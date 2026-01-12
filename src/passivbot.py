@@ -3455,26 +3455,26 @@ class Passivbot:
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "sort_global": True,
                 "global_bot_params": global_bp,
-                "hedge": {
-                    "threshold": float(self.config_get(["hedge", "threshold"], default=0.0) or 0.0),
+                "mirror": {
+                    "threshold": float(self.config_get(["live", "mirror", "threshold"], default=0.0) or 0.0),
                     "tolerance_pct": float(
-                        self.config_get(["hedge", "tolerance_pct"], default=0.05) or 0.05
+                        self.config_get(["live", "mirror", "tolerance_pct"], default=0.05) or 0.05
                     ),
-                    "hedge_excess_allowance_pct": float(
-                        self.config_get(["hedge", "hedge_excess_allowance_pct"], default=0.20) or 0.20
+                    "mirror_excess_allowance_pct": float(
+                        self.config_get(["live", "mirror", "mirror_excess_allowance_pct"], default=0.20) or 0.20
                     ),
                     "max_n_positions": int(
-                        round(float(self.config_get(["hedge", "max_n_positions"], default=0) or 0))
+                        round(float(self.config_get(["live", "mirror", "max_n_positions"], default=0) or 0))
                     ),
                     "allocation_min_fraction": float(
-                        self.config_get(["hedge", "allocation_min_fraction"], default=0.10) or 0.10
+                        self.config_get(["live", "mirror", "allocation_min_fraction"], default=0.10) or 0.10
                     ),
                     "mode": str(
-                        self.config_get(["hedge", "mode"], default="hedge_shorts_for_longs")
-                        or "hedge_shorts_for_longs"
+                        self.config_get(["live", "mirror", "mode"], default="mirror_shorts_for_longs")
+                        or "mirror_shorts_for_longs"
                     ),
                     "one_way": True,
-                    "approved_hedge_symbols": [],
+                    "approved_mirror_symbols": [],
                 },
                 "hedge_mode": effective_hedge_mode,
             },
@@ -3750,26 +3750,26 @@ class Passivbot:
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "sort_global": True,
                 "global_bot_params": global_bp,
-                "hedge": {
-                    "threshold": float(self.config_get(["hedge", "threshold"], default=0.0) or 0.0),
+                "mirror": {
+                    "threshold": float(self.config_get(["live", "mirror", "threshold"], default=0.0) or 0.0),
                     "tolerance_pct": float(
-                        self.config_get(["hedge", "tolerance_pct"], default=0.05) or 0.05
+                        self.config_get(["live", "mirror", "tolerance_pct"], default=0.05) or 0.05
                     ),
-                    "hedge_excess_allowance_pct": float(
-                        self.config_get(["hedge", "hedge_excess_allowance_pct"], default=0.20) or 0.20
+                    "mirror_excess_allowance_pct": float(
+                        self.config_get(["live", "mirror", "mirror_excess_allowance_pct"], default=0.20) or 0.20
                     ),
                     "max_n_positions": int(
-                        round(float(self.config_get(["hedge", "max_n_positions"], default=0) or 0))
+                        round(float(self.config_get(["live", "mirror", "max_n_positions"], default=0) or 0))
                     ),
                     "allocation_min_fraction": float(
-                        self.config_get(["hedge", "allocation_min_fraction"], default=0.10) or 0.10
+                        self.config_get(["live", "mirror", "allocation_min_fraction"], default=0.10) or 0.10
                     ),
                     "mode": str(
-                        self.config_get(["hedge", "mode"], default="hedge_shorts_for_longs")
-                        or "hedge_shorts_for_longs"
+                        self.config_get(["live", "mirror", "mode"], default="mirror_shorts_for_longs")
+                        or "mirror_shorts_for_longs"
                     ),
                     "one_way": True,
-                    "approved_hedge_symbols": [],
+                    "approved_mirror_symbols": [],
                 },
                 "hedge_mode": effective_hedge_mode,
             },

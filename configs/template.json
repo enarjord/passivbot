@@ -195,16 +195,6 @@
         }
     },
     "coin_overrides": {},
-    "hedge": {
-        "mode": "hedge_shorts_for_longs",
-        "threshold": 0.0,
-        "tolerance_pct": 0.05,
-        "hedge_excess_allowance_pct": 0.20,
-        "max_n_positions": 0,
-        "allocation_min_fraction": 0.10,
-        "one_way": true,
-        "approved_coins": []
-    },
     "live": {
         "approved_coins": "configs/approved_coins.json",
         "auto_gs": true,
@@ -236,7 +226,17 @@
         "time_in_force": "good_till_cancelled",
         "user": "bybit_01",
         "warmup_jitter_seconds": 30.0,
-        "warmup_ratio": 0.3
+        "warmup_ratio": 0.3,
+        "mirror": {
+            "mode": "mirror_shorts_for_longs",
+            "threshold": 0.0,
+            "tolerance_pct": 0.05,
+            "mirror_excess_allowance_pct": 0.20,
+            "max_n_positions": 0,
+            "allocation_min_fraction": 0.10,
+            "one_way": true,
+            "approved_coins": []
+        }
     },
     "logging": {
         "level": 1,

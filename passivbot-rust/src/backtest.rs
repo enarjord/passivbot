@@ -267,7 +267,7 @@ pub struct Backtest<'a> {
     effective_n_positions: EffectiveNPositions,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
-    hedge_config: Option<crate::hedge::HedgeConfig>,
+    mirror_config: Option<crate::mirror::MirrorConfig>,
     pub balance: Balance,
     n_coins: usize,
     ema_alphas: Vec<EmaAlphas>,
@@ -1003,7 +1003,7 @@ impl<'a> Backtest<'a> {
                 unstuck_allowance_short: short_allowance,
                 sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
-                hedge: self.hedge_config.clone(),
+                mirror: self.mirror_config.clone(),
                 hedge_mode: self.backtest_params.hedge_mode,
             },
             symbols,
@@ -1211,7 +1211,7 @@ impl<'a> Backtest<'a> {
         bot_params: Vec<BotParamsPair>,
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,
-        hedge_config: Option<crate::hedge::HedgeConfig>,
+        mirror_config: Option<crate::mirror::MirrorConfig>,
     ) -> Self {
         let mut balance = Balance::default();
         balance.btc_collateral_cap = backtest_params.btc_collateral_cap.max(0.0);
@@ -1405,14 +1405,14 @@ impl<'a> Backtest<'a> {
         let any_trailing_long = trailing_enabled.iter().any(|te| te.long);
         let any_trailing_short = trailing_enabled.iter().any(|te| te.short);
 
-        // Check hedge modes before moving hedge_config
-        let hedge_uses_longs = matches!(
-            hedge_config.as_ref().map(|h| &h.mode),
-            Some(crate::hedge::HedgeMode::HedgeLongsForShorts)
+        // Check mirror modes before moving mirror_config
+        let mirror_uses_longs = matches!(
+            mirror_config.as_ref().map(|h| &h.mode),
+            Some(crate::mirror::MirrorMode::MirrorLongsForShorts)
         );
-        let hedge_uses_shorts = matches!(
-            hedge_config.as_ref().map(|h| &h.mode),
-            Some(crate::hedge::HedgeMode::HedgeShortsForLongs)
+        let mirror_uses_shorts = matches!(
+            mirror_config.as_ref().map(|h| &h.mode),
+            Some(crate::mirror::MirrorMode::MirrorShortsForLongs)
         );
 
         Backtest {
@@ -1425,7 +1425,7 @@ impl<'a> Backtest<'a> {
             effective_n_positions,
             exchange_params_list,
             backtest_params: backtest_params.clone(),
-            hedge_config,
+            mirror_config,
             balance,
             n_coins,
             ema_alphas,
@@ -1474,14 +1474,14 @@ impl<'a> Backtest<'a> {
                     .iter()
                     .any(|bp| bp.long.wallet_exposure_limit != 0.0)
                     && bot_params_master.long.n_positions > 0)
-                    // Also enable longs if hedge mode uses longs (HedgeLongsForShorts)
-                    || hedge_uses_longs,
+                    // Also enable longs if mirror mode uses longs (MirrorLongsForShorts)
+                    || mirror_uses_longs,
                 short: (bot_params
                     .iter()
                     .any(|bp| bp.short.wallet_exposure_limit != 0.0)
                     && bot_params_master.short.n_positions > 0)
-                    // Also enable shorts if hedge mode uses shorts (HedgeShortsForLongs)
-                    || hedge_uses_shorts,
+                    // Also enable shorts if mirror mode uses shorts (MirrorShortsForLongs)
+                    || mirror_uses_shorts,
             },
             trailing_enabled,
             any_trailing_long,

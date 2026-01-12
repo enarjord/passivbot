@@ -28,9 +28,9 @@ mod core {
         calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
         calc_next_entry_short,
     };
-    use crate::hedge::{
-        compute_hedge_cycle, DesiredBaseOrder, HedgeAction, HedgeConfig, HedgeMode, HedgePosition,
-        HedgeSymbol,
+    use crate::mirror::{
+        compute_mirror_cycle, DesiredBaseOrder, MirrorAction, MirrorConfig, MirrorMode, MirrorPosition,
+        MirrorSymbol,
     };
     use crate::risk::{
         calc_twel_enforcer_actions, calc_unstucking_action, GateEntriesPosition,
@@ -161,9 +161,9 @@ mod core {
         pub sort_global: bool,
         /// Global bot params (not modifiable by per-coin overrides).
         pub global_bot_params: BotParamsPair,
-        /// Hedge overlay configuration. If `None` or `threshold == 0.0`, hedging is disabled.
+        /// Mirror overlay configuration. If `None` or `threshold == 0.0`, mirroring is disabled.
         #[serde(default)]
-        pub hedge: Option<HedgeConfig>,
+        pub mirror: Option<MirrorConfig>,
         /// If false (one-way mode), only one position side can exist per coin at a time.
         /// When no position exists on either side, the side closer to its EMA entry band wins.
         #[serde(default = "default_hedge_mode")]
@@ -236,10 +236,10 @@ mod core {
                 | CloseAutoReduceTwelShort
                 | ClosePanicShort
                 | CloseAutoReduceWelShort
-                | HedgeCloseCollisionLong
-                | HedgeCloseCollisionShort
-                | HedgeCloseRebalanceLong
-                | HedgeCloseRebalanceShort
+                | MirrorCloseCollisionLong
+                | MirrorCloseCollisionShort
+                | MirrorCloseRebalanceLong
+                | MirrorCloseRebalanceShort
         )
     }
 
@@ -2187,24 +2187,24 @@ mod core {
             }
         }
 
-        // --- Hedge Overlay ---
-        // If hedge is enabled and threshold > 0, compute hedge orders and apply gating.
-        let mut hedge_orders: Vec<IdealOrder> = Vec::new();
-        if let Some(ref hedge_cfg) = input.global.hedge {
-            if hedge_cfg.threshold > 0.0 {
-                // Build position vectors for hedge module
-                let mut positions_long: Vec<HedgePosition> = Vec::new();
-                let mut positions_short: Vec<HedgePosition> = Vec::new();
+        // --- Mirror Overlay ---
+        // If mirror is enabled and threshold > 0, compute mirror orders and apply gating.
+        let mut mirror_orders: Vec<IdealOrder> = Vec::new();
+        if let Some(ref mirror_cfg) = input.global.mirror {
+            if mirror_cfg.threshold > 0.0 {
+                // Build position vectors for mirror module
+                let mut positions_long: Vec<MirrorPosition> = Vec::new();
+                let mut positions_short: Vec<MirrorPosition> = Vec::new();
                 for s in input.symbols.iter() {
                     if s.long.position.size != 0.0 {
-                        positions_long.push(HedgePosition {
+                        positions_long.push(MirrorPosition {
                             idx: s.symbol_idx,
                             size: s.long.position.size,
                             price: s.long.position.price,
                         });
                     }
                     if s.short.position.size != 0.0 {
-                        positions_short.push(HedgePosition {
+                        positions_short.push(MirrorPosition {
                             idx: s.symbol_idx,
                             size: s.short.position.size,
                             price: s.short.position.price,
@@ -2212,21 +2212,21 @@ mod core {
                     }
                 }
 
-                // Build symbol data for hedge module
-                let hedge_symbols: Vec<HedgeSymbol> = input
+                // Build symbol data for mirror module
+                let mirror_symbols: Vec<MirrorSymbol> = input
                     .symbols
                     .iter()
                     .map(|s| {
-                        // Use 1h volatility EMA for hedge ranking (same span as entry volatility)
-                        let vol_span = match hedge_cfg.mode {
-                            HedgeMode::HedgeShortsForLongs => {
+                        // Use 1h volatility EMA for mirror ranking (same span as entry volatility)
+                        let vol_span = match mirror_cfg.mode {
+                            MirrorMode::MirrorShortsForLongs => {
                                 input
                                     .global
                                     .global_bot_params
                                     .long
                                     .entry_volatility_ema_span_hours
                             }
-                            HedgeMode::HedgeLongsForShorts => {
+                            MirrorMode::MirrorLongsForShorts => {
                                 input
                                     .global
                                     .global_bot_params
@@ -2237,17 +2237,17 @@ mod core {
                         let volatility_score =
                             ema_lookup(&s.emas.h1.log_range, vol_span).unwrap_or(0.0);
                         // Use volume EMA span from bot params for volume score
-                        let volume_span = match hedge_cfg.mode {
-                            HedgeMode::HedgeShortsForLongs => {
+                        let volume_span = match mirror_cfg.mode {
+                            MirrorMode::MirrorShortsForLongs => {
                                 input.global.global_bot_params.long.filter_volume_ema_span
                             }
-                            HedgeMode::HedgeLongsForShorts => {
+                            MirrorMode::MirrorLongsForShorts => {
                                 input.global.global_bot_params.short.filter_volume_ema_span
                             }
                         };
                         let volume_score =
                             ema_lookup(&s.emas.h1.volume, volume_span).unwrap_or(0.0);
-                        HedgeSymbol {
+                        MirrorSymbol {
                             idx: s.symbol_idx,
                             bid: s.order_book.bid,
                             ask: s.order_book.ask,
@@ -2261,8 +2261,8 @@ mod core {
 
                 // Build desired base orders (initial entries only) for collision detection
                 let mut desired_base_orders: Vec<DesiredBaseOrder> = Vec::new();
-                match hedge_cfg.mode {
-                    HedgeMode::HedgeShortsForLongs => {
+                match mirror_cfg.mode {
+                    MirrorMode::MirrorShortsForLongs => {
                         // Base is long, so collect long initial entries
                         for s in per_long.iter().filter_map(|v| v.as_ref()) {
                             for o in &s.entries {
@@ -2279,7 +2279,7 @@ mod core {
                             }
                         }
                     }
-                    HedgeMode::HedgeLongsForShorts => {
+                    MirrorMode::MirrorLongsForShorts => {
                         // Base is short, so collect short initial entries
                         for s in per_short.iter().filter_map(|v| v.as_ref()) {
                             for o in &s.entries {
@@ -2299,8 +2299,8 @@ mod core {
                 }
 
                 // Determine base TWEL and n_positions for the base side
-                let (base_twel, base_n_positions) = match hedge_cfg.mode {
-                    HedgeMode::HedgeShortsForLongs => (
+                let (base_twel, base_n_positions) = match mirror_cfg.mode {
+                    MirrorMode::MirrorShortsForLongs => (
                         input
                             .global
                             .global_bot_params
@@ -2308,7 +2308,7 @@ mod core {
                             .total_wallet_exposure_limit,
                         input.global.global_bot_params.long.n_positions,
                     ),
-                    HedgeMode::HedgeLongsForShorts => (
+                    MirrorMode::MirrorLongsForShorts => (
                         input
                             .global
                             .global_bot_params
@@ -2318,10 +2318,10 @@ mod core {
                     ),
                 };
 
-                // Call hedge overlay
-                match compute_hedge_cycle(
-                    hedge_cfg,
-                    &hedge_symbols,
+                // Call mirror overlay
+                match compute_mirror_cycle(
+                    mirror_cfg,
+                    &mirror_symbols,
                     &positions_long,
                     &positions_short,
                     &desired_base_orders,
@@ -2329,14 +2329,14 @@ mod core {
                     base_twel,
                     base_n_positions,
                 ) {
-                    Ok(hedge_output) => {
-                        // Gate base initial entries on symbols with hedge collisions
-                        if !hedge_output.gate_base_entries.is_empty() {
-                            match hedge_cfg.mode {
-                                HedgeMode::HedgeShortsForLongs => {
+                    Ok(mirror_output) => {
+                        // Gate base initial entries on symbols with mirror collisions
+                        if !mirror_output.gate_base_entries.is_empty() {
+                            match mirror_cfg.mode {
+                                MirrorMode::MirrorShortsForLongs => {
                                     // Gate long initial entries
                                     for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
-                                        if hedge_output.gate_base_entries.contains(&s.symbol_idx) {
+                                        if mirror_output.gate_base_entries.contains(&s.symbol_idx) {
                                             s.entries.retain(|o| {
                                                 !matches!(
                                                     o.order_type,
@@ -2347,10 +2347,10 @@ mod core {
                                         }
                                     }
                                 }
-                                HedgeMode::HedgeLongsForShorts => {
+                                MirrorMode::MirrorLongsForShorts => {
                                     // Gate short initial entries
                                     for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
-                                        if hedge_output.gate_base_entries.contains(&s.symbol_idx) {
+                                        if mirror_output.gate_base_entries.contains(&s.symbol_idx) {
                                             s.entries.retain(|o| {
                                                 !matches!(
                                                     o.order_type,
@@ -2364,49 +2364,49 @@ mod core {
                             }
                         }
 
-                        // Convert hedge orders to IdealOrder
-                        for ho in hedge_output.orders {
-                            let (pside, order_type) = match hedge_cfg.mode {
-                                HedgeMode::HedgeShortsForLongs => {
-                                    // Hedge side is short
-                                    let ot = match ho.action {
-                                        HedgeAction::OpenOrIncrease => OrderType::HedgeEntryShort,
-                                        HedgeAction::Close => {
-                                            if ho.reason == "collision_with_base" {
-                                                OrderType::HedgeCloseCollisionShort
+                        // Convert mirror orders to IdealOrder
+                        for mo in mirror_output.orders {
+                            let (pside, order_type) = match mirror_cfg.mode {
+                                MirrorMode::MirrorShortsForLongs => {
+                                    // Mirror side is short
+                                    let ot = match mo.action {
+                                        MirrorAction::OpenOrIncrease => OrderType::MirrorEntryShort,
+                                        MirrorAction::Close => {
+                                            if mo.reason == "collision_with_base" {
+                                                OrderType::MirrorCloseCollisionShort
                                             } else {
-                                                OrderType::HedgeCloseRebalanceShort
+                                                OrderType::MirrorCloseRebalanceShort
                                             }
                                         }
                                     };
                                     (PositionSide::Short, ot)
                                 }
-                                HedgeMode::HedgeLongsForShorts => {
-                                    // Hedge side is long
-                                    let ot = match ho.action {
-                                        HedgeAction::OpenOrIncrease => OrderType::HedgeEntryLong,
-                                        HedgeAction::Close => {
-                                            if ho.reason == "collision_with_base" {
-                                                OrderType::HedgeCloseCollisionLong
+                                MirrorMode::MirrorLongsForShorts => {
+                                    // Mirror side is long
+                                    let ot = match mo.action {
+                                        MirrorAction::OpenOrIncrease => OrderType::MirrorEntryLong,
+                                        MirrorAction::Close => {
+                                            if mo.reason == "collision_with_base" {
+                                                OrderType::MirrorCloseCollisionLong
                                             } else {
-                                                OrderType::HedgeCloseRebalanceLong
+                                                OrderType::MirrorCloseRebalanceLong
                                             }
                                         }
                                     };
                                     (PositionSide::Long, ot)
                                 }
                             };
-                            hedge_orders.push(IdealOrder {
-                                symbol_idx: ho.idx,
+                            mirror_orders.push(IdealOrder {
+                                symbol_idx: mo.idx,
                                 pside,
-                                qty: ho.qty,
-                                price: ho.price,
+                                qty: mo.qty,
+                                price: mo.price,
                                 order_type,
                             });
                         }
                     }
                     Err(e) => {
-                        // Log hedge error but don't fail the orchestrator
+                        // Log mirror error but don't fail the orchestrator
                         // In production, this could be logged; for now we silently skip
                         let _ = e; // suppress unused warning
                     }
@@ -2462,7 +2462,7 @@ mod core {
         }
 
         // Collect and (optionally) globally sort.
-        let mut total_orders: usize = hedge_orders.len();
+        let mut total_orders: usize = mirror_orders.len();
         for s in per_long.iter().filter_map(|v| v.as_ref()) {
             total_orders += s.closes.len() + s.entries.len();
         }
@@ -2479,7 +2479,7 @@ mod core {
             orders.append(&mut s.entries);
         }
         // Add hedge orders
-        orders.extend(hedge_orders);
+        orders.extend(mirror_orders);
 
         if input.global.sort_global {
             orders.sort_by(|a, b| {

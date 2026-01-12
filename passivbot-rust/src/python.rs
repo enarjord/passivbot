@@ -7,7 +7,7 @@ use crate::constants::{LONG, SHORT};
 use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
-use crate::hedge::{HedgeConfig, HedgeMode};
+use crate::mirror::{MirrorConfig, MirrorMode};
 use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
@@ -695,7 +695,7 @@ fn run_backtest_core<'py>(
     }
 
     let backtest_params = backtest_params_from_dict(backtest_params_dict.as_gil_ref())?;
-    let hedge_config = hedge_config_from_dict(backtest_params_dict.as_gil_ref())?;
+    let mirror_config = mirror_config_from_dict(backtest_params_dict.as_gil_ref())?;
     let metrics_only = backtest_params.metrics_only;
     let mut backtest = Backtest::new(
         hlcvs_rust,
@@ -703,7 +703,7 @@ fn run_backtest_core<'py>(
         bot_params_vec,
         exchange_params,
         &backtest_params,
-        hedge_config,
+        mirror_config,
     );
 
     // Run the backtest and process results
@@ -848,84 +848,84 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
     })
 }
 
-/// Parse optional hedge config from backtest_params["hedge"].
-/// Returns None if hedge dict is missing or threshold == 0.
-fn hedge_config_from_dict(backtest_params: &PyDict) -> PyResult<Option<HedgeConfig>> {
-    let hedge_dict = match backtest_params.get_item("hedge")? {
+/// Parse optional mirror config from backtest_params["mirror"].
+/// Returns None if mirror dict is missing or threshold == 0.
+fn mirror_config_from_dict(backtest_params: &PyDict) -> PyResult<Option<MirrorConfig>> {
+    let mirror_dict = match backtest_params.get_item("mirror")? {
         Some(item) if !item.is_none() => item
             .downcast::<PyDict>()
-            .map_err(|_| PyValueError::new_err("hedge must be a dict"))?,
+            .map_err(|_| PyValueError::new_err("mirror must be a dict"))?,
         _ => return Ok(None),
     };
 
-    let threshold: f64 = hedge_dict
+    let threshold: f64 = mirror_dict
         .get_item("threshold")?
         .map(|v| v.extract::<f64>())
         .transpose()?
         .unwrap_or(0.0);
 
-    // If threshold is 0, hedging is disabled
+    // If threshold is 0, mirroring is disabled
     if threshold <= 0.0 {
         return Ok(None);
     }
 
-    let tolerance_pct: f64 = hedge_dict
+    let tolerance_pct: f64 = mirror_dict
         .get_item("tolerance_pct")?
         .map(|v| v.extract::<f64>())
         .transpose()?
         .unwrap_or(0.05);
 
-    let hedge_excess_allowance_pct: f64 = hedge_dict
-        .get_item("hedge_excess_allowance_pct")?
+    let mirror_excess_allowance_pct: f64 = mirror_dict
+        .get_item("mirror_excess_allowance_pct")?
         .map(|v| v.extract::<f64>())
         .transpose()?
         .unwrap_or(0.20);
 
-    let max_n_positions: usize = hedge_dict
+    let max_n_positions: usize = mirror_dict
         .get_item("max_n_positions")?
         .map(|v| v.extract::<f64>())
         .transpose()?
         .map(|f| f.round() as usize)
         .unwrap_or(0);
 
-    let allocation_min_fraction: f64 = hedge_dict
+    let allocation_min_fraction: f64 = mirror_dict
         .get_item("allocation_min_fraction")?
         .map(|v| v.extract::<f64>())
         .transpose()?
         .unwrap_or(0.10);
 
-    let mode_str: String = hedge_dict
+    let mode_str: String = mirror_dict
         .get_item("mode")?
         .map(|v| v.extract::<String>())
         .transpose()?
-        .unwrap_or_else(|| "hedge_shorts_for_longs".to_string());
+        .unwrap_or_else(|| "mirror_shorts_for_longs".to_string());
 
     let mode = match mode_str.as_str() {
-        "hedge_longs_for_shorts" => HedgeMode::HedgeLongsForShorts,
-        _ => HedgeMode::HedgeShortsForLongs,
+        "mirror_longs_for_shorts" => MirrorMode::MirrorLongsForShorts,
+        _ => MirrorMode::MirrorShortsForLongs,
     };
 
-    let one_way: bool = hedge_dict
+    let one_way: bool = mirror_dict
         .get_item("one_way")?
         .map(|v| v.extract::<bool>())
         .transpose()?
         .unwrap_or(true);
 
-    let approved_hedge_symbols: Vec<usize> = hedge_dict
-        .get_item("approved_hedge_symbols")?
+    let approved_mirror_symbols: Vec<usize> = mirror_dict
+        .get_item("approved_mirror_symbols")?
         .map(|v| v.extract::<Vec<usize>>())
         .transpose()?
         .unwrap_or_default();
 
-    Ok(Some(HedgeConfig {
+    Ok(Some(MirrorConfig {
         threshold,
         tolerance_pct,
-        hedge_excess_allowance_pct,
+        mirror_excess_allowance_pct,
         max_n_positions,
         allocation_min_fraction,
         mode,
         one_way,
-        approved_hedge_symbols,
+        approved_mirror_symbols,
     }))
 }
 

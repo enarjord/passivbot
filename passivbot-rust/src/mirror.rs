@@ -1,8 +1,8 @@
-//! Hedge overlay (WIP).
+//! Mirror overlay (market-neutral hedging).
 //!
 //! Implements a reactive market-neutral overlay:
 //! - Base is long-only or short-only.
-//! - Hedge positions are on the opposite pside.
+//! - Mirror positions are on the opposite pside, mirroring base exposure.
 //! - One-way constraint (v0): never hold long and short simultaneously on the same symbol.
 //! - Signed conventions: buy qty/long psize positive; sell qty/short psize negative.
 
@@ -14,7 +14,7 @@ use crate::types::ExchangeParams;
 use crate::utils::{calc_new_psize_pprice, cost_to_qty, qty_to_cost, round_, round_dn, round_up};
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct HedgePosition {
+pub struct MirrorPosition {
     pub idx: usize,
     /// Signed size: longs positive, shorts negative.
     pub size: f64,
@@ -23,7 +23,7 @@ pub struct HedgePosition {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct HedgeSymbol {
+pub struct MirrorSymbol {
     pub idx: usize,
     pub bid: f64,
     pub ask: f64,
@@ -41,79 +41,79 @@ pub struct DesiredBaseOrder {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum HedgeAction {
+pub enum MirrorAction {
     OpenOrIncrease,
     Close,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct HedgeOrder {
+pub struct MirrorOrder {
     pub idx: usize,
     /// Signed qty: positive = buy, negative = sell.
     pub qty: f64,
     pub price: f64,
-    pub action: HedgeAction,
+    pub action: MirrorAction,
     pub reason: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct HedgeCycleOutput {
-    pub orders: Vec<HedgeOrder>,
+pub struct MirrorCycleOutput {
+    pub orders: Vec<MirrorOrder>,
     /// In one-way mode, base entry orders on these symbols must be gated/canceled this cycle.
     pub gate_base_entries: HashSet<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum HedgeMode {
+pub enum MirrorMode {
     /// Base is long-only, hedges are shorts.
-    HedgeShortsForLongs,
+    MirrorShortsForLongs,
     /// Base is short-only, hedges are longs.
-    HedgeLongsForShorts,
+    MirrorLongsForShorts,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HedgeConfig {
+pub struct MirrorConfig {
     /// 0 disables hedging; 1 targets equal hedge/base exposure; 0.5 targets 50% hedge exposure, etc.
     pub threshold: f64,
     /// Tolerance is absolute exposure band: `tolerance_band = base_twel * tolerance_pct`.
     pub tolerance_pct: f64,
     /// Cap looseness multiplier.
-    pub hedge_excess_allowance_pct: f64,
+    pub mirror_excess_allowance_pct: f64,
     /// Max number of hedge positions. If 0, default to base side `n_positions`.
     pub max_n_positions: usize,
     /// Minimum fraction of remaining hedge budget to spend per allocation step (avoids churn).
     pub allocation_min_fraction: f64,
-    /// Eligible symbols for opening new hedges (e.g. approved_coins.short in HedgeShortsForLongs).
-    pub approved_hedge_symbols: Vec<usize>,
+    /// Eligible symbols for opening new hedges (e.g. approved_coins.short in MirrorShortsForLongs).
+    pub approved_mirror_symbols: Vec<usize>,
     /// v0: one-way only.
     pub one_way: bool,
     /// Hedge direction.
-    pub mode: HedgeMode,
+    pub mode: MirrorMode,
 }
 
-impl Default for HedgeConfig {
+impl Default for MirrorConfig {
     fn default() -> Self {
         Self {
             threshold: 0.0,
             tolerance_pct: 0.05,
-            hedge_excess_allowance_pct: 0.20,
+            mirror_excess_allowance_pct: 0.20,
             max_n_positions: 0,
             allocation_min_fraction: 0.10,
-            approved_hedge_symbols: Vec::new(),
+            approved_mirror_symbols: Vec::new(),
             one_way: true,
-            mode: HedgeMode::HedgeShortsForLongs,
+            mode: MirrorMode::MirrorShortsForLongs,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct HedgeError {
+pub struct MirrorError {
     pub message: String,
 }
 
-impl HedgeError {
+impl MirrorError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -121,7 +121,7 @@ impl HedgeError {
     }
 }
 
-fn market_price(sym: &HedgeSymbol) -> f64 {
+fn market_price(sym: &MirrorSymbol) -> f64 {
     (sym.bid + sym.ask) * 0.5
 }
 
@@ -137,7 +137,7 @@ fn effective_min_entry_qty(effective_min_cost: f64, entry_price: f64, ep: &Excha
 
 /// Exposure uses mark-to-market price for true market-neutral hedging.
 /// This means exposure reflects current risk, not historical entry cost.
-fn position_exposure(pos: &HedgePosition, sym: &HedgeSymbol, balance: f64) -> f64 {
+fn position_exposure(pos: &MirrorPosition, sym: &MirrorSymbol, balance: f64) -> f64 {
     if pos.size == 0.0 {
         return 0.0;
     }
@@ -145,7 +145,7 @@ fn position_exposure(pos: &HedgePosition, sym: &HedgeSymbol, balance: f64) -> f6
 }
 
 /// Borda ranking: low volatility + high volume. Lower score is better.
-fn rank_assets_borda(eligible: &[HedgeSymbol]) -> Vec<HedgeSymbol> {
+fn rank_assets_borda(eligible: &[MirrorSymbol]) -> Vec<MirrorSymbol> {
     if eligible.is_empty() {
         return vec![];
     }
@@ -162,7 +162,7 @@ fn rank_assets_borda(eligible: &[HedgeSymbol]) -> Vec<HedgeSymbol> {
     for (i, s) in by_volume.iter().enumerate() {
         volume_rank.insert(s.idx, i);
     }
-    let mut scored: Vec<(usize, HedgeSymbol)> = eligible
+    let mut scored: Vec<(usize, MirrorSymbol)> = eligible
         .iter()
         .map(|s| {
             let vr = *vol_rank.get(&s.idx).unwrap_or(&eligible.len());
@@ -174,36 +174,36 @@ fn rank_assets_borda(eligible: &[HedgeSymbol]) -> Vec<HedgeSymbol> {
     scored.into_iter().map(|(_, s)| s).collect()
 }
 
-fn underwaterness_long(pprice: f64, sym: &HedgeSymbol) -> f64 {
+fn underwaterness_long(pprice: f64, sym: &MirrorSymbol) -> f64 {
     if pprice <= 0.0 {
         return 0.0;
     }
     1.0 - market_price(sym) / pprice
 }
 
-fn underwaterness_short(pprice: f64, sym: &HedgeSymbol) -> f64 {
+fn underwaterness_short(pprice: f64, sym: &MirrorSymbol) -> f64 {
     if pprice <= 0.0 {
         return 0.0;
     }
     market_price(sym) / pprice - 1.0
 }
 
-fn validate_symbols_contiguous(symbols: &[HedgeSymbol]) -> Result<(), HedgeError> {
+fn validate_symbols_contiguous(symbols: &[MirrorSymbol]) -> Result<(), MirrorError> {
     for (i, s) in symbols.iter().enumerate() {
         if s.idx != i {
-            return Err(HedgeError::new(format!(
+            return Err(MirrorError::new(format!(
                 "symbols must be indexed by idx (symbols[i].idx == i); got symbols[{}].idx={}",
                 i, s.idx
             )));
         }
         if !(s.bid.is_finite() && s.ask.is_finite() && s.bid > 0.0 && s.ask > 0.0) {
-            return Err(HedgeError::new(format!(
+            return Err(MirrorError::new(format!(
                 "invalid order book for idx {}: bid={} ask={}",
                 s.idx, s.bid, s.ask
             )));
         }
         if !(s.effective_min_cost.is_finite() && s.effective_min_cost > 0.0) {
-            return Err(HedgeError::new(format!(
+            return Err(MirrorError::new(format!(
                 "non-finite effective_min_cost for idx {}: {}",
                 s.idx, s.effective_min_cost
             )));
@@ -212,67 +212,67 @@ fn validate_symbols_contiguous(symbols: &[HedgeSymbol]) -> Result<(), HedgeError
     Ok(())
 }
 
-fn validate_config(cfg: &HedgeConfig) -> Result<(), HedgeError> {
+fn validate_config(cfg: &MirrorConfig) -> Result<(), MirrorError> {
     for (name, v) in [
         ("threshold", cfg.threshold),
         ("tolerance_pct", cfg.tolerance_pct),
-        ("hedge_excess_allowance_pct", cfg.hedge_excess_allowance_pct),
+        ("mirror_excess_allowance_pct", cfg.mirror_excess_allowance_pct),
         ("allocation_min_fraction", cfg.allocation_min_fraction),
     ] {
         if !v.is_finite() {
-            return Err(HedgeError::new(format!(
-                "hedge config {} is non-finite: {}",
+            return Err(MirrorError::new(format!(
+                "mirror config {} is non-finite: {}",
                 name, v
             )));
         }
     }
     if cfg.threshold < 0.0 {
-        return Err(HedgeError::new("hedge.threshold must be >= 0.0"));
+        return Err(MirrorError::new("mirror.threshold must be >= 0.0"));
     }
     if cfg.tolerance_pct < 0.0 {
-        return Err(HedgeError::new("hedge.tolerance_pct must be >= 0.0"));
+        return Err(MirrorError::new("mirror.tolerance_pct must be >= 0.0"));
     }
-    if cfg.hedge_excess_allowance_pct < 0.0 {
-        return Err(HedgeError::new(
-            "hedge.hedge_excess_allowance_pct must be >= 0.0",
+    if cfg.mirror_excess_allowance_pct < 0.0 {
+        return Err(MirrorError::new(
+            "mirror.mirror_excess_allowance_pct must be >= 0.0",
         ));
     }
     if cfg.allocation_min_fraction <= 0.0 || cfg.allocation_min_fraction > 1.0 {
-        return Err(HedgeError::new(
-            "hedge.allocation_min_fraction must be in (0.0, 1.0]",
+        return Err(MirrorError::new(
+            "mirror.allocation_min_fraction must be in (0.0, 1.0]",
         ));
     }
     Ok(())
 }
 
-fn base_entry_wants_symbol(mode: HedgeMode, desired_qty: f64) -> bool {
+fn base_entry_wants_symbol(mode: MirrorMode, desired_qty: f64) -> bool {
     match mode {
-        HedgeMode::HedgeShortsForLongs => desired_qty > 0.0,
-        HedgeMode::HedgeLongsForShorts => desired_qty < 0.0,
+        MirrorMode::MirrorShortsForLongs => desired_qty > 0.0,
+        MirrorMode::MirrorLongsForShorts => desired_qty < 0.0,
     }
 }
 
-fn hedge_entry_price(mode: HedgeMode, sym: &HedgeSymbol) -> f64 {
+fn hedge_entry_price(mode: MirrorMode, sym: &MirrorSymbol) -> f64 {
     match mode {
-        HedgeMode::HedgeShortsForLongs => sym.ask, // sell to open/increase short (maker)
-        HedgeMode::HedgeLongsForShorts => sym.bid, // buy to open/increase long (maker)
+        MirrorMode::MirrorShortsForLongs => sym.ask, // sell to open/increase short (maker)
+        MirrorMode::MirrorLongsForShorts => sym.bid, // buy to open/increase long (maker)
     }
 }
 
-fn hedge_close_price(mode: HedgeMode, sym: &HedgeSymbol) -> f64 {
+fn hedge_close_price(mode: MirrorMode, sym: &MirrorSymbol) -> f64 {
     match mode {
-        HedgeMode::HedgeShortsForLongs => sym.bid, // buy to close short (maker)
-        HedgeMode::HedgeLongsForShorts => sym.ask, // sell to close long (maker)
+        MirrorMode::MirrorShortsForLongs => sym.bid, // buy to close short (maker)
+        MirrorMode::MirrorLongsForShorts => sym.ask, // sell to close long (maker)
     }
 }
 
-fn hedge_close_qty_for_full_close(mode: HedgeMode, pos: &HedgePosition, sym: &HedgeSymbol) -> f64 {
+fn hedge_close_qty_for_full_close(mode: MirrorMode, pos: &MirrorPosition, sym: &MirrorSymbol) -> f64 {
     let qty_step = sym.exchange_params.qty_step;
     let abs_size = pos.size.abs();
     let rounded = round_(abs_size, qty_step);
     if rounded == 0.0 { abs_size } else { rounded }.copysign(match mode {
-        HedgeMode::HedgeShortsForLongs => 1.0,  // buy
-        HedgeMode::HedgeLongsForShorts => -1.0, // sell
+        MirrorMode::MirrorShortsForLongs => 1.0,  // buy
+        MirrorMode::MirrorLongsForShorts => -1.0, // sell
     })
 }
 
@@ -282,35 +282,35 @@ fn hedge_close_qty_for_full_close(mode: HedgeMode, pos: &HedgePosition, sym: &He
 /// - `positions_long/short` are the current open positions per pside (signed sizes).
 /// - `desired_base_orders` are the base ideal orders for this cycle (used for collisions/exclusions).
 /// - `base_twel` and `base_n_positions` are taken from the base pside's bot params.
-pub fn compute_hedge_cycle(
-    cfg: &HedgeConfig,
-    symbols: &[HedgeSymbol],
-    positions_long: &[HedgePosition],
-    positions_short: &[HedgePosition],
+pub fn compute_mirror_cycle(
+    cfg: &MirrorConfig,
+    symbols: &[MirrorSymbol],
+    positions_long: &[MirrorPosition],
+    positions_short: &[MirrorPosition],
     desired_base_orders: &[DesiredBaseOrder],
     balance: f64,
     base_twel: f64,
     base_n_positions: usize,
-) -> Result<HedgeCycleOutput, HedgeError> {
+) -> Result<MirrorCycleOutput, MirrorError> {
     validate_config(cfg)?;
     validate_symbols_contiguous(symbols)?;
 
     if !(balance.is_finite() && balance > 0.0) {
-        return Err(HedgeError::new(format!(
+        return Err(MirrorError::new(format!(
             "balance must be > 0 and finite; got {}",
             balance
         )));
     }
     if !(base_twel.is_finite() && base_twel >= 0.0) {
-        return Err(HedgeError::new(format!(
+        return Err(MirrorError::new(format!(
             "base_twel must be >= 0 and finite; got {}",
             base_twel
         )));
     }
 
     let (base_positions, hedge_positions) = match cfg.mode {
-        HedgeMode::HedgeShortsForLongs => (positions_long, positions_short),
-        HedgeMode::HedgeLongsForShorts => (positions_short, positions_long),
+        MirrorMode::MirrorShortsForLongs => (positions_long, positions_short),
+        MirrorMode::MirrorLongsForShorts => (positions_short, positions_long),
     };
 
     // One-way invariant (v0).
@@ -321,7 +321,7 @@ pub fn compute_hedge_cycle(
         }
         for p in positions_short.iter().filter(|p| p.size != 0.0) {
             if long_set.contains(&p.idx) {
-                return Err(HedgeError::new(format!(
+                return Err(MirrorError::new(format!(
                     "one-way violation: both long and short positions open on idx {}",
                     p.idx
                 )));
@@ -329,7 +329,7 @@ pub fn compute_hedge_cycle(
         }
     }
 
-    let mut out = HedgeCycleOutput::default();
+    let mut out = MirrorCycleOutput::default();
 
     let base_open: HashSet<usize> = base_positions
         .iter()
@@ -344,7 +344,7 @@ pub fn compute_hedge_cycle(
         .map(|o| o.idx)
         .collect();
 
-    let hedge_map: HashMap<usize, HedgePosition> = hedge_positions
+    let hedge_map: HashMap<usize, MirrorPosition> = hedge_positions
         .iter()
         .filter(|p| p.size != 0.0)
         .cloned()
@@ -356,7 +356,7 @@ pub fn compute_hedge_cycle(
         for idx in &base_entry_intents {
             if let Some(pos) = hedge_map.get(idx) {
                 if *idx >= symbols.len() {
-                    return Err(HedgeError::new(format!(
+                    return Err(MirrorError::new(format!(
                         "missing symbol market data for collision close idx {}",
                         idx
                     )));
@@ -364,11 +364,11 @@ pub fn compute_hedge_cycle(
                 let sym = &symbols[*idx];
                 let close_qty = hedge_close_qty_for_full_close(cfg.mode, pos, sym);
                 if close_qty != 0.0 {
-                    out.orders.push(HedgeOrder {
+                    out.orders.push(MirrorOrder {
                         idx: *idx,
                         qty: close_qty,
                         price: hedge_close_price(cfg.mode, sym),
-                        action: HedgeAction::Close,
+                        action: MirrorAction::Close,
                         reason: "collision_with_base".to_string(),
                     });
                     out.gate_base_entries.insert(*idx);
@@ -378,7 +378,7 @@ pub fn compute_hedge_cycle(
     }
 
     // Active hedges excluding collisions we are closing.
-    let mut active_hedges: Vec<HedgePosition> = hedge_positions
+    let mut active_hedges: Vec<MirrorPosition> = hedge_positions
         .iter()
         .filter(|p| p.size != 0.0 && !out.gate_base_entries.contains(&p.idx))
         .cloned()
@@ -411,7 +411,7 @@ pub fn compute_hedge_cycle(
     };
     let max_positions = max_positions_cfg.max(1);
     let cap_exposure =
-        (base_twel * cfg.threshold / max_positions as f64) * (1.0 + cfg.hedge_excess_allowance_pct);
+        (base_twel * cfg.threshold / max_positions as f64) * (1.0 + cfg.mirror_excess_allowance_pct);
 
     // Reduce hedge exposure: close least underwater first (full close).
     if diff > tolerance_band {
@@ -420,12 +420,12 @@ pub fn compute_hedge_cycle(
             let sa = &symbols[a.idx];
             let sb = &symbols[b.idx];
             let ua = match cfg.mode {
-                HedgeMode::HedgeShortsForLongs => underwaterness_short(a.price, sa),
-                HedgeMode::HedgeLongsForShorts => underwaterness_long(a.price, sa),
+                MirrorMode::MirrorShortsForLongs => underwaterness_short(a.price, sa),
+                MirrorMode::MirrorLongsForShorts => underwaterness_long(a.price, sa),
             };
             let ub = match cfg.mode {
-                HedgeMode::HedgeShortsForLongs => underwaterness_short(b.price, sb),
-                HedgeMode::HedgeLongsForShorts => underwaterness_long(b.price, sb),
+                MirrorMode::MirrorShortsForLongs => underwaterness_short(b.price, sb),
+                MirrorMode::MirrorLongsForShorts => underwaterness_long(b.price, sb),
             };
             ua.partial_cmp(&ub).unwrap()
         });
@@ -439,11 +439,11 @@ pub fn compute_hedge_cycle(
             if close_qty == 0.0 {
                 continue;
             }
-            out.orders.push(HedgeOrder {
+            out.orders.push(MirrorOrder {
                 idx: pos.idx,
                 qty: close_qty,
                 price: hedge_close_price(cfg.mode, sym),
-                action: HedgeAction::Close,
+                action: MirrorAction::Close,
                 reason: "rebalance_reduce".to_string(),
             });
             gross_hedge -= position_exposure(pos, sym, balance);
@@ -458,11 +458,11 @@ pub fn compute_hedge_cycle(
     }
 
     // Build eligible symbols list:
-    // - restricted to approved_hedge_symbols for *opening*
+    // - restricted to approved_mirror_symbols for *opening*
     // - exclude base open symbols and base entry intents (one-way)
-    let approved_set: HashSet<usize> = cfg.approved_hedge_symbols.iter().copied().collect();
-    let mut eligible: Vec<HedgeSymbol> = Vec::new();
-    for &idx in &cfg.approved_hedge_symbols {
+    let approved_set: HashSet<usize> = cfg.approved_mirror_symbols.iter().copied().collect();
+    let mut eligible: Vec<MirrorSymbol> = Vec::new();
+    for &idx in &cfg.approved_mirror_symbols {
         if idx >= symbols.len() {
             continue;
         }
@@ -474,7 +474,7 @@ pub fn compute_hedge_cycle(
     let ranked = rank_assets_borda(&eligible);
 
     // Working hedge state (simulate in-cycle allocations).
-    let mut hedge_state: HashMap<usize, HedgePosition> = HashMap::new();
+    let mut hedge_state: HashMap<usize, MirrorPosition> = HashMap::new();
     for p in active_hedges.iter().cloned() {
         hedge_state.insert(p.idx, p);
     }
@@ -503,19 +503,19 @@ pub fn compute_hedge_cycle(
             continue;
         }
         let signed_qty = match cfg.mode {
-            HedgeMode::HedgeShortsForLongs => -min_qty,
-            HedgeMode::HedgeLongsForShorts => min_qty,
+            MirrorMode::MirrorShortsForLongs => -min_qty,
+            MirrorMode::MirrorLongsForShorts => min_qty,
         };
-        out.orders.push(HedgeOrder {
+        out.orders.push(MirrorOrder {
             idx: sym.idx,
             qty: signed_qty,
             price: entry_price,
-            action: HedgeAction::OpenOrIncrease,
+            action: MirrorAction::OpenOrIncrease,
             reason: "rebalance_open_min".to_string(),
         });
         hedge_state.insert(
             sym.idx,
-            HedgePosition {
+            MirrorPosition {
                 idx: sym.idx,
                 size: signed_qty,
                 price: entry_price,
@@ -564,8 +564,8 @@ pub fn compute_hedge_cycle(
                 continue;
             }
             let u = match cfg.mode {
-                HedgeMode::HedgeShortsForLongs => underwaterness_short(pos.price, sym),
-                HedgeMode::HedgeLongsForShorts => underwaterness_long(pos.price, sym),
+                MirrorMode::MirrorShortsForLongs => underwaterness_short(pos.price, sym),
+                MirrorMode::MirrorLongsForShorts => underwaterness_long(pos.price, sym),
             };
             best = match best {
                 None => Some((u, *idx)),
@@ -588,7 +588,7 @@ pub fn compute_hedge_cycle(
             effective_min_entry_qty(sym.effective_min_cost, entry_price, &sym.exchange_params);
         let min_cost = qty_to_cost(min_qty, entry_price, sym.exchange_params.c_mult);
 
-        let pos = hedge_state.get(&idx).cloned().unwrap_or(HedgePosition {
+        let pos = hedge_state.get(&idx).cloned().unwrap_or(MirrorPosition {
             idx,
             size: 0.0,
             price: 0.0,
@@ -617,8 +617,8 @@ pub fn compute_hedge_cycle(
             break;
         }
         let signed_qty = match cfg.mode {
-            HedgeMode::HedgeShortsForLongs => -qty,
-            HedgeMode::HedgeLongsForShorts => qty,
+            MirrorMode::MirrorShortsForLongs => -qty,
+            MirrorMode::MirrorLongsForShorts => qty,
         };
         let cost_after = qty_to_cost(qty, entry_price, sym.exchange_params.c_mult);
         if cost_after + 1e-12 < min_cost {
@@ -641,7 +641,7 @@ pub fn compute_hedge_cycle(
         );
         hedge_state.insert(
             idx,
-            HedgePosition {
+            MirrorPosition {
                 idx,
                 size: new_psize,
                 price: new_pprice,
@@ -656,11 +656,11 @@ pub fn compute_hedge_cycle(
         }
         let sym = &symbols[idx];
         let entry_price = hedge_entry_price(cfg.mode, sym);
-        out.orders.push(HedgeOrder {
+        out.orders.push(MirrorOrder {
             idx,
             qty,
             price: entry_price,
-            action: HedgeAction::OpenOrIncrease,
+            action: MirrorAction::OpenOrIncrease,
             reason: "rebalance_add".to_string(),
         });
     }
@@ -674,8 +674,8 @@ pub fn compute_hedge_cycle(
 mod tests {
     use super::*;
 
-    fn sym(idx: usize, bid: f64, ask: f64, vol: f64, vola: f64, min_cost: f64) -> HedgeSymbol {
-        HedgeSymbol {
+    fn sym(idx: usize, bid: f64, ask: f64, vol: f64, vola: f64, min_cost: f64) -> MirrorSymbol {
+        MirrorSymbol {
             idx,
             bid,
             ask,
@@ -704,36 +704,36 @@ mod tests {
 
     #[test]
     fn test_no_action_within_tolerance() {
-        let cfg = HedgeConfig {
+        let cfg = MirrorConfig {
             threshold: 1.0,
             tolerance_pct: 0.10,
-            approved_hedge_symbols: vec![1],
+            approved_mirror_symbols: vec![1],
             ..Default::default()
         };
         let symbols = vec![
             sym(0, 10.0, 10.0, 1.0, 1.0, 1.0),
             sym(1, 10.0, 10.0, 1.0, 1.0, 1.0),
         ];
-        let longs = vec![HedgePosition {
+        let longs = vec![MirrorPosition {
             idx: 0,
             size: 1.0,
             price: 10.0,
         }];
-        let shorts = vec![HedgePosition {
+        let shorts = vec![MirrorPosition {
             idx: 1,
             size: -1.0,
             price: 10.0,
         }];
-        let res = compute_hedge_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
+        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
         assert!(res.orders.is_empty() && res.gate_base_entries.is_empty());
     }
 
     #[test]
     fn test_add_shorts_when_underhedged() {
-        let cfg = HedgeConfig {
+        let cfg = MirrorConfig {
             threshold: 1.0,
             tolerance_pct: 0.0,
-            approved_hedge_symbols: vec![1, 2],
+            approved_mirror_symbols: vec![1, 2],
             ..Default::default()
         };
         let symbols = vec![
@@ -741,95 +741,95 @@ mod tests {
             sym(1, 10.0, 10.0, 1000.0, 0.1, 1.0),
             sym(2, 10.0, 10.0, 900.0, 0.2, 1.0),
         ];
-        let longs = vec![HedgePosition {
+        let longs = vec![MirrorPosition {
             idx: 0,
             size: 10.0,
             price: 10.0,
         }]; // exposure = 1.0
-        let shorts: Vec<HedgePosition> = vec![]; // none
-        let res = compute_hedge_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
+        let shorts: Vec<MirrorPosition> = vec![]; // none
+        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
         assert!(res.orders.iter().any(|o| o.qty < 0.0));
     }
 
     #[test]
     fn test_reduce_shorts_when_overhedged() {
-        let cfg = HedgeConfig {
+        let cfg = MirrorConfig {
             threshold: 1.0,
             tolerance_pct: 0.0,
-            approved_hedge_symbols: vec![1],
+            approved_mirror_symbols: vec![1],
             ..Default::default()
         };
         let symbols = vec![
             sym(0, 10.0, 10.0, 1.0, 1.0, 1.0),
             sym(1, 10.0, 10.0, 1.0, 1.0, 1.0),
         ];
-        let longs = vec![HedgePosition {
+        let longs = vec![MirrorPosition {
             idx: 0,
             size: 5.0,
             price: 10.0,
         }]; // exposure 0.5
-        let shorts = vec![HedgePosition {
+        let shorts = vec![MirrorPosition {
             idx: 1,
             size: -10.0,
             price: 10.0,
         }]; // exposure 1.0
-        let res = compute_hedge_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
+        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
         assert!(res.orders.iter().any(|o| o.qty > 0.0));
     }
 
     #[test]
     fn test_collision_gates_base_entry_and_closes_hedge() {
-        let cfg = HedgeConfig {
+        let cfg = MirrorConfig {
             threshold: 1.0,
             tolerance_pct: 0.0,
-            approved_hedge_symbols: vec![0],
+            approved_mirror_symbols: vec![0],
             ..Default::default()
         };
         let symbols = vec![sym(0, 10.0, 10.0, 1.0, 1.0, 1.0)];
-        let longs = vec![HedgePosition {
+        let longs = vec![MirrorPosition {
             idx: 0,
             size: 10.0,
             price: 10.0,
         }];
-        let shorts = vec![HedgePosition {
+        let shorts = vec![MirrorPosition {
             idx: 0,
             size: -1.0,
             price: 10.0,
         }];
         let desired = vec![DesiredBaseOrder { idx: 0, qty: 1.0 }];
         let res =
-            compute_hedge_cycle(&cfg, &symbols, &longs, &shorts, &desired, 100.0, 1.5, 1).unwrap();
+            compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &desired, 100.0, 1.5, 1).unwrap();
         assert!(res.gate_base_entries.contains(&0));
         assert!(res
             .orders
             .iter()
-            .any(|o| o.qty > 0.0 && o.action == HedgeAction::Close));
+            .any(|o| o.qty > 0.0 && o.action == MirrorAction::Close));
     }
 
     #[test]
     fn test_short_only_mode_adds_longs() {
-        let cfg = HedgeConfig {
+        let cfg = MirrorConfig {
             threshold: 1.0,
             tolerance_pct: 0.0,
-            approved_hedge_symbols: vec![1],
-            mode: HedgeMode::HedgeLongsForShorts,
+            approved_mirror_symbols: vec![1],
+            mode: MirrorMode::MirrorLongsForShorts,
             ..Default::default()
         };
         let symbols = vec![
             sym(0, 10.0, 10.0, 1.0, 1.0, 1.0),
             sym(1, 10.0, 10.0, 1.0, 1.0, 1.0),
         ];
-        let shorts = vec![HedgePosition {
+        let shorts = vec![MirrorPosition {
             idx: 0,
             size: -10.0,
             price: 10.0,
         }]; // base exposure 1.0
-        let hedges: Vec<HedgePosition> = vec![];
+        let hedges: Vec<MirrorPosition> = vec![];
         let res =
-            compute_hedge_cycle(&cfg, &symbols, &hedges, &shorts, &[], 100.0, 1.5, 1).unwrap();
+            compute_mirror_cycle(&cfg, &symbols, &hedges, &shorts, &[], 100.0, 1.5, 1).unwrap();
         assert!(res
             .orders
             .iter()
-            .any(|o| o.qty > 0.0 && o.action == HedgeAction::OpenOrIncrease));
+            .any(|o| o.qty > 0.0 && o.action == MirrorAction::OpenOrIncrease));
     }
 }

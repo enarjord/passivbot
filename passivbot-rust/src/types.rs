@@ -345,13 +345,13 @@ pub enum OrderType {
     CloseAutoReduceWelLong = 24,
     CloseAutoReduceWelShort = 25,
 
-    // Hedge overlay order types
-    HedgeEntryLong = 26,
-    HedgeEntryShort = 27,
-    HedgeCloseCollisionLong = 28,
-    HedgeCloseCollisionShort = 29,
-    HedgeCloseRebalanceLong = 30,
-    HedgeCloseRebalanceShort = 31,
+    // Mirror overlay order types
+    MirrorEntryLong = 26,
+    MirrorEntryShort = 27,
+    MirrorCloseCollisionLong = 28,
+    MirrorCloseCollisionShort = 29,
+    MirrorCloseRebalanceLong = 30,
+    MirrorCloseRebalanceShort = 31,
 
     Empty = 65535,
 }
@@ -386,9 +386,9 @@ impl OrderType {
                 | CloseAutoReduceTwelLong
                 | CloseAutoReduceWelLong
                 | ClosePanicLong
-                | HedgeEntryLong
-                | HedgeCloseCollisionLong
-                | HedgeCloseRebalanceLong
+                | MirrorEntryLong
+                | MirrorCloseCollisionLong
+                | MirrorCloseRebalanceLong
         )
     }
 }

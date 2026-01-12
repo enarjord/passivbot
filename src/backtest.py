@@ -546,28 +546,28 @@ def process_forager_fills(
     total_pnl = pnls["long"] + pnls["short"]
     analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / total_pnl if total_pnl != 0 else 0.5
 
-    # Hedge-specific metrics
-    hedge_fills = fdf[fdf.type.str.contains("hedge")]
-    if len(hedge_fills) > 0:
-        hedge_profit = hedge_fills[hedge_fills.pnl > 0.0].pnl.sum()
-        hedge_loss = hedge_fills[hedge_fills.pnl < 0.0].pnl.sum()
-        hedge_pnl_total = hedge_profit + hedge_loss
-        analysis_appendix["hedge_pnl_total"] = hedge_pnl_total
-        analysis_appendix["hedge_fill_count"] = len(hedge_fills)
-        analysis_appendix["hedge_loss_profit_ratio"] = abs(hedge_loss / hedge_profit) if hedge_profit != 0 else 1.0
-        # Calculate hedge ADG (average daily gain)
+    # Mirror-specific metrics
+    mirror_fills = fdf[fdf.type.str.contains("mirror", case=False)]
+    if len(mirror_fills) > 0:
+        mirror_profit = mirror_fills[mirror_fills.pnl > 0.0].pnl.sum()
+        mirror_loss = mirror_fills[mirror_fills.pnl < 0.0].pnl.sum()
+        mirror_pnl_total = mirror_profit + mirror_loss
+        analysis_appendix["mirror_pnl_total"] = mirror_pnl_total
+        analysis_appendix["mirror_fill_count"] = len(mirror_fills)
+        analysis_appendix["mirror_loss_profit_ratio"] = abs(mirror_loss / mirror_profit) if mirror_profit != 0 else 1.0
+        # Calculate mirror ADG (average daily gain)
         if len(fdf) > 0:
             ts_min = pd.to_datetime(fdf["timestamp"].min(), unit="ms")
             ts_max = pd.to_datetime(fdf["timestamp"].max(), unit="ms")
             n_days = (ts_max - ts_min).total_seconds() / (60 * 60 * 24)
-            analysis_appendix["hedge_adg"] = hedge_pnl_total / n_days if n_days > 0 else 0.0
+            analysis_appendix["mirror_adg"] = mirror_pnl_total / n_days if n_days > 0 else 0.0
         else:
-            analysis_appendix["hedge_adg"] = 0.0
+            analysis_appendix["mirror_adg"] = 0.0
     else:
-        analysis_appendix["hedge_pnl_total"] = 0.0
-        analysis_appendix["hedge_fill_count"] = 0
-        analysis_appendix["hedge_loss_profit_ratio"] = 1.0
-        analysis_appendix["hedge_adg"] = 0.0
+        analysis_appendix["mirror_pnl_total"] = 0.0
+        analysis_appendix["mirror_fill_count"] = 0
+        analysis_appendix["mirror_loss_profit_ratio"] = 1.0
+        analysis_appendix["mirror_adg"] = 0.0
     sample_divider = max(1, int(balance_sample_divider))
     if not fdf.empty:
         timestamps_ns = fdf["timestamp"].astype("int64")
@@ -969,55 +969,55 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
         }
 
-        # Hedge overlay (optional; default disabled).
-        hedge_cfg = config.get("hedge", {}) or {}
+        # Mirror overlay (optional; default disabled).
+        mirror_cfg = config.get("live", {}).get("mirror", {}) or {}
         try:
-            threshold = float(hedge_cfg.get("threshold", 0.0) or 0.0)
+            threshold = float(mirror_cfg.get("threshold", 0.0) or 0.0)
         except Exception:
             threshold = 0.0
         try:
-            tolerance_pct = float(hedge_cfg.get("tolerance_pct", 0.05) or 0.05)
+            tolerance_pct = float(mirror_cfg.get("tolerance_pct", 0.05) or 0.05)
         except Exception:
             tolerance_pct = 0.05
         try:
-            hedge_excess_allowance_pct = float(
-                hedge_cfg.get("hedge_excess_allowance_pct", 0.20) or 0.20
+            mirror_excess_allowance_pct = float(
+                mirror_cfg.get("mirror_excess_allowance_pct", 0.20) or 0.20
             )
         except Exception:
-            hedge_excess_allowance_pct = 0.20
+            mirror_excess_allowance_pct = 0.20
         try:
-            max_n_positions = int(round(float(hedge_cfg.get("max_n_positions", 0) or 0)))
+            max_n_positions = int(round(float(mirror_cfg.get("max_n_positions", 0) or 0)))
         except Exception:
             max_n_positions = 0
         try:
-            allocation_min_fraction = float(hedge_cfg.get("allocation_min_fraction", 0.10) or 0.10)
+            allocation_min_fraction = float(mirror_cfg.get("allocation_min_fraction", 0.10) or 0.10)
         except Exception:
             allocation_min_fraction = 0.10
-        mode = str(hedge_cfg.get("mode", "hedge_shorts_for_longs") or "hedge_shorts_for_longs")
-        one_way = bool(hedge_cfg.get("one_way", True))
+        mode = str(mirror_cfg.get("mode", "mirror_shorts_for_longs") or "mirror_shorts_for_longs")
+        one_way = bool(mirror_cfg.get("one_way", True))
 
         approved_coins = require_live_value(config, "approved_coins")
-        approved_hedge_coins = []
+        approved_mirror_coins = []
         if isinstance(approved_coins, dict):
-            approved_hedge_coins = list(approved_coins.get("short", []) or [])
+            approved_mirror_coins = list(approved_coins.get("short", []) or [])
         elif isinstance(approved_coins, list):
-            approved_hedge_coins = list(approved_coins)
+            approved_mirror_coins = list(approved_coins)
         coin_to_idx = {c: i for i, c in enumerate(coins)}
-        approved_hedge_symbols = [coin_to_idx[c] for c in approved_hedge_coins if c in coin_to_idx]
-        if not approved_hedge_symbols and bool(
+        approved_mirror_symbols = [coin_to_idx[c] for c in approved_mirror_coins if c in coin_to_idx]
+        if not approved_mirror_symbols and bool(
             require_live_value(config, "empty_means_all_approved")
         ):
-            approved_hedge_symbols = list(range(len(coins)))
+            approved_mirror_symbols = list(range(len(coins)))
 
-        backtest_params["hedge"] = {
+        backtest_params["mirror"] = {
             "threshold": threshold,
             "tolerance_pct": tolerance_pct,
-            "hedge_excess_allowance_pct": hedge_excess_allowance_pct,
+            "mirror_excess_allowance_pct": mirror_excess_allowance_pct,
             "max_n_positions": max_n_positions,
             "allocation_min_fraction": allocation_min_fraction,
             "mode": mode,
             "one_way": one_way,
-            "approved_hedge_symbols": approved_hedge_symbols,
+            "approved_mirror_symbols": approved_mirror_symbols,
         }
     return bot_params_list, exchange_params, backtest_params
 
@@ -1027,24 +1027,24 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     analysis_btc = dict(analysis_btc)
     keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
 
-    # Determine effective exposure limits, accounting for hedge mode
-    hedge_cfg = config.get("hedge", {}) or {}
-    hedge_threshold = float(hedge_cfg.get("threshold", 0.0) or 0.0)
-    hedge_mode = str(hedge_cfg.get("mode", "") or "")
+    # Determine effective exposure limits, accounting for mirror mode
+    mirror_cfg = config.get("live", {}).get("mirror", {}) or {}
+    mirror_threshold = float(mirror_cfg.get("threshold", 0.0) or 0.0)
+    mirror_mode = str(mirror_cfg.get("mode", "") or "")
 
     effective_twel = {}
     for pside in ["long", "short"]:
         base_twel = float(require_config_value(config, f"bot.{pside}.total_wallet_exposure_limit"))
         if base_twel > 0.0:
             effective_twel[pside] = base_twel
-        elif hedge_threshold > 0.0:
-            # When base TWEL is 0 but hedge is active, use hedge exposure
-            if pside == "short" and hedge_mode == "hedge_shorts_for_longs":
+        elif mirror_threshold > 0.0:
+            # When base TWEL is 0 but mirror is active, use mirror exposure
+            if pside == "short" and mirror_mode == "mirror_shorts_for_longs":
                 long_twel = float(require_config_value(config, "bot.long.total_wallet_exposure_limit"))
-                effective_twel[pside] = hedge_threshold * long_twel
-            elif pside == "long" and hedge_mode == "hedge_longs_for_shorts":
+                effective_twel[pside] = mirror_threshold * long_twel
+            elif pside == "long" and mirror_mode == "mirror_longs_for_shorts":
                 short_twel = float(require_config_value(config, "bot.short.total_wallet_exposure_limit"))
-                effective_twel[pside] = hedge_threshold * short_twel
+                effective_twel[pside] = mirror_threshold * short_twel
             else:
                 effective_twel[pside] = 0.0
         else:
