@@ -43,11 +43,12 @@ import atexit
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, TypedDict, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, TypedDict, TYPE_CHECKING
 import threading
 from collections import OrderedDict
 
-import sys
+if TYPE_CHECKING:
+    import aiohttp
 
 import numpy as np
 import portalocker  # type: ignore
@@ -334,6 +335,8 @@ class CandlestickManager:
         self._remote_fetch_callback = remote_fetch_callback
         # Cache of legacy shard paths per (exchange, symbol, tf)
         self._legacy_shard_paths_cache: Dict[Tuple[str, str, str], Dict[str, str]] = {}
+        # Cache for legacy day quality decisions: (symbol, tf, date_key) -> legacy_is_complete
+        self._legacy_day_quality_cache: Dict[Tuple[str, str, str], bool] = {}
         # Cache of primary shard paths per (symbol, tf) - avoids redundant glob scans
         self._shard_paths_cache: Dict[Tuple[str, str], Dict[str, str]] = {}
 
@@ -680,6 +683,47 @@ class CandlestickManager:
     ) -> str:
         return str(Path(self._symbol_dir(symbol, timeframe=timeframe, tf=tf)) / f"{date_key}.npy")
 
+    def _prune_missing_shards_from_index(self, idx: dict) -> int:
+        """Remove shard entries whose files are missing; refresh derived meta fields."""
+        try:
+            shards = idx.get("shards", {})
+            if not isinstance(shards, dict) or not shards:
+                return 0
+            removed = 0
+            for day_key, shard_meta in list(shards.items()):
+                if not isinstance(shard_meta, dict):
+                    continue
+                path = shard_meta.get("path")
+                if not path:
+                    continue
+                if not os.path.exists(str(path)):
+                    shards.pop(day_key, None)
+                    removed += 1
+            if not removed:
+                return 0
+            idx["shards"] = shards
+            meta = idx.setdefault("meta", {})
+            try:
+                last_ts = 0
+                inception_ts: Optional[int] = None
+                for shard_meta in shards.values():
+                    if not isinstance(shard_meta, dict):
+                        continue
+                    mt = shard_meta.get("max_ts")
+                    if mt is not None:
+                        last_ts = max(last_ts, int(mt))
+                    mi = shard_meta.get("min_ts")
+                    if mi is not None:
+                        inception_ts = int(mi) if inception_ts is None else min(inception_ts, int(mi))
+                meta["last_final_ts"] = int(last_ts)
+                meta["inception_ts"] = inception_ts
+            except Exception:
+                meta["last_final_ts"] = 0
+                meta["inception_ts"] = None
+            return int(removed)
+        except Exception:
+            return 0
+
     def _ensure_symbol_index(
         self, symbol: str, timeframe: Optional[str] = None, *, tf: Optional[str] = None
     ) -> dict:
@@ -720,6 +764,17 @@ class CandlestickManager:
             meta.setdefault("last_refresh_ms", 0)
             meta.setdefault("last_final_ts", 0)
             meta.setdefault("inception_ts", None)  # first known candle timestamp
+
+            # Keep index consistent if shard files were deleted.
+            removed = self._prune_missing_shards_from_index(idx)
+            if removed:
+                self._log(
+                    "warning",
+                    "index_pruned_missing_shards",
+                    symbol=symbol,
+                    timeframe=tf_norm,
+                    removed=removed,
+                )
             self._index[key] = idx
             self._index_mtime[key] = current_mtime
             self._log(
@@ -740,6 +795,17 @@ class CandlestickManager:
         meta.setdefault("last_refresh_ms", 0)
         meta.setdefault("last_final_ts", 0)
         meta.setdefault("inception_ts", None)  # first known candle timestamp
+
+        # Keep cached index consistent if shard files were deleted while running.
+        removed = self._prune_missing_shards_from_index(idx)
+        if removed:
+            self._log(
+                "warning",
+                "index_pruned_missing_shards",
+                symbol=symbol,
+                timeframe=tf_norm,
+                removed=removed,
+            )
         self._index[key] = idx
         self._index_mtime[key] = current_mtime
         if current_mtime is not None:
@@ -1103,6 +1169,53 @@ class CandlestickManager:
             self.log.warning(f"Failed loading shard {path}: {e}")
             return np.empty((0,), dtype=CANDLE_DTYPE)
 
+    def _legacy_day_is_complete(self, symbol: str, tf: str, date_key: str) -> bool:
+        """Return True if legacy has a continuous shard for this day.
+
+        "Complete" is defined as a full UTC-day of 1m candles:
+        - exactly 1440 minutes
+        - spanning [00:00, 23:59] UTC for the given date_key
+        - strictly 1m-continuous with no duplicates
+
+        This is intentionally strict because this flag gates whether we skip writing a
+        primary shard overlay. If we mistakenly treat a partial legacy shard as complete,
+        we will keep re-downloading the missing minutes every run but never persist them.
+        """
+        cache_key = (str(symbol), str(tf), str(date_key))
+        cached = self._legacy_day_quality_cache.get(cache_key)
+        if cached is not None:
+            return bool(cached)
+        ok = False
+        try:
+            legacy_paths = self._get_legacy_shard_paths(symbol, tf)
+            legacy_path = legacy_paths.get(date_key)
+            if not legacy_path or not os.path.exists(str(legacy_path)):
+                ok = False
+            else:
+                arr = self._load_shard(str(legacy_path))
+                if arr.size == 0:
+                    ok = False
+                else:
+                    day_start, day_end = self._date_range_of_key(str(date_key))
+                    expected_len = int((day_end - day_start) // ONE_MIN_MS) + 1  # 1440
+                    if int(arr.shape[0]) != int(expected_len):
+                        ok = False
+                    else:
+                        ts = np.sort(arr["ts"].astype(np.int64, copy=False))
+                        if int(ts[0]) != int(day_start) or int(ts[-1]) != int(day_end):
+                            ok = False
+                        else:
+                            diffs = np.diff(ts)
+                            ok = bool(
+                                diffs.size
+                                and int(diffs.min()) == ONE_MIN_MS
+                                and int(diffs.max()) == ONE_MIN_MS
+                            )
+        except Exception:
+            ok = False
+        self._legacy_day_quality_cache[cache_key] = bool(ok)
+        return bool(ok)
+
     def _load_from_disk(
         self,
         symbol: str,
@@ -1126,46 +1239,7 @@ class CandlestickManager:
             day_ctx: Dict[str, Dict[str, Any]] = {}
             legacy_hits = 0
             primary_hits = 0
-
-            def _expected_len_for_day(day_start: int, day_end: int) -> int:
-                lo = _floor_minute(max(int(start_ts), int(day_start)))
-                hi = _floor_minute(min(int(end_ts), int(day_end)))
-                if hi < lo:
-                    return 0
-                return int((hi - lo) // ONE_MIN_MS) + 1
-
-            def _looks_suspicious_1m(arr: np.ndarray, day_start: int, day_end: int) -> bool:
-                if tf_norm != "1m":
-                    return False
-                expected_len = _expected_len_for_day(day_start, day_end)
-                if expected_len <= 0:
-                    return False
-                if arr.size == 0:
-                    return True
-                # Conservative: only flag shards that are clearly partial.
-                if int(arr.shape[0]) < max(10, int(expected_len * 0.50)):
-                    return True
-                try:
-                    ts0 = int(arr[0]["ts"])
-                    ts1 = int(arr[-1]["ts"])
-                except Exception:
-                    return True
-                full_day_requested = int(start_ts) <= int(day_start) and int(end_ts) >= int(day_end)
-                if full_day_requested and expected_len >= 600:
-                    lo = _floor_minute(max(int(start_ts), int(day_start)))
-                    hi = _floor_minute(min(int(end_ts), int(day_end)))
-                    if ts0 > lo + 5 * ONE_MIN_MS:
-                        return True
-                    if ts1 < hi - 5 * ONE_MIN_MS:
-                        return True
-                if arr.size > 1:
-                    diffs = np.diff(arr["ts"].astype(np.int64, copy=False))
-                    if diffs.size and (int(diffs.min()) < ONE_MIN_MS or int(diffs.max()) > ONE_MIN_MS):
-                        return True
-                return False
-
-            idx = self._ensure_symbol_index(symbol, tf=tf_norm)
-            shard_meta = idx.get("shards", {}) if isinstance(idx, dict) else {}
+            merged_hits = 0
             for key, (day_start, day_end) in days.items():
                 if day_end < start_ts or day_start > end_ts:
                     continue
@@ -1176,38 +1250,39 @@ class CandlestickManager:
 
                 chosen_path: Optional[str] = None
                 chosen_source: str = ""
-                if primary_path is not None:
-                    choose_legacy = False
-                    if legacy_path is not None and tf_norm == "1m":
-                        # Quick suspicion check via index metadata (if available)
-                        try:
-                            meta = shard_meta.get(key) if isinstance(shard_meta, dict) else None
-                            if isinstance(meta, dict):
-                                exp_len = _expected_len_for_day(int(day_start), int(day_end))
-                                cnt = int(meta.get("count", 0))
-                                if exp_len > 0 and cnt < max(10, int(exp_len * 0.50)):
-                                    choose_legacy = True
-                        except Exception as exc:
-                            self._log(
-                                "debug",
-                                "disk_load_metadata_check_failed",
-                                symbol=symbol,
-                                timeframe=tf_norm,
-                                day=key,
-                                error=str(exc),
-                            )
-                    if choose_legacy and legacy_path is not None:
+
+                # For 1m, treat legacy downloader shards as canonical and use primary as an
+                # overlay only when legacy is missing/incomplete.
+                if tf_norm == "1m" and legacy_path is not None:
+                    legacy_complete = False
+                    try:
+                        legacy_complete = self._legacy_day_is_complete(symbol, tf_norm, key)
+                    except Exception:
+                        legacy_complete = False
+
+                    if legacy_complete:
                         chosen_path = legacy_path
                         chosen_source = "legacy"
                         legacy_hits += 1
                     else:
+                        if primary_path is not None:
+                            # Load both and merge to maximize coverage (reduces slow refetch paths).
+                            chosen_path = legacy_path
+                            chosen_source = "merge"
+                            merged_hits += 1
+                        else:
+                            chosen_path = legacy_path
+                            chosen_source = "legacy"
+                            legacy_hits += 1
+                else:
+                    if primary_path is not None:
                         chosen_path = primary_path
                         chosen_source = "primary"
                         primary_hits += 1
-                else:
-                    chosen_path = legacy_path
-                    chosen_source = "legacy"
-                    legacy_hits += 1
+                    else:
+                        chosen_path = legacy_path
+                        chosen_source = "legacy"
+                        legacy_hits += 1
 
                 if chosen_path is not None:
                     load_keys.append((key, chosen_path))
@@ -1228,125 +1303,31 @@ class CandlestickManager:
                 days_total=len(days),
                 primary_days=primary_hits,
                 legacy_days=legacy_hits,
+                merged_days=merged_hits,
             )
             # Load and merge with coarse progress updates to show activity for large ranges.
             arrays: List[np.ndarray] = []
             t0 = time.monotonic()
             last_progress_log = t0
-            repaired_primary_days = 0
-            repaired_any = False
             for i, (day_key, path) in enumerate(sorted(load_keys), start=1):
                 ctx = day_ctx.get(day_key, {})
-                a = self._load_shard(path)
-
-                # If we loaded legacy for a day where a primary shard exists but looks incomplete,
-                # overwrite/repair the primary shard on disk to self-heal permanently.
-                if (
-                    tf_norm == "1m"
-                    and ctx.get("source") == "legacy"
-                    and ctx.get("primary_path")
-                    and a.size
-                ):
-                    suspect_primary = False
+                src = str(ctx.get("source") or "")
+                if tf_norm == "1m" and src == "merge":
+                    legacy_arr = self._load_shard(path)
+                    primary_arr = np.empty((0,), dtype=CANDLE_DTYPE)
                     try:
-                        meta = shard_meta.get(day_key) if isinstance(shard_meta, dict) else None
-                        if isinstance(meta, dict):
-                            exp_len = _expected_len_for_day(int(ctx.get("day_start", 0)), int(ctx.get("day_end", 0)))
-                            cnt = int(meta.get("count", 0))
-                            if exp_len > 0 and cnt < max(10, int(exp_len * 0.50)):
-                                suspect_primary = True
-                    except Exception as exc:
-                        self._log(
-                            "debug",
-                            "disk_load_primary_meta_check_failed",
-                            symbol=symbol,
-                            timeframe=tf_norm,
-                            day=day_key,
-                            error=str(exc),
-                        )
-                    if not suspect_primary:
-                        try:
-                            primary_arr = self._load_shard(str(ctx.get("primary_path")))
-                            suspect_primary = _looks_suspicious_1m(
-                                primary_arr, int(ctx.get("day_start", 0)), int(ctx.get("day_end", 0))
-                            )
-                        except Exception as exc:
-                            self._log(
-                                "debug",
-                                "disk_load_primary_shard_check_failed",
-                                symbol=symbol,
-                                timeframe=tf_norm,
-                                day=day_key,
-                                primary_path=str(ctx.get("primary_path")),
-                                error=str(exc),
-                            )
-                    if suspect_primary:
-                        try:
-                            self._save_shard(symbol, day_key, a, tf=tf_norm, defer_index=True)
-                            repaired_primary_days += 1
-                            repaired_any = True
-                            self._log(
-                                "warning",
-                                "primary_shard_overwritten_from_legacy",
-                                symbol=symbol,
-                                timeframe=tf_norm,
-                                day=day_key,
-                                primary_path=str(ctx.get("primary_path")),
-                                legacy_path=str(ctx.get("legacy_path")),
-                                repaired_rows=int(a.shape[0]),
-                            )
-                        except Exception as exc:
-                            # Best-effort: keep going with in-memory array, but log the failure.
-                            self._log(
-                                "warning",
-                                "primary_shard_overwrite_from_legacy_save_failed",
-                                symbol=symbol,
-                                timeframe=tf_norm,
-                                day=day_key,
-                                primary_path=str(ctx.get("primary_path")),
-                                legacy_path=str(ctx.get("legacy_path")),
-                                error=str(exc),
-                            )
+                        pp = ctx.get("primary_path")
+                        if pp:
+                            primary_arr = self._load_shard(str(pp))
+                    except Exception:
+                        primary_arr = np.empty((0,), dtype=CANDLE_DTYPE)
+                    # Keep legacy canonical: primary should only fill legacy gaps.
+                    a = self._merge_overwrite(primary_arr, legacy_arr)
+                else:
+                    a = self._load_shard(path)
 
-                # Auto-repair obviously partial primary shards using legacy archive shards.
-                if (
-                    tf_norm == "1m"
-                    and ctx.get("source") == "primary"
-                    and ctx.get("legacy_path")
-                    and _looks_suspicious_1m(a, int(ctx.get("day_start", 0)), int(ctx.get("day_end", 0)))
-                ):
-                    primary_rows = int(a.shape[0]) if a is not None else 0
-                    legacy_arr = self._load_shard(str(ctx["legacy_path"]))
-                    if legacy_arr.size:
-                        repaired = self._merge_overwrite(a, legacy_arr)
-                        try:
-                            self._save_shard(symbol, day_key, repaired, tf=tf_norm, defer_index=True)
-                            repaired_primary_days += 1
-                            repaired_any = True
-                        except Exception as exc:
-                            # Best-effort: keep going with the repaired in-memory array.
-                            self._log(
-                                "warning",
-                                "primary_shard_repair_save_failed",
-                                symbol=symbol,
-                                timeframe=tf_norm,
-                                day=day_key,
-                                primary_path=str(ctx.get("primary_path")),
-                                legacy_path=str(ctx.get("legacy_path")),
-                                error=str(exc),
-                            )
-                        a = repaired
-                        self._log(
-                            "warning",
-                            "primary_shard_repaired_from_legacy",
-                            symbol=symbol,
-                            timeframe=tf_norm,
-                            day=day_key,
-                            primary_path=str(ctx.get("primary_path")),
-                            legacy_path=str(ctx.get("legacy_path")),
-                            primary_rows=primary_rows,
-                            repaired_rows=int(a.shape[0]),
-                        )
+                # NOTE: We intentionally do NOT write legacy data into primary shards.
+                # Primary is only used to fill gaps where legacy is missing/incomplete.
                 arrays.append(a)
                 now = time.monotonic()
                 if now - last_progress_log >= 5.0 or i == len(load_keys):
@@ -1365,19 +1346,6 @@ class CandlestickManager:
             if not arrays:
                 return
             merged_disk = np.sort(np.concatenate(arrays), order="ts")
-
-            # Flush deferred index updates once after repairs.
-            if repaired_any:
-                try:
-                    self.flush_deferred_index(symbol, tf=tf_norm)
-                except Exception as exc:
-                    self._log(
-                        "warning",
-                        "flush_deferred_index_failed",
-                        symbol=symbol,
-                        timeframe=tf_norm,
-                        error=str(exc),
-                    )
 
             # If legacy data revealed earlier candles than our stored inception_ts,
             # update inception_ts now so archive prefetch logic doesn't skip.
@@ -1407,7 +1375,6 @@ class CandlestickManager:
                 days=len(load_keys),
                 primary_days=primary_hits,
                 legacy_days=legacy_hits,
-                repaired_primary_days=repaired_primary_days,
                 rows=int(merged_disk.shape[0]),
                 start_ts=start_ts,
                 end_ts=end_ts,
@@ -2046,10 +2013,14 @@ class CandlestickManager:
         if not hasattr(ex, "fetch_ohlcv"):
             return []
 
-        backoff = 0.5
-        for attempt in range(5):
+        exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
+        is_bybit = "bybit" in exid
+        max_attempts = 9 if is_bybit else 5
+        backoff = 1.0 if is_bybit else 0.5
+        backoff_cap = 20.0 if is_bybit else 8.0
+        for attempt in range(max_attempts):
             try:
-                params = {}
+                params: Dict[str, Any] = {}
                 # Provide an end bound for exchanges that support it.
                 # Note: Avoid passing 'until' to Bitget due to API validation errors on non-1m tfs.
                 if end_exclusive_ms is not None:
@@ -2063,6 +2034,12 @@ class CandlestickManager:
                         and "kucoin" not in exid
                     ):
                         params["until"] = int(end_exclusive_ms) - 1
+
+                # Bybit v5 requires a category for some market data routes. CCXT usually infers
+                # this from the market, but being explicit avoids intermittent misclassification.
+                if "bybit" in exid:
+                    params.setdefault("category", "linear")
+
                 tf_norm = self._normalize_timeframe_arg(timeframe, tf, default=self._ccxt_timeframe)
                 t0 = time.monotonic()
                 self._emit_remote_fetch(
@@ -2128,6 +2105,8 @@ class CandlestickManager:
                 )
                 return res or []
             except Exception as e:  # pragma: no cover - network not used in tests
+                err_type = type(e).__name__
+                err_repr = repr(e)
                 elapsed_ms = int((time.monotonic() - t0) * 1000) if "t0" in locals() else None
                 self._emit_remote_fetch(
                     {
@@ -2139,18 +2118,37 @@ class CandlestickManager:
                         "since_ts": int(since_ms),
                         "attempt": int(attempt + 1),
                         "elapsed_ms": elapsed_ms,
+                        "params": dict(params) if "params" in locals() else None,
+                        "error_type": err_type,
                         "error": str(e),
+                        "error_repr": err_repr,
                     }
                 )
                 self._log(
                     "warning",
                     "ccxt_fetch_ohlcv_failed",
                     symbol=symbol,
+                    tf=str(tf) if tf is not None else None,
                     attempt=attempt + 1,
+                    params=params if "params" in locals() else None,
+                    error_type=err_type,
                     error=str(e),
+                    error_repr=err_repr,
                 )
-                await asyncio.sleep(backoff)
-                backoff *= 2
+                sleep_s = backoff
+                msg = (str(e) or "")
+                msg_l = msg.lower()
+                # Heuristic: slow down harder on rate-limit style responses.
+                if any(x in msg_l for x in ("rate limit", "too many", "429", "10006")):
+                    sleep_s = max(sleep_s, 5.0)
+                # Bybit: be more persistent on transient network-ish errors.
+                if is_bybit and (
+                    err_type in {"RequestTimeout", "NetworkError", "ExchangeNotAvailable", "DDoSProtection"}
+                    or any(x in msg_l for x in ("timed out", "timeout", "etimedout", "econnreset", "502", "503", "504"))
+                ):
+                    sleep_s = max(sleep_s, 2.0)
+                await asyncio.sleep(sleep_s)
+                backoff = min(backoff * 2.0, backoff_cap)
         return []
 
     # ----- Array slicing helpers -----
@@ -2546,11 +2544,13 @@ class CandlestickManager:
 
         async with self._http_session_lock:
             if self._http_session is None or self._http_session.closed:
-                # Configure session with faster fail timeouts and increased connection pooling
-                timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_read=15)
+                # Archive hosts can be slow and archives can be large; use tolerant timeouts.
+                # Keep connect timeout bounded, but allow more time for reads.
+                timeout = aiohttp.ClientTimeout(total=120, connect=20, sock_read=60)
                 connector = aiohttp.TCPConnector(
-                    limit=50,  # Increased for parallel symbol fetching
-                    limit_per_host=15,  # Increased for archive servers
+                    # Keep concurrency moderate to avoid timeouts under load.
+                    limit=20,
+                    limit_per_host=6,
                     ttl_dns_cache=300,  # DNS cache TTL in seconds
                     enable_cleanup_closed=True,
                 )
@@ -2603,17 +2603,28 @@ class CandlestickManager:
                 resp.raise_for_status()
                 data = await resp.read()
         except Exception as e:
+            err_type = type(e).__name__
+            err_repr = repr(e)
             self._emit_remote_fetch(
                 {
                     "kind": "archive_http_get",
                     "stage": "error",
                     "exchange": str(self._ex_id),
                     "url": str(url),
+                    "error_type": err_type,
                     "error": str(e),
+                    "error_repr": err_repr,
                     "elapsed_ms": int((time.monotonic() - t0) * 1000),
                 }
             )
-            self._log("debug", "archive_http_error", url=url, error=str(e))
+            self._log(
+                "debug",
+                "archive_http_error",
+                url=url,
+                error_type=err_type,
+                error=str(e),
+                error_repr=err_repr,
+            )
             raise
 
         self._emit_remote_fetch(
@@ -2849,6 +2860,16 @@ class CandlestickManager:
         shard_paths = self._iter_shard_paths(symbol, tf="1m")
         legacy_paths = self._get_legacy_shard_paths(symbol, "1m")
 
+        # Determine primary shard completeness via index.json (cheap; avoids loading npy files).
+        idx_shards: Dict[str, Dict[str, Any]] = {}
+        try:
+            idx = self._ensure_symbol_index(symbol, tf="1m")
+            idx_shards = idx.get("shards") or {}
+            if not isinstance(idx_shards, dict):
+                idx_shards = {}
+        except Exception:
+            idx_shards = {}
+
         # Don't try to fetch archives for recent days - they don't exist yet
         # Exchanges typically need 48-72 hours to publish archive data
         archive_freshness_hours = 72
@@ -2856,18 +2877,59 @@ class CandlestickManager:
 
         # First pass: count days to fetch
         days_to_fetch = []
+        skipped_reasons = {
+            "partial_day_request": 0,
+            "too_recent": 0,
+            "legacy_present": 0,
+            "primary_complete": 0,
+        }
         for day_key, (day_start, day_end) in day_map.items():
             if start_ts > day_start or end_ts < day_end:
+                skipped_reasons["partial_day_request"] += 1
                 continue  # not a full-day request for this day
             if day_end > archive_cutoff_ms:
+                skipped_reasons["too_recent"] += 1
                 continue  # too recent - archive not available yet, use CCXT
-            if day_key in shard_paths:
-                continue  # already have at least some data on disk
             if day_key in legacy_paths:
+                skipped_reasons["legacy_present"] += 1
                 continue  # legacy cache already covers this day
+
+            # Only fetch archives for days missing or incomplete in primary.
+            # NOTE: Previously we skipped any day with an existing primary shard path.
+            # That can block archive healing if a prior CCXT run wrote a partial/incomplete day.
+            if day_key in shard_paths:
+                meta = idx_shards.get(day_key) if isinstance(idx_shards, dict) else None
+                try:
+                    if isinstance(meta, dict):
+                        # full UTC day coverage (inclusive endpoints)
+                        if (
+                            int(meta.get("count") or -1) == 1440
+                            and int(meta.get("min_ts") or 0) == int(day_start)
+                            and int(meta.get("max_ts") or 0) == int(day_end)
+                        ):
+                            skipped_reasons["primary_complete"] += 1
+                            continue
+                except Exception:
+                    # If meta is missing/corrupt, treat as incomplete and allow archive fetch.
+                    pass
+
             days_to_fetch.append((day_key, day_start, day_end))
 
         if not days_to_fetch:
+            # Surface why archive prefetch didn't run (useful when large gaps exist but
+            # they are not eligible for full-day archive materialization).
+            try:
+                self._emit_remote_fetch(
+                    {
+                        "kind": "archive_prefetch",
+                        "stage": "skip",
+                        "exchange": str(self._ex_id),
+                        "symbol": symbol,
+                        "reasons": dict(skipped_reasons),
+                    }
+                )
+            except Exception:
+                pass
             return
 
         total_days = len(days_to_fetch)
@@ -2884,12 +2946,34 @@ class CandlestickManager:
             parallel=parallel_days,
             date_range=f"{days_to_fetch[0][0]}..{days_to_fetch[-1][0]}",
         )
+        self._emit_remote_fetch(
+            {
+                "kind": "archive_prefetch",
+                "stage": "start",
+                "exchange": str(self._ex_id),
+                "symbol": symbol,
+                "days_to_fetch": int(total_days),
+                "parallel": int(parallel_days),
+                "date_range": f"{days_to_fetch[0][0]}..{days_to_fetch[-1][0]}",
+            }
+        )
+
+        last_progress_emit = 0.0
 
         # Semaphore to limit concurrent fetches
         sem = asyncio.Semaphore(max(1, parallel_days))
 
-        async def fetch_single_day(day_info: Tuple[str, int, int]) -> Tuple[str, Optional[np.ndarray], Optional[str]]:
-            """Fetch a single day's archive data. Returns (day_key, array or None, error or None)."""
+        def _format_archive_exc(exc: BaseException) -> Tuple[str, str]:
+            """Return (error_type, error_repr) for logging."""
+            try:
+                return (type(exc).__name__, repr(exc))
+            except Exception:
+                return (type(exc).__name__, "<unrepresentable exception>")
+
+        async def fetch_single_day(
+            day_info: Tuple[str, int, int]
+        ) -> Tuple[str, Optional[np.ndarray], Optional[Tuple[str, str]]]:
+            """Fetch a single day's archive data. Returns (day_key, array or None, (err_type, err_repr) or None)."""
             day_key, day_start, day_end = day_info
             async with sem:
                 try:
@@ -2897,7 +2981,7 @@ class CandlestickManager:
                     arr = await self._archive_fetch_day(symbol, day_key)
                     return (day_key, arr, None)
                 except Exception as e:
-                    return (day_key, None, str(e))
+                    return (day_key, None, _format_archive_exc(e))
 
         try:
             # Process in batches matching semaphore limit to avoid task queuing
@@ -2917,6 +3001,25 @@ class CandlestickManager:
                     batch=f"{batch[0][0]}..{batch[-1][0]}",
                     elapsed_s=round(time.monotonic() - start_time, 1),
                 )
+                try:
+                    now = time.monotonic()
+                    if (now - last_progress_emit) >= float(self._progress_log_interval_seconds or 0.0):
+                        last_progress_emit = now
+                        self._emit_remote_fetch(
+                            {
+                                "kind": "archive_prefetch",
+                                "stage": "progress",
+                                "exchange": str(self._ex_id),
+                                "symbol": symbol,
+                                "completed": int(completed),
+                                "total": int(total_days),
+                                "pct": int(100 * completed / total_days) if total_days > 0 else 0,
+                                "batch": f"{batch[0][0]}..{batch[-1][0]}",
+                                "elapsed_s": round(time.monotonic() - start_time, 1),
+                            }
+                        )
+                except Exception:
+                    pass
 
                 # Fetch batch in parallel
                 tasks = [fetch_single_day(d) for d in batch]
@@ -2927,12 +3030,26 @@ class CandlestickManager:
                 for i, result in enumerate(results):
                     day_key = batch[i][0]
                     if isinstance(result, Exception):
-                        error_msg = str(result) or f"{type(result).__name__}"
-                        self._log("warning", "archive_day_failed", symbol=symbol, day=day_key, error=error_msg)
+                        err_type, err_repr = _format_archive_exc(result)
+                        self._log(
+                            "warning",
+                            "archive_day_failed",
+                            symbol=symbol,
+                            day=day_key,
+                            error=err_repr,
+                            error_type=err_type,
+                        )
                         skipped += 1
-                    elif result[2] is not None:  # Error string
-                        error_msg = result[2] or "unknown error"
-                        self._log("warning", "archive_day_failed", symbol=symbol, day=day_key, error=error_msg)
+                    elif result[2] is not None:  # (error_type, error_repr)
+                        err_type, err_repr = result[2]
+                        self._log(
+                            "warning",
+                            "archive_day_failed",
+                            symbol=symbol,
+                            day=day_key,
+                            error=err_repr,
+                            error_type=err_type,
+                        )
                         skipped += 1
                     elif result[1] is None or result[1].size == 0:
                         self._log("debug", "archive_day_unavailable", symbol=symbol, day=day_key)
@@ -2988,6 +3105,18 @@ class CandlestickManager:
             skipped=skipped,
             total=total_days,
             elapsed_s=total_elapsed,
+        )
+        self._emit_remote_fetch(
+            {
+                "kind": "archive_prefetch",
+                "stage": "done",
+                "exchange": str(self._ex_id),
+                "symbol": symbol,
+                "fetched": int(completed),
+                "skipped": int(skipped),
+                "total": int(total_days),
+                "elapsed_s": float(total_elapsed),
+            }
         )
 
     async def get_candles(
@@ -3351,10 +3480,13 @@ class CandlestickManager:
                                 ]
                             if unknown_after:
                                 persisted_batches = False
+                                deferred_index_any = False
+                                flush_failed_once = False
 
                                 def _persist_hist_batch(batch: np.ndarray) -> None:
-                                    nonlocal persisted_batches
+                                    nonlocal persisted_batches, deferred_index_any
                                     persisted_batches = True
+                                    deferred_index_any = True
                                     # Skip memory retention to preserve full historical data
                                     self._persist_batch(
                                         symbol,
@@ -3362,6 +3494,7 @@ class CandlestickManager:
                                         timeframe="1m",
                                         merge_cache=True,
                                         last_refresh_ms=now,
+                                        defer_index=True,
                                         skip_memory_retention=True,
                                     )
                                 self._log(
@@ -3373,8 +3506,45 @@ class CandlestickManager:
                                     last_end_ts=int(unknown_after[-1][1]),
                                 )
 
+                                # Coalesce many small missing spans into per-day fetch windows.
+                                # This avoids thousands of tiny CCXT requests when gaps are fragmented.
+                                spans_to_fetch: List[Tuple[int, int]] = list(unknown_after)
+                                try:
+                                    day_windows: Dict[str, Tuple[int, int]] = {}
+                                    for s0, e0 in spans_to_fetch:
+                                        s = int(s0)
+                                        e = int(e0)
+                                        if e < s:
+                                            continue
+                                        while s <= e:
+                                            dk = self._date_key(s)
+                                            ds, de = self._date_range_of_key(dk)
+                                            w_start = max(int(ds), int(adj_start_ts))
+                                            w_end = min(int(de), int(end_ts))
+                                            if w_end >= w_start:
+                                                prev = day_windows.get(dk)
+                                                if prev is None:
+                                                    day_windows[dk] = (w_start, w_end)
+                                                else:
+                                                    day_windows[dk] = (
+                                                        min(int(prev[0]), w_start),
+                                                        max(int(prev[1]), w_end),
+                                                    )
+                                            s = int(de) + ONE_MIN_MS
+                                    spans_to_fetch = [day_windows[k] for k in sorted(day_windows.keys())]
+                                    if len(spans_to_fetch) != len(unknown_after):
+                                        self._log(
+                                            "info",
+                                            "historical_missing_spans_coalesced",
+                                            symbol=symbol,
+                                            spans_before=len(unknown_after),
+                                            spans_after=len(spans_to_fetch),
+                                        )
+                                except Exception:
+                                    spans_to_fetch = list(unknown_after)
+
                                 # Fetch only the missing spans (not the whole historical range).
-                                for s, e in unknown_after:
+                                for s, e in spans_to_fetch:
                                     s2 = max(int(s), int(adj_start_ts))
                                     e2 = int(e)
                                     if e2 < s2:
@@ -3395,6 +3565,27 @@ class CandlestickManager:
                                             s2,
                                             span_end_excl,
                                         )
+                                    if deferred_index_any:
+                                        try:
+                                            self.flush_deferred_index(symbol, tf="1m")
+                                        except Exception as exc:  # best-effort; keep fetching even if index update fails
+                                            if not flush_failed_once:
+                                                try:
+                                                    err_type = type(exc).__name__
+                                                    err_repr = repr(exc)
+                                                except Exception:
+                                                    err_type = "Exception"
+                                                    err_repr = "<unrepresentable exception>"
+                                                self._log(
+                                                    "warning",
+                                                    "flush_deferred_index_failed",
+                                                    symbol=symbol,
+                                                    timeframe="1m",
+                                                    error_type=err_type,
+                                                    error=err_repr,
+                                                )
+                                                flush_failed_once = True
+                                        deferred_index_any = False
                                     if fetched.size and not persisted_batches:
                                         # Skip memory retention to preserve full historical data
                                         self._persist_batch(
@@ -3403,8 +3594,28 @@ class CandlestickManager:
                                             timeframe="1m",
                                             merge_cache=True,
                                             last_refresh_ms=now,
+                                            defer_index=True,
                                             skip_memory_retention=True,
                                         )
+                                        try:
+                                            self.flush_deferred_index(symbol, tf="1m")
+                                        except Exception as exc:  # best-effort; keep fetching even if index update fails
+                                            if not flush_failed_once:
+                                                try:
+                                                    err_type = type(exc).__name__
+                                                    err_repr = repr(exc)
+                                                except Exception:
+                                                    err_type = "Exception"
+                                                    err_repr = "<unrepresentable exception>"
+                                                self._log(
+                                                    "warning",
+                                                    "flush_deferred_index_failed",
+                                                    symbol=symbol,
+                                                    timeframe="1m",
+                                                    error_type=err_type,
+                                                    error=err_repr,
+                                                )
+                                                flush_failed_once = True
                             arr = (
                                 np.sort(self._cache[symbol], order="ts")
                                 if symbol in self._cache
@@ -4595,6 +4806,29 @@ class CandlestickManager:
         crc = int(zlib.crc32(data_bytes) & 0xFFFFFFFF)
 
         tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+
+        # If legacy already has a continuous 1m day shard, skip writing this primary shard.
+        # Primary should only fill legacy gaps.
+        if tf_norm == "1m":
+            try:
+                if self._legacy_day_is_complete(symbol, tf_norm, date_key):
+                    return
+            except Exception as exc:  # best-effort; legacy cache may be unreadable, fall back to primary write
+                try:
+                    err_type = type(exc).__name__
+                    err_repr = repr(exc)
+                except Exception:
+                    err_type = "Exception"
+                    err_repr = "<unrepresentable exception>"
+                self._log(
+                    "warning",
+                    "legacy_day_quality_check_failed",
+                    symbol=symbol,
+                    timeframe=tf_norm,
+                    day=date_key,
+                    error_type=err_type,
+                    error=err_repr,
+                )
         shard_path = self._shard_path(symbol, date_key, tf=tf_norm)
         os.makedirs(os.path.dirname(shard_path), exist_ok=True)
         # Write .npy content atomically
