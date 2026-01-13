@@ -1280,6 +1280,7 @@ async def main():
         "hedge_mode",
         "ignored_coins",
         "minimum_coin_age_days",
+        "mirror",
     }
     for key in sorted(template_config["live"]):
         if key not in keep_live_keys:
