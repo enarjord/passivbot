@@ -15,6 +15,7 @@ This document provides an overview of the parameters found in `config/template.j
 - **filter_by_min_effective_cost**: When `true`, skip coins whose projected initial entry
   (balance × wallet_exposure_limit × entry_initial_qty_pct, including WE excess allowance)
   would fall below the exchange’s effective minimum cost.
+- **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use the exchange-derived maker fees.
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
   `balance_and_equity.csv` and related plots. `1` keeps full per-minute resolution; higher values
   thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes.
