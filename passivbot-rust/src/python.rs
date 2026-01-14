@@ -905,12 +905,6 @@ fn mirror_config_from_dict(backtest_params: &PyDict) -> PyResult<Option<MirrorCo
         _ => MirrorMode::MirrorShortsForLongs,
     };
 
-    let one_way: bool = mirror_dict
-        .get_item("one_way")?
-        .map(|v| v.extract::<bool>())
-        .transpose()?
-        .unwrap_or(true);
-
     let approved_mirror_symbols: Vec<usize> = mirror_dict
         .get_item("approved_mirror_symbols")?
         .map(|v| v.extract::<Vec<usize>>())
@@ -924,7 +918,6 @@ fn mirror_config_from_dict(backtest_params: &PyDict) -> PyResult<Option<MirrorCo
         max_n_positions,
         allocation_min_fraction,
         mode,
-        one_way,
         approved_mirror_symbols,
     }))
 }

@@ -3473,7 +3473,6 @@ class Passivbot:
                         self.config_get(["live", "mirror", "mode"], default="mirror_shorts_for_longs")
                         or "mirror_shorts_for_longs"
                     ),
-                    "one_way": True,
                     "approved_mirror_symbols": [],
                 },
                 "hedge_mode": effective_hedge_mode,
@@ -3768,7 +3767,6 @@ class Passivbot:
                         self.config_get(["live", "mirror", "mode"], default="mirror_shorts_for_longs")
                         or "mirror_shorts_for_longs"
                     ),
-                    "one_way": True,
                     "approved_mirror_symbols": [],
                 },
                 "hedge_mode": effective_hedge_mode,

@@ -2850,6 +2850,7 @@ mod tests {
             vec![bp_pair],
             vec![ExchangeParams::default()],
             &backtest_params,
+            None,
         );
 
         let input = bt.get_orchestrator_input_cached(1, None);

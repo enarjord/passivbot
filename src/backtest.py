@@ -1001,7 +1001,6 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
         except Exception:
             allocation_min_fraction = 0.10
         mode = str(mirror_cfg.get("mode", "mirror_shorts_for_longs") or "mirror_shorts_for_longs")
-        one_way = bool(mirror_cfg.get("one_way", True))
 
         approved_coins = require_live_value(config, "approved_coins")
         approved_mirror_coins = []
@@ -1023,7 +1022,6 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "max_n_positions": max_n_positions,
             "allocation_min_fraction": allocation_min_fraction,
             "mode": mode,
-            "one_way": one_way,
             "approved_mirror_symbols": approved_mirror_symbols,
         }
     return bot_params_list, exchange_params, backtest_params

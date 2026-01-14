@@ -29,8 +29,8 @@ mod core {
         calc_next_entry_short,
     };
     use crate::mirror::{
-        compute_mirror_cycle, DesiredBaseOrder, MirrorAction, MirrorConfig, MirrorMode, MirrorPosition,
-        MirrorSymbol,
+        compute_mirror_cycle, DesiredBaseOrder, MirrorAction, MirrorConfig, MirrorMode,
+        MirrorPosition, MirrorSymbol,
     };
     use crate::risk::{
         calc_twel_enforcer_actions, calc_unstucking_action, GateEntriesPosition,
@@ -1263,6 +1263,13 @@ mod core {
                 } else if has_short && !has_long {
                     // Short position exists - block long initial entries
                     workspace.one_way_block_initial_long[idx] = true;
+                } else if has_long && has_short {
+                    // Both positions exist - violation of one-way mode
+                    // This shouldn't happen normally, but can occur via manual trades
+                    // Put both sides on graceful stop (block initial entries, allow re-entries)
+                    // Note: if a side is globally disabled, it will be set to Manual mode later
+                    workspace.one_way_block_initial_long[idx] = true;
+                    workspace.one_way_block_initial_short[idx] = true;
                 } else if !has_long && !has_short {
                     // No position on either side - decide based on EMA band distance
                     // The side closer to its entry threshold gets to enter
@@ -1297,7 +1304,6 @@ mod core {
                     }
                     // If EMA bands can't be derived, allow both (no blocking)
                 }
-                // If both positions exist (shouldn't happen in one-way mode), don't block either
             }
         }
 
@@ -2259,38 +2265,72 @@ mod core {
                     })
                     .collect();
 
-                // Build desired base orders (initial entries only) for collision detection
+                // Build bid/ask lookup by symbol_idx for market price comparison
+                let market_prices: std::collections::HashMap<usize, (f64, f64)> = input
+                    .symbols
+                    .iter()
+                    .map(|s| (s.symbol_idx, (s.order_book.bid, s.order_book.ask)))
+                    .collect();
+
+                // Build desired base orders: initial entries + reentries at market price
+                // Reentries at market price are "imminent" and should trigger proactive mirror creation
                 let mut desired_base_orders: Vec<DesiredBaseOrder> = Vec::new();
                 match mirror_cfg.mode {
                     MirrorMode::MirrorShortsForLongs => {
-                        // Base is long, so collect long initial entries
+                        // Base is long, so collect long entries
                         for s in per_long.iter().filter_map(|v| v.as_ref()) {
+                            let highest_bid = market_prices
+                                .get(&s.symbol_idx)
+                                .map(|(bid, _)| *bid)
+                                .unwrap_or(0.0);
                             for o in &s.entries {
-                                if matches!(
-                                    o.order_type,
+                                let include = match o.order_type {
+                                    // Always include initial entries (existing behavior)
                                     OrderType::EntryInitialNormalLong
-                                        | OrderType::EntryInitialPartialLong
-                                ) {
+                                    | OrderType::EntryInitialPartialLong => true,
+                                    // Include reentries at exactly market price (imminent fills)
+                                    OrderType::EntryGridNormalLong
+                                    | OrderType::EntryGridCroppedLong
+                                    | OrderType::EntryGridInflatedLong
+                                    | OrderType::EntryTrailingNormalLong
+                                    | OrderType::EntryTrailingCroppedLong => o.price == highest_bid,
+                                    _ => false,
+                                };
+                                if include {
                                     desired_base_orders.push(DesiredBaseOrder {
                                         idx: o.symbol_idx,
                                         qty: o.qty,
+                                        price: o.price,
                                     });
                                 }
                             }
                         }
                     }
                     MirrorMode::MirrorLongsForShorts => {
-                        // Base is short, so collect short initial entries
+                        // Base is short, so collect short entries
                         for s in per_short.iter().filter_map(|v| v.as_ref()) {
+                            let lowest_ask = market_prices
+                                .get(&s.symbol_idx)
+                                .map(|(_, ask)| *ask)
+                                .unwrap_or(f64::MAX);
                             for o in &s.entries {
-                                if matches!(
-                                    o.order_type,
+                                let include = match o.order_type {
+                                    // Always include initial entries (existing behavior)
                                     OrderType::EntryInitialNormalShort
-                                        | OrderType::EntryInitialPartialShort
-                                ) {
+                                    | OrderType::EntryInitialPartialShort => true,
+                                    // Include reentries at exactly market price (imminent fills)
+                                    OrderType::EntryGridNormalShort
+                                    | OrderType::EntryGridCroppedShort
+                                    | OrderType::EntryGridInflatedShort
+                                    | OrderType::EntryTrailingNormalShort
+                                    | OrderType::EntryTrailingCroppedShort => o.price == lowest_ask,
+                                    _ => false,
+                                };
+                                if include {
                                     desired_base_orders.push(DesiredBaseOrder {
                                         idx: o.symbol_idx,
                                         qty: o.qty,
+                                        price: o.price,
                                     });
                                 }
                             }
@@ -2328,6 +2368,7 @@ mod core {
                     input.balance,
                     base_twel,
                     base_n_positions,
+                    input.global.hedge_mode,
                 ) {
                     Ok(mirror_output) => {
                         // Gate base initial entries on symbols with mirror collisions
@@ -2589,7 +2630,7 @@ mod core {
                         pair.long.n_positions = 1;
                         pair
                     },
-                    hedge: None,
+                    mirror: None,
                     hedge_mode: true,
                 },
                 symbols: vec![sym.clone()],
@@ -2671,7 +2712,7 @@ mod core {
                     unstuck_allowance_short: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
-                    hedge: None,
+                    mirror: None,
                     hedge_mode: true,
                 },
                 symbols: vec![sym],
@@ -2705,7 +2746,7 @@ mod core {
                     unstuck_allowance_short: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
-                    hedge: None,
+                    mirror: None,
                     hedge_mode: true,
                 },
                 symbols: vec![sym0, sym1],
@@ -2810,7 +2851,7 @@ mod core {
                     unstuck_allowance_short: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
-                    hedge: None,
+                    mirror: None,
                     hedge_mode: true,
                 },
                 symbols: syms,
@@ -3014,7 +3055,7 @@ mod core {
                     unstuck_allowance_short: 1000.0,
                     sort_global: true,
                     global_bot_params: global_bp,
-                    hedge: None,
+                    mirror: None,
                     hedge_mode: true,
                 },
                 symbols: vec![sym],

@@ -38,6 +38,8 @@ pub struct DesiredBaseOrder {
     pub idx: usize,
     /// Signed qty following internal conventions (buy > 0, sell < 0).
     pub qty: f64,
+    /// Order price, used to compute exposure from imminent orders.
+    pub price: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -87,8 +89,6 @@ pub struct MirrorConfig {
     pub allocation_min_fraction: f64,
     /// Eligible symbols for opening new hedges (e.g. approved_coins.short in MirrorShortsForLongs).
     pub approved_mirror_symbols: Vec<usize>,
-    /// v0: one-way only.
-    pub one_way: bool,
     /// Hedge direction.
     pub mode: MirrorMode,
 }
@@ -102,7 +102,6 @@ impl Default for MirrorConfig {
             max_n_positions: 0,
             allocation_min_fraction: 0.10,
             approved_mirror_symbols: Vec::new(),
-            one_way: true,
             mode: MirrorMode::MirrorShortsForLongs,
         }
     }
@@ -141,7 +140,11 @@ fn position_exposure(pos: &MirrorPosition, sym: &MirrorSymbol, balance: f64) -> 
     if pos.size == 0.0 {
         return 0.0;
     }
-    qty_to_cost(pos.size.abs(), market_price(sym), sym.exchange_params.c_mult) / balance
+    qty_to_cost(
+        pos.size.abs(),
+        market_price(sym),
+        sym.exchange_params.c_mult,
+    ) / balance
 }
 
 /// Borda ranking: low volatility + high volume. Lower score is better.
@@ -216,7 +219,10 @@ fn validate_config(cfg: &MirrorConfig) -> Result<(), MirrorError> {
     for (name, v) in [
         ("threshold", cfg.threshold),
         ("tolerance_pct", cfg.tolerance_pct),
-        ("mirror_excess_allowance_pct", cfg.mirror_excess_allowance_pct),
+        (
+            "mirror_excess_allowance_pct",
+            cfg.mirror_excess_allowance_pct,
+        ),
         ("allocation_min_fraction", cfg.allocation_min_fraction),
     ] {
         if !v.is_finite() {
@@ -266,7 +272,11 @@ fn hedge_close_price(mode: MirrorMode, sym: &MirrorSymbol) -> f64 {
     }
 }
 
-fn hedge_close_qty_for_full_close(mode: MirrorMode, pos: &MirrorPosition, sym: &MirrorSymbol) -> f64 {
+fn hedge_close_qty_for_full_close(
+    mode: MirrorMode,
+    pos: &MirrorPosition,
+    sym: &MirrorSymbol,
+) -> f64 {
     let qty_step = sym.exchange_params.qty_step;
     let abs_size = pos.size.abs();
     let rounded = round_(abs_size, qty_step);
@@ -282,6 +292,8 @@ fn hedge_close_qty_for_full_close(mode: MirrorMode, pos: &MirrorPosition, sym: &
 /// - `positions_long/short` are the current open positions per pside (signed sizes).
 /// - `desired_base_orders` are the base ideal orders for this cycle (used for collisions/exclusions).
 /// - `base_twel` and `base_n_positions` are taken from the base pside's bot params.
+/// - `hedge_mode` controls whether simultaneous long/short positions are allowed on same symbol.
+///   If false (one-way mode), mirror enforces single-side-per-symbol constraint.
 pub fn compute_mirror_cycle(
     cfg: &MirrorConfig,
     symbols: &[MirrorSymbol],
@@ -291,6 +303,7 @@ pub fn compute_mirror_cycle(
     balance: f64,
     base_twel: f64,
     base_n_positions: usize,
+    hedge_mode: bool,
 ) -> Result<MirrorCycleOutput, MirrorError> {
     validate_config(cfg)?;
     validate_symbols_contiguous(symbols)?;
@@ -313,8 +326,8 @@ pub fn compute_mirror_cycle(
         MirrorMode::MirrorLongsForShorts => (positions_short, positions_long),
     };
 
-    // One-way invariant (v0).
-    if cfg.one_way {
+    // One-way invariant: if hedge_mode is false, we enforce single-side-per-symbol.
+    if !hedge_mode {
         let mut long_set: HashSet<usize> = HashSet::new();
         for p in positions_long.iter().filter(|p| p.size != 0.0) {
             long_set.insert(p.idx);
@@ -352,7 +365,7 @@ pub fn compute_mirror_cycle(
         .collect();
 
     // One-way collisions: if base wants to open on idx where a hedge exists, close hedge and gate base entry.
-    if cfg.one_way {
+    if !hedge_mode {
         for idx in &base_entry_intents {
             if let Some(pos) = hedge_map.get(idx) {
                 if *idx >= symbols.len() {
@@ -384,12 +397,23 @@ pub fn compute_mirror_cycle(
         .cloned()
         .collect();
 
-    // Compute exposures.
+    // Compute exposures from current positions.
     let mut gross_base: f64 = 0.0;
     for p in base_positions.iter().filter(|p| p.size != 0.0) {
         let sym = &symbols[p.idx];
         gross_base += position_exposure(p, sym, balance);
     }
+
+    // Add exposure from imminent base orders (at market price) for proactive mirroring.
+    // These orders are highly likely to fill next cycle, so we target their projected exposure.
+    for o in desired_base_orders {
+        if o.idx < symbols.len() {
+            let sym = &symbols[o.idx];
+            // Order exposure = |qty| * price * c_mult / balance
+            gross_base += o.qty.abs() * o.price * sym.exchange_params.c_mult / balance;
+        }
+    }
+
     let mut gross_hedge: f64 = 0.0;
     for p in active_hedges.iter().filter(|p| p.size != 0.0) {
         let sym = &symbols[p.idx];
@@ -410,8 +434,8 @@ pub fn compute_mirror_cycle(
         cfg.max_n_positions
     };
     let max_positions = max_positions_cfg.max(1);
-    let cap_exposure =
-        (base_twel * cfg.threshold / max_positions as f64) * (1.0 + cfg.mirror_excess_allowance_pct);
+    let cap_exposure = (base_twel * cfg.threshold / max_positions as f64)
+        * (1.0 + cfg.mirror_excess_allowance_pct);
 
     // Reduce hedge exposure: close least underwater first (full close).
     if diff > tolerance_band {
@@ -466,7 +490,7 @@ pub fn compute_mirror_cycle(
         if idx >= symbols.len() {
             continue;
         }
-        if cfg.one_way && (base_open.contains(&idx) || base_entry_intents.contains(&idx)) {
+        if !hedge_mode && (base_open.contains(&idx) || base_entry_intents.contains(&idx)) {
             continue;
         }
         eligible.push(symbols[idx].clone());
@@ -724,7 +748,9 @@ mod tests {
             size: -1.0,
             price: 10.0,
         }];
-        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
+        // hedge_mode=false means one-way enforcement (equivalent to old one_way=true)
+        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1, false)
+            .unwrap();
         assert!(res.orders.is_empty() && res.gate_base_entries.is_empty());
     }
 
@@ -747,7 +773,8 @@ mod tests {
             price: 10.0,
         }]; // exposure = 1.0
         let shorts: Vec<MirrorPosition> = vec![]; // none
-        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
+        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1, false)
+            .unwrap();
         assert!(res.orders.iter().any(|o| o.qty < 0.0));
     }
 
@@ -773,7 +800,8 @@ mod tests {
             size: -10.0,
             price: 10.0,
         }]; // exposure 1.0
-        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
+        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1, false)
+            .unwrap();
         assert!(res.orders.iter().any(|o| o.qty > 0.0));
     }
 
@@ -796,9 +824,15 @@ mod tests {
             size: -1.0,
             price: 10.0,
         }];
-        let desired = vec![DesiredBaseOrder { idx: 0, qty: 1.0 }];
-        let res =
-            compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &desired, 100.0, 1.5, 1).unwrap();
+        let desired = vec![DesiredBaseOrder {
+            idx: 0,
+            qty: 1.0,
+            price: 10.0,
+        }];
+        let res = compute_mirror_cycle(
+            &cfg, &symbols, &longs, &shorts, &desired, 100.0, 1.5, 1, false,
+        )
+        .unwrap();
         assert!(res.gate_base_entries.contains(&0));
         assert!(res
             .orders
@@ -825,8 +859,8 @@ mod tests {
             price: 10.0,
         }]; // base exposure 1.0
         let hedges: Vec<MirrorPosition> = vec![];
-        let res =
-            compute_mirror_cycle(&cfg, &symbols, &hedges, &shorts, &[], 100.0, 1.5, 1).unwrap();
+        let res = compute_mirror_cycle(&cfg, &symbols, &hedges, &shorts, &[], 100.0, 1.5, 1, false)
+            .unwrap();
         assert!(res
             .orders
             .iter()

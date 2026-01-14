@@ -210,6 +210,11 @@ python3 -m jupyter lab
 - **EMA spans are floats:** Do not round derived spans (e.g., `span2 = sqrt(span0 * span1)`)
 - **Effective min qty/cost:** Entries must observe effective min qty; closes observe effective min cost (unless pos size < min qty, then close qty = pos size)
 
+### Trading Modes (graceful_stop vs manual)
+
+- **Graceful stop**: Blocks only **initial** entries (when position size = 0). Allows re-entries and normal close logic for existing positions. Re-entries are NOT blocked.
+- **Manual**: Bot emits no orders (neither entries nor closes) for that position side. Human operator manages manually.
+
 ### Stateless Design
 
 - **Never rely on "what happened earlier"** unless it can be rederived from exchange/state snapshot on startup
