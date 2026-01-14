@@ -1252,32 +1252,50 @@ mod core {
                 } else if has_short && !has_long {
                     // Short position exists - block long initial entries
                     workspace.one_way_block_initial_long[idx] = true;
-                } else if !has_long && !has_short {
-                    // No position on either side - decide based on EMA band distance
-                    // The side closer to its entry threshold gets to enter
+                } else if has_long && has_short {
+                    // Both positions exist - violation of one-way mode; block both initial entries.
+                    workspace.one_way_block_initial_long[idx] = true;
+                    workspace.one_way_block_initial_short[idx] = true;
+                } else {
+                    // No position on either side - decide based on eligibility and EMA band distance
+                    let long_enabled = enabled_long
+                        && should_generate_entries(effective_mode(s.long.mode, false), false, true);
+                    let short_enabled = enabled_short
+                        && should_generate_entries(
+                            effective_mode(s.short.mode, false),
+                            false,
+                            true,
+                        );
 
-                    // Derive EMA bands for both sides
+                    if long_enabled && !short_enabled {
+                        workspace.one_way_block_initial_short[idx] = true;
+                        continue;
+                    }
+                    if short_enabled && !long_enabled {
+                        workspace.one_way_block_initial_long[idx] = true;
+                        continue;
+                    }
+                    if !long_enabled && !short_enabled {
+                        workspace.one_way_block_initial_long[idx] = true;
+                        workspace.one_way_block_initial_short[idx] = true;
+                        continue;
+                    }
+
+                    // Both sides are eligible - choose based on EMA band distance.
                     let ema_bands_long = derive_ema_bands(idx, &s.emas, &s.long.bot_params);
                     let ema_bands_short = derive_ema_bands(idx, &s.emas, &s.short.bot_params);
 
                     if let (Ok(bands_long), Ok(bands_short)) = (ema_bands_long, ema_bands_short) {
-                        // Entry thresholds:
-                        // Long: lower_ema * (1 - entry_initial_ema_dist)
-                        // Short: upper_ema * (1 + entry_initial_ema_dist)
                         let entry_threshold_long =
                             bands_long.lower * (1.0 - s.long.bot_params.entry_initial_ema_dist);
                         let entry_threshold_short =
                             bands_short.upper * (1.0 + s.short.bot_params.entry_initial_ema_dist);
 
-                        // Distance to entry threshold (larger = closer to triggering)
-                        // Long entries (buys) compare to bid; short entries (sells) compare to ask
-                        // For long: threshold / bid - 1 (closer to 0 = closer to triggering)
-                        // For short: 1 - threshold / ask (closer to 0 = closer to triggering)
                         let dist_long = entry_threshold_long / s.order_book.bid - 1.0;
                         let dist_short = 1.0 - entry_threshold_short / s.order_book.ask;
 
-                        // Block the side that's farther from triggering (smaller distance)
-                        // Tie-break: favor long
+                        // Block the side that's farther from triggering (smaller distance).
+                        // Tie-break: favor long.
                         if dist_long >= dist_short {
                             workspace.one_way_block_initial_short[idx] = true;
                         } else {
@@ -1286,7 +1304,6 @@ mod core {
                     }
                     // If EMA bands can't be derived, allow both (no blocking)
                 }
-                // If both positions exist (shouldn't happen in one-way mode), don't block either
             }
         }
 
@@ -2438,6 +2455,80 @@ mod core {
             let out = compute_ideal_orders(&input).unwrap();
             // With no position and GracefulStop, we should not emit any entries.
             assert!(out.orders.iter().all(|o| is_close_order_type(o.order_type)));
+        }
+
+        #[test]
+        fn one_way_blocks_disabled_long_allows_short_initials() {
+            let sym = make_basic_symbol(0);
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.0;
+            global_bp.long.n_positions = 1;
+            global_bp.short.total_wallet_exposure_limit = 1.0;
+            global_bp.short.n_positions = 1;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: false,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            let has_long_entries = out
+                .orders
+                .iter()
+                .any(|o| o.pside == PositionSide::Long && !is_close_order_type(o.order_type));
+            let has_short_entries = out
+                .orders
+                .iter()
+                .any(|o| o.pside == PositionSide::Short && !is_close_order_type(o.order_type));
+            assert!(!has_long_entries);
+            assert!(has_short_entries);
+        }
+
+        #[test]
+        fn one_way_blocks_disabled_short_allows_long_initials() {
+            let sym = make_basic_symbol(0);
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 1.0;
+            global_bp.long.n_positions = 1;
+            global_bp.short.total_wallet_exposure_limit = 0.0;
+            global_bp.short.n_positions = 1;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: false,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            let has_long_entries = out
+                .orders
+                .iter()
+                .any(|o| o.pside == PositionSide::Long && !is_close_order_type(o.order_type));
+            let has_short_entries = out
+                .orders
+                .iter()
+                .any(|o| o.pside == PositionSide::Short && !is_close_order_type(o.order_type));
+            assert!(has_long_entries);
+            assert!(!has_short_entries);
         }
 
         #[test]
