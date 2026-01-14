@@ -1273,6 +1273,16 @@ mod core {
                 } else if !has_long && !has_short {
                     // No position on either side - decide based on EMA band distance
                     // The side closer to its entry threshold gets to enter
+                    // Only apply this logic if BOTH sides are enabled
+                    let long_enabled = s.long.bot_params.total_wallet_exposure_limit > 0.0
+                        && s.long.bot_params.n_positions > 0;
+                    let short_enabled = s.short.bot_params.total_wallet_exposure_limit > 0.0
+                        && s.short.bot_params.n_positions > 0;
+
+                    if !long_enabled || !short_enabled {
+                        // One side is disabled, no need to arbitrate
+                        continue;
+                    }
 
                     // Derive EMA bands for both sides
                     let ema_bands_long = derive_ema_bands(idx, &s.emas, &s.long.bot_params);
@@ -2359,6 +2369,8 @@ mod core {
                 };
 
                 // Call mirror overlay
+                // Temporarily enable debug to trace mirror gap issue
+                let mirror_debug = std::env::var("MIRROR_DEBUG").is_ok();
                 match compute_mirror_cycle(
                     mirror_cfg,
                     &mirror_symbols,
@@ -2369,6 +2381,7 @@ mod core {
                     base_twel,
                     base_n_positions,
                     input.global.hedge_mode,
+                    mirror_debug,
                 ) {
                     Ok(mirror_output) => {
                         // Gate base initial entries on symbols with mirror collisions
