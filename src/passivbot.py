@@ -1031,10 +1031,12 @@ class Passivbot:
         failed_update_pos_oos_pnls_ohlcvs_count = 0
         max_n_fails = 10
         while not self.stop_signal_received:
+            logging.info(f"running execution loop")
             try:
                 self.execution_scheduled = False
                 self.state_change_detected_by_symbol = set()
                 if not await self.update_pos_oos_pnls_ohlcvs():
+                    logging.info(f"a")
                     await asyncio.sleep(0.5)
                     failed_update_pos_oos_pnls_ohlcvs_count += 1
                     if failed_update_pos_oos_pnls_ohlcvs_count > max_n_fails:
@@ -3558,8 +3560,10 @@ class Passivbot:
                 }
             )
 
+        logging.info(f"debug input {json.dumps(input_dict)}")
         out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
         out = json.loads(out_json)
+        logging.info(f"debug output {out}")
         orders = out.get("orders", [])
 
         ideal_orders: dict[str, list] = {}
@@ -3851,8 +3855,10 @@ class Passivbot:
                 }
             )
 
+        logging.info(f"debug input {json.dumps(input_dict)}")
         out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
         out = json.loads(out_json)
+        logging.info(f"debug output {out}")
         orders = out.get("orders", [])
 
         ideal_orders: dict[str, list] = {}
