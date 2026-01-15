@@ -149,7 +149,7 @@
             "risk_twel_enforcer_threshold": 0.989,
             "risk_we_excess_allowance_pct": 1,
             "risk_wel_enforcer_threshold": 0.983,
-            "total_wallet_exposure_limit": 1,
+            "total_wallet_exposure_limit": 1.25,
             "unstuck_close_pct": 0.0126,
             "unstuck_ema_dist": -0.0789,
             "unstuck_loss_allowance_pct": 0.0013,
