@@ -8,6 +8,7 @@ All notable user-facing changes will be documented in this file.
 - One-way mode now respects disabled sides when choosing initial entry side, preventing a disabled side from blocking entries.
 
 ### Added
+- `bot.long.entry_trailing_from_pprice` and `bot.short.entry_trailing_from_pprice` (default true): when false, trailing entry thresholds measure from last entry fill price instead of average position price, enabling tighter DCA spacing and more responsive entry trailing.
 - `live.warmup_jitter_seconds` (default 30): random delay before warmup to prevent API rate limit storms when multiple bots start simultaneously.
 - `live.max_concurrent_api_requests` (default null): optional global concurrency limit for CCXT API calls via CandlestickManager's network semaphore.
 - `backtest.maker_fee_override` (default null): optional backtest/optimizer maker fee override (part-per-one) to replace exchange-derived fees.

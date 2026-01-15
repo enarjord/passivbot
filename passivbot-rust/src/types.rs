@@ -259,6 +259,7 @@ pub struct BotParams {
     pub entry_trailing_threshold_pct: f64,
     pub entry_trailing_threshold_we_weight: f64,
     pub entry_trailing_threshold_volatility_weight: f64,
+    pub entry_trailing_from_pprice: bool,
     pub filter_volatility_ema_span: f64,
     pub filter_volatility_drop_pct: f64,
     pub filter_volume_ema_span: f64,

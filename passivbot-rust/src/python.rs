@@ -939,6 +939,15 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
             dict,
             "entry_trailing_threshold_volatility_weight",
         )?,
+        entry_trailing_from_pprice: dict
+            .get_item("entry_trailing_from_pprice")?
+            .map(|v| {
+                // Try to extract as bool first, then fallback to float
+                v.extract::<bool>()
+                    .or_else(|_| v.extract::<f64>().map(|f| f != 0.0))
+            })
+            .transpose()?
+            .unwrap_or(true), // Default to true (current behavior)
         filter_volatility_ema_span: extract_value_with_fallback(
             dict,
             "filter_volatility_ema_span",
@@ -1082,6 +1091,7 @@ pub fn calc_next_entry_long_py(
         &bot_params,
         &position,
         &trailing_price_bundle,
+        0.0, // Python wrapper doesn't track last entry price
     );
 
     (
@@ -1258,6 +1268,7 @@ pub fn calc_next_entry_short_py(
         &bot_params,
         &position,
         &trailing_price_bundle,
+        0.0, // Python wrapper doesn't track last entry price
     );
 
     (

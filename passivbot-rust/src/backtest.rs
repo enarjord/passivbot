@@ -312,6 +312,8 @@ pub struct Backtest<'a> {
     orchestrator_input_cache: Option<orchestrator::OrchestratorInput>,
     orchestrator_workspace: orchestrator::OrchestratorWorkspace,
     orch_profile: Option<OrchProfile>,
+    last_entry_price_long: HashMap<usize, f64>,
+    last_entry_price_short: HashMap<usize, f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -970,6 +972,9 @@ impl<'a> Backtest<'a> {
                     .cloned()
                     .unwrap_or_default();
 
+                let last_entry_price_long = *self.last_entry_price_long.get(&idx).unwrap_or(&0.0);
+                let last_entry_price_short = *self.last_entry_price_short.get(&idx).unwrap_or(&0.0);
+
                 orchestrator::SymbolInput {
                     symbol_idx: idx,
                     order_book,
@@ -983,12 +988,14 @@ impl<'a> Backtest<'a> {
                         position: pos_long,
                         trailing: trailing_long,
                         bot_params: self.bot_params[idx].long.clone(),
+                        last_entry_price: last_entry_price_long,
                     },
                     short: orchestrator::SymbolSideInput {
                         mode: mode_short,
                         position: pos_short,
                         trailing: trailing_short,
                         bot_params: self.bot_params[idx].short.clone(),
+                        last_entry_price: last_entry_price_short,
                     },
                 }
             })
@@ -1107,6 +1114,9 @@ impl<'a> Backtest<'a> {
                 .get(&idx)
                 .cloned()
                 .unwrap_or_default();
+
+            sym.long.last_entry_price = *self.last_entry_price_long.get(&idx).unwrap_or(&0.0);
+            sym.short.last_entry_price = *self.last_entry_price_short.get(&idx).unwrap_or(&0.0);
 
             // Bot params are mostly static, but `wallet_exposure_limit` may be dynamically updated
             // per timestep based on `effective_n_positions` and eligible coin count.
@@ -1495,6 +1505,8 @@ impl<'a> Backtest<'a> {
                     mode: "orchestrator",
                     ..OrchProfile::default()
                 }),
+            last_entry_price_long: HashMap::new(),
+            last_entry_price_short: HashMap::new(),
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -2007,6 +2019,8 @@ impl<'a> Backtest<'a> {
         let current_pprice = self.positions.long[&idx].price;
         if new_psize == 0.0 {
             self.positions.long.remove(&idx);
+            // Clear last entry price when position is fully closed
+            self.last_entry_price_long.remove(&idx);
         } else {
             self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         }
@@ -2090,6 +2104,8 @@ impl<'a> Backtest<'a> {
         let current_pprice = self.positions.short[&idx].price;
         if new_psize == 0.0 {
             self.positions.short.remove(&idx);
+            // Clear last entry price when position is fully closed
+            self.last_entry_price_short.remove(&idx);
         } else {
             self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         }
@@ -2164,6 +2180,8 @@ impl<'a> Backtest<'a> {
         );
         self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
+        // Update last entry price for long position
+        self.last_entry_price_long.insert(idx, order.price);
         let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
@@ -2234,6 +2252,8 @@ impl<'a> Backtest<'a> {
         );
         self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         self.positions.short.get_mut(&idx).unwrap().price = new_pprice;
+        // Update last entry price for short position
+        self.last_entry_price_short.insert(idx, order.price);
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
