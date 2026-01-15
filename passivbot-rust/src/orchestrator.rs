@@ -2462,8 +2462,7 @@ mod core {
                     }
                     Err(e) => {
                         // Log mirror error but don't fail the orchestrator
-                        // In production, this could be logged; for now we silently skip
-                        let _ = e; // suppress unused warning
+                        eprintln!("[MIRROR ERROR] {}", e.message);
                     }
                 }
             }
@@ -2755,6 +2754,7 @@ mod core {
                     unstuck_allowance_short: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
+                    mirror: None,
                     hedge_mode: false,
                 },
                 symbols: vec![sym],
@@ -2792,6 +2792,7 @@ mod core {
                     unstuck_allowance_short: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
+                    mirror: None,
                     hedge_mode: false,
                 },
                 symbols: vec![sym],

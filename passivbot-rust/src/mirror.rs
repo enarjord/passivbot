@@ -442,9 +442,6 @@ pub fn compute_mirror_cycle(
     }
 
     if diff.abs() <= tolerance_band + 1e-12 {
-        if debug {
-            eprintln!("[MIRROR DEBUG] Early return: |diff|={:.6} <= tolerance_band={:.6}", diff.abs(), tolerance_band);
-        }
         return Ok(out);
     }
 
@@ -625,7 +622,9 @@ pub fn compute_mirror_cycle(
                 }
             };
         }
-        let Some((_u, idx)) = best else { break };
+        let Some((_u, idx)) = best else {
+            break;
+        };
 
         let sym = &symbols[idx];
         let entry_price = hedge_entry_price(cfg.mode, sym);
