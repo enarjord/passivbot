@@ -307,6 +307,8 @@ class BitgetBot(CCXTBot):
         def _extract_fill(elm: dict) -> dict:
             timestamp = int(elm["cTime"])
             side, position_side = deduce_side_pside(elm)
+            # Try to extract custom_id directly from raw data if available
+            custom_id = elm.get("clientOid") or elm.get("clientOrderId")
             return {
                 "id": elm.get("orderId"),
                 "timestamp": timestamp,
@@ -319,7 +321,8 @@ class BitgetBot(CCXTBot):
                 "fees": elm.get("feeDetail"),
                 "pb_order_type": None,
                 "position_side": position_side,
-                "client_order_id": None,
+                "client_order_id": custom_id,
+                "custom_id": custom_id,
                 "info": elm,
             }
 
@@ -372,6 +375,7 @@ class BitgetBot(CCXTBot):
                 cached = self._client_oid_cache.get(event_id)
                 if cached:
                     event["client_order_id"], event["pb_order_type"] = cached
+                    event["custom_id"] = event["client_order_id"]
                 if not event.get("client_order_id"):
                     pending.append(
                         (
@@ -381,6 +385,7 @@ class BitgetBot(CCXTBot):
                         )
                     )
                 else:
+                    event["custom_id"] = event["client_order_id"]
                     self._client_oid_cache[event_id] = (
                         event["client_order_id"],
                         event.get("pb_order_type"),
@@ -390,6 +395,7 @@ class BitgetBot(CCXTBot):
                 await asyncio.gather(*(task for _, _, task in pending), return_exceptions=True)
                 for event_id, event, _ in pending:
                     if event.get("client_order_id"):
+                        event["custom_id"] = event["client_order_id"]
                         self._client_oid_cache[event_id] = (
                             event["client_order_id"],
                             event.get("pb_order_type"),

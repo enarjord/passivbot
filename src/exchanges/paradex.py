@@ -182,6 +182,32 @@ class ParadexBot(CCXTBot):
                 return symbol
         return market
 
+    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
+        """Return canonical fill events for Paradex."""
+        events = []
+        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
+        for fill in fills:
+            events.append(
+                {
+                    "id": fill.get("id"),
+                    "timestamp": fill.get("timestamp"),
+                    "symbol": fill.get("symbol"),
+                    "side": fill.get("side"),
+                    "position_side": fill.get("position_side"),
+                    "qty": fill.get("qty") or fill.get("amount"),
+                    "price": fill.get("price"),
+                    "pnl": fill.get("pnl"),
+                    "fee": fill.get("fee"),
+                    "info": fill.get("info"),
+                    "custom_id": fill.get("info", {}).get("client_id") or fill.get("clientOrderId"),
+                }
+            )
+        return events
+
+    async def fetch_fill_events(self, start_time=None, end_time=None, limit=None):
+        """Adapter: delegates to gather_fill_events for compatibility with base class."""
+        return await self.gather_fill_events(start_time, end_time, limit)
+
     def did_cancel_order(self, executed, order=None) -> bool:
         """Paradex returns 204 No Content on successful cancellation.
 

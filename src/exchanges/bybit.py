@@ -342,6 +342,10 @@ class BybitBot(CCXTBot):
         unified.sort(key=lambda x: x["timestamp"])
         return unified
 
+    async def fetch_fill_events(self, start_time=None, end_time=None, limit=None):
+        """Adapter: delegates to gather_fill_events for compatibility with base class."""
+        return await self.gather_fill_events(start_time, end_time, limit)
+
     async def fetch_my_trades(self, start_time, end_time, limit=100):
         # wrapper for ccxt.fetch_my_trades
         # multiple fetches to find all fills inside given date range

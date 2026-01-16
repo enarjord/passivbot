@@ -1574,6 +1574,10 @@ class Passivbot:
         """
         if not hasattr(self, "trailing_prices"):
             self.trailing_prices = {}
+        if not hasattr(self, "last_entry_prices"):
+            self.last_entry_prices = {}
+        # Update last_entry_prices from fill events for entry_trailing_from_pprice feature
+        self.update_last_entry_prices_from_fills()
         last_position_changes = self.get_last_position_changes()
         symbols = set(self.trailing_prices) | set(last_position_changes) | set(self.active_symbols)
 
@@ -2325,6 +2329,83 @@ class Passivbot:
                 json.dump(payload, open(self.fill_events_cache_path, "w"))
             except Exception as exc:
                 logging.error(f"error dumping fill events to {self.fill_events_cache_path}: {exc}")
+
+    def update_last_entry_prices_from_fills(self):
+        """Update last_entry_prices dict from fill events for entry_trailing_from_pprice feature."""
+        if not hasattr(self, "fill_events") or not self.fill_events:
+            return
+
+        if not hasattr(self, "last_entry_prices"):
+            self.last_entry_prices = {}
+
+        # Process fill events to track last entry price per symbol/side
+        for fill in self.fill_events:
+            try:
+                symbol = fill.get("symbol")
+                if not symbol:
+                    continue
+
+                # Determine if this is an entry or close
+                custom_id = fill.get("custom_id", "")
+                if not custom_id:
+                    continue
+
+                # Decode order type from custom_id
+                type_id = try_decode_type_id_from_custom_id(custom_id)
+                if type_id is None:
+                    continue
+
+                order_type = snake_of(type_id)
+
+                # Check if this is an entry fill
+                is_entry = any(keyword in order_type for keyword in ["entry_initial", "entry_trailing", "entry_grid"])
+
+                pside = fill.get("position_side", "")
+                if pside not in ["long", "short"]:
+                    continue
+
+                price = float(fill.get("price", 0.0))
+                if price <= 0.0:
+                    continue
+
+                # Initialize symbol dict if needed
+                if symbol not in self.last_entry_prices:
+                    self.last_entry_prices[symbol] = {}
+
+                if is_entry:
+                    # Update last entry price
+                    old_price = self.last_entry_prices[symbol].get(pside, 0.0)
+                    self.last_entry_prices[symbol][pside] = price
+                    if self.config.get("logging_level", "info") == "debug":
+                        if old_price > 0.0:
+                            logging.debug(
+                                f"[entry_trailing_from_pprice] Fill tracked: {symbol} {pside} "
+                                f"entry @ ${price:.4f} (previous: ${old_price:.4f})"
+                            )
+                        else:
+                            logging.debug(
+                                f"[entry_trailing_from_pprice] Fill tracked: {symbol} {pside} "
+                                f"entry @ ${price:.4f} (first entry)"
+                            )
+
+            except Exception as e:
+                logging.debug(f"Error processing fill event for last_entry_price tracking: {e}")
+                continue
+
+        # Clear last_entry_price for any closed positions
+        for symbol in list(self.last_entry_prices.keys()):
+            for pside in ["long", "short"]:
+                pos = self.positions.get(symbol, {}).get(pside, {})
+                if pos.get("size", 0.0) == 0.0:
+                    if pside in self.last_entry_prices[symbol]:
+                        old_price = self.last_entry_prices[symbol][pside]
+                        if old_price != 0.0:
+                            self.last_entry_prices[symbol][pside] = 0.0
+                            if self.config.get("logging_level", "info") == "debug":
+                                logging.debug(
+                                    f"[entry_trailing_from_pprice] Position closed: {symbol} {pside} "
+                                    f"cleared last_entry_price (was ${old_price:.4f})"
+                                )
 
     async def fetch_fill_events(self, start_time=None, end_time=None, limit=None):
         """Exchange-specific fill event fetcher (to be implemented by subclasses)."""
@@ -3757,6 +3838,27 @@ class Passivbot:
                     trailing = _trailing_bundle_default_dict()
                 else:
                     trailing = dict(trailing)
+                # Get last entry price for this symbol/side
+                last_entry_price = self.last_entry_prices.get(symbol, {}).get(pside, 0.0)
+
+                # Debug logging for entry_trailing_from_pprice feature
+                if self.config.get("logging_level", "info") == "debug":
+                    bot_params = self.bot_params.get(pside, {})
+                    entry_trailing_from_pprice = bot_params.get("entry_trailing_from_pprice", True)
+                    if not entry_trailing_from_pprice:
+                        pprice = float(pos.get("price", 0.0))
+                        if last_entry_price > 0.0:
+                            logging.debug(
+                                f"[entry_trailing_from_pprice] {symbol} {pside}: "
+                                f"Using last_entry_price=${last_entry_price:.4f} "
+                                f"(pprice=${pprice:.4f}, diff={((last_entry_price-pprice)/pprice*100):+.2f}%)"
+                            )
+                        else:
+                            logging.debug(
+                                f"[entry_trailing_from_pprice] {symbol} {pside}: "
+                                f"FALLBACK to pprice=${pprice:.4f} (last_entry_price=0.0)"
+                            )
+
                 return {
                     "mode": mode,
                     "position": {"size": float(pos["size"]), "price": float(pos["price"])},
@@ -3766,6 +3868,7 @@ class Passivbot:
                         "max_since_open": float(trailing.get("max_since_open", 0.0)),
                         "min_since_max": float(trailing.get("min_since_max", 0.0)),
                     },
+                    "last_entry_price": float(last_entry_price),
                     "bot_params": self._bot_params_to_rust_dict(pside, symbol),
                 }
 

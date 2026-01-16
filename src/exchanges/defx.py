@@ -113,9 +113,14 @@ class DefxBot(CCXTBot):
                     "pnl": fill.get("pnl"),
                     "fee": fill.get("fee"),
                     "info": fill.get("info"),
+                    "custom_id": fill.get("clientId"),
                 }
             )
         return events
+
+    async def fetch_fill_events(self, start_time=None, end_time=None, limit=None):
+        """Adapter: delegates to gather_fill_events for compatibility with base class."""
+        return await self.gather_fill_events(start_time, end_time, limit)
 
     def _build_order_params(self, order: dict) -> dict:
         return {
