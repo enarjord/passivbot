@@ -25,12 +25,12 @@ def _create_worker_storage(study_dir: Path):
     """Create JournalStorage for worker processes.
 
     Args:
-        study_dir: Study directory containing study.log
+        study_dir: Study directory containing journal.log
 
     Returns:
         JournalStorage instance
     """
-    return create_journal_storage(study_dir / "study.log")
+    return create_journal_storage(study_dir / "journal.log")
 
 
 @dataclass

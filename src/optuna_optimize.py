@@ -278,26 +278,34 @@ async def _run_optimization_core(
         # Get population size for generation-based dispatch
         population_size = getattr(sampler_config, "population_size", n_trials)
         n_generations = (n_trials + population_size - 1) // population_size
+        existing_trials = len(study.trials)
 
         with Pool(processes=n_cpus, initializer=init_worker, initargs=(init_data,)) as pool:
             try:
                 trials_completed = 0
-                for gen in range(n_generations):
+                for _ in range(n_generations):
                     batch_size = min(population_size, n_trials - trials_completed)
 
                     # Dispatch one generation, wait for all to complete
                     list(pool.imap_unordered(_run_single_trial, range(batch_size)))
                     trials_completed += batch_size
-
-                    logging.info(f"Generation {gen} complete ({trials_completed}/{n_trials} trials)")
             except KeyboardInterrupt:
                 logging.info("Interrupted - terminating workers...")
                 pool.terminate()
                 pool.join()
 
     finally:
+        # Clean up lock file on interruption (avoids 30s grace period wait on resume)
+        journal_path = study_dir / "journal.log"
+        lock_path = study_dir / "journal.log.lock"
+        if lock_path.exists() or lock_path.is_symlink():
+            try:
+                lock_path.unlink()
+                logging.debug("Cleaned up journal lock file")
+            except OSError as e:
+                logging.debug(f"Could not remove lock file: {e}")
+
         # Always attempt Pareto extraction (even on interrupt)
-        journal_path = study_dir / "study.log"
         if journal_path.exists():
             try:
                 storage = create_journal_storage(journal_path)
@@ -311,7 +319,7 @@ async def _run_optimization_core(
             except Exception as e:
                 logging.warning(f"Could not extract Pareto front: {e}")
         else:
-            logging.warning("No study.log found, skipping Pareto extraction")
+            logging.warning("No journal.log found, skipping Pareto extraction")
 
         array_manager.cleanup()
 
@@ -363,7 +371,7 @@ async def run_optimization(
 
     # Create study directory and study
     study_dir = _create_study_dir(config, study_name)
-    journal_path = study_dir / "study.log"
+    journal_path = study_dir / "journal.log"
     storage = create_journal_storage(journal_path)
 
     sampler_cfg = optuna_cfg.sampler
@@ -517,9 +525,9 @@ async def resume_optimization(
     if not config_path.exists():
         raise ValueError(f"No config.json found in {study_dir}")
 
-    journal_path = study_dir / "study.log"
+    journal_path = study_dir / "journal.log"
     if not journal_path.exists():
-        raise ValueError(f"No study.log found in {study_dir}")
+        raise ValueError(f"No journal.log found in {study_dir}")
     storage = create_journal_storage(journal_path)
 
     config = load_config(str(config_path), live_only=False, verbose=False)
