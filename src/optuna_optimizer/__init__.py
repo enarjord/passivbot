@@ -26,7 +26,7 @@ from .samplers import create_sampler, get_sampler_config_by_name, make_constrain
 from .shared_arrays import SharedArrayAttachment, SharedArrayManager, SharedArraySpec, attach_shared_array
 from .trial import check_constraints, compute_penalty, compute_scores, resolve_metric, sample_params
 from .worker import WorkerContext, WorkerInitData, get_context, init_worker
-from .windowed_sampler import WindowedNSGAIISampler, WindowedNSGAIIISampler
+from .sync_sampler import SyncNSGAIISampler, SyncNSGAIIISampler
 
 __all__ = [
     # Models
@@ -54,8 +54,8 @@ __all__ = [
     "create_sampler",
     "get_sampler_config_by_name",
     "make_constraints_func",
-    "WindowedNSGAIISampler",
-    "WindowedNSGAIIISampler",
+    "SyncNSGAIISampler",
+    "SyncNSGAIIISampler",
     # Pareto
     "extract_pareto",
     # Trial

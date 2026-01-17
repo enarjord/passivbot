@@ -68,7 +68,7 @@ def _objective(trial: optuna.Trial) -> tuple[float, ...]:
 
     # 1. Sample and apply params
     bot_params = sample_params(trial, ctx.bounds, fixed_params=ctx.fixed_params)
-    logging.debug(f"[T{trial_num:04d}] {_format_params(bot_params)}")
+    logging.debug(f"[{trial_num}] {_format_params(bot_params)}")
     trial_config = apply_params_to_config(bot_params, ctx.config)
 
     # 2. Run backtests
@@ -88,8 +88,7 @@ def _objective(trial: optuna.Trial) -> tuple[float, ...]:
     obj_summary = ", ".join(
         f"{obj.metric}={resolve_metric(obj.metric, flat_stats):.5f}" for obj in ctx.objectives
     )
-    constraint_status = "KO" if any(v > 0 for v in violations) else "OK"
-    logging.info(f"[T{trial_num:04d}] {obj_summary}, constraints={constraint_status}")
+    logging.info(f"[{trial_num}] {obj_summary}")
 
     return scores
 
@@ -276,11 +275,21 @@ async def _run_optimization_core(
             debug_level=debug_level,
             logging_module="logging_setup",
         )
+        # Get population size for generation-based dispatch
+        population_size = getattr(sampler_config, "population_size", n_trials)
+        n_generations = (n_trials + population_size - 1) // population_size
+
         with Pool(processes=n_cpus, initializer=init_worker, initargs=(init_data,)) as pool:
             try:
-                # Dispatch one trial at a time - allows interrupt between trials
-                for _ in pool.imap_unordered(_run_single_trial, range(n_trials)):
-                    pass
+                trials_completed = 0
+                for gen in range(n_generations):
+                    batch_size = min(population_size, n_trials - trials_completed)
+
+                    # Dispatch one generation, wait for all to complete
+                    list(pool.imap_unordered(_run_single_trial, range(batch_size)))
+                    trials_completed += batch_size
+
+                    logging.info(f"Generation {gen} complete ({trials_completed}/{n_trials} trials)")
             except KeyboardInterrupt:
                 logging.info("Interrupted - terminating workers...")
                 pool.terminate()

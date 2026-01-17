@@ -2124,7 +2124,7 @@ def get_template_config():
                 "n_cpus": 8,
                 "penalty_weight": 1000,
                 "max_best_trials": 200,
-                "sampler": {"name": "nsgaii", "population_size": 250, "window_generations": 50},
+                "sampler": {"name": "nsgaii", "population_size": 250},
             },
         },
     }

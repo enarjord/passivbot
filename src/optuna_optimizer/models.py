@@ -67,20 +67,22 @@ class TPESamplerConfig(BaseModel):
 
 
 class NSGAIISamplerConfig(BaseModel):
+    model_config = {"extra": "ignore"}
+
     name: Literal["nsgaii"] = "nsgaii"
     population_size: int = 250
     mutation_prob: float | None = None
     crossover_prob: float = 0.9
-    window_generations: int = 50
     seed: int | None = None
 
 
 class NSGAIIISamplerConfig(BaseModel):
+    model_config = {"extra": "ignore"}
+
     name: Literal["nsgaiii"] = "nsgaiii"
     population_size: int = 250
     mutation_prob: float | None = None
     crossover_prob: float = 0.9
-    window_generations: int = 50
     seed: int | None = None
 
 

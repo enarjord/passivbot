@@ -6,7 +6,7 @@ from .models import (
     GPSamplerConfig, NSGAIISamplerConfig, NSGAIIISamplerConfig,
     RandomSamplerConfig, SamplerConfig, TPESamplerConfig,
 )
-from .windowed_sampler import WindowedNSGAIISampler, WindowedNSGAIIISampler
+from .sync_sampler import SyncNSGAIISampler, SyncNSGAIIISampler
 
 if TYPE_CHECKING:
     import optuna
@@ -46,22 +46,20 @@ def create_sampler(
             constraints_func=constraints_func,
         )
     if isinstance(config, NSGAIISamplerConfig):
-        return WindowedNSGAIISampler(
+        return SyncNSGAIISampler(
             population_size=config.population_size,
             mutation_prob=config.mutation_prob,
             crossover_prob=config.crossover_prob,
             seed=config.seed,
             constraints_func=constraints_func,
-            window_generations=config.window_generations,
         )
     if isinstance(config, NSGAIIISamplerConfig):
-        return WindowedNSGAIIISampler(
+        return SyncNSGAIIISampler(
             population_size=config.population_size,
             mutation_prob=config.mutation_prob,
             crossover_prob=config.crossover_prob,
             seed=config.seed,
             constraints_func=constraints_func,
-            window_generations=config.window_generations,
         )
     if isinstance(config, GPSamplerConfig):
         return optuna.samplers.GPSampler(
