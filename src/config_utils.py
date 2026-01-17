@@ -2116,5 +2116,15 @@ def get_template_config():
             "round_to_n_significant_digits": 5,
             "scoring": ["adg", "sharpe_ratio"],
             "write_all_results": True,
+            # Optuna optimizer keys
+            "objectives": [],
+            "constraints": [],
+            "optuna": {
+                "n_trials": 250000,
+                "n_cpus": 8,
+                "penalty_weight": 1000,
+                "max_best_trials": 200,
+                "sampler": {"name": "nsgaii", "population_size": 250, "window_generations": 50},
+            },
         },
     }
