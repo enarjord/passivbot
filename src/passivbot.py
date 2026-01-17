@@ -24,6 +24,11 @@ import logging
 import math
 from pathlib import Path
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
+from fill_events_manager import (
+    FillEventsManager,
+    _build_fetcher_for_bot,
+    _extract_symbol_pool,
+)
 from typing import Dict, Iterable, Tuple, List, Optional, Any
 from logging_setup import configure_logging, resolve_log_level
 from utils import (
@@ -502,6 +507,15 @@ class Passivbot:
             "long": "graceful_stop" if auto_gs else "manual",
             "short": "graceful_stop" if auto_gs else "manual",
         }
+
+        # FillEventsManager shadow mode: runs in parallel with legacy pnls, logs comparison
+        self._pnls_shadow_mode = bool(
+            get_optional_live_value(self.config, "pnls_manager_shadow_mode", False)
+        )
+        self._pnls_manager: Optional[FillEventsManager] = None
+        self._pnls_shadow_initialized = False
+        self._pnls_shadow_last_comparison_ts = 0
+        self._pnls_shadow_comparison_interval_ms = 60_000  # compare every 60 seconds
 
     def live_value(self, key: str):
         return require_live_value(self.config, key)
@@ -1080,10 +1094,30 @@ class Passivbot:
             return False
         if not balance_ok:
             return False
-        open_orders_ok, pnls_ok = await asyncio.gather(
+
+        # Build task list: always include open_orders and pnls
+        tasks = [
             self.update_open_orders(),
             self.update_pnls(),
-        )
+        ]
+        # If shadow mode is enabled, also run the FillEventsManager update in parallel
+        if self._pnls_shadow_mode:
+            tasks.append(self._update_pnls_shadow())
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Check results (first two are always open_orders and pnls)
+        open_orders_ok = results[0] is True
+        pnls_ok = results[1] is True
+
+        # Handle shadow mode result (just log errors, don't fail the bot)
+        if self._pnls_shadow_mode and len(results) > 2:
+            shadow_result = results[2]
+            if isinstance(shadow_result, Exception):
+                logging.warning("[shadow] Shadow update raised exception: %s", shadow_result)
+            # Run comparison after both updates complete
+            self._compare_pnls_shadow()
+
         if not open_orders_ok or not pnls_ok:
             return False
         if self.stop_signal_received:
@@ -2220,6 +2254,193 @@ class Passivbot:
             # no fills yet; avoid re-scanning entire lookback on the next cycle
             self._pnls_cursor_ts = max(self.get_exchange_time() - 1000, age_limit)
         return True
+
+    # -------------------------------------------------------------------------
+    # FillEventsManager Shadow Mode (dry run comparison with legacy pnls)
+    # -------------------------------------------------------------------------
+
+    async def _init_pnls_shadow_manager(self) -> bool:
+        """Initialize the FillEventsManager for shadow mode comparison.
+
+        Returns True if initialization succeeded, False otherwise.
+        Shadow mode runs the new FillEventsManager in parallel with legacy pnls,
+        caching data and logging comparisons, but not using it for bot decisions.
+        """
+        if not self._pnls_shadow_mode:
+            return False
+
+        if self._pnls_shadow_initialized:
+            return True
+
+        try:
+            logging.info(
+                "[shadow] Initializing FillEventsManager shadow mode for %s:%s",
+                self.exchange,
+                self.user,
+            )
+
+            # Extract symbol pool from config (same as legacy pnls uses)
+            symbol_pool = _extract_symbol_pool(self.config, None)
+
+            # Build the fetcher for this bot
+            fetcher = _build_fetcher_for_bot(self, symbol_pool)
+
+            # Create the FillEventsManager with its own cache path
+            cache_path = Path(f"caches/fill_events/{self.exchange}/{self.user}")
+
+            self._pnls_manager = FillEventsManager(
+                exchange=self.exchange,
+                user=self.user,
+                fetcher=fetcher,
+                cache_path=cache_path,
+            )
+
+            # Load cached events
+            await self._pnls_manager.ensure_loaded()
+
+            cached_count = len(self._pnls_manager._events)
+            logging.info(
+                "[shadow] FillEventsManager initialized: %d cached events loaded",
+                cached_count,
+            )
+
+            self._pnls_shadow_initialized = True
+            return True
+
+        except Exception as e:
+            logging.error("[shadow] Failed to initialize FillEventsManager: %s", e)
+            traceback.print_exc()
+            self._pnls_shadow_mode = False  # Disable shadow mode on init failure
+            return False
+
+    async def _update_pnls_shadow(self) -> bool:
+        """Run the FillEventsManager refresh in shadow mode.
+
+        Returns True if update succeeded, False otherwise.
+        This runs in parallel with update_pnls() but results are only logged,
+        not used for bot decisions.
+        """
+        if not self._pnls_shadow_mode:
+            return False
+
+        if not self._pnls_shadow_initialized:
+            if not await self._init_pnls_shadow_manager():
+                return False
+
+        if self._pnls_manager is None:
+            return False
+
+        try:
+            # Use the same lookback window as legacy pnls
+            age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
+                self.live_value("pnls_max_lookback_days")
+            )
+
+            # Refresh latest events (incremental update like legacy)
+            await self._pnls_manager.refresh_latest(overlap=20)
+
+            return True
+
+        except RateLimitExceeded:
+            logging.warning("[shadow] Rate limit while fetching fill events; retrying next cycle")
+            return False
+        except Exception as e:
+            logging.error("[shadow] Failed to update FillEventsManager: %s", e)
+            if self.logging_level >= 2:
+                traceback.print_exc()
+            return False
+
+    def _compare_pnls_shadow(self) -> None:
+        """Compare legacy pnls with FillEventsManager data and log differences.
+
+        This comparison is logged periodically to avoid spamming logs.
+        Differences are logged at DEBUG level normally, INFO level for significant discrepancies.
+        """
+        if not self._pnls_shadow_mode or self._pnls_manager is None:
+            return
+
+        now_ms = utc_ms()
+        if now_ms - self._pnls_shadow_last_comparison_ts < self._pnls_shadow_comparison_interval_ms:
+            return
+
+        self._pnls_shadow_last_comparison_ts = now_ms
+
+        try:
+            # Get lookback window
+            age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
+                self.live_value("pnls_max_lookback_days")
+            )
+
+            # Legacy pnls data
+            legacy_events = [p for p in getattr(self, "pnls", []) if p.get("timestamp", 0) >= age_limit]
+            legacy_count = len(legacy_events)
+            legacy_pnl_sum = sum(p.get("pnl", 0.0) for p in legacy_events)
+            legacy_ids = set(p.get("id", "") for p in legacy_events)
+
+            # New FillEventsManager data
+            manager_events = self._pnls_manager.get_events(start_ms=int(age_limit))
+            manager_count = len(manager_events)
+            manager_pnl_sum = sum(ev.pnl for ev in manager_events)
+            manager_ids = set(ev.id for ev in manager_events)
+
+            # Calculate differences
+            count_diff = manager_count - legacy_count
+            pnl_diff = manager_pnl_sum - legacy_pnl_sum
+
+            # Find IDs only in one system
+            only_in_legacy = legacy_ids - manager_ids
+            only_in_manager = manager_ids - legacy_ids
+
+            # Latest timestamps
+            legacy_latest = max((p.get("timestamp", 0) for p in legacy_events), default=0)
+            manager_latest = max((ev.timestamp for ev in manager_events), default=0)
+
+            # Log comparison
+            log_level = logging.DEBUG
+            if abs(count_diff) > 10 or abs(pnl_diff) > 1.0:
+                log_level = logging.INFO  # Log more prominently if significant difference
+
+            logging.log(
+                log_level,
+                "[shadow] Comparison: legacy=%d events (pnl=%.4f), manager=%d events (pnl=%.4f), "
+                "diff=%+d events (pnl=%+.4f)",
+                legacy_count,
+                legacy_pnl_sum,
+                manager_count,
+                manager_pnl_sum,
+                count_diff,
+                pnl_diff,
+            )
+
+            if only_in_legacy:
+                logging.debug(
+                    "[shadow] IDs only in legacy (%d): %s",
+                    len(only_in_legacy),
+                    list(only_in_legacy)[:5],  # Show first 5
+                )
+
+            if only_in_manager:
+                logging.debug(
+                    "[shadow] IDs only in manager (%d): %s",
+                    len(only_in_manager),
+                    list(only_in_manager)[:5],  # Show first 5
+                )
+
+            # Log timestamp comparison
+            if legacy_latest > 0 and manager_latest > 0:
+                ts_diff_ms = manager_latest - legacy_latest
+                if abs(ts_diff_ms) > 60_000:  # More than 1 minute difference
+                    logging.info(
+                        "[shadow] Latest timestamp diff: legacy=%s, manager=%s (diff=%+.1fs)",
+                        ts_to_date(legacy_latest),
+                        ts_to_date(manager_latest),
+                        ts_diff_ms / 1000.0,
+                    )
+
+        except Exception as e:
+            logging.error("[shadow] Error during pnls comparison: %s", e)
+            if self.logging_level >= 2:
+                traceback.print_exc()
 
     async def init_fill_events(self):
         """Initialise in-memory fill events cache."""

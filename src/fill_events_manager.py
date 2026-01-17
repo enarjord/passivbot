@@ -12,15 +12,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
 import json
 import logging
 import os
+import random
+import tempfile
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypedDict
 
 from ccxt.base.errors import RateLimitExceeded
 
@@ -35,6 +38,158 @@ from procedures import load_user_info
 from pure_funcs import ensure_millis
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Rate Limit Coordination
+# ---------------------------------------------------------------------------
+
+# Default rate limits per exchange (calls per minute)
+_DEFAULT_RATE_LIMITS: Dict[str, Dict[str, int]] = {
+    "binance": {"fetch_my_trades": 1200, "fetch_income_history": 120, "default": 1200},
+    "bybit": {"fetch_my_trades": 120, "fetch_positions_history": 120, "default": 120},
+    "bitget": {"fill_history": 120, "fetch_order": 60, "default": 120},
+    "hyperliquid": {"fetch_my_trades": 120, "default": 120},
+    "gateio": {"fetch_closed_orders": 120, "default": 120},
+    "kucoin": {"fetch_my_trades": 120, "fetch_positions_history": 120, "fetch_order": 60, "default": 120},
+}
+
+# Window for rate limit tracking (ms)
+_RATE_LIMIT_WINDOW_MS = 60_000
+
+# Default jitter range for staggered startup (seconds)
+_STARTUP_JITTER_MIN = 0.0
+_STARTUP_JITTER_MAX = 30.0
+
+
+class RateLimitCoordinator:
+    """Coordinates rate limiting across multiple bot instances via shared temp file.
+
+    Each exchange has a temp file that logs recent API calls. Instances check this
+    file before making API calls and add jitter if approaching rate limits.
+    """
+
+    def __init__(
+        self,
+        exchange: str,
+        user: str,
+        *,
+        temp_dir: Optional[Path] = None,
+        window_ms: int = _RATE_LIMIT_WINDOW_MS,
+        limits: Optional[Dict[str, int]] = None,
+    ) -> None:
+        self.exchange = exchange.lower()
+        self.user = user
+        self.window_ms = window_ms
+        self.limits = limits or _DEFAULT_RATE_LIMITS.get(self.exchange, {"default": 120})
+
+        if temp_dir is None:
+            temp_dir = Path(tempfile.gettempdir()) / "passivbot_rate_limits"
+        self.temp_dir = temp_dir
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        self.temp_file = self.temp_dir / f"{self.exchange}.json"
+
+    def _load_calls(self) -> List[Dict[str, object]]:
+        """Load recent API calls from temp file."""
+        if not self.temp_file.exists():
+            return []
+        try:
+            with self.temp_file.open("r") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                try:
+                    data = json.load(f)
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                return data.get("calls", [])
+        except Exception as exc:
+            logger.debug("RateLimitCoordinator: failed to load %s: %s", self.temp_file, exc)
+            return []
+
+    def _save_calls(self, calls: List[Dict[str, object]]) -> None:
+        """Save API calls to temp file atomically."""
+        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+
+        # Prune old entries
+        cutoff = now_ms - self.window_ms
+        calls = [c for c in calls if c.get("timestamp_ms", 0) > cutoff]
+
+        data = {
+            "calls": calls,
+            "window_ms": self.window_ms,
+            "limits": self.limits,
+            "last_update": now_ms,
+        }
+
+        tmp_file = self.temp_file.with_suffix(".tmp")
+        try:
+            with tmp_file.open("w") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    json.dump(data, f)
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            os.replace(tmp_file, self.temp_file)
+        except Exception as exc:
+            logger.debug("RateLimitCoordinator: failed to save %s: %s", self.temp_file, exc)
+
+    def get_current_usage(self, endpoint: str) -> int:
+        """Get current call count for an endpoint in the current window."""
+        calls = self._load_calls()
+        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        cutoff = now_ms - self.window_ms
+        return sum(1 for c in calls if c.get("endpoint") == endpoint and c.get("timestamp_ms", 0) > cutoff)
+
+    def get_limit(self, endpoint: str) -> int:
+        """Get rate limit for an endpoint."""
+        return self.limits.get(endpoint, self.limits.get("default", 120))
+
+    def record_call(self, endpoint: str) -> None:
+        """Record an API call."""
+        calls = self._load_calls()
+        calls.append({
+            "endpoint": endpoint,
+            "timestamp_ms": int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+            "user": self.user,
+        })
+        self._save_calls(calls)
+
+    async def wait_if_needed(self, endpoint: str) -> float:
+        """Check rate limit and wait if needed. Returns time waited (seconds)."""
+        current = self.get_current_usage(endpoint)
+        limit = self.get_limit(endpoint)
+
+        if current >= limit:
+            # At or over limit - wait for full window
+            wait_time = self.window_ms / 1000.0
+            logger.info(
+                "RateLimitCoordinator: %s:%s at limit (%d/%d), waiting %.1fs",
+                self.exchange, endpoint, current, limit, wait_time
+            )
+            await asyncio.sleep(wait_time)
+            return wait_time
+        elif current >= limit * 0.8:
+            # Approaching limit - add jitter
+            jitter = random.uniform(0.1, 2.0)
+            logger.debug(
+                "RateLimitCoordinator: %s:%s approaching limit (%d/%d), jitter %.2fs",
+                self.exchange, endpoint, current, limit, jitter
+            )
+            await asyncio.sleep(jitter)
+            return jitter
+
+        return 0.0
+
+    @staticmethod
+    async def startup_jitter(
+        min_seconds: float = _STARTUP_JITTER_MIN,
+        max_seconds: float = _STARTUP_JITTER_MAX,
+    ) -> float:
+        """Apply random jitter at startup to stagger multiple bot launches."""
+        jitter = random.uniform(min_seconds, max_seconds)
+        if jitter > 0:
+            logger.info("RateLimitCoordinator: startup jitter %.2fs", jitter)
+            await asyncio.sleep(jitter)
+        return jitter
 
 
 def _format_ms(ts: Optional[int]) -> str:
@@ -350,6 +505,23 @@ def _check_pagination_progress(
 # ---------------------------------------------------------------------------
 
 
+def _normalize_raw_field(raw: object) -> List[Dict[str, object]]:
+    """Normalize raw field to List[Dict] format.
+
+    Handles migration from old Dict format to new List[Dict] format.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        # Already in new format - validate and return
+        return [dict(item) if isinstance(item, dict) else {"data": item} for item in raw]
+    if isinstance(raw, dict):
+        # Old format: single dict -> wrap in list with "legacy" source
+        return [{"source": "legacy", "data": raw}]
+    # Unknown format
+    return [{"source": "unknown", "data": str(raw)}]
+
+
 @dataclass(frozen=True)
 class FillEvent:
     """Canonical representation of a single fill event."""
@@ -368,7 +540,7 @@ class FillEvent:
     client_order_id: str
     psize: float = 0.0
     pprice: float = 0.0
-    raw: Dict[str, object] = None
+    raw: List[Dict[str, object]] = None  # List of raw payloads from multiple sources
 
     @property
     def key(self) -> str:
@@ -390,7 +562,7 @@ class FillEvent:
             "client_order_id": self.client_order_id,
             "psize": self.psize,
             "pprice": self.pprice,
-            "raw": self.raw if self.raw is not None else {},
+            "raw": self.raw if self.raw is not None else [],
         }
 
     @classmethod
@@ -425,13 +597,48 @@ class FillEvent:
             client_order_id=str(data["client_order_id"]),
             psize=float(data.get("psize", 0.0)),
             pprice=float(data.get("pprice", 0.0)),
-            raw=dict(data.get("raw") or {}),
+            raw=_normalize_raw_field(data.get("raw")),
         )
 
 
 # ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------
+
+# Maximum retry attempts before marking gap as persistent
+_GAP_MAX_RETRIES = 3
+
+# Gap confidence levels
+GAP_CONFIDENCE_UNKNOWN = 0.0
+GAP_CONFIDENCE_SUSPICIOUS = 0.3
+GAP_CONFIDENCE_LIKELY_LEGITIMATE = 0.7
+GAP_CONFIDENCE_CONFIRMED = 1.0
+
+# Gap reasons
+GAP_REASON_AUTO = "auto_detected"
+GAP_REASON_FETCH_FAILED = "fetch_failed"
+GAP_REASON_CONFIRMED = "confirmed_legitimate"
+GAP_REASON_MANUAL = "manual"
+
+
+class KnownGap(TypedDict, total=False):
+    """Gap metadata stored in metadata.json known_gaps."""
+
+    start_ts: int  # Gap start timestamp (ms)
+    end_ts: int  # Gap end timestamp (ms)
+    retry_count: int  # Number of fetch attempts (max 3)
+    reason: str  # auto_detected, fetch_failed, confirmed_legitimate, manual
+    added_at: int  # Timestamp when gap was first detected
+    confidence: float  # 0.0=unknown, 0.3=suspicious, 0.7=likely_ok, 1.0=confirmed
+
+
+class CacheMetadata(TypedDict, total=False):
+    """Cache metadata stored in metadata.json."""
+
+    last_refresh_ms: int  # Timestamp of last successful refresh
+    oldest_event_ts: int  # Oldest event timestamp in cache
+    newest_event_ts: int  # Newest event timestamp in cache
+    known_gaps: List[KnownGap]  # List of known gaps
 
 
 class FillEventCache:
@@ -440,6 +647,7 @@ class FillEventCache:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
+        self._metadata: Optional[CacheMetadata] = None
 
     def load(self) -> List[FillEvent]:
         files = sorted(self.root.glob("*.json"))
@@ -495,6 +703,197 @@ class FillEventCache:
                 len(payload),
                 path,
             )
+
+    @property
+    def metadata_path(self) -> Path:
+        return self.root / "metadata.json"
+
+    def load_metadata(self) -> CacheMetadata:
+        """Load cache metadata from disk."""
+        if self._metadata is not None:
+            return self._metadata
+
+        default: CacheMetadata = {
+            "last_refresh_ms": 0,
+            "oldest_event_ts": 0,
+            "newest_event_ts": 0,
+            "known_gaps": [],
+        }
+
+        if not self.metadata_path.exists():
+            self._metadata = default
+            return self._metadata
+
+        try:
+            with self.metadata_path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                data = default
+            # Ensure all keys exist
+            for key in default:
+                data.setdefault(key, default[key])
+            self._metadata = data
+        except Exception as exc:
+            logger.warning("FillEventCache.load_metadata: failed to read %s (%s)", self.metadata_path, exc)
+            self._metadata = default
+
+        return self._metadata
+
+    def save_metadata(self, metadata: Optional[CacheMetadata] = None) -> None:
+        """Save cache metadata to disk atomically."""
+        if metadata is not None:
+            self._metadata = metadata
+
+        if self._metadata is None:
+            return
+
+        tmp_path = self.metadata_path.with_suffix(".tmp")
+        try:
+            with tmp_path.open("w", encoding="utf-8") as fh:
+                json.dump(self._metadata, fh, indent=2)
+            os.replace(tmp_path, self.metadata_path)
+            logger.debug("FillEventCache.save_metadata: wrote to %s", self.metadata_path)
+        except Exception as exc:
+            logger.error("FillEventCache.save_metadata: failed to write %s (%s)", self.metadata_path, exc)
+
+    def update_metadata_from_events(self, events: Sequence[FillEvent]) -> None:
+        """Update metadata timestamps based on events."""
+        if not events:
+            return
+
+        metadata = self.load_metadata()
+        timestamps = [ev.timestamp for ev in events]
+        oldest = min(timestamps)
+        newest = max(timestamps)
+
+        current_oldest = metadata.get("oldest_event_ts", 0)
+        current_newest = metadata.get("newest_event_ts", 0)
+
+        if current_oldest == 0 or oldest < current_oldest:
+            metadata["oldest_event_ts"] = oldest
+        if newest > current_newest:
+            metadata["newest_event_ts"] = newest
+
+        metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        self.save_metadata(metadata)
+
+    def get_known_gaps(self) -> List[KnownGap]:
+        """Return list of known gaps."""
+        return self.load_metadata().get("known_gaps", [])
+
+    def add_known_gap(
+        self,
+        start_ts: int,
+        end_ts: int,
+        *,
+        reason: str = GAP_REASON_AUTO,
+        confidence: float = GAP_CONFIDENCE_UNKNOWN,
+    ) -> None:
+        """Add or update a known gap."""
+        metadata = self.load_metadata()
+        gaps = metadata.get("known_gaps", [])
+        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+
+        # Check for overlapping gap to update
+        for gap in gaps:
+            if gap["start_ts"] <= end_ts and gap["end_ts"] >= start_ts:
+                # Overlapping - merge
+                gap["start_ts"] = min(gap["start_ts"], start_ts)
+                gap["end_ts"] = max(gap["end_ts"], end_ts)
+                gap["retry_count"] = gap.get("retry_count", 0) + 1
+                if gap["retry_count"] >= _GAP_MAX_RETRIES:
+                    gap["confidence"] = max(gap.get("confidence", 0), GAP_CONFIDENCE_LIKELY_LEGITIMATE)
+                logger.info(
+                    "FillEventCache.add_known_gap: updated gap %s → %s (retry_count=%d)",
+                    _format_ms(gap["start_ts"]),
+                    _format_ms(gap["end_ts"]),
+                    gap["retry_count"],
+                )
+                self.save_metadata(metadata)
+                return
+
+        # New gap
+        new_gap: KnownGap = {
+            "start_ts": start_ts,
+            "end_ts": end_ts,
+            "retry_count": 0,
+            "reason": reason,
+            "added_at": now_ms,
+            "confidence": confidence,
+        }
+        gaps.append(new_gap)
+        metadata["known_gaps"] = gaps
+        logger.info(
+            "FillEventCache.add_known_gap: added new gap %s → %s (reason=%s)",
+            _format_ms(start_ts),
+            _format_ms(end_ts),
+            reason,
+        )
+        self.save_metadata(metadata)
+
+    def clear_gap(self, start_ts: int, end_ts: int) -> bool:
+        """Remove a gap that has been filled. Returns True if a gap was removed."""
+        metadata = self.load_metadata()
+        gaps = metadata.get("known_gaps", [])
+        original_count = len(gaps)
+
+        # Remove gaps that are fully contained in the filled range
+        remaining = []
+        for gap in gaps:
+            if gap["start_ts"] >= start_ts and gap["end_ts"] <= end_ts:
+                logger.info(
+                    "FillEventCache.clear_gap: removed gap %s → %s",
+                    _format_ms(gap["start_ts"]),
+                    _format_ms(gap["end_ts"]),
+                )
+                continue
+            # Partial overlap - trim the gap
+            if gap["start_ts"] < start_ts < gap["end_ts"]:
+                gap["end_ts"] = start_ts
+            if gap["start_ts"] < end_ts < gap["end_ts"]:
+                gap["start_ts"] = end_ts
+            if gap["start_ts"] < gap["end_ts"]:
+                remaining.append(gap)
+
+        if len(remaining) != original_count:
+            metadata["known_gaps"] = remaining
+            self.save_metadata(metadata)
+            return True
+        return False
+
+    def should_retry_gap(self, gap: KnownGap) -> bool:
+        """Check if a gap should be retried (retry_count < max)."""
+        return gap.get("retry_count", 0) < _GAP_MAX_RETRIES
+
+    def get_coverage_summary(self) -> Dict[str, object]:
+        """Return a summary of cache coverage for debugging."""
+        metadata = self.load_metadata()
+        gaps = metadata.get("known_gaps", [])
+
+        persistent_gaps = [g for g in gaps if not self.should_retry_gap(g)]
+        retryable_gaps = [g for g in gaps if self.should_retry_gap(g)]
+
+        total_gap_ms = sum(g["end_ts"] - g["start_ts"] for g in gaps)
+
+        return {
+            "oldest_event_ts": metadata.get("oldest_event_ts", 0),
+            "newest_event_ts": metadata.get("newest_event_ts", 0),
+            "last_refresh_ms": metadata.get("last_refresh_ms", 0),
+            "total_gaps": len(gaps),
+            "persistent_gaps": len(persistent_gaps),
+            "retryable_gaps": len(retryable_gaps),
+            "total_gap_hours": total_gap_ms / (1000 * 60 * 60) if total_gap_ms > 0 else 0,
+            "gaps": [
+                {
+                    "start": _format_ms(g["start_ts"]),
+                    "end": _format_ms(g["end_ts"]),
+                    "retry_count": g.get("retry_count", 0),
+                    "reason": g.get("reason", "unknown"),
+                    "confidence": g.get("confidence", 0),
+                }
+                for g in gaps
+            ],
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -787,6 +1186,7 @@ class BitgetFetcher(BaseFetcher):
             "pb_order_type": raw.get("pb_order_type", ""),
             "position_side": position_side,
             "client_order_id": raw.get("client_order_id"),
+            "raw": [{"source": "fill_history", "data": dict(raw)}],
         }
 
     def _resolve_symbol(self, market_symbol: Optional[str]) -> str:
@@ -1237,6 +1637,7 @@ class BinanceFetcher(BaseFetcher):
             "client_order_id": client_order_id,
             "order_id": str(order_id) if order_id else "",
             "info": info,
+            "raw": [{"source": "fetch_my_trades", "data": dict(trade)}],
         }
 
     def _collect_symbols(self, provider: Callable[[], Iterable[str]]) -> List[str]:
@@ -1279,11 +1680,13 @@ class FillEventsManager:
         user: str,
         fetcher: BaseFetcher,
         cache_path: Path,
+        rate_limit_coordinator: Optional[RateLimitCoordinator] = None,
     ) -> None:
         self.exchange = exchange
         self.user = user
         self.fetcher = fetcher
         self.cache = FillEventCache(cache_path)
+        self.rate_limiter = rate_limit_coordinator or RateLimitCoordinator(exchange, user)
         self._events: List[FillEvent] = []
         self._loaded = False
         self._lock = asyncio.Lock()
@@ -1335,7 +1738,7 @@ class FillEventsManager:
             ensure_qty_signage(batch)
             days_touched: set[str] = set()
             for raw in batch:
-                raw.setdefault("raw", {})
+                raw.setdefault("raw", [])
                 try:
                     event = FillEvent.from_dict(raw)
                 except ValueError as exc:
@@ -1370,6 +1773,15 @@ class FillEventsManager:
         await self.fetcher.fetch(start_ms, end_ms, detail_cache, on_batch=handle_batch)
 
         self._events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
+
+        # Update cache metadata with timestamps
+        if self._events:
+            self.cache.update_metadata_from_events(self._events)
+
+            # If we successfully fetched data for a gap range, clear it
+            if start_ms is not None and end_ms is not None and added_ids:
+                self.cache.clear_gap(start_ms, end_ms)
+
         logger.info(
             "FillEventsManager.refresh: merged events=%d (added=%d)",
             len(self._events),
@@ -1394,10 +1806,32 @@ class FillEventsManager:
         *,
         gap_hours: float = 12.0,
         overlap: int = 20,
+        force_refetch_gaps: bool = False,
     ) -> None:
-        """Fill missing data between `start_ms` and `end_ms` using gap heuristics."""
+        """Fill missing data between `start_ms` and `end_ms` using gap heuristics.
+
+        Args:
+            start_ms: Start timestamp in milliseconds
+            end_ms: End timestamp in milliseconds (or None for now)
+            gap_hours: Threshold for detecting gaps (default 12 hours)
+            overlap: Number of events to overlap when fetching latest
+            force_refetch_gaps: If True, retry even persistent gaps
+        """
         await self.ensure_loaded()
         intervals: List[Tuple[int, int]] = []
+
+        # Get known gaps from cache metadata
+        known_gaps = self.cache.get_known_gaps()
+
+        def is_in_persistent_gap(ts_start: int, ts_end: int) -> bool:
+            """Check if interval is fully within a persistent (max retries) gap."""
+            if force_refetch_gaps:
+                return False
+            for gap in known_gaps:
+                if ts_start >= gap["start_ts"] and ts_end <= gap["end_ts"]:
+                    if not self.cache.should_retry_gap(gap):
+                        return True
+            return False
 
         if not self._events:
             logger.info("FillEventsManager.refresh_range: cache empty, refreshing entire interval")
@@ -1413,7 +1847,7 @@ class FillEventsManager:
         # Fetch older data before earliest cached if requested
         if start_ms < earliest:
             upper = earliest if end_ms is None else min(earliest, end_ms)
-            if start_ms < upper:
+            if start_ms < upper and not is_in_persistent_gap(start_ms, upper):
                 intervals.append((start_ms, upper))
 
         # Detect large gaps in cached data
@@ -1424,15 +1858,30 @@ class FillEventsManager:
                 break
             if cur_ts - prev_ts >= gap_ms:
                 gap_start = max(prev_ts, start_ms)
-                if gap_start < (end_ms if end_ms is not None else cur_ts):
-                    intervals.append((gap_start, end_ms))
+                gap_end = end_ms if end_ms is not None else cur_ts
+                if gap_start < gap_end:
+                    if is_in_persistent_gap(gap_start, gap_end):
+                        logger.debug(
+                            "FillEventsManager.refresh_range: skipping persistent gap %s → %s",
+                            _format_ms(gap_start),
+                            _format_ms(gap_end),
+                        )
+                    else:
+                        intervals.append((gap_start, gap_end))
+                        # Record as potential gap for tracking
+                        self.cache.add_known_gap(
+                            gap_start,
+                            gap_end,
+                            reason=GAP_REASON_AUTO,
+                            confidence=GAP_CONFIDENCE_SUSPICIOUS,
+                        )
                 break
             prev_ts = cur_ts
 
         # Fetch newer data after latest cached if requested (if not already covered)
         if end_ms is not None and end_ms > latest and (not intervals or intervals[-1][1] != end_ms):
             lower = max(latest, start_ms)
-            if lower < end_ms:
+            if lower < end_ms and not is_in_persistent_gap(lower, end_ms):
                 intervals.append((lower, end_ms))
 
         merged = self._merge_intervals(intervals)
@@ -1516,6 +1965,21 @@ class FillEventsManager:
             total += ev.pnl
             points.append((ev.timestamp, total))
         return points
+
+    def get_coverage_summary(self) -> Dict[str, object]:
+        """Return a summary of cache coverage and known gaps."""
+        summary = self.cache.get_coverage_summary()
+        summary["events_count"] = len(self._events)
+        summary["exchange"] = self.exchange
+        summary["user"] = self.user
+        if self._events:
+            summary["first_event"] = _format_ms(self._events[0].timestamp)
+            summary["last_event"] = _format_ms(self._events[-1].timestamp)
+            # Count unique symbols
+            symbols = set(ev.symbol for ev in self._events)
+            summary["symbols_count"] = len(symbols)
+            summary["symbols"] = sorted(symbols)
+        return summary
 
     @staticmethod
     def _events_for_days(
@@ -1850,6 +2314,7 @@ class BybitFetcher(BaseFetcher):
             "pb_order_type": "",
             "position_side": position_side,
             "client_order_id": client_order_id or "",
+            "raw": [{"source": "fetch_my_trades", "data": dict(trade)}],
         }
 
     @staticmethod
@@ -2021,7 +2486,7 @@ class HyperliquidFetcher(BaseFetcher):
             "pb_order_type": "",
             "position_side": position_side,
             "client_order_id": str(client_order_id or ""),
-            "raw": {"my_trade": trade, "info": info},
+            "raw": [{"source": "fetch_my_trades", "data": trade}],
             "c_mult": float(info.get("contractMultiplier") or info.get("multiplier") or 1.0),
         }
 
@@ -2150,6 +2615,7 @@ class GateioFetcher(BaseFetcher):
             "pb_order_type": pb_type or "unknown",
             "position_side": position_side,
             "client_order_id": str(client_order_id or ""),
+            "raw": [{"source": "fetch_closed_orders", "data": dict(order)}],
         }
 
     @staticmethod
@@ -2427,6 +2893,7 @@ class KucoinFetcher(BaseFetcher):
             "pb_order_type": "",
             "position_side": position_side,
             "client_order_id": str(trade.get("clientOrderId") or info.get("clientOid") or ""),
+            "raw": [{"source": "fetch_my_trades", "data": dict(trade)}],
         }
 
     @staticmethod
