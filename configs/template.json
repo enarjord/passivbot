@@ -372,6 +372,26 @@
             "volume_pct_per_day_avg_w",
             "entry_initial_balance_pct_long"
         ],
+        "objectives": [
+            {"metric": "mdg_w", "direction": "maximize"},
+            {"metric": "sterling_ratio", "direction": "maximize"}
+        ],
+        "constraints": [
+          {"metric": "drawdown_worst_usd", "max": 0.9},
+          {"metric": "loss_profit_ratio", "max": 0.6},
+          {"metric": "positions_held_per_day_w", "min": 3}
+        ],
+        "optuna": {
+            "penalty_weight": 1000,
+            "max_best_trials": 200,
+            "n_trials": 10000,
+            "n_cpus": 10,
+
+            "sampler": {
+                "name": "tpe",
+                "n_startup_trials": 200
+            }
+        },
         "write_all_results": true
     }
 }
