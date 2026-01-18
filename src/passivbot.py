@@ -5296,6 +5296,13 @@ async def main():
         default=False,
         help="Enable verbose (debug) logging. Equivalent to --log-level debug.",
     )
+    parser.add_argument(
+        "--shadow-mode",
+        dest="shadow_mode",
+        action="store_true",
+        default=False,
+        help="Enable FillEventsManager shadow mode for PnL comparison logging.",
+    )
 
     template_config = get_template_config()
     del template_config["optimize"]
@@ -5321,6 +5328,13 @@ async def main():
         logging_section = {}
     config["logging"] = logging_section
     logging_section["level"] = effective_log_level
+
+    # --shadow-mode flag enables FillEventsManager shadow mode
+    if args.shadow_mode:
+        if "live" not in config or not isinstance(config["live"], dict):
+            config["live"] = {}
+        config["live"]["pnls_manager_shadow_mode"] = True
+        logging.info("[shadow] Shadow mode enabled via CLI flag")
 
     custom_endpoints_cli = args.custom_endpoints
     live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
