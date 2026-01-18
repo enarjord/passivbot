@@ -130,6 +130,7 @@
             "short": ["ADA","BTC","ETH","SOL","XRP"]
         },
         "auto_gs": true,
+        "pnls_manager_shadow_mode": true,
         "balance_hysteresis_snap_pct": 0.02,
         "balance_override": null,
         "empty_means_all_approved": true,

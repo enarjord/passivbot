@@ -2548,31 +2548,23 @@ class Passivbot:
                         ts_diff_ms / 1000.0,
                     )
 
-            # Compare unstuck allowances
+            # Compare unstuck allowances (always log at INFO for validation)
             legacy_unstuck = self._calc_unstuck_allowances_live(allow_new_unstuck=True)
             manager_unstuck = self._calc_unstuck_allowances_from_fill_events(allow_new_unstuck=True)
             unstuck_diff_long = manager_unstuck["long"] - legacy_unstuck["long"]
             unstuck_diff_short = manager_unstuck["short"] - legacy_unstuck["short"]
-            if abs(unstuck_diff_long) > 0.01 or abs(unstuck_diff_short) > 0.01:
-                logging.info(
-                    "[shadow] Unstuck allowances: legacy=(long=%.4f, short=%.4f), "
-                    "manager=(long=%.4f, short=%.4f), diff=(long=%+.4f, short=%+.4f)",
-                    legacy_unstuck["long"],
-                    legacy_unstuck["short"],
-                    manager_unstuck["long"],
-                    manager_unstuck["short"],
-                    unstuck_diff_long,
-                    unstuck_diff_short,
-                )
-            else:
-                logging.debug(
-                    "[shadow] Unstuck allowances match: legacy=(long=%.4f, short=%.4f), "
-                    "manager=(long=%.4f, short=%.4f)",
-                    legacy_unstuck["long"],
-                    legacy_unstuck["short"],
-                    manager_unstuck["long"],
-                    manager_unstuck["short"],
-                )
+            match_str = "MATCH" if abs(unstuck_diff_long) < 0.01 and abs(unstuck_diff_short) < 0.01 else "DIFF"
+            logging.info(
+                "[shadow] Unstuck allowances %s: legacy=(long=%.4f, short=%.4f), "
+                "manager=(long=%.4f, short=%.4f), diff=(long=%+.4f, short=%+.4f)",
+                match_str,
+                legacy_unstuck["long"],
+                legacy_unstuck["short"],
+                manager_unstuck["long"],
+                manager_unstuck["short"],
+                unstuck_diff_long,
+                unstuck_diff_short,
+            )
 
             # Compare last position changes (timestamps for trailing logic)
             legacy_lpc = self.get_last_position_changes()
@@ -2590,7 +2582,7 @@ class Passivbot:
                     if legacy_ts != manager_ts:
                         diff_s = ((manager_ts or 0) - (legacy_ts or 0)) / 1000.0 if legacy_ts and manager_ts else 0
                         logging.info(
-                            "[shadow] Last position change %s %s: legacy=%s, manager=%s (diff=%+.1fs)",
+                            "[shadow] Last position change %s %s DIFF: legacy=%s, manager=%s (diff=%+.1fs)",
                             coin,
                             pside,
                             legacy_dt,
@@ -2598,12 +2590,11 @@ class Passivbot:
                             diff_s,
                         )
                     else:
-                        logging.debug(
-                            "[shadow] Last position change %s %s: legacy=%s, manager=%s (match)",
+                        logging.info(
+                            "[shadow] Last position change %s %s MATCH: %s",
                             coin,
                             pside,
                             legacy_dt,
-                            manager_dt,
                         )
 
         except Exception as e:
@@ -5364,6 +5355,13 @@ async def main():
         default=False,
         help="Enable verbose (debug) logging. Equivalent to --log-level debug.",
     )
+    parser.add_argument(
+        "--shadow-mode",
+        dest="shadow_mode",
+        action="store_true",
+        default=False,
+        help="Enable FillEventsManager shadow mode for PnL comparison logging.",
+    )
 
     template_config = get_template_config()
     del template_config["optimize"]
@@ -5389,6 +5387,13 @@ async def main():
         logging_section = {}
     config["logging"] = logging_section
     logging_section["level"] = effective_log_level
+
+    # --shadow-mode flag enables FillEventsManager shadow mode
+    if args.shadow_mode:
+        if "live" not in config or not isinstance(config["live"], dict):
+            config["live"] = {}
+        config["live"]["pnls_manager_shadow_mode"] = True
+        logging.info("[shadow] Shadow mode enabled via CLI flag")
 
     custom_endpoints_cli = args.custom_endpoints
     live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
