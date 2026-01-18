@@ -37,6 +37,8 @@ import json
 import logging
 import math
 import os
+import sys
+
 import time
 import zlib
 import atexit
@@ -63,6 +65,9 @@ _LOCK_STALE_SECONDS = 180.0
 _LOCK_BACKOFF_INITIAL = 0.1
 _LOCK_BACKOFF_MAX = 2.0
 
+# See: https://github.com/enarjord/passivbot/issues/547
+# True if running on Windows (used for file/path compatible names)
+windows_compatibility = sys.platform.startswith("win") or os.environ.get("WINDOWS_COMPATIBILITY") == "1"
 
 @dataclass
 class _LockRecord:
@@ -230,7 +235,13 @@ def _ts_index(a: np.ndarray) -> np.ndarray:
 
 
 def _sanitize_symbol(symbol: str) -> str:
-    return symbol.replace("/", "_")
+    sanitized = symbol.replace("/", "_")
+    # See: https://github.com/enarjord/passivbot/issues/547
+    # If running under "Windows Compatibility" mode,
+    # also replace ':' with '_' to ensure compatibility with Windows file naming restrictions.
+    if windows_compatibility:
+        sanitized = sanitized.replace(":", "_")
+    return sanitized
 
 
 # Parse timeframe string like '1m','5m','1h','1d' to milliseconds.

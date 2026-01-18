@@ -118,6 +118,10 @@ Add your keys to api-keys.json.
 
 ### Step 7: Run Passivbot
 
+> **Hint:**  
+> To ensure cache folder names are Windows-compatible (even outside Windows), set the environment variable `WINDOWS_COMPATIBILITY=1`.   
+> This is only required in certain scenarios, e.g., running under Docker (Linux) while mounting the `caches` folder to a Windows host.
+
 To start the bot with the default settings, run:
 
 ```sh
