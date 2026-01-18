@@ -170,13 +170,16 @@ mod core {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct SymbolSideInput {
-        /// `None` means “forager-eligible default”.
-        /// `Some(Normal)` means “forced Normal” (always selected).
+        /// `None` means "forager-eligible default".
+        /// `Some(Normal)` means "forced Normal" (always selected).
         pub mode: Option<TradingMode>,
         pub position: Position,
         pub trailing: TrailingPriceBundle,
         /// Per-symbol/per-pside params after applying coin_overrides.
         pub bot_params: BotParams,
+        /// Last entry fill price (for trailing threshold calculation)
+        #[serde(default)]
+        pub last_entry_price: f64,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1415,6 +1418,7 @@ mod core {
                                         &s.long.bot_params,
                                         &s.long.position,
                                         &s.long.trailing,
+                                        s.long.last_entry_price,
                                     );
                                     if e.qty != 0.0 {
                                         entries.push(IdealOrder {
@@ -1433,6 +1437,7 @@ mod core {
                                     &s.long.bot_params,
                                     &s.long.position,
                                     &s.long.trailing,
+                                    s.long.last_entry_price,
                                 );
                                 let expand_entries = nc.tradable
                                     && would_fill_next_candle(nc.low, nc.high, e.qty, e.price);
@@ -1688,6 +1693,7 @@ mod core {
                                         &s.short.bot_params,
                                         &s.short.position,
                                         &s.short.trailing,
+                                        s.short.last_entry_price,
                                     );
                                     if e.qty != 0.0 {
                                         entries.push(IdealOrder {
@@ -1706,6 +1712,7 @@ mod core {
                                     &s.short.bot_params,
                                     &s.short.position,
                                     &s.short.trailing,
+                                    s.short.last_entry_price,
                                 );
                                 let expand_entries = nc.tradable
                                     && would_fill_next_candle(nc.low, nc.high, e.qty, e.price);
@@ -2326,12 +2333,14 @@ mod core {
                     position: Position::default(),
                     trailing: TrailingPriceBundle::default(),
                     bot_params: bp.clone(),
+                    last_entry_price: 0.0,
                 },
                 short: SymbolSideInput {
                     mode: None,
                     position: Position::default(),
                     trailing: TrailingPriceBundle::default(),
                     bot_params: bp,
+                    last_entry_price: 0.0,
                 },
             }
         }
