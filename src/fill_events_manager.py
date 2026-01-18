@@ -2911,8 +2911,7 @@ class KucoinFetcher(BaseFetcher):
         if events is None:
             return
         detail_cache = detail_cache or {}
-        tasks: List[asyncio.Task[Optional[Tuple[str, str]]]] = []
-        pending: List[Tuple[Dict[str, object], str]] = []
+        pending: List[Tuple[Dict[str, object], str, str, str]] = []  # (ev, ev_id, order_id, symbol)
         for ev in events:
             cached = detail_cache.get(ev.get("id"))
             if cached:
@@ -2926,12 +2925,24 @@ class KucoinFetcher(BaseFetcher):
             if not order_id:
                 ev.setdefault("pb_order_type", "unknown")
                 continue
-            pending.append((ev, ev.get("id")))
-            tasks.append(asyncio.create_task(self._enrich_with_order_details(order_id, symbol)))
+            pending.append((ev, ev.get("id"), order_id, symbol))
 
-        if tasks:
+        if pending:
+            # Limit concurrency to avoid overwhelming the API
+            sem = asyncio.Semaphore(8)
+
+            async def throttled_fetch(order_id: str, symbol: str) -> Optional[Tuple[str, str]]:
+                async with sem:
+                    return await self._enrich_with_order_details(order_id, symbol)
+
+            tasks = [throttled_fetch(order_id, symbol) for _, _, order_id, symbol in pending]
+            if len(tasks) > 50:
+                logger.info(
+                    "KucoinFetcher: enriching %d events with order details (concurrency=8)...",
+                    len(tasks),
+                )
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            for (ev, ev_id), res in zip(pending, results):
+            for (ev, ev_id, _, _), res in zip(pending, results):
                 if isinstance(res, Exception) or res is None:
                     ev.setdefault("pb_order_type", ev.get("pb_order_type") or "unknown")
                     continue
