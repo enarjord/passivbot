@@ -6,6 +6,7 @@ All notable user-facing changes will be documented in this file.
 
 ### Fixed
 - One-way mode now respects disabled sides when choosing initial entry side, preventing a disabled side from blocking entries.
+- Windows compatibility: cache folder names now replace `:` with `_` on Windows or when `WINDOWS_COMPATIBILITY=1` env var is set (#547, thanks @FelixJongleur42). **Note:** Existing Windows caches will be orphaned and re-downloaded.
 
 ### Added
 - `live.warmup_jitter_seconds` (default 30): random delay before warmup to prevent API rate limit storms when multiple bots start simultaneously.
