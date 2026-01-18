@@ -15,22 +15,25 @@ import numpy as np
 from .models import Bound, Constraint, Objective, SamplerConfig
 from .samplers import create_sampler, make_constraints_func
 from .shared_arrays import SharedArraySpec, SharedArrayAttachment, attach_shared_array
-from .storage import create_journal_storage
+from .storage import SharedMemoryJournalBackend
 
 if TYPE_CHECKING:
     import optuna
 
 
-def _create_worker_storage(study_dir: Path):
+def _create_worker_storage(shared_state: tuple):
     """Create JournalStorage for worker processes.
 
     Args:
-        study_dir: Study directory containing journal.log
+        shared_state: Shared memory state from parent process.
 
     Returns:
-        JournalStorage instance
+        JournalStorage instance backed by shared memory
     """
-    return create_journal_storage(study_dir / "journal.log")
+    from optuna.storages import JournalStorage
+
+    backend = SharedMemoryJournalBackend.from_shared_state(shared_state)
+    return JournalStorage(backend)
 
 
 @dataclass
@@ -55,6 +58,7 @@ class WorkerInitData:
     penalty_weight: float = 1000
     debug_level: int = 1
     logging_module: str | None = None  # e.g. "logging_setup" - if None, uses basic logging
+    shared_storage_state: tuple | None = None  # Shared memory backend state from parent
 
 
 @dataclass
@@ -103,7 +107,7 @@ class WorkerContext:
 
         # Load study once per worker for efficient single-trial dispatch
         study_dir = Path(data.study_dir)
-        storage = _create_worker_storage(study_dir)
+        storage = _create_worker_storage(data.shared_storage_state)
 
         # Recreate sampler in worker process (samplers aren't picklable)
         constraints_func = make_constraints_func() if data.penalty_weight == -1 else None

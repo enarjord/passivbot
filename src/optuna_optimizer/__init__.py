@@ -21,7 +21,7 @@ from .models import (
     TPESamplerConfig,
 )
 from .pareto import extract_pareto
-from .storage import create_journal_storage
+from .storage import SharedMemoryJournalBackend, dump_to_sqlite, load_from_sqlite
 from .samplers import create_sampler, get_sampler_config_by_name, make_constraints_func
 from .shared_arrays import SharedArrayAttachment, SharedArrayManager, SharedArraySpec, attach_shared_array
 from .trial import check_constraints, compute_penalty, compute_scores, resolve_metric, sample_params
@@ -49,7 +49,9 @@ __all__ = [
     "apply_params_to_config",
     "load_seed_configs",
     # Storage
-    "create_journal_storage",
+    "SharedMemoryJournalBackend",
+    "dump_to_sqlite",
+    "load_from_sqlite",
     # Samplers
     "create_sampler",
     "get_sampler_config_by_name",

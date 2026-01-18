@@ -66,6 +66,7 @@ class TestLockFileCleanup:
 
                         # Run with mocked internals - should clean up lock in finally
                         import asyncio
+                        from optuna_optimizer.models import NSGAIISamplerConfig
                         try:
                             asyncio.run(_run_optimization_core(
                                 config={},
@@ -74,10 +75,12 @@ class TestLockFileCleanup:
                                 bounds={},
                                 constraints=[],
                                 objectives=[],
+                                sampler_config=NSGAIISamplerConfig(),
                                 n_trials=1,
                                 n_cpus=1,
                                 fixed_params=None,
                                 penalty_weight=1000,
+                                max_best_trials=10,
                                 debug_level=1,
                             ))
                         except Exception:
@@ -106,6 +109,7 @@ class TestLockFileCleanup:
                     mock_study.return_value.trials = []
 
                     import asyncio
+                    from optuna_optimizer.models import NSGAIISamplerConfig
                     with pytest.raises(RuntimeError, match="Simulated failure"):
                         asyncio.run(_run_optimization_core(
                             config={},
@@ -114,10 +118,12 @@ class TestLockFileCleanup:
                             bounds={},
                             constraints=[],
                             objectives=[],
+                            sampler_config=NSGAIISamplerConfig(),
                             n_trials=1,
                             n_cpus=1,
                             fixed_params=None,
                             penalty_weight=1000,
+                            max_best_trials=10,
                             debug_level=1,
                         ))
 

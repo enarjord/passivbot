@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import optuna
+from optuna.storages import JournalStorage
 import typer
 
 # External dependencies - owned by orchestrator, not package
@@ -27,8 +28,8 @@ from optuna_optimizer import (
     apply_params_to_config,
     check_constraints,
     compute_scores,
-    create_journal_storage,
     create_sampler,
+    dump_to_sqlite,
     extract_bounds,
     extract_constraints,
     extract_objectives,
@@ -36,12 +37,14 @@ from optuna_optimizer import (
     extract_params_from_config,
     extract_pareto,
     get_sampler_config_by_name,
+    load_from_sqlite,
     load_seed_configs,
     make_constraints_func,
     resolve_metric,
     sample_params,
     SharedArrayManager,
     SharedArraySpec,
+    SharedMemoryJournalBackend,
 )
 from optuna_optimizer.models import Objective
 from optuna_optimizer.worker import WorkerContext, WorkerInitData, get_context, init_worker
@@ -225,6 +228,7 @@ async def _run_optimization_core(
     penalty_weight: float,
     max_best_trials: int,
     debug_level: int,
+    shared_backend: SharedMemoryJournalBackend,
 ) -> None:
     """Core optimization loop shared by run and resume.
 
@@ -242,6 +246,7 @@ async def _run_optimization_core(
         penalty_weight: Constraint penalty weight (-1 = hard, 0 = disabled, >0 = soft)
         max_best_trials: Maximum Pareto configs to export
         debug_level: Logging verbosity
+        shared_backend: Shared memory backend for worker communication
     """
     array_manager = SharedArrayManager()
     start_time = time.time()
@@ -274,6 +279,7 @@ async def _run_optimization_core(
             penalty_weight=penalty_weight,
             debug_level=debug_level,
             logging_module="logging_setup",
+            shared_storage_state=shared_backend.get_shared_state() if shared_backend else None,
         )
         # Get population size for generation-based dispatch
         population_size = getattr(sampler_config, "population_size", n_trials)
@@ -295,31 +301,25 @@ async def _run_optimization_core(
                 pool.join()
 
     finally:
-        # Clean up lock file on interruption (avoids 30s grace period wait on resume)
-        journal_path = study_dir / "journal.log"
-        lock_path = study_dir / "journal.log.lock"
-        if lock_path.exists() or lock_path.is_symlink():
-            try:
-                lock_path.unlink()
-                logging.debug("Cleaned up journal lock file")
-            except OSError as e:
-                logging.debug(f"Could not remove lock file: {e}")
+        # Extract Pareto and log summary (use study object directly from memory)
+        try:
+            if study.trials:
+                _log_optimization_summary(study, objectives, n_trials, start_time)
+                logging.info("Extracting Pareto front...")
+                extract_pareto(study, study_dir, objectives, config, max_best_trials)
+            else:
+                logging.warning("No trials completed, skipping Pareto extraction")
+        except Exception as e:
+            logging.warning(f"Could not extract Pareto front: {e}")
 
-        # Always attempt Pareto extraction (even on interrupt)
-        if journal_path.exists():
-            try:
-                storage = create_journal_storage(journal_path)
-                final_study = optuna.load_study(study_name=study_dir.name, storage=storage)
-                if final_study.trials:
-                    _log_optimization_summary(final_study, objectives, n_trials, start_time)
-                    logging.info("Extracting Pareto front, please wait...")
-                    extract_pareto(final_study, study_dir, objectives, config, max_best_trials)
-                else:
-                    logging.warning("No trials completed, skipping Pareto extraction")
-            except Exception as e:
-                logging.warning(f"Could not extract Pareto front: {e}")
-        else:
-            logging.warning("No journal.log found, skipping Pareto extraction")
+        # Dump to SQLite for resume and optuna-dashboard
+        sqlite_path = study_dir / "study.db"
+        logging.info(f"Saving study to {sqlite_path}...")
+        dump_to_sqlite(shared_backend, study.study_name, sqlite_path)
+
+        # Shutdown Manager cleanly
+        if shared_backend._manager is not None:
+            shared_backend._manager.shutdown()
 
         array_manager.cleanup()
 
@@ -371,8 +371,10 @@ async def run_optimization(
 
     # Create study directory and study
     study_dir = _create_study_dir(config, study_name)
-    journal_path = study_dir / "journal.log"
-    storage = create_journal_storage(journal_path)
+
+    # Create shared backend (has built-in SIGINT protection for clean Ctrl+C)
+    shared_backend = SharedMemoryJournalBackend.create_parent()
+    storage = JournalStorage(shared_backend)
 
     sampler_cfg = optuna_cfg.sampler
     if sampler_name:
@@ -415,7 +417,7 @@ async def run_optimization(
     await _run_optimization_core(
         config, study_dir, study, bounds, constraints, objectives,
         sampler_cfg, n_trials, n_cpus, fixed_params, penalty_weight,
-        optuna_cfg.max_best_trials, debug_level
+        optuna_cfg.max_best_trials, debug_level, shared_backend
     )
 
 
@@ -525,10 +527,9 @@ async def resume_optimization(
     if not config_path.exists():
         raise ValueError(f"No config.json found in {study_dir}")
 
-    journal_path = study_dir / "journal.log"
-    if not journal_path.exists():
-        raise ValueError(f"No journal.log found in {study_dir}")
-    storage = create_journal_storage(journal_path)
+    sqlite_path = study_dir / "study.db"
+    if not sqlite_path.exists():
+        raise ValueError(f"No study.db found in {study_dir}")
 
     config = load_config(str(config_path), live_only=False, verbose=False)
     optuna_cfg = extract_optuna_config(config)
@@ -543,13 +544,13 @@ async def resume_optimization(
     n_cpus = n_cpus or optuna_cfg.n_cpus
     penalty_weight = optuna_cfg.penalty_weight
 
-    # Recreate sampler from config (load_study uses default otherwise)
+    # Recreate sampler from config
     sampler_cfg = optuna_cfg.sampler
     constraints_func = make_constraints_func() if penalty_weight == -1 else None
     sampler = create_sampler(sampler_cfg, constraints_func)
 
-    # Load existing study with correct sampler
-    study = optuna.load_study(study_name=study_dir.name, storage=storage, sampler=sampler)
+    # Load existing study from SQLite into memory
+    shared_backend, study = load_from_sqlite(sqlite_path, study_dir.name, sampler)
     existing_trials = len(study.trials)
 
     # Restore fine-tune mode from study metadata
@@ -567,7 +568,7 @@ async def resume_optimization(
     await _run_optimization_core(
         config, study_dir, study, bounds, constraints, objectives,
         sampler_cfg, n_trials, n_cpus, fixed_params, penalty_weight,
-        optuna_cfg.max_best_trials, debug_level
+        optuna_cfg.max_best_trials, debug_level, shared_backend
     )
 
 
