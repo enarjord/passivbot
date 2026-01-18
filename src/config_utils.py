@@ -2025,6 +2025,7 @@ def get_template_config():
                 "allocation_min_fraction": 0.1,
                 "max_n_positions": 0,
                 "mirror_excess_allowance_pct": 0.2,
+                "ema_dist_entry": 0.0,
             },
         },
         "logging": {

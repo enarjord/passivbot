@@ -235,6 +235,7 @@
             "mirror_excess_allowance_pct": 0.20,
             "max_n_positions": 0,
             "allocation_min_fraction": 0.10,
+            "ema_dist_entry": 0.0,
             "approved_coins": []
         }
     },

@@ -31,6 +31,10 @@ pub struct MirrorSymbol {
     pub volatility_score: f64,
     pub exchange_params: ExchangeParams,
     pub effective_min_cost: f64,
+    /// EMA upper band for this symbol (used for EMA-based gating).
+    pub ema_upper: f64,
+    /// EMA lower band for this symbol (used for EMA-based gating).
+    pub ema_lower: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -91,6 +95,12 @@ pub struct MirrorConfig {
     pub approved_mirror_symbols: Vec<usize>,
     /// Hedge direction.
     pub mode: MirrorMode,
+    /// EMA distance for opening new mirror positions (0 = disabled, no EMA gating).
+    /// For MirrorShortsForLongs: only open shorts when price > ema_upper * (1 + ema_dist_entry)
+    /// For MirrorLongsForShorts: only open longs when price < ema_lower * (1 - ema_dist_entry)
+    /// E.g., 0.01 = require price to be 1% beyond EMA band before opening mirror position.
+    #[serde(default)]
+    pub ema_dist_entry: f64,
 }
 
 impl Default for MirrorConfig {
@@ -103,6 +113,7 @@ impl Default for MirrorConfig {
             allocation_min_fraction: 0.10,
             approved_mirror_symbols: Vec::new(),
             mode: MirrorMode::MirrorShortsForLongs,
+            ema_dist_entry: 0.0,
         }
     }
 }
@@ -191,6 +202,33 @@ fn underwaterness_short(pprice: f64, sym: &MirrorSymbol) -> f64 {
     market_price(sym) / pprice - 1.0
 }
 
+/// Check if price satisfies EMA gating condition for opening new mirror positions.
+/// Returns true if EMA gating is disabled (ema_dist_entry == 0) or price is extended beyond EMA.
+fn ema_gate_allows_entry(mode: MirrorMode, sym: &MirrorSymbol, ema_dist_entry: f64) -> bool {
+    // If EMA gating is disabled, always allow
+    if ema_dist_entry == 0.0 {
+        return true;
+    }
+    // If EMA bands are not available (0.0), allow entry
+    if sym.ema_upper <= 0.0 || sym.ema_lower <= 0.0 {
+        return true;
+    }
+
+    let price = market_price(sym);
+    match mode {
+        // For shorting: only open when price is ABOVE upper EMA band (extended upward)
+        MirrorMode::MirrorShortsForLongs => {
+            let threshold = sym.ema_upper * (1.0 + ema_dist_entry);
+            price >= threshold
+        }
+        // For longing: only open when price is BELOW lower EMA band (extended downward)
+        MirrorMode::MirrorLongsForShorts => {
+            let threshold = sym.ema_lower * (1.0 - ema_dist_entry);
+            price <= threshold
+        }
+    }
+}
+
 fn validate_symbols_contiguous(symbols: &[MirrorSymbol]) -> Result<(), MirrorError> {
     for (i, s) in symbols.iter().enumerate() {
         if s.idx != i {
@@ -224,6 +262,7 @@ fn validate_config(cfg: &MirrorConfig) -> Result<(), MirrorError> {
             cfg.mirror_excess_allowance_pct,
         ),
         ("allocation_min_fraction", cfg.allocation_min_fraction),
+        ("ema_dist_entry", cfg.ema_dist_entry),
     ] {
         if !v.is_finite() {
             return Err(MirrorError::new(format!(
@@ -392,7 +431,7 @@ pub fn compute_mirror_cycle(
         }
     }
 
-    // Active hedges excluding collisions we are closing.
+    // Active hedges excluding collisions.
     let mut active_hedges: Vec<MirrorPosition> = hedge_positions
         .iter()
         .filter(|p| p.size != 0.0 && !out.gate_base_entries.contains(&p.idx))
@@ -502,6 +541,7 @@ pub fn compute_mirror_cycle(
     // Build eligible symbols list:
     // - restricted to approved_mirror_symbols for *opening*
     // - exclude base open symbols and base entry intents (one-way)
+    // - apply EMA gating: only open new positions when price is extended beyond EMA
     let approved_set: HashSet<usize> = cfg.approved_mirror_symbols.iter().copied().collect();
     let mut eligible: Vec<MirrorSymbol> = Vec::new();
     for &idx in &cfg.approved_mirror_symbols {
@@ -511,7 +551,12 @@ pub fn compute_mirror_cycle(
         if !hedge_mode && (base_open.contains(&idx) || base_entry_intents.contains(&idx)) {
             continue;
         }
-        eligible.push(symbols[idx].clone());
+        // EMA gating: only include symbols where price is extended beyond EMA
+        let sym = &symbols[idx];
+        if !ema_gate_allows_entry(cfg.mode, sym, cfg.ema_dist_entry) {
+            continue;
+        }
+        eligible.push(sym.clone());
     }
     let ranked = rank_assets_borda(&eligible);
 
@@ -719,6 +764,7 @@ mod tests {
     use super::*;
 
     fn sym(idx: usize, bid: f64, ask: f64, vol: f64, vola: f64, min_cost: f64) -> MirrorSymbol {
+        let price = (bid + ask) * 0.5;
         MirrorSymbol {
             idx,
             bid,
@@ -733,6 +779,9 @@ mod tests {
                 c_mult: 1.0,
             },
             effective_min_cost: min_cost,
+            // Default EMA bands to market price (no gating effect)
+            ema_upper: price,
+            ema_lower: price,
         }
     }
 
@@ -769,8 +818,19 @@ mod tests {
             price: 10.0,
         }];
         // hedge_mode=false means one-way enforcement (equivalent to old one_way=true)
-        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1, false, false)
-            .unwrap();
+        let res = compute_mirror_cycle(
+            &cfg,
+            &symbols,
+            &longs,
+            &shorts,
+            &[],
+            100.0,
+            1.5,
+            1,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(res.orders.is_empty() && res.gate_base_entries.is_empty());
     }
 
@@ -793,8 +853,19 @@ mod tests {
             price: 10.0,
         }]; // exposure = 1.0
         let shorts: Vec<MirrorPosition> = vec![]; // none
-        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1, false, false)
-            .unwrap();
+        let res = compute_mirror_cycle(
+            &cfg,
+            &symbols,
+            &longs,
+            &shorts,
+            &[],
+            100.0,
+            1.5,
+            1,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(res.orders.iter().any(|o| o.qty < 0.0));
     }
 
@@ -820,8 +891,19 @@ mod tests {
             size: -10.0,
             price: 10.0,
         }]; // exposure 1.0
-        let res = compute_mirror_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1, false, false)
-            .unwrap();
+        let res = compute_mirror_cycle(
+            &cfg,
+            &symbols,
+            &longs,
+            &shorts,
+            &[],
+            100.0,
+            1.5,
+            1,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(res.orders.iter().any(|o| o.qty > 0.0));
     }
 
@@ -879,8 +961,19 @@ mod tests {
             price: 10.0,
         }]; // base exposure 1.0
         let hedges: Vec<MirrorPosition> = vec![];
-        let res = compute_mirror_cycle(&cfg, &symbols, &hedges, &shorts, &[], 100.0, 1.5, 1, false, false)
-            .unwrap();
+        let res = compute_mirror_cycle(
+            &cfg,
+            &symbols,
+            &hedges,
+            &shorts,
+            &[],
+            100.0,
+            1.5,
+            1,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(res
             .orders
             .iter()

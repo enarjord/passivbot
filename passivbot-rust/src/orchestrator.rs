@@ -2264,6 +2264,16 @@ mod core {
                         };
                         let volume_score =
                             ema_lookup(&s.emas.h1.volume, volume_span).unwrap_or(0.0);
+                        // Derive EMA bands for mirror gating based on base side's bot params
+                        let bot_params = match mirror_cfg.mode {
+                            MirrorMode::MirrorShortsForLongs => &s.long.bot_params,
+                            MirrorMode::MirrorLongsForShorts => &s.short.bot_params,
+                        };
+                        let ema_bands = derive_ema_bands(s.symbol_idx, &s.emas, bot_params);
+                        let (ema_upper, ema_lower) = match ema_bands {
+                            Ok(bands) => (bands.upper, bands.lower),
+                            Err(_) => (0.0, 0.0), // EMA gating will be disabled if bands unavailable
+                        };
                         MirrorSymbol {
                             idx: s.symbol_idx,
                             bid: s.order_book.bid,
@@ -2272,6 +2282,8 @@ mod core {
                             volatility_score,
                             exchange_params: s.exchange.clone(),
                             effective_min_cost: s.effective_min_cost,
+                            ema_upper,
+                            ema_lower,
                         }
                     })
                     .collect();

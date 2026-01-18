@@ -894,6 +894,12 @@ fn mirror_config_from_dict(backtest_params: &PyDict) -> PyResult<Option<MirrorCo
         .transpose()?
         .unwrap_or(0.10);
 
+    let ema_dist_entry: f64 = mirror_dict
+        .get_item("ema_dist_entry")?
+        .map(|v| v.extract::<f64>())
+        .transpose()?
+        .unwrap_or(0.0);
+
     let mode_str: String = mirror_dict
         .get_item("mode")?
         .map(|v| v.extract::<String>())
@@ -918,6 +924,7 @@ fn mirror_config_from_dict(backtest_params: &PyDict) -> PyResult<Option<MirrorCo
         max_n_positions,
         allocation_min_fraction,
         mode,
+        ema_dist_entry,
         approved_mirror_symbols,
     }))
 }

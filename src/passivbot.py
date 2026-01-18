@@ -3475,6 +3475,9 @@ class Passivbot:
                         self.config_get(["live", "mirror", "mode"], default="mirror_shorts_for_longs")
                         or "mirror_shorts_for_longs"
                     ),
+                    "ema_dist_entry": float(
+                        self.config_get(["live", "mirror", "ema_dist_entry"], default=0.0) or 0.0
+                    ),
                     "approved_mirror_symbols": [],
                 },
                 "hedge_mode": effective_hedge_mode,
@@ -3770,6 +3773,9 @@ class Passivbot:
                     "mode": str(
                         self.config_get(["live", "mirror", "mode"], default="mirror_shorts_for_longs")
                         or "mirror_shorts_for_longs"
+                    ),
+                    "ema_dist_entry": float(
+                        self.config_get(["live", "mirror", "ema_dist_entry"], default=0.0) or 0.0
                     ),
                     "approved_mirror_symbols": [],
                 },
