@@ -646,6 +646,25 @@ class CandlestickManager:
         self._progress_last_log[key] = now
         self._log("debug", event, **fields)
 
+    def _log_persistent_gap_summary(self) -> None:
+        """Log accumulated persistent gap summary if any, throttled to once per 60s."""
+        if not hasattr(self, "_persistent_gap_summary") or not self._persistent_gap_summary:
+            return
+        now = time.monotonic()
+        last = getattr(self, "_persistent_gap_summary_last_log", 0.0)
+        if (now - last) < 60.0:  # Only log summary once per minute
+            return
+        self._persistent_gap_summary_last_log = now
+        summary = self._persistent_gap_summary
+        total = sum(summary.values())
+        symbols = ", ".join(f"{s}:{c}" for s, c in sorted(summary.items())[:5])
+        if len(summary) > 5:
+            symbols += f", +{len(summary) - 5} more"
+        self.log.warning(
+            f"persistent gaps: {total} new ({symbols}). Use --force-refetch-gaps to retry."
+        )
+        self._persistent_gap_summary.clear()
+
     def _throttled_warning(self, throttle_key: str, event: str, **fields) -> None:
         """Emit a warning at most once per throttle window (default 5 min).
 
@@ -1739,19 +1758,10 @@ class CandlestickManager:
                     and gap_reason != "pre_inception"
                 ):
                     gap_minutes = (updated_gap["end_ts"] - updated_gap["start_ts"]) // ONE_MIN_MS + 1
-                    # Use throttled warning to handle edge cases (concurrent calls, etc.)
-                    throttle_key = f"gap_persistent_{symbol}_{updated_gap['start_ts']}_{updated_gap['end_ts']}"
-                    self._throttled_warning(
-                        throttle_key,
-                        "gap_persistent",
-                        symbol=symbol,
-                        start_ts=updated_gap["start_ts"],
-                        end_ts=updated_gap["end_ts"],
-                        gap_minutes=gap_minutes,
-                        retry_count=current_retry_count,
-                        reason=gap_reason,
-                        msg=f"Gap marked as persistent after {_GAP_MAX_RETRIES} retries. Use --force-refetch-gaps to retry.",
-                    )
+                    # Track persistent gaps for summary logging
+                    if not hasattr(self, "_persistent_gap_summary"):
+                        self._persistent_gap_summary: Dict[str, int] = {}
+                    self._persistent_gap_summary[symbol] = self._persistent_gap_summary.get(symbol, 0) + 1
 
         self._save_known_gaps_enhanced(symbol, gaps)
 
@@ -3933,6 +3943,9 @@ class CandlestickManager:
             fill_leading_gaps=fill_leading_gaps,
             assume_sorted=True,
         )
+
+        # Log accumulated persistent gap summary (throttled to once per minute)
+        self._log_persistent_gap_summary()
 
         return result
 
