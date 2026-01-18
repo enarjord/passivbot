@@ -179,9 +179,8 @@ async def test_load_markets_fetch_and_cache(tmp_path, monkeypatch):
     markets = await downloader.load_markets("binance")
     assert "BTC/USDT:USDT" in markets
 
-    # Ensure cache file exists
-    ex = downloader.normalize_exchange_name("binance")
-    cache_fp = tmp_path / "caches" / ex / "markets.json"
+    # Ensure cache file exists (uses non-normalized exchange name for cache path)
+    cache_fp = tmp_path / "caches" / "binance" / "markets.json"
     assert cache_fp.exists()
 
     # Second call: make cache fresh to test cache path

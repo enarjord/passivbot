@@ -39,16 +39,16 @@ async def test_load_markets_fetch_and_cache_creates_maps(tmp_path, monkeypatch):
     monkeypatch.setattr(utils.ccxt, "exchanges", ["binanceusdm"], raising=False)
     monkeypatch.setattr(utils.ccxt, "binanceusdm", make_dummy_exchange_class(markets), raising=False)
 
-    # Call with "binance" to exercise normalize_exchange_name -> "binanceusdm"
+    # Call with "binance" - cache uses non-normalized name "binance" (not "binanceusdm")
     result = await utils.load_markets("binance")
     assert result == markets
 
-    # Cached markets file exists
-    markets_path = os.path.join("caches", "binanceusdm", "markets.json")
+    # Cached markets file exists (uses non-normalized exchange name for cache path)
+    markets_path = os.path.join("caches", "binance", "markets.json")
     assert os.path.exists(markets_path)
 
     # Maps should be created
-    c2s_path = os.path.join("caches", "binanceusdm", "coin_to_symbol_map.json")
+    c2s_path = os.path.join("caches", "binance", "coin_to_symbol_map.json")
     s2c_path = os.path.join("caches", "symbol_to_coin_map.json")
     assert os.path.exists(c2s_path)
     assert os.path.exists(s2c_path)
@@ -66,9 +66,9 @@ async def test_load_markets_fetch_and_cache_creates_maps(tmp_path, monkeypatch):
     # symbol_to_coin should resolve "1000SHIB" to "SHIB"
     assert s2c["1000SHIB/USDT:USDT"] == "SHIB"
 
-    # Runtime helpers use caches
-    assert utils.coin_to_symbol("BTC", "binanceusdm") == "BTC/USDT:USDT"
-    assert utils.coin_to_symbol("SHIB", "binanceusdm") == "1000SHIB/USDT:USDT"
+    # Runtime helpers use caches (use non-normalized exchange name)
+    assert utils.coin_to_symbol("BTC", "binance") == "BTC/USDT:USDT"
+    assert utils.coin_to_symbol("SHIB", "binance") == "1000SHIB/USDT:USDT"
 
     # Heuristic for hyperliquid-style "kSHIB"
     assert utils.symbol_to_coin("kSHIB/USDT:USDT") == "SHIB"

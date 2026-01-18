@@ -1355,6 +1355,7 @@ class Passivbot:
         position_side = order.get("position_side", "?")
         price = _fmt(order.get("price", "?"))
         symbol = order.get("symbol", "?")
+        coin = symbol_to_coin(symbol, verbose=False) or symbol
         details = f"{side} {qty} {position_side}@{price}"
         extra_parts = []
         if context:
@@ -1371,7 +1372,7 @@ class Passivbot:
                 parts.append(f"qty {qo} -> {qn} ({delta.get('qty_pct_diff','?')}%)")
             if parts:
                 extra_parts.append("delta=" + "; ".join(parts))
-        msg = f"{action: >{self.action_str_max_len}} {symbol} | {details} | type={pb_order_type} | src={source}"
+        msg = f"[order] {action: >{self.action_str_max_len}} {coin} | {details} | type={pb_order_type} | src={source}"
         if extra_parts:
             msg += " | " + " ".join(extra_parts)
         logging.log(level, msg)
@@ -1427,7 +1428,8 @@ class Passivbot:
                 reason_str = " | reasons=" + ", ".join(
                     f"{reason}:{count}" for reason, count in sorted(reason_counts.items())
                 )
-            logging.info("%s %s | %s%s", action, symbol, display, reason_str)
+            coin = symbol_to_coin(symbol, verbose=False) or symbol
+            logging.info("[order] %6s %s | %s%s", action, coin, display, reason_str)
 
     def _resolve_pb_order_type(self, order) -> str:
         """Best-effort decoding of Passivbot order type for logging."""
@@ -1856,7 +1858,7 @@ class Passivbot:
         res = log_dict_changes(previous_PB_modes, self.PB_modes)
         for k, v in res.items():
             for elm in v:
-                logging.info(f"{k} {elm}")
+                logging.info(f"[mode] {k:7s} {elm}")
 
     async def get_filtered_coins(self, pside: str) -> List[str]:
         """Select ideal coins for a side using EMA-based volume and log-range filters.
@@ -2133,7 +2135,7 @@ class Passivbot:
             try:
                 equity = self.balance + (await self.calc_upnl_sum())
                 logging.info(
-                    f"balance changed: {self._previous_balance} -> {self.balance} equity: {equity:.4f} source: {source}"
+                    f"[balance] {self._previous_balance} -> {self.balance} equity: {equity:.4f} source: {source}"
                 )
             except Exception as e:
                 logging.error(f"error with handle_balance_update {e}")
@@ -2313,6 +2315,97 @@ class Passivbot:
             self._pnls_shadow_mode = False  # Disable shadow mode on init failure
             return False
 
+    def _log_fill_event(self, event) -> str:
+        """Format a FillEvent for logging.
+
+        Format: [fill] BTC long entry +0.001 @ 100000.00
+        For closes: [fill] BTC long close -0.001 @ 100500.00, pnl=+5.50 USDT
+        For unknown orders: [fill] BTC long unknown -0.2 @ 2.05, pnl=-0.005 USDT (coid=abc123)
+        """
+        coin = symbol_to_coin(event.symbol, verbose=False) or event.symbol
+        pside = event.position_side.lower()
+        order_type = event.pb_order_type.lower() if event.pb_order_type else "fill"
+
+        # Format qty with sign (+ for buys, - for sells)
+        qty_sign = "+" if event.side.lower() == "buy" else "-"
+        qty_str = f"{qty_sign}{abs(event.qty):.6g}"
+
+        msg = f"[fill] {coin} {pside} {order_type} {qty_str} @ {event.price:.2f}"
+
+        # Add pnl for closes (use 3 significant digits)
+        if event.pnl != 0.0:
+            pnl_sign = "+" if event.pnl >= 0 else ""
+            msg += f", pnl={pnl_sign}{round_dynamic(event.pnl, 3)} USDT"
+
+        # Add client_order_id for unknown orders
+        if order_type == "unknown" and event.client_order_id:
+            msg += f" (coid={event.client_order_id})"
+
+        return msg
+
+    def _log_new_fill_events(self, new_events: list) -> None:
+        """Log new fill events. Truncates to summary if > 20 events."""
+        if not new_events:
+            return
+
+        if len(new_events) > 20:
+            # Truncate to summary
+            total_pnl = sum(ev.pnl for ev in new_events)
+            pnl_sign = "+" if total_pnl >= 0 else ""
+            logging.info("[fill] %d fills, pnl=%s%s USDT", len(new_events), pnl_sign, round_dynamic(total_pnl, 3))
+        else:
+            # Log each event
+            for event in sorted(new_events, key=lambda e: e.timestamp):
+                logging.info(self._log_fill_event(event))
+
+    def _calc_unstuck_allowances_from_fill_events(self, allow_new_unstuck: bool) -> dict[str, float]:
+        """Calculate unstuck allowances using FillEventsManager data (shadow mode equivalent)."""
+        if not allow_new_unstuck or self._pnls_manager is None:
+            return {"long": 0.0, "short": 0.0}
+
+        events = self._pnls_manager.get_events()
+        if not events:
+            return {"long": 0.0, "short": 0.0}
+
+        pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
+        pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
+
+        out = {}
+        for pside in ["long", "short"]:
+            pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
+            if pct > 0.0:
+                out[pside] = float(
+                    pbr.calc_auto_unstuck_allowance(
+                        float(self.balance),
+                        pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0),
+                        float(pnls_cumsum_max),
+                        float(pnls_cumsum_last),
+                    )
+                )
+            else:
+                out[pside] = 0.0
+        return out
+
+    def _get_last_position_changes_from_fill_events(self) -> dict:
+        """Get last position changes using FillEventsManager data (shadow mode equivalent)."""
+        last_position_changes = defaultdict(dict)
+        if self._pnls_manager is None:
+            return last_position_changes
+
+        events = self._pnls_manager.get_events()
+        for symbol in self.positions:
+            for pside in ["long", "short"]:
+                if self.has_position(pside, symbol) and self.is_trailing(symbol, pside):
+                    last_position_changes[symbol][pside] = utc_ms() - 1000 * 60 * 60 * 24 * 7
+                    for ev in reversed(events):
+                        try:
+                            if ev.symbol == symbol and ev.position_side == pside:
+                                last_position_changes[symbol][pside] = ev.timestamp
+                                break
+                        except Exception as e:
+                            logging.error(f"Error in _get_last_position_changes_from_fill_events: {e}")
+        return last_position_changes
+
     async def _update_pnls_shadow(self) -> bool:
         """Run the FillEventsManager refresh in shadow mode.
 
@@ -2336,8 +2429,17 @@ class Passivbot:
                 self.live_value("pnls_max_lookback_days")
             )
 
+            # Get existing event IDs before refresh
+            existing_ids = set(ev.id for ev in self._pnls_manager.get_events())
+
             # Refresh latest events (incremental update like legacy)
             await self._pnls_manager.refresh_latest(overlap=20)
+
+            # Find and log new events (those not in cache before refresh)
+            all_events = self._pnls_manager.get_events()
+            new_events = [ev for ev in all_events if ev.id not in existing_ids]
+            if new_events:
+                self._log_new_fill_events(new_events)
 
             return True
 
@@ -2436,6 +2538,55 @@ class Passivbot:
                         ts_to_date(manager_latest),
                         ts_diff_ms / 1000.0,
                     )
+
+            # Compare unstuck allowances (always log at INFO for validation)
+            legacy_unstuck = self._calc_unstuck_allowances_live(allow_new_unstuck=True)
+            manager_unstuck = self._calc_unstuck_allowances_from_fill_events(allow_new_unstuck=True)
+            unstuck_diff_long = manager_unstuck["long"] - legacy_unstuck["long"]
+            unstuck_diff_short = manager_unstuck["short"] - legacy_unstuck["short"]
+            match_str = "MATCH" if abs(unstuck_diff_long) < 0.01 and abs(unstuck_diff_short) < 0.01 else "DIFF"
+            logging.info(
+                "[shadow] Unstuck allowances %s: legacy=(long=%.4f, short=%.4f), "
+                "manager=(long=%.4f, short=%.4f), diff=(long=%+.4f, short=%+.4f)",
+                match_str,
+                legacy_unstuck["long"],
+                legacy_unstuck["short"],
+                manager_unstuck["long"],
+                manager_unstuck["short"],
+                unstuck_diff_long,
+                unstuck_diff_short,
+            )
+
+            # Compare last position changes (timestamps for trailing logic)
+            legacy_lpc = self.get_last_position_changes()
+            manager_lpc = self._get_last_position_changes_from_fill_events()
+            all_symbols = set(legacy_lpc.keys()) | set(manager_lpc.keys())
+            for symbol in sorted(all_symbols):
+                coin = symbol_to_coin(symbol, verbose=False) or symbol
+                for pside in ["long", "short"]:
+                    legacy_ts = legacy_lpc.get(symbol, {}).get(pside)
+                    manager_ts = manager_lpc.get(symbol, {}).get(pside)
+                    if legacy_ts is None and manager_ts is None:
+                        continue
+                    legacy_dt = ts_to_date(legacy_ts) if legacy_ts else "N/A"
+                    manager_dt = ts_to_date(manager_ts) if manager_ts else "N/A"
+                    if legacy_ts != manager_ts:
+                        diff_s = ((manager_ts or 0) - (legacy_ts or 0)) / 1000.0 if legacy_ts and manager_ts else 0
+                        logging.info(
+                            "[shadow] Last position change %s %s DIFF: legacy=%s, manager=%s (diff=%+.1fs)",
+                            coin,
+                            pside,
+                            legacy_dt,
+                            manager_dt,
+                            diff_s,
+                        )
+                    else:
+                        logging.info(
+                            "[shadow] Last position change %s %s MATCH: %s",
+                            coin,
+                            pside,
+                            legacy_dt,
+                        )
 
         except Exception as e:
             logging.error("[shadow] Error during pnls comparison: %s", e)
@@ -3256,7 +3407,7 @@ class Passivbot:
                             order, "removed order", "fetch_open_orders", level=logging.DEBUG
                         )
             if len(added_orders) > 20:
-                logging.info(f"added {len(added_orders)} new orders")
+                logging.info(f"[order] added {len(added_orders)} new orders")
             else:
                 for order in added_orders:
                     self.log_order_action(
@@ -3335,15 +3486,15 @@ class Passivbot:
 
             # classify action ------------------------------------------------
             if old["size"] == 0.0 and new["size"] != 0.0:
-                action = "     new pos"
+                action = "    new"
             elif new["size"] == 0.0:
-                action = "  closed pos"
+                action = " closed"
             elif new["size"] > old["size"]:
-                action = "added to pos"
+                action = "  added"
             elif new["size"] < old["size"]:
-                action = " reduced pos"
+                action = "reduced"
             else:
-                action = "     unknown"
+                action = "unknown"
 
             # Compute metrics for new pos
             wallet_exposure = (
@@ -3382,10 +3533,11 @@ class Passivbot:
             except:
                 upnl = 0.0
 
+            coin = symbol_to_coin(symbol, verbose=False) or symbol
             table.add_row(
                 [
                     action + " ",
-                    symbol + " ",
+                    coin + " ",
                     pside + " ",
                     round_dynamic(old["size"], rd),
                     " @ ",
@@ -3405,9 +3557,9 @@ class Passivbot:
                 ]
             )
 
-        # Print aligned table
+        # Print aligned table with [pos] prefix
         for line in table.get_string().splitlines():
-            logging.info(line)
+            logging.info("[pos] %s", line)
 
     async def _fetch_and_apply_positions(self):
         """Fetch raw positions, apply them to local state and return snapshots."""

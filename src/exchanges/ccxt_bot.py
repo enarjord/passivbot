@@ -366,10 +366,10 @@ class CCXTBot(Passivbot):
         If watching is not available, exits gracefully (polling handles updates).
         """
         if not self.can_watch_orders():
-            logging.info(f"{self.exchange}: watch_orders not available, using REST polling")
+            logging.info(f"[ws] {self.exchange}: watch_orders not available, using REST polling")
             return
 
-        logging.info(f"{self.exchange}: starting WebSocket order watch")
+        logging.info(f"[ws] {self.exchange}: starting order watch")
         while True:
             try:
                 if self.stop_websocket:
@@ -378,7 +378,7 @@ class CCXTBot(Passivbot):
                 normalized = [self._normalize_order_update(o) for o in raw_orders]
                 self.handle_order_update(normalized)
             except Exception as e:
-                logging.error(f"exception in watch_orders: {e}")
+                logging.error(f"[ws] exception in watch_orders: {e}")
                 traceback.print_exc()
                 await asyncio.sleep(1)
 

@@ -483,14 +483,16 @@ async def load_markets(
     """
     Standalone helper to load and cache CCXT markets for a given exchange.
 
-    - Normalizes 'binance' -> 'binanceusdm'
     - Reads from caches/{exchange}/markets.json if fresh
     - Otherwise fetches via ccxt, writes cache, and returns the markets dict
 
     Returns a markets dictionary as provided by ccxt.
+
+    Note: Uses the exchange name as-is (e.g., "binance" not "binanceusdm") for
+    consistency with other cache paths (pnls, ohlcv, fill_events).
     """
     # Prefer cc.id when a ccxt instance is supplied, otherwise use the provided exchange string.
-    ex = normalize_exchange_name(getattr(cc, "id", None) or exchange)
+    ex = (getattr(cc, "id", None) or exchange or "").lower()
     markets_path = os.path.join("caches", ex, "markets.json")
 
     # Try cache first
@@ -807,12 +809,15 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
 
     Uses file locking to make the read-modify-write cycle atomic, preventing
     race conditions when multiple bots start simultaneously.
+
+    Note: Uses the exchange name as-is (e.g., "binance" not "binanceusdm") for
+    consistency with other cache paths.
     """
     # Run stale lock cleanup on first access
     _cleanup_stale_symbol_map_locks()
 
     try:
-        exchange = normalize_exchange_name(exchange)
+        exchange = (exchange or "").lower()
         quote = get_quote(exchange, quote)
 
         symbol_to_coin_map_path = make_get_filepath(os.path.join("caches", "symbol_to_coin_map.json"))
@@ -887,7 +892,7 @@ def coin_to_symbol(coin, exchange, quote=None):
     # caches coin_to_symbol_map in memory and reloads if file changes
     if coin == "":
         return ""
-    ex = normalize_exchange_name(exchange)
+    ex = (exchange or "").lower()
     quote = get_quote(ex, quote)
     coin_sanitized = symbol_to_coin(coin)
     fallback = f"{coin_sanitized}/{quote}:{quote}"
