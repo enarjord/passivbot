@@ -2432,8 +2432,29 @@ class Passivbot:
             # Get existing event IDs before refresh
             existing_ids = set(ev.id for ev in self._pnls_manager.get_events())
 
-            # Refresh latest events (incremental update like legacy)
-            await self._pnls_manager.refresh_latest(overlap=20)
+            # Check if we need a full refresh (cache empty or too old)
+            events = self._pnls_manager.get_events()
+            needs_full_refresh = not events
+            if events:
+                oldest_event_ts = events[0].timestamp
+                if oldest_event_ts > age_limit + 1000 * 60 * 60 * 24:  # > 1 day newer than limit
+                    needs_full_refresh = True
+                    logging.info(
+                        "[shadow] Cache oldest event (%s) is newer than lookback (%s), doing full refresh",
+                        ts_to_date(oldest_event_ts)[:19],
+                        ts_to_date(age_limit)[:19],
+                    )
+
+            if needs_full_refresh:
+                # Full refresh with proper lookback window
+                logging.info(
+                    "[shadow] Performing full refresh from %s",
+                    ts_to_date(age_limit)[:19],
+                )
+                await self._pnls_manager.refresh(start_ms=int(age_limit), end_ms=None)
+            else:
+                # Incremental refresh like legacy
+                await self._pnls_manager.refresh_latest(overlap=20)
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()

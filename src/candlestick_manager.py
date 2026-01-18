@@ -3141,6 +3141,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         force_refetch_gaps: bool = False,
+        fill_leading_gaps: bool = False,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
 
@@ -3152,6 +3153,8 @@ class CandlestickManager:
         - Applies gap standardization (1m only)
         - If `force_refetch_gaps` is True: clears known gaps in the requested range
           before fetching, forcing a retry of all gaps regardless of retry count
+        - If `fill_leading_gaps` is True: synthesize zero-candles even before the
+          first real data point (useful for EMA calculation)
         """
         if max_age_ms is not None and max_age_ms < 0:
             raise ValueError("max_age_ms cannot be negative")
@@ -3906,9 +3909,29 @@ class CandlestickManager:
                             self._add_known_gap(symbol, max(s, ms), min(e, me))
 
         # Standardize gaps: synthesize zero-candles where missing.
-        # sub is already sorted (from _slice_ts_range), skip redundant sort
+        # To help seed forward-fill, include one candle before start_ts if available.
+        # This ensures standardize_gaps has a prev_close even if sub starts after start_ts.
+        data_for_gaps = sub
+        if sub.size == 0 or (sub.size > 0 and int(sub[0]["ts"]) > start_ts):
+            full_arr = self._cache.get(symbol)
+            if full_arr is not None and full_arr.size > 0:
+                full_arr = _ensure_dtype(full_arr)
+                ts_idx = full_arr["ts"].astype(np.int64)
+                idx = int(np.searchsorted(ts_idx, start_ts, side="left"))
+                if idx > 0:
+                    seed_candle = full_arr[idx - 1 : idx]
+                    if sub.size > 0:
+                        data_for_gaps = np.concatenate([seed_candle, sub])
+                    else:
+                        data_for_gaps = seed_candle
+
         result = self.standardize_gaps(
-            sub, start_ts=start_ts, end_ts=end_ts, strict=strict, assume_sorted=True
+            data_for_gaps,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            strict=strict,
+            fill_leading_gaps=fill_leading_gaps,
+            assume_sorted=True,
         )
 
         return result
