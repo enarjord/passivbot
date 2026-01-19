@@ -197,53 +197,64 @@ Coins selected for trading are filtered by volume and log range. First, filter c
   - Log range is computed from 1m OHLCVs as `mean(ln(high / low))`.
   - In forager mode, the bot selects coins with the highest log-range values for opening positions.
 
-## Hedge Overlay (WIP)
+## Mirror Mode (Market-Neutral Hedging)
 
-Passivbot has an experimental market-neutral hedging overlay. It is designed for:
+Passivbot has a market-neutral hedging overlay called "mirror mode". It automatically hedges your base positions by opening opposite-side positions on different symbols. For a comprehensive guide, see `mirror.md`.
 
-- base long-only + hedge shorts (`hedge_shorts_for_longs`), or
-- base short-only + hedge longs (`hedge_longs_for_shorts`)
+Mirror mode is designed for:
 
-Hedging is enabled when `hedge.threshold > 0.0`. For a higher-level explanation, see `hedging.md`.
+- Base long-only + mirror shorts (`mirror_shorts_for_longs`), or
+- Base short-only + mirror longs (`mirror_longs_for_shorts`)
 
-Important constraints (v0):
+Mirror mode is enabled when `mirror.threshold > 0.0`.
 
-- One-way mode only: no simultaneous long+short on the same symbol.
+**Important constraints:**
+
 - The opposite base side must be disabled:
-  - `hedge_shorts_for_longs` requires base short disabled (`bot.short.n_positions = 0` or `bot.short.total_wallet_exposure_limit = 0.0`).
-  - `hedge_longs_for_shorts` requires base long disabled (`bot.long.n_positions = 0` or `bot.long.total_wallet_exposure_limit = 0.0`).
+  - `mirror_shorts_for_longs` requires `bot.short.n_positions = 0`.
+  - `mirror_longs_for_shorts` requires `bot.long.n_positions = 0`.
+- Position mode is controlled by `live.hedge_mode`:
+  - `hedge_mode: true` (default) = two-way mode, simultaneous long+short allowed on same symbol.
+  - `hedge_mode: false` = one-way mode, only one side per symbol (collision handling applies).
 
-### Hedge Parameters
+### Mirror Parameters
 
-- **hedge.mode**:
-  - Hedge direction.
-  - Allowed values: `hedge_shorts_for_longs`, `hedge_longs_for_shorts`.
-- **hedge.threshold**:
-  - Target hedge exposure as a multiple of base exposure.
-  - `0.0` disables hedging; `1.0` targets equal hedge/base exposure; `0.5` targets half, etc.
-- **hedge.tolerance_pct**:
-  - Absolute tolerance band to avoid churn.
-  - Internally: `tolerance_band = base_twel * tolerance_pct`.
-- **hedge.max_n_positions**:
-  - Maximum number of hedge positions.
-  - `0` means “use base side `n_positions`”.
-- **hedge.hedge_excess_allowance_pct**:
-  - Per-hedge position cap looseness.
-  - Each hedge position is capped (in exposure terms) to:
-    `cap_exposure = (base_twel * hedge.threshold / max_positions) * (1 + hedge_excess_allowance_pct)`.
-- **hedge.allocation_min_fraction**:
-  - Chunking control when allocating additional hedge notional to existing hedges.
+- **mirror.mode**:
+  - Mirror direction.
+  - Allowed values: `mirror_shorts_for_longs`, `mirror_longs_for_shorts`.
+- **mirror.threshold**:
+  - Target mirror exposure as a multiple of base exposure.
+  - `0.0` disables mirror mode; `1.0` targets equal mirror/base exposure; `0.5` targets half, etc.
+- **mirror.tolerance_pct**:
+  - Tolerance band (as fraction of target exposure) to avoid rebalancing churn.
+  - Internally: `tolerance_band = target_hedge_exposure * tolerance_pct`.
+- **mirror.max_n_positions**:
+  - Maximum number of mirror positions.
+  - `0` means "use base side `n_positions`".
+- **mirror.mirror_excess_allowance_pct**:
+  - Per-mirror position cap looseness.
+  - Each mirror position is capped (in exposure terms) to:
+    `cap_exposure = (base_twel * threshold / max_positions) * (1 + mirror_excess_allowance_pct)`.
+- **mirror.allocation_min_fraction**:
+  - Minimum fraction of remaining budget to allocate per step when adding to mirrors.
   - Must be in `(0.0, 1.0]`. Higher values reduce churn but make rebalancing coarser.
-- **hedge.one_way**:
-  - Must be `true` for v0. (The Rust hedger errors on one-way violations.)
+- **mirror.ema_dist_entry**:
+  - EMA-based gating for opening new mirror positions.
+  - For `mirror_shorts_for_longs`: only open shorts when price >= EMA_upper * (1 + ema_dist_entry).
+  - For `mirror_longs_for_shorts`: only open longs when price <= EMA_lower * (1 - ema_dist_entry).
+  - `0.0` = gate exactly at the EMA band.
+  - Positive values (e.g., `0.01`) = require price to be extended beyond the EMA band.
+  - Negative values (e.g., `-0.01`) = allow entries even slightly inside the EMA band.
+  - To effectively disable EMA gating, use a large negative value (e.g., `-1.0`).
 
-### Hedge Universe (Which Coins May Be Hedged)
+### Mirror Universe (Which Coins May Be Mirrored)
 
-Hedge positions are only opened on an approved universe derived from:
+Mirror positions are only opened on an approved universe derived from:
 
-- `live.approved_coins.short`
+- `mirror_shorts_for_longs`: uses `live.approved_coins.short`
+- `mirror_longs_for_shorts`: uses `live.approved_coins.long`
 
-In backtests, this is mapped to the backtest coin universe and passed into Rust as `approved_hedge_symbols` (internal indices).
+In backtests, this is mapped to the backtest coin universe and passed into Rust as `approved_mirror_symbols` (internal indices).
 
 ## Coin Overrides
 - **coin_overrides**:

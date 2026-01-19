@@ -203,12 +203,11 @@ fn underwaterness_short(pprice: f64, sym: &MirrorSymbol) -> f64 {
 }
 
 /// Check if price satisfies EMA gating condition for opening new mirror positions.
-/// Returns true if EMA gating is disabled (ema_dist_entry == 0) or price is extended beyond EMA.
+/// - `ema_dist_entry = 0.0`: gate exactly at the EMA band
+/// - Positive values: require price extended beyond the EMA band
+/// - Negative values: allow entries inside the EMA band
+/// - To disable gating, use a large negative value (e.g., -1.0)
 fn ema_gate_allows_entry(mode: MirrorMode, sym: &MirrorSymbol, ema_dist_entry: f64) -> bool {
-    // If EMA gating is disabled, always allow
-    if ema_dist_entry == 0.0 {
-        return true;
-    }
     // If EMA bands are not available (0.0), allow entry
     if sym.ema_upper <= 0.0 || sym.ema_lower <= 0.0 {
         return true;
