@@ -21,15 +21,27 @@ use crate::types::{
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
 use pyo3::PyObject;
 use serde::Serialize;
 use serde_json;
 use std::str::FromStr;
+use rayon::prelude::*;
 
 type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, Py<PyDict>);
+
+/// Configure Rayon's global thread pool with the specified number of threads.
+/// Must be called before any parallel operations (e.g., run_backtest_batch).
+/// Can only be called once per process - subsequent calls will error.
+#[pyfunction]
+pub fn configure_thread_pool(n_threads: usize) -> PyResult<()> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(n_threads)
+        .build_global()
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to configure thread pool: {}", e)))
+}
 
 #[pyclass(name = "HlcvsBundle", module = "passivbot_rust", unsendable)]
 pub struct HlcvsBundlePy {
@@ -640,6 +652,125 @@ pub fn run_backtest_bundle(
     )
 }
 
+/// Batch backtest evaluator for optimizer - runs multiple trials in parallel via Rayon
+#[pyfunction]
+pub fn run_backtest_batch(
+    bundle: &HlcvsBundlePy,
+    bot_params_batch: &Bound<'_, PyList>,
+    exchange_params_list: &Bound<'_, PyList>,
+    backtest_params_dict: &Bound<'_, PyDict>,
+) -> PyResult<Vec<Py<PyDict>>> {
+    let py = bot_params_batch.py();
+
+    // Parse shared data once (GIL held)
+    let hlcvs = bundle.inner.hlcvs.bind(py).readonly();
+    let btc_usd = bundle.inner.btc_usd.bind(py).readonly();
+    let hlcvs_rust = hlcvs.as_array();
+    let btc_usd_rust = btc_usd.as_array();
+
+    // Validate dimensions
+    if hlcvs_rust.ndim() != 3 {
+        return Err(PyValueError::new_err(format!(
+            "Expected 3D HLCV array, got ndim={}",
+            hlcvs_rust.ndim()
+        )));
+    }
+    let n_timesteps = hlcvs_rust.shape()[0];
+    if btc_usd_rust.len() != n_timesteps {
+        return Err(PyValueError::new_err(format!(
+            "BTC/USD data length ({}) does not match HLCV timesteps ({})",
+            btc_usd_rust.len(),
+            n_timesteps
+        )));
+    }
+
+    // Parse exchange params
+    let exchange_params_py_list = exchange_params_list.as_gil_ref();
+    let exchange_params_len = exchange_params_py_list.len();
+    let mut exchange_params = Vec::with_capacity(exchange_params_len);
+    for item in exchange_params_py_list.iter() {
+        let dict = item
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("Unsupported data type in exchange_params_list"))?;
+        exchange_params.push(exchange_params_from_dict(dict)?);
+    }
+
+    // Parse backtest params
+    let backtest_params = backtest_params_from_dict(backtest_params_dict.as_gil_ref())?;
+
+    // Parse bot_params for each trial in the batch
+    let batch_size = bot_params_batch.len();
+    let mut bot_params_vec = Vec::with_capacity(batch_size);
+
+    for trial_params_item in bot_params_batch.iter() {
+        let trial_params_list = trial_params_item
+            .downcast::<PyList>()
+            .map_err(|_| PyValueError::new_err("Each trial's bot_params must be a list[dict]"))?;
+
+        let trial_params_py_list = trial_params_list.as_gil_ref();
+        let n_coins = trial_params_py_list.len();
+        let mut trial_bot_params = Vec::with_capacity(n_coins);
+
+        for coin_params in trial_params_py_list.iter() {
+            let dict = coin_params
+                .downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("each bot_params element must be a dict"))?;
+            trial_bot_params.push(bot_params_pair_from_dict(dict)?);
+        }
+        bot_params_vec.push(trial_bot_params);
+    }
+
+    // Clone exchange_params and backtest_params for each thread
+    // (they're small structs, cheaper to clone than Arc overhead)
+    let exchange_params_vec: Vec<_> = (0..batch_size)
+        .map(|_| exchange_params.clone())
+        .collect();
+    let backtest_params_vec: Vec<_> = (0..batch_size)
+        .map(|_| backtest_params.clone())
+        .collect();
+
+    // Release GIL and run parallel backtests via Rayon
+    let analyses: Vec<_> = py.allow_threads(|| {
+        bot_params_vec
+            .into_par_iter()
+            .zip(exchange_params_vec.into_par_iter())
+            .zip(backtest_params_vec.into_par_iter())
+            .map(|((bot_params, exchange_params), backtest_params)| {
+                // Each thread creates its own Backtest instance
+                let mut backtest = Backtest::new(
+                    hlcvs_rust,
+                    btc_usd_rust,
+                    bot_params,
+                    exchange_params,
+                    &backtest_params,
+                );
+
+                // Run backtest and analyze
+                let (fills, equities) = backtest.run();
+                let (mut analysis_usd, _analysis_btc) = analyze_backtest_pair(
+                    &fills,
+                    &equities,
+                    backtest.balance.use_btc_collateral,
+                    &backtest.total_wallet_exposures,
+                );
+
+                // Add entry balance pct info
+                let (entry_pct_long, entry_pct_short) = backtest.initial_entry_balance_pct();
+                analysis_usd.entry_initial_balance_pct_long = entry_pct_long;
+                analysis_usd.entry_initial_balance_pct_short = entry_pct_short;
+
+                analysis_usd
+            })
+            .collect()
+    });
+
+    // Convert to Python dicts (need GIL, which we have again)
+    analyses
+        .into_iter()
+        .map(|analysis| analysis_to_py_dict(py, &analysis))
+        .collect()
+}
+
 fn run_backtest_core<'py>(
     hlcvs: PyReadonlyArray3<'py, f64>,
     btc_usd: PyReadonlyArray1<'py, f64>,
@@ -705,7 +836,8 @@ fn run_backtest_core<'py>(
 
     // Run the backtest and process results
     Python::with_gil(|py| {
-        let (fills, equities) = backtest.run();
+        // Release GIL during backtest computation to allow other Python threads to run
+        let (fills, equities) = py.allow_threads(|| backtest.run());
         let (entry_pct_long, entry_pct_short) = backtest.initial_entry_balance_pct();
         let (mut analysis_usd, mut analysis_btc) = analyze_backtest_pair(
             &fills,
@@ -718,9 +850,9 @@ fn run_backtest_core<'py>(
         analysis_btc.entry_initial_balance_pct_long = entry_pct_long;
         analysis_btc.entry_initial_balance_pct_short = entry_pct_short;
 
-        // Create a dictionary to store analysis results using a more concise approach
-        let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
-        let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
+        // Create a dictionary to store analysis results (direct PyDict conversion, no JSON)
+        let py_analysis_usd = analysis_to_py_dict(py, &analysis_usd)?;
+        let py_analysis_btc = analysis_to_py_dict(py, &analysis_btc)?;
         if metrics_only {
             return Ok((
                 py.None().into_py(py),
@@ -770,6 +902,47 @@ fn run_backtest_core<'py>(
     })
 }
 
+/// Convert Analysis struct directly to PyDict without JSON serialization.
+/// This eliminates the JSON round-trip overhead (~2-3% speedup).
+fn analysis_to_py_dict(py: Python<'_>, analysis: &crate::types::Analysis) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new_bound(py);
+
+    // Macro to reduce boilerplate for setting f64 fields
+    macro_rules! set_f64 {
+        ($($field:ident),+) => {
+            $(dict.set_item(stringify!($field), analysis.$field)?;)+
+        };
+    }
+
+    set_f64!(
+        adg, mdg, gain, adg_pnl, mdg_pnl,
+        sharpe_ratio_pnl, sortino_ratio_pnl,
+        sharpe_ratio, sortino_ratio, omega_ratio,
+        expected_shortfall_1pct, calmar_ratio, sterling_ratio,
+        drawdown_worst, drawdown_worst_mean_1pct,
+        equity_balance_diff_neg_max, equity_balance_diff_neg_mean,
+        equity_balance_diff_pos_max, equity_balance_diff_pos_mean,
+        loss_profit_ratio,
+        peak_recovery_hours_equity, peak_recovery_hours_pnl,
+        equity_choppiness, equity_jerkiness, exponential_fit_error,
+        equity_choppiness_w, equity_jerkiness_w, exponential_fit_error_w,
+        positions_held_per_day, positions_held_per_day_w,
+        position_held_hours_mean, position_held_hours_max,
+        position_held_hours_median, position_unchanged_hours_max,
+        adg_w, adg_pnl_w, mdg_pnl_w,
+        sharpe_ratio_pnl_w, sortino_ratio_pnl_w,
+        mdg_w, sharpe_ratio_w, sortino_ratio_w, omega_ratio_w,
+        calmar_ratio_w, sterling_ratio_w, loss_profit_ratio_w,
+        volume_pct_per_day_avg, volume_pct_per_day_avg_w,
+        total_wallet_exposure_max, total_wallet_exposure_mean, total_wallet_exposure_median,
+        entry_initial_balance_pct_long, entry_initial_balance_pct_short
+    );
+
+    Ok(dict.unbind())
+}
+
+// Legacy JSON-based conversion for other types (kept for compatibility)
+#[allow(dead_code)]
 fn struct_to_py_dict<T: Serialize + ?Sized>(py: Python<'_>, obj: &T) -> PyResult<Py<PyDict>> {
     // Convert struct to JSON string
     let json_str = serde_json::to_string(obj).map_err(|e| {

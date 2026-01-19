@@ -148,34 +148,6 @@ class TestCheckConstraints:
         assert violations == []
 
 
-class TestComputePenalty:
-    def test_no_violations(self):
-        from optuna_optimizer.trial import compute_penalty
-        violations = [0.0, 0.0, 0.0]
-        assert compute_penalty(violations, 1000) == 0.0
-
-    def test_single_violation(self):
-        from optuna_optimizer.trial import compute_penalty
-        violations = [0.0, 0.002, 0.0]  # mdg_w missed by 0.002
-        assert compute_penalty(violations, 1000) == 2.0
-
-    def test_multiple_violations(self):
-        from optuna_optimizer.trial import compute_penalty
-        violations = [0.01, 0.005, 0.0]
-        assert compute_penalty(violations, 1000) == 15.0
-
-    def test_zero_weight_returns_zero(self):
-        from optuna_optimizer.trial import compute_penalty
-        violations = [0.01, 0.005]
-        assert compute_penalty(violations, 0) == 0.0
-
-    def test_negative_violations_ignored(self):
-        from optuna_optimizer.trial import compute_penalty
-        # Negative values mean constraint satisfied with margin - should be ignored
-        violations = [-0.01, 0.005, -0.02]
-        assert compute_penalty(violations, 1000) == 5.0
-
-
 class TestResolveMetric:
     def test_exact_match(self):
         from optuna_optimizer.trial import resolve_metric
@@ -212,3 +184,43 @@ class TestResolveMetric:
 
         flat_stats = {"mdg": 0.1, "mdg_mean": 0.2, "mdg_btc_mean": 0.3}
         assert resolve_metric("mdg", flat_stats) == 0.1
+
+
+class TestComputeScores:
+    def test_single_objective_maximize(self):
+        from optuna_optimizer.models import Objective
+        from optuna_optimizer.trial import compute_scores
+
+        objectives = [Objective(metric="mdg", direction="maximize")]
+        flat_stats = {"mdg_mean": 0.5}
+
+        scores = compute_scores(flat_stats, objectives)
+
+        # Maximize -> sign = -1, so score = -0.5
+        assert scores == (-0.5,)
+
+    def test_single_objective_minimize(self):
+        from optuna_optimizer.models import Objective
+        from optuna_optimizer.trial import compute_scores
+
+        objectives = [Objective(metric="drawdown", direction="minimize")]
+        flat_stats = {"drawdown_mean": 0.3}
+
+        scores = compute_scores(flat_stats, objectives)
+
+        # Minimize -> sign = 1, so score = 0.3
+        assert scores == (0.3,)
+
+    def test_multiple_objectives(self):
+        from optuna_optimizer.models import Objective
+        from optuna_optimizer.trial import compute_scores
+
+        objectives = [
+            Objective(metric="mdg", direction="maximize"),
+            Objective(metric="sharpe", direction="maximize"),
+        ]
+        flat_stats = {"mdg_mean": 0.5, "sharpe_mean": 1.2}
+
+        scores = compute_scores(flat_stats, objectives)
+
+        assert scores == (-0.5, -1.2)

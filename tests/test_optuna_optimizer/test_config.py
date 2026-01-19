@@ -29,10 +29,10 @@ class TestExtractConstraints:
 class TestExtractOptunaConfig:
     def test_extract(self):
         from optuna_optimizer.config import extract_optuna_config
-        config = {"optimize": {"optuna": {"n_trials": 5000, "sampler": {"name": "gp"}}}}
+        config = {"optimize": {"optuna": {"n_trials": 5000, "sampler": {"name": "nsgaii", "population_size": 100}}}}
         cfg = extract_optuna_config(config)
         assert cfg.n_trials == 5000
-        assert cfg.sampler.name == "gp"
+        assert cfg.sampler.name == "nsgaii"
 
 
 class TestExtractObjectives:
@@ -194,94 +194,95 @@ class TestExtractParamsFromConfig:
 class TestLoadSeedConfigs:
     def test_loads_single_json_file(self, tmp_path):
         from optuna_optimizer.config import load_seed_configs
+        from unittest.mock import MagicMock
 
         config_file = tmp_path / "config.json"
         config_file.write_text("{}")  # Content doesn't matter, we mock the loader
 
-        with patch("config_utils.load_config") as mock_load:
-            mock_load.return_value = {"bot": {"long": {"ema_span_0": 500}}}
-            result = load_seed_configs(config_file)
+        mock_loader = MagicMock(return_value={"bot": {"long": {"ema_span_0": 500}}})
+        result = load_seed_configs(config_file, mock_loader)
 
-        mock_load.assert_called_once_with(str(config_file), live_only=False, verbose=False)
+        mock_loader.assert_called_once_with(str(config_file))
         assert len(result) == 1
         assert result[0]["bot"]["long"]["ema_span_0"] == 500
 
     def test_loads_directory_of_configs(self, tmp_path):
         from optuna_optimizer.config import load_seed_configs
+        from unittest.mock import MagicMock
 
         (tmp_path / "a.json").write_text("{}")
         (tmp_path / "b.json").write_text("{}")
 
-        with patch("config_utils.load_config") as mock_load:
-            mock_load.side_effect = [
-                {"bot": {"long": {"x": 1}}},
-                {"bot": {"long": {"x": 2}}},
-            ]
-            result = load_seed_configs(tmp_path)
+        mock_loader = MagicMock(side_effect=[
+            {"bot": {"long": {"x": 1}}},
+            {"bot": {"long": {"x": 2}}},
+        ])
+        result = load_seed_configs(tmp_path, mock_loader)
 
-        assert mock_load.call_count == 2
+        assert mock_loader.call_count == 2
         assert len(result) == 2
 
     def test_skips_non_json_files(self, tmp_path):
         from optuna_optimizer.config import load_seed_configs
+        from unittest.mock import MagicMock
 
         (tmp_path / "config.json").write_text("{}")
         (tmp_path / "readme.txt").write_text("not json")
         (tmp_path / "data.bin").write_bytes(b"\x00\x01\x02")
 
-        with patch("config_utils.load_config") as mock_load:
-            mock_load.return_value = {"bot": {}}
-            result = load_seed_configs(tmp_path)
+        mock_loader = MagicMock(return_value={"bot": {}})
+        result = load_seed_configs(tmp_path, mock_loader)
 
         # Only the .json file should be loaded
-        mock_load.assert_called_once()
+        mock_loader.assert_called_once()
         assert len(result) == 1
 
     def test_recurses_into_subdirectories(self, tmp_path):
         from optuna_optimizer.config import load_seed_configs
+        from unittest.mock import MagicMock
 
         subdir = tmp_path / "pareto"
         subdir.mkdir()
         (subdir / "best.json").write_text("{}")
 
-        with patch("config_utils.load_config") as mock_load:
-            mock_load.return_value = {"bot": {"long": {"x": 1}}}
-            result = load_seed_configs(tmp_path)
+        mock_loader = MagicMock(return_value={"bot": {"long": {"x": 1}}})
+        result = load_seed_configs(tmp_path, mock_loader)
 
-        mock_load.assert_called_once()
+        mock_loader.assert_called_once()
         assert len(result) == 1
 
     def test_returns_empty_for_nonexistent_path(self, tmp_path):
         from optuna_optimizer.config import load_seed_configs
+        from unittest.mock import MagicMock
 
-        result = load_seed_configs(tmp_path / "does_not_exist")
+        mock_loader = MagicMock()
+        result = load_seed_configs(tmp_path / "does_not_exist", mock_loader)
 
         assert result == []
 
     def test_skips_invalid_config(self, tmp_path):
         from optuna_optimizer.config import load_seed_configs
+        from unittest.mock import MagicMock
 
         (tmp_path / "good.json").write_text("{}")
         (tmp_path / "bad.json").write_text("{}")
 
-        with patch("config_utils.load_config") as mock_load:
-            # First call succeeds, second raises
-            mock_load.side_effect = [
-                {"bot": {}},
-                Exception("invalid config"),
-            ]
-            result = load_seed_configs(tmp_path)
+        mock_loader = MagicMock(side_effect=[
+            {"bot": {}},
+            Exception("invalid config"),
+        ])
+        result = load_seed_configs(tmp_path, mock_loader)
 
         assert len(result) == 1
 
     def test_supports_hjson_extension(self, tmp_path):
         from optuna_optimizer.config import load_seed_configs
+        from unittest.mock import MagicMock
 
         (tmp_path / "config.hjson").write_text("{}")
 
-        with patch("config_utils.load_config") as mock_load:
-            mock_load.return_value = {"bot": {}}
-            result = load_seed_configs(tmp_path)
+        mock_loader = MagicMock(return_value={"bot": {}})
+        result = load_seed_configs(tmp_path, mock_loader)
 
-        mock_load.assert_called_once()
+        mock_loader.assert_called_once()
         assert len(result) == 1

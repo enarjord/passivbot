@@ -1,7 +1,7 @@
 """Pydantic models for Optuna optimizer configuration."""
 from __future__ import annotations
 from typing import Annotated, Literal, Self, Union
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class Objective(BaseModel):
@@ -55,17 +55,6 @@ class Bound(BaseModel):
         return self.step is not None and self.step > 0
 
 
-class TPESamplerConfig(BaseModel):
-    name: Literal["tpe"] = "tpe"
-    n_startup_trials: int = 50
-    multivariate: bool = True
-    # constant_liar shares sampled params between workers via system_attrs,
-    # but causes JSONDecodeError race conditions with JournalStorage because
-    # read_logs() doesn't acquire a lock while append_logs() does.
-    constant_liar: bool = False
-    seed: int | None = None
-
-
 class NSGAIISamplerConfig(BaseModel):
     model_config = {"extra": "ignore"}
 
@@ -86,20 +75,8 @@ class NSGAIIISamplerConfig(BaseModel):
     seed: int | None = None
 
 
-class GPSamplerConfig(BaseModel):
-    name: Literal["gp"] = "gp"
-    n_startup_trials: int = 10
-    deterministic_objective: bool = False
-    seed: int | None = None
-
-
-class RandomSamplerConfig(BaseModel):
-    name: Literal["random"] = "random"
-    seed: int | None = None
-
-
 SamplerConfig = Annotated[
-    Union[TPESamplerConfig, NSGAIISamplerConfig, NSGAIIISamplerConfig, GPSamplerConfig, RandomSamplerConfig],
+    Union[NSGAIISamplerConfig, NSGAIIISamplerConfig],
     Field(discriminator="name"),
 ]
 
@@ -108,14 +85,6 @@ class OptunaConfig(BaseModel):
     """Main configuration for the Optuna optimizer."""
     n_trials: int = 250000
     n_cpus: int = 8
-    penalty_weight: float = 1000
     max_best_trials: int = 200
     study_name: str | None = None
     sampler: SamplerConfig = Field(default_factory=NSGAIISamplerConfig)
-
-    @field_validator("penalty_weight")
-    @classmethod
-    def validate_penalty_weight(cls, v: float) -> float:
-        if v < 0 and v != -1:
-            raise ValueError("penalty_weight must be -1 (hard), 0 (disabled), or > 0 (soft)")
-        return v

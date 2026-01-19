@@ -2,10 +2,7 @@
 from __future__ import annotations
 from typing import Callable, TYPE_CHECKING
 
-from .models import (
-    GPSamplerConfig, NSGAIISamplerConfig, NSGAIIISamplerConfig,
-    RandomSamplerConfig, SamplerConfig, TPESamplerConfig,
-)
+from .models import NSGAIISamplerConfig, NSGAIIISamplerConfig, SamplerConfig
 from .sync_sampler import SyncNSGAIISampler, SyncNSGAIIISampler
 
 if TYPE_CHECKING:
@@ -36,15 +33,6 @@ def create_sampler(
     Returns:
         Configured Optuna sampler
     """
-    import optuna  # Lazy import to avoid requiring optuna at module load
-    if isinstance(config, TPESamplerConfig):
-        return optuna.samplers.TPESampler(
-            n_startup_trials=config.n_startup_trials,
-            multivariate=config.multivariate,
-            constant_liar=config.constant_liar,
-            seed=config.seed,
-            constraints_func=constraints_func,
-        )
     if isinstance(config, NSGAIISamplerConfig):
         return SyncNSGAIISampler(
             population_size=config.population_size,
@@ -61,16 +49,6 @@ def create_sampler(
             seed=config.seed,
             constraints_func=constraints_func,
         )
-    if isinstance(config, GPSamplerConfig):
-        return optuna.samplers.GPSampler(
-            n_startup_trials=config.n_startup_trials,
-            deterministic_objective=config.deterministic_objective,
-            seed=config.seed,
-            constraints_func=constraints_func,
-        )
-    if isinstance(config, RandomSamplerConfig):
-        # RandomSampler doesn't support constraints_func
-        return optuna.samplers.RandomSampler(seed=config.seed)
     raise ValueError(f"Unknown sampler: {type(config)}")
 
 
@@ -78,7 +56,7 @@ def get_sampler_config_by_name(name: str) -> SamplerConfig:
     """Get a sampler config by name.
 
     Args:
-        name: One of 'tpe', 'nsgaii', 'nsgaiii', 'gp', 'random'
+        name: One of 'nsgaii', 'nsgaiii'
 
     Returns:
         Default config for the named sampler.
@@ -87,10 +65,7 @@ def get_sampler_config_by_name(name: str) -> SamplerConfig:
         KeyError: If name is not recognized.
     """
     configs = {
-        "tpe": TPESamplerConfig,
         "nsgaii": NSGAIISamplerConfig,
         "nsgaiii": NSGAIIISamplerConfig,
-        "gp": GPSamplerConfig,
-        "random": RandomSamplerConfig,
     }
     return configs[name]()

@@ -1,4 +1,5 @@
 """Optuna-based optimizer for Passivbot."""
+from .bot_params import BotParamsTemplate
 from .config import (
     apply_params_to_config,
     extract_bounds,
@@ -11,35 +12,29 @@ from .config import (
 from .models import (
     Bound,
     Constraint,
-    GPSamplerConfig,
     NSGAIISamplerConfig,
     NSGAIIISamplerConfig,
     Objective,
     OptunaConfig,
-    RandomSamplerConfig,
     SamplerConfig,
-    TPESamplerConfig,
 )
 from .pareto import extract_pareto
-from .storage import SharedMemoryJournalBackend, dump_to_sqlite, load_from_sqlite
+from .storage import InMemoryJournalBackend, dump_to_sqlite, load_from_sqlite
 from .samplers import create_sampler, get_sampler_config_by_name, make_constraints_func
-from .shared_arrays import SharedArrayAttachment, SharedArrayManager, SharedArraySpec, attach_shared_array
-from .trial import check_constraints, compute_penalty, compute_scores, resolve_metric, sample_params
-from .worker import WorkerContext, WorkerInitData, get_context, init_worker
+from .trial import build_distributions, check_constraints, compute_scores, resolve_metric, sample_params
 from .sync_sampler import SyncNSGAIISampler, SyncNSGAIIISampler
 
 __all__ = [
+    # Bot params
+    "BotParamsTemplate",
     # Models
     "Bound",
     "Constraint",
     "Objective",
     "OptunaConfig",
     "SamplerConfig",
-    "TPESamplerConfig",
     "NSGAIISamplerConfig",
     "NSGAIIISamplerConfig",
-    "GPSamplerConfig",
-    "RandomSamplerConfig",
     # Config
     "extract_bounds",
     "extract_constraints",
@@ -49,7 +44,7 @@ __all__ = [
     "apply_params_to_config",
     "load_seed_configs",
     # Storage
-    "SharedMemoryJournalBackend",
+    "InMemoryJournalBackend",
     "dump_to_sqlite",
     "load_from_sqlite",
     # Samplers
@@ -61,19 +56,9 @@ __all__ = [
     # Pareto
     "extract_pareto",
     # Trial
+    "build_distributions",
     "sample_params",
     "check_constraints",
-    "compute_penalty",
     "compute_scores",
     "resolve_metric",
-    # Shared arrays
-    "SharedArrayManager",
-    "SharedArraySpec",
-    "SharedArrayAttachment",
-    "attach_shared_array",
-    # Worker
-    "WorkerInitData",
-    "WorkerContext",
-    "init_worker",
-    "get_context",
 ]

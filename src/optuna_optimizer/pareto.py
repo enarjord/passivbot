@@ -156,7 +156,7 @@ def extract_pareto(
     trials = study.best_trials
     original_count = len(trials)
 
-    if original_count > max_best_trials:
+    if max_best_trials > 0 and original_count > max_best_trials:
         trials = _select_diverse(trials, objectives, max_best_trials)
         logging.info(f"Pruned Pareto front from {original_count} to {len(trials)} using farthest-point sampling")
 

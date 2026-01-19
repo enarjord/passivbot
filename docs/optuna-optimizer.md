@@ -7,8 +7,8 @@ The Optuna optimizer is a modern alternative to the legacy DEAP-based optimizer,
 | Feature | Legacy (DEAP) | Optuna |
 |---------|---------------|--------|
 | Multi-objective | Custom NSGA-II implementation | Native support with multiple algorithms |
-| Samplers | NSGA-II only | TPE, NSGA-II, NSGA-III, GP, Random |
-| Constraints | Penalty-based limits | Explicit min/max constraints with hard/soft modes |
+| Samplers | NSGA-II only | NSGA-II, NSGA-III |
+| Constraints | Penalty-based limits | Explicit min/max constraints (always hard) |
 | Resumability | Start from seed configs only | Full study persistence—resume exactly where you left off |
 | Monitoring | Post-hoc with pareto_dash.py | Real-time with optuna-dashboard |
 | Fine-tuning | `--fine_tune_params` | `--fine-tune` (same capability) |
@@ -58,7 +58,7 @@ While the optimizer runs, launch the dashboard in another terminal:
 
 ```bash
 pip install optuna-dashboard  # if not installed
-optuna-dashboard optimize_results/YOUR_STUDY_DIR/study.log
+optuna-dashboard sqlite:///optimize_results/YOUR_STUDY_DIR/study.db
 ```
 
 Open `http://localhost:8080` to see real-time trial progress, Pareto fronts, and parameter importance.
@@ -104,13 +104,7 @@ Replace the legacy `limits` with explicit bounds. Constraints define acceptable 
 
 At least one of `min` or `max` is required. You can specify both for range constraints.
 
-**Constraint modes** are controlled by `optuna.penalty_weight`:
-
-| `penalty_weight` | Mode | Behavior |
-|------------------|------|----------|
-| `-1` | Hard | Violations are passed to the sampler as infeasible; trial is marked failed |
-| `0` | Disabled | Constraints are ignored |
-| `> 0` (e.g., `1000`) | Soft | Violation amounts are multiplied by this weight and added to objective scores |
+Constraints are always enforced as hard constraints. Trials violating constraints are marked infeasible and excluded from the Pareto front.
 
 ### Optuna Section
 
@@ -118,7 +112,6 @@ At least one of `min` or `max` is required. You can specify both for range const
 "optuna": {
   "n_trials": 10000,
   "n_cpus": 8,
-  "penalty_weight": 1000,
   "max_best_trials": 200,
   "sampler": {
     "name": "nsgaii",
@@ -131,22 +124,10 @@ At least one of `min` or `max` is required. You can specify both for range const
 |-------|---------|-------------|
 | `n_trials` | 250000 | Total optimization trials to run |
 | `n_cpus` | 8 | Worker processes |
-| `penalty_weight` | 1000 | Constraint penalty mode (see above) |
-| `max_best_trials` | 200 | Maximum Pareto configs to export |
+| `max_best_trials` | 200 | Maximum Pareto configs to export (0 = unlimited) |
 | `sampler` | NSGA-II | Sampling algorithm configuration |
 
 ### Samplers
-
-#### TPE (Tree-structured Parzen Estimator)
-```json
-"sampler": {
-  "name": "tpe",
-  "n_startup_trials": 50,
-  "multivariate": true,
-  "seed": null
-}
-```
-Good for: General-purpose optimization, especially with many parameters.
 
 #### NSGA-II
 ```json
@@ -172,26 +153,6 @@ Good for: Multi-objective optimization with 2-3 objectives. The default choice.
 ```
 Good for: Many-objective optimization (4+ objectives).
 
-#### GP (Gaussian Process)
-```json
-"sampler": {
-  "name": "gp",
-  "n_startup_trials": 10,
-  "deterministic_objective": false,
-  "seed": null
-}
-```
-Good for: Expensive objectives with few parameters. Not recommended for Passivbot (backtests are fast enough that TPE/NSGA-II are more efficient).
-
-#### Random
-```json
-"sampler": {
-  "name": "random",
-  "seed": null
-}
-```
-Good for: Baseline comparisons, or when you want pure exploration.
-
 ## CLI Reference
 
 ```bash
@@ -211,7 +172,7 @@ python3 src/optuna_optimize.py <path> [options]
 | `--n-trials` | `-n` | Override number of trials |
 | `--n-cpus` | `-c` | Override number of workers |
 | `--study-name` | `-s` | Custom study name (new only, default: timestamp_hash) |
-| `--sampler` | | Sampler override: `tpe`, `nsgaii`, `nsgaiii`, `gp`, `random` (new only) |
+| `--sampler` | | Sampler override: `nsgaii`, `nsgaiii` (new only) |
 | `--fine-tune` | `-ft` | Comma-separated params to tune; all others fixed (new only) |
 | `--start` | `-t` | Seed configs file or directory (new only) |
 | `--debug-level` | `-d` | Log verbosity: 0=warn, 1=info, 2=debug, 3=trace |
@@ -245,7 +206,7 @@ python3 src/optuna_optimize.py configs/template.json -d 2
 
 ## Monitoring with optuna-dashboard
 
-The Optuna optimizer stores its study in a journal file (`study.log`) that optuna-dashboard can read in real-time.
+The Optuna optimizer stores its study in a SQLite database (`study.db`) that optuna-dashboard can read in real-time.
 
 ### Setup
 
@@ -258,7 +219,7 @@ pip install optuna-dashboard
 While the optimizer is running (or after it completes):
 
 ```bash
-optuna-dashboard optimize_results/YOUR_STUDY_DIR/study.log
+optuna-dashboard sqlite:///optimize_results/YOUR_STUDY_DIR/study.db
 ```
 
 Then open `http://localhost:8080` in your browser.
@@ -279,16 +240,17 @@ Each optimization creates a directory under `optimize_results/`:
 
 ```
 optimize_results/2024-01-15T12_34_56_abcd1234/
-├── study.log           # Optuna journal (can be used with optuna-dashboard)
+├── study.db            # SQLite database (optuna-dashboard compatible)
 ├── config.json         # Config snapshot used for this run
 └── pareto/
-    ├── members.json    # Pareto front configurations
-    └── metrics.json    # Pareto metrics summary
+    ├── 0001_t0042_mdg_w0.123_sterling1.234.json
+    ├── 0002_t0103_mdg_w0.122_sterling1.345.json
+    └── ...             # Individual ranked config files
 ```
 
 ### Pareto Output
 
-When optimization completes (or is interrupted), the Pareto front is extracted automatically. `pareto/members.json` contains the non-dominated configurations, limited to `max_best_trials` entries.
+When optimization completes (or is interrupted), the Pareto front is extracted automatically. The `pareto/` directory contains individual JSON config files, ranked by distance to ideal point (best overall first). Filenames follow the pattern `{rank}_t{trial}_{metrics}.json`. Output is limited to `max_best_trials` entries (set to `0` to export all non-dominated solutions without limit).
 
 You can also use the existing `pareto_dash.py` tool for analysis:
 
@@ -373,7 +335,7 @@ Key difference: Optuna uses `n_trials` (total evaluations) instead of generation
 | `--fine_tune_params` | `--fine-tune` |
 | `--start` | `--start` (same) |
 | `--population_size 250` | Config only, or `--sampler nsgaii` + config |
-| N/A | `--sampler tpe/nsgaii/nsgaiii/gp/random` |
+| N/A | `--sampler nsgaii/nsgaiii` |
 | N/A | Resume by passing study directory |
 
 ### What Stays the Same

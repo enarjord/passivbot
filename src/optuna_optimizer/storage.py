@@ -1,18 +1,15 @@
 """Storage backend for Optuna optimization.
 
-Provides SharedMemoryJournalBackend for in-memory storage during optimization,
+Provides InMemoryJournalBackend for in-memory storage during optimization,
 with SQLite dump/load functions for persistence and resume capability.
 
-The shared memory backend eliminates all disk I/O during optimization,
-providing ~10% throughput improvement on stable hardware where crash
-recovery is not needed.
+The in-memory backend eliminates all disk I/O during optimization,
+providing optimal throughput with single-process Rust parallelism.
 """
 from __future__ import annotations
 
 import json
 from collections.abc import Generator
-from multiprocessing import Manager
-from multiprocessing.managers import SyncManager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -23,70 +20,25 @@ from optuna.storages import JournalStorage
 from optuna.storages.journal._base import BaseJournalBackend
 
 
-class SharedMemoryJournalBackend(BaseJournalBackend):
-    """In-memory journal backend using multiprocessing shared state.
+class InMemoryJournalBackend(BaseJournalBackend):
+    """Simple in-memory journal backend for single-process optimization.
 
-    This backend stores all journal logs in a Manager-backed list that is
-    shared across processes. No disk I/O occurs during optimization,
-    providing significant performance improvement on stable hardware.
-
-    The backend can operate in two modes:
-    - Parent mode: Creates the Manager and shared state
-    - Worker mode: Attaches to existing shared state passed from parent
+    Stores all journal logs in a regular Python list. No disk I/O occurs
+    during optimization, providing optimal performance. No multiprocessing
+    overhead since Rust Rayon handles parallelism.
 
     Usage:
-        # In parent process:
-        backend = SharedMemoryJournalBackend.create_parent()
-        storage = JournalStorage(backend)
-
-        # Pass backend.get_shared_state() to workers via WorkerInitData
-
-        # In worker process:
-        backend = SharedMemoryJournalBackend.from_shared_state(shared_state)
+        backend = InMemoryJournalBackend()
         storage = JournalStorage(backend)
 
     Note:
-        Data is lost if the parent process crashes. Use dump_to_sqlite()
-        to persist the study before shutdown if needed.
+        Data is lost if the process crashes. Use dump_to_sqlite()
+        to persist the study before shutdown.
     """
 
-    def __init__(
-        self,
-        logs: list,
-        manager: SyncManager | None = None,
-    ) -> None:
-        """Initialize backend with shared state.
-
-        Args:
-            logs: Manager-backed list for storing log entries
-            manager: Manager instance (only held by parent to keep alive)
-        """
-        self._logs = logs
-        self._manager = manager  # Parent keeps reference to prevent cleanup
-
-    @classmethod
-    def create_parent(cls) -> "SharedMemoryJournalBackend":
-        """Create backend in parent process with new shared state."""
-        manager = Manager()
-        logs = manager.list()
-        return cls(logs, manager)
-
-    @classmethod
-    def from_shared_state(cls, shared_state: list) -> "SharedMemoryJournalBackend":
-        """Create backend in worker process from shared state.
-
-        Args:
-            shared_state: Manager-backed list proxy from parent
-        """
-        return cls(shared_state, manager=None)
-
-    def get_shared_state(self) -> list:
-        """Get shared state for passing to worker processes.
-
-        Returns:
-            Manager-backed list proxy that can be pickled
-        """
-        return self._logs
+    def __init__(self) -> None:
+        """Initialize backend with empty log list."""
+        self._logs: list[str] = []
 
     def read_logs(self, log_number_from: int) -> Generator[dict[str, Any], None, None]:
         """Read logs starting from the given log number.
@@ -96,24 +48,15 @@ class SharedMemoryJournalBackend(BaseJournalBackend):
 
         Yields:
             Log entries as dictionaries
-
-        Note:
-            No lock needed - Manager list operations are serialized by the
-            Manager server process. Snapshot avoids issues with concurrent appends.
         """
-        logs_snapshot = list(self._logs[log_number_from:])
-        for log_json in logs_snapshot:
+        for log_json in self._logs[log_number_from:]:
             yield json.loads(log_json)
 
     def append_logs(self, logs: list[dict[str, Any]]) -> None:
-        """Append logs to the shared storage.
+        """Append logs to the in-memory storage.
 
         Args:
             logs: List of log entries to append
-
-        Note:
-            No lock needed - Manager list.append() calls are serialized by
-            the Manager server process, making concurrent appends safe.
         """
         for log in logs:
             self._logs.append(json.dumps(log))
@@ -124,7 +67,7 @@ class SharedMemoryJournalBackend(BaseJournalBackend):
 
 
 def dump_to_sqlite(
-    backend: SharedMemoryJournalBackend,
+    backend: InMemoryJournalBackend,
     study_name: str,
     sqlite_path: Path,
 ) -> None:
@@ -383,10 +326,10 @@ def load_from_sqlite(
     sqlite_path: Path,
     study_name: str,
     sampler: "optuna.samplers.BaseSampler | None" = None,
-) -> tuple[SharedMemoryJournalBackend, "optuna.Study"]:
+) -> tuple[InMemoryJournalBackend, "optuna.Study"]:
     """Load existing SQLite study into memory for resume.
 
-    Creates fresh SharedMemoryJournalBackend, copies study into it,
+    Creates fresh InMemoryJournalBackend, copies study into it,
     returns backend and loaded study ready for optimization.
 
     Args:
@@ -400,7 +343,7 @@ def load_from_sqlite(
     import optuna
 
     # Create fresh in-memory backend
-    backend = SharedMemoryJournalBackend.create_parent()
+    backend = InMemoryJournalBackend()
     to_storage = JournalStorage(backend)
 
     from_storage = f"sqlite:///{sqlite_path}"

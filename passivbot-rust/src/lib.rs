@@ -45,6 +45,8 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_twel_enforcer_orders_py, m)?)?;
     m.add_function(wrap_pyfunction!(run_backtest, m)?)?;
     m.add_function(wrap_pyfunction!(run_backtest_bundle, m)?)?;
+    m.add_function(wrap_pyfunction!(run_backtest_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(configure_thread_pool, m)?)?;
     m.add_function(wrap_pyfunction!(calc_auto_unstuck_allowance, m)?)?;
     m.add_function(wrap_pyfunction!(hysteresis, m)?)?;
     m.add_function(wrap_pyfunction!(calc_min_entry_qty_py, m)?)?;

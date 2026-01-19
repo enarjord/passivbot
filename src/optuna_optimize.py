@@ -9,23 +9,23 @@ import sys
 import time
 from datetime import datetime
 from hashlib import md5
-from multiprocessing import Pool
 from pathlib import Path
 
-import numpy as np
 import optuna
 from optuna.storages import JournalStorage
 import typer
+import passivbot_rust as pbr
 
 # External dependencies - owned by orchestrator, not package
-from backtest import build_backtest_payload, execute_backtest, prepare_hlcvs_mss
+from backtest import build_backtest_payload, prepare_hlcvs_mss
 from config_utils import load_config, require_config_value
 from logging_setup import configure_logging
 from optimize import build_scenario_metrics, flatten_metric_stats
 
 # Package imports - pure Optuna logic
 from optuna_optimizer import (
-    apply_params_to_config,
+    BotParamsTemplate,
+    build_distributions,
     check_constraints,
     compute_scores,
     create_sampler,
@@ -42,81 +42,18 @@ from optuna_optimizer import (
     make_constraints_func,
     resolve_metric,
     sample_params,
-    SharedArrayManager,
-    SharedArraySpec,
-    SharedMemoryJournalBackend,
+    InMemoryJournalBackend,
 )
 from optuna_optimizer.models import Objective
-from optuna_optimizer.worker import WorkerContext, WorkerInitData, get_context, init_worker
 
 
 # ---------------------------------------------------------------------------
-# Worker functions (run in child processes)
+# Helper functions
 # ---------------------------------------------------------------------------
-def _run_single_trial(_: int) -> None:
-    """Run exactly one optimization trial.
-
-    This is designed for single-trial dispatch via pool.imap_unordered(),
-    allowing the parent process to interrupt between trials. The dummy
-    argument is the trial index from range(n_trials).
-    """
-    ctx = get_context()
-    ctx.study.optimize(_objective, n_trials=1)
-
-
-def _objective(trial: optuna.Trial) -> tuple[float, ...]:
-    """Objective function - bridges Optuna and backtest."""
-    ctx = get_context()
-    trial_num = trial.number
-
-    # 1. Sample and apply params
-    bot_params = sample_params(trial, ctx.bounds, fixed_params=ctx.fixed_params)
-    logging.debug(f"[{trial_num}] {_format_params(bot_params)}")
-    trial_config = apply_params_to_config(bot_params, ctx.config)
-
-    # 2. Run backtests
-    analyses = _run_backtests(ctx, trial_config)
-
-    # 3. Aggregate and score
-    scenario_metrics = build_scenario_metrics(analyses)
-    flat_stats = flatten_metric_stats(scenario_metrics.get("stats", {}))
-
-    resolved = {c.metric: resolve_metric(c.metric, flat_stats) for c in ctx.constraints}
-    violations = check_constraints(resolved, ctx.constraints)
-    trial.set_user_attr("constraint_violations", violations)
-
-    scores = compute_scores(flat_stats, ctx.objectives, violations, ctx.penalty_weight)
-
-    # 4. Log completion
-    obj_summary = ", ".join(
-        f"{obj.metric}={resolve_metric(obj.metric, flat_stats):.5f}" for obj in ctx.objectives
-    )
-    logging.info(f"[{trial_num}] {obj_summary}")
-
-    return scores
-
-
 def _format_params(params: dict) -> str:
     """Format params dict for logging."""
     items = [f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in params.items()]
     return ", ".join(items)
-
-
-def _run_backtests(ctx: WorkerContext, trial_config: dict) -> dict[str, dict]:
-    """Run backtest for each exchange, return analyses keyed by exchange."""
-    analyses = {}
-    for exchange in ctx.exchanges:
-        payload = build_backtest_payload(
-            ctx.hlcvs[exchange],
-            ctx.mss[exchange],
-            trial_config,
-            exchange,
-            ctx.btc[exchange],
-            ctx.timestamps[exchange],
-        )
-        _, _, analysis = execute_backtest(payload, trial_config)
-        analyses[exchange] = analysis
-    return analyses
 
 
 def _format_duration(seconds: float) -> str:
@@ -137,7 +74,7 @@ def _log_optimization_summary(
     n_trials_planned: int,
     start_time: float,
 ) -> None:
-    """Log comprehensive optimization summary.
+    """Log optimization summary.
 
     Args:
         study: Optuna study with completed trials
@@ -151,22 +88,14 @@ def _log_optimization_summary(
     n_total = len(trials)
     elapsed = time.time() - start_time
 
-    # Count trial states
     complete_trials = [t for t in trials if t.state == TrialState.COMPLETE]
     n_complete = len(complete_trials)
-    n_pruned = sum(1 for t in trials if t.state == TrialState.PRUNED)
-    n_failed = sum(1 for t in trials if t.state == TrialState.FAIL)
 
     # Count constraint violations
     n_satisfied = sum(
         1 for t in complete_trials
         if not any(v > 0 for v in t.user_attrs.get("constraint_violations", []))
     )
-
-    # Compute throughput and remaining estimate
-    throughput = n_total / elapsed * 60 if elapsed > 0 else 0
-    remaining_trials = n_trials_planned - n_total
-    remaining_time = remaining_trials / throughput * 60 if throughput > 0 else 0
 
     # Get best values for each objective from Pareto front
     pareto_trials = study.best_trials
@@ -177,35 +106,34 @@ def _log_optimization_summary(
             best_values[obj.metric] = max(values) if obj.sign == 1 else min(values)
 
     # Build and log summary
-    pct_complete = (n_total / n_trials_planned * 100) if n_trials_planned > 0 else 0
     pct_satisfied = (n_satisfied / n_complete * 100) if n_complete > 0 else 0
 
+    throughput = n_total / elapsed * 60 if elapsed > 0 else 0
+
     lines = [
-        "=" * 65,
-        "Optimization Summary",
-        "=" * 65,
-        f"Trials:      {n_total}/{n_trials_planned} completed ({pct_complete:.1f}%)",
-        f"             {n_complete} complete, {n_pruned} pruned, {n_failed} failed",
-        f"Constraints: {n_satisfied}/{n_complete} satisfied ({pct_satisfied:.1f}%)",
-        "-" * 65,
-        f"Elapsed:     {_format_duration(elapsed)}",
-        f"Throughput:  {throughput:.1f} trials/min",
+        "=" * 50,
+        "Optimization Complete",
+        "=" * 50,
+        f"Elapsed:     {_format_duration(elapsed)} ({throughput:.1f} trials/min)",
     ]
 
-    if remaining_trials > 0:
-        lines.append(f"Remaining:   ~{_format_duration(remaining_time)} (estimated)")
+    # ETA line only if incomplete
+    remaining_trials = n_trials_planned - n_total
+    if remaining_trials > 0 and throughput > 0:
+        remaining_time = remaining_trials / throughput * 60
+        lines.append(f"Remaining:   ~{_format_duration(remaining_time)}")
 
-    lines.append("-" * 65)
+    lines.append(f"Constraints: {n_satisfied}/{n_complete} satisfied ({pct_satisfied:.1f}%)")
 
     if best_values:
         lines.append("Best values:")
         for metric, value in best_values.items():
             lines.append(f"  {metric}: {value:.6f}")
-        lines.append(f"Pareto front: {len(pareto_trials)} trials")
+        lines.append(f"Pareto front: {len(pareto_trials)} configs")
     else:
         lines.append("No complete trials yet")
 
-    lines.append("=" * 65)
+    lines.append("=" * 50)
 
     for line in lines:
         logging.info(line)
@@ -225,12 +153,11 @@ async def _run_optimization_core(
     n_trials: int,
     n_cpus: int,
     fixed_params: dict | None,
-    penalty_weight: float,
     max_best_trials: int,
     debug_level: int,
-    shared_backend: SharedMemoryJournalBackend,
+    backend: InMemoryJournalBackend,
 ) -> None:
-    """Core optimization loop shared by run and resume.
+    """Core optimization loop using ask/tell pattern with Rust Rayon parallelism.
 
     Args:
         config: Full configuration dict
@@ -239,69 +166,105 @@ async def _run_optimization_core(
         bounds: Parameter bounds
         constraints: Metric constraints
         objectives: Optimization objectives
-        sampler_config: Sampler configuration (recreated in workers)
+        sampler_config: Sampler configuration
         n_trials: Number of trials to run
-        n_cpus: Number of worker processes
+        n_cpus: Number of threads for Rust Rayon thread pool
         fixed_params: Parameters to skip sampling (for fine-tune mode)
-        penalty_weight: Constraint penalty weight (-1 = hard, 0 = disabled, >0 = soft)
         max_best_trials: Maximum Pareto configs to export
         debug_level: Logging verbosity
-        shared_backend: Shared memory backend for worker communication
+        backend: In-memory journal backend
     """
-    array_manager = SharedArrayManager()
     start_time = time.time()
 
+    # Configure Rust thread pool once before any parallel work
+    pbr.configure_thread_pool(n_cpus)
+    logging.info(f"Configured Rayon thread pool with {n_cpus} threads")
+
     try:
-        # Load OHLCV data into shared memory
+        # Load OHLCV data once (no shared memory needed - single process)
         logging.info("Loading OHLCV data...")
-        hlcvs_specs, btc_specs, ts_specs, mss = await _load_shared_data(
-            config, array_manager
-        )
-        exchanges = list(hlcvs_specs.keys())
+        payloads, mss_dict = await _load_all_data(config)
+        exchanges = list(payloads.keys())
         logging.info(f"Loaded {len(exchanges)} exchange(s): {exchanges}")
 
+        # Create bot_params templates for each exchange (avoids deepcopy in hot loop)
+        templates = {}
+        for exchange in exchanges:
+            coins = payloads[exchange].backtest_params["coins"]
+            templates[exchange] = BotParamsTemplate.from_config(config, coins)
+            logging.debug(f"Created BotParamsTemplate for {exchange} with {len(coins)} coins")
+
+        # Build distributions once for faster suggest_float calls (~10x speedup)
+        distributions = build_distributions(bounds)
+        logging.debug(f"Built {len(distributions)} parameter distributions")
+
         logging.info(f"Study: {study_dir}")
-        logging.info(f"Trials: {n_trials}, Workers: {n_cpus}")
+        logging.info(f"Trials: {n_trials}, CPU cores: {n_cpus}")
 
-        # Run workers with single-trial dispatch for responsive interrupts
-        init_data = WorkerInitData(
-            hlcvs_specs=hlcvs_specs,
-            btc_specs=btc_specs,
-            ts_specs=ts_specs,
-            mss=mss,
-            config=config,
-            study_dir=str(study_dir),
-            bounds=bounds,
-            constraints=constraints,
-            objectives=objectives,
-            sampler_config=sampler_config,
-            fixed_params=fixed_params,
-            penalty_weight=penalty_weight,
-            debug_level=debug_level,
-            logging_module="logging_setup",
-            shared_storage_state=shared_backend.get_shared_state() if shared_backend else None,
-        )
-        # Get population size for generation-based dispatch
-        population_size = getattr(sampler_config, "population_size", n_trials)
+        # Generation-based ask/tell loop
+        population_size = sampler_config.population_size
         n_generations = (n_trials + population_size - 1) // population_size
-        existing_trials = len(study.trials)
+        trials_completed = 0
 
-        with Pool(processes=n_cpus, initializer=init_worker, initargs=(init_data,)) as pool:
-            try:
-                trials_completed = 0
-                for _ in range(n_generations):
-                    batch_size = min(population_size, n_trials - trials_completed)
+        def create_trial_direct() -> optuna.Trial:
+            """Create trial directly, bypassing O(n) waiting trial scan."""
+            trial_id = study._storage.create_new_trial(study._study_id)
+            return optuna.Trial(study, trial_id)
 
-                    # Dispatch one generation, wait for all to complete
-                    list(pool.imap_unordered(_run_single_trial, range(batch_size)))
-                    trials_completed += batch_size
-            except KeyboardInterrupt:
-                logging.info("Interrupted - terminating workers...")
-                pool.terminate()
-                pool.join()
+        try:
+            for gen in range(n_generations):
+                batch_size = min(population_size, n_trials - trials_completed)
+
+                # 1. Ask: Create batch of trials
+                # Gen 0: use study.ask() to consume any enqueued seed configs
+                # Gen 1+: create trials directly to avoid O(n) waiting trial scan
+                if gen == 0:
+                    trials = [study.ask() for _ in range(batch_size)]
+                else:
+                    trials = [create_trial_direct() for _ in range(batch_size)]
+
+                # 2. Sample params and build bot_params for each trial
+                sampled_params_batch = []
+                for trial in trials:
+                    params = sample_params(trial, bounds, fixed_params=fixed_params)
+                    logging.debug(f"[{trial.number}] {_format_params(params)}")
+                    sampled_params_batch.append(params)
+
+                # Build bot_params_batch for each exchange using templates (no deepcopy)
+                bot_params_batch_per_exchange = {}
+                for exchange, template in templates.items():
+                    bot_params_batch_per_exchange[exchange] = [
+                        template.build_bot_params_list(params)
+                        for params in sampled_params_batch
+                    ]
+
+                # 3. Run batch backtests in Rust (parallel via Rayon)
+                t_backtest_start = time.perf_counter()
+                analyses_batch = _run_batch_backtests(payloads, bot_params_batch_per_exchange)
+                t_backtest = time.perf_counter() - t_backtest_start
+
+                # 4. Tell: Report results for each trial
+                for trial, trial_analyses in zip(trials, analyses_batch):
+                    scenario_metrics = build_scenario_metrics(trial_analyses)
+                    flat_stats = flatten_metric_stats(scenario_metrics.get("stats", {}))
+
+                    resolved = {c.metric: resolve_metric(c.metric, flat_stats) for c in constraints}
+                    violations = check_constraints(resolved, constraints)
+                    trial.set_user_attr("constraint_violations", violations)
+
+                    scores = compute_scores(flat_stats, objectives)
+                    study.tell(trial.number, scores)
+
+                trials_completed += batch_size
+
+                # Log generation progress
+                logging.info(f"Gen {gen+1}/{n_generations}: {trials_completed}/{n_trials} trials | backtest {t_backtest:.1f}s")
+
+        except KeyboardInterrupt:
+            logging.info("Interrupted - stopping optimization...")
 
     finally:
-        # Extract Pareto and log summary (use study object directly from memory)
+        # Extract Pareto and log summary
         try:
             if study.trials:
                 _log_optimization_summary(study, objectives, n_trials, start_time)
@@ -315,13 +278,7 @@ async def _run_optimization_core(
         # Dump to SQLite for resume and optuna-dashboard
         sqlite_path = study_dir / "study.db"
         logging.info(f"Saving study to {sqlite_path}...")
-        dump_to_sqlite(shared_backend, study.study_name, sqlite_path)
-
-        # Shutdown Manager cleanly
-        if shared_backend._manager is not None:
-            shared_backend._manager.shutdown()
-
-        array_manager.cleanup()
+        dump_to_sqlite(backend, study.study_name, sqlite_path)
 
 
 async def run_optimization(
@@ -357,7 +314,6 @@ async def run_optimization(
 
     n_trials = n_trials or optuna_cfg.n_trials
     n_cpus = n_cpus or optuna_cfg.n_cpus
-    penalty_weight = optuna_cfg.penalty_weight
 
     # Handle fine-tune mode
     fixed_params = None
@@ -372,16 +328,16 @@ async def run_optimization(
     # Create study directory and study
     study_dir = _create_study_dir(config, study_name)
 
-    # Create shared backend (has built-in SIGINT protection for clean Ctrl+C)
-    shared_backend = SharedMemoryJournalBackend.create_parent()
-    storage = JournalStorage(shared_backend)
+    # Create in-memory backend (single process, no IPC needed)
+    backend = InMemoryJournalBackend()
+    storage = JournalStorage(backend)
 
     sampler_cfg = optuna_cfg.sampler
     if sampler_name:
         sampler_cfg = get_sampler_config_by_name(sampler_name)
 
-    # Hard mode: pass constraints_func to sampler
-    constraints_func = make_constraints_func() if penalty_weight == -1 else None
+    # Always use hard constraints
+    constraints_func = make_constraints_func()
 
     study = optuna.create_study(
         study_name=study_dir.name,
@@ -411,22 +367,19 @@ async def run_optimization(
 
     # Save config for resume
     (study_dir / "config.json").write_text(json.dumps(config, indent=2))
-    mode = "hard" if penalty_weight == -1 else "disabled" if penalty_weight == 0 else f"soft (weight={penalty_weight})"
-    logging.info(f"Sampler: {sampler_cfg.name}, Constraints: {mode}")
+    logging.info(f"Sampler: {sampler_cfg.name}, Constraints: hard")
 
     await _run_optimization_core(
         config, study_dir, study, bounds, constraints, objectives,
-        sampler_cfg, n_trials, n_cpus, fixed_params, penalty_weight,
-        optuna_cfg.max_best_trials, debug_level, shared_backend
+        sampler_cfg, n_trials, n_cpus, fixed_params,
+        optuna_cfg.max_best_trials, debug_level, backend
     )
 
 
-async def _load_shared_data(config: dict, manager: SharedArrayManager):
-    """Load OHLCV and create shared memory arrays."""
-    hlcvs_specs: dict[str, SharedArraySpec] = {}
-    btc_specs: dict[str, SharedArraySpec] = {}
-    ts_specs: dict[str, SharedArraySpec] = {}
-    mss_all = {}
+async def _load_all_data(config: dict):
+    """Load OHLCV data and prepare backtest payloads (no shared memory needed)."""
+    payloads = {}
+    mss_dict = {}
 
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     combine_ohlcvs = config.get("backtest", {}).get("combine_ohlcvs", False)
@@ -440,26 +393,52 @@ async def _load_shared_data(config: dict, manager: SharedArrayManager):
         )
         logging.debug(f"{exchange}: Loaded {len(coins)} coins, shape={hlcvs.shape}")
 
-        logging.debug(f"{exchange}: Creating shared memory arrays...")
-        hlcvs_spec, _ = manager.create_from(
-            np.ascontiguousarray(hlcvs, dtype=np.float64)
-        )
-        btc_spec, _ = manager.create_from(
-            np.ascontiguousarray(btc_usd, dtype=np.float64)
-        )
-        ts_spec, _ = manager.create_from(
-            np.ascontiguousarray(timestamps, dtype=np.int64)
-        )
-
-        hlcvs_specs[exchange] = hlcvs_spec
-        btc_specs[exchange] = btc_spec
-        ts_specs[exchange] = ts_spec
-        mss_all[exchange] = mss
-
+        # Set coins in config BEFORE build_backtest_payload (which calls prep_backtest_args)
         config.setdefault("backtest", {}).setdefault("coins", {})[exchange] = coins
+
+        # Use build_backtest_payload to create properly structured bundle with metadata
+        payload = build_backtest_payload(hlcvs, mss, config, exchange, btc_usd, timestamps)
+        payloads[exchange] = payload
+        mss_dict[exchange] = mss
         logging.debug(f"{exchange}: Done")
 
-    return hlcvs_specs, btc_specs, ts_specs, mss_all
+    return payloads, mss_dict
+
+
+def _run_batch_backtests(
+    payloads: dict,
+    bot_params_batch_per_exchange: dict[str, list[list[dict]]],
+) -> list[dict[str, dict]]:
+    """Run batch of trials across all exchanges using Rust Rayon parallelism.
+
+    Args:
+        payloads: Dict of exchange -> BacktestPayload
+        bot_params_batch_per_exchange: Dict of exchange -> list of bot_params_list per trial
+
+    Returns:
+        List of analyses dicts (one per trial), where each dict is keyed by exchange.
+    """
+    # Get batch size from first exchange
+    first_exchange = next(iter(bot_params_batch_per_exchange))
+    batch_size = len(bot_params_batch_per_exchange[first_exchange])
+    analyses_batch = [{} for _ in range(batch_size)]
+
+    for exchange, bot_params_batch in bot_params_batch_per_exchange.items():
+        payload = payloads[exchange]
+
+        # Call Rust batch API (runs trials in parallel via Rayon)
+        analyses = pbr.run_backtest_batch(
+            payload.bundle,           # HlcvsBundle with proper metadata
+            bot_params_batch,         # List of bot_params per trial
+            payload.exchange_params,  # Shared across trials
+            payload.backtest_params,  # Shared across trials
+        )
+
+        # Assign results to each trial's dict
+        for i, analysis in enumerate(analyses):
+            analyses_batch[i][exchange] = analysis
+
+    return analyses_batch
 
 
 def _create_study_dir(config: dict, study_name: str | None) -> Path:
@@ -542,11 +521,11 @@ async def resume_optimization(
 
     n_trials = n_trials or optuna_cfg.n_trials
     n_cpus = n_cpus or optuna_cfg.n_cpus
-    penalty_weight = optuna_cfg.penalty_weight
 
     # Recreate sampler from config
     sampler_cfg = optuna_cfg.sampler
-    constraints_func = make_constraints_func() if penalty_weight == -1 else None
+    # Always use hard constraints
+    constraints_func = make_constraints_func()
     sampler = create_sampler(sampler_cfg, constraints_func)
 
     # Load existing study from SQLite into memory
@@ -562,13 +541,12 @@ async def resume_optimization(
 
     logging.info(f"Resuming study: {study_dir}")
     logging.info(f"Existing trials: {existing_trials}, Adding: {n_trials}")
-    mode = "hard" if penalty_weight == -1 else "disabled" if penalty_weight == 0 else f"soft (weight={penalty_weight})"
-    logging.info(f"Sampler: {sampler_cfg.name}, Constraints: {mode}")
+    logging.info(f"Sampler: {sampler_cfg.name}, Constraints: hard")
 
     await _run_optimization_core(
         config, study_dir, study, bounds, constraints, objectives,
-        sampler_cfg, n_trials, n_cpus, fixed_params, penalty_weight,
-        optuna_cfg.max_best_trials, debug_level, shared_backend
+        sampler_cfg, n_trials, n_cpus, fixed_params,
+        optuna_cfg.max_best_trials, debug_level, backend
     )
 
 
@@ -584,7 +562,7 @@ def main(
     n_trials: int | None = typer.Option(None, "--n-trials", "-n", help="Number of trials"),
     n_cpus: int | None = typer.Option(None, "--n-cpus", "-c", help="Number of workers"),
     study_name: str | None = typer.Option(None, "--study-name", "-s", help="Study name (new only)"),
-    sampler: str | None = typer.Option(None, "--sampler", help="Sampler: tpe/nsgaii/nsgaiii/gp/random (new only)"),
+    sampler: str | None = typer.Option(None, "--sampler", help="Sampler: nsgaii/nsgaiii (new only)"),
     fine_tune: str | None = typer.Option(None, "--fine-tune", "-ft", help="Params to tune (new only)"),
     start: Path | None = typer.Option(None, "--start", "-t", help="Seed configs file/dir (new only)"),
     debug_level: int = typer.Option(1, "--debug-level", "-d", help="Log level: 0=warn, 1=info, 2=debug, 3=trace"),

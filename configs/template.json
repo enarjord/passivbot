@@ -382,14 +382,12 @@
           {"metric": "positions_held_per_day_w", "min": 3}
         ],
         "optuna": {
-            "penalty_weight": 1000,
             "max_best_trials": 200,
             "n_trials": 10000,
             "n_cpus": 10,
-
             "sampler": {
-                "name": "tpe",
-                "n_startup_trials": 200
+                "name": "nsgaii",
+                "population_size": 250
             }
         },
         "write_all_results": true

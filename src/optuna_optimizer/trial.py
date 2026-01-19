@@ -6,7 +6,30 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import optuna
 
+from optuna.distributions import FloatDistribution
+
 from .models import Bound, Constraint, Objective
+
+
+def build_distributions(bounds: dict[str, Bound]) -> dict[str, FloatDistribution]:
+    """Build Optuna distributions from bounds for use with study.ask(fixed_distributions=...).
+
+    Pre-defining distributions provides ~10x speedup for suggest_float calls.
+
+    Args:
+        bounds: Parameter bounds from config
+
+    Returns:
+        Dict of param name -> FloatDistribution
+    """
+    distributions = {}
+    for name, bound in bounds.items():
+        distributions[name] = FloatDistribution(
+            low=bound.low,
+            high=bound.high,
+            step=bound.step,
+        )
+    return distributions
 
 
 def sample_params(
@@ -69,45 +92,12 @@ def check_constraints(
     return violations
 
 
-def compute_penalty(violations: list[float], weight: float) -> float:
-    """Compute total penalty from constraint violations.
-
-    Args:
-        violations: List of violation amounts (positive = violated)
-        weight: Penalty weight multiplier
-
-    Returns:
-        Sum of positive violations multiplied by weight.
-    """
-    if weight == 0:
-        return 0.0
-    return sum(v * weight for v in violations if v > 0)
-
-
 def compute_scores(
     flat_stats: dict[str, float],
     objectives: list[Objective],
-    violations: list[float],
-    penalty_weight: float,
 ) -> tuple[float, ...]:
-    """Compute final objective scores for Optuna (minimization).
-
-    Args:
-        flat_stats: Flattened metric statistics
-        objectives: List of objectives with metrics and directions
-        violations: Constraint violation amounts
-        penalty_weight: Penalty multiplier (-1 = hard, 0 = disabled, >0 = soft)
-
-    Returns:
-        Tuple of scores (one per objective), ready for Optuna.
-    """
-    scores = [obj.sign * resolve_metric(obj.metric, flat_stats) for obj in objectives]
-
-    if penalty_weight > 0:
-        penalty = compute_penalty(violations, penalty_weight)
-        scores = [s + penalty for s in scores]
-
-    return tuple(scores)
+    """Compute final objective scores for Optuna (minimization)."""
+    return tuple(obj.sign * resolve_metric(obj.metric, flat_stats) for obj in objectives)
 
 
 def resolve_metric(metric: str, flat_stats: dict[str, float]) -> float:

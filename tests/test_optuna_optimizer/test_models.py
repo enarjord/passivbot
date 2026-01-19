@@ -80,13 +80,6 @@ class TestBound:
 
 
 class TestSamplerConfig:
-    def test_tpe_defaults(self):
-        from optuna_optimizer.models import TPESamplerConfig
-        cfg = TPESamplerConfig()
-        assert cfg.name == "tpe"
-        assert cfg.n_startup_trials == 50
-        assert cfg.multivariate is True
-
     def test_nsgaii(self):
         from optuna_optimizer.models import NSGAIISamplerConfig
         cfg = NSGAIISamplerConfig(population_size=100)
@@ -98,27 +91,17 @@ class TestSamplerConfig:
         cfg = NSGAIIISamplerConfig()
         assert cfg.name == "nsgaiii"
 
-    def test_gp(self):
-        from optuna_optimizer.models import GPSamplerConfig
-        cfg = GPSamplerConfig(n_startup_trials=20)
-        assert cfg.name == "gp"
-
-    def test_random(self):
-        from optuna_optimizer.models import RandomSamplerConfig
-        cfg = RandomSamplerConfig(seed=42)
-        assert cfg.seed == 42
-
     def test_discriminated_union(self):
         from optuna_optimizer.models import SamplerConfig
         from pydantic import TypeAdapter
 
         adapter = TypeAdapter(SamplerConfig)
-        cfg = adapter.validate_python({"name": "tpe", "multivariate": False})
-        assert cfg.name == "tpe"
-        assert cfg.multivariate is False
 
         cfg = adapter.validate_python({"name": "nsgaii", "population_size": 75})
         assert cfg.population_size == 75
+
+        cfg = adapter.validate_python({"name": "nsgaiii", "population_size": 100})
+        assert cfg.name == "nsgaiii"
 
 
 class TestOptunaConfig:
@@ -137,33 +120,3 @@ class TestOptunaConfig:
         )
         assert cfg.n_trials == 5000
         assert cfg.sampler.name == "nsgaii"
-
-
-class TestOptunaConfigPenaltyWeight:
-    def test_default_penalty_weight(self):
-        from optuna_optimizer.models import OptunaConfig
-        cfg = OptunaConfig()
-        assert cfg.penalty_weight == 1000
-
-    def test_custom_penalty_weight(self):
-        from optuna_optimizer.models import OptunaConfig
-        cfg = OptunaConfig(penalty_weight=0)
-        assert cfg.penalty_weight == 0
-
-    def test_penalty_weight_from_dict(self):
-        from optuna_optimizer.models import OptunaConfig
-        cfg = OptunaConfig.model_validate({"penalty_weight": 500})
-        assert cfg.penalty_weight == 500
-
-    def test_penalty_weight_hard_mode(self):
-        from optuna_optimizer.models import OptunaConfig
-        cfg = OptunaConfig(penalty_weight=-1)
-        assert cfg.penalty_weight == -1
-
-    def test_penalty_weight_invalid_negative(self):
-        import pytest
-        from optuna_optimizer.models import OptunaConfig
-        with pytest.raises(ValueError, match="penalty_weight must be -1"):
-            OptunaConfig(penalty_weight=-2)
-        with pytest.raises(ValueError, match="penalty_weight must be -1"):
-            OptunaConfig(penalty_weight=-0.5)
