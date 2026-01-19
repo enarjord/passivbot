@@ -3471,6 +3471,41 @@ class CandlestickManager:
         # For historical ranges, if we don't have shards for all days yet, fetch
         # exactly the range and persist shards for future calls.
         end_finalized = latest_finalized
+
+        # Large span prefetch: If the request spans more than 2 days and is not fully
+        # covered, trigger archive prefetch for the historical portion even if end_ts
+        # touches the present. This fixes warmup requests that span 31 days but were
+        # previously skipping archive fetch because end_ts == latest_finalized.
+        span_minutes = (end_ts - start_ts) // ONE_MIN_MS
+        large_span_threshold = 2 * 24 * 60  # 2 days in minutes
+        if (
+            self.exchange is not None
+            and span_minutes > large_span_threshold
+            and not fully_covered
+            and self._archive_supported()
+        ):
+            # Prefetch archives for the historical portion (up to 2 days ago, since
+            # archives typically lag by 1-2 days)
+            archive_end_ts = end_finalized - 2 * 24 * 60 * ONE_MIN_MS
+            if start_ts < archive_end_ts:
+                self._log(
+                    "info",
+                    "large_span_archive_prefetch",
+                    symbol=symbol,
+                    span_minutes=int(span_minutes),
+                    start_ts=start_ts,
+                    archive_end_ts=archive_end_ts,
+                )
+                await self._prefetch_archives_for_range(symbol, start_ts, archive_end_ts)
+                # Reload from disk after archive fetch
+                try:
+                    self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
+                except Exception:
+                    pass
+                arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
+                fully_covered = _is_fully_covered(sub, start_ts, end_ts)
+
         # Treat ranges ending exactly at the latest finalized minute as present-touching
         historical = end_ts < end_finalized
         if self.exchange is not None and historical:
