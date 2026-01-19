@@ -78,17 +78,23 @@ async def test_update_balance_uses_fetch_balance_when_no_cache():
 
 @pytest.mark.asyncio
 async def test_update_balance_failure_keeps_previous():
+    """Test that when fetch_balance raises an exception, previous balance is preserved.
+
+    Per CLAUDE.md: exchange fetch methods should raise exceptions on failure,
+    not return False. The exception propagates to the caller who handles it.
+    """
     bot = Passivbot.__new__(Passivbot)
     bot.quote = "USDT"
     bot.balance = 50.0
     bot.previous_hysteresis_balance = 50.0
 
     async def fake_fetch_balance():
-        return False  # simulate failed fetch
+        raise Exception("network error")  # simulate failed fetch
 
     bot.fetch_balance = fake_fetch_balance
 
-    ok = await bot.update_balance()
-    assert ok is False
+    with pytest.raises(Exception, match="network error"):
+        await bot.update_balance()
+    # Balance should remain unchanged because assignment was never reached
     assert bot.balance == pytest.approx(50.0)
     assert bot.previous_hysteresis_balance == pytest.approx(50.0)
