@@ -2441,8 +2441,29 @@ class Passivbot:
             # Get existing event IDs before refresh
             existing_ids = set(ev.id for ev in self._pnls_manager.get_events())
 
-            # Refresh latest events (incremental update like legacy)
-            await self._pnls_manager.refresh_latest(overlap=20)
+            # Check if we need a full refresh (cache empty or too old)
+            events = self._pnls_manager.get_events()
+            needs_full_refresh = not events
+            if events:
+                oldest_event_ts = events[0].timestamp
+                if oldest_event_ts > age_limit + 1000 * 60 * 60 * 24:  # > 1 day newer than limit
+                    needs_full_refresh = True
+                    logging.info(
+                        "[shadow] Cache oldest event (%s) is newer than lookback (%s), doing full refresh",
+                        ts_to_date(oldest_event_ts)[:19],
+                        ts_to_date(age_limit)[:19],
+                    )
+
+            if needs_full_refresh:
+                # Full refresh with proper lookback window
+                logging.info(
+                    "[shadow] Performing full refresh from %s",
+                    ts_to_date(age_limit)[:19],
+                )
+                await self._pnls_manager.refresh(start_ms=int(age_limit), end_ms=None)
+            else:
+                # Incremental refresh like legacy
+                await self._pnls_manager.refresh_latest(overlap=20)
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
@@ -3571,18 +3592,18 @@ class Passivbot:
             logging.info("[pos] %s", line)
 
     async def _fetch_and_apply_positions(self):
-        """Fetch raw positions, apply them to local state and return snapshots."""
+        """Fetch raw positions, apply them to local state and return snapshots.
+
+        Returns:
+            Tuple of (success: bool, old_positions, new_positions).
+
+        Raises:
+            Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
+        """
         if not hasattr(self, "positions"):
             self.positions = {}
-        try:
-            res = await self.fetch_positions()
-        except RateLimitExceeded:
-            logging.warning("rate limit while fetching positions; retrying next cycle")
-            return False
-        except NetworkError as e:
-            logging.error(f"network error fetching positions: {e}")
-            return False
-        if res is None or res is False:
+        res = await self.fetch_positions()
+        if res is None:
             return False, None, None
         positions_list_new = res
         fetched_positions_old = deepcopy(self.fetched_positions)
@@ -3619,7 +3640,14 @@ class Passivbot:
         return True
 
     async def update_balance(self):
-        """Fetch and apply the latest wallet balance."""
+        """Fetch and apply the latest wallet balance.
+
+        Returns:
+            bool: True on success, False if balance_override is used but invalid.
+
+        Raises:
+            Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
+        """
         if not hasattr(self, "balance_override"):
             self.balance_override = None
         if not hasattr(self, "_balance_override_logged"):
@@ -3628,48 +3656,37 @@ class Passivbot:
             self.previous_hysteresis_balance = None
         if not hasattr(self, "balance_hysteresis_snap_pct"):
             self.balance_hysteresis_snap_pct = 0.02
+
+        if self.balance_override is not None:
+            balance = float(self.balance_override)
+            if not self._balance_override_logged:
+                logging.info("Using balance override: %.6f", balance)
+                self._balance_override_logged = True
+        else:
+            if not hasattr(self, "fetch_balance"):
+                logging.debug("update_balance: no fetch_balance implemented")
+                return False
+            balance = await self.fetch_balance()
+
+        # Only accept numeric balances; keep previous value on failure
+        if balance is None:
+            logging.warning("balance fetch returned None; keeping previous balance")
+            return False
         try:
-            if self.balance_override is not None:
-                balance = float(self.balance_override)
-                if not self._balance_override_logged:
-                    logging.info("Using balance override: %.6f", balance)
-                    self._balance_override_logged = True
-            else:
-                if not hasattr(self, "fetch_balance"):
-                    logging.debug("update_balance: no fetch_balance implemented")
-                    return False
-                balance = await self.fetch_balance()
-            # Only accept numeric balances; keep previous value on failure
-            if balance is None or balance is False:
-                logging.warning("balance fetch failed; keeping previous balance")
-                return False
-            try:
-                balance = float(balance)
-            except (TypeError, ValueError):
-                logging.warning("non-numeric balance fetch result; keeping previous balance")
-                return False
-            if self.balance_override is None:
-                if self.previous_hysteresis_balance is None:
-                    self.previous_hysteresis_balance = balance
-                balance = pbr.hysteresis(
-                    balance, self.previous_hysteresis_balance, self.balance_hysteresis_snap_pct
-                )
+            balance = float(balance)
+        except (TypeError, ValueError):
+            logging.warning("non-numeric balance fetch result; keeping previous balance")
+            return False
+
+        if self.balance_override is None:
+            if self.previous_hysteresis_balance is None:
                 self.previous_hysteresis_balance = balance
-            self.balance = balance
-            return True
-        except RateLimitExceeded:
-            logging.warning("rate limit while fetching balance; retrying next cycle")
-            return False
-        except NetworkError as e:
-            logging.error(f"network error fetching balance: {e}")
-            return False
-        except NotImplementedError:
-            logging.debug("update_balance: fetch_balance not implemented")
-            return False
-        except Exception as e:
-            logging.error(f"error updating balance {e}")
-            traceback.print_exc()
-            return False
+            balance = pbr.hysteresis(
+                balance, self.previous_hysteresis_balance, self.balance_hysteresis_snap_pct
+            )
+            self.previous_hysteresis_balance = balance
+        self.balance = balance
+        return True
 
     async def update_positions_and_balance(self):
         """Convenience helper to refresh both positions and balance concurrently."""

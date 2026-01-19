@@ -37,6 +37,8 @@ import json
 import logging
 import math
 import os
+import sys
+
 import time
 import zlib
 import atexit
@@ -63,6 +65,9 @@ _LOCK_STALE_SECONDS = 180.0
 _LOCK_BACKOFF_INITIAL = 0.1
 _LOCK_BACKOFF_MAX = 2.0
 
+# See: https://github.com/enarjord/passivbot/issues/547
+# True if running on Windows (used for file/path compatible names)
+windows_compatibility = sys.platform.startswith("win") or os.environ.get("WINDOWS_COMPATIBILITY") == "1"
 
 @dataclass
 class _LockRecord:
@@ -230,7 +235,13 @@ def _ts_index(a: np.ndarray) -> np.ndarray:
 
 
 def _sanitize_symbol(symbol: str) -> str:
-    return symbol.replace("/", "_")
+    sanitized = symbol.replace("/", "_")
+    # See: https://github.com/enarjord/passivbot/issues/547
+    # If running under "Windows Compatibility" mode,
+    # also replace ':' with '_' to ensure compatibility with Windows file naming restrictions.
+    if windows_compatibility:
+        sanitized = sanitized.replace(":", "_")
+    return sanitized
 
 
 # Parse timeframe string like '1m','5m','1h','1d' to milliseconds.
@@ -634,6 +645,25 @@ class CandlestickManager:
             return
         self._progress_last_log[key] = now
         self._log("debug", event, **fields)
+
+    def _log_persistent_gap_summary(self) -> None:
+        """Log accumulated persistent gap summary if any, throttled to once per 60s."""
+        if not hasattr(self, "_persistent_gap_summary") or not self._persistent_gap_summary:
+            return
+        now = time.monotonic()
+        last = getattr(self, "_persistent_gap_summary_last_log", 0.0)
+        if (now - last) < 60.0:  # Only log summary once per minute
+            return
+        self._persistent_gap_summary_last_log = now
+        summary = self._persistent_gap_summary
+        total = sum(summary.values())
+        symbols = ", ".join(f"{s}:{c}" for s, c in sorted(summary.items())[:5])
+        if len(summary) > 5:
+            symbols += f", +{len(summary) - 5} more"
+        self.log.warning(
+            f"persistent gaps: {total} new ({symbols}). Use --force-refetch-gaps to retry."
+        )
+        self._persistent_gap_summary.clear()
 
     def _throttled_warning(self, throttle_key: str, event: str, **fields) -> None:
         """Emit a warning at most once per throttle window (default 5 min).
@@ -1728,19 +1758,10 @@ class CandlestickManager:
                     and gap_reason != "pre_inception"
                 ):
                     gap_minutes = (updated_gap["end_ts"] - updated_gap["start_ts"]) // ONE_MIN_MS + 1
-                    # Use throttled warning to handle edge cases (concurrent calls, etc.)
-                    throttle_key = f"gap_persistent_{symbol}_{updated_gap['start_ts']}_{updated_gap['end_ts']}"
-                    self._throttled_warning(
-                        throttle_key,
-                        "gap_persistent",
-                        symbol=symbol,
-                        start_ts=updated_gap["start_ts"],
-                        end_ts=updated_gap["end_ts"],
-                        gap_minutes=gap_minutes,
-                        retry_count=current_retry_count,
-                        reason=gap_reason,
-                        msg=f"Gap marked as persistent after {_GAP_MAX_RETRIES} retries. Use --force-refetch-gaps to retry.",
-                    )
+                    # Track persistent gaps for summary logging
+                    if not hasattr(self, "_persistent_gap_summary"):
+                        self._persistent_gap_summary: Dict[str, int] = {}
+                    self._persistent_gap_summary[symbol] = self._persistent_gap_summary.get(symbol, 0) + 1
 
         self._save_known_gaps_enhanced(symbol, gaps)
 
@@ -3130,6 +3151,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         force_refetch_gaps: bool = False,
+        fill_leading_gaps: bool = False,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
 
@@ -3141,6 +3163,8 @@ class CandlestickManager:
         - Applies gap standardization (1m only)
         - If `force_refetch_gaps` is True: clears known gaps in the requested range
           before fetching, forcing a retry of all gaps regardless of retry count
+        - If `fill_leading_gaps` is True: synthesize zero-candles even before the
+          first real data point (useful for EMA calculation)
         """
         if max_age_ms is not None and max_age_ms < 0:
             raise ValueError("max_age_ms cannot be negative")
@@ -3895,10 +3919,33 @@ class CandlestickManager:
                             self._add_known_gap(symbol, max(s, ms), min(e, me))
 
         # Standardize gaps: synthesize zero-candles where missing.
-        # sub is already sorted (from _slice_ts_range), skip redundant sort
+        # To help seed forward-fill, include one candle before start_ts if available.
+        # This ensures standardize_gaps has a prev_close even if sub starts after start_ts.
+        data_for_gaps = sub
+        if sub.size == 0 or (sub.size > 0 and int(sub[0]["ts"]) > start_ts):
+            full_arr = self._cache.get(symbol)
+            if full_arr is not None and full_arr.size > 0:
+                full_arr = _ensure_dtype(full_arr)
+                ts_idx = full_arr["ts"].astype(np.int64)
+                idx = int(np.searchsorted(ts_idx, start_ts, side="left"))
+                if idx > 0:
+                    seed_candle = full_arr[idx - 1 : idx]
+                    if sub.size > 0:
+                        data_for_gaps = np.concatenate([seed_candle, sub])
+                    else:
+                        data_for_gaps = seed_candle
+
         result = self.standardize_gaps(
-            sub, start_ts=start_ts, end_ts=end_ts, strict=strict, assume_sorted=True
+            data_for_gaps,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            strict=strict,
+            fill_leading_gaps=fill_leading_gaps,
+            assume_sorted=True,
         )
+
+        # Log accumulated persistent gap summary (throttled to once per minute)
+        self._log_persistent_gap_summary()
 
         return result
 

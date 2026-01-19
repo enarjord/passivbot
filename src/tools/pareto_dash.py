@@ -454,7 +454,11 @@ def serve_dash(data_root: str, port: int = 8050):
     if not run_dirs:
         raise SystemExit(f"No runs found under {data_root}")
 
-    app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+    app = Dash(
+        __name__,
+        external_stylesheets=[dbc.themes.BOOTSTRAP],
+        suppress_callback_exceptions=True,
+    )
 
     # =========================================================================
     # LAYOUT
@@ -961,35 +965,20 @@ def serve_dash(data_root: str, port: int = 8050):
     # CALLBACKS - Main scatter plot with click selection
     # =========================================================================
 
-    @app.callback(
-        Output("main-scatter", "figure"),
-        Output("explorer-scatter", "figure"),
-        Input("run-selection", "value"),
-        Input("x-metric", "value"),
-        Input("y-metric", "value"),
-        Input("color-metric", "value"),
-        Input("limit-expressions", "value"),
-        Input("selected-config-id", "data"),
-        Input("show-frontier-only", "value"),
-        Input("highlight-frontier", "value"),
-        Input("frontier-metrics", "value"),
-        Input("scoring-weights", "data"),
-    )
-    def update_scatter_plots(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
-                             show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights):
+    def _build_scatter_figure(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
+                               show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights):
+        """Build scatter plot figure - shared logic for both tabs."""
         run_data = get_run_data(run_dir)
         df = run_data.dataframe
 
         if df.empty or not x_metric or not y_metric:
-            empty = px.scatter(title="Select metrics")
-            return empty, empty
+            return px.scatter(title="Select metrics")
 
         mask = _apply_limits(df, limit_exprs)
         df_filtered = df.loc[mask].copy()
 
         if df_filtered.empty:
-            empty = px.scatter(title="No configs pass filters")
-            return empty, empty
+            return px.scatter(title="No configs pass filters")
 
         # Compute weighted score if weights provided
         if scoring_weights:
@@ -1004,8 +993,7 @@ def serve_dash(data_root: str, port: int = 8050):
         if show_frontier_only and "frontier" in show_frontier_only:
             df_filtered = df_filtered[df_filtered["_is_frontier"]].copy()
             if df_filtered.empty:
-                empty = px.scatter(title="No configs on frontier")
-                return empty, empty
+                return px.scatter(title="No configs on frontier")
 
         # Add selection marker
         df_filtered["_selected"] = df_filtered["_id"] == selected_id
@@ -1053,39 +1041,84 @@ def serve_dash(data_root: str, port: int = 8050):
             ))
 
         fig.update_layout(clickmode="event+select")
+        return fig
 
-        return fig, fig
+    @app.callback(
+        Output("main-scatter", "figure"),
+        Input("run-selection", "value"),
+        Input("x-metric", "value"),
+        Input("y-metric", "value"),
+        Input("color-metric", "value"),
+        Input("limit-expressions", "value"),
+        Input("selected-config-id", "data"),
+        Input("show-frontier-only", "value"),
+        Input("highlight-frontier", "value"),
+        Input("frontier-metrics", "value"),
+        Input("scoring-weights", "data"),
+    )
+    def update_main_scatter(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
+                            show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights):
+        return _build_scatter_figure(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
+                                     show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights)
+
+    @app.callback(
+        Output("explorer-scatter", "figure"),
+        Input("run-selection", "value"),
+        Input("x-metric", "value"),
+        Input("y-metric", "value"),
+        Input("color-metric", "value"),
+        Input("limit-expressions", "value"),
+        Input("selected-config-id", "data"),
+        Input("show-frontier-only", "value"),
+        Input("highlight-frontier", "value"),
+        Input("frontier-metrics", "value"),
+        Input("scoring-weights", "data"),
+    )
+    def update_explorer_scatter(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
+                                show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights):
+        return _build_scatter_figure(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
+                                     show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights)
+
+    def _extract_config_id_from_click(click_data):
+        """Extract config ID from scatter plot click data."""
+        if click_data and "points" in click_data and click_data["points"]:
+            point = click_data["points"][0]
+            if "customdata" in point and point["customdata"]:
+                return point["customdata"][0]
+        return no_update
 
     @app.callback(
         Output("selected-config-id", "data"),
         Input("main-scatter", "clickData"),
+        prevent_initial_call=True,
+    )
+    def handle_main_scatter_click(click_data):
+        return _extract_config_id_from_click(click_data)
+
+    @app.callback(
+        Output("selected-config-id", "data", allow_duplicate=True),
         Input("explorer-scatter", "clickData"),
+        prevent_initial_call=True,
+    )
+    def handle_explorer_scatter_click(click_data):
+        return _extract_config_id_from_click(click_data)
+
+    @app.callback(
+        Output("selected-config-id", "data", allow_duplicate=True),
         Input("pareto-table", "selected_rows"),
         State("run-selection", "value"),
         State("limit-expressions", "value"),
+        prevent_initial_call=True,
     )
-    def handle_config_selection(main_click, explorer_click, table_rows, run_dir, limit_exprs):
-        ctx = callback_context
-        if not ctx.triggered:
+    def handle_pareto_table_selection(table_rows, run_dir, limit_exprs):
+        if not table_rows:
             return no_update
-
-        trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
-
-        if trigger_id in ["main-scatter", "explorer-scatter"]:
-            click_data = main_click if trigger_id == "main-scatter" else explorer_click
-            if click_data and "points" in click_data and click_data["points"]:
-                point = click_data["points"][0]
-                if "customdata" in point and point["customdata"]:
-                    return point["customdata"][0]
-
-        elif trigger_id == "pareto-table" and table_rows:
-            run_data = get_run_data(run_dir)
-            df = run_data.dataframe
-            mask = _apply_limits(df, limit_exprs)
-            df_filtered = df.loc[mask]
-            if table_rows[0] < len(df_filtered):
-                return df_filtered.iloc[table_rows[0]]["_id"]
-
+        run_data = get_run_data(run_dir)
+        df = run_data.dataframe
+        mask = _apply_limits(df, limit_exprs)
+        df_filtered = df.loc[mask]
+        if table_rows[0] < len(df_filtered):
+            return df_filtered.iloc[table_rows[0]]["_id"]
         return no_update
 
     # =========================================================================
@@ -1094,24 +1127,21 @@ def serve_dash(data_root: str, port: int = 8050):
 
     @app.callback(
         Output("selected-config-summary", "children"),
-        Output("config-details-panel", "children"),
         Input("selected-config-id", "data"),
         Input("run-selection", "value"),
     )
-    def update_selected_config_display(selected_id, run_dir):
+    def update_selected_config_summary(selected_id, run_dir):
+        """Update config summary in Overview tab."""
         if not selected_id:
-            no_selection = html.P("Click on a point to select a config", className="text-muted")
-            return no_selection, no_selection
+            return html.P("Click on a point to select a config", className="text-muted")
 
         run_data = get_run_data(run_dir)
         if selected_id not in run_data.raw_configs:
-            return html.P("Config not found"), html.P("Config not found")
+            return html.P("Config not found")
 
-        config = run_data.raw_configs[selected_id]
         df = run_data.dataframe
         row = df[df["_id"] == selected_id]
 
-        # Summary card
         summary_items = [html.Strong(f"ID: {selected_id[:16]}...")]
         if not row.empty:
             for metric in run_data.scoring_metrics[:5]:
@@ -1119,9 +1149,26 @@ def serve_dash(data_root: str, port: int = 8050):
                     val = row[metric].values[0]
                     if pd.notna(val):
                         summary_items.append(html.Div(f"{metric}: {val:.4f}"))
-        summary = html.Div(summary_items, style={"fontSize": "12px"})
+        return html.Div(summary_items, style={"fontSize": "12px"})
 
-        # Detailed config - bot parameters
+    @app.callback(
+        Output("config-details-panel", "children"),
+        Input("selected-config-id", "data"),
+        Input("run-selection", "value"),
+    )
+    def update_config_details_panel(selected_id, run_dir):
+        """Update config details in Explorer tab."""
+        if not selected_id:
+            return html.P("Click on a point to select a config", className="text-muted")
+
+        run_data = get_run_data(run_dir)
+        if selected_id not in run_data.raw_configs:
+            return html.P("Config not found")
+
+        config = run_data.raw_configs[selected_id]
+        df = run_data.dataframe
+        row = df[df["_id"] == selected_id]
+
         bot_params = config.get("bot", {})
         details_items = [html.H6("Bot Parameters")]
 
@@ -1143,7 +1190,6 @@ def serve_dash(data_root: str, port: int = 8050):
                 details_items.append(html.H6(f"{side.capitalize()}", className="mt-2 text-primary"))
                 details_items.extend(render_params(bot_params[side]))
 
-        # Add key metrics
         details_items.append(html.H6("Key Metrics", className="mt-3"))
         if not row.empty:
             for metric in run_data.aggregated_metrics[:10]:
@@ -1152,8 +1198,7 @@ def serve_dash(data_root: str, port: int = 8050):
                     if pd.notna(val):
                         details_items.append(html.Div(f"{metric}: {val:.4f}", style={"fontSize": "11px"}))
 
-        details = html.Div(details_items)
-        return summary, details
+        return html.Div(details_items)
 
     # =========================================================================
     # CALLBACKS - Other plots

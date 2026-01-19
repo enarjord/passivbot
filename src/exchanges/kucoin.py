@@ -237,11 +237,17 @@ class KucoinBot(CCXTBot):
         return filtered
 
     async def fetch_fills(self, start_time=None, end_time=None, limit=None):
+        if start_time is None:
+            logging.warning(
+                "fetch_fills called without start_time; "
+                "consider setting pnls_max_lookback_days in config to limit fetch"
+            )
         all_fills = []
         params = {}
         if end_time:
             params["until"] = int(end_time)
         day = 1000 * 60 * 60 * 24
+        now_ms = self.get_exchange_time()
         while True:
             fills = await self.cca.fetch_my_trades(params=params)
             if fills:
@@ -252,10 +258,10 @@ class KucoinBot(CCXTBot):
                 if "until" in params:
                     new_until = params["until"] - day
                 else:
-                    new_until = self.get_exchange_time() - day
+                    new_until = now_ms - day
             params["until"] = new_until
             all_fills = fills + all_fills
-            if start_time is None or new_until <= start_time + day:
+            if start_time is not None and new_until <= start_time + day:
                 break
             logging.info(
                 f"fetched {len(fills)} fill{'' if len(fills) == 1 else 's'}"
@@ -282,11 +288,17 @@ class KucoinBot(CCXTBot):
         return sorted(deduped.values(), key=lambda x: x["timestamp"])
 
     async def fetch_positions_history(self, start_time=None, end_time=None, limit=None):
+        if start_time is None:
+            logging.warning(
+                "fetch_positions_history called without start_time; "
+                "consider setting pnls_max_lookback_days in config to limit fetch"
+            )
         all_ph = []
         params = {}
         if end_time:
             params["until"] = int(end_time)
         day = 1000 * 60 * 60 * 24
+        now_ms = self.get_exchange_time()
         while True:
             ph = await self.cca.fetch_positions_history(params=params)
             ph = sorted(ph, key=lambda x: x["lastUpdateTimestamp"])
@@ -298,10 +310,10 @@ class KucoinBot(CCXTBot):
                 if "until" in params:
                     new_until = params["until"] - day
                 else:
-                    new_until = self.get_exchange_time() - day
+                    new_until = now_ms - day
             params["until"] = new_until
             all_ph = ph + all_ph
-            if start_time is None or new_until <= start_time + day:
+            if start_time is not None and new_until <= start_time + day:
                 break
             logging.info(
                 f"fetched {len(ph)} pos histor{'y' if len(ph) == 1 else 'ies'}"
