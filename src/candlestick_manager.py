@@ -343,6 +343,10 @@ class CandlestickManager:
         self._progress_last_log: Dict[Tuple[str, str, str], float] = {}
         self._warning_last_log: Dict[str, float] = {}  # throttle repeated warnings
         self._warning_throttle_seconds: float = 300.0  # 5 minutes between repeated warnings
+        # Summary tracking for strict gap warnings (logged once per 15 min instead of per-event)
+        self._strict_gaps_summary: Dict[str, int] = {}  # symbol -> missing count
+        self._strict_gaps_summary_last_log: float = 0.0
+        self._strict_gaps_summary_interval: float = 900.0  # 15 minutes
         self._remote_fetch_callback = remote_fetch_callback
         # Cache of legacy shard paths per (exchange, symbol, tf)
         self._legacy_shard_paths_cache: Dict[Tuple[str, str, str], Dict[str, str]] = {}
@@ -678,6 +682,31 @@ class CandlestickManager:
             return
         self._warning_last_log[throttle_key] = now
         self._log("warning", event, **fields)
+
+    def _record_strict_gap(self, symbol: str, missing_count: int) -> None:
+        """Accumulate strict gap counts for summary logging."""
+        self._strict_gaps_summary[symbol] = self._strict_gaps_summary.get(symbol, 0) + missing_count
+
+    def _log_strict_gaps_summary(self) -> None:
+        """Log accumulated strict gap summary if any, throttled to once per 15 min."""
+        if not self._strict_gaps_summary:
+            return
+        now = time.monotonic()
+        if (now - self._strict_gaps_summary_last_log) < self._strict_gaps_summary_interval:
+            return
+        self._strict_gaps_summary_last_log = now
+        summary = self._strict_gaps_summary
+        total = sum(summary.values())
+        symbols = ", ".join(f"{s}:{c}" for s, c in sorted(summary.items(), key=lambda x: -x[1])[:5])
+        if len(summary) > 5:
+            symbols += f", +{len(summary) - 5} more"
+        self.log.warning(
+            "[candle] strict mode gaps: %d missing candles across %d symbols (%s)",
+            total,
+            len(summary),
+            symbols,
+        )
+        self._strict_gaps_summary.clear()
 
     def _emit_remote_fetch(self, payload: Dict[str, Any]) -> None:
         cb = getattr(self, "_remote_fetch_callback", None)
@@ -2348,6 +2377,7 @@ class CandlestickManager:
         strict: bool = False,
         fill_leading_gaps: bool = False,
         assume_sorted: bool = False,
+        symbol: Optional[str] = None,
     ) -> np.ndarray:
         """Return a new array with zero-candles synthesized for missing minutes.
 
@@ -2435,13 +2465,10 @@ class CandlestickManager:
                 # fallback: keep behavior safe (no warning rather than exploding)
                 missing_count = 0
             if missing_count:
-                self._throttled_warning(
-                    "standardize_gaps_strict_missing",  # throttle key
-                    "standardize_gaps_strict_missing",
-                    missing=int(missing_count),
-                    start_ts=effective_lo,
-                    end_ts=hi,
-                )
+                # Accumulate for summary logging instead of per-event warnings
+                sym_key = symbol or "unknown"
+                self._record_strict_gap(sym_key, int(missing_count))
+                self._log_strict_gaps_summary()
             return a[i0:i1]
 
         out_rows = []
@@ -2464,6 +2491,7 @@ class CandlestickManager:
                 prev_close = float(a[0]["c"])
             # If no candle before, prev_close stays None until we hit real data
 
+        synthesized_count = 0
         for t in expected:
             if t in pos:
                 row = a[pos[t]]
@@ -2475,6 +2503,17 @@ class CandlestickManager:
                     continue
                 # Synthesize a zero-candle using previous close (internal gaps only)
                 out_rows.append((int(t), prev_close, prev_close, prev_close, prev_close, 0.0))
+                synthesized_count += 1
+
+        # Log when zero-candles were synthesized (helps diagnose exchange data gaps)
+        if synthesized_count > 0 and symbol:
+            self.log.warning(
+                "[candle] %s: synthesized %d zero-candle%s (no trades from exchange) using prev_close=%.6f",
+                symbol,
+                synthesized_count,
+                "s" if synthesized_count > 1 else "",
+                prev_close if prev_close is not None else 0.0,
+            )
 
         if not out_rows:
             return np.empty((0,), dtype=CANDLE_DTYPE)
@@ -3942,10 +3981,12 @@ class CandlestickManager:
             strict=strict,
             fill_leading_gaps=fill_leading_gaps,
             assume_sorted=True,
+            symbol=symbol,
         )
 
-        # Log accumulated persistent gap summary (throttled to once per minute)
+        # Log accumulated gap summaries (throttled)
         self._log_persistent_gap_summary()
+        self._log_strict_gaps_summary()
 
         return result
 

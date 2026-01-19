@@ -40,6 +40,10 @@ from pure_funcs import ensure_millis
 
 logger = logging.getLogger(__name__)
 
+# Throttle state for spammy warnings
+_pnl_discrepancy_last_log: Dict[str, float] = {}  # exchange:user -> last log time
+_PNL_DISCREPANCY_THROTTLE_SECONDS = 300.0  # Log at most once per 5 minutes
+
 
 # ---------------------------------------------------------------------------
 # Rate Limit Coordination
@@ -2826,8 +2830,9 @@ class KucoinFetcher(BaseFetcher):
                 events[best["id"]]["pnl"] = float(p.get("realizedPnl", 0.0))
                 seen_trade_ids.add(best["id"])
 
-    @staticmethod
-    def _log_discrepancies(local_pnls: Dict[str, float], positions: List[Dict[str, object]]) -> None:
+    def _log_discrepancies(
+        self, local_pnls: Dict[str, float], positions: List[Dict[str, object]]
+    ) -> None:
         if not positions or not local_pnls:
             return
         # Aggregate by symbol for a rough reconciliation
@@ -2846,11 +2851,18 @@ class KucoinFetcher(BaseFetcher):
         local_total = sum(local_pnls.values())
         remote_total = sum(pos_sum.values())
         if abs(local_total - remote_total) > max(1e-8, 0.05 * (abs(remote_total) + 1e-8)):
-            logger.warning(
-                "KucoinFetcher: local PnL sum %.6f differs from positions_history sum %.6f",
-                local_total,
-                remote_total,
-            )
+            # Throttle this warning to once per 5 minutes
+            now = time.time()
+            throttle_key = f"kucoin:{id(self.api)}"
+            last_log = _pnl_discrepancy_last_log.get(throttle_key, 0.0)
+            if (now - last_log) >= _PNL_DISCREPANCY_THROTTLE_SECONDS:
+                _pnl_discrepancy_last_log[throttle_key] = now
+                logger.warning(
+                    "[pnl] KucoinFetcher: local sum %.2f differs from positions_history %.2f (delta=%.2f)",
+                    local_total,
+                    remote_total,
+                    local_total - remote_total,
+                )
 
     @staticmethod
     def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
