@@ -2814,6 +2814,15 @@ class KucoinFetcher(BaseFetcher):
         positions: List[Dict[str, object]],
         events: Dict[str, Dict[str, object]],
     ) -> None:
+        """Match position close PnL from positions_history to trade fills.
+
+        Uses a 5-minute window to find all fills that could be part of a position close.
+        When multiple fills match a single position close:
+        - The PnL is distributed proportionally by fill quantity
+        - This ensures the total PnL sums correctly regardless of how many fills closed the position
+        """
+        match_window_ms = 5 * 60 * 1000  # 5 minute window for matching
+
         closes_by_symbol: Dict[str, List[Dict[str, object]]] = defaultdict(list)
         for c in closes:
             closes_by_symbol[c["symbol"]].append(c)
@@ -2821,20 +2830,64 @@ class KucoinFetcher(BaseFetcher):
         for p in positions:
             positions_by_symbol[p.get("symbol", "")].append(p)
 
-        seen_trade_ids: set[str] = set()
+        # Track which trades have been assigned PnL
+        assigned_trade_ids: set[str] = set()
+        unmatched_positions = []
+
         for symbol, pos_list in positions_by_symbol.items():
             if symbol not in closes_by_symbol:
+                unmatched_positions.extend(pos_list)
                 continue
+
+            symbol_closes = closes_by_symbol[symbol]
             for p in pos_list:
-                candidates = sorted(
-                    [c for c in closes_by_symbol[symbol] if c["id"] not in seen_trade_ids],
-                    key=lambda c: abs(c["timestamp"] - p.get("lastUpdateTimestamp", 0)),
-                )
-                if not candidates:
+                p_ts = p.get("lastUpdateTimestamp", 0)
+                p_pnl = float(p.get("realizedPnl", 0.0) or 0.0)
+
+                # Find all fills within the match window that haven't been assigned yet
+                matching_fills = [
+                    c for c in symbol_closes
+                    if c["id"] not in assigned_trade_ids
+                    and abs(c["timestamp"] - p_ts) < match_window_ms
+                ]
+
+                if not matching_fills:
+                    # Try expanding window for this position
+                    unmatched_positions.append(p)
                     continue
-                best = candidates[0]
-                events[best["id"]]["pnl"] = float(p.get("realizedPnl", 0.0))
-                seen_trade_ids.add(best["id"])
+
+                # Compute total qty across matching fills
+                total_qty = sum(abs(float(f.get("qty", 0) or f.get("amount", 0) or 0)) for f in matching_fills)
+
+                if total_qty <= 0:
+                    # Fallback: assign all PnL to closest fill
+                    closest = min(matching_fills, key=lambda c: abs(c["timestamp"] - p_ts))
+                    events[closest["id"]]["pnl"] = p_pnl
+                    assigned_trade_ids.add(closest["id"])
+                else:
+                    # Distribute PnL proportionally by qty
+                    for fill in matching_fills:
+                        fill_qty = abs(float(fill.get("qty", 0) or fill.get("amount", 0) or 0))
+                        proportion = fill_qty / total_qty if total_qty > 0 else 0
+                        events[fill["id"]]["pnl"] = p_pnl * proportion
+                        assigned_trade_ids.add(fill["id"])
+
+        # Set PnL to 0 for closes that weren't assigned any PnL from positions_history
+        for c in closes:
+            if c["id"] not in assigned_trade_ids:
+                # This close didn't match any position_history entry - set local_pnl to 0
+                # since we don't have reliable entry data to compute it
+                events[c["id"]]["pnl"] = 0.0
+
+        # Log unmatched positions for debugging
+        if unmatched_positions:
+            total_unmatched_pnl = sum(float(p.get("realizedPnl", 0) or 0) for p in unmatched_positions)
+            logger.debug(
+                "[pnl] KucoinFetcher._match_pnls: %d position closes (%s total PnL) "
+                "could not be matched to any trade fills",
+                len(unmatched_positions),
+                f"{total_unmatched_pnl:.4f}",
+            )
 
     def _log_discrepancies(
         self, local_pnls: Dict[str, float], positions: List[Dict[str, object]]
@@ -2927,36 +2980,80 @@ class KucoinFetcher(BaseFetcher):
     async def _enrich_with_order_details_bulk(
         self, events: List[Dict[str, object]], detail_cache: Dict[str, Tuple[str, str]]
     ) -> None:
+        """Enrich events with clientOid from order details.
+
+        Optimized to:
+        1. Check cache by both tradeId and orderId
+        2. Group events by orderId to avoid duplicate fetch_order calls
+        3. Share results across events with the same orderId
+        """
         if events is None:
             return
         detail_cache = detail_cache or {}
-        pending: List[Tuple[Dict[str, object], str, str, str]] = []  # (ev, ev_id, order_id, symbol)
+
+        # Build an orderId -> clientOid lookup from cache (for events already enriched)
+        order_id_cache: Dict[str, Tuple[str, str]] = {}
+
+        # First pass: apply cached values and build orderId lookup
         for ev in events:
-            cached = detail_cache.get(ev.get("id"))
+            ev_id = ev.get("id")
+            order_id = ev.get("order_id")
+
+            # Check cache by tradeId
+            cached = detail_cache.get(ev_id) if ev_id else None
             if cached:
                 ev["client_order_id"], ev["pb_order_type"] = cached
+                # Also populate orderId cache for other events with same order
+                if order_id:
+                    order_id_cache[str(order_id)] = cached
+                continue
+
+            # Check if we already know this orderId's clientOid
+            if order_id and str(order_id) in order_id_cache:
+                client_oid, pb_type = order_id_cache[str(order_id)]
+                ev["client_order_id"] = client_oid
+                ev["pb_order_type"] = pb_type
+                if ev_id:
+                    detail_cache[ev_id] = (client_oid, pb_type)
+
+        # Second pass: collect events that still need enrichment, grouped by orderId
+        events_by_order: Dict[str, List[Dict[str, object]]] = defaultdict(list)
+        for ev in events:
             has_client = bool(ev.get("client_order_id"))
             has_type = bool(ev.get("pb_order_type")) and ev["pb_order_type"] != "unknown"
             if has_client and has_type:
                 continue
             order_id = ev.get("order_id")
-            symbol = ev.get("symbol")
             if not order_id:
                 ev.setdefault("pb_order_type", "unknown")
                 continue
-            pending.append((ev, ev.get("id"), order_id, symbol))
+            # Skip if we already fetched this orderId
+            if str(order_id) in order_id_cache:
+                client_oid, pb_type = order_id_cache[str(order_id)]
+                ev["client_order_id"] = client_oid
+                ev["pb_order_type"] = pb_type
+                ev_id = ev.get("id")
+                if ev_id:
+                    detail_cache[ev_id] = (client_oid, pb_type)
+                continue
+            events_by_order[str(order_id)].append(ev)
 
-        if pending:
+        unique_orders = list(events_by_order.keys())
+        if unique_orders:
+            # Get symbol for each orderId (use first event's symbol)
+            order_symbols = {oid: evs[0].get("symbol") for oid, evs in events_by_order.items()}
+
             # Limit concurrency to avoid overwhelming the API
             sem = asyncio.Semaphore(8)
-            total = len(pending)
+            total = len(unique_orders)
             completed = 0
             last_log_time = time.time()
-            log_interval = 5.0  # Log progress every 5 seconds
+            log_interval = 5.0
 
-            async def throttled_fetch(order_id: str, symbol: str) -> Optional[Tuple[str, str]]:
+            async def throttled_fetch(order_id: str) -> Tuple[str, Optional[Tuple[str, str]]]:
                 nonlocal completed, last_log_time
                 async with sem:
+                    symbol = order_symbols.get(order_id)
                     result = await self._enrich_with_order_details(order_id, symbol)
                     completed += 1
                     now = time.time()
@@ -2969,26 +3066,45 @@ class KucoinFetcher(BaseFetcher):
                             total,
                             pct,
                         )
-                    return result
+                    return order_id, result
 
-            tasks = [throttled_fetch(order_id, symbol) for _, _, order_id, symbol in pending]
+            total_events = sum(len(evs) for evs in events_by_order.values())
             if total > 50:
                 logger.info(
-                    "KucoinFetcher: enriching %d events with order details (concurrency=8)...",
+                    "KucoinFetcher: enriching %d events via %d unique orders (concurrency=8)...",
+                    total_events,
                     total,
                 )
+
+            tasks = [throttled_fetch(oid) for oid in unique_orders]
             results = await asyncio.gather(*tasks, return_exceptions=True)
+
             if total > 50:
-                logger.info("KucoinFetcher: enrichment complete (%d events)", total)
-            for (ev, ev_id, _, _), res in zip(pending, results):
-                if isinstance(res, Exception) or res is None:
-                    ev.setdefault("pb_order_type", ev.get("pb_order_type") or "unknown")
+                logger.info("KucoinFetcher: enrichment complete (%d orders, %d events)", total, total_events)
+
+            # Apply results to all events sharing the same orderId
+            for res in results:
+                if isinstance(res, Exception):
                     continue
-                client_oid, pb_type = res
-                ev["client_order_id"] = client_oid or ev.get("client_order_id") or ""
-                ev["pb_order_type"] = pb_type or "unknown"
-                if ev_id:
-                    detail_cache[ev_id] = (ev["client_order_id"], ev["pb_order_type"])
+                order_id, detail = res
+                if detail is None:
+                    # Mark all events with this orderId as unknown
+                    for ev in events_by_order.get(order_id, []):
+                        ev.setdefault("pb_order_type", "unknown")
+                    continue
+
+                client_oid, pb_type = detail
+                order_id_cache[order_id] = (client_oid, pb_type)
+
+                # Apply to all events with this orderId
+                for ev in events_by_order.get(order_id, []):
+                    ev["client_order_id"] = client_oid or ev.get("client_order_id") or ""
+                    ev["pb_order_type"] = pb_type or "unknown"
+                    ev_id = ev.get("id")
+                    if ev_id:
+                        detail_cache[ev_id] = (ev["client_order_id"], ev["pb_order_type"])
+
+        # Final pass: ensure all events have pb_order_type
         for ev in events:
             if not ev.get("pb_order_type"):
                 ev["pb_order_type"] = "unknown"

@@ -17,6 +17,8 @@ from src.fill_events_manager import (
     BitgetFetcher,
     BybitFetcher,
     HyperliquidFetcher,
+    KucoinFetcher,
+    OkxFetcher,
     FillEvent,
     FillEventCache,
     FillEventsManager,
@@ -1198,3 +1200,607 @@ async def test_manager_persists_manual_fill(tmp_path: Path):
     assert len(events) == 1
     assert events[0].pb_order_type == "unknown"
     assert events[0].client_order_id == ""
+
+
+# ---------------------------------------------------------------------------
+# OkxFetcher tests
+# ---------------------------------------------------------------------------
+
+
+class _FakeOkxAPI:
+    """Fake OKX API for testing OkxFetcher."""
+
+    def __init__(
+        self,
+        fills_batches: List[List[Dict[str, Any]]],
+        fills_history_batches: Optional[List[List[Dict[str, Any]]]] = None,
+    ) -> None:
+        self._fills_batches = list(fills_batches)
+        self._fills_history_batches = list(fills_history_batches or [])
+        self.fills_calls: List[Dict[str, Any]] = []
+        self.fills_history_calls: List[Dict[str, Any]] = []
+
+    async def private_get_trade_fills(self, params: Dict[str, Any]):
+        self.fills_calls.append(dict(params))
+        if not self._fills_batches:
+            return {"data": []}
+        return {"data": self._fills_batches.pop(0)}
+
+    async def private_get_trade_fills_history(self, params: Dict[str, Any]):
+        self.fills_history_calls.append(dict(params))
+        if not self._fills_history_batches:
+            return {"data": []}
+        return {"data": self._fills_history_batches.pop(0)}
+
+
+def _make_okx_fill(
+    trade_id: str,
+    ts: int,
+    inst_id: str = "BTC-USDT-SWAP",
+    side: str = "buy",
+    qty: str = "0.1",
+    price: str = "50000",
+    pnl: str = "0",
+    pos_side: str = "long",
+    cl_ord_id: str = "",
+    bill_id: str = "",
+) -> Dict[str, Any]:
+    """Helper to create an OKX fill dict."""
+    return {
+        "tradeId": trade_id,
+        "ordId": f"ord-{trade_id}",
+        "billId": bill_id or trade_id,
+        "ts": str(ts),
+        "fillTime": str(ts),
+        "instId": inst_id,
+        "side": side,
+        "fillSz": qty,
+        "fillPx": price,
+        "fillPnl": pnl,
+        "posSide": pos_side,
+        "clOrdId": cl_ord_id,
+        "feeCcy": "USDT",
+        "fee": "-0.01",
+    }
+
+
+@pytest.mark.asyncio
+async def test_okx_fetcher_basic_fetch(monkeypatch):
+    """Test basic fetch with all required fields present."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    fills = [
+        _make_okx_fill(
+            trade_id="tid-1",
+            ts=now_ms - 1000,
+            side="buy",
+            qty="0.5",
+            price="50000",
+            pnl="0",
+            pos_side="long",
+            cl_ord_id="entry_initial_normal_long",
+        ),
+        _make_okx_fill(
+            trade_id="tid-2",
+            ts=now_ms - 500,
+            side="sell",
+            qty="0.5",
+            price="51000",
+            pnl="500",
+            pos_side="long",
+            cl_ord_id="close_grid_long",
+        ),
+    ]
+
+    api = _FakeOkxAPI([fills])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v)
+
+    fetcher = OkxFetcher(api, trade_limit=100)
+    detail_cache: Dict[str, Tuple[str, str]] = {}
+    batches: List[List[Dict[str, object]]] = []
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 2000,
+        until_ms=now_ms,
+        detail_cache=detail_cache,
+        on_batch=batches.append,
+    )
+
+    assert len(events) == 2
+    # Check fields
+    entry = events[0]
+    assert entry["id"] == "tid-1"
+    assert entry["symbol"] == "BTC/USDT:USDT"
+    assert entry["side"] == "buy"
+    assert entry["qty"] == pytest.approx(0.5)
+    assert entry["price"] == pytest.approx(50000)
+    assert entry["pnl"] == pytest.approx(0)
+    assert entry["position_side"] == "long"
+    assert entry["client_order_id"] == "entry_initial_normal_long"
+    assert entry["pb_order_type"] == "entry_initial_normal_long"
+
+    close = events[1]
+    assert close["id"] == "tid-2"
+    assert close["pnl"] == pytest.approx(500)
+    assert close["pb_order_type"] == "close_grid_long"
+
+    assert len(api.fills_calls) == 1
+    assert len(batches) >= 1
+
+
+@pytest.mark.asyncio
+async def test_okx_fetcher_pagination_with_billid_cursor(monkeypatch):
+    """Test pagination using billId cursor for backward traversal."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    # First batch (most recent)
+    batch1 = [
+        _make_okx_fill(trade_id="tid-3", ts=now_ms - 100, bill_id="bill-3"),
+        _make_okx_fill(trade_id="tid-2", ts=now_ms - 200, bill_id="bill-2"),
+    ]
+    # Second batch (older)
+    batch2 = [
+        _make_okx_fill(trade_id="tid-1", ts=now_ms - 300, bill_id="bill-1"),
+    ]
+
+    api = _FakeOkxAPI([batch1, batch2, []])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = OkxFetcher(api, trade_limit=2)
+    detail_cache: Dict[str, Tuple[str, str]] = {}
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 500,
+        until_ms=now_ms,
+        detail_cache=detail_cache,
+    )
+
+    assert len(events) == 3
+    assert [ev["id"] for ev in events] == ["tid-1", "tid-2", "tid-3"]
+
+    # Check pagination cursor was used
+    assert len(api.fills_calls) == 2
+    # Second call should have 'after' param with billId from oldest fill in first batch
+    assert "after" in api.fills_calls[1]
+    assert api.fills_calls[1]["after"] == "bill-2"
+
+
+@pytest.mark.asyncio
+async def test_okx_fetcher_dual_endpoint_old_and_recent(monkeypatch):
+    """Test using both /fills-history and /fills endpoints for date ranges spanning 3+ days."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    three_days_ms = 3 * 24 * 60 * 60 * 1000
+
+    # Old data (before 3 days ago)
+    old_ts = now_ms - three_days_ms - 1000
+    old_fills = [
+        _make_okx_fill(trade_id="tid-old", ts=old_ts, cl_ord_id="entry_old"),
+    ]
+
+    # Recent data (within last 3 days)
+    recent_ts = now_ms - 1000
+    recent_fills = [
+        _make_okx_fill(trade_id="tid-recent", ts=recent_ts, cl_ord_id="entry_recent"),
+    ]
+
+    api = _FakeOkxAPI(
+        fills_batches=[recent_fills],
+        fills_history_batches=[old_fills],
+    )
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = OkxFetcher(api, trade_limit=100)
+    detail_cache: Dict[str, Tuple[str, str]] = {}
+
+    events = await fetcher.fetch(
+        since_ms=old_ts - 1000,
+        until_ms=now_ms,
+        detail_cache=detail_cache,
+    )
+
+    assert len(events) == 2
+    assert events[0]["id"] == "tid-old"
+    assert events[1]["id"] == "tid-recent"
+
+    # Both endpoints should have been called
+    assert len(api.fills_history_calls) == 1
+    assert len(api.fills_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_okx_fetcher_net_mode_position_side_inference(monkeypatch):
+    """Test net mode position side inference from side + pnl."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    fills = [
+        # Opening long: buy with no pnl -> position_side = long
+        _make_okx_fill(
+            trade_id="tid-open-long",
+            ts=now_ms - 3000,
+            side="buy",
+            pnl="0",
+            pos_side="net",
+        ),
+        # Closing long: sell with pnl -> position_side = long (was holding long)
+        _make_okx_fill(
+            trade_id="tid-close-long",
+            ts=now_ms - 2000,
+            side="sell",
+            pnl="100",
+            pos_side="net",
+        ),
+        # Opening short: sell with no pnl -> position_side = short
+        _make_okx_fill(
+            trade_id="tid-open-short",
+            ts=now_ms - 1000,
+            side="sell",
+            pnl="0",
+            pos_side="net",
+        ),
+        # Closing short: buy with pnl -> position_side = short (was holding short)
+        _make_okx_fill(
+            trade_id="tid-close-short",
+            ts=now_ms,
+            side="buy",
+            pnl="50",
+            pos_side="net",
+        ),
+    ]
+
+    api = _FakeOkxAPI([fills])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = OkxFetcher(api, trade_limit=100)
+    detail_cache: Dict[str, Tuple[str, str]] = {}
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 5000,
+        until_ms=now_ms + 1000,
+        detail_cache=detail_cache,
+    )
+
+    assert len(events) == 4
+
+    # Check position side inference for net mode
+    open_long = next(ev for ev in events if ev["id"] == "tid-open-long")
+    assert open_long["position_side"] == "long"  # buy with no pnl = opening long
+
+    close_long = next(ev for ev in events if ev["id"] == "tid-close-long")
+    assert close_long["position_side"] == "long"  # sell with pnl = closing long
+
+    open_short = next(ev for ev in events if ev["id"] == "tid-open-short")
+    assert open_short["position_side"] == "short"  # sell with no pnl = opening short
+
+    close_short = next(ev for ev in events if ev["id"] == "tid-close-short")
+    assert close_short["position_side"] == "short"  # buy with pnl = closing short
+
+
+@pytest.mark.asyncio
+async def test_okx_fetcher_detail_cache_reuse(monkeypatch):
+    """Test that detail cache is used to avoid recomputing pb_order_type."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    fills = [
+        _make_okx_fill(
+            trade_id="tid-cached",
+            ts=now_ms - 1000,
+            cl_ord_id="",  # No client order ID in fill
+        ),
+    ]
+
+    api = _FakeOkxAPI([fills])
+
+    # Pre-populate cache
+    detail_cache: Dict[str, Tuple[str, str]] = {
+        "tid-cached": ("cached-client-id", "cached-pb-type"),
+    }
+
+    fetcher = OkxFetcher(api, trade_limit=100)
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 2000,
+        until_ms=now_ms,
+        detail_cache=detail_cache,
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["client_order_id"] == "cached-client-id"
+    assert event["pb_order_type"] == "cached-pb-type"
+
+
+@pytest.mark.asyncio
+async def test_okx_fetcher_symbol_normalization(monkeypatch):
+    """Test instId to CCXT symbol conversion."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    fills = [
+        _make_okx_fill(trade_id="tid-btc", ts=now_ms - 300, inst_id="BTC-USDT-SWAP"),
+        _make_okx_fill(trade_id="tid-eth", ts=now_ms - 200, inst_id="ETH-USDT-SWAP"),
+        _make_okx_fill(trade_id="tid-sol", ts=now_ms - 100, inst_id="SOL-USDT-SWAP"),
+    ]
+
+    api = _FakeOkxAPI([fills])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = OkxFetcher(api, trade_limit=100)
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 1000,
+        until_ms=now_ms,
+        detail_cache={},
+    )
+
+    assert len(events) == 3
+    assert events[0]["symbol"] == "BTC/USDT:USDT"
+    assert events[1]["symbol"] == "ETH/USDT:USDT"
+    assert events[2]["symbol"] == "SOL/USDT:USDT"
+
+
+@pytest.mark.asyncio
+async def test_okx_fetcher_hedge_mode(monkeypatch):
+    """Test hedge mode with explicit long/short position sides."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    fills = [
+        _make_okx_fill(
+            trade_id="tid-long",
+            ts=now_ms - 200,
+            side="buy",
+            pos_side="long",
+        ),
+        _make_okx_fill(
+            trade_id="tid-short",
+            ts=now_ms - 100,
+            side="sell",
+            pos_side="short",
+        ),
+    ]
+
+    api = _FakeOkxAPI([fills])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = OkxFetcher(api, trade_limit=100)
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 1000,
+        until_ms=now_ms,
+        detail_cache={},
+    )
+
+    assert len(events) == 2
+    assert events[0]["position_side"] == "long"
+    assert events[1]["position_side"] == "short"
+
+
+@pytest.mark.asyncio
+async def test_okx_fetcher_short_batch_stops_pagination(monkeypatch):
+    """Test that pagination stops when batch size is less than trade_limit."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    # Single batch smaller than trade_limit - should not paginate
+    batch = [
+        _make_okx_fill(trade_id="tid-1", ts=now_ms - 100, bill_id="bill-1"),
+    ]
+
+    api = _FakeOkxAPI([batch])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = OkxFetcher(api, trade_limit=100)  # trade_limit=100, batch has 1
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 1000,
+        until_ms=now_ms,
+        detail_cache={},
+    )
+
+    assert len(events) == 1
+    # Only one API call since batch was smaller than limit
+    assert len(api.fills_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_okx_fetcher_time_bounds_filtering(monkeypatch):
+    """Test that events outside time bounds are filtered."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    fills = [
+        _make_okx_fill(trade_id="tid-before", ts=now_ms - 5000),  # Before since_ms
+        _make_okx_fill(trade_id="tid-in-range", ts=now_ms - 500),  # In range
+        _make_okx_fill(trade_id="tid-after", ts=now_ms + 1000),  # After until_ms
+    ]
+
+    api = _FakeOkxAPI([fills])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = OkxFetcher(api, trade_limit=100)
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 1000,  # Only include tid-in-range
+        until_ms=now_ms,
+        detail_cache={},
+    )
+
+    assert len(events) == 1
+    assert events[0]["id"] == "tid-in-range"
+
+
+@pytest.mark.asyncio
+async def test_okx_fetcher_on_batch_callback(monkeypatch):
+    """Test on_batch callback is called with each batch of events."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    batch1 = [
+        _make_okx_fill(trade_id="tid-1", ts=now_ms - 200, bill_id="bill-1"),
+        _make_okx_fill(trade_id="tid-2", ts=now_ms - 100, bill_id="bill-2"),
+    ]
+
+    api = _FakeOkxAPI([batch1, []])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = OkxFetcher(api, trade_limit=2)
+    batches: List[List[Dict[str, object]]] = []
+
+    await fetcher.fetch(
+        since_ms=now_ms - 1000,
+        until_ms=now_ms,
+        detail_cache={},
+        on_batch=batches.append,
+    )
+
+    assert len(batches) >= 1
+    # First batch should have both events
+    assert len(batches[0]) == 2
+
+
+# ---------------------------------------------------------------------------
+# KucoinFetcher tests
+# ---------------------------------------------------------------------------
+
+
+def test_kucoin_match_pnls_distributes_proportionally():
+    """Test that _match_pnls distributes PnL proportionally across multiple fills."""
+    # Mock fetcher (we only need the _match_pnls method)
+    fetcher = KucoinFetcher(api=None)
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    # Create closing trades that match a single position close
+    closes = [
+        {
+            "id": "close-1",
+            "symbol": "BTC/USDT:USDT",
+            "timestamp": now_ms,
+            "qty": 80.0,  # 80% of position
+        },
+        {
+            "id": "close-2",
+            "symbol": "BTC/USDT:USDT",
+            "timestamp": now_ms + 100,
+            "qty": 20.0,  # 20% of position
+        },
+    ]
+
+    # Position history entry with total PnL
+    positions = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "lastUpdateTimestamp": now_ms + 50,  # Between the two closes
+            "realizedPnl": 100.0,  # Total PnL to distribute
+        },
+    ]
+
+    # Events dict that _match_pnls will modify
+    events = {
+        "close-1": {"id": "close-1", "pnl": 0.0, "symbol": "BTC/USDT:USDT"},
+        "close-2": {"id": "close-2", "pnl": 0.0, "symbol": "BTC/USDT:USDT"},
+    }
+
+    fetcher._match_pnls(closes, positions, events)
+
+    # PnL should be distributed 80/20
+    assert events["close-1"]["pnl"] == pytest.approx(80.0, rel=0.01)
+    assert events["close-2"]["pnl"] == pytest.approx(20.0, rel=0.01)
+
+
+def test_kucoin_match_pnls_handles_unmatched_closes():
+    """Test that unmatched closes get PnL set to 0."""
+    fetcher = KucoinFetcher(api=None)
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    # Close trade with no matching position
+    closes = [
+        {
+            "id": "orphan-close",
+            "symbol": "ETH/USDT:USDT",
+            "timestamp": now_ms,
+            "qty": 10.0,
+        },
+    ]
+
+    # Position history from a different time window (>5 min away)
+    positions = [
+        {
+            "symbol": "ETH/USDT:USDT",
+            "lastUpdateTimestamp": now_ms - 10 * 60 * 1000,  # 10 min earlier
+            "realizedPnl": 50.0,
+        },
+    ]
+
+    events = {
+        "orphan-close": {"id": "orphan-close", "pnl": 999.0, "symbol": "ETH/USDT:USDT"},
+    }
+
+    fetcher._match_pnls(closes, positions, events)
+
+    # Unmatched close should have PnL set to 0
+    assert events["orphan-close"]["pnl"] == 0.0
+
+
+def test_kucoin_match_pnls_single_fill_gets_full_pnl():
+    """Test that a single fill matching a position gets the full PnL."""
+    fetcher = KucoinFetcher(api=None)
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    closes = [
+        {
+            "id": "single-close",
+            "symbol": "SOL/USDT:USDT",
+            "timestamp": now_ms,
+            "qty": 50.0,
+        },
+    ]
+
+    positions = [
+        {
+            "symbol": "SOL/USDT:USDT",
+            "lastUpdateTimestamp": now_ms + 10,
+            "realizedPnl": 25.5,
+        },
+    ]
+
+    events = {
+        "single-close": {"id": "single-close", "pnl": 0.0, "symbol": "SOL/USDT:USDT"},
+    }
+
+    fetcher._match_pnls(closes, positions, events)
+
+    assert events["single-close"]["pnl"] == pytest.approx(25.5)
+
+
+def test_kucoin_match_pnls_multiple_positions_multiple_fills():
+    """Test matching multiple position closes to their respective fills."""
+    fetcher = KucoinFetcher(api=None)
+
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    ten_min_ms = 10 * 60 * 1000  # 10 minutes to ensure clear separation
+
+    closes = [
+        # First position close fills (at time 0)
+        {"id": "btc-close-1", "symbol": "BTC/USDT:USDT", "timestamp": now_ms, "qty": 10.0},
+        {"id": "btc-close-2", "symbol": "BTC/USDT:USDT", "timestamp": now_ms + 50, "qty": 10.0},
+        # Second position close fills (10 min later - well outside 5-min window)
+        {"id": "btc-close-3", "symbol": "BTC/USDT:USDT", "timestamp": now_ms + ten_min_ms, "qty": 5.0},
+    ]
+
+    positions = [
+        # First position close (near time 0)
+        {"symbol": "BTC/USDT:USDT", "lastUpdateTimestamp": now_ms + 25, "realizedPnl": 100.0},
+        # Second position close (10 min later)
+        {"symbol": "BTC/USDT:USDT", "lastUpdateTimestamp": now_ms + ten_min_ms + 10, "realizedPnl": 50.0},
+    ]
+
+    events = {
+        "btc-close-1": {"id": "btc-close-1", "pnl": 0.0, "symbol": "BTC/USDT:USDT"},
+        "btc-close-2": {"id": "btc-close-2", "pnl": 0.0, "symbol": "BTC/USDT:USDT"},
+        "btc-close-3": {"id": "btc-close-3", "pnl": 0.0, "symbol": "BTC/USDT:USDT"},
+    }
+
+    fetcher._match_pnls(closes, positions, events)
+
+    # First position: 100 PnL distributed 50/50 (10+10 qty)
+    assert events["btc-close-1"]["pnl"] == pytest.approx(50.0)
+    assert events["btc-close-2"]["pnl"] == pytest.approx(50.0)
+    # Second position: 50 PnL to single fill
+    assert events["btc-close-3"]["pnl"] == pytest.approx(50.0)
