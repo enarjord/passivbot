@@ -577,13 +577,18 @@ class Passivbot:
 
         twel_long = float(self.bot_value("long", "total_wallet_exposure_limit") or 0.0)
         twel_short = float(self.bot_value("short", "total_wallet_exposure_limit") or 0.0)
-        exposure = f"{twel_long:.0%}" if long_enabled else ""
-        if short_enabled:
-            exposure = f"{exposure}/{twel_short:.0%}" if exposure else f"{twel_short:.0%}"
+        if long_enabled and short_enabled:
+            twel_str = f"L:{twel_long:.0%} S:{twel_short:.0%}"
+        elif long_enabled:
+            twel_str = f"{twel_long:.0%}"
+        elif short_enabled:
+            twel_str = f"{twel_short:.0%}"
+        else:
+            twel_str = "0%"
 
         # Build content lines and calculate width dynamically
         line1 = f"  PASSIVBOT  │  {exchange}:{user}  │  {now}  "
-        line2 = f"  Mode: {mode}  │  Positions: {n_pos}  │  Exposure: {exposure}  "
+        line2 = f"  Mode: {mode}  │  Positions: {n_pos}  │  TWEL: {twel_str}  "
         width = max(len(line1), len(line2), 50)  # minimum 50 chars
         border = "═" * width
 
