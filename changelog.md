@@ -8,6 +8,7 @@ All notable user-facing changes will be documented in this file.
 - One-way mode now respects disabled sides when choosing initial entry side, preventing a disabled side from blocking entries.
 - Startup banner now dynamically calculates width to prevent misaligned borders.
 - Bybit leverage/margin mode "not modified" errors now handled gracefully instead of logging full tracebacks.
+- Large warmup spans (>2 days) now properly trigger gap-filling via CCXT even when end_ts touches present, fixing issue where thousands of zero-candles were synthesized for historical gaps.
 - Windows compatibility: cache folder names now replace `:` with `_` on Windows or when `WINDOWS_COMPATIBILITY=1` env var is set (#547, thanks @FelixJongleur42). **Note:** Existing Windows caches will be orphaned and re-downloaded.
 - Pareto dashboard: fixed JavaScript callback errors when switching between tabs (#550, thanks @646826).
 

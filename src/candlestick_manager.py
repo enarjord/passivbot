@@ -3610,7 +3610,24 @@ class CandlestickManager:
                 fully_covered = _is_fully_covered(sub, start_ts, end_ts)
 
         # Treat ranges ending exactly at the latest finalized minute as present-touching
+        # UNLESS the span is large (>2 days) and not fully covered - then treat as historical
+        # to trigger gap filling via CCXT. This fixes warmup requests that span 31 days but
+        # were skipping gap detection because end_ts == latest_finalized.
         historical = end_ts < end_finalized
+        if (
+            not historical
+            and span_minutes > large_span_threshold
+            and not fully_covered
+            and self.exchange is not None
+        ):
+            self._log(
+                "debug",
+                "large_span_needs_gap_fill",
+                symbol=symbol,
+                span_minutes=int(span_minutes),
+                fully_covered=fully_covered,
+            )
+            historical = True
         if self.exchange is not None and historical:
             # If the requested historical window is not fully covered in memory,
             # attempt to fetch unknown missing spans, regardless of shard presence.
