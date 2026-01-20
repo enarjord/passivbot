@@ -2277,10 +2277,13 @@ class BybitFetcher(BaseFetcher):
 
         remaining_orders = [k for k, v in order_remaining_pnl.items() if abs(v) > 1e-6]
         if remaining_orders:
-            logger.warning(
-                "BybitFetcher._combine: residual PnL for orders %s (values=%s)",
-                remaining_orders,
-                [order_remaining_pnl[k] for k in remaining_orders],
+            # Log at debug level - this is historical residual PnL that couldn't be matched
+            # to trades, not an actionable warning
+            total_residual = sum(order_remaining_pnl[k] for k in remaining_orders)
+            logger.debug(
+                "[fills] residual PnL: %d orders, total=%.4f (unmatched historical PnL)",
+                len(remaining_orders),
+                total_residual,
             )
         remaining_symbols = [k for k, v in symbol_remaining_pnl.items() if abs(v) > 1e-6]
         if remaining_symbols:
