@@ -571,6 +571,28 @@ def normalize_exchange_name(exchange: str) -> str:
     return ex
 
 
+def denormalize_exchange_name(exchange: str) -> str:
+    """
+    Convert a ccxt futures exchange id back to the canonical short form used in configs,
+    caches, and logs.
+
+    Examples:
+    - "binanceusdm" -> "binance"
+    - "kucoinfutures" -> "kucoin"
+    - "krakenfutures" -> "kraken"
+
+    If the exchange doesn't have a known suffix, returns it unchanged.
+    """
+    ex = (exchange or "").lower()
+
+    # Remove known futures suffixes
+    for suffix in ("usdm", "futures"):
+        if ex.endswith(suffix):
+            return ex[: -len(suffix)]
+
+    return ex
+
+
 def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout_ms: int = 60_000):
     """
     Return a ccxt async-support exchange instance for the given exchange id.

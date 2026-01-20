@@ -48,6 +48,7 @@ from utils import (
     date_to_ts,
     get_file_mod_ms,
     normalize_exchange_name,
+    denormalize_exchange_name,
     get_quote,
     symbol_to_coin,
     coin_to_symbol,
@@ -1815,7 +1816,7 @@ async def _prepare_hlcvs_combined_impl(
 
         chosen_data_per_coin[coin] = best_df
         chosen_mss_per_coin[coin] = om_dict[best_exchange].get_market_specific_settings(coin)
-        chosen_mss_per_coin[coin]["exchange"] = best_exchange
+        chosen_mss_per_coin[coin]["exchange"] = denormalize_exchange_name(best_exchange)
     # ---------------------------------------------------------------
     # If no coins survived, raise error
     # ---------------------------------------------------------------

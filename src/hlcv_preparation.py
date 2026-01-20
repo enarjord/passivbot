@@ -70,6 +70,7 @@ from ohlcv_utils import dump_ohlcv_data
 from procedures import get_first_timestamps_unified
 from utils import (
     coin_to_symbol,
+    denormalize_exchange_name,
     format_end_date,
     get_quote,
     load_ccxt_instance,
@@ -971,7 +972,7 @@ async def _prepare_hlcvs_combined_impl(
 
                 # Prepare market settings
                 mss = om_dict[best_exchange].get_market_specific_settings(coin)
-                mss["exchange"] = best_exchange
+                mss["exchange"] = denormalize_exchange_name(best_exchange)
                 warm_minutes = int(per_coin_warmups.get(coin, default_warm))
                 mss["warmup_minutes"] = warm_minutes
 
