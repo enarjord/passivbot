@@ -15,6 +15,8 @@ All notable user-facing changes will be documented in this file.
 - Zero-candle synthesis logs are now rate-limited to at most once per minute per symbol, reducing log spam.
 - Zero-candle logs now include human-readable UTC timestamps showing which candles were synthesized (e.g., `synthesized 3 zero-candles at 2026-01-19T22:15 to 2026-01-19T22:17`).
 - Synthetic candles are now tracked at runtime; when real data arrives for a previously-synthetic timestamp, the EMA cache is automatically invalidated and will be recomputed on next cycle.
+- FillEventsManager logs now prefixed with `[fills]` for easier filtering; verbose refresh logs consolidated into single summary line (e.g., `[fills] refresh: events=1311 (+1) | persisted 2 days (2026-01-19, 2026-01-20)`).
+- Health summary now includes realized PnL sum when fills > 0 (e.g., `fills=3 (pnl=+12.50)`).
 
 ### Added
 - `openpyxl` added to `requirements-live.txt` (required for Bitget archive XLSX parsing).

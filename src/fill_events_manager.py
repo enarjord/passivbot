@@ -703,10 +703,10 @@ class FillEventCache:
             with tmp_path.open("w", encoding="utf-8") as fh:
                 json.dump(payload, fh)
             os.replace(tmp_path, path)
-            logger.info(
-                "FillEventCache.save_days: wrote %d events to %s",
+            logger.debug(
+                "[fills] cache wrote %d events to %s",
                 len(payload),
-                path,
+                path.name,
             )
 
     @property
@@ -1725,19 +1725,18 @@ class FillEventsManager:
         end_ms: Optional[int] = None,
     ) -> None:
         await self.ensure_loaded()
-        requested_start = start_ms
-        logger.info(
-            "FillEventsManager.refresh: start=%s end=%s current_cache=%d (requested_start=%s)",
+        logger.debug(
+            "[fills] refresh: start=%s end=%s current_cache=%d",
             _format_ms(start_ms),
             _format_ms(end_ms),
             len(self._events),
-            _format_ms(requested_start),
         )
         detail_cache = {
             ev.id: (ev.client_order_id, ev.pb_order_type) for ev in self._events if ev.client_order_id
         }
         updated_map: Dict[str, FillEvent] = {ev.id: ev for ev in self._events}
         added_ids: set[str] = set()
+        all_days_persisted: set[str] = set()
 
         def handle_batch(batch: List[Dict[str, object]]) -> None:
             ensure_qty_signage(batch)
@@ -1748,7 +1747,7 @@ class FillEventsManager:
                     event = FillEvent.from_dict(raw)
                 except ValueError as exc:
                     logger.warning(
-                        "FillEventsManager.refresh: skipping malformed event %s (error=%s)",
+                        "[fills] skipping malformed event %s (error=%s)",
                         raw.get("id"),
                         exc,
                     )
@@ -1765,15 +1764,7 @@ class FillEventsManager:
                 return
             day_payload = self._events_for_days(updated_map.values(), days_touched)
             self.cache.save_days(day_payload)
-            days_list = sorted(days_touched)
-            preview = ", ".join(days_list[:5])
-            if len(days_list) > 5:
-                preview += ", ..."
-            logger.info(
-                "FillEventsManager.refresh: persisted %d day files (%s)",
-                len(day_payload),
-                preview,
-            )
+            all_days_persisted.update(days_touched)
 
         await self.fetcher.fetch(start_ms, end_ms, detail_cache, on_batch=handle_batch)
 
@@ -1787,17 +1778,27 @@ class FillEventsManager:
             if start_ms is not None and end_ms is not None and added_ids:
                 self.cache.clear_gap(start_ms, end_ms)
 
-        logger.info(
-            "FillEventsManager.refresh: merged events=%d (added=%d)",
-            len(self._events),
-            len(added_ids),
-        )
+        # Consolidated refresh summary log
+        if added_ids or all_days_persisted:
+            days_list = sorted(all_days_persisted)
+            days_preview = ", ".join(days_list[:5])
+            if len(days_list) > 5:
+                days_preview += f", ... ({len(days_list)} total)"
+            logger.info(
+                "[fills] refresh: events=%d (+%d) | persisted %d days (%s)",
+                len(self._events),
+                len(added_ids),
+                len(all_days_persisted),
+                days_preview,
+            )
+        else:
+            logger.debug("[fills] refresh: events=%d (no changes)", len(self._events))
 
     async def refresh_latest(self, *, overlap: int = 20) -> None:
         """Fetch only the most recent fills, overlapping by `overlap` events."""
         await self.ensure_loaded()
         if not self._events:
-            logger.info("FillEventsManager.refresh_latest: cache empty, falling back to full refresh")
+            logger.debug("[fills] refresh_latest: cache empty, falling back to full refresh")
         start_ms = None
         if self._events:
             idx = max(0, len(self._events) - overlap)
@@ -1839,7 +1840,7 @@ class FillEventsManager:
             return False
 
         if not self._events:
-            logger.info("FillEventsManager.refresh_range: cache empty, refreshing entire interval")
+            logger.debug("[fills] refresh_range: cache empty, refreshing entire interval")
             await self.refresh(start_ms=start_ms, end_ms=end_ms)
             await self.refresh_latest(overlap=overlap)
             return
@@ -1891,13 +1892,13 @@ class FillEventsManager:
 
         merged = self._merge_intervals(intervals)
         if merged:
-            logger.info(
-                "FillEventsManager.refresh_range: refreshing %d intervals: %s",
+            logger.debug(
+                "[fills] refresh_range: refreshing %d intervals: %s",
                 len(merged),
                 ", ".join(f"{_format_ms(start)} → {_format_ms(end)}" for start, end in merged),
             )
         else:
-            logger.info("FillEventsManager.refresh_range: no gaps detected in requested interval")
+            logger.debug("[fills] refresh_range: no gaps detected in requested interval")
 
         for start, end in merged:
             await self.refresh(start_ms=start, end_ms=end)

@@ -522,6 +522,7 @@ class Passivbot:
         self._health_orders_placed = 0
         self._health_orders_cancelled = 0
         self._health_fills = 0
+        self._health_pnl = 0.0  # sum of realized PnL from fills
         self._health_errors = 0
         self._health_ws_reconnects = 0
         self._health_rate_limits = 0
@@ -635,16 +636,23 @@ class Passivbot:
 
         balance_str = f"{self.balance:.2f} {self.quote}"
 
+        # Build fills string with PnL if fills > 0
+        if self._health_fills > 0:
+            pnl_sign = "+" if self._health_pnl >= 0 else ""
+            fills_str = f"fills={self._health_fills} (pnl={pnl_sign}{self._health_pnl:.2f})"
+        else:
+            fills_str = "fills=0"
+
         logging.info(
             "[health] uptime=%s | positions=%d long, %d short | balance=%s | "
-            "orders_placed=%d | orders_cancelled=%d | fills=%d | errors=%d | ws_reconnects=%d | rate_limits=%d",
+            "orders_placed=%d | orders_cancelled=%d | %s | errors=%d | ws_reconnects=%d | rate_limits=%d",
             uptime_str,
             n_long,
             n_short,
             balance_str,
             self._health_orders_placed,
             self._health_orders_cancelled,
-            self._health_fills,
+            fills_str,
             self._health_errors,
             self._health_ws_reconnects,
             self._health_rate_limits,
@@ -2476,8 +2484,9 @@ class Passivbot:
         if not new_events:
             return
 
-        # Track fills for health summary
+        # Track fills and PnL for health summary
         self._health_fills += len(new_events)
+        self._health_pnl += sum(ev.pnl for ev in new_events)
 
         if len(new_events) > 20:
             # Truncate to summary
