@@ -2,7 +2,7 @@
 
 All notable user-facing changes will be documented in this file.
 
-## Unreleased
+## v7.6.2 - 2026-01-20
 
 ### Fixed
 - One-way mode now respects disabled sides when choosing initial entry side, preventing a disabled side from blocking entries.
