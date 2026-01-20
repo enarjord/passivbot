@@ -462,6 +462,10 @@ class Passivbot:
                     "Unable to parse live.max_concurrent_api_requests=%r; ignoring",
                     max_concurrent,
                 )
+        # Archive fetching: disabled by default for live bots (avoids timeout issues)
+        # Set live.enable_archive_candle_fetch=true to enable if needed
+        archive_enabled = get_optional_live_value(config, "enable_archive_candle_fetch", False)
+        cm_kwargs["archive_enabled"] = bool(archive_enabled)
         self.cm = CandlestickManager(**cm_kwargs)
         # TTL (minutes) for EMA candles on non-traded symbols
         ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")

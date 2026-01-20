@@ -318,6 +318,9 @@ class CandlestickManager:
         # Optional global concurrency limiter for remote ccxt calls
         max_concurrent_requests: int | None = None,
         lock_timeout_seconds: float | None = None,
+        # Archive fetching: if False, only use ccxt REST API even if archives are available.
+        # Useful for live bots where archives may timeout; backtester enables by default.
+        archive_enabled: bool = True,
     ) -> None:
         self.exchange = exchange
         # If no explicit exchange_name provided, infer from ccxt instance id
@@ -330,6 +333,8 @@ class CandlestickManager:
         self.overlap_candles = int(overlap_candles)
         self.max_memory_candles_per_symbol = int(max_memory_candles_per_symbol)
         self.max_disk_candles_per_symbol_per_tf = int(max_disk_candles_per_symbol_per_tf)
+        # Archive fetching: if False, only use ccxt REST API
+        self.archive_enabled = bool(archive_enabled)
         # Debug levels: 0=warnings, 1=network-only, 2=full debug, 3=trace
         try:
             dbg = int(float(debug))
@@ -1612,11 +1617,11 @@ class CandlestickManager:
             # Real data arrived for previously synthetic timestamps - invalidate EMA cache
             self._synthetic_timestamps[symbol] -= replaced
             self._invalidate_ema_cache(symbol)
-            self._log(
-                "info",
-                "synthetic_replaced_by_real",
-                symbol=symbol,
-                replaced_count=len(replaced),
+            self.log.info(
+                "[candle] %s: real data replaced %d synthetic candle%s, EMA cache invalidated",
+                symbol,
+                len(replaced),
+                "s" if len(replaced) > 1 else "",
             )
 
     def _invalidate_ema_cache(self, symbol: str) -> None:
@@ -2617,6 +2622,9 @@ class CandlestickManager:
     # ----- External archives (historical) -----
 
     def _archive_supported(self) -> bool:
+        """Check if archive fetching is supported and enabled for this exchange."""
+        if not self.archive_enabled:
+            return False
         try:
             exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
         except Exception:
