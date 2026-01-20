@@ -11,7 +11,20 @@ TRACE_LEVEL = 5
 TRACE_LEVEL_NAME = "TRACE"
 
 DEFAULT_FORMAT = "%(asctime)s %(levelname)-8s %(message)s"
+DEFAULT_FORMAT_WITH_PREFIX = "%(asctime)s %(levelname)-8s [%(log_prefix)s] %(message)s"
 DEFAULT_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+
+
+class PrefixFilter(logging.Filter):
+    """Filter that adds a log_prefix attribute to log records."""
+
+    def __init__(self, prefix: str = ""):
+        super().__init__()
+        self.prefix = prefix
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.log_prefix = self.prefix
+        return True
 
 _LOG_LEVEL_ALIASES = {
     "warning": 0,
@@ -97,21 +110,43 @@ def configure_logging(
     max_bytes: int = 10 * 1024 * 1024,
     backup_count: int = 5,
     stream: bool = True,
-    fmt: str = DEFAULT_FORMAT,
+    fmt: Optional[str] = None,
     datefmt: str = DEFAULT_DATEFMT,
+    prefix: Optional[str] = None,
 ) -> None:
-    """Initialise the root logger based on Passivbot's debug settings."""
+    """Initialise the root logger based on Passivbot's debug settings.
+
+    Args:
+        debug: Logging level (0=warning, 1=info, 2=debug, 3=trace)
+        log_file: Optional path to log file
+        rotation: Enable log rotation
+        max_bytes: Max bytes per log file before rotation
+        backup_count: Number of backup files to keep
+        stream: Enable console output
+        fmt: Custom log format (defaults based on prefix)
+        datefmt: Date format string
+        prefix: Optional prefix to add to all log messages (e.g., exchange name)
+    """
     _ensure_trace_level()
     debug_level = _normalize_debug(debug)
     numeric_level = _debug_to_level(debug_level)
 
+    # Choose format based on prefix
+    if fmt is None:
+        fmt = DEFAULT_FORMAT_WITH_PREFIX if prefix else DEFAULT_FORMAT
+
     formatter = logging.Formatter(fmt=fmt, datefmt=datefmt)
     handlers: list[logging.Handler] = []
+
+    # Create prefix filter if needed
+    prefix_filter = PrefixFilter(prefix or "") if prefix else None
 
     if stream:
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
         stream_handler.setLevel(numeric_level)
+        if prefix_filter:
+            stream_handler.addFilter(prefix_filter)
         handlers.append(stream_handler)
 
     if log_file:
@@ -123,6 +158,8 @@ def configure_logging(
             file_handler = logging.FileHandler(path)
         file_handler.setFormatter(formatter)
         file_handler.setLevel(numeric_level)
+        if prefix_filter:
+            file_handler.addFilter(prefix_filter)
         handlers.append(file_handler)
 
     root = logging.getLogger()

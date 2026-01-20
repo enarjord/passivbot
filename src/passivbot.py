@@ -462,6 +462,10 @@ class Passivbot:
                     "Unable to parse live.max_concurrent_api_requests=%r; ignoring",
                     max_concurrent,
                 )
+        # Archive fetching: disabled by default for live bots (avoids timeout issues)
+        # Set live.enable_archive_candle_fetch=true to enable if needed
+        archive_enabled = get_optional_live_value(config, "enable_archive_candle_fetch", False)
+        cm_kwargs["archive_enabled"] = bool(archive_enabled)
         self.cm = CandlestickManager(**cm_kwargs)
         # TTL (minutes) for EMA candles on non-traded symbols
         ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")
@@ -517,6 +521,18 @@ class Passivbot:
         self._pnls_shadow_last_comparison_ts = 0
         self._pnls_shadow_comparison_interval_ms = 60_000  # compare every 60 seconds
 
+        # Health tracking for periodic summary
+        self._health_start_ms = utc_ms()
+        self._health_orders_placed = 0
+        self._health_orders_cancelled = 0
+        self._health_fills = 0
+        self._health_pnl = 0.0  # sum of realized PnL from fills
+        self._health_errors = 0
+        self._health_ws_reconnects = 0
+        self._health_rate_limits = 0
+        self._health_last_summary_ms = 0
+        self._health_summary_interval_ms = 15 * 60 * 1000  # 15 minutes
+
     def live_value(self, key: str):
         return require_live_value(self.config, key)
 
@@ -537,22 +553,137 @@ class Passivbot:
             options.update(overrides)
         return options
 
+    def _log_startup_banner(self) -> None:
+        """Log a startup banner with key configuration info."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        user = self.user
+        exchange = self.exchange
+
+        # Determine enabled sides
+        long_enabled = float(self.bot_value("long", "total_wallet_exposure_limit") or 0.0) > 0.0
+        short_enabled = float(self.bot_value("short", "total_wallet_exposure_limit") or 0.0) > 0.0
+        if long_enabled and short_enabled:
+            mode = "LONG + SHORT"
+        elif long_enabled:
+            mode = "LONG only"
+        elif short_enabled:
+            mode = "SHORT only"
+        else:
+            mode = "DISABLED"
+
+        n_pos_long = int(self.bot_value("long", "n_positions") or 0)
+        n_pos_short = int(self.bot_value("short", "n_positions") or 0)
+        n_pos = f"{n_pos_long}L" if long_enabled else ""
+        if short_enabled:
+            n_pos = f"{n_pos}/{n_pos_short}S" if n_pos else f"{n_pos_short}S"
+
+        twel_long = float(self.bot_value("long", "total_wallet_exposure_limit") or 0.0)
+        twel_short = float(self.bot_value("short", "total_wallet_exposure_limit") or 0.0)
+        if long_enabled and short_enabled:
+            twel_str = f"L:{twel_long:.0%} S:{twel_short:.0%}"
+        elif long_enabled:
+            twel_str = f"{twel_long:.0%}"
+        elif short_enabled:
+            twel_str = f"{twel_short:.0%}"
+        else:
+            twel_str = "0%"
+
+        # Build content lines and calculate width dynamically
+        line1 = f"  PASSIVBOT  │  {exchange}:{user}  │  {now}  "
+        line2 = f"  Mode: {mode}  │  Positions: {n_pos}  │  TWEL: {twel_str}  "
+        width = max(len(line1), len(line2), 50)  # minimum 50 chars
+        border = "═" * width
+
+        # Pad lines to match width
+        line1 = line1.ljust(width)
+        line2 = line2.ljust(width)
+
+        logging.info("╔%s╗", border)
+        logging.info("║%s║", line1)
+        logging.info("╠%s╣", border)
+        logging.info("║%s║", line2)
+        logging.info("╚%s╝", border)
+
+    def _format_duration(self, ms: int) -> str:
+        """Format milliseconds as human-readable duration (e.g., '2d5h15m')."""
+        total_seconds = ms // 1000
+        days, remainder = divmod(total_seconds, 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if days > 0:
+            return f"{days}d{hours}h{minutes}m"
+        if hours > 0:
+            return f"{hours}h{minutes}m"
+        if minutes > 0:
+            return f"{minutes}m{seconds}s"
+        return f"{seconds}s"
+
+    def _maybe_log_health_summary(self) -> None:
+        """Log periodic health summary if interval has elapsed."""
+        now_ms = utc_ms()
+        if (now_ms - self._health_last_summary_ms) < self._health_summary_interval_ms:
+            return
+        self._health_last_summary_ms = now_ms
+        self._log_health_summary()
+
+    def _log_health_summary(self) -> None:
+        """Log a health summary with uptime and counters."""
+        now_ms = utc_ms()
+        uptime_ms = now_ms - self._health_start_ms
+        uptime_str = self._format_duration(uptime_ms)
+
+        # Count current positions
+        n_long = 0
+        n_short = 0
+        for symbol, pos_data in self.positions.items():
+            if pos_data.get("long", {}).get("size", 0.0) != 0.0:
+                n_long += 1
+            if pos_data.get("short", {}).get("size", 0.0) != 0.0:
+                n_short += 1
+
+        balance_str = f"{self.balance:.2f} {self.quote}"
+
+        # Build fills string with PnL if fills > 0
+        if self._health_fills > 0:
+            pnl_sign = "+" if self._health_pnl >= 0 else ""
+            fills_str = f"fills={self._health_fills} (pnl={pnl_sign}{self._health_pnl:.2f})"
+        else:
+            fills_str = "fills=0"
+
+        logging.info(
+            "[health] uptime=%s | positions=%d long, %d short | balance=%s | "
+            "orders_placed=%d | orders_cancelled=%d | %s | errors=%d | ws_reconnects=%d | rate_limits=%d",
+            uptime_str,
+            n_long,
+            n_short,
+            balance_str,
+            self._health_orders_placed,
+            self._health_orders_cancelled,
+            fills_str,
+            self._health_errors,
+            self._health_ws_reconnects,
+            self._health_rate_limits,
+        )
+
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
-        logging.info(f"Starting bot {self.exchange}...")
+        self._log_startup_banner()
+        logging.info("[boot] starting bot %s...", self.exchange)
         await format_approved_ignored_coins(self.config, self.user_info["exchange"], quote=self.quote)
         await self.init_markets()
         # Staggered warmup of candles for approved symbols (large sets handled gracefully)
         try:
             await self.warmup_candles_staggered()
         except Exception as e:
-            logging.info(f"warmup skipped due to: {e}")
+            logging.info("[boot] warmup skipped due to: %s", e)
         await asyncio.sleep(1)
         self._log_memory_snapshot()
-        logging.info(f"Starting data maintainers...")
+        logging.info("[boot] starting data maintainers...")
         await self.start_data_maintainers()
 
-        logging.info(f"starting execution loop...")
+        logging.info("[boot] starting execution loop...")
         if not self.debug_mode:
             await self.run_execution_loop()
 
@@ -852,7 +983,7 @@ class Passivbot:
             max_jitter = 30.0
         if max_jitter > 0:
             jitter = random.uniform(0, max_jitter)
-            logging.info(f"warmup jitter: sleeping {jitter:.1f}s (max={max_jitter}s)")
+            logging.info("[boot] warmup jitter: sleeping %.1fs (max=%.0fs)", jitter, max_jitter)
             await asyncio.sleep(jitter)
 
         n = len(symbols)
@@ -1060,6 +1191,8 @@ class Passivbot:
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
                     return res
+                # Periodic health summary
+                self._maybe_log_health_summary()
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
                 sleep_duration = 30
                 for i in range(sleep_duration * 10):
@@ -1067,6 +1200,7 @@ class Passivbot:
                         break
                     await asyncio.sleep(0.1)
             except Exception as e:
+                self._health_errors += 1
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
                 await asyncio.sleep(1.0)
@@ -1076,23 +1210,23 @@ class Passivbot:
             return
         self._shutdown_in_progress = True
         self.stop_signal_received = True
-        logging.info("Shutdown requested; closing background tasks and sessions.")
+        logging.info("[shutdown] shutdown requested; closing background tasks and sessions")
         try:
             self.stop_data_maintainers(verbose=False)
         except Exception as e:
-            logging.error(f"error stopping maintainers during shutdown {e}")
+            logging.error("[shutdown] error stopping maintainers: %s", e)
         await asyncio.sleep(0)
         try:
             if getattr(self, "ccp", None) is not None:
                 await self.ccp.close()
         except Exception as e:
-            logging.error(f"error closing private ccxt session {e}")
+            logging.error("[shutdown] error closing private ccxt session: %s", e)
         try:
             if getattr(self, "cca", None) is not None:
                 await self.cca.close()
         except Exception as e:
-            logging.error(f"error closing public ccxt session {e}")
-        logging.info("Shutdown cleanup complete.")
+            logging.error("[shutdown] error closing public ccxt session: %s", e)
+        logging.info("[shutdown] cleanup complete")
 
     async def update_pos_oos_pnls_ohlcvs(self) -> bool:
         """Refresh positions, open orders, realised PnL, and 1m candles."""
@@ -1195,7 +1329,7 @@ class Passivbot:
             if to_create:
                 print(f"would create {len(to_create)} order{'s' if len(to_create) > 1 else ''}")
         elif self.balance < self.balance_threshold:
-            logging.info(f"Balance too low: {self.balance} {self.quote}. Not creating any orders.")
+            logging.info("[balance] too low: %.2f %s; not creating orders", self.balance, self.quote)
         else:
             # to_create_mod = [x for x in to_create if not order_has_match(x, to_cancel)]
             to_create_mod = []
@@ -1208,14 +1342,16 @@ class Passivbot:
                     )
                 elif delay_time_ms := self.order_was_recently_updated(x):
                     logging.info(
-                        f"matching recent order execution found; will be delayed for up to {delay_time_ms/1000:.1f} secs: {xf}"
+                        "[order] recent execution found; delaying for up to %.1f secs: %s",
+                        delay_time_ms / 1000,
+                        xf,
                     )
                 else:
                     to_create_mod.append(x)
             if self.state_change_detected_by_symbol:
                 logging.info(
-                    "state change during execution; skipping order creation"
-                    f" for {self.state_change_detected_by_symbol} until next cycle"
+                    "[order] state change detected; skipping order creation for %s until next cycle",
+                    self.state_change_detected_by_symbol,
                 )
                 to_create_mod = [
                     x
@@ -1279,6 +1415,7 @@ class Passivbot:
         if to_return:
             for elm in to_return:
                 self.add_new_order(elm, source="POST")
+            self._health_orders_placed += len(to_return)
         return to_return
 
     async def execute_cancellations_parent(self, orders: [dict]) -> [dict]:
@@ -1338,6 +1475,7 @@ class Passivbot:
         if to_return:
             for elm in to_return:
                 self.remove_order(elm, source="POST")
+            self._health_orders_cancelled += len(to_return)
         return to_return
 
     def log_order_action(
@@ -2238,7 +2376,8 @@ class Passivbot:
         try:
             res = await self.fetch_pnls(start_time=start_time, limit=100)
         except RateLimitExceeded:
-            logging.warning("rate limit while fetching pnls; retrying next cycle")
+            self._health_rate_limits += 1
+            logging.warning("[rate] hit rate limit while fetching pnls; retrying next cycle")
             return False
         if res in [None, False]:
             return False
@@ -2254,13 +2393,19 @@ class Passivbot:
         if new_pnls:
             new_income = sum([x["pnl"] for x in new_pnls])
             if new_income != 0.0:
+                pnl_sign = "+" if new_income > 0 else ""
                 logging.info(
-                    f"{len(new_pnls)} new pnl{'s' if len(new_pnls) > 1 else ''} {new_income} {self.quote}"
+                    "[pnl] %d new pnl%s: %s%.4f %s",
+                    len(new_pnls),
+                    "s" if len(new_pnls) > 1 else "",
+                    pnl_sign,
+                    new_income,
+                    self.quote,
                 )
             try:
                 json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
             except Exception as e:
-                logging.error(f"error dumping pnls to {self.pnls_cache_filepath} {e}")
+                logging.error("[pnl] error dumping pnls to %s: %s", self.pnls_cache_filepath, e)
         elif not self.pnls:
             # no fills yet; avoid re-scanning entire lookback on the next cycle
             self._pnls_cursor_ts = max(self.get_exchange_time() - 1000, age_limit)
@@ -2356,6 +2501,10 @@ class Passivbot:
         """Log new fill events. Truncates to summary if > 20 events."""
         if not new_events:
             return
+
+        # Track fills and PnL for health summary
+        self._health_fills += len(new_events)
+        self._health_pnl += sum(ev.pnl for ev in new_events)
 
         if len(new_events) > 20:
             # Truncate to summary
@@ -2474,7 +2623,8 @@ class Passivbot:
             return True
 
         except RateLimitExceeded:
-            logging.warning("[shadow] Rate limit while fetching fill events; retrying next cycle")
+            self._health_rate_limits += 1
+            logging.warning("[rate] hit rate limit while fetching fill events (shadow); retrying next cycle")
             return False
         except Exception as e:
             logging.error("[shadow] Failed to update FillEventsManager: %s", e)
@@ -2697,7 +2847,8 @@ class Passivbot:
             try:
                 fresh = await self.fetch_fill_events(start_time=age_limit)
             except RateLimitExceeded:
-                logging.warning("rate limit while fetching initial fill events; retrying later")
+                self._health_rate_limits += 1
+                logging.warning("[rate] hit rate limit while fetching initial fill events; retrying later")
                 fresh = []
             except Exception as exc:
                 logging.error(f"failed to fetch initial fill events: {exc}")
@@ -2996,7 +3147,8 @@ class Passivbot:
                 limit=fetch_limit,
             )
         except RateLimitExceeded:
-            logging.warning("rate limit while fetching fill events; retrying next cycle")
+            self._health_rate_limits += 1
+            logging.warning("[rate] hit rate limit while fetching fill events; retrying next cycle")
             return False
         except NotImplementedError:
             logging.error("fetch_fill_events not implemented for this exchange")
@@ -3453,7 +3605,8 @@ class Passivbot:
                 await self.update_positions_and_balance()
             return True
         except RateLimitExceeded:
-            logging.warning("rate limit while fetching open orders; retrying next cycle")
+            self._health_rate_limits += 1
+            logging.warning("[rate] hit rate limit while fetching open orders; retrying next cycle")
             return False
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
@@ -5268,9 +5421,29 @@ class Passivbot:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
             return executed
         except Exception as e:
-            logging.error(f"error cancelling order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
+            err_str = str(e).lower()
+            # Detect "order already filled/cancelled" errors - not harmful, just a race condition
+            already_gone_indicators = [
+                "100004",  # KuCoin: "The order cannot be canceled"
+                "order does not exist",
+                "order not found",
+                "already filled",
+                "already cancelled",
+                "already canceled",
+                "-2011",  # Binance: "Unknown order"
+                "51400",  # OKX: "Order does not exist"
+                "order_not_found",
+            ]
+            if any(ind in err_str for ind in already_gone_indicators):
+                logging.info(
+                    "[order] cancel skipped: %s %s - order likely already filled or cancelled",
+                    order.get("symbol", "?"),
+                    order.get("id", "?")[:12],
+                )
+            else:
+                logging.error(f"error cancelling order {order} {e}")
+                print_async_exception(executed)
+                traceback.print_exc()
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
@@ -5465,6 +5638,9 @@ async def main():
     )
 
     user_info = load_user_info(require_live_value(config, "user"))
+    # Reconfigure logging with exchange prefix now that we know the exchange
+    exchange_prefix = user_info["exchange"]
+    configure_logging(debug=effective_log_level, prefix=exchange_prefix)
     await load_markets(user_info["exchange"], verbose=True)
 
     config = parse_overrides(config, verbose=True)

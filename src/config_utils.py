@@ -20,10 +20,11 @@ from config_transform import ConfigTransformTracker, record_transform
 
 
 def _log_config(verbose: bool, level: int, message: str, *args) -> None:
+    prefixed_message = "[config] " + message
     if verbose or level >= logging.WARNING:
-        logging.log(level, message, *args)
+        logging.log(level, prefixed_message, *args)
     else:
-        logging.debug(message, *args)
+        logging.debug(prefixed_message, *args)
 
 
 CURRENCY_METRICS = {

@@ -2,6 +2,7 @@ from exchanges.ccxt_bot import CCXTBot
 from passivbot import logging, clip_by_timestamp
 from uuid import uuid4
 import asyncio
+import ccxt
 from collections import defaultdict
 from utils import ts_to_date, utc_ms
 from config_utils import require_live_value
@@ -465,12 +466,25 @@ class BybitBot(CCXTBot):
                 )
             )
         for symbol in symbols:
-            res = None
             to_print = ""
-            res = await coros_to_call_lev[symbol]
-            to_print += f" set leverage {res} "
-            res = await coros_to_call_margin_mode[symbol]
-            to_print += f"set cross mode {res}"
+            # Handle leverage setting - ignore "not modified" errors (retCode 110043)
+            try:
+                res = await coros_to_call_lev[symbol]
+                to_print += f" set leverage {res} "
+            except ccxt.BadRequest as e:
+                if "110043" in str(e) or "not modified" in str(e).lower():
+                    logging.debug(f"{symbol}: leverage already set (not modified)")
+                else:
+                    logging.warning(f"{symbol}: leverage set failed: {e}")
+            # Handle margin mode setting - ignore "not modified" errors
+            try:
+                res = await coros_to_call_margin_mode[symbol]
+                to_print += f"set cross mode {res}"
+            except ccxt.BadRequest as e:
+                if "110026" in str(e) or "not modified" in str(e).lower():
+                    logging.debug(f"{symbol}: margin mode already set (not modified)")
+                else:
+                    logging.warning(f"{symbol}: margin mode set failed: {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 

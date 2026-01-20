@@ -378,6 +378,7 @@ class CCXTBot(Passivbot):
                 normalized = [self._normalize_order_update(o) for o in raw_orders]
                 self.handle_order_update(normalized)
             except Exception as e:
+                self._health_ws_reconnects += 1
                 logging.error(f"[ws] exception in watch_orders: {e}")
                 traceback.print_exc()
                 await asyncio.sleep(1)

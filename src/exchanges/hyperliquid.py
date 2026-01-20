@@ -89,6 +89,7 @@ class HyperliquidBot(CCXTBot):
                     res[i]["qty"] = res[i]["amount"]
                 self.handle_order_update(res)
             except Exception as e:
+                self._health_ws_reconnects += 1
                 logging.error(f"exception watch_orders {res} {e}")
                 traceback.print_exc()
                 await asyncio.sleep(1)

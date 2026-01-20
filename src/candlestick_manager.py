@@ -318,6 +318,9 @@ class CandlestickManager:
         # Optional global concurrency limiter for remote ccxt calls
         max_concurrent_requests: int | None = None,
         lock_timeout_seconds: float | None = None,
+        # Archive fetching: if False, only use ccxt REST API even if archives are available.
+        # Useful for live bots where archives may timeout; backtester enables by default.
+        archive_enabled: bool = True,
     ) -> None:
         self.exchange = exchange
         # If no explicit exchange_name provided, infer from ccxt instance id
@@ -330,6 +333,8 @@ class CandlestickManager:
         self.overlap_candles = int(overlap_candles)
         self.max_memory_candles_per_symbol = int(max_memory_candles_per_symbol)
         self.max_disk_candles_per_symbol_per_tf = int(max_disk_candles_per_symbol_per_tf)
+        # Archive fetching: if False, only use ccxt REST API
+        self.archive_enabled = bool(archive_enabled)
         # Debug levels: 0=warnings, 1=network-only, 2=full debug, 3=trace
         try:
             dbg = int(float(debug))
@@ -343,6 +348,10 @@ class CandlestickManager:
         self._progress_last_log: Dict[Tuple[str, str, str], float] = {}
         self._warning_last_log: Dict[str, float] = {}  # throttle repeated warnings
         self._warning_throttle_seconds: float = 300.0  # 5 minutes between repeated warnings
+        # Summary tracking for strict gap warnings (logged once per 15 min instead of per-event)
+        self._strict_gaps_summary: Dict[str, int] = {}  # symbol -> missing count
+        self._strict_gaps_summary_last_log: float = 0.0
+        self._strict_gaps_summary_interval: float = 900.0  # 15 minutes
         self._remote_fetch_callback = remote_fetch_callback
         # Cache of legacy shard paths per (exchange, symbol, tf)
         self._legacy_shard_paths_cache: Dict[Tuple[str, str, str], Dict[str, str]] = {}
@@ -365,6 +374,12 @@ class CandlestickManager:
         )
         self._tf_range_cache_cap = 8
         self._step_warning_keys: set[Tuple[str, str, str]] = set()
+        # Rate-limiting for zero-candle synthesis warnings (at most once per minute per symbol)
+        self._synth_candle_log_last: Dict[str, float] = {}  # symbol -> last log time (unix sec)
+        self._synth_candle_log_throttle_sec: float = 60.0  # minimum seconds between logs per symbol
+        # Track which timestamps were synthesized (per symbol) for EMA recomputation detection
+        # When real data arrives for a previously synthetic timestamp, EMAs should be recomputed
+        self._synthetic_timestamps: Dict[str, set[int]] = {}  # symbol -> set of synthetic ts (ms)
         # Timeout parameters for cross-process fetch locks
         self._lock_timeout_seconds = float(_LOCK_TIMEOUT_SECONDS)
         if lock_timeout_seconds is not None:
@@ -678,6 +693,31 @@ class CandlestickManager:
             return
         self._warning_last_log[throttle_key] = now
         self._log("warning", event, **fields)
+
+    def _record_strict_gap(self, symbol: str, missing_count: int) -> None:
+        """Accumulate strict gap counts for summary logging."""
+        self._strict_gaps_summary[symbol] = self._strict_gaps_summary.get(symbol, 0) + missing_count
+
+    def _log_strict_gaps_summary(self) -> None:
+        """Log accumulated strict gap summary if any, throttled to once per 15 min."""
+        if not self._strict_gaps_summary:
+            return
+        now = time.monotonic()
+        if (now - self._strict_gaps_summary_last_log) < self._strict_gaps_summary_interval:
+            return
+        self._strict_gaps_summary_last_log = now
+        summary = self._strict_gaps_summary
+        total = sum(summary.values())
+        symbols = ", ".join(f"{s}:{c}" for s, c in sorted(summary.items(), key=lambda x: -x[1])[:5])
+        if len(summary) > 5:
+            symbols += f", +{len(summary) - 5} more"
+        self.log.warning(
+            "[candle] strict mode gaps: %d missing candles across %d symbols (%s)",
+            total,
+            len(summary),
+            symbols,
+        )
+        self._strict_gaps_summary.clear()
 
     def _emit_remote_fetch(self, payload: Dict[str, Any]) -> None:
         cb = getattr(self, "_remote_fetch_callback", None)
@@ -1558,8 +1598,65 @@ class CandlestickManager:
                     last_refresh_ms=last_refresh_ms,
                     last_final_ts=int(merged_cache[-1]["ts"]),
                 )
+            # Check if real data has replaced any previously synthetic timestamps
+            # If so, mark that EMAs should be recomputed for this symbol
+            self._check_synthetic_replacement(symbol, arr)
 
         self._save_range_incremental(symbol, arr, timeframe=tf_norm, defer_index=defer_index)
+
+    def _check_synthetic_replacement(self, symbol: str, real_data: np.ndarray) -> None:
+        """Check if real data replaces previously synthetic timestamps and invalidate EMA cache if so."""
+        if symbol not in self._synthetic_timestamps or not self._synthetic_timestamps[symbol]:
+            return
+        if real_data.size == 0:
+            return
+
+        real_ts_set = set(real_data["ts"].astype(np.int64).tolist())
+        replaced = self._synthetic_timestamps[symbol] & real_ts_set
+        if replaced:
+            # Real data arrived for previously synthetic timestamps - invalidate EMA cache
+            self._synthetic_timestamps[symbol] -= replaced
+            self._invalidate_ema_cache(symbol)
+            self.log.info(
+                "[candle] %s: real data replaced %d synthetic candle%s, EMA cache invalidated",
+                symbol,
+                len(replaced),
+                "s" if len(replaced) > 1 else "",
+            )
+
+    def _invalidate_ema_cache(self, symbol: str) -> None:
+        """Invalidate all cached EMA values for a symbol, forcing recomputation."""
+        if symbol in self._ema_cache:
+            del self._ema_cache[symbol]
+
+    def needs_ema_recompute(self, symbol: str) -> bool:
+        """Check if EMAs for a symbol should be recomputed due to synthetic data replacement.
+
+        The bot can call this method to check if real data has replaced synthetic data
+        since the last EMA computation, indicating EMAs should be recomputed.
+
+        Returns True if:
+        - EMA cache was invalidated due to synthetic replacement
+        - Symbol has no cached EMAs (will be computed fresh anyway)
+
+        Returns False if:
+        - Symbol has valid cached EMAs computed from real data
+        """
+        # If there's no EMA cache for this symbol, it will be computed fresh
+        if symbol not in self._ema_cache or not self._ema_cache[symbol]:
+            return True
+        # If the cache exists, it's valid (invalidation clears it)
+        return False
+
+    def clear_synthetic_tracking(self, symbol: Optional[str] = None) -> None:
+        """Clear synthetic timestamp tracking for a symbol or all symbols.
+
+        Useful after warmup completes or when the bot knows all real data has been fetched.
+        """
+        if symbol is None:
+            self._synthetic_timestamps.clear()
+        elif symbol in self._synthetic_timestamps:
+            del self._synthetic_timestamps[symbol]
 
     def _merge_overwrite(self, existing: np.ndarray, new: np.ndarray) -> np.ndarray:
         """Merge two candle arrays by ts, preferring values from `new` on conflict."""
@@ -2348,6 +2445,7 @@ class CandlestickManager:
         strict: bool = False,
         fill_leading_gaps: bool = False,
         assume_sorted: bool = False,
+        symbol: Optional[str] = None,
     ) -> np.ndarray:
         """Return a new array with zero-candles synthesized for missing minutes.
 
@@ -2435,13 +2533,10 @@ class CandlestickManager:
                 # fallback: keep behavior safe (no warning rather than exploding)
                 missing_count = 0
             if missing_count:
-                self._throttled_warning(
-                    "standardize_gaps_strict_missing",  # throttle key
-                    "standardize_gaps_strict_missing",
-                    missing=int(missing_count),
-                    start_ts=effective_lo,
-                    end_ts=hi,
-                )
+                # Accumulate for summary logging instead of per-event warnings
+                sym_key = symbol or "unknown"
+                self._record_strict_gap(sym_key, int(missing_count))
+                self._log_strict_gaps_summary()
             return a[i0:i1]
 
         out_rows = []
@@ -2464,6 +2559,8 @@ class CandlestickManager:
                 prev_close = float(a[0]["c"])
             # If no candle before, prev_close stays None until we hit real data
 
+        synthesized_count = 0
+        synthesized_timestamps: List[int] = []
         for t in expected:
             if t in pos:
                 row = a[pos[t]]
@@ -2475,6 +2572,48 @@ class CandlestickManager:
                     continue
                 # Synthesize a zero-candle using previous close (internal gaps only)
                 out_rows.append((int(t), prev_close, prev_close, prev_close, prev_close, 0.0))
+                synthesized_timestamps.append(int(t))
+                synthesized_count += 1
+
+        # Track synthetic timestamps for EMA recomputation detection
+        if symbol and synthesized_timestamps:
+            if symbol not in self._synthetic_timestamps:
+                self._synthetic_timestamps[symbol] = set()
+            self._synthetic_timestamps[symbol].update(synthesized_timestamps)
+            # Limit tracked timestamps to last 7 days to avoid unbounded growth
+            cutoff = _utc_now_ms() - 7 * 24 * 60 * ONE_MIN_MS
+            self._synthetic_timestamps[symbol] = {
+                ts for ts in self._synthetic_timestamps[symbol] if ts > cutoff
+            }
+
+        # Log when zero-candles were synthesized (rate-limited: at most once per minute per symbol)
+        if synthesized_count > 0 and symbol:
+            now_sec = time.time()
+            last_log = self._synth_candle_log_last.get(symbol, 0.0)
+            if (now_sec - last_log) >= self._synth_candle_log_throttle_sec:
+                self._synth_candle_log_last[symbol] = now_sec
+                # Format timestamp range for human readability
+                from datetime import datetime, timezone
+                first_ts = min(synthesized_timestamps)
+                last_ts = max(synthesized_timestamps)
+                first_dt = datetime.fromtimestamp(first_ts / 1000, tz=timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M"
+                )
+                if synthesized_count == 1:
+                    ts_info = first_dt
+                else:
+                    last_dt = datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M"
+                    )
+                    ts_info = f"{first_dt} to {last_dt}"
+                self.log.warning(
+                    "[candle] %s: synthesized %d zero-candle%s at %s (no trades from exchange) using prev_close=%.6f",
+                    symbol,
+                    synthesized_count,
+                    "s" if synthesized_count > 1 else "",
+                    ts_info,
+                    prev_close if prev_close is not None else 0.0,
+                )
 
         if not out_rows:
             return np.empty((0,), dtype=CANDLE_DTYPE)
@@ -2483,6 +2622,9 @@ class CandlestickManager:
     # ----- External archives (historical) -----
 
     def _archive_supported(self) -> bool:
+        """Check if archive fetching is supported and enabled for this exchange."""
+        if not self.archive_enabled:
+            return False
         try:
             exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
         except Exception:
@@ -3432,8 +3574,60 @@ class CandlestickManager:
         # For historical ranges, if we don't have shards for all days yet, fetch
         # exactly the range and persist shards for future calls.
         end_finalized = latest_finalized
+
+        # Large span prefetch: If the request spans more than 2 days and is not fully
+        # covered, trigger archive prefetch for the historical portion even if end_ts
+        # touches the present. This fixes warmup requests that span 31 days but were
+        # previously skipping archive fetch because end_ts == latest_finalized.
+        span_minutes = (end_ts - start_ts) // ONE_MIN_MS
+        large_span_threshold = 2 * 24 * 60  # 2 days in minutes
+        if (
+            self.exchange is not None
+            and span_minutes > large_span_threshold
+            and not fully_covered
+            and self._archive_supported()
+        ):
+            # Prefetch archives for the historical portion (up to 2 days ago, since
+            # archives typically lag by 1-2 days)
+            archive_end_ts = end_finalized - 2 * 24 * 60 * ONE_MIN_MS
+            if start_ts < archive_end_ts:
+                self._log(
+                    "info",
+                    "large_span_archive_prefetch",
+                    symbol=symbol,
+                    span_minutes=int(span_minutes),
+                    start_ts=start_ts,
+                    archive_end_ts=archive_end_ts,
+                )
+                await self._prefetch_archives_for_range(symbol, start_ts, archive_end_ts)
+                # Reload from disk after archive fetch
+                try:
+                    self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
+                except Exception:
+                    pass
+                arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
+                fully_covered = _is_fully_covered(sub, start_ts, end_ts)
+
         # Treat ranges ending exactly at the latest finalized minute as present-touching
+        # UNLESS the span is large (>2 days) and not fully covered - then treat as historical
+        # to trigger gap filling via CCXT. This fixes warmup requests that span 31 days but
+        # were skipping gap detection because end_ts == latest_finalized.
         historical = end_ts < end_finalized
+        if (
+            not historical
+            and span_minutes > large_span_threshold
+            and not fully_covered
+            and self.exchange is not None
+        ):
+            self._log(
+                "debug",
+                "large_span_needs_gap_fill",
+                symbol=symbol,
+                span_minutes=int(span_minutes),
+                fully_covered=fully_covered,
+            )
+            historical = True
         if self.exchange is not None and historical:
             # If the requested historical window is not fully covered in memory,
             # attempt to fetch unknown missing spans, regardless of shard presence.
@@ -3942,10 +4136,12 @@ class CandlestickManager:
             strict=strict,
             fill_leading_gaps=fill_leading_gaps,
             assume_sorted=True,
+            symbol=symbol,
         )
 
-        # Log accumulated persistent gap summary (throttled to once per minute)
+        # Log accumulated gap summaries (throttled)
         self._log_persistent_gap_summary()
+        self._log_strict_gaps_summary()
 
         return result
 
