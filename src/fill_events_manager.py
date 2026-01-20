@@ -57,6 +57,8 @@ _DEFAULT_RATE_LIMITS: Dict[str, Dict[str, int]] = {
     "hyperliquid": {"fetch_my_trades": 120, "default": 120},
     "gateio": {"fetch_closed_orders": 120, "default": 120},
     "kucoin": {"fetch_my_trades": 120, "fetch_positions_history": 120, "fetch_order": 60, "default": 120},
+    # OKX: /fills = 60 req/2s, /fills-history = 10 req/2s (conservative estimates)
+    "okx": {"fetch_my_trades": 1800, "fills_history": 300, "default": 300},
 }
 
 # Window for rate limit tracking (ms)
@@ -3025,6 +3027,298 @@ class KucoinFetcher(BaseFetcher):
 # ---------------------------------------------------------------------------
 
 
+class OkxFetcher(BaseFetcher):
+    """Fetches fill events from OKX using fills and fills-history endpoints.
+
+    OKX provides all required fields in a single endpoint:
+    - tradeId: unique fill identifier
+    - fillPnl: realized PnL
+    - posSide: position side (long/short/net)
+    - clOrdId: client order ID (passivbot order type)
+    - fillSz: fill quantity
+    - fillPx: fill price
+
+    Endpoints:
+    - /api/v5/trade/fills: last 3 days (higher rate limit)
+    - /api/v5/trade/fills-history: last 3 months (lower rate limit)
+
+    Pagination: Returns newest first; use 'after' param with billId for backward pagination.
+    """
+
+    # 3 days in ms - threshold for choosing between /fills and /fills-history
+    _THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000
+
+    def __init__(
+        self,
+        api,
+        *,
+        trade_limit: int = 100,
+        inst_type: str = "SWAP",
+    ) -> None:
+        self.api = api
+        self.trade_limit = max(1, min(100, trade_limit))  # OKX max is 100
+        self.inst_type = inst_type
+
+    async def fetch(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        until_ms = until_ms or now_ms
+
+        # Determine which endpoint(s) to use based on time range
+        three_days_ago = now_ms - self._THREE_DAYS_MS
+
+        collected: Dict[str, Dict[str, object]] = {}
+        max_fetches = 400
+        fetch_count = 0
+
+        logger.info(
+            "OkxFetcher.fetch: start (since=%s, until=%s)",
+            _format_ms(since_ms),
+            _format_ms(until_ms),
+        )
+
+        # If we need data older than 3 days, start with fills-history
+        if since_ms is not None and since_ms < three_days_ago:
+            # Use fills-history for older data
+            fetch_count, collected = await self._fetch_from_endpoint(
+                endpoint="history",
+                since_ms=since_ms,
+                until_ms=min(until_ms, three_days_ago),
+                collected=collected,
+                max_fetches=max_fetches,
+                start_fetch_count=fetch_count,
+                on_batch=on_batch,
+                detail_cache=detail_cache,
+            )
+
+        # Use /fills for recent data (last 3 days)
+        recent_since = max(since_ms or 0, three_days_ago) if since_ms else three_days_ago
+        if until_ms > three_days_ago:
+            fetch_count, collected = await self._fetch_from_endpoint(
+                endpoint="recent",
+                since_ms=recent_since if since_ms else None,
+                until_ms=until_ms,
+                collected=collected,
+                max_fetches=max_fetches,
+                start_fetch_count=fetch_count,
+                on_batch=on_batch,
+                detail_cache=detail_cache,
+            )
+
+        # Sort and filter results
+        events = sorted(collected.values(), key=lambda ev: ev["timestamp"])
+
+        # Apply time filters
+        if since_ms is not None:
+            events = [ev for ev in events if ev["timestamp"] >= since_ms]
+        if until_ms is not None:
+            events = [ev for ev in events if ev["timestamp"] <= until_ms]
+
+        # Annotate positions
+        events = _coalesce_events(events)
+        annotate_positions_inplace(events)
+
+        # Apply pb_order_type from cache or derive from clOrdId
+        for event in events:
+            cache_entry = detail_cache.get(event["id"])
+            if cache_entry:
+                event["client_order_id"], event["pb_order_type"] = cache_entry
+            elif event["client_order_id"]:
+                event["pb_order_type"] = custom_id_to_snake(event["client_order_id"])
+            else:
+                event["pb_order_type"] = "unknown"
+            if not event["pb_order_type"]:
+                event["pb_order_type"] = "unknown"
+
+        logger.info(
+            "OkxFetcher.fetch: done (events=%d, fetches=%d)",
+            len(events),
+            fetch_count,
+        )
+        return events
+
+    async def _fetch_from_endpoint(
+        self,
+        endpoint: str,
+        since_ms: Optional[int],
+        until_ms: int,
+        collected: Dict[str, Dict[str, object]],
+        max_fetches: int,
+        start_fetch_count: int,
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]],
+        detail_cache: Dict[str, Tuple[str, str]],
+    ) -> Tuple[int, Dict[str, Dict[str, object]]]:
+        """Fetch fills from either /fills (recent) or /fills-history (history) endpoint."""
+        fetch_count = start_fetch_count
+        after_cursor: Optional[str] = None
+
+        endpoint_name = "fills" if endpoint == "recent" else "fills-history"
+        logger.debug(
+            "OkxFetcher: using /%s endpoint (since=%s, until=%s)",
+            endpoint_name,
+            _format_ms(since_ms),
+            _format_ms(until_ms),
+        )
+
+        while fetch_count < max_fetches:
+            params: Dict[str, object] = {
+                "instType": self.inst_type,
+                "limit": str(self.trade_limit),
+            }
+
+            # Time windowing
+            if since_ms is not None:
+                params["begin"] = str(since_ms)
+            if until_ms is not None:
+                params["end"] = str(until_ms)
+
+            # Pagination cursor
+            if after_cursor:
+                params["after"] = after_cursor
+
+            try:
+                if endpoint == "recent":
+                    response = await self.api.private_get_trade_fills(params)
+                else:
+                    response = await self.api.private_get_trade_fills_history(params)
+            except RateLimitExceeded as exc:
+                logger.debug("OkxFetcher: rate limit hit, sleeping (%s)", exc)
+                await asyncio.sleep(2.0)
+                continue
+
+            fetch_count += 1
+            fills = response.get("data", [])
+
+            if fetch_count > 1:
+                logger.info(
+                    "OkxFetcher.fetch: /%s #%d after=%s size=%d",
+                    endpoint_name,
+                    fetch_count,
+                    after_cursor,
+                    len(fills),
+                )
+
+            if not fills:
+                break
+
+            batch_events = []
+            oldest_ts = None
+            for raw in fills:
+                event = self._normalize_fill(raw)
+                event_id = event["id"]
+                if not event_id:
+                    continue
+
+                # Check time bounds
+                ts = event["timestamp"]
+                if since_ms is not None and ts < since_ms:
+                    continue
+                if until_ms is not None and ts > until_ms:
+                    continue
+
+                # Track oldest for boundary check
+                if oldest_ts is None or ts < oldest_ts:
+                    oldest_ts = ts
+
+                # Enrich from cache
+                if event_id in detail_cache:
+                    event["client_order_id"], event["pb_order_type"] = detail_cache[event_id]
+
+                collected[event_id] = event
+                batch_events.append(event)
+
+            # Callback for incremental processing
+            if on_batch and batch_events:
+                on_batch(batch_events)
+
+            # Check if we've reached the start boundary
+            if since_ms is not None and oldest_ts is not None and oldest_ts <= since_ms:
+                logger.debug("OkxFetcher: reached since_ms boundary, stopping")
+                break
+
+            # Short batch means no more data
+            if len(fills) < self.trade_limit:
+                break
+
+            # Get pagination cursor for next batch (use billId from oldest fill)
+            last_fill = fills[-1]
+            after_cursor = last_fill.get("billId")
+            if not after_cursor:
+                break
+
+        return fetch_count, collected
+
+    @staticmethod
+    def _normalize_fill(raw: Dict[str, object]) -> Dict[str, object]:
+        """Normalize a raw OKX fill to the canonical fill event format."""
+        trade_id = str(raw.get("tradeId") or "")
+        order_id = str(raw.get("ordId") or "")
+        timestamp = int(raw.get("ts") or raw.get("fillTime") or 0)
+        inst_id = str(raw.get("instId") or "")
+
+        # Convert instId (e.g., "BTC-USDT-SWAP") to CCXT symbol format
+        symbol = inst_id
+        if "-SWAP" in inst_id:
+            parts = inst_id.replace("-SWAP", "").split("-")
+            if len(parts) == 2:
+                base, quote = parts
+                symbol = f"{base}/{quote}:{quote}"
+        elif "-" in inst_id:
+            parts = inst_id.split("-")
+            if len(parts) >= 2:
+                base, quote = parts[0], parts[1]
+                symbol = f"{base}/{quote}:{quote}"
+
+        side = str(raw.get("side") or "").lower()
+        qty = abs(float(raw.get("fillSz") or 0.0))
+        price = float(raw.get("fillPx") or 0.0)
+        pnl = float(raw.get("fillPnl") or 0.0)
+
+        # Position side handling (supports both hedge and net modes)
+        pos_side_raw = str(raw.get("posSide") or "").lower()
+        if pos_side_raw == "net":
+            # Net mode: infer position side from side + pnl
+            # If closing (has PnL), opposite of trade side was the position
+            if pnl != 0:
+                position_side = "short" if side == "buy" else "long"
+            else:
+                # Opening: same as trade side
+                position_side = "long" if side == "buy" else "short"
+        elif pos_side_raw in ("long", "short"):
+            position_side = pos_side_raw
+        else:
+            # Fallback
+            position_side = "long" if side == "buy" else "short"
+
+        client_order_id = str(raw.get("clOrdId") or "")
+        fee_ccy = str(raw.get("feeCcy") or "")
+        fee_amt = float(raw.get("fee") or 0.0)
+        fee = {"currency": fee_ccy, "cost": abs(fee_amt)} if fee_ccy else None
+
+        return {
+            "id": trade_id,
+            "order_id": order_id,
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp) if timestamp else "",
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": pnl,
+            "fees": fee,
+            "pb_order_type": "",
+            "position_side": position_side,
+            "client_order_id": client_order_id,
+            "raw": [{"source": "okx_fills", "data": raw}],
+            "c_mult": 1.0,
+        }
+
+
 def custom_id_to_snake(client_oid: str) -> str:
     """Placeholder import shim; real implementation lives in passivbot."""
     try:
@@ -3058,6 +3352,7 @@ EXCHANGE_BOT_CLASSES: Dict[str, Tuple[str, str]] = {
     "hyperliquid": ("exchanges.hyperliquid", "HyperliquidBot"),
     "gateio": ("exchanges.gateio", "GateIOBot"),
     "kucoin": ("exchanges.kucoin", "KucoinBot"),
+    "okx": ("exchanges.okx", "OKXBot"),
 }
 
 
@@ -3177,6 +3472,8 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         )
     if exchange == "kucoin":
         return KucoinFetcher(api=bot.cca)
+    if exchange == "okx":
+        return OkxFetcher(api=bot.cca)
     raise ValueError(f"Unsupported exchange '{exchange}' for fill events CLI")
 
 
