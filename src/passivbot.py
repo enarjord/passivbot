@@ -580,12 +580,20 @@ class Passivbot:
         if short_enabled:
             exposure = f"{exposure}/{twel_short:.0%}" if exposure else f"{twel_short:.0%}"
 
-        width = 62
+        # Build content lines and calculate width dynamically
+        line1 = f"  PASSIVBOT  │  {exchange}:{user}  │  {now}  "
+        line2 = f"  Mode: {mode}  │  Positions: {n_pos}  │  Exposure: {exposure}  "
+        width = max(len(line1), len(line2), 50)  # minimum 50 chars
         border = "═" * width
+
+        # Pad lines to match width
+        line1 = line1.ljust(width)
+        line2 = line2.ljust(width)
+
         logging.info("╔%s╗", border)
-        logging.info("║  PASSIVBOT  │  %s:%s  │  %s  ║", exchange, user, now)
+        logging.info("║%s║", line1)
         logging.info("╠%s╣", border)
-        logging.info("║  Mode: %-12s │  Positions: %-6s │  Exposure: %-8s ║", mode, n_pos, exposure)
+        logging.info("║%s║", line2)
         logging.info("╚%s╝", border)
 
     def _format_duration(self, ms: int) -> str:

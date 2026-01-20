@@ -369,6 +369,12 @@ class CandlestickManager:
         )
         self._tf_range_cache_cap = 8
         self._step_warning_keys: set[Tuple[str, str, str]] = set()
+        # Rate-limiting for zero-candle synthesis warnings (at most once per minute per symbol)
+        self._synth_candle_log_last: Dict[str, float] = {}  # symbol -> last log time (unix sec)
+        self._synth_candle_log_throttle_sec: float = 60.0  # minimum seconds between logs per symbol
+        # Track which timestamps were synthesized (per symbol) for EMA recomputation detection
+        # When real data arrives for a previously synthetic timestamp, EMAs should be recomputed
+        self._synthetic_timestamps: Dict[str, set[int]] = {}  # symbol -> set of synthetic ts (ms)
         # Timeout parameters for cross-process fetch locks
         self._lock_timeout_seconds = float(_LOCK_TIMEOUT_SECONDS)
         if lock_timeout_seconds is not None:
@@ -1587,8 +1593,65 @@ class CandlestickManager:
                     last_refresh_ms=last_refresh_ms,
                     last_final_ts=int(merged_cache[-1]["ts"]),
                 )
+            # Check if real data has replaced any previously synthetic timestamps
+            # If so, mark that EMAs should be recomputed for this symbol
+            self._check_synthetic_replacement(symbol, arr)
 
         self._save_range_incremental(symbol, arr, timeframe=tf_norm, defer_index=defer_index)
+
+    def _check_synthetic_replacement(self, symbol: str, real_data: np.ndarray) -> None:
+        """Check if real data replaces previously synthetic timestamps and invalidate EMA cache if so."""
+        if symbol not in self._synthetic_timestamps or not self._synthetic_timestamps[symbol]:
+            return
+        if real_data.size == 0:
+            return
+
+        real_ts_set = set(real_data["ts"].astype(np.int64).tolist())
+        replaced = self._synthetic_timestamps[symbol] & real_ts_set
+        if replaced:
+            # Real data arrived for previously synthetic timestamps - invalidate EMA cache
+            self._synthetic_timestamps[symbol] -= replaced
+            self._invalidate_ema_cache(symbol)
+            self._log(
+                "info",
+                "synthetic_replaced_by_real",
+                symbol=symbol,
+                replaced_count=len(replaced),
+            )
+
+    def _invalidate_ema_cache(self, symbol: str) -> None:
+        """Invalidate all cached EMA values for a symbol, forcing recomputation."""
+        if symbol in self._ema_cache:
+            del self._ema_cache[symbol]
+
+    def needs_ema_recompute(self, symbol: str) -> bool:
+        """Check if EMAs for a symbol should be recomputed due to synthetic data replacement.
+
+        The bot can call this method to check if real data has replaced synthetic data
+        since the last EMA computation, indicating EMAs should be recomputed.
+
+        Returns True if:
+        - EMA cache was invalidated due to synthetic replacement
+        - Symbol has no cached EMAs (will be computed fresh anyway)
+
+        Returns False if:
+        - Symbol has valid cached EMAs computed from real data
+        """
+        # If there's no EMA cache for this symbol, it will be computed fresh
+        if symbol not in self._ema_cache or not self._ema_cache[symbol]:
+            return True
+        # If the cache exists, it's valid (invalidation clears it)
+        return False
+
+    def clear_synthetic_tracking(self, symbol: Optional[str] = None) -> None:
+        """Clear synthetic timestamp tracking for a symbol or all symbols.
+
+        Useful after warmup completes or when the bot knows all real data has been fetched.
+        """
+        if symbol is None:
+            self._synthetic_timestamps.clear()
+        elif symbol in self._synthetic_timestamps:
+            del self._synthetic_timestamps[symbol]
 
     def _merge_overwrite(self, existing: np.ndarray, new: np.ndarray) -> np.ndarray:
         """Merge two candle arrays by ts, preferring values from `new` on conflict."""
@@ -2492,6 +2555,7 @@ class CandlestickManager:
             # If no candle before, prev_close stays None until we hit real data
 
         synthesized_count = 0
+        synthesized_timestamps: List[int] = []
         for t in expected:
             if t in pos:
                 row = a[pos[t]]
@@ -2503,17 +2567,48 @@ class CandlestickManager:
                     continue
                 # Synthesize a zero-candle using previous close (internal gaps only)
                 out_rows.append((int(t), prev_close, prev_close, prev_close, prev_close, 0.0))
+                synthesized_timestamps.append(int(t))
                 synthesized_count += 1
 
-        # Log when zero-candles were synthesized (helps diagnose exchange data gaps)
+        # Track synthetic timestamps for EMA recomputation detection
+        if symbol and synthesized_timestamps:
+            if symbol not in self._synthetic_timestamps:
+                self._synthetic_timestamps[symbol] = set()
+            self._synthetic_timestamps[symbol].update(synthesized_timestamps)
+            # Limit tracked timestamps to last 7 days to avoid unbounded growth
+            cutoff = _utc_now_ms() - 7 * 24 * 60 * ONE_MIN_MS
+            self._synthetic_timestamps[symbol] = {
+                ts for ts in self._synthetic_timestamps[symbol] if ts > cutoff
+            }
+
+        # Log when zero-candles were synthesized (rate-limited: at most once per minute per symbol)
         if synthesized_count > 0 and symbol:
-            self.log.warning(
-                "[candle] %s: synthesized %d zero-candle%s (no trades from exchange) using prev_close=%.6f",
-                symbol,
-                synthesized_count,
-                "s" if synthesized_count > 1 else "",
-                prev_close if prev_close is not None else 0.0,
-            )
+            now_sec = time.time()
+            last_log = self._synth_candle_log_last.get(symbol, 0.0)
+            if (now_sec - last_log) >= self._synth_candle_log_throttle_sec:
+                self._synth_candle_log_last[symbol] = now_sec
+                # Format timestamp range for human readability
+                from datetime import datetime, timezone
+                first_ts = min(synthesized_timestamps)
+                last_ts = max(synthesized_timestamps)
+                first_dt = datetime.fromtimestamp(first_ts / 1000, tz=timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M"
+                )
+                if synthesized_count == 1:
+                    ts_info = first_dt
+                else:
+                    last_dt = datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M"
+                    )
+                    ts_info = f"{first_dt} to {last_dt}"
+                self.log.warning(
+                    "[candle] %s: synthesized %d zero-candle%s at %s (no trades from exchange) using prev_close=%.6f",
+                    symbol,
+                    synthesized_count,
+                    "s" if synthesized_count > 1 else "",
+                    ts_info,
+                    prev_close if prev_close is not None else 0.0,
+                )
 
         if not out_rows:
             return np.empty((0,), dtype=CANDLE_DTYPE)

@@ -6,10 +6,20 @@ All notable user-facing changes will be documented in this file.
 
 ### Fixed
 - One-way mode now respects disabled sides when choosing initial entry side, preventing a disabled side from blocking entries.
+- Startup banner now dynamically calculates width to prevent misaligned borders.
 - Windows compatibility: cache folder names now replace `:` with `_` on Windows or when `WINDOWS_COMPATIBILITY=1` env var is set (#547, thanks @FelixJongleur42). **Note:** Existing Windows caches will be orphaned and re-downloaded.
 - Pareto dashboard: fixed JavaScript callback errors when switching between tabs (#550, thanks @646826).
 
+### Changed
+- Config modification logs now prefixed with `[config]` for easier filtering (e.g., `[config] changed live.user bybit_01 -> gateio_01`).
+- Zero-candle synthesis logs are now rate-limited to at most once per minute per symbol, reducing log spam.
+- Zero-candle logs now include human-readable UTC timestamps showing which candles were synthesized (e.g., `synthesized 3 zero-candles at 2026-01-19T22:15 to 2026-01-19T22:17`).
+- Synthetic candles are now tracked at runtime; when real data arrives for a previously-synthetic timestamp, the EMA cache is automatically invalidated and will be recomputed on next cycle.
+
 ### Added
+- `openpyxl` added to `requirements-live.txt` (required for Bitget archive XLSX parsing).
+- `CandlestickManager.needs_ema_recompute(symbol)`: check if EMAs should be recomputed due to synthetic→real data replacement.
+- `CandlestickManager.clear_synthetic_tracking(symbol)`: clear synthetic timestamp tracking after warmup completes.
 - `live.warmup_jitter_seconds` (default 30): random delay before warmup to prevent API rate limit storms when multiple bots start simultaneously.
 - `live.max_concurrent_api_requests` (default null): optional global concurrency limit for CCXT API calls via CandlestickManager's network semaphore.
 - `backtest.maker_fee_override` (default null): optional backtest/optimizer maker fee override (part-per-one) to replace exchange-derived fees.
