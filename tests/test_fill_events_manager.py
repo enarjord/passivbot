@@ -343,6 +343,389 @@ async def test_binance_fetcher_includes_trade_entries(monkeypatch):
     assert event["pb_order_type"] == custom_id_to_snake("x-entry-test-0x0007")
 
 
+@pytest.mark.asyncio
+async def test_binance_fetcher_income_only_events(monkeypatch):
+    """Test that income events without matching trades are still included."""
+    income_events = [
+        {
+            "id": "income-only-1",
+            "timestamp": 1_700_000_000_000,
+            "datetime": "2023-11-01T00:00:00Z",
+            "symbol": "SOL/USDT:USDT",
+            "side": "",
+            "qty": 0.0,
+            "price": 0.0,
+            "pnl": 5.0,
+            "fees": None,
+            "pb_order_type": "",
+            "position_side": "long",
+            "client_order_id": "",
+        }
+    ]
+
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: [],
+        open_orders_provider=lambda: [],
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return [dict(ev) for ev in income_events]
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        return []  # No matching trades
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+
+    detail_cache: Dict[str, Tuple[str, str]] = {}
+    events = await fetcher.fetch(
+        since_ms=income_events[0]["timestamp"] - 1,
+        until_ms=income_events[0]["timestamp"] + 1,
+        detail_cache=detail_cache,
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["id"] == "income-only-1"
+    assert event["pnl"] == pytest.approx(5.0)
+    assert event["position_side"] == "long"
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_time_bounds_filtering(monkeypatch):
+    """Test that events outside time bounds are filtered."""
+    income_events = [
+        {
+            "id": "before-range",
+            "timestamp": 1_700_000_000_000,
+            "datetime": "",
+            "symbol": "BTC/USDT:USDT",
+            "side": "sell",
+            "qty": 0.0,
+            "price": 0.0,
+            "pnl": 1.0,
+            "fees": None,
+            "pb_order_type": "",
+            "position_side": "long",
+            "client_order_id": "",
+        },
+        {
+            "id": "in-range",
+            "timestamp": 1_700_000_500_000,
+            "datetime": "",
+            "symbol": "BTC/USDT:USDT",
+            "side": "sell",
+            "qty": 0.0,
+            "price": 0.0,
+            "pnl": 2.0,
+            "fees": None,
+            "pb_order_type": "",
+            "position_side": "long",
+            "client_order_id": "",
+        },
+        {
+            "id": "after-range",
+            "timestamp": 1_700_001_000_000,
+            "datetime": "",
+            "symbol": "BTC/USDT:USDT",
+            "side": "sell",
+            "qty": 0.0,
+            "price": 0.0,
+            "pnl": 3.0,
+            "fees": None,
+            "pb_order_type": "",
+            "position_side": "long",
+            "client_order_id": "",
+        },
+    ]
+
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: [],
+        open_orders_provider=lambda: [],
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return [dict(ev) for ev in income_events]
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+
+    events = await fetcher.fetch(
+        since_ms=1_700_000_100_000,
+        until_ms=1_700_000_600_000,
+        detail_cache={},
+    )
+
+    assert len(events) == 1
+    assert events[0]["id"] == "in-range"
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_position_side_from_trade(monkeypatch):
+    """Test position side is captured from trade info."""
+    income_events = [
+        {
+            "id": "trade-ps-1",
+            "timestamp": 1_700_000_000_000,
+            "datetime": "",
+            "symbol": "ETH/USDT:USDT",
+            "side": "sell",
+            "qty": 0.0,
+            "price": 0.0,
+            "pnl": 10.0,
+            "fees": None,
+            "pb_order_type": "",
+            "position_side": "unknown",  # Income doesn't have position side
+            "client_order_id": "",
+        }
+    ]
+    trades = [
+        {
+            "id": "trade-ps-1",
+            "timestamp": 1_700_000_000_000,
+            "symbol": "ETH/USDT:USDT",
+            "side": "sell",
+            "amount": 1.0,
+            "price": 2000.0,
+            "fee": {"currency": "USDT", "cost": 0.01},
+            "order": "order-123",
+            "info": {"positionSide": "SHORT"},  # Trade has position side
+        }
+    ]
+
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: [],
+        open_orders_provider=lambda: [],
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return [dict(ev) for ev in income_events]
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        return list(trades if symbol == "ETH/USDT:USDT" else [])
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+
+    events = await fetcher.fetch(
+        since_ms=income_events[0]["timestamp"] - 1,
+        until_ms=income_events[0]["timestamp"] + 1,
+        detail_cache={},
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    # Position side should be taken from trade, normalized to lowercase
+    assert event["position_side"] == "short"
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_fees_from_trade(monkeypatch):
+    """Test fees are captured from trades."""
+    trades = [
+        {
+            "id": "fee-trade-1",
+            "timestamp": 1_700_000_000_000,
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "amount": 0.01,
+            "price": 40000.0,
+            "fee": {"currency": "BNB", "cost": 0.0001},
+            "order": "order-456",
+            "info": {"positionSide": "LONG", "realizedPnl": "0"},
+        }
+    ]
+
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: ["BTC/USDT:USDT"],
+        open_orders_provider=lambda: [],
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return []
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        return list(trades if symbol == "BTC/USDT:USDT" else [])
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+
+    events = await fetcher.fetch(
+        since_ms=trades[0]["timestamp"] - 1,
+        until_ms=trades[0]["timestamp"] + 1,
+        detail_cache={},
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["fees"] is not None
+    assert event["fees"]["cost"] == pytest.approx(0.0001)
+    assert event["fees"]["currency"] == "BNB"
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_symbol_pool_from_providers(monkeypatch):
+    """Test symbol pool is collected from positions, open orders, and income."""
+    position_symbols = ["BTC/USDT:USDT"]
+    order_symbols = ["ETH/USDT:USDT"]
+    income_symbol = "SOL/USDT:USDT"
+
+    income_events = [
+        {
+            "id": "income-sol-1",
+            "timestamp": 1_700_000_000_000,
+            "datetime": "",
+            "symbol": income_symbol,
+            "side": "",
+            "qty": 0.0,
+            "price": 0.0,
+            "pnl": 1.0,
+            "fees": None,
+            "pb_order_type": "",
+            "position_side": "long",
+            "client_order_id": "",
+        }
+    ]
+
+    fetched_symbols: List[str] = []
+
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: position_symbols,
+        open_orders_provider=lambda: order_symbols,
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return [dict(ev) for ev in income_events]
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        fetched_symbols.append(symbol)
+        return []
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+
+    await fetcher.fetch(
+        since_ms=income_events[0]["timestamp"] - 1,
+        until_ms=income_events[0]["timestamp"] + 1,
+        detail_cache={},
+    )
+
+    # All three sources should be queried for trades
+    assert "BTC/USDT:USDT" in fetched_symbols  # From positions
+    assert "ETH/USDT:USDT" in fetched_symbols  # From open orders
+    assert income_symbol in fetched_symbols    # From income events
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_detail_cache_usage(monkeypatch):
+    """Test detail cache is used and populated."""
+    trades = [
+        {
+            "id": "cached-trade-1",
+            "timestamp": 1_700_000_000_000,
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "amount": 0.1,
+            "price": 50000.0,
+            "order": "order-789",
+            "info": {"positionSide": "LONG"},
+        }
+    ]
+
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: ["BTC/USDT:USDT"],
+        open_orders_provider=lambda: [],
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return []
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        return list(trades if symbol == "BTC/USDT:USDT" else [])
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+
+    # Pre-populated cache
+    detail_cache: Dict[str, Tuple[str, str]] = {
+        "cached-trade-1": ("cached-client-id", "entry_initial_normal_long"),
+    }
+
+    events = await fetcher.fetch(
+        since_ms=trades[0]["timestamp"] - 1,
+        until_ms=trades[0]["timestamp"] + 1,
+        detail_cache=detail_cache,
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["client_order_id"] == "cached-client-id"
+    assert event["pb_order_type"] == "entry_initial_normal_long"
+
+
 # ---------------------------------------------------------------------------
 # FillEvent tests
 # ---------------------------------------------------------------------------
