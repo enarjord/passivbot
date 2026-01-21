@@ -3666,6 +3666,16 @@ class Passivbot:
         if not changed:
             return
 
+        # Pre-calculate total WE per side for TWEL% display
+        total_we_by_pside = {"long": 0.0, "short": 0.0}
+        for pos in positions_new:
+            sym = pos["symbol"]
+            ps = pos["position_side"]
+            sz = pos.get("size", 0.0)
+            px = pos.get("price", 0.0)
+            if sz != 0 and self.balance > 0 and sym in self.c_mults:
+                total_we_by_pside[ps] += pbr.qty_to_cost(sz, px, self.c_mults[sym]) / self.balance
+
         # Create PrettyTable for aligned output
         table = PrettyTable()
         table.border = False
@@ -3728,10 +3738,13 @@ class Passivbot:
                 upnl = 0.0
 
             coin = symbol_to_coin(symbol, verbose=False) or symbol
-            # Format WEL percentages: "| 100% WEL, 25% WELe |"
+            # Format WEL percentages with padding for alignment
             wel_pct = round(WEL_ratio * 100)
             wele_pct = round(WELe_ratio * 100)
-            wel_str = f"| {wel_pct}% WEL, {wele_pct}% WELe |"
+            # TWEL% = total WE for this side / TWEL
+            twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+            twel_pct = round(total_we_by_pside[pside] / twel * 100) if twel > 0.0 else 0
+            wel_str = f"| {wel_pct:3d}% WEL, {wele_pct:3d}% WELe, {twel_pct:3d}% TWEL |"
             table.add_row(
                 [
                     action + " ",
