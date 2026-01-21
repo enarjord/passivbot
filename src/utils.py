@@ -492,7 +492,8 @@ async def load_markets(
     consistency with other cache paths (pnls, ohlcv, fill_events).
     """
     # Prefer cc.id when a ccxt instance is supplied, otherwise use the provided exchange string.
-    ex = (getattr(cc, "id", None) or exchange or "").lower()
+    # Denormalize to use canonical form for cache paths (e.g., "binance" not "binanceusdm")
+    ex = denormalize_exchange_name(getattr(cc, "id", None) or exchange or "")
     markets_path = os.path.join("caches", ex, "markets.json")
 
     # Try cache first
@@ -914,7 +915,8 @@ def coin_to_symbol(coin, exchange, quote=None):
     # caches coin_to_symbol_map in memory and reloads if file changes
     if coin == "":
         return ""
-    ex = (exchange or "").lower()
+    # Denormalize to use canonical form for cache paths (e.g., "binance" not "binanceusdm")
+    ex = denormalize_exchange_name(exchange or "")
     quote = get_quote(ex, quote)
     coin_sanitized = symbol_to_coin(coin)
     fallback = f"{coin_sanitized}/{quote}:{quote}"

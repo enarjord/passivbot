@@ -520,10 +520,12 @@ class OHLCVManager:
         self.start_ts = date_to_ts(self.start_date)
         self.end_ts = date_to_ts(self.end_date)
         self.cc = cc
+        # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
+        cache_exchange = denormalize_exchange_name(self.exchange)
         self.cache_filepaths = {
-            "markets": os.path.join("caches", self.exchange, "markets.json"),
-            "ohlcvs": os.path.join("historical_data", f"ohlcvs_{self.exchange}"),
-            "first_timestamps": os.path.join("caches", self.exchange, "first_timestamps.json"),
+            "markets": os.path.join("caches", cache_exchange, "markets.json"),
+            "ohlcvs": os.path.join("historical_data", f"ohlcvs_{cache_exchange}"),
+            "first_timestamps": os.path.join("caches", cache_exchange, "first_timestamps.json"),
         }
         self.markets = None
         self.verbose = verbose
