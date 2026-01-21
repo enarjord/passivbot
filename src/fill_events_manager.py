@@ -2505,7 +2505,8 @@ class HyperliquidFetcher(BaseFetcher):
 class GateioFetcher(BaseFetcher):
     """Fetches fill events for Gate.io using trades + order PnL.
 
-    Uses fetch_my_trades for fill-level data (fees, exact prices) and
+    Uses the my_trades_timerange endpoint for fill-level data (fees, exact prices)
+    since the standard my_trades endpoint has a 7-day hard limit. Uses
     fetch_closed_orders for PnL. Distributes order-level PnL proportionally
     across fills when an order has multiple trades.
     """
@@ -2515,9 +2516,11 @@ class GateioFetcher(BaseFetcher):
         api,
         *,
         trade_limit: int = 100,
+        now_func: Optional[Callable[[], int]] = None,
     ) -> None:
         self.api = api
         self.trade_limit = max(1, min(100, trade_limit))
+        self._now_func = now_func or (lambda: int(datetime.now(tz=timezone.utc).timestamp() * 1000))
 
     async def fetch(
         self,
@@ -2573,58 +2576,131 @@ class GateioFetcher(BaseFetcher):
     async def _fetch_trades(
         self, since_ms: Optional[int], until_ms: Optional[int]
     ) -> List[Dict[str, object]]:
-        """Fetch trades using offset-based pagination."""
+        """Fetch trades using the my_trades_timerange endpoint.
+
+        The standard my_trades endpoint has a ~7 day hard limit, so we use
+        the timerange endpoint which allows fetching historical data by
+        specifying from/to timestamps.
+        """
+        now_ms = self._now_func()
+        # Default to 30 days if no since_ms provided
+        default_lookback_ms = 30 * 24 * 60 * 60 * 1000
+        from_s = int((since_ms or (now_ms - default_lookback_ms)) / 1000)
+        to_s = int((until_ms or now_ms) / 1000)
+
         collected: Dict[str, Dict[str, object]] = {}
         max_fetches = 400
         fetch_count = 0
-        params: Dict[str, object] = {"limit": self.trade_limit, "offset": 0}
+        offset = 0
+        consecutive_rate_limits = 0
 
         while fetch_count < max_fetches:
             fetch_count += 1
             try:
-                batch = await self.api.fetch_my_trades(params=params)
+                # Use the timerange endpoint directly via CCXT's private API
+                batch = await self.api.private_futures_get_settle_my_trades_timerange({
+                    "settle": "usdt",
+                    "from": from_s,
+                    "to": to_s,
+                    "limit": self.trade_limit,
+                    "offset": offset,
+                })
+                consecutive_rate_limits = 0
             except RateLimitExceeded as exc:
-                logger.debug("GateioFetcher._fetch_trades: rate-limited (%s); sleeping", exc)
-                await asyncio.sleep(1.0)
+                consecutive_rate_limits += 1
+                sleep_time = min(2 ** consecutive_rate_limits, 30)
+                logger.debug(
+                    "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs",
+                    exc, sleep_time
+                )
+                await asyncio.sleep(sleep_time)
                 continue
+            except Exception as exc:
+                # Check if it's a rate limit error in disguise
+                if "TOO_MANY_REQUESTS" in str(exc):
+                    consecutive_rate_limits += 1
+                    sleep_time = min(2 ** consecutive_rate_limits, 30)
+                    logger.debug(
+                        "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs",
+                        exc, sleep_time
+                    )
+                    await asyncio.sleep(sleep_time)
+                    continue
+                raise
 
             if fetch_count > 1:
                 logger.info(
                     "GateioFetcher._fetch_trades: fetch #%d offset=%s size=%d",
                     fetch_count,
-                    params.get("offset"),
+                    offset,
                     len(batch) if batch else 0,
                 )
 
             if not batch:
                 break
 
-            for trade in batch:
-                ts = int(trade.get("timestamp", 0))
-                # Skip trades outside time bounds
+            for raw_trade in batch:
+                # Convert raw Gate.io response to CCXT-like format
+                trade = self._normalize_raw_trade(raw_trade)
+                ts = trade.get("timestamp", 0)
+                # Skip trades outside time bounds (safety check)
                 if since_ms is not None and ts < since_ms:
                     continue
                 if until_ms is not None and ts > until_ms:
                     continue
-                trade_id = str(trade.get("id") or trade.get("info", {}).get("trade_id") or "")
+                trade_id = str(trade.get("id") or "")
                 if trade_id:
                     collected[trade_id] = trade
 
             if len(batch) < self.trade_limit:
                 break
 
-            # Check if we've gone past the time bounds
-            if since_ms is not None and collected:
-                oldest = min(t.get("timestamp", 0) for t in collected.values())
-                if oldest <= since_ms:
-                    break
-
-            params["offset"] = int(params.get("offset", 0)) + self.trade_limit
+            offset += self.trade_limit
+            # Small delay to avoid rate limits
+            await asyncio.sleep(0.15)
 
         if fetch_count >= max_fetches:
             logger.warning("GateioFetcher._fetch_trades: reached pagination cap (%d)", max_fetches)
 
         return list(collected.values())
+
+    def _normalize_raw_trade(self, raw: Dict[str, object]) -> Dict[str, object]:
+        """Convert raw Gate.io my_trades_timerange response to CCXT-like format.
+
+        Raw format from my_trades_timerange:
+            price, text, fee, create_time (float seconds), point_fee,
+            trade_id, contract, role, order_id, size, close_size, biz_info, amend_text
+
+        CCXT-like format expected by _normalize_trade:
+            id, order, timestamp, symbol, side, amount, price, fee, info
+        """
+        # Parse timestamp from float seconds to ms
+        create_time = raw.get("create_time", 0)
+        timestamp_ms = int(float(create_time) * 1000) if create_time else 0
+
+        # Get contract and convert to CCXT symbol format (e.g., BNB_USDT -> BNB/USDT:USDT)
+        contract = str(raw.get("contract") or "")
+        symbol = contract.replace("_", "/") + ":USDT" if contract else ""
+
+        # Determine side from size sign (positive = buy, negative = sell)
+        size = float(raw.get("size") or 0)
+        side = "buy" if size >= 0 else "sell"
+
+        # Build fee structure
+        fee_cost = float(raw.get("fee") or 0)
+        fee = {"cost": fee_cost, "currency": "USDT"} if fee_cost else None
+
+        return {
+            "id": str(raw.get("trade_id") or raw.get("id") or ""),
+            "order": str(raw.get("order_id") or ""),
+            "timestamp": timestamp_ms,
+            "symbol": symbol,
+            "side": side,
+            "amount": abs(size),
+            "price": float(raw.get("price") or 0),
+            "fee": fee,
+            "info": raw,  # Keep raw data for _normalize_trade to access
+        }
 
     async def _fetch_orders_for_pnl(
         self, order_ids: set[str]
@@ -2760,7 +2836,7 @@ class GateioFetcher(BaseFetcher):
             "pb_order_type": pb_type or "unknown",
             "position_side": position_side,
             "client_order_id": client_order_id,
-            "raw": [{"source": "fetch_my_trades", "data": dict(trade)}],
+            "raw": [{"source": "my_trades_timerange", "data": dict(trade)}],
         }
 
     @staticmethod

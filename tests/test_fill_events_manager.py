@@ -2444,6 +2444,39 @@ class _FakeGateioAPI:
             return []
         return self._trades_batches.pop(0)
 
+    async def private_futures_get_settle_my_trades_timerange(self, params: Dict[str, Any] = None):
+        """Return trades in raw Gate.io format for the timerange endpoint."""
+        self.trade_calls.append(dict(params or {}))
+        if not self._trades_batches:
+            return []
+        ccxt_trades = self._trades_batches.pop(0)
+        # Convert CCXT-like format to raw Gate.io format
+        raw_trades = []
+        for t in ccxt_trades:
+            info = t.get("info", {})
+            # Convert ms timestamp to seconds (float)
+            ts_s = t.get("timestamp", 0) / 1000.0
+            # Get size with sign from side
+            size = float(info.get("size") or t.get("amount") or 0)
+            if t.get("side") == "sell":
+                size = -abs(size)
+            # Convert symbol to contract format (BTC/USDT:USDT -> BTC_USDT)
+            symbol = t.get("symbol", "")
+            contract = symbol.replace("/", "_").replace(":USDT", "") if symbol else ""
+            raw_trades.append({
+                "trade_id": t.get("id") or info.get("trade_id"),
+                "order_id": t.get("order") or info.get("order_id"),
+                "create_time": str(ts_s),
+                "contract": contract,
+                "size": size,
+                "price": float(t.get("price") or info.get("price") or 0),
+                "fee": float(t.get("fee", {}).get("cost", 0)) if t.get("fee") else 0,
+                "text": info.get("text", ""),
+                "close_size": float(info.get("close_size", 0)),
+                "role": "maker",
+            })
+        return raw_trades
+
     async def fetch_closed_orders(self, params: Dict[str, Any] = None):
         self.order_calls.append(dict(params or {}))
         if not self._orders_batches:
