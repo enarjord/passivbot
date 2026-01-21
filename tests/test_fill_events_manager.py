@@ -866,6 +866,236 @@ async def test_bybit_fetcher_marks_unknown_for_manual():
 
 
 @pytest.mark.asyncio
+async def test_bybit_fetcher_symbol_level_fallback():
+    """Test symbol-level PnL fallback for unknown trades without matching order IDs.
+
+    The symbol-level fallback distributes remaining PnL proportionally to unknown
+    trades. The remaining qty is calculated as:
+    (position_closed_qty - known_order_qty) + unknown_trade_qty
+
+    For this test:
+    - Position closedSize=1.0, PnL=25.0
+    - Trade qty=1.0 with unknown order ID
+    - remaining_qty = (1.0 - 0) + 1.0 = 2.0
+    - Trade gets: 25.0 * (1.0 / 2.0) = 12.5
+    """
+    base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    # Trade with order ID not in positions (unknown trade)
+    trades_batches = [
+        [
+            {
+                "id": "trade-orphan",
+                "timestamp": base_ts,
+                "amount": 1.0,
+                "price": 100.0,
+                "side": "sell",
+                "symbol": "BTC/USDT:USDT",
+                "info": {
+                    "orderId": "order-orphan",  # No matching position for this order
+                    "closedSize": "1.0",
+                },
+            }
+        ]
+    ]
+    # Position with different order ID but same symbol
+    positions_batches = [
+        [
+            {
+                "symbol": "BTC/USDT:USDT",
+                "realizedPnl": "25.0",
+                "timestamp": base_ts + 10,
+                "info": {
+                    "orderId": "order-other",  # Different order ID
+                    "closedSize": "1.0",
+                },
+            }
+        ]
+    ]
+
+    api = _FakeBybitAPI(trades_batches, positions_batches)
+
+    fetcher = BybitFetcher(api)
+    events = await fetcher.fetch(
+        since_ms=base_ts - 1_000,
+        until_ms=base_ts + 1_000,
+        detail_cache={},
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    # Symbol-level fallback distributes PnL proportionally
+    # remaining_qty = 2.0 (1.0 from position + 1.0 from trade)
+    # trade gets 25.0 * (1.0 / 2.0) = 12.5
+    assert event["pnl"] == pytest.approx(12.5)
+
+
+@pytest.mark.asyncio
+async def test_bybit_fetcher_position_side_from_closed_size():
+    """Test position side is inferred from side + closedSize."""
+    base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    trades_batches = [
+        [
+            # Entry long (buy, closedSize=0)
+            {
+                "id": "trade-entry-long",
+                "timestamp": base_ts,
+                "amount": 1.0,
+                "price": 100.0,
+                "side": "buy",
+                "symbol": "BTC/USDT:USDT",
+                "info": {
+                    "orderId": "order-1",
+                    "closedSize": "0",
+                },
+            },
+            # Close long (sell, closedSize>0)
+            {
+                "id": "trade-close-long",
+                "timestamp": base_ts + 100,
+                "amount": 1.0,
+                "price": 110.0,
+                "side": "sell",
+                "symbol": "BTC/USDT:USDT",
+                "info": {
+                    "orderId": "order-2",
+                    "closedSize": "1.0",
+                },
+            },
+            # Entry short (sell, closedSize=0)
+            {
+                "id": "trade-entry-short",
+                "timestamp": base_ts + 200,
+                "amount": 1.0,
+                "price": 105.0,
+                "side": "sell",
+                "symbol": "ETH/USDT:USDT",
+                "info": {
+                    "orderId": "order-3",
+                    "closedSize": "0",
+                },
+            },
+            # Close short (buy, closedSize>0)
+            {
+                "id": "trade-close-short",
+                "timestamp": base_ts + 300,
+                "amount": 1.0,
+                "price": 100.0,
+                "side": "buy",
+                "symbol": "ETH/USDT:USDT",
+                "info": {
+                    "orderId": "order-4",
+                    "closedSize": "1.0",
+                },
+            },
+        ]
+    ]
+    positions_batches: List[List[Dict[str, Any]]] = [[]]
+
+    api = _FakeBybitAPI(trades_batches, positions_batches)
+
+    fetcher = BybitFetcher(api)
+    events = await fetcher.fetch(
+        since_ms=base_ts - 1_000,
+        until_ms=base_ts + 1_000,
+        detail_cache={},
+    )
+
+    events_by_id = {ev["id"]: ev for ev in events}
+
+    assert events_by_id["trade-entry-long"]["position_side"] == "long"
+    assert events_by_id["trade-close-long"]["position_side"] == "long"
+    assert events_by_id["trade-entry-short"]["position_side"] == "short"
+    assert events_by_id["trade-close-short"]["position_side"] == "short"
+
+
+@pytest.mark.asyncio
+async def test_bybit_fetcher_empty_batches():
+    """Test handling when trades or positions are empty."""
+    base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    # Empty trades, has positions
+    api1 = _FakeBybitAPI([[]], [[{"symbol": "BTC/USDT:USDT", "realizedPnl": "10.0", "timestamp": base_ts, "info": {"orderId": "o1"}}]])
+    fetcher1 = BybitFetcher(api1)
+    events1 = await fetcher1.fetch(since_ms=base_ts - 1000, until_ms=base_ts + 1000, detail_cache={})
+    assert len(events1) == 0  # No trades means no events
+
+    # Has trades, empty positions
+    api2 = _FakeBybitAPI(
+        [[{"id": "t1", "timestamp": base_ts, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {"orderId": "o1"}}]],
+        [[]],
+    )
+    fetcher2 = BybitFetcher(api2)
+    events2 = await fetcher2.fetch(since_ms=base_ts - 1000, until_ms=base_ts + 1000, detail_cache={})
+    assert len(events2) == 1
+    assert events2[0]["pnl"] == pytest.approx(0.0)  # No position PnL to assign
+
+
+@pytest.mark.asyncio
+async def test_bybit_fetcher_time_bounds_filtering():
+    """Test that events outside time bounds are filtered."""
+    base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    trades_batches = [
+        [
+            {"id": "trade-before", "timestamp": base_ts - 5000, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {}},
+            {"id": "trade-in-range", "timestamp": base_ts, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {}},
+            {"id": "trade-after", "timestamp": base_ts + 5000, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {}},
+        ]
+    ]
+    positions_batches: List[List[Dict[str, Any]]] = [[]]
+
+    api = _FakeBybitAPI(trades_batches, positions_batches)
+
+    fetcher = BybitFetcher(api)
+    events = await fetcher.fetch(
+        since_ms=base_ts - 1000,
+        until_ms=base_ts + 1000,
+        detail_cache={},
+    )
+
+    assert len(events) == 1
+    assert events[0]["id"] == "trade-in-range"
+
+
+@pytest.mark.asyncio
+async def test_bybit_fetcher_fees_captured():
+    """Test that fees are captured from trades."""
+    base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    trades_batches = [
+        [
+            {
+                "id": "trade-with-fee",
+                "timestamp": base_ts,
+                "amount": 1.0,
+                "price": 50000.0,
+                "side": "buy",
+                "symbol": "BTC/USDT:USDT",
+                "fee": {"currency": "USDT", "cost": 0.05},
+                "info": {"orderId": "order-1"},
+            }
+        ]
+    ]
+    positions_batches: List[List[Dict[str, Any]]] = [[]]
+
+    api = _FakeBybitAPI(trades_batches, positions_batches)
+
+    fetcher = BybitFetcher(api)
+    events = await fetcher.fetch(
+        since_ms=base_ts - 1000,
+        until_ms=base_ts + 1000,
+        detail_cache={},
+    )
+
+    assert len(events) == 1
+    assert events[0]["fees"] is not None
+    assert events[0]["fees"]["cost"] == pytest.approx(0.05)
+    assert events[0]["fees"]["currency"] == "USDT"
+
+
+@pytest.mark.asyncio
 async def test_hyperliquid_fetcher_basic(monkeypatch):
     base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
     trades_batches = [
