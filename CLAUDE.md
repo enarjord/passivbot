@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**IMPORTANT:** Also read and follow `docs/ai/passivbot_agent_principles.yaml` for detailed conventions on terminology, error handling, testing, and design principles.
+
 ## Overview
 
 Passivbot is a cryptocurrency trading bot for perpetual futures markets. It uses a contrarian market-making strategy inspired by Martingale betting, written in Python for orchestration and Rust for performance-critical components (backtesting, order calculations, analysis).
@@ -202,7 +204,7 @@ python3 -m jupyter lab
 
 ### Important Conventions
 
-**From `passivbot_agent_principles.yaml`:**
+**See `docs/ai/passivbot_agent_principles.yaml` for the full list.** Key points:
 
 - **Position side** (long/short) → `[position_side, pos_side, pside, PositionSide, PosSide, Pside]`
 - **Order side** (buy/sell) → `[side, order_side, Side, OrderSide]`
