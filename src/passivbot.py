@@ -3697,7 +3697,9 @@ class Passivbot:
             wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
             allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
             effective_wel = wel * (1.0 + max(0.0, allowance_pct))
-            WE_ratio = wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0
+            # WEL% = ratio against base WEL, WELe% = ratio against effective WEL (with excess allowance)
+            WEL_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
+            WELe_ratio = wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0
 
             last_price = await self.cm.get_current_close(symbol, max_age_ms=60_000)
             try:
@@ -3726,6 +3728,10 @@ class Passivbot:
                 upnl = 0.0
 
             coin = symbol_to_coin(symbol, verbose=False) or symbol
+            # Format WEL percentages: "| 100% WEL, 25% WELe |"
+            wel_pct = round(WEL_ratio * 100)
+            wele_pct = round(WELe_ratio * 100)
+            wel_str = f"| {wel_pct}% WEL, {wele_pct}% WELe |"
             table.add_row(
                 [
                     action + " ",
@@ -3740,8 +3746,8 @@ class Passivbot:
                     round_dynamic(new["price"], rd),
                     " WE: ",
                     pbr.round_dynamic(wallet_exposure, 3),
-                    " WE ratio: ",
-                    round(WE_ratio, 3),
+                    " ",
+                    wel_str,
                     " PA dist: ",
                     round(pprice_diff, 4),
                     " upnl: ",
