@@ -2503,7 +2503,12 @@ class HyperliquidFetcher(BaseFetcher):
 
 
 class GateioFetcher(BaseFetcher):
-    """Fetches fill events via ccxt.fetch_closed_orders for Gate.io."""
+    """Fetches fill events for Gate.io using trades + order PnL.
+
+    Uses fetch_my_trades for fill-level data (fees, exact prices) and
+    fetch_closed_orders for PnL. Distributes order-level PnL proportionally
+    across fills when an order has multiple trades.
+    """
 
     def __init__(
         self,
@@ -2512,7 +2517,7 @@ class GateioFetcher(BaseFetcher):
         trade_limit: int = 100,
     ) -> None:
         self.api = api
-        self.trade_limit = max(1, trade_limit)
+        self.trade_limit = max(1, min(100, trade_limit))
 
     async def fetch(
         self,
@@ -2521,112 +2526,241 @@ class GateioFetcher(BaseFetcher):
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
-        params: Dict[str, object] = {
-            "status": "finished",
-            "limit": self.trade_limit,
-            "offset": 0,
-        }
+        logger.info(
+            "GateioFetcher.fetch: start (since=%s, until=%s)",
+            _format_ms(since_ms),
+            _format_ms(until_ms),
+        )
 
+        # Step 1: Fetch trades (fill-level data with fees)
+        trades = await self._fetch_trades(since_ms, until_ms)
+        if not trades:
+            logger.info("GateioFetcher.fetch: no trades found")
+            return []
+
+        # Step 2: Collect unique order IDs
+        order_ids: set[str] = set()
+        for t in trades:
+            oid = str(t.get("order") or t.get("info", {}).get("order_id") or "")
+            if oid:
+                order_ids.add(oid)
+
+        # Step 3: Fetch closed orders for PnL
+        orders_by_id = await self._fetch_orders_for_pnl(order_ids)
+
+        # Step 4: Merge trades with order PnL
+        events = self._merge_trades_with_orders(trades, orders_by_id, detail_cache)
+
+        # Filter by time bounds
+        if since_ms is not None:
+            events = [ev for ev in events if ev["timestamp"] >= since_ms]
+        if until_ms is not None:
+            events = [ev for ev in events if ev["timestamp"] <= until_ms]
+
+        ordered = sorted(events, key=lambda ev: ev["timestamp"])
+
+        if on_batch and ordered:
+            on_batch(ordered)
+
+        logger.info(
+            "GateioFetcher.fetch: done (events=%d, trades=%d, orders=%d)",
+            len(ordered),
+            len(trades),
+            len(orders_by_id),
+        )
+        return ordered
+
+    async def _fetch_trades(
+        self, since_ms: Optional[int], until_ms: Optional[int]
+    ) -> List[Dict[str, object]]:
+        """Fetch trades using offset-based pagination."""
         collected: Dict[str, Dict[str, object]] = {}
         max_fetches = 400
         fetch_count = 0
+        params: Dict[str, object] = {"limit": self.trade_limit, "offset": 0}
 
-        while True:
-            new_key = _check_pagination_progress(
-                None,
-                dict(params, _page=fetch_count),
-                "GateioFetcher.fetch",
-            )
-            if new_key is None:
-                break
+        while fetch_count < max_fetches:
             fetch_count += 1
             try:
-                orders = await self.api.fetch_closed_orders(params=params)
-            except RateLimitExceeded as exc:  # pragma: no cover - live API
-                logger.debug("GateioFetcher.fetch: rate-limited (%s); sleeping", exc)
+                batch = await self.api.fetch_my_trades(params=params)
+            except RateLimitExceeded as exc:
+                logger.debug("GateioFetcher._fetch_trades: rate-limited (%s); sleeping", exc)
                 await asyncio.sleep(1.0)
                 continue
+
             if fetch_count > 1:
                 logger.info(
-                    "GateioFetcher.fetch: fetch #%d offset=%s size=%d",
+                    "GateioFetcher._fetch_trades: fetch #%d offset=%s size=%d",
                     fetch_count,
                     params.get("offset"),
-                    len(orders) if orders else 0,
+                    len(batch) if batch else 0,
                 )
-            if not orders:
+
+            if not batch:
                 break
-            for order in orders:
-                event = self._normalize_order(order)
-                ts = event["timestamp"]
+
+            for trade in batch:
+                ts = int(trade.get("timestamp", 0))
+                # Skip trades outside time bounds
                 if since_ms is not None and ts < since_ms:
                     continue
                 if until_ms is not None and ts > until_ms:
                     continue
-                collected[event["id"]] = event
-            if on_batch:
-                on_batch(list(collected.values()))
-            if len(orders) < self.trade_limit:
+                trade_id = str(trade.get("id") or trade.get("info", {}).get("trade_id") or "")
+                if trade_id:
+                    collected[trade_id] = trade
+
+            if len(batch) < self.trade_limit:
                 break
-            if since_ms is not None:
-                oldest = min(ev["timestamp"] for ev in collected.values()) if collected else None
-                if oldest is not None and oldest <= since_ms:
+
+            # Check if we've gone past the time bounds
+            if since_ms is not None and collected:
+                oldest = min(t.get("timestamp", 0) for t in collected.values())
+                if oldest <= since_ms:
                     break
-            params["offset"] = params.get("offset", 0) + self.trade_limit
-            if fetch_count >= max_fetches:
-                logger.warning("GateioFetcher.fetch: reached pagination cap (%d)", max_fetches)
+
+            params["offset"] = int(params.get("offset", 0)) + self.trade_limit
+
+        if fetch_count >= max_fetches:
+            logger.warning("GateioFetcher._fetch_trades: reached pagination cap (%d)", max_fetches)
+
+        return list(collected.values())
+
+    async def _fetch_orders_for_pnl(
+        self, order_ids: set[str]
+    ) -> Dict[str, Dict[str, object]]:
+        """Fetch closed orders to get PnL data."""
+        orders_by_id: Dict[str, Dict[str, object]] = {}
+        max_fetches = 400
+        fetch_count = 0
+        params: Dict[str, object] = {"status": "finished", "limit": 100, "offset": 0}
+
+        while fetch_count < max_fetches:
+            fetch_count += 1
+            try:
+                batch = await self.api.fetch_closed_orders(params=params)
+            except RateLimitExceeded as exc:
+                logger.debug("GateioFetcher._fetch_orders_for_pnl: rate-limited (%s); sleeping", exc)
+                await asyncio.sleep(1.0)
+                continue
+
+            if not batch:
                 break
 
-        ordered = sorted(collected.values(), key=lambda ev: ev["timestamp"])
-        return ordered
+            for order in batch:
+                oid = str(order.get("id") or "")
+                if oid:
+                    orders_by_id[oid] = order
 
-    def _normalize_order(self, order: Dict[str, object]) -> Dict[str, object]:
-        info = order.get("info", {}) or {}
-        order_id = str(order.get("id") or info.get("id") or info.get("order_id") or "")
-        ts_raw = (
-            order.get("lastTradeTimestamp")
-            or info.get("update_time_ms")
-            or info.get("update_time")
-            or order.get("timestamp")
-            or info.get("create_time_ms")
-            or info.get("create_time")
-            or 0
-        )
+            # Check if we've collected all needed orders
+            if order_ids and order_ids.issubset(orders_by_id.keys()):
+                break
+
+            if len(batch) < 100:
+                break
+
+            params["offset"] = int(params.get("offset", 0)) + 100
+
+        return orders_by_id
+
+    def _merge_trades_with_orders(
+        self,
+        trades: List[Dict[str, object]],
+        orders_by_id: Dict[str, Dict[str, object]],
+        detail_cache: Dict[str, Tuple[str, str]],
+    ) -> List[Dict[str, object]]:
+        """Merge trades with order-level PnL, distributing proportionally."""
+        # Group trades by order_id
+        trades_by_order: Dict[str, List[Dict[str, object]]] = defaultdict(list)
+        for t in trades:
+            oid = str(t.get("order") or t.get("info", {}).get("order_id") or "")
+            trades_by_order[oid].append(t)
+
+        events = []
+        for order_id, order_trades in trades_by_order.items():
+            order = orders_by_id.get(order_id, {})
+            order_info = order.get("info", {}) if order else {}
+
+            # Get order-level PnL
+            order_pnl = float(order_info.get("pnl") or 0.0)
+
+            # Calculate total qty for proportional distribution
+            total_qty = sum(abs(float(t.get("amount", 0))) for t in order_trades)
+
+            for t in order_trades:
+                event = self._normalize_trade(t, order, order_pnl, total_qty, detail_cache)
+                events.append(event)
+
+        return events
+
+    def _normalize_trade(
+        self,
+        trade: Dict[str, object],
+        order: Dict[str, object],
+        order_pnl: float,
+        total_qty: float,
+        detail_cache: Dict[str, Tuple[str, str]],
+    ) -> Dict[str, object]:
+        """Normalize a trade to the canonical fill event format."""
+        info = trade.get("info", {}) or {}
+        order_info = order.get("info", {}) if order else {}
+
+        trade_id = str(trade.get("id") or info.get("trade_id") or "")
+        order_id = str(trade.get("order") or info.get("order_id") or "")
+
+        ts_raw = trade.get("timestamp") or info.get("create_time") or 0
         try:
             timestamp = int(ensure_millis(float(ts_raw)))
         except Exception:
-            try:
-                timestamp = int(float(ts_raw))
-            except Exception:
-                timestamp = 0
-        symbol = str(order.get("symbol") or info.get("symbol") or info.get("contract") or "")
-        side = str(order.get("side") or info.get("side") or "").lower()
-        qty = abs(float(order.get("amount") or info.get("size") or info.get("amount") or 0.0))
-        price = float(order.get("price") or info.get("price") or 0.0)
-        pnl = float(info.get("pnl") or 0.0)
-        pnl_margin = float(info.get("pnl_margin") or 0.0)
-        reduce_only = bool(order.get("reduce_only") or info.get("reduce_only") or False)
-        client_order_id = (
-            order.get("clientOrderId") or info.get("text") or info.get("client_order_id") or ""
+            timestamp = int(float(ts_raw)) if ts_raw else 0
+
+        symbol = str(trade.get("symbol") or info.get("contract") or "")
+        side = str(trade.get("side") or info.get("side") or "").lower()
+        qty = abs(float(trade.get("amount") or info.get("size") or 0.0))
+        price = float(trade.get("price") or info.get("price") or 0.0)
+        fee = trade.get("fee")
+
+        # Distribute PnL proportionally
+        proportion = qty / total_qty if total_qty > 0 else 0
+        pnl = order_pnl * proportion
+
+        # Get client order ID from trade or order
+        client_order_id = str(
+            info.get("text")
+            or order.get("clientOrderId")
+            or order_info.get("text")
+            or ""
         )
-        pb_type = custom_id_to_snake(str(client_order_id)) if client_order_id else "unknown"
-        is_close = abs(pnl) > 0.0 or abs(pnl_margin) > 0.0 or reduce_only
+
+        # Check detail cache first
+        if trade_id and trade_id in detail_cache:
+            client_order_id, pb_type = detail_cache[trade_id]
+        else:
+            pb_type = custom_id_to_snake(client_order_id) if client_order_id else "unknown"
+            if trade_id and client_order_id:
+                detail_cache[trade_id] = (client_order_id, pb_type)
+
+        # Determine position side
+        close_size = float(info.get("close_size", 0))
+        is_reduce_only = order.get("reduceOnly", False) or order_info.get("is_reduce_only", False)
+        is_close = close_size > 0 or is_reduce_only or abs(order_pnl) > 0
         position_side = self._determine_position_side(side, is_close)
 
         return {
-            "id": order_id,
+            "id": trade_id,
             "order_id": order_id,
             "timestamp": timestamp,
             "datetime": ts_to_date(timestamp) if timestamp else "",
-            "symbol": str(symbol or ""),
+            "symbol": symbol,
             "side": side,
             "qty": qty,
             "price": price,
             "pnl": pnl,
-            "fees": None,
+            "fees": fee,
             "pb_order_type": pb_type or "unknown",
             "position_side": position_side,
-            "client_order_id": str(client_order_id or ""),
-            "raw": [{"source": "fetch_closed_orders", "data": dict(order)}],
+            "client_order_id": client_order_id,
+            "raw": [{"source": "fetch_my_trades", "data": dict(trade)}],
         }
 
     @staticmethod

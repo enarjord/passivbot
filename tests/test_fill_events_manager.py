@@ -16,6 +16,7 @@ from src.fill_events_manager import (
     BinanceFetcher,
     BitgetFetcher,
     BybitFetcher,
+    GateioFetcher,
     HyperliquidFetcher,
     KucoinFetcher,
     OkxFetcher,
@@ -1804,3 +1805,368 @@ def test_kucoin_match_pnls_multiple_positions_multiple_fills():
     assert events["btc-close-2"]["pnl"] == pytest.approx(50.0)
     # Second position: 50 PnL to single fill
     assert events["btc-close-3"]["pnl"] == pytest.approx(50.0)
+
+
+# ---------------------------------------------------------------------------
+# GateioFetcher tests
+# ---------------------------------------------------------------------------
+
+
+class _FakeGateioAPI:
+    """Fake GateIO API for testing GateioFetcher."""
+
+    def __init__(
+        self,
+        trades_batches: List[List[Dict[str, Any]]],
+        orders_batches: List[List[Dict[str, Any]]],
+    ) -> None:
+        self._trades_batches = list(trades_batches)
+        self._orders_batches = list(orders_batches)
+        self.trade_calls: List[Dict[str, Any]] = []
+        self.order_calls: List[Dict[str, Any]] = []
+
+    async def fetch_my_trades(self, params: Dict[str, Any] = None):
+        self.trade_calls.append(dict(params or {}))
+        if not self._trades_batches:
+            return []
+        return self._trades_batches.pop(0)
+
+    async def fetch_closed_orders(self, params: Dict[str, Any] = None):
+        self.order_calls.append(dict(params or {}))
+        if not self._orders_batches:
+            return []
+        return self._orders_batches.pop(0)
+
+
+def _make_gateio_trade(
+    trade_id: str,
+    order_id: str,
+    ts: int,
+    symbol: str = "BTC/USDT:USDT",
+    side: str = "buy",
+    amount: float = 1.0,
+    price: float = 50000.0,
+    fee_cost: float = 0.01,
+    text: str = "",
+    close_size: float = 0.0,
+) -> Dict[str, Any]:
+    """Helper to create a GateIO trade dict."""
+    return {
+        "id": trade_id,
+        "order": order_id,
+        "symbol": symbol,
+        "side": side,
+        "amount": amount,
+        "price": price,
+        "timestamp": ts,
+        "fee": {"currency": "USDT", "cost": fee_cost},
+        "info": {
+            "trade_id": trade_id,
+            "order_id": order_id,
+            "text": text,
+            "close_size": str(close_size),
+            "size": str(amount),
+            "price": str(price),
+        },
+    }
+
+
+def _make_gateio_order(
+    order_id: str,
+    ts: int,
+    symbol: str = "BTC/USDT:USDT",
+    side: str = "buy",
+    amount: float = 1.0,
+    pnl: float = 0.0,
+    client_order_id: str = "",
+    reduce_only: bool = False,
+) -> Dict[str, Any]:
+    """Helper to create a GateIO order dict."""
+    return {
+        "id": order_id,
+        "symbol": symbol,
+        "side": side,
+        "amount": amount,
+        "timestamp": ts,
+        "clientOrderId": client_order_id,
+        "reduceOnly": reduce_only,
+        "info": {
+            "id": order_id,
+            "pnl": str(pnl),
+            "text": client_order_id,
+            "is_reduce_only": reduce_only,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_gateio_fetcher_merges_trades_with_orders(monkeypatch):
+    """Test that trades are fetched and merged with order PnL."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    trades = [
+        _make_gateio_trade(
+            trade_id="trade-1",
+            order_id="order-1",
+            ts=now_ms - 1000,
+            amount=1.0,
+            text="entry_initial_normal_long",
+        ),
+        _make_gateio_trade(
+            trade_id="trade-2",
+            order_id="order-2",
+            ts=now_ms - 500,
+            side="sell",
+            amount=1.0,
+            text="close_grid_long",
+            close_size=1.0,
+        ),
+    ]
+
+    orders = [
+        _make_gateio_order(
+            order_id="order-1",
+            ts=now_ms - 1000,
+            pnl=0.0,
+            client_order_id="entry_initial_normal_long",
+        ),
+        _make_gateio_order(
+            order_id="order-2",
+            ts=now_ms - 500,
+            side="sell",
+            pnl=10.5,
+            client_order_id="close_grid_long",
+            reduce_only=True,
+        ),
+    ]
+
+    api = _FakeGateioAPI([trades], [orders])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = GateioFetcher(api, trade_limit=100)
+    detail_cache: Dict[str, Tuple[str, str]] = {}
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 2000,
+        until_ms=now_ms,
+        detail_cache=detail_cache,
+    )
+
+    assert len(events) == 2
+
+    # Check entry trade
+    entry = events[0]
+    assert entry["id"] == "trade-1"
+    assert entry["pnl"] == pytest.approx(0.0)
+    assert entry["fees"]["cost"] == pytest.approx(0.01)
+    assert entry["client_order_id"] == "entry_initial_normal_long"
+    assert entry["position_side"] == "long"
+
+    # Check close trade
+    close = events[1]
+    assert close["id"] == "trade-2"
+    assert close["pnl"] == pytest.approx(10.5)
+    assert close["fees"]["cost"] == pytest.approx(0.01)
+    assert close["position_side"] == "long"  # Closing a long position
+
+
+@pytest.mark.asyncio
+async def test_gateio_fetcher_distributes_pnl_proportionally(monkeypatch):
+    """Test that order PnL is distributed across multiple fills."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    # Two trades for one order
+    trades = [
+        _make_gateio_trade(
+            trade_id="trade-1",
+            order_id="order-1",
+            ts=now_ms - 100,
+            side="sell",
+            amount=30.0,  # 30% of order
+            close_size=30.0,
+        ),
+        _make_gateio_trade(
+            trade_id="trade-2",
+            order_id="order-1",
+            ts=now_ms - 50,
+            side="sell",
+            amount=70.0,  # 70% of order
+            close_size=70.0,
+        ),
+    ]
+
+    orders = [
+        _make_gateio_order(
+            order_id="order-1",
+            ts=now_ms - 100,
+            side="sell",
+            amount=100.0,
+            pnl=100.0,  # Total PnL to distribute
+            reduce_only=True,
+        ),
+    ]
+
+    api = _FakeGateioAPI([trades], [orders])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = GateioFetcher(api, trade_limit=100)
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 1000,
+        until_ms=now_ms,
+        detail_cache={},
+    )
+
+    assert len(events) == 2
+
+    # PnL should be distributed 30/70
+    pnls = {ev["id"]: ev["pnl"] for ev in events}
+    assert pnls["trade-1"] == pytest.approx(30.0)  # 30%
+    assert pnls["trade-2"] == pytest.approx(70.0)  # 70%
+
+
+@pytest.mark.asyncio
+async def test_gateio_fetcher_uses_detail_cache(monkeypatch):
+    """Test that detail cache is used and populated."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    trades = [
+        _make_gateio_trade(
+            trade_id="trade-cached",
+            order_id="order-1",
+            ts=now_ms - 100,
+            text="",  # No text in trade
+        ),
+    ]
+
+    orders = [
+        _make_gateio_order(
+            order_id="order-1",
+            ts=now_ms - 100,
+            client_order_id="",  # No client order ID
+        ),
+    ]
+
+    api = _FakeGateioAPI([trades], [orders])
+
+    # Pre-populated cache
+    detail_cache: Dict[str, Tuple[str, str]] = {
+        "trade-cached": ("cached-client-id", "cached-pb-type"),
+    }
+
+    fetcher = GateioFetcher(api, trade_limit=100)
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 1000,
+        until_ms=now_ms,
+        detail_cache=detail_cache,
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["client_order_id"] == "cached-client-id"
+    assert event["pb_order_type"] == "cached-pb-type"
+
+
+@pytest.mark.asyncio
+async def test_gateio_fetcher_captures_fees(monkeypatch):
+    """Test that fees are captured from trades (not orders)."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    trades = [
+        _make_gateio_trade(
+            trade_id="trade-1",
+            order_id="order-1",
+            ts=now_ms - 100,
+            fee_cost=0.05,
+        ),
+    ]
+
+    orders = [
+        _make_gateio_order(
+            order_id="order-1",
+            ts=now_ms - 100,
+        ),
+    ]
+
+    api = _FakeGateioAPI([trades], [orders])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = GateioFetcher(api, trade_limit=100)
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 1000,
+        until_ms=now_ms,
+        detail_cache={},
+    )
+
+    assert len(events) == 1
+    assert events[0]["fees"] is not None
+    assert events[0]["fees"]["cost"] == pytest.approx(0.05)
+    assert events[0]["fees"]["currency"] == "USDT"
+
+
+@pytest.mark.asyncio
+async def test_gateio_fetcher_position_side_inference(monkeypatch):
+    """Test position side is inferred correctly from side and close status."""
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    trades = [
+        # Entry long (buy, not close)
+        _make_gateio_trade(
+            trade_id="entry-long",
+            order_id="order-1",
+            ts=now_ms - 400,
+            side="buy",
+            close_size=0,
+        ),
+        # Close long (sell, is close)
+        _make_gateio_trade(
+            trade_id="close-long",
+            order_id="order-2",
+            ts=now_ms - 300,
+            side="sell",
+            close_size=1.0,
+        ),
+        # Entry short (sell, not close)
+        _make_gateio_trade(
+            trade_id="entry-short",
+            order_id="order-3",
+            ts=now_ms - 200,
+            side="sell",
+            close_size=0,
+        ),
+        # Close short (buy, is close)
+        _make_gateio_trade(
+            trade_id="close-short",
+            order_id="order-4",
+            ts=now_ms - 100,
+            side="buy",
+            close_size=1.0,
+        ),
+    ]
+
+    orders = [
+        _make_gateio_order(order_id="order-1", ts=now_ms - 400, side="buy", pnl=0),
+        _make_gateio_order(order_id="order-2", ts=now_ms - 300, side="sell", pnl=5.0, reduce_only=True),
+        _make_gateio_order(order_id="order-3", ts=now_ms - 200, side="sell", pnl=0),
+        _make_gateio_order(order_id="order-4", ts=now_ms - 100, side="buy", pnl=3.0, reduce_only=True),
+    ]
+
+    api = _FakeGateioAPI([trades], [orders])
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = GateioFetcher(api, trade_limit=100)
+
+    events = await fetcher.fetch(
+        since_ms=now_ms - 1000,
+        until_ms=now_ms,
+        detail_cache={},
+    )
+
+    events_by_id = {ev["id"]: ev for ev in events}
+
+    assert events_by_id["entry-long"]["position_side"] == "long"
+    assert events_by_id["close-long"]["position_side"] == "long"
+    assert events_by_id["entry-short"]["position_side"] == "short"
+    assert events_by_id["close-short"]["position_side"] == "short"
