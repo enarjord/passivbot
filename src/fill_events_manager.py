@@ -1921,9 +1921,12 @@ class FillEventsManager:
         if symbol:
             events = [ev for ev in events if ev.symbol == symbol]
         # Annotate positions on a copy so cache on disk remains untouched
+        # Note: PnL is NOT recomputed here - fetchers are responsible for computing
+        # correct PnL values during fetch. Recomputing here would overwrite correct
+        # values (e.g., KuCoinFetcher uses positions_history for accurate PnL).
         payload = [ev.to_dict() for ev in events]
         ensure_qty_signage(payload)
-        annotate_positions_inplace(payload, recompute_pnl=(self.exchange.lower() == "kucoin"))
+        annotate_positions_inplace(payload)
         return [FillEvent.from_dict(ev) for ev in payload]
 
     def get_pnl_sum(

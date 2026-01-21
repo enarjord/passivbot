@@ -141,6 +141,27 @@ def _format_datetime_str(dt: pd.Timestamp) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _extract_base_coin(symbol: str) -> str:
+    """Extract base coin from symbol, normalizing across quote currencies.
+
+    Examples:
+        BTC/USDT:USDT -> BTC
+        BTC/USDC:USDC -> BTC
+        ETH/USDT:USDT -> ETH
+        BTCUSDT -> BTC
+    """
+    if not symbol:
+        return ""
+    # Handle CCXT format: BASE/QUOTE:SETTLE (e.g., BTC/USDT:USDT)
+    if "/" in symbol:
+        return symbol.split("/")[0]
+    # Handle raw format without separators (e.g., BTCUSDT)
+    for suffix in ["USDT", "USDC", "USD", "BUSD", "TUSD"]:
+        if symbol.endswith(suffix):
+            return symbol[:-len(suffix)]
+    return symbol
+
+
 def _events_to_dataframe(events: List[dict], account_label: str) -> pd.DataFrame:
     if not events:
         return pd.DataFrame()
@@ -154,6 +175,9 @@ def _events_to_dataframe(events: List[dict], account_label: str) -> pd.DataFrame
     fees_col = df.get("fees", pd.Series([None] * len(df)))
     df["fee_cost"] = [_normalize_fee_cost(x) for x in fees_col]
     df["pnl_with_fees"] = df["pnl"] - df["fee_cost"]
+    # Add normalized coin column (base asset only, e.g., BTC instead of BTC/USDT:USDT)
+    # This allows aggregation across different quote currencies (USDT, USDC, etc.)
+    df["coin"] = df["symbol"].apply(_extract_base_coin)
     return df
 
 
@@ -340,7 +364,7 @@ def _aggregate_accounts(
     selected_accounts: List[str],
     start_ms: Optional[int],
     end_ms: Optional[int],
-    symbols_filter: Optional[List[str]],
+    coins_filter: Optional[List[str]],
 ) -> pd.DataFrame:
     """Aggregate events from all selected accounts into a DataFrame."""
     frames: List[pd.DataFrame] = []
@@ -352,8 +376,9 @@ def _aggregate_accounts(
             _run_async(data["manager"].ensure_loaded())
             events = data["manager"].get_events(start_ms, end_ms)
             frame = _events_to_dataframe([ev.to_dict() for ev in events], account)
-            if symbols_filter:
-                frame = frame[frame["symbol"].isin(symbols_filter)]
+            # Filter by normalized coin (base asset only)
+            if coins_filter:
+                frame = frame[frame["coin"].isin(coins_filter)]
             if not frame.empty:
                 frames.append(frame)
         except Exception as e:
@@ -391,7 +416,7 @@ def build_figures(df: pd.DataFrame):
         return (
             px.line(title="Cumulative PnL (no data)"),
             px.bar(title="Daily PnL (no data)"),
-            px.bar(title="Top Symbols (no data)"),
+            px.bar(title="Top Coins (no data)"),
             px.bar(title="PnL by Account (no data)"),
         )
     df = df.sort_values("timestamp").copy()
@@ -417,18 +442,19 @@ def build_figures(df: pd.DataFrame):
         title="Daily Realized PnL",
         barmode="group",
     )
-    top_symbols = (
-        df.groupby(["symbol", "account"], as_index=False)
+    # Group by normalized coin (base asset only) to merge BTC/USDT:USDT and BTC/USDC:USDC
+    top_coins = (
+        df.groupby(["coin", "account"], as_index=False)
         .agg({"pnl": "sum", "qty": "sum"})
         .sort_values("pnl", ascending=False)
         .head(30)
     )
     top_fig = px.bar(
-        top_symbols,
-        x="symbol",
+        top_coins,
+        x="coin",
         y="pnl",
         color="account",
-        title="Top Symbols by Realized PnL",
+        title="Top Coins by Realized PnL",
     )
     # Replace fees chart with PnL by account summary
     account_pnl = (
@@ -459,6 +485,30 @@ def build_symbol_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
         size=symbol_df["qty"].abs(),
         hover_data=["qty", "pnl", "pb_order_type", "datetime_str"],
         title=f"{symbol} Fills",
+    )
+    return fig
+
+
+def build_coin_chart(df: pd.DataFrame, coin: str) -> go.Figure:
+    """Build a chart for a coin (base asset), merging fills across quote currencies."""
+    coin_df = df[df["coin"] == coin].copy()
+    if coin_df.empty:
+        return px.scatter(title=f"No fills for {coin}")
+
+    # Sort by timestamp for correct chronological ordering
+    coin_df = coin_df.sort_values("timestamp")
+
+    # Simple scatter plot - color by account to show fills from different exchanges
+    fig = px.scatter(
+        coin_df,
+        x="datetime",
+        y="price",
+        color="account",
+        symbol="side",
+        symbol_map={"buy": "triangle-up", "sell": "triangle-down"},
+        size=coin_df["qty"].abs(),
+        hover_data=["symbol", "qty", "pnl", "pb_order_type", "datetime_str"],
+        title=f"{coin} Fills (across all quote currencies)",
     )
     return fig
 
@@ -589,7 +639,7 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
                     ),
                     dbc.Col(
                         [
-                            html.Label("Symbols (optional)"),
+                            html.Label("Coins (optional)"),
                             dcc.Dropdown(id="symbols", options=[], value=[], multi=True),
                         ],
                         md=2,
@@ -771,12 +821,13 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
 
         # Aggregate from cache
         df = _aggregate_accounts(accounts, selected, start_ms, end_ms, symbols if symbols else None)
-        symbols_options = (
-            [{"label": s, "value": s} for s in sorted(df["symbol"].unique())] if not df.empty else []
+        # Use normalized coin for dropdown (base asset only, merges USDT/USDC variants)
+        coins_options = (
+            [{"label": c, "value": c} for c in sorted(df["coin"].unique())] if not df.empty else []
         )
 
         status = f"{len(df)} events" if not df.empty else "No data"
-        return df.to_dict(orient="records"), symbols_options, status
+        return df.to_dict(orient="records"), coins_options, status
 
     # Render tab content
     @app.callback(
@@ -834,10 +885,11 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
             )
             # Define columns: datetime_str for readable display, exclude fee_cost from main view
             # (fees are inconsistent across exchanges)
+            # Use normalized coin (base asset) instead of full symbol to merge USDT/USDC variants
             table_columns = [
                 {"name": "Time", "id": "datetime_str"},
                 {"name": "Account", "id": "account"},
-                {"name": "Symbol", "id": "symbol"},
+                {"name": "Coin", "id": "coin"},
                 {"name": "Side", "id": "side"},
                 {"name": "Pos Side", "id": "position_side"},
                 {"name": "Qty", "id": "qty", "type": "numeric", "format": {"specifier": ".6f"}},
@@ -865,7 +917,7 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
                     style_cell_conditional=[
                         {"if": {"column_id": "datetime_str"}, "width": "160px"},
                         {"if": {"column_id": "account"}, "width": "120px"},
-                        {"if": {"column_id": "symbol"}, "width": "100px"},
+                        {"if": {"column_id": "coin"}, "width": "80px"},
                     ],
                 ),
             ])
@@ -874,32 +926,33 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
             if df.empty:
                 return html.Div("No data available. Please refresh first.", className="text-muted")
 
-            unique_symbols = sorted(df["symbol"].unique())
-            selected_symbol = selected_symbols[0] if selected_symbols else (unique_symbols[0] if unique_symbols else None)
+            # Use normalized coin (base asset) for grouping
+            unique_coins = sorted(df["coin"].unique())
+            selected_coin = selected_symbols[0] if selected_symbols else (unique_coins[0] if unique_coins else None)
 
-            if not selected_symbol:
-                return html.Div("No symbols available.", className="text-muted")
+            if not selected_coin:
+                return html.Div("No coins available.", className="text-muted")
 
-            fig = build_symbol_chart(df, selected_symbol)
+            fig = build_coin_chart(df, selected_coin)
 
-            # Symbol stats (PnL without fees since fees are inconsistent)
-            symbol_df = df[df["symbol"] == selected_symbol]
+            # Coin stats (PnL without fees since fees are inconsistent)
+            coin_df = df[df["coin"] == selected_coin]
             stats = {
-                "PnL": f"{symbol_df['pnl'].sum():.4f}",
-                "Trades": len(symbol_df),
-                "Buys": len(symbol_df[symbol_df["side"] == "buy"]),
-                "Sells": len(symbol_df[symbol_df["side"] == "sell"]),
-                "Avg Price": f"{symbol_df['price'].mean():.4f}" if not symbol_df.empty else "N/A",
+                "PnL": f"{coin_df['pnl'].sum():.4f}",
+                "Trades": len(coin_df),
+                "Buys": len(coin_df[coin_df["side"] == "buy"]),
+                "Sells": len(coin_df[coin_df["side"] == "sell"]),
+                "Avg Price": f"{coin_df['price'].mean():.4f}" if not coin_df.empty else "N/A",
             }
 
             return html.Div([
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Select Symbol"),
+                        html.Label("Select Coin"),
                         dcc.Dropdown(
                             id="symbol-detail-dropdown",
-                            options=[{"label": s, "value": s} for s in unique_symbols],
-                            value=selected_symbol,
+                            options=[{"label": c, "value": c} for c in unique_coins],
+                            value=selected_coin,
                         ),
                     ], md=4),
                     dbc.Col([
@@ -911,7 +964,7 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
                 ], className="mb-3"),
                 dcc.Graph(figure=fig),
                 html.P(
-                    "Tip: Select a symbol from the dropdown or filter in the main Symbols dropdown.",
+                    "Tip: Select a coin from the dropdown or filter in the main Coins dropdown.",
                     className="text-muted mt-2",
                 ),
             ])
@@ -930,7 +983,7 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
             if df.empty:
                 return html.Div("No data to export. Please refresh first.", className="text-muted")
             # Select columns for preview, use datetime_str for display
-            preview_cols = ["datetime_str", "account", "symbol", "side", "position_side", "qty", "price", "pnl", "pb_order_type"]
+            preview_cols = ["datetime_str", "account", "coin", "side", "position_side", "qty", "price", "pnl", "pb_order_type"]
             preview_cols = [c for c in preview_cols if c in df.columns]
             return html.Div([
                 html.H4("Export Fill Events"),
