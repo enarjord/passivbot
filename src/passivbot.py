@@ -951,11 +951,11 @@ class Passivbot:
             logging.info("EMA debug | " + " | ".join(logs))
 
     async def warmup_candles_staggered(
-        self, *, concurrency: int = 8, window_candles: int | None = None, ttl_ms: int = 300_000
+        self, *, concurrency: int | None = None, window_candles: int | None = None, ttl_ms: int = 300_000
     ) -> None:
         """Warm up recent candles for all approved symbols in a staggered way.
 
-        - concurrency: max in-flight symbols
+        - concurrency: max in-flight symbols; if None, uses config or exchange-specific default
         - window_candles: number of 1m candles to warm; defaults to CandlestickManager.default_window_candles
         - ttl_ms: skip refresh if data newer than this TTL exists
 
@@ -967,6 +967,24 @@ class Passivbot:
         symbols = sorted(set().union(*self.approved_coins_minus_ignored_coins.values()))
         if not symbols:
             return
+
+        # Determine concurrency: explicit arg > config > exchange-specific default
+        if concurrency is None:
+            cfg_concurrency = get_optional_live_value(self.config, "warmup_concurrency", 0)
+            try:
+                cfg_concurrency = int(cfg_concurrency) if cfg_concurrency else 0
+            except Exception:
+                cfg_concurrency = 0
+            if cfg_concurrency > 0:
+                concurrency = cfg_concurrency
+            else:
+                # Exchange-specific defaults: Hyperliquid has stricter rate limits
+                exchange_lower = self.exchange.lower() if self.exchange else ""
+                if exchange_lower == "hyperliquid":
+                    concurrency = 2
+                else:
+                    concurrency = 8
+        concurrency = max(1, int(concurrency))
 
         # Random jitter delay to prevent API rate limit storms when multiple bots start simultaneously
         max_jitter = get_optional_live_value(self.config, "warmup_jitter_seconds", 30.0)

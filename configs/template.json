@@ -228,7 +228,8 @@
         "time_in_force": "good_till_cancelled",
         "user": "bybit_01",
         "warmup_jitter_seconds": 30,
-        "warmup_ratio": 0.3
+        "warmup_ratio": 0.3,
+        "warmup_concurrency": 0
     },
     "logging": {
         "level": 1,

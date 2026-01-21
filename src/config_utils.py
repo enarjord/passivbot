@@ -2019,6 +2019,7 @@ def get_template_config():
             "user": "bybit_01",
             "warmup_jitter_seconds": 30.0,
             "warmup_ratio": 0.2,
+            "warmup_concurrency": 0,
             "max_concurrent_api_requests": None,
         },
         "logging": {

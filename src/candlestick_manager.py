@@ -408,6 +408,12 @@ class CandlestickManager:
         except Exception:
             self._net_sem = None
 
+        # Global rate limit coordination: when a rate limit is hit, all concurrent
+        # requests pause until this timestamp (prevents thundering herd retries)
+        self._rate_limit_until: float = 0.0
+        self._rate_limit_lock = asyncio.Lock()
+        self._rate_limit_count: int = 0
+
         # Persistent HTTP session for archive fetches (created lazily)
         self._http_session: Optional["aiohttp.ClientSession"] = None
         self._http_session_lock = asyncio.Lock()
@@ -2113,6 +2119,34 @@ class CandlestickManager:
 
     # ----- CCXT fetching -----
 
+    async def _apply_rate_limit_backoff(self) -> None:
+        """Wait if we're in a global rate limit backoff period.
+
+        When a rate limit is hit, all concurrent requests should pause to avoid
+        the thundering herd problem where they all retry simultaneously.
+        """
+        now = time.time()
+        if now < self._rate_limit_until:
+            wait_time = self._rate_limit_until - now
+            if wait_time > 0:
+                self._log("debug", "rate_limit_global_wait", wait_seconds=round(wait_time, 2))
+                await asyncio.sleep(wait_time)
+
+    async def _set_global_rate_limit(self, backoff_seconds: float = 5.0) -> None:
+        """Set a global rate limit backoff that affects all concurrent requests."""
+        async with self._rate_limit_lock:
+            new_until = time.time() + backoff_seconds
+            # Only extend if the new backoff is longer than existing
+            if new_until > self._rate_limit_until:
+                self._rate_limit_until = new_until
+                self._rate_limit_count += 1
+                self._log(
+                    "info",
+                    "rate_limit_global_set",
+                    backoff_seconds=backoff_seconds,
+                    total_count=self._rate_limit_count,
+                )
+
     async def _ccxt_fetch_ohlcv_once(
         self,
         symbol: str,
@@ -2133,10 +2167,13 @@ class CandlestickManager:
 
         exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
         is_bybit = "bybit" in exid
+        is_hyperliquid = "hyperliquid" in exid
         max_attempts = 9 if is_bybit else 5
         backoff = 1.0 if is_bybit else 0.5
         backoff_cap = 20.0 if is_bybit else 8.0
         for attempt in range(max_attempts):
+            # Wait for global rate limit backoff if one is active
+            await self._apply_rate_limit_backoff()
             try:
                 params: Dict[str, Any] = {}
                 # Provide an end bound for exchanges that support it.
@@ -2257,8 +2294,13 @@ class CandlestickManager:
                 msg = (str(e) or "")
                 msg_l = msg.lower()
                 # Heuristic: slow down harder on rate-limit style responses.
-                if any(x in msg_l for x in ("rate limit", "too many", "429", "10006")):
-                    sleep_s = max(sleep_s, 5.0)
+                is_rate_limit = any(x in msg_l for x in ("rate limit", "too many", "429", "10006"))
+                if is_rate_limit:
+                    # Set global backoff to coordinate all concurrent requests
+                    # Hyperliquid needs longer backoff due to stricter limits
+                    global_backoff = 10.0 if is_hyperliquid else 5.0
+                    await self._set_global_rate_limit(global_backoff)
+                    sleep_s = max(sleep_s, global_backoff)
                 # Bybit: be more persistent on transient network-ish errors.
                 if is_bybit and (
                     err_type in {"RequestTimeout", "NetworkError", "ExchangeNotAvailable", "DDoSProtection"}
