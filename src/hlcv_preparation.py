@@ -1026,7 +1026,8 @@ async def _prepare_hlcvs_combined_impl(
         valid_coins,
         start_date_for_volume_ratios,
         end_date_for_volume_ratios,
-        {ex: om_dict[ex] for ex in exchanges_with_data},
+        # om_dict keys are normalized (e.g. "binanceusdm"), but exchanges_with_data are denormalized
+        {ex: om_dict[normalize_exchange_name(ex)] for ex in exchanges_with_data},
     )
     exchanges_counts = defaultdict(int)
     for coin in chosen_mss_per_coin:
