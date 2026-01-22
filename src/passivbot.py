@@ -2493,12 +2493,13 @@ class Passivbot:
                     pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
                     + drop_since_peak_pct
                 )
-                logging.info(
-                    f"[fills] [debug] pnls_cumsum_max: {pnls_cumsum_max}, pnls_cumsum_last: {pnls_cumsum_last}, bal: {self.balance} bal peak: {balance_peak}"
-                )
-                logging.info(
-                    f"[fills] [debug] drop since peak pct: {drop_since_peak_pct}, allowance_raw: {allowance_raw}, allowance_mod: {allowance_mod}"
-                )
+                if self.is_pside_enabled(pside):
+                    logging.info(
+                        f"[fills] [debug] {pside} pnls_cumsum_max: {pnls_cumsum_max}, pnls_cumsum_last: {pnls_cumsum_last}, bal: {self.balance} bal peak: {balance_peak}"
+                    )
+                    logging.info(
+                        f"[fills] [debug] drop since peak pct: {drop_since_peak_pct}, allowance_raw: {allowance_raw}, allowance_mod: {allowance_mod}"
+                    )
                 out[pside] = float(
                     pbr.calc_auto_unstuck_allowance(
                         float(self.balance),
