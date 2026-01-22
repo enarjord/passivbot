@@ -955,7 +955,25 @@ async def _prepare_hlcvs_combined_impl(
                 coin_fts = int(first_timestamps_unified[coin])
                 effective_start_ts = max(int(base_start_ts), coin_fts + int(min_coin_age_ms))
                 if effective_start_ts >= end_ts:
+                    logging.info(
+                        "%s: skipping - effective start %s >= end %s "
+                        "(coin first available: %s, min_age=%d days)",
+                        coin,
+                        ts_to_date(effective_start_ts),
+                        ts_to_date(end_ts),
+                        ts_to_date(coin_fts),
+                        int(minimum_coin_age_days),
+                    )
                     return None
+                if effective_start_ts > base_start_ts:
+                    logging.info(
+                        "%s: adjusting start from %s to %s (coin first available: %s, min_age=%d days)",
+                        coin,
+                        ts_to_date(base_start_ts),
+                        ts_to_date(effective_start_ts),
+                        ts_to_date(coin_fts),
+                        int(minimum_coin_age_days),
+                    )
 
                 forced_exchange = forced_sources.get(coin)
                 candidate_exchanges = [forced_exchange] if forced_exchange else exchanges_to_consider
