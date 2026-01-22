@@ -2,6 +2,26 @@
 
 All notable user-facing changes will be documented in this file.
 
+## v7.7.0 - Unreleased
+
+### Changed
+- **PnL tracking now uses FillEventsManager exclusively** - Legacy `update_pnls` path removed. FillEventsManager provides more accurate fill tracking with proper event deduplication, canonical schemas, and exchange-specific fetchers for all supported exchanges.
+- Fill events are now stored in `caches/fill_events/{exchange}/{user}/` instead of the old `caches/{exchange}/{user}_pnls.json` format. Existing legacy cache files are ignored; FillEventsManager will rebuild from exchange API on first run.
+- Unstuck allowances now computed from FillEventsManager data instead of legacy pnls list.
+- Trailing position change timestamps now derived from FillEventsManager events.
+
+### Removed
+- `--shadow-mode` CLI flag (no longer needed; FillEventsManager is production-ready)
+- `live.pnls_manager_shadow_mode` config option
+- Legacy `init_pnls`, `update_pnls`, `fetch_pnls` methods in passivbot.py
+- Legacy `init_fill_events`, `update_fill_events`, `fetch_fill_events` methods (dead code)
+- Shadow mode comparison logging (`_compare_pnls_shadow`, etc.)
+
+### Migration Notes
+- **No action required** - FillEventsManager automatically fetches and caches fill data
+- Old `{user}_pnls.json` cache files can be safely deleted after upgrading
+- If using custom exchange configurations, ensure the exchange's fill fetcher is supported (Binance, Bybit, Bitget, GateIO, Hyperliquid, KuCoin, OKX)
+
 ## v7.6.2 - 2026-01-20
 
 ### Fixed

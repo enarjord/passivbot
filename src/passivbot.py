@@ -394,7 +394,7 @@ class Passivbot:
         self.max_leverage = {}
         self.pside_int_map = {"long": 0, "short": 1}
         self.PB_modes = {"long": {}, "short": {}}
-        self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
+        # Legacy pnls_cache_filepath removed; FillEventsManager handles caching
         self.quote = "USDT"
 
         self.minimum_market_age_millis = (
@@ -512,14 +512,9 @@ class Passivbot:
             "short": "graceful_stop" if auto_gs else "manual",
         }
 
-        # FillEventsManager shadow mode: runs in parallel with legacy pnls, logs comparison
-        self._pnls_shadow_mode = bool(
-            get_optional_live_value(self.config, "pnls_manager_shadow_mode", False)
-        )
+        # FillEventsManager for PnL tracking (replaces legacy self.pnls list)
         self._pnls_manager: Optional[FillEventsManager] = None
-        self._pnls_shadow_initialized = False
-        self._pnls_shadow_last_comparison_ts = 0
-        self._pnls_shadow_comparison_interval_ms = 60_000  # compare every 60 seconds
+        self._pnls_initialized = False
 
         # Health tracking for periodic summary
         self._health_start_ms = utc_ms()
@@ -1247,28 +1242,16 @@ class Passivbot:
         if not balance_ok:
             return False
 
-        # Build task list: always include open_orders and pnls
+        # Build task list: open_orders and fill events (pnls)
         tasks = [
             self.update_open_orders(),
             self.update_pnls(),
         ]
-        # If shadow mode is enabled, also run the FillEventsManager update in parallel
-        if self._pnls_shadow_mode:
-            tasks.append(self._update_pnls_shadow())
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Check results (first two are always open_orders and pnls)
         open_orders_ok = results[0] is True
         pnls_ok = results[1] is True
-
-        # Handle shadow mode result (just log errors, don't fail the bot)
-        if self._pnls_shadow_mode and len(results) > 2:
-            shadow_result = results[2]
-            if isinstance(shadow_result, Exception):
-                logging.warning("[shadow] Shadow update raised exception: %s", shadow_result)
-            # Run comparison after both updates complete
-            self._compare_pnls_shadow()
 
         if not open_orders_ok or not pnls_ok:
             return False
@@ -1730,19 +1713,21 @@ class Passivbot:
     def get_last_position_changes(self, symbol=None):
         """Return the most recent fill timestamp per symbol/side for trailing logic."""
         last_position_changes = defaultdict(dict)
+        if self._pnls_manager is None:
+            return last_position_changes
+
+        events = self._pnls_manager.get_events()
         for symbol in self.positions:
             for pside in ["long", "short"]:
                 if self.has_position(pside, symbol) and self.is_trailing(symbol, pside):
                     last_position_changes[symbol][pside] = utc_ms() - 1000 * 60 * 60 * 24 * 7
-                    for fill in self.pnls[::-1]:
+                    for ev in reversed(events):
                         try:
-                            if fill["symbol"] == symbol and fill["position_side"] == pside:
-                                last_position_changes[symbol][pside] = fill["timestamp"]
+                            if ev.symbol == symbol and ev.position_side == pside:
+                                last_position_changes[symbol][pside] = ev.timestamp
                                 break
                         except Exception as e:
-                            logging.error(
-                                f"Error with get_last_position_changes. Faulty element: {fill}"
-                            )
+                            logging.error(f"Error in get_last_position_changes: {e}")
         return last_position_changes
 
     # Legacy: wait_for_ohlcvs_1m_to_update removed (CandlestickManager handles freshness)
@@ -2325,126 +2310,14 @@ class Passivbot:
         return upnl_sum
 
     async def init_pnls(self):
-        """Initialise historical PnL cache, loading from disk when available."""
-        if not hasattr(self, "pnls"):
-            self.pnls = []
-        else:
-            return  # pnls already initiated; abort
-        logging.info(f"initiating pnls...")
-        age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
-            self.live_value("pnls_max_lookback_days")
-        )
-        pnls_cache = []
-        if os.path.exists(self.pnls_cache_filepath):
-            try:
-                pnls_cache = json.load(open(self.pnls_cache_filepath))
-            except Exception as e:
-                logging.error(f"error loading {self.pnls_cache_filepath} {e}")
-        if pnls_cache:
-            newest_pnls = await self.fetch_pnls(start_time=pnls_cache[-1]["timestamp"])
-            if pnls_cache[0]["timestamp"] > age_limit + 1000 * 60 * 60 * 4:
-                # might be older missing pnls
-                logging.info(
-                    f"fetching missing pnls from before {ts_to_date(pnls_cache[0]['timestamp'])}"
-                )
-                missing_pnls = await self.fetch_pnls(
-                    start_time=age_limit, end_time=pnls_cache[0]["timestamp"]
-                )
-                pnls_cache = sorted(
-                    {
-                        elm["id"]: elm
-                        for elm in pnls_cache + missing_pnls + newest_pnls
-                        if elm["timestamp"] >= age_limit
-                    }.values(),
-                    key=lambda x: x["timestamp"],
-                )
-        else:
-            pnls_cache = await self.fetch_pnls(start_time=age_limit)
-            if pnls_cache:
-                try:
-                    json.dump(pnls_cache, open(self.pnls_cache_filepath, "w"))
-                except Exception as e:
-                    logging.error(f"error dumping pnls to {self.pnls_cache_filepath} {e}")
-        self.pnls = pnls_cache
-
-    async def update_pnls(self):
-        """Fetch latest fills, update the PnL cache, and persist it when changed."""
-        age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
-            self.live_value("pnls_max_lookback_days")
-        )
-        if self.stop_signal_received:
-            return False
-        await self.init_pnls()  # will do nothing if already initiated
-        old_ids = {elm["id"] for elm in self.pnls}
-        if not hasattr(self, "_pnls_cursor_ts"):
-            self._pnls_cursor_ts = age_limit
-        if self.pnls:
-            start_time = max(self.pnls[-1]["timestamp"] - 1000, age_limit)
-        else:
-            start_time = max(self._pnls_cursor_ts, age_limit)
-        try:
-            res = await self.fetch_pnls(start_time=start_time, limit=100)
-        except RateLimitExceeded:
-            self._health_rate_limits += 1
-            logging.warning("[rate] hit rate limit while fetching pnls; retrying next cycle")
-            return False
-        if res in [None, False]:
-            return False
-        new_pnls = [x for x in res if x["id"] not in old_ids]
-        self.pnls = sorted(
-            {
-                elm["id"]: elm for elm in self.pnls + new_pnls if elm["timestamp"] >= age_limit
-            }.values(),
-            key=lambda x: x["timestamp"],
-        )
-        if self.pnls:
-            self._pnls_cursor_ts = max(self.pnls[-1]["timestamp"] - 1000, age_limit)
-        if new_pnls:
-            new_income = sum([x["pnl"] for x in new_pnls])
-            if new_income != 0.0:
-                pnl_sign = "+" if new_income > 0 else ""
-                logging.info(
-                    "[pnl] %d new pnl%s: %s%.4f %s",
-                    len(new_pnls),
-                    "s" if len(new_pnls) > 1 else "",
-                    pnl_sign,
-                    new_income,
-                    self.quote,
-                )
-            try:
-                json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
-            except Exception as e:
-                logging.error("[pnl] error dumping pnls to %s: %s", self.pnls_cache_filepath, e)
-        elif not self.pnls:
-            # no fills yet; avoid re-scanning entire lookback on the next cycle
-            self._pnls_cursor_ts = max(self.get_exchange_time() - 1000, age_limit)
-        return True
-
-    # -------------------------------------------------------------------------
-    # FillEventsManager Shadow Mode (dry run comparison with legacy pnls)
-    # -------------------------------------------------------------------------
-
-    async def _init_pnls_shadow_manager(self) -> bool:
-        """Initialize the FillEventsManager for shadow mode comparison.
-
-        Returns True if initialization succeeded, False otherwise.
-        Shadow mode runs the new FillEventsManager in parallel with legacy pnls,
-        caching data and logging comparisons, but not using it for bot decisions.
-        """
-        if not self._pnls_shadow_mode:
-            return False
-
-        if self._pnls_shadow_initialized:
-            return True
+        """Initialize FillEventsManager for PnL tracking."""
+        if self._pnls_initialized:
+            return
 
         try:
-            logging.info(
-                "[shadow] Initializing FillEventsManager shadow mode for %s:%s",
-                self.exchange,
-                self.user,
-            )
+            logging.info("Initializing FillEventsManager...")
 
-            # Extract symbol pool from config (same as legacy pnls uses)
+            # Extract symbol pool from config
             symbol_pool = _extract_symbol_pool(self.config, None)
 
             # Build the fetcher for this bot
@@ -2464,19 +2337,76 @@ class Passivbot:
             await self._pnls_manager.ensure_loaded()
 
             cached_count = len(self._pnls_manager._events)
-            logging.info(
-                "[shadow] FillEventsManager initialized: %d cached events loaded",
-                cached_count,
-            )
+            logging.info("FillEventsManager initialized: %d cached events loaded", cached_count)
 
-            self._pnls_shadow_initialized = True
-            return True
+            self._pnls_initialized = True
 
         except Exception as e:
-            logging.error("[shadow] Failed to initialize FillEventsManager: %s", e)
+            logging.error("Failed to initialize FillEventsManager: %s", e)
             traceback.print_exc()
-            self._pnls_shadow_mode = False  # Disable shadow mode on init failure
+            raise
+
+    async def update_pnls(self):
+        """Fetch latest fills using FillEventsManager and update the cache."""
+        if self.stop_signal_received:
             return False
+
+        await self.init_pnls()  # will do nothing if already initiated
+
+        if self._pnls_manager is None:
+            return False
+
+        try:
+            # Use the same lookback window
+            age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
+                self.live_value("pnls_max_lookback_days")
+            )
+
+            # Get existing event IDs before refresh
+            existing_ids = set(ev.id for ev in self._pnls_manager.get_events())
+
+            # Check if we need a full refresh (cache empty or too old)
+            events = self._pnls_manager.get_events()
+            needs_full_refresh = not events
+            if events:
+                oldest_event_ts = events[0].timestamp
+                if oldest_event_ts > age_limit + 1000 * 60 * 60 * 24:  # > 1 day newer than limit
+                    needs_full_refresh = True
+                    logging.info(
+                        "[fills] Cache oldest event (%s) is newer than lookback (%s), doing full refresh",
+                        ts_to_date(oldest_event_ts)[:19],
+                        ts_to_date(age_limit)[:19],
+                    )
+
+            if needs_full_refresh:
+                # Full refresh with proper lookback window
+                logging.info("[fills] Performing full refresh from %s", ts_to_date(age_limit)[:19])
+                await self._pnls_manager.refresh(start_ms=int(age_limit), end_ms=None)
+            else:
+                # Incremental refresh
+                await self._pnls_manager.refresh_latest(overlap=20)
+
+            # Find and log new events (those not in cache before refresh)
+            all_events = self._pnls_manager.get_events()
+            new_events = [ev for ev in all_events if ev.id not in existing_ids]
+            if new_events:
+                self._log_new_fill_events(new_events)
+
+            return True
+
+        except RateLimitExceeded:
+            self._health_rate_limits += 1
+            logging.warning("[rate] hit rate limit while fetching fill events; retrying next cycle")
+            return False
+        except Exception as e:
+            logging.error("[fills] Failed to update FillEventsManager: %s", e)
+            if self.logging_level >= 2:
+                traceback.print_exc()
+            return False
+
+    # -------------------------------------------------------------------------
+    # FillEventsManager Helpers
+    # -------------------------------------------------------------------------
 
     def _log_fill_event(self, event) -> str:
         """Format a FillEvent for logging.
@@ -2525,8 +2455,8 @@ class Passivbot:
             for event in sorted(new_events, key=lambda e: e.timestamp):
                 logging.info(self._log_fill_event(event))
 
-    def _calc_unstuck_allowances_from_fill_events(self, allow_new_unstuck: bool) -> dict[str, float]:
-        """Calculate unstuck allowances using FillEventsManager data (shadow mode equivalent)."""
+    def _calc_unstuck_allowances(self, allow_new_unstuck: bool) -> dict[str, float]:
+        """Calculate unstuck allowances using FillEventsManager data."""
         if not allow_new_unstuck or self._pnls_manager is None:
             return {"long": 0.0, "short": 0.0}
 
@@ -2553,712 +2483,7 @@ class Passivbot:
                 out[pside] = 0.0
         return out
 
-    def _get_last_position_changes_from_fill_events(self) -> dict:
-        """Get last position changes using FillEventsManager data (shadow mode equivalent)."""
-        last_position_changes = defaultdict(dict)
-        if self._pnls_manager is None:
-            return last_position_changes
-
-        events = self._pnls_manager.get_events()
-        for symbol in self.positions:
-            for pside in ["long", "short"]:
-                if self.has_position(pside, symbol) and self.is_trailing(symbol, pside):
-                    last_position_changes[symbol][pside] = utc_ms() - 1000 * 60 * 60 * 24 * 7
-                    for ev in reversed(events):
-                        try:
-                            if ev.symbol == symbol and ev.position_side == pside:
-                                last_position_changes[symbol][pside] = ev.timestamp
-                                break
-                        except Exception as e:
-                            logging.error(f"Error in _get_last_position_changes_from_fill_events: {e}")
-        return last_position_changes
-
-    async def _update_pnls_shadow(self) -> bool:
-        """Run the FillEventsManager refresh in shadow mode.
-
-        Returns True if update succeeded, False otherwise.
-        This runs in parallel with update_pnls() but results are only logged,
-        not used for bot decisions.
-        """
-        if not self._pnls_shadow_mode:
-            return False
-
-        if not self._pnls_shadow_initialized:
-            if not await self._init_pnls_shadow_manager():
-                return False
-
-        if self._pnls_manager is None:
-            return False
-
-        try:
-            # Use the same lookback window as legacy pnls
-            age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
-                self.live_value("pnls_max_lookback_days")
-            )
-
-            # Get existing event IDs before refresh
-            existing_ids = set(ev.id for ev in self._pnls_manager.get_events())
-
-            # Check if we need a full refresh (cache empty or too old)
-            events = self._pnls_manager.get_events()
-            needs_full_refresh = not events
-            if events:
-                oldest_event_ts = events[0].timestamp
-                if oldest_event_ts > age_limit + 1000 * 60 * 60 * 24:  # > 1 day newer than limit
-                    needs_full_refresh = True
-                    logging.info(
-                        "[shadow] Cache oldest event (%s) is newer than lookback (%s), doing full refresh",
-                        ts_to_date(oldest_event_ts)[:19],
-                        ts_to_date(age_limit)[:19],
-                    )
-
-            if needs_full_refresh:
-                # Full refresh with proper lookback window
-                logging.info(
-                    "[shadow] Performing full refresh from %s",
-                    ts_to_date(age_limit)[:19],
-                )
-                await self._pnls_manager.refresh(start_ms=int(age_limit), end_ms=None)
-            else:
-                # Incremental refresh like legacy
-                await self._pnls_manager.refresh_latest(overlap=20)
-
-            # Find and log new events (those not in cache before refresh)
-            all_events = self._pnls_manager.get_events()
-            new_events = [ev for ev in all_events if ev.id not in existing_ids]
-            if new_events:
-                self._log_new_fill_events(new_events)
-
-            return True
-
-        except RateLimitExceeded:
-            self._health_rate_limits += 1
-            logging.warning("[rate] hit rate limit while fetching fill events (shadow); retrying next cycle")
-            return False
-        except Exception as e:
-            logging.error("[shadow] Failed to update FillEventsManager: %s", e)
-            if self.logging_level >= 2:
-                traceback.print_exc()
-            return False
-
-    def _compare_pnls_shadow(self) -> None:
-        """Compare legacy pnls with FillEventsManager data and log differences.
-
-        This comparison is logged periodically to avoid spamming logs.
-        Differences are logged at DEBUG level normally, INFO level for significant discrepancies.
-        """
-        if not self._pnls_shadow_mode or self._pnls_manager is None:
-            return
-
-        now_ms = utc_ms()
-        if now_ms - self._pnls_shadow_last_comparison_ts < self._pnls_shadow_comparison_interval_ms:
-            return
-
-        self._pnls_shadow_last_comparison_ts = now_ms
-
-        try:
-            # Get lookback window
-            age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
-                self.live_value("pnls_max_lookback_days")
-            )
-
-            # Legacy pnls data
-            legacy_events = [p for p in getattr(self, "pnls", []) if p.get("timestamp", 0) >= age_limit]
-            legacy_count = len(legacy_events)
-            legacy_pnl_sum = sum(p.get("pnl", 0.0) for p in legacy_events)
-            legacy_ids = set(p.get("id", "") for p in legacy_events)
-
-            # New FillEventsManager data
-            manager_events = self._pnls_manager.get_events(start_ms=int(age_limit))
-            manager_count = len(manager_events)
-            manager_pnl_sum = sum(ev.pnl for ev in manager_events)
-            manager_ids = set(ev.id for ev in manager_events)
-
-            # Calculate differences
-            count_diff = manager_count - legacy_count
-            pnl_diff = manager_pnl_sum - legacy_pnl_sum
-
-            # Find IDs only in one system
-            only_in_legacy = legacy_ids - manager_ids
-            only_in_manager = manager_ids - legacy_ids
-
-            # Latest timestamps
-            legacy_latest = max((p.get("timestamp", 0) for p in legacy_events), default=0)
-            manager_latest = max((ev.timestamp for ev in manager_events), default=0)
-
-            # Log comparison
-            log_level = logging.DEBUG
-            if abs(count_diff) > 10 or abs(pnl_diff) > 1.0:
-                log_level = logging.INFO  # Log more prominently if significant difference
-
-            logging.log(
-                log_level,
-                "[shadow] Comparison: legacy=%d events (pnl=%.4f), manager=%d events (pnl=%.4f), "
-                "diff=%+d events (pnl=%+.4f)",
-                legacy_count,
-                legacy_pnl_sum,
-                manager_count,
-                manager_pnl_sum,
-                count_diff,
-                pnl_diff,
-            )
-
-            if only_in_legacy:
-                logging.debug(
-                    "[shadow] IDs only in legacy (%d): %s",
-                    len(only_in_legacy),
-                    list(only_in_legacy)[:5],  # Show first 5
-                )
-
-            if only_in_manager:
-                logging.debug(
-                    "[shadow] IDs only in manager (%d): %s",
-                    len(only_in_manager),
-                    list(only_in_manager)[:5],  # Show first 5
-                )
-
-            # Log timestamp comparison
-            if legacy_latest > 0 and manager_latest > 0:
-                ts_diff_ms = manager_latest - legacy_latest
-                if abs(ts_diff_ms) > 60_000:  # More than 1 minute difference
-                    logging.info(
-                        "[shadow] Latest timestamp diff: legacy=%s, manager=%s (diff=%+.1fs)",
-                        ts_to_date(legacy_latest),
-                        ts_to_date(manager_latest),
-                        ts_diff_ms / 1000.0,
-                    )
-
-            # Compare unstuck allowances (always log at INFO for validation)
-            legacy_unstuck = self._calc_unstuck_allowances_live(allow_new_unstuck=True)
-            manager_unstuck = self._calc_unstuck_allowances_from_fill_events(allow_new_unstuck=True)
-            unstuck_diff_long = manager_unstuck["long"] - legacy_unstuck["long"]
-            unstuck_diff_short = manager_unstuck["short"] - legacy_unstuck["short"]
-            match_str = "MATCH" if abs(unstuck_diff_long) < 0.01 and abs(unstuck_diff_short) < 0.01 else "DIFF"
-            logging.info(
-                "[shadow] Unstuck allowances %s: legacy=(long=%.4f, short=%.4f), "
-                "manager=(long=%.4f, short=%.4f), diff=(long=%+.4f, short=%+.4f)",
-                match_str,
-                legacy_unstuck["long"],
-                legacy_unstuck["short"],
-                manager_unstuck["long"],
-                manager_unstuck["short"],
-                unstuck_diff_long,
-                unstuck_diff_short,
-            )
-
-            # Compare last position changes (timestamps for trailing logic)
-            legacy_lpc = self.get_last_position_changes()
-            manager_lpc = self._get_last_position_changes_from_fill_events()
-            all_symbols = set(legacy_lpc.keys()) | set(manager_lpc.keys())
-            for symbol in sorted(all_symbols):
-                coin = symbol_to_coin(symbol, verbose=False) or symbol
-                for pside in ["long", "short"]:
-                    legacy_ts = legacy_lpc.get(symbol, {}).get(pside)
-                    manager_ts = manager_lpc.get(symbol, {}).get(pside)
-                    if legacy_ts is None and manager_ts is None:
-                        continue
-                    legacy_dt = ts_to_date(legacy_ts) if legacy_ts else "N/A"
-                    manager_dt = ts_to_date(manager_ts) if manager_ts else "N/A"
-                    if legacy_ts != manager_ts:
-                        diff_s = ((manager_ts or 0) - (legacy_ts or 0)) / 1000.0 if legacy_ts and manager_ts else 0
-                        logging.info(
-                            "[shadow] Last position change %s %s DIFF: legacy=%s, manager=%s (diff=%+.1fs)",
-                            coin,
-                            pside,
-                            legacy_dt,
-                            manager_dt,
-                            diff_s,
-                        )
-                    else:
-                        logging.info(
-                            "[shadow] Last position change %s %s MATCH: %s",
-                            coin,
-                            pside,
-                            legacy_dt,
-                        )
-
-        except Exception as e:
-            logging.error("[shadow] Error during pnls comparison: %s", e)
-            if self.logging_level >= 2:
-                traceback.print_exc()
-
-    async def init_fill_events(self):
-        """Initialise in-memory fill events cache."""
-        if not hasattr(self, "fill_events"):
-            self.fill_events = []
-        if not hasattr(self, "fill_events_cache_path"):
-            self.fill_events_cache_path = make_get_filepath(
-                f"caches/{self.exchange}/{self.user}_fill_events.json"
-            )
-        if not hasattr(self, "fill_events_loaded"):
-            self.fill_events_loaded = False
-
-        if self.fill_events_loaded:
-            return
-
-        age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
-            self.live_value("pnls_max_lookback_days")
-        )
-        loaded_events: List[dict] = []
-        cache_needs_dump = False
-        if os.path.exists(self.fill_events_cache_path):
-            try:
-                loaded_events = json.load(open(self.fill_events_cache_path))
-            except Exception as exc:
-                logging.error(f"error loading {self.fill_events_cache_path}: {exc}")
-
-        merged: Dict[str, dict] = {}
-        if loaded_events:
-            normalized: List[dict] = []
-            for raw in loaded_events:
-                try:
-                    evt = self._canonicalize_fill_event(raw)
-                except Exception as exc:
-                    logging.error(f"discarding malformed cached fill event: {exc}")
-                    continue
-                if evt["timestamp"] >= age_limit:
-                    normalized.append(evt)
-            merged.update({evt["id"]: evt for evt in normalized})
-            if normalized != loaded_events:
-                cache_needs_dump = True
-
-            oldest = min((evt["timestamp"] for evt in normalized), default=None)
-            newest = max((evt["timestamp"] for evt in normalized), default=None)
-            gap_fills: List[dict] = []
-            if newest is not None:
-                try:
-                    gap_fills.extend(await self.fetch_fill_events(start_time=newest - 1000) or [])
-                except Exception as exc:
-                    logging.error(f"failed to fetch recent fill events: {exc}")
-            if oldest is not None and oldest > age_limit + 1000 * 60 * 60 * 4:
-                logging.info(
-                    "fetching missing fill events from before %s",
-                    ts_to_date(oldest),
-                )
-                try:
-                    gap_fills.extend(
-                        await self.fetch_fill_events(start_time=age_limit, end_time=oldest) or []
-                    )
-                except Exception as exc:
-                    logging.error(f"failed to fetch historical fill events: {exc}")
-
-            for raw in gap_fills:
-                try:
-                    evt = self._canonicalize_fill_event(raw)
-                except Exception as exc:
-                    logging.error(f"discarding malformed fill event: {exc}")
-                    continue
-                if evt["timestamp"] >= age_limit:
-                    merged[evt["id"]] = evt
-            if gap_fills:
-                cache_needs_dump = True
-        else:
-            try:
-                fresh = await self.fetch_fill_events(start_time=age_limit)
-            except RateLimitExceeded:
-                self._health_rate_limits += 1
-                logging.warning("[rate] hit rate limit while fetching initial fill events; retrying later")
-                fresh = []
-            except Exception as exc:
-                logging.error(f"failed to fetch initial fill events: {exc}")
-                fresh = []
-
-            for raw in fresh or []:
-                try:
-                    evt = self._canonicalize_fill_event(raw)
-                except Exception as exc:
-                    logging.error(f"discarding malformed fill event: {exc}")
-                    continue
-                if evt["timestamp"] >= age_limit:
-                    merged[evt["id"]] = evt
-            if fresh:
-                cache_needs_dump = True
-
-        self.fill_events = sorted(merged.values(), key=lambda x: x["timestamp"])
-        if not hasattr(self, "_fill_event_fingerprints"):
-            self._fill_event_fingerprints = {}
-        for evt in self.fill_events:
-            fp = self._fingerprint_event(evt)
-            self._fill_event_fingerprints.setdefault(evt["id"], set()).add(fp)
-        self.fill_events_loaded = True
-        if cache_needs_dump and self.fill_events:
-            payload = [dict(evt) for evt in self.fill_events]
-            try:
-                json.dump(payload, open(self.fill_events_cache_path, "w"))
-            except Exception as exc:
-                logging.error(f"error dumping fill events to {self.fill_events_cache_path}: {exc}")
-
-    async def fetch_fill_events(self, start_time=None, end_time=None, limit=None):
-        """Exchange-specific fill event fetcher (to be implemented by subclasses)."""
-        raise NotImplementedError("fetch_fill_events must be implemented by exchange subclasses")
-
-    def _canonicalize_fill_event(self, raw: dict) -> dict:
-        """Validate and normalise a raw fill event into canonical FillEvent shape."""
-        required_keys = (
-            "id",
-            "timestamp",
-            "symbol",
-            "side",
-            "qty",
-            "price",
-            "pnl",
-            "position_side",
-        )
-        missing = [key for key in required_keys if key not in raw]
-        if missing:
-            raise ValueError(f"fill event missing required keys: {missing}")
-
-        try:
-            event_id = str(raw["id"])
-        except Exception as exc:
-            raise ValueError(f"invalid fill id {raw.get('id')}") from exc
-        if not event_id:
-            raise ValueError("fill event id cannot be empty")
-
-        try:
-            ts = int(ensure_millis(raw["timestamp"]))
-        except Exception as exc:
-            raise ValueError(f"invalid fill timestamp {raw.get('timestamp')}") from exc
-
-        symbol = str(raw["symbol"])
-        if not symbol:
-            raise ValueError("fill event symbol cannot be empty")
-
-        side = str(raw["side"]).lower()
-        if side not in ("buy", "sell"):
-            raise ValueError(f"unsupported fill side {raw.get('side')}")
-
-        pside = str(raw["position_side"]).lower()
-        if pside not in ("long", "short"):
-            raise ValueError(f"unsupported position_side {raw.get('position_side')}")
-
-        try:
-            qty = float(raw["qty"])
-        except Exception as exc:
-            raise ValueError(f"invalid fill qty {raw.get('qty')}") from exc
-
-        try:
-            price = float(raw["price"])
-        except Exception as exc:
-            raise ValueError(f"invalid fill price {raw.get('price')}") from exc
-
-        try:
-            pnl = float(raw["pnl"])
-        except Exception as exc:
-            raise ValueError(f"invalid fill pnl {raw.get('pnl')}") from exc
-
-        result = {
-            "id": event_id,
-            "timestamp": ts,
-            "symbol": symbol,
-            "side": side,
-            "qty": qty,
-            "price": price,
-            "pnl": pnl,
-            "position_side": pside,
-        }
-
-        if "fees" in raw and raw["fees"] is not None:
-            try:
-                if "fees" in result:
-                    result["fees"] = eval(raw["fees"])
-            except Exception:
-                logging.warning(f"failed to parse fees for fill {event_id}; dropping field. {result}")
-        if "pb_order_type" in raw and raw["pb_order_type"] is not None:
-            result["pb_order_type"] = str(raw["pb_order_type"])
-
-        return result
-
-    def _fingerprint_event(self, event: dict) -> tuple:
-        return (
-            event.get("id"),
-            int(event.get("timestamp", 0)),
-            round(float(event.get("qty", 0.0)), 12),
-            round(float(event.get("price", 0.0)), 12),
-            round(float(event.get("pnl", 0.0)), 12),
-            str(event.get("pb_order_type")),
-        )
-
-    def _merge_fill_event_group(self, event_id: str, events: List[dict]) -> List[dict]:
-        events = [dict(evt) for evt in sorted(events, key=lambda x: x["timestamp"])]
-        if len(events) == 1:
-            return [events[0]]
-
-        symbols = {evt["symbol"] for evt in events}
-        sides = {evt["side"] for evt in events}
-        psides = {evt["position_side"] for evt in events}
-
-        time_span = events[-1]["timestamp"] - events[0]["timestamp"]
-        if (
-            len(symbols) > 1
-            or len(sides) > 1
-            or len(psides) > 1
-            or time_span > PARTIAL_FILL_MERGE_MAX_DELAY_MS
-        ):
-            reason = []
-            if len(symbols) > 1:
-                reason.append("symbol mismatch")
-            if len(sides) > 1:
-                reason.append("side mismatch")
-            if len(psides) > 1:
-                reason.append("position_side mismatch")
-            if time_span > PARTIAL_FILL_MERGE_MAX_DELAY_MS:
-                reason.append(f"time span {time_span/1000:.1f}s")
-            logging.warning(
-                "fill id %s emitted as multiple events (%s)",
-                event_id,
-                ", ".join(reason) or "unknown reason",
-            )
-            merged_events = []
-            for idx, evt in enumerate(events, start=1):
-                new_evt = dict(evt)
-                if idx > 1:
-                    new_evt["id"] = f"{evt['id']}#{idx}"
-                merged_events.append(new_evt)
-            return merged_events
-
-        total_qty = sum(abs(evt["qty"]) for evt in events)
-        if total_qty <= 0.0:
-            total_qty = sum(evt["qty"] for evt in events)
-        if total_qty == 0.0:
-            total_qty = events[-1]["qty"]
-
-        weighted_price = 0.0
-        for evt in events:
-            qty = abs(evt["qty"]) if total_qty != 0 else evt["qty"]
-            weighted_price += evt["price"] * qty
-
-        merged = dict(events[-1])
-        merged["timestamp"] = events[-1]["timestamp"]
-        merged["qty"] = sum(evt["qty"] for evt in events)
-        merged["pnl"] = sum(evt["pnl"] for evt in events)
-        if total_qty != 0:
-            merged["price"] = weighted_price / total_qty
-        merged_fees = [evt.get("fees") for evt in events if evt.get("fees") is not None]
-        if merged_fees:
-            merged["fees"] = sum(merged_fees)
-        pb_types = {evt.get("pb_order_type") for evt in events if evt.get("pb_order_type")}
-        if len(pb_types) > 1:
-            logging.warning(
-                "fill id %s had multiple pb_order_type values: %s; keeping the latest",
-                event_id,
-                pb_types,
-            )
-        return [merged]
-
-    def _merge_fill_events_collection(self, events: Iterable[dict], age_limit: int) -> List[dict]:
-        grouped: Dict[str, List[dict]] = defaultdict(list)
-        for evt in events:
-            if evt["timestamp"] >= age_limit:
-                grouped[evt["id"]].append(evt)
-
-        merged: List[dict] = []
-        used_ids: set[str] = set()
-        for event_id, group in grouped.items():
-            merged_group = self._merge_fill_event_group(event_id, group)
-            for evt in merged_group:
-                new_evt = dict(evt)
-                if new_evt["id"] in used_ids:
-                    base_id = evt["id"]
-                    suffix = 2
-                    candidate = f"{base_id}#{suffix}"
-                    while candidate in used_ids:
-                        suffix += 1
-                        candidate = f"{base_id}#{suffix}"
-                    new_evt["id"] = candidate
-                used_ids.add(new_evt["id"])
-                merged.append(new_evt)
-
-        merged.sort(key=lambda x: x["timestamp"])
-        return merged
-
-    def _events_close(
-        self,
-        a: dict,
-        b: dict,
-        *,
-        qty_tol: float = 1e-9,
-        price_tol: float = 1e-8,
-        pnl_tol: float = 1e-9,
-    ) -> bool:
-        if a is None or b is None:
-            return False
-        if a.get("symbol") != b.get("symbol"):
-            return False
-        if a.get("side") != b.get("side"):
-            return False
-        if a.get("position_side") != b.get("position_side"):
-            return False
-        if abs(a.get("qty", 0.0) - b.get("qty", 0.0)) > qty_tol:
-            return False
-        price_ref = max(1.0, abs(a.get("price", 0.0)), abs(b.get("price", 0.0)))
-        if abs(a.get("price", 0.0) - b.get("price", 0.0)) > price_tol * price_ref:
-            return False
-        if abs(a.get("pnl", 0.0) - b.get("pnl", 0.0)) > pnl_tol:
-            return False
-        fees_a = a.get("fees")
-        fees_b = b.get("fees")
-        if fees_a is None and fees_b is None:
-            return True
-        if fees_a is None or fees_b is None:
-            return False
-        if abs(fees_a - fees_b) > pnl_tol:
-            return False
-        if str(a.get("pb_order_type")) != str(b.get("pb_order_type")):
-            return False
-        if str(a.get("client_order_id")) != str(b.get("client_order_id")):
-            return False
-        return True
-
-    async def update_fill_events(
-        self, start_time: Optional[int] = None, end_time: Optional[int] = None
-    ):
-        """
-        Fetch canonical fill events and maintain an up-to-date, deduplicated cache.
-
-        The cache is stored in self.fill_events (sorted by timestamp ascending) and may be
-        reused by downstream consumers (e.g., equity reconstruction).
-        """
-
-        if self.stop_signal_received:
-            return False
-        await self.init_fill_events()
-
-        age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
-            self.live_value("pnls_max_lookback_days")
-        )
-
-        previous_map = {evt["id"]: evt for evt in self.fill_events}
-        known_event_ids: set[str] = set(previous_map.keys())
-        for key in list(previous_map.keys()):
-            if "#" in key:
-                known_event_ids.add(key.split("#", 1)[0])
-        latest_ts = self.fill_events[-1]["timestamp"] if self.fill_events else None
-
-        effective_start = start_time
-        fetch_limit = None if start_time is not None else FILL_EVENT_FETCH_LIMIT_DEFAULT
-        if effective_start is None:
-            effective_start = age_limit
-            if self.fill_events:
-                overlap_count = min(len(self.fill_events), FILL_EVENT_FETCH_OVERLAP_COUNT)
-                overlap_idx = max(0, len(self.fill_events) - overlap_count)
-                overlap_ts = self.fill_events[overlap_idx]["timestamp"]
-                now_ts = self.get_exchange_time()
-                min_start = max(age_limit, now_ts - FILL_EVENT_FETCH_OVERLAP_MAX_MS)
-                effective_start = max(age_limit, min_start, overlap_ts)
-            elif latest_ts is not None:
-                effective_start = max(age_limit, latest_ts - 1000)
-
-        try:
-            fetched = await self.fetch_fill_events(
-                start_time=effective_start,
-                end_time=end_time,
-                limit=fetch_limit,
-            )
-        except RateLimitExceeded:
-            self._health_rate_limits += 1
-            logging.warning("[rate] hit rate limit while fetching fill events; retrying next cycle")
-            return False
-        except NotImplementedError:
-            logging.error("fetch_fill_events not implemented for this exchange")
-            return False
-        except Exception as exc:
-            logging.error(f"failed to fetch fill events: {exc}")
-            traceback.print_exc()
-            return False
-
-        grouped_updates: Dict[str, List[dict]] = defaultdict(list)
-        for raw in fetched or []:
-            try:
-                event = self._canonicalize_fill_event(raw)
-            except Exception as exc:
-                logging.error(f"discarding malformed fill event: {exc}")
-                continue
-            if event["timestamp"] < age_limit and event["id"] not in known_event_ids:
-                continue
-            fp = self._fingerprint_event(event)
-            fp_set = self._fill_event_fingerprints.setdefault(event["id"], set())
-            if fp in fp_set:
-                continue
-            fp_set.add(fp)
-            grouped_updates[event["id"]].append(event)
-        if not grouped_updates:
-            return True
-
-        result_map: Dict[str, dict] = {
-            evt["id"]: evt for evt in self.fill_events if evt["timestamp"] >= age_limit
-        }
-
-        delta_count = 0
-        delta_pnl = 0.0
-
-        def _lists_close(new_events: List[dict], old_events: List[dict]) -> bool:
-            if len(new_events) != len(old_events):
-                return False
-            for a, b in zip(new_events, old_events):
-                if not self._events_close(a, b):
-                    return False
-            return True
-
-        for event_id, updates in grouped_updates.items():
-            if not updates:
-                continue
-
-            related_keys = [
-                key for key in result_map.keys() if key == event_id or key.startswith(f"{event_id}#")
-            ]
-            prev_entries = [
-                previous_map[key]
-                for key in previous_map
-                if key == event_id or key.startswith(f"{event_id}#")
-            ]
-            prev_pnl = sum(evt.get("pnl", 0.0) for evt in prev_entries)
-
-            for key in related_keys:
-                result_map.pop(key, None)
-            for key in list(self._fill_event_fingerprints.keys()):
-                if key == event_id or key.startswith(f"{event_id}#"):
-                    del self._fill_event_fingerprints[key]
-
-            merged_group = self._merge_fill_event_group(event_id, updates)
-            if not merged_group:
-                continue
-
-            changed = not _lists_close(merged_group, prev_entries)
-            if changed:
-                delta_count += len(merged_group)
-                new_pnl = sum(evt.get("pnl", 0.0) for evt in merged_group)
-                delta_pnl += new_pnl - prev_pnl
-
-            for evt in merged_group:
-                result_map[evt["id"]] = evt
-                self._fill_event_fingerprints.setdefault(evt["id"], set()).add(
-                    self._fingerprint_event(evt)
-                )
-
-        self.fill_events = sorted(result_map.values(), key=lambda x: x["timestamp"])
-
-        if delta_count > 0:
-            logging.info(
-                f"{delta_count} updated fill event"
-                f"{'s' if delta_count != 1 else ''}"
-                f" (delta pnl {delta_pnl} {self.quote})"
-            )
-
-        if delta_count > 0 or not os.path.exists(self.fill_events_cache_path):
-            cache_payload = [evt for evt in self.fill_events if evt["timestamp"] >= age_limit]
-            try:
-                json.dump(cache_payload, open(self.fill_events_cache_path, "w"))
-            except Exception as exc:
-                logging.error(f"error dumping fill events to {self.fill_events_cache_path}: {exc}")
-        return True
-
-    def log_pnls_change(self, old_pnls, new_pnls):
-        """Log differences between previous and new PnL entries for debugging."""
-        keys = ["id", "timestamp", "symbol", "side", "position_side", "price", "qty"]
-        old_pnls_compressed = {(x[k] for k in keys) for x in old_pnls}
-        new_pnls_compressed = [(x[k] for k in keys) for x in new_pnls]
-        added_pnls = [x for x in new_pnls_compressed if x not in old_pnls_compressed]
+    # Legacy init_fill_events, update_fill_events, etc. removed - using FillEventsManager
 
     async def get_balance_equity_history(
         self, fill_events: Optional[List[dict]] = None, current_balance: Optional[float] = None
@@ -3381,7 +2606,11 @@ class Passivbot:
             return sorted(out, key=lambda x: x["timestamp"])
 
         if fill_events is None:
-            fill_events = getattr(self, "pnls", [])
+            # Use FillEventsManager events converted to dict format
+            if self._pnls_manager:
+                fill_events = [ev.to_dict() for ev in self._pnls_manager.get_events()]
+            else:
+                fill_events = []
 
         events = _extract_events(fill_events)
         if not events:
@@ -3981,25 +3210,8 @@ class Passivbot:
         return "manual"
 
     def _calc_unstuck_allowances_live(self, allow_new_unstuck: bool) -> dict[str, float]:
-        if not allow_new_unstuck or len(getattr(self, "pnls", [])) == 0:
-            return {"long": 0.0, "short": 0.0}
-        pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
-        pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
-        out = {}
-        for pside in ["long", "short"]:
-            pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
-            if pct > 0.0:
-                out[pside] = float(
-                    pbr.calc_auto_unstuck_allowance(
-                        float(self.balance),
-                        pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0),
-                        float(pnls_cumsum_max),
-                        float(pnls_cumsum_last),
-                    )
-                )
-            else:
-                out[pside] = 0.0
-        return out
+        """Calculate unstuck allowances using FillEventsManager."""
+        return self._calc_unstuck_allowances(allow_new_unstuck)
 
     async def calc_ideal_orders_orchestrator_from_snapshot(
         self, snapshot: dict, *, return_snapshot: bool
@@ -5523,14 +4735,6 @@ async def main():
         default=False,
         help="Enable verbose (debug) logging. Equivalent to --log-level debug.",
     )
-    parser.add_argument(
-        "--shadow-mode",
-        dest="shadow_mode",
-        action="store_true",
-        default=False,
-        help="Enable FillEventsManager shadow mode for PnL comparison logging.",
-    )
-
     template_config = get_template_config()
     del template_config["optimize"]
     del template_config["backtest"]
@@ -5555,13 +4759,6 @@ async def main():
         logging_section = {}
     config["logging"] = logging_section
     logging_section["level"] = effective_log_level
-
-    # --shadow-mode flag enables FillEventsManager shadow mode
-    if args.shadow_mode:
-        if "live" not in config or not isinstance(config["live"], dict):
-            config["live"] = {}
-        config["live"]["pnls_manager_shadow_mode"] = True
-        logging.info("[shadow] Shadow mode enabled via CLI flag")
 
     custom_endpoints_cli = args.custom_endpoints
     live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
