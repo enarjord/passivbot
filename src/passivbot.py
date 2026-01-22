@@ -1728,7 +1728,8 @@ class Passivbot:
                                 break
                         except Exception as e:
                             logging.error(f"Error in get_last_position_changes: {e}")
-        logging.info(f"[fills] [debug] last_position_changes: {last_position_changes}")
+        as_datetime = {k: {k0: ts_to_date(v0)[:19] for k0, v0 in v.items()} for k, v in last_position_changes.items()}
+        logging.info(f"[fills] [debug] last_position_changes: {as_datetime}")
         return last_position_changes
 
     # Legacy: wait_for_ohlcvs_1m_to_update removed (CandlestickManager handles freshness)
