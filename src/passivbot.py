@@ -1728,6 +1728,7 @@ class Passivbot:
                                 break
                         except Exception as e:
                             logging.error(f"Error in get_last_position_changes: {e}")
+        logging.info(f"[fills] [debug] last_position_changes: {last_position_changes}")
         return last_position_changes
 
     # Legacy: wait_for_ohlcvs_1m_to_update removed (CandlestickManager handles freshness)
@@ -2466,6 +2467,7 @@ class Passivbot:
 
         pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
+        logging.info(f"[fills] [debug] pnls_cumsum_max, pnls_cumsum_last: {pnls_cumsum_max} {pnls_cumsum_last}")
 
         out = {}
         for pside in ["long", "short"]:
