@@ -149,7 +149,9 @@ def load_ohlcv_data(filepath: str) -> pd.DataFrame:
     arr_deduplicated = deduplicate_rows(arr)
     if len(arr) != len(arr_deduplicated):
         dump_ohlcv_data(arr_deduplicated, filepath)
-        print(f"Caught .npy file with duplicate rows: {filepath} Overwrote with deduplicated version.")
+        print(
+            f"Caught .npy file with duplicate rows: {filepath} Overwrote with deduplicated version."
+        )
     return ensure_millis_df(pd.DataFrame(arr_deduplicated, columns=columns))
 
 
@@ -176,7 +178,9 @@ def fill_gaps_in_ohlcvs(df: pd.DataFrame) -> pd.DataFrame:
     return new_df.reset_index().rename(columns={"index": "timestamp"})
 
 
-def attempt_gap_fix_ohlcvs(df: pd.DataFrame, symbol: str | None = None, verbose: bool = True) -> pd.DataFrame:
+def attempt_gap_fix_ohlcvs(
+    df: pd.DataFrame, symbol: str | None = None, verbose: bool = True
+) -> pd.DataFrame:
     interval = 60_000
     max_hours = 12
     max_gap = interval * 60 * max_hours
@@ -211,4 +215,3 @@ __all__ = [
     "get_days_in_between",
     "load_ohlcv_data",
 ]
-

@@ -887,7 +887,9 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
                 with portalocker.Lock(c2s_lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT):
                     if verbose:
                         logging.info("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
-                    _atomic_write_json(coin_to_symbol_map_path, coin_to_symbol_map, indent=4, sort_keys=True)
+                    _atomic_write_json(
+                        coin_to_symbol_map_path, coin_to_symbol_map, indent=4, sort_keys=True
+                    )
                     # Update in-memory cache
                     try:
                         st = os.stat(coin_to_symbol_map_path)
@@ -899,7 +901,9 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
                     except Exception:
                         pass
             except portalocker.LockException:
-                logging.warning("Could not acquire lock for %s, skipping write", coin_to_symbol_map_path)
+                logging.warning(
+                    "Could not acquire lock for %s, skipping write", coin_to_symbol_map_path
+                )
 
         except portalocker.LockException:
             logging.warning("Could not acquire lock for symbol map cache update, skipping")
@@ -1049,7 +1053,9 @@ async def format_approved_ignored_coins(config, exchanges: [str], quote=None, ve
         {"long": [""], "short": [""]},
     ]:
         if bool(_require_live_value(config, "empty_means_all_approved")):
-            marketss = await asyncio.gather(*[load_markets(ex, verbose=False, quote=quote) for ex in exchanges])
+            marketss = await asyncio.gather(
+                *[load_markets(ex, verbose=False, quote=quote) for ex in exchanges]
+            )
             marketss = [filter_markets(m, ex, quote=quote)[0] for m, ex in zip(marketss, exchanges)]
             approved_coins = set()
             for markets in marketss:

@@ -26,6 +26,7 @@ class PrefixFilter(logging.Filter):
         record.log_prefix = self.prefix
         return True
 
+
 _LOG_LEVEL_ALIASES = {
     "warning": 0,
     "warn": 0,

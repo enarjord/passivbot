@@ -264,9 +264,7 @@ class HyperliquidBot(CCXTBot):
     async def execute_cancellation(self, order: dict) -> dict:
         """Hyperliquid: Cancel order with vault support."""
         params = (
-            {"vaultAddress": self.user_info["wallet_address"]}
-            if self.user_info["is_vault"]
-            else {}
+            {"vaultAddress": self.user_info["wallet_address"]} if self.user_info["is_vault"] else {}
         )
         return await self.cca.cancel_order(order["id"], symbol=order["symbol"], params=params)
 

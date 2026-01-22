@@ -375,9 +375,7 @@ class Passivbot:
         # This is the config-level setting; exchange-specific bots may override
         # self.hedge_mode to False if the exchange doesn't support two-way mode.
         # Effective hedge_mode = config setting AND exchange capability.
-        self._config_hedge_mode = bool(
-            get_optional_live_value(self.config, "hedge_mode", True)
-        )
+        self._config_hedge_mode = bool(get_optional_live_value(self.config, "hedge_mode", True))
         self.hedge_mode = True  # Exchange capability, may be overridden by subclass
         self.inverse = False
         self.active_symbols = []
@@ -689,10 +687,14 @@ class Passivbot:
         await self.update_exchange_config()  # set hedge mode
         # Reuse existing ccxt session when available (ensures shared options such as fetchMarkets types).
         cc_instance = getattr(self, "cca", None)
-        self.markets_dict = await load_markets(self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote)
+        self.markets_dict = await load_markets(
+            self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote
+        )
         await self.determine_utc_offset(verbose)
         # ineligible symbols cannot open new positions
-        eligible, _, reasons = filter_markets(self.markets_dict, self.exchange, quote=self.quote, verbose=verbose)
+        eligible, _, reasons = filter_markets(
+            self.markets_dict, self.exchange, quote=self.quote, verbose=verbose
+        )
         self.eligible_symbols = set(eligible)
         self.ineligible_symbols = reasons
         self.set_market_specific_settings()
@@ -946,7 +948,11 @@ class Passivbot:
             logging.info("EMA debug | " + " | ".join(logs))
 
     async def warmup_candles_staggered(
-        self, *, concurrency: int | None = None, window_candles: int | None = None, ttl_ms: int = 300_000
+        self,
+        *,
+        concurrency: int | None = None,
+        window_candles: int | None = None,
+        ttl_ms: int = 300_000,
     ) -> None:
         """Warm up recent candles for all approved symbols in a staggered way.
 
@@ -1728,7 +1734,10 @@ class Passivbot:
                                 break
                         except Exception as e:
                             logging.error(f"Error in get_last_position_changes: {e}")
-        as_datetime = {k: {k0: ts_to_date(v0)[:19] for k0, v0 in v.items()} for k, v in last_position_changes.items()}
+        as_datetime = {
+            k: {k0: ts_to_date(v0)[:19] for k0, v0 in v.items()}
+            for k, v in last_position_changes.items()
+        }
         logging.info(f"[fills] [debug] last_position_changes: {as_datetime}")
         return last_position_changes
 
@@ -2451,7 +2460,12 @@ class Passivbot:
             # Truncate to summary
             total_pnl = sum(ev.pnl for ev in new_events)
             pnl_sign = "+" if total_pnl >= 0 else ""
-            logging.info("[fill] %d fills, pnl=%s%s USDT", len(new_events), pnl_sign, round_dynamic(total_pnl, 3))
+            logging.info(
+                "[fill] %d fills, pnl=%s%s USDT",
+                len(new_events),
+                pnl_sign,
+                round_dynamic(total_pnl, 3),
+            )
         else:
             # Log each event
             for event in sorted(new_events, key=lambda e: e.timestamp):
@@ -2468,12 +2482,23 @@ class Passivbot:
 
         pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
-        logging.info(f"[fills] [debug] pnls_cumsum_max, pnls_cumsum_last: {pnls_cumsum_max} {pnls_cumsum_last}")
-
         out = {}
         for pside in ["long", "short"]:
             pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
             if pct > 0.0:
+                balance_peak = self.balance + (pnls_cumsum_max - pnls_cumsum_last)
+                drop_since_peak_pct = self.balance / balance_peak - 1.0
+                allowance_raw = balance_peak * (pct + drop_since_peak_pct)
+                allowance_mod = balance_peak * (
+                    pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+                    + drop_since_peak_pct
+                )
+                logging.info(
+                    f"[fills] [debug] pnls_cumsum_max: {pnls_cumsum_max}, pnls_cumsum_last: {pnls_cumsum_last}, bal: {self.balance} bal peak: {balance_peak}"
+                )
+                logging.info(
+                    f"[fills] [debug] drop since peak pct: {drop_since_peak_pct}, allowance_raw: {allowance_raw}, allowance_mod: {allowance_mod}"
+                )
                 out[pside] = float(
                     pbr.calc_auto_unstuck_allowance(
                         float(self.balance),

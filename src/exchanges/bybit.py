@@ -136,14 +136,10 @@ class BybitBot(CCXTBot):
             params["endTime"] = int(end_time)
         fetched = (await self.cca.private_get_v5_position_closed_pnl(params))["result"]
         while True:
-            fetched["list"] = sorted(
-                floatify(fetched["list"]), key=lambda x: float(x["updatedTime"])
-            )
+            fetched["list"] = sorted(floatify(fetched["list"]), key=lambda x: float(x["updatedTime"]))
             for i in range(len(fetched["list"])):
                 fetched["list"][i]["timestamp"] = float(fetched["list"][i]["updatedTime"])
-                fetched["list"][i]["symbol"] = self.get_symbol_id_inv(
-                    fetched["list"][i]["symbol"]
-                )
+                fetched["list"][i]["symbol"] = self.get_symbol_id_inv(fetched["list"][i]["symbol"])
                 fetched["list"][i]["pnl"] = float(fetched["list"][i]["closedPnl"])
                 fetched["list"][i]["side"] = fetched["list"][i]["side"].lower()
                 fetched["list"][i]["position_side"] = (
@@ -455,9 +451,7 @@ class BybitBot(CCXTBot):
                 self.cca.set_margin_mode(
                     "cross",
                     symbol=symbol,
-                    params={
-                        "leverage": int(self.config_get(["live", "leverage"], symbol=symbol))
-                    },
+                    params={"leverage": int(self.config_get(["live", "leverage"], symbol=symbol))},
                 )
             )
             coros_to_call_lev[symbol] = asyncio.create_task(

@@ -56,7 +56,12 @@ _DEFAULT_RATE_LIMITS: Dict[str, Dict[str, int]] = {
     "bitget": {"fill_history": 120, "fetch_order": 60, "default": 120},
     "hyperliquid": {"fetch_my_trades": 120, "default": 120},
     "gateio": {"fetch_closed_orders": 120, "default": 120},
-    "kucoin": {"fetch_my_trades": 120, "fetch_positions_history": 120, "fetch_order": 60, "default": 120},
+    "kucoin": {
+        "fetch_my_trades": 120,
+        "fetch_positions_history": 120,
+        "fetch_order": 60,
+        "default": 120,
+    },
     # OKX: /fills = 60 req/2s, /fills-history = 10 req/2s (conservative estimates)
     "okx": {"fetch_my_trades": 1800, "fills_history": 300, "default": 300},
 }
@@ -144,7 +149,9 @@ class RateLimitCoordinator:
         calls = self._load_calls()
         now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
         cutoff = now_ms - self.window_ms
-        return sum(1 for c in calls if c.get("endpoint") == endpoint and c.get("timestamp_ms", 0) > cutoff)
+        return sum(
+            1 for c in calls if c.get("endpoint") == endpoint and c.get("timestamp_ms", 0) > cutoff
+        )
 
     def get_limit(self, endpoint: str) -> int:
         """Get rate limit for an endpoint."""
@@ -153,11 +160,13 @@ class RateLimitCoordinator:
     def record_call(self, endpoint: str) -> None:
         """Record an API call."""
         calls = self._load_calls()
-        calls.append({
-            "endpoint": endpoint,
-            "timestamp_ms": int(datetime.now(tz=timezone.utc).timestamp() * 1000),
-            "user": self.user,
-        })
+        calls.append(
+            {
+                "endpoint": endpoint,
+                "timestamp_ms": int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+                "user": self.user,
+            }
+        )
         self._save_calls(calls)
 
     async def wait_if_needed(self, endpoint: str) -> float:
@@ -170,7 +179,11 @@ class RateLimitCoordinator:
             wait_time = self.window_ms / 1000.0
             logger.info(
                 "RateLimitCoordinator: %s:%s at limit (%d/%d), waiting %.1fs",
-                self.exchange, endpoint, current, limit, wait_time
+                self.exchange,
+                endpoint,
+                current,
+                limit,
+                wait_time,
             )
             await asyncio.sleep(wait_time)
             return wait_time
@@ -179,7 +192,11 @@ class RateLimitCoordinator:
             jitter = random.uniform(0.1, 2.0)
             logger.debug(
                 "RateLimitCoordinator: %s:%s approaching limit (%d/%d), jitter %.2fs",
-                self.exchange, endpoint, current, limit, jitter
+                self.exchange,
+                endpoint,
+                current,
+                limit,
+                jitter,
             )
             await asyncio.sleep(jitter)
             return jitter
@@ -741,7 +758,9 @@ class FillEventCache:
                 data.setdefault(key, default[key])
             self._metadata = data
         except Exception as exc:
-            logger.warning("FillEventCache.load_metadata: failed to read %s (%s)", self.metadata_path, exc)
+            logger.warning(
+                "FillEventCache.load_metadata: failed to read %s (%s)", self.metadata_path, exc
+            )
             self._metadata = default
 
         return self._metadata
@@ -761,7 +780,9 @@ class FillEventCache:
             os.replace(tmp_path, self.metadata_path)
             logger.debug("FillEventCache.save_metadata: wrote to %s", self.metadata_path)
         except Exception as exc:
-            logger.error("FillEventCache.save_metadata: failed to write %s (%s)", self.metadata_path, exc)
+            logger.error(
+                "FillEventCache.save_metadata: failed to write %s (%s)", self.metadata_path, exc
+            )
 
     def update_metadata_from_events(self, events: Sequence[FillEvent]) -> None:
         """Update metadata timestamps based on events."""
@@ -809,7 +830,9 @@ class FillEventCache:
                 gap["end_ts"] = max(gap["end_ts"], end_ts)
                 gap["retry_count"] = gap.get("retry_count", 0) + 1
                 if gap["retry_count"] >= _GAP_MAX_RETRIES:
-                    gap["confidence"] = max(gap.get("confidence", 0), GAP_CONFIDENCE_LIKELY_LEGITIMATE)
+                    gap["confidence"] = max(
+                        gap.get("confidence", 0), GAP_CONFIDENCE_LIKELY_LEGITIMATE
+                    )
                 logger.info(
                     "FillEventCache.add_known_gap: updated gap %s → %s (retry_count=%d)",
                     _format_ms(gap["start_ts"]),
@@ -2601,20 +2624,21 @@ class GateioFetcher(BaseFetcher):
             fetch_count += 1
             try:
                 # Use the timerange endpoint directly via CCXT's private API
-                batch = await self.api.private_futures_get_settle_my_trades_timerange({
-                    "settle": "usdt",
-                    "from": from_s,
-                    "to": to_s,
-                    "limit": self.trade_limit,
-                    "offset": offset,
-                })
+                batch = await self.api.private_futures_get_settle_my_trades_timerange(
+                    {
+                        "settle": "usdt",
+                        "from": from_s,
+                        "to": to_s,
+                        "limit": self.trade_limit,
+                        "offset": offset,
+                    }
+                )
                 consecutive_rate_limits = 0
             except RateLimitExceeded as exc:
                 consecutive_rate_limits += 1
-                sleep_time = min(2 ** consecutive_rate_limits, 30)
+                sleep_time = min(2**consecutive_rate_limits, 30)
                 logger.debug(
-                    "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs",
-                    exc, sleep_time
+                    "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs", exc, sleep_time
                 )
                 await asyncio.sleep(sleep_time)
                 continue
@@ -2622,10 +2646,11 @@ class GateioFetcher(BaseFetcher):
                 # Check if it's a rate limit error in disguise
                 if "TOO_MANY_REQUESTS" in str(exc):
                     consecutive_rate_limits += 1
-                    sleep_time = min(2 ** consecutive_rate_limits, 30)
+                    sleep_time = min(2**consecutive_rate_limits, 30)
                     logger.debug(
                         "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs",
-                        exc, sleep_time
+                        exc,
+                        sleep_time,
                     )
                     await asyncio.sleep(sleep_time)
                     continue
@@ -2705,9 +2730,7 @@ class GateioFetcher(BaseFetcher):
             "info": raw,  # Keep raw data for _normalize_trade to access
         }
 
-    async def _fetch_orders_for_pnl(
-        self, order_ids: set[str]
-    ) -> Dict[str, Dict[str, object]]:
+    async def _fetch_orders_for_pnl(self, order_ids: set[str]) -> Dict[str, Dict[str, object]]:
         """Fetch closed orders to get PnL data."""
         orders_by_id: Dict[str, Dict[str, object]] = {}
         max_fetches = 400
@@ -2805,10 +2828,7 @@ class GateioFetcher(BaseFetcher):
 
         # Get client order ID from trade or order
         client_order_id = str(
-            info.get("text")
-            or order.get("clientOrderId")
-            or order_info.get("text")
-            or ""
+            info.get("text") or order.get("clientOrderId") or order_info.get("text") or ""
         )
 
         # Check detail cache first
@@ -3059,7 +3079,8 @@ class KucoinFetcher(BaseFetcher):
 
                 # Find all fills within the match window that haven't been assigned yet
                 matching_fills = [
-                    c for c in symbol_closes
+                    c
+                    for c in symbol_closes
                     if c["id"] not in assigned_trade_ids
                     and abs(c["timestamp"] - p_ts) < match_window_ms
                 ]
@@ -3070,7 +3091,9 @@ class KucoinFetcher(BaseFetcher):
                     continue
 
                 # Compute total qty across matching fills
-                total_qty = sum(abs(float(f.get("qty", 0) or f.get("amount", 0) or 0)) for f in matching_fills)
+                total_qty = sum(
+                    abs(float(f.get("qty", 0) or f.get("amount", 0) or 0)) for f in matching_fills
+                )
 
                 if total_qty <= 0:
                     # Fallback: assign all PnL to closest fill
@@ -3094,7 +3117,9 @@ class KucoinFetcher(BaseFetcher):
 
         # Log unmatched positions for debugging
         if unmatched_positions:
-            total_unmatched_pnl = sum(float(p.get("realizedPnl", 0) or 0) for p in unmatched_positions)
+            total_unmatched_pnl = sum(
+                float(p.get("realizedPnl", 0) or 0) for p in unmatched_positions
+            )
             logger.debug(
                 "[pnl] KucoinFetcher._match_pnls: %d position closes (%s total PnL) "
                 "could not be matched to any trade fills",
@@ -3293,7 +3318,9 @@ class KucoinFetcher(BaseFetcher):
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             if total > 50:
-                logger.info("KucoinFetcher: enrichment complete (%d orders, %d events)", total, total_events)
+                logger.info(
+                    "KucoinFetcher: enrichment complete (%d orders, %d events)", total, total_events
+                )
 
             # Apply results to all events sharing the same orderId
             for res in results:

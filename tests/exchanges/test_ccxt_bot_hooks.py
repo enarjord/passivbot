@@ -1,4 +1,5 @@
 """Tests for CCXTBot Template Method hooks."""
+
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
@@ -93,13 +94,14 @@ class TestWatchOrdersTemplateMethod:
         bot.stop_websocket = False  # Start running
 
         # Mock the hooks
-        bot._do_watch_orders = AsyncMock(return_value=[
-            {"amount": 1.0, "info": {"positionSide": "LONG"}}
-        ])
+        bot._do_watch_orders = AsyncMock(
+            return_value=[{"amount": 1.0, "info": {"positionSide": "LONG"}}]
+        )
 
         # Set stop_websocket = True after first call to exit loop
         def stop_after_call(orders):
             bot.stop_websocket = True
+
         bot.handle_order_update = MagicMock(side_effect=stop_after_call)
 
         await bot.watch_orders()
@@ -268,22 +270,24 @@ class TestFetchPnls:
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
         bot.cca = MagicMock()
-        bot.cca.fetch_my_trades = AsyncMock(return_value=[
-            {
-                "id": "trade1",
-                "timestamp": 1000,
-                "side": "buy",
-                "amount": 1.5,
-                "info": {"realized_pnl": "0"},
-            },
-            {
-                "id": "trade2",
-                "timestamp": 2000,
-                "side": "sell",
-                "amount": 1.5,
-                "info": {"realized_pnl": "25.50"},
-            },
-        ])
+        bot.cca.fetch_my_trades = AsyncMock(
+            return_value=[
+                {
+                    "id": "trade1",
+                    "timestamp": 1000,
+                    "side": "buy",
+                    "amount": 1.5,
+                    "info": {"realized_pnl": "0"},
+                },
+                {
+                    "id": "trade2",
+                    "timestamp": 2000,
+                    "side": "sell",
+                    "amount": 1.5,
+                    "info": {"realized_pnl": "25.50"},
+                },
+            ]
+        )
 
         result = await bot.fetch_pnls(start_time=500)
 
@@ -391,6 +395,7 @@ class TestFetchPositionsHooks:
     def bot_with_mock_cca(self):
         """Bot with mocked cca.fetch_positions."""
         from exchanges.ccxt_bot import CCXTBot
+
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
         bot.cca = MagicMock()
@@ -462,9 +467,11 @@ class TestFetchPositionsHooks:
     async def test_fetch_positions_uses_hooks(self, bot_with_mock_cca):
         """fetch_positions should use _do_fetch_positions and _normalize_positions."""
         bot = bot_with_mock_cca
-        bot.cca.fetch_positions = AsyncMock(return_value=[
-            {"symbol": "BTC/USDT:USDT", "side": "long", "contracts": 1.0, "entryPrice": 45000}
-        ])
+        bot.cca.fetch_positions = AsyncMock(
+            return_value=[
+                {"symbol": "BTC/USDT:USDT", "side": "long", "contracts": 1.0, "entryPrice": 45000}
+            ]
+        )
 
         result = await bot.fetch_positions()
 
@@ -480,6 +487,7 @@ class TestFetchPnlsHooks:
     def bot_with_mock_cca(self):
         """Bot with mocked cca.fetch_my_trades."""
         from exchanges.ccxt_bot import CCXTBot
+
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
         bot.cca = MagicMock()
@@ -544,9 +552,11 @@ class TestFetchPnlsHooks:
     async def test_fetch_pnls_uses_hooks(self, bot_with_mock_cca):
         """fetch_pnls should use _do_fetch_pnls and _normalize_pnls."""
         bot = bot_with_mock_cca
-        bot.cca.fetch_my_trades = AsyncMock(return_value=[
-            {"amount": 1.0, "side": "buy", "timestamp": 1000, "info": {"realized_pnl": "100"}}
-        ])
+        bot.cca.fetch_my_trades = AsyncMock(
+            return_value=[
+                {"amount": 1.0, "side": "buy", "timestamp": 1000, "info": {"realized_pnl": "100"}}
+            ]
+        )
 
         result = await bot.fetch_pnls(start_time=500)
 
@@ -562,6 +572,7 @@ class TestFetchTickersHooks:
     def bot_with_mock_cca(self):
         """Bot with mocked cca.fetch_tickers."""
         from exchanges.ccxt_bot import CCXTBot
+
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
         bot.cca = MagicMock()
@@ -622,9 +633,9 @@ class TestFetchTickersHooks:
     async def test_fetch_tickers_uses_hooks(self, bot_with_mock_cca):
         """fetch_tickers should use _do_fetch_tickers and _normalize_tickers."""
         bot = bot_with_mock_cca
-        bot.cca.fetch_tickers = AsyncMock(return_value={
-            "BTC/USDT:USDT": {"bid": 45000, "ask": 45001, "last": 45000}
-        })
+        bot.cca.fetch_tickers = AsyncMock(
+            return_value={"BTC/USDT:USDT": {"bid": 45000, "ask": 45001, "last": 45000}}
+        )
 
         result = await bot.fetch_tickers()
 
@@ -639,6 +650,7 @@ class TestBuildOrderParams:
     def bot_with_config(self):
         """Bot with config for time_in_force."""
         from exchanges.ccxt_bot import CCXTBot
+
         bot = CCXTBot.__new__(CCXTBot)
         bot.config = {"live": {"time_in_force": "post_only"}}
         return bot

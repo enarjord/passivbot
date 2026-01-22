@@ -158,7 +158,7 @@ def _extract_base_coin(symbol: str) -> str:
     # Handle raw format without separators (e.g., BTCUSDT)
     for suffix in ["USDT", "USDC", "USD", "BUSD", "TUSD"]:
         if symbol.endswith(suffix):
-            return symbol[:-len(suffix)]
+            return symbol[: -len(suffix)]
     return symbol
 
 
@@ -317,7 +317,9 @@ def _start_background_refresh(
                 data = accounts.get(account)
                 if data:
                     with _REFRESH_LOCK:
-                        _REFRESH_STATE["progress"] = f"Rebuilding {account} ({i+1}/{len(selected_accounts)})..."
+                        _REFRESH_STATE["progress"] = (
+                            f"Rebuilding {account} ({i+1}/{len(selected_accounts)})..."
+                        )
                     _rebuild_manager(data)
 
             with _REFRESH_LOCK:
@@ -429,11 +431,7 @@ def build_figures(df: pd.DataFrame):
         title="Cumulative Realized PnL",
         hover_data=["symbol", "pnl", "pb_order_type"],
     )
-    daily = (
-        df.groupby(["date", "account"], as_index=False)
-        .agg({"pnl": "sum"})
-        .sort_values("date")
-    )
+    daily = df.groupby(["date", "account"], as_index=False).agg({"pnl": "sum"}).sort_values("date")
     daily_fig = px.bar(
         daily,
         x="date",
@@ -458,9 +456,7 @@ def build_figures(df: pd.DataFrame):
     )
     # Replace fees chart with PnL by account summary
     account_pnl = (
-        df.groupby("account", as_index=False)
-        .agg({"pnl": "sum"})
-        .sort_values("pnl", ascending=False)
+        df.groupby("account", as_index=False).agg({"pnl": "sum"}).sort_values("pnl", ascending=False)
     )
     account_fig = px.bar(account_pnl, x="account", y="pnl", title="Total PnL by Account")
     return cum_fig, daily_fig, top_fig, account_fig
@@ -551,17 +547,25 @@ def build_cache_health_panel(summaries: List[Dict[str, Any]]) -> html.Div:
 
         card = dbc.Card(
             [
-                dbc.CardHeader([
-                    html.Strong(account),
-                    dbc.Badge(status_text, color=status_color, className="ms-2"),
-                ]),
-                dbc.CardBody([
-                    html.P(f"Events: {events_count:,}"),
-                    html.P(f"First: {first_event}"),
-                    html.P(f"Last: {last_event}"),
-                    html.P(f"Gap hours: {total_gap_hours:.1f}"),
-                    html.Ul(gap_details) if gap_details else html.P("No gaps", className="text-muted"),
-                ]),
+                dbc.CardHeader(
+                    [
+                        html.Strong(account),
+                        dbc.Badge(status_text, color=status_color, className="ms-2"),
+                    ]
+                ),
+                dbc.CardBody(
+                    [
+                        html.P(f"Events: {events_count:,}"),
+                        html.P(f"First: {first_event}"),
+                        html.P(f"Last: {last_event}"),
+                        html.P(f"Gap hours: {total_gap_hours:.1f}"),
+                        (
+                            html.Ul(gap_details)
+                            if gap_details
+                            else html.P("No gaps", className="text-muted")
+                        ),
+                    ]
+                ),
             ],
             className="mb-2",
         )
@@ -584,13 +588,14 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
 
     # Setup log handler
     log_handler = DashLogHandler()
-    log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S"))
+    log_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
+    )
     logging.getLogger().addHandler(log_handler)
 
     app.layout = dbc.Container(
         [
             html.H2("Fill Events Dashboard"),
-
             # Loading overlay - shows when refresh is running
             html.Div(
                 id="loading-overlay",
@@ -609,19 +614,25 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
                 children=[
                     dbc.Card(
                         [
-                            dbc.CardBody([
-                                html.Div([
-                                    dbc.Spinner(size="lg", color="primary"),
-                                    html.H4("Fetching Fill Events...", className="mt-3"),
-                                    html.P(id="loading-progress", className="text-muted mb-0"),
-                                ], className="text-center")
-                            ])
+                            dbc.CardBody(
+                                [
+                                    html.Div(
+                                        [
+                                            dbc.Spinner(size="lg", color="primary"),
+                                            html.H4("Fetching Fill Events...", className="mt-3"),
+                                            html.P(
+                                                id="loading-progress", className="text-muted mb-0"
+                                            ),
+                                        ],
+                                        className="text-center",
+                                    )
+                                ]
+                            )
                         ],
                         style={"width": "350px"},
                     )
                 ],
             ),
-
             # Controls row
             dbc.Row(
                 [
@@ -677,20 +688,25 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
                     dbc.Col(
                         [
                             html.Label("Actions"),
-                            html.Div([
-                                dbc.Button(
-                                    "Refresh", id="refresh-btn", color="primary",
-                                    size="sm", className="me-1", n_clicks=0
-                                ),
-                                html.Span(id="refresh-status", className="ms-2 text-muted small"),
-                            ])
+                            html.Div(
+                                [
+                                    dbc.Button(
+                                        "Refresh",
+                                        id="refresh-btn",
+                                        color="primary",
+                                        size="sm",
+                                        className="me-1",
+                                        n_clicks=0,
+                                    ),
+                                    html.Span(id="refresh-status", className="ms-2 text-muted small"),
+                                ]
+                            ),
                         ],
                         md=2,
                     ),
                 ],
                 className="mb-3",
             ),
-
             # Tabs
             dbc.Tabs(
                 [
@@ -704,16 +720,13 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
                 active_tab="tab-overview",
                 className="mb-3",
             ),
-
             # Tab content container
             html.Div(id="tab-content"),
-
             # Data stores
             dcc.Store(id="fill-data"),
             dcc.Store(id="refresh-trigger", data=0),
             dcc.Store(id="refresh-params"),  # Store params for background refresh
             dcc.Download(id="download-csv"),
-
             # Interval for refresh polling and log updates
             dcc.Interval(id="refresh-poll-interval", interval=500, n_intervals=0),
             dcc.Interval(id="log-interval", interval=1000, n_intervals=0),
@@ -751,7 +764,9 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
 
         selected = selected_accounts or list(accounts.keys())
         start_ms = int(pd.Timestamp(start_date, tz="UTC").timestamp() * 1000) if start_date else None
-        end_ms = int(pd.Timestamp(end_date, tz="UTC").timestamp() * 1000) + 86400000 if end_date else None
+        end_ms = (
+            int(pd.Timestamp(end_date, tz="UTC").timestamp() * 1000) + 86400000 if end_date else None
+        )
 
         if start_ms is None or end_ms is None:
             logging.warning("Select date range first")
@@ -817,7 +832,9 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
     def load_data(trigger, selected_accounts, symbols, start_date, end_date):
         selected = selected_accounts or list(accounts.keys())
         start_ms = int(pd.Timestamp(start_date, tz="UTC").timestamp() * 1000) if start_date else None
-        end_ms = int(pd.Timestamp(end_date, tz="UTC").timestamp() * 1000) + 86400000 if end_date else None
+        end_ms = (
+            int(pd.Timestamp(end_date, tz="UTC").timestamp() * 1000) + 86400000 if end_date else None
+        )
 
         # Aggregate from cache
         df = _aggregate_accounts(accounts, selected, start_ms, end_ms, symbols if symbols else None)
@@ -848,41 +865,42 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
 
         if active_tab == "tab-console":
             log_text = _get_log_messages()
-            return html.Div([
-                html.H4("Console Output"),
-                html.P("Live log messages from the fill events manager:", className="text-muted"),
-                html.Pre(
-                    log_text or "No log messages yet...",
-                    id="console-log-content",
-                    style={
-                        "backgroundColor": "#1e1e1e",
-                        "color": "#d4d4d4",
-                        "padding": "15px",
-                        "borderRadius": "5px",
-                        "maxHeight": "500px",
-                        "overflowY": "auto",
-                        "fontFamily": "monospace",
-                        "fontSize": "12px",
-                    }
-                ),
-            ])
+            return html.Div(
+                [
+                    html.H4("Console Output"),
+                    html.P("Live log messages from the fill events manager:", className="text-muted"),
+                    html.Pre(
+                        log_text or "No log messages yet...",
+                        id="console-log-content",
+                        style={
+                            "backgroundColor": "#1e1e1e",
+                            "color": "#d4d4d4",
+                            "padding": "15px",
+                            "borderRadius": "5px",
+                            "maxHeight": "500px",
+                            "overflowY": "auto",
+                            "fontFamily": "monospace",
+                            "fontSize": "12px",
+                        },
+                    ),
+                ]
+            )
 
         df = pd.DataFrame(fill_data) if fill_data else pd.DataFrame()
 
         if active_tab == "tab-overview":
             if df.empty:
-                return html.Div([
-                    html.H4("No Data"),
-                    html.P("Select accounts and date range, then click 'Refresh' to fetch data."),
-                ], className="text-center mt-5")
+                return html.Div(
+                    [
+                        html.H4("No Data"),
+                        html.P("Select accounts and date range, then click 'Refresh' to fetch data."),
+                    ],
+                    className="text-center mt-5",
+                )
 
             figs = build_figures(df)
             # Sort by timestamp (numeric) for correct ordering, use datetime_str for display
-            recent = (
-                df.sort_values("timestamp", ascending=False)
-                .head(200)
-                .to_dict(orient="records")
-            )
+            recent = df.sort_values("timestamp", ascending=False).head(200).to_dict(orient="records")
             # Define columns: datetime_str for readable display, exclude fee_cost from main view
             # (fees are inconsistent across exchanges)
             # Use normalized coin (base asset) instead of full symbol to merge USDT/USDC variants
@@ -897,30 +915,36 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
                 {"name": "PnL", "id": "pnl", "type": "numeric", "format": {"specifier": ".4f"}},
                 {"name": "Type", "id": "pb_order_type"},
             ]
-            return html.Div([
-                dbc.Row([
-                    dbc.Col(dcc.Graph(figure=figs[0]), md=6),
-                    dbc.Col(dcc.Graph(figure=figs[1]), md=6),
-                ]),
-                dbc.Row([
-                    dbc.Col(dcc.Graph(figure=figs[2]), md=6),
-                    dbc.Col(dcc.Graph(figure=figs[3]), md=6),
-                ]),
-                html.H4("Recent fills", className="mt-4"),
-                dash_table.DataTable(
-                    columns=table_columns,
-                    data=recent,
-                    page_size=25,
-                    sort_action="native",
-                    filter_action="native",
-                    style_table={"overflowX": "auto"},
-                    style_cell_conditional=[
-                        {"if": {"column_id": "datetime_str"}, "width": "160px"},
-                        {"if": {"column_id": "account"}, "width": "120px"},
-                        {"if": {"column_id": "coin"}, "width": "80px"},
-                    ],
-                ),
-            ])
+            return html.Div(
+                [
+                    dbc.Row(
+                        [
+                            dbc.Col(dcc.Graph(figure=figs[0]), md=6),
+                            dbc.Col(dcc.Graph(figure=figs[1]), md=6),
+                        ]
+                    ),
+                    dbc.Row(
+                        [
+                            dbc.Col(dcc.Graph(figure=figs[2]), md=6),
+                            dbc.Col(dcc.Graph(figure=figs[3]), md=6),
+                        ]
+                    ),
+                    html.H4("Recent fills", className="mt-4"),
+                    dash_table.DataTable(
+                        columns=table_columns,
+                        data=recent,
+                        page_size=25,
+                        sort_action="native",
+                        filter_action="native",
+                        style_table={"overflowX": "auto"},
+                        style_cell_conditional=[
+                            {"if": {"column_id": "datetime_str"}, "width": "160px"},
+                            {"if": {"column_id": "account"}, "width": "120px"},
+                            {"if": {"column_id": "coin"}, "width": "80px"},
+                        ],
+                    ),
+                ]
+            )
 
         elif active_tab == "tab-symbol":
             if df.empty:
@@ -928,7 +952,11 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
 
             # Use normalized coin (base asset) for grouping
             unique_coins = sorted(df["coin"].unique())
-            selected_coin = selected_symbols[0] if selected_symbols else (unique_coins[0] if unique_coins else None)
+            selected_coin = (
+                selected_symbols[0]
+                if selected_symbols
+                else (unique_coins[0] if unique_coins else None)
+            )
 
             if not selected_coin:
                 return html.Div("No coins available.", className="text-muted")
@@ -945,64 +973,109 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
                 "Avg Price": f"{coin_df['price'].mean():.4f}" if not coin_df.empty else "N/A",
             }
 
-            return html.Div([
-                dbc.Row([
-                    dbc.Col([
-                        html.Label("Select Coin"),
-                        dcc.Dropdown(
-                            id="symbol-detail-dropdown",
-                            options=[{"label": c, "value": c} for c in unique_coins],
-                            value=selected_coin,
-                        ),
-                    ], md=4),
-                    dbc.Col([
-                        html.Div([
-                            dbc.Badge(f"{k}: {v}", color="secondary", className="me-2 mb-1")
-                            for k, v in stats.items()
-                        ])
-                    ], md=8),
-                ], className="mb-3"),
-                dcc.Graph(figure=fig),
-                html.P(
-                    "Tip: Select a coin from the dropdown or filter in the main Coins dropdown.",
-                    className="text-muted mt-2",
-                ),
-            ])
+            return html.Div(
+                [
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    html.Label("Select Coin"),
+                                    dcc.Dropdown(
+                                        id="symbol-detail-dropdown",
+                                        options=[{"label": c, "value": c} for c in unique_coins],
+                                        value=selected_coin,
+                                    ),
+                                ],
+                                md=4,
+                            ),
+                            dbc.Col(
+                                [
+                                    html.Div(
+                                        [
+                                            dbc.Badge(
+                                                f"{k}: {v}", color="secondary", className="me-2 mb-1"
+                                            )
+                                            for k, v in stats.items()
+                                        ]
+                                    )
+                                ],
+                                md=8,
+                            ),
+                        ],
+                        className="mb-3",
+                    ),
+                    dcc.Graph(figure=fig),
+                    html.P(
+                        "Tip: Select a coin from the dropdown or filter in the main Coins dropdown.",
+                        className="text-muted mt-2",
+                    ),
+                ]
+            )
 
         elif active_tab == "tab-health":
             # Load health data lazily only when this tab is active
             selected = selected_accounts or list(accounts.keys())
             health_summaries = _get_coverage_summaries(accounts, selected)
-            return html.Div([
-                html.H4("Cache Health Status"),
-                html.P("Shows coverage and known gaps for each account's fill event cache.", className="text-muted"),
-                build_cache_health_panel(health_summaries),
-            ])
+            return html.Div(
+                [
+                    html.H4("Cache Health Status"),
+                    html.P(
+                        "Shows coverage and known gaps for each account's fill event cache.",
+                        className="text-muted",
+                    ),
+                    build_cache_health_panel(health_summaries),
+                ]
+            )
 
         elif active_tab == "tab-export":
             if df.empty:
                 return html.Div("No data to export. Please refresh first.", className="text-muted")
             # Select columns for preview, use datetime_str for display
-            preview_cols = ["datetime_str", "account", "coin", "side", "position_side", "qty", "price", "pnl", "pb_order_type"]
+            preview_cols = [
+                "datetime_str",
+                "account",
+                "coin",
+                "side",
+                "position_side",
+                "qty",
+                "price",
+                "pnl",
+                "pb_order_type",
+            ]
             preview_cols = [c for c in preview_cols if c in df.columns]
-            return html.Div([
-                html.H4("Export Fill Events"),
-                html.P(f"Ready to export {len(df)} fill events.", className="mb-3"),
-                dbc.Row([
-                    dbc.Col([
-                        dbc.Button("Download CSV", id="btn-csv", color="primary", n_clicks=0),
-                    ], md=2),
-                    dbc.Col([
-                        dbc.Button("Download JSON", id="btn-json", color="secondary", n_clicks=0),
-                    ], md=2),
-                ], className="mb-4"),
-                html.H5("Preview (first 10 rows)"),
-                dash_table.DataTable(
-                    columns=[{"name": c, "id": c} for c in preview_cols],
-                    data=df.head(10)[preview_cols].to_dict(orient="records"),
-                    style_table={"overflowX": "auto"},
-                ),
-            ])
+            return html.Div(
+                [
+                    html.H4("Export Fill Events"),
+                    html.P(f"Ready to export {len(df)} fill events.", className="mb-3"),
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    dbc.Button(
+                                        "Download CSV", id="btn-csv", color="primary", n_clicks=0
+                                    ),
+                                ],
+                                md=2,
+                            ),
+                            dbc.Col(
+                                [
+                                    dbc.Button(
+                                        "Download JSON", id="btn-json", color="secondary", n_clicks=0
+                                    ),
+                                ],
+                                md=2,
+                            ),
+                        ],
+                        className="mb-4",
+                    ),
+                    html.H5("Preview (first 10 rows)"),
+                    dash_table.DataTable(
+                        columns=[{"name": c, "id": c} for c in preview_cols],
+                        data=df.head(10)[preview_cols].to_dict(orient="records"),
+                        style_table={"overflowX": "auto"},
+                    ),
+                ]
+            )
 
         return html.Div("Select a tab to view content.")
 

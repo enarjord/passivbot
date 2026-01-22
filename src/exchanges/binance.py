@@ -46,6 +46,7 @@ class BinanceBot(CCXTBot):
         if res["ifNewUser"] and res["rebateWorking"]:
             return
         import json
+
         lines = [
             "To support continued Passivbot development, please use a Binance account which",
             "1) was created after 2024-09-21 and",
@@ -87,12 +88,14 @@ class BinanceBot(CCXTBot):
         positions = []
         for elm in fetched:
             if float(elm["positionAmt"]) != 0.0:
-                positions.append({
-                    "symbol": self.get_symbol_id_inv(elm["symbol"]),
-                    "position_side": elm["positionSide"].lower(),
-                    "size": float(elm["positionAmt"]),
-                    "price": float(elm["entryPrice"]),
-                })
+                positions.append(
+                    {
+                        "symbol": self.get_symbol_id_inv(elm["symbol"]),
+                        "position_side": elm["positionSide"].lower(),
+                        "size": float(elm["positionAmt"]),
+                        "price": float(elm["entryPrice"]),
+                    }
+                )
         return positions
 
     def _get_balance(self, fetched: dict) -> float:

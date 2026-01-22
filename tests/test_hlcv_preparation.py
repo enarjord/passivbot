@@ -27,7 +27,8 @@ import pytest
 
 # Import modules under test
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from hlcv_preparation import HLCVManager, prepare_hlcvs, prepare_hlcvs_combined
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
@@ -36,6 +37,7 @@ from candlestick_manager import CandlestickManager, CANDLE_DTYPE
 # ============================================================================
 # Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def mock_exchange():
@@ -139,7 +141,9 @@ def sample_config():
     }
 
 
-def create_sample_ohlcv_data(start_ts: int, num_candles: int, base_price: float = 100.0) -> pd.DataFrame:
+def create_sample_ohlcv_data(
+    start_ts: int, num_candles: int, base_price: float = 100.0
+) -> pd.DataFrame:
     """Create sample OHLCV data for testing."""
     timestamps = [start_ts + i * 60_000 for i in range(num_candles)]
     data = {
@@ -170,6 +174,7 @@ def create_numpy_candles(start_ts: int, num_candles: int, base_price: float = 10
 # ============================================================================
 # Test Class: HLCVManager Basics
 # ============================================================================
+
 
 class TestHLCVManagerBasics:
     """Test basic HLCVManager operations."""
@@ -204,7 +209,7 @@ class TestHLCVManagerBasics:
 
         # Update with timestamps (ms)
         new_start_ts = 1704067200000  # 2024-01-01 00:00:00
-        new_end_ts = 1704153600000    # 2024-01-02 00:00:00
+        new_end_ts = 1704153600000  # 2024-01-02 00:00:00
 
         om.update_date_range(new_start_ts, new_end_ts)
 
@@ -228,7 +233,7 @@ class TestHLCVManagerBasics:
     @pytest.mark.asyncio
     async def test_load_cc_initializes_candlestick_manager(self, tmp_path, mock_exchange):
         """Test that load_cc initializes CandlestickManager."""
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
             om = HLCVManager(
                 exchange="binanceusdm",
                 start_date="2024-01-01",
@@ -250,8 +255,8 @@ class TestHLCVManagerBasics:
         # Create sample data
         sample_data = create_sample_ohlcv_data(start_ts, num_candles, base_price=50000.0)
 
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="binanceusdm",
                     start_date="2024-01-01",
@@ -282,6 +287,7 @@ class TestHLCVManagerBasics:
 # Test Class: Gap Handling
 # ============================================================================
 
+
 class TestHLCVManagerGapHandling:
     """Test gap detection and tolerance handling."""
 
@@ -300,8 +306,8 @@ class TestHLCVManagerGapHandling:
 
         combined = np.concatenate([candles1, candles2])
 
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="binanceusdm",
                     start_date="2024-01-01",
@@ -314,7 +320,7 @@ class TestHLCVManagerGapHandling:
                 om.load_cc()
 
                 async def mock_get_candles(*args, **kwargs):
-                    if kwargs.get('strict'):
+                    if kwargs.get("strict"):
                         return combined
                     # Return filled version
                     return combined
@@ -328,7 +334,9 @@ class TestHLCVManagerGapHandling:
                 assert not df.empty
 
     @pytest.mark.asyncio
-    async def test_gaps_exceeding_tolerance_rejected(self, tmp_path, mock_exchange, mock_markets, caplog):
+    async def test_gaps_exceeding_tolerance_rejected(
+        self, tmp_path, mock_exchange, mock_markets, caplog
+    ):
         """Test that gaps exceeding tolerance cause empty dataframe return."""
         start_ts = 1704067200000
         gap_tolerance_minutes = 60.0
@@ -342,8 +350,8 @@ class TestHLCVManagerGapHandling:
 
         combined = np.concatenate([candles1, candles2])
 
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="binanceusdm",
                     start_date="2024-01-01",
@@ -384,8 +392,8 @@ class TestHLCVManagerGapHandling:
 
         combined = np.concatenate([warmup_data, trading_data])
 
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="binanceusdm",
                     start_date="2024-01-01",
@@ -413,14 +421,15 @@ class TestHLCVManagerGapHandling:
 # Test Class: Error Handling
 # ============================================================================
 
+
 class TestHLCVManagerErrorHandling:
     """Test error handling and edge cases."""
 
     @pytest.mark.asyncio
     async def test_empty_data_returns_empty_dataframe(self, tmp_path, mock_exchange, mock_markets):
         """Test that missing data returns empty DataFrame."""
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="binanceusdm",
                     start_date="2024-01-01",
@@ -443,8 +452,8 @@ class TestHLCVManagerErrorHandling:
     @pytest.mark.asyncio
     async def test_missing_coin_returns_empty_dataframe(self, tmp_path, mock_exchange, mock_markets):
         """Test that requesting non-existent coin returns empty DataFrame."""
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="binanceusdm",
                     start_date="2024-01-01",
@@ -460,8 +469,8 @@ class TestHLCVManagerErrorHandling:
     @pytest.mark.asyncio
     async def test_invalid_date_range_returns_empty(self, tmp_path, mock_exchange, mock_markets):
         """Test that invalid date range (start > end) returns empty DataFrame."""
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="binanceusdm",
                     start_date="2024-01-02",  # Start after end
@@ -480,8 +489,8 @@ class TestHLCVManagerErrorHandling:
         """Test handling of single candle (edge case)."""
         start_ts = 1704067200000
 
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="binanceusdm",
                     start_date="2024-01-01",
@@ -508,14 +517,15 @@ class TestHLCVManagerErrorHandling:
 # Test Class: Market Settings
 # ============================================================================
 
+
 class TestHLCVManagerMarketSettings:
     """Test market-specific settings retrieval."""
 
     @pytest.mark.asyncio
     async def test_get_market_specific_settings_binance(self, tmp_path, mock_exchange, mock_markets):
         """Test market settings for Binance."""
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="binanceusdm",
                     start_date="2024-01-01",
@@ -536,10 +546,12 @@ class TestHLCVManagerMarketSettings:
                 assert "price_step" in mss
 
     @pytest.mark.asyncio
-    async def test_get_market_specific_settings_bybit_fee_override(self, tmp_path, mock_exchange, mock_markets):
+    async def test_get_market_specific_settings_bybit_fee_override(
+        self, tmp_path, mock_exchange, mock_markets
+    ):
         """Test that Bybit fees are overridden correctly."""
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="bybit",
                     start_date="2024-01-01",
@@ -559,6 +571,7 @@ class TestHLCVManagerMarketSettings:
 # Test Class: First Timestamp Tracking
 # ============================================================================
 
+
 class TestHLCVManagerFirstTimestamp:
     """Test first timestamp (inception) tracking."""
 
@@ -573,8 +586,8 @@ class TestHLCVManagerFirstTimestamp:
         cache_dir = tmp_path / "test_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="binanceusdm",
                     start_date="2024-01-01",
@@ -600,8 +613,8 @@ class TestHLCVManagerFirstTimestamp:
         cache_file = cache_dir / "first_timestamps.json"
         cache_file.write_text(json.dumps({"BTC": inception_ts}))
 
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
                 om = HLCVManager(
                     exchange="binanceusdm",
                     start_date="2024-01-01",
@@ -620,6 +633,7 @@ class TestHLCVManagerFirstTimestamp:
 # Test Class: Prepare HLCVS Integration
 # ============================================================================
 
+
 class TestPrepareHLCVSIntegration:
     """Integration tests for prepare_hlcvs function."""
 
@@ -629,10 +643,13 @@ class TestPrepareHLCVSIntegration:
         start_ts = 1704067200000
         num_candles = 200
 
-        with patch('hlcv_preparation.load_ccxt_instance', return_value=mock_exchange):
-            with patch('hlcv_preparation.load_markets', return_value=mock_markets):
-                with patch('hlcv_preparation.get_first_timestamps_unified') as mock_fts:
-                    mock_fts.return_value = {"BTC": start_ts - 1000000000, "ETH": start_ts - 1000000000}
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
+                with patch("hlcv_preparation.get_first_timestamps_unified") as mock_fts:
+                    mock_fts.return_value = {
+                        "BTC": start_ts - 1000000000,
+                        "ETH": start_ts - 1000000000,
+                    }
 
                     # This test would require extensive mocking of internal functions
                     # For now, verify that the function can be called without errors
@@ -645,6 +662,7 @@ class TestPrepareHLCVSIntegration:
 # ============================================================================
 # Test Class: Combined Multi-Exchange
 # ============================================================================
+
 
 class TestPrepareHLCVSCombined:
     """Test multi-exchange 'best feed per coin' logic."""
@@ -660,7 +678,9 @@ class TestPrepareHLCVSCombined:
 
         # Full integration test would require extensive mocking - skip for now
         # The function is tested through actual backtesting integration tests
-        pytest.skip("Full integration test requires extensive mocking - validated through backtest integration")
+        pytest.skip(
+            "Full integration test requires extensive mocking - validated through backtest integration"
+        )
 
 
 # ============================================================================

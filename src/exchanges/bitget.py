@@ -121,9 +121,7 @@ class BitgetBot(CCXTBot):
         for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
             # Bitget requires minimum 5.1 USDT per order
-            self.min_costs[symbol] = max(
-                5.1, elm["limits"]["cost"]["min"] or 0.1
-            )
+            self.min_costs[symbol] = max(5.1, elm["limits"]["cost"]["min"] or 0.1)
 
     def _normalize_order_update(self, order: dict) -> dict:
         """Bitget override: derive side from tradeSide/posSide."""
@@ -174,9 +172,7 @@ class BitgetBot(CCXTBot):
             and "unionTotalMargin" in balance_info
             and balance_info["assetMode"] == "union"
         ):
-            return float(balance_info["unionTotalMargin"]) - float(
-                balance_info["unrealizedPL"]
-            )
+            return float(balance_info["unionTotalMargin"]) - float(balance_info["unrealizedPL"])
         return float(balance_info["available"])
 
     # ═══════════════════ BITGET-SPECIFIC METHODS ═══════════════════

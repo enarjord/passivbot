@@ -62,12 +62,14 @@ class OKXBot(CCXTBot):
                 continue
             contracts = float(elm.get("contracts", 0))
             if contracts != 0:
-                positions.append({
-                    "symbol": elm["symbol"],
-                    "position_side": elm.get("side", "long").lower(),
-                    "size": contracts,
-                    "price": float(elm.get("entryPrice", 0)),
-                })
+                positions.append(
+                    {
+                        "symbol": elm["symbol"],
+                        "position_side": elm.get("side", "long").lower(),
+                        "size": contracts,
+                        "price": float(elm.get("entryPrice", 0)),
+                    }
+                )
         return positions
 
     def _get_pnl_from_trade(self, trade: dict) -> float:

@@ -21,6 +21,7 @@ import pytest
 # Helper Functions (from test_orchestrator_json_api.py)
 # ============================================================================
 
+
 def bot_params(**overrides):
     """Create base bot params with overrides."""
     base = {
@@ -72,10 +73,13 @@ def bot_params_pair(long_overrides=None, short_overrides=None):
     return {
         "long": bot_params(**(long_overrides or {})),
         "short": bot_params(
-            **({
-                "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-            } | (short_overrides or {}))
+            **(
+                {
+                    "n_positions": 0,
+                    "total_wallet_exposure_limit": 0.0,
+                }
+                | (short_overrides or {})
+            )
         ),
     }
 
@@ -152,7 +156,8 @@ def make_symbol(
         "tradable": tradable,
         "next_candle": None,
         "effective_min_cost": effective_min_cost,
-        "emas": emas or ema_bundle(
+        "emas": emas
+        or ema_bundle(
             m1_close=[
                 [10.0, bid],
                 [20.0, bid],
@@ -169,10 +174,15 @@ def make_symbol(
             "mode": short_mode,
             "position": {"size": short_pos_size, "price": short_pos_price},
             "trailing": trailing_bundle(),
-            "bot_params": bot_params(**({
-                "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-            } | (short_bp or {}))),
+            "bot_params": bot_params(
+                **(
+                    {
+                        "n_positions": 0,
+                        "total_wallet_exposure_limit": 0.0,
+                    }
+                    | (short_bp or {})
+                )
+            ),
         },
     }
 
@@ -203,6 +213,7 @@ def compute(pbr, inp: dict) -> dict:
 # Test Class: Order Computation Accuracy
 # ============================================================================
 
+
 class TestOrchestratorOrderAccuracy:
     """Test order computation accuracy for various scenarios."""
 
@@ -219,8 +230,8 @@ class TestOrchestratorOrderAccuracy:
                     ask=100.0,
                     long_bp={
                         "entry_initial_ema_dist": -0.01,  # Enter 1% below EMA
-                        "entry_grid_spacing_pct": 0.02,    # 2% spacing
-                        "entry_initial_qty_pct": 0.1,      # 10% of wallet
+                        "entry_grid_spacing_pct": 0.02,  # 2% spacing
+                        "entry_initial_qty_pct": 0.1,  # 10% of wallet
                         "wallet_exposure_limit": 1.0,
                     },
                 )
@@ -258,9 +269,9 @@ class TestOrchestratorOrderAccuracy:
                     bid=100.0,
                     ask=100.0,
                     short_bp={
-                        "entry_initial_ema_dist": 0.01,     # Enter 1% above EMA
-                        "entry_grid_spacing_pct": 0.02,      # 2% spacing
-                        "entry_initial_qty_pct": 0.1,        # 10% of wallet
+                        "entry_initial_ema_dist": 0.01,  # Enter 1% above EMA
+                        "entry_grid_spacing_pct": 0.02,  # 2% spacing
+                        "entry_initial_qty_pct": 0.1,  # 10% of wallet
                         "wallet_exposure_limit": 1.0,
                     },
                 )
@@ -290,12 +301,12 @@ class TestOrchestratorOrderAccuracy:
                     0,
                     bid=105.0,
                     ask=105.0,
-                    long_pos_size=1.0,    # Have 1.0 long position
+                    long_pos_size=1.0,  # Have 1.0 long position
                     long_pos_price=100.0,  # Bought at 100
                     long_bp={
                         "close_grid_markup_start": 0.01,  # Start at 1% markup
-                        "close_grid_markup_end": 0.05,    # End at 5% markup
-                        "close_grid_qty_pct": 0.5,        # Close 50% per order
+                        "close_grid_markup_end": 0.05,  # End at 5% markup
+                        "close_grid_qty_pct": 0.5,  # Close 50% per order
                     },
                 )
             ],
@@ -320,15 +331,15 @@ class TestOrchestratorOrderAccuracy:
             symbols=[
                 make_symbol(
                     0,
-                    bid=80.0,    # Price dropped 20%
+                    bid=80.0,  # Price dropped 20%
                     ask=80.0,
-                    long_pos_size=5.0,     # Large position
+                    long_pos_size=5.0,  # Large position
                     long_pos_price=100.0,  # Original entry
                     long_bp={
-                        "unstuck_threshold": 0.1,           # Trigger at 10% loss
-                        "unstuck_loss_allowance_pct": 0.05, # Allow 5% loss
-                        "unstuck_close_pct": 0.5,           # Close 50%
-                        "unstuck_ema_dist": -0.05,          # Unstuck entry 5% below EMA
+                        "unstuck_threshold": 0.1,  # Trigger at 10% loss
+                        "unstuck_loss_allowance_pct": 0.05,  # Allow 5% loss
+                        "unstuck_close_pct": 0.5,  # Close 50%
+                        "unstuck_ema_dist": -0.05,  # Unstuck entry 5% below EMA
                     },
                 )
             ],
@@ -354,9 +365,9 @@ class TestOrchestratorOrderAccuracy:
                     bid=100.0,
                     ask=100.0,
                     long_bp={
-                        "entry_trailing_threshold_pct": 0.02,     # Trail after 2% move
-                        "entry_trailing_retracement_pct": 0.01,   # Enter on 1% retracement
-                        "entry_trailing_grid_ratio": 0.5,         # 50% of grid
+                        "entry_trailing_threshold_pct": 0.02,  # Trail after 2% move
+                        "entry_trailing_retracement_pct": 0.01,  # Enter on 1% retracement
+                        "entry_trailing_grid_ratio": 0.5,  # 50% of grid
                         "entry_initial_qty_pct": 0.1,
                     },
                 )
@@ -373,6 +384,7 @@ class TestOrchestratorOrderAccuracy:
 # ============================================================================
 # Test Class: Edge Cases
 # ============================================================================
+
 
 class TestOrchestratorEdgeCases:
     """Test edge cases and extreme conditions."""
@@ -453,7 +465,7 @@ class TestOrchestratorEdgeCases:
                     0,
                     bid=100.0,
                     ask=100.0,
-                    long_pos_size=10.0,    # Position worth 1000 (100% exposure)
+                    long_pos_size=10.0,  # Position worth 1000 (100% exposure)
                     long_pos_price=100.0,
                     long_bp={
                         "wallet_exposure_limit": 1.0,  # Max 100% WEL
@@ -475,6 +487,7 @@ class TestOrchestratorEdgeCases:
 # ============================================================================
 # Test Class: Multi-Symbol Coordination
 # ============================================================================
+
 
 class TestOrchestratorMultiSymbol:
     """Test multi-symbol coordination and TWE allocation."""
@@ -582,6 +595,7 @@ class TestOrchestratorMultiSymbol:
 # Test Class: Error Handling
 # ============================================================================
 
+
 class TestOrchestratorErrorHandling:
     """Test error handling and validation."""
 
@@ -635,10 +649,7 @@ class TestOrchestratorErrorHandling:
             balance=1_000.0,
             symbols=[
                 make_symbol(
-                    0,
-                    bid=100.0,
-                    ask=100.0,
-                    emas=ema_bundle(m1_close=[])  # Missing required EMAs
+                    0, bid=100.0, ask=100.0, emas=ema_bundle(m1_close=[])  # Missing required EMAs
                 )
             ],
         )
@@ -650,6 +661,7 @@ class TestOrchestratorErrorHandling:
 # ============================================================================
 # Test Class: Signed Quantities Convention
 # ============================================================================
+
 
 class TestSignedQuantitiesConvention:
     """Test that signed quantities follow conventions from passivbot_agent_principles.yaml."""
@@ -674,7 +686,9 @@ class TestSignedQuantitiesConvention:
         )
 
         out = compute(pbr, inp)
-        long_entries = [o for o in out["orders"] if o["pside"] == "long" and "entry" in o.get("order_type", "")]
+        long_entries = [
+            o for o in out["orders"] if o["pside"] == "long" and "entry" in o.get("order_type", "")
+        ]
 
         # All long entry quantities should be positive
         for order in long_entries:
@@ -702,7 +716,9 @@ class TestSignedQuantitiesConvention:
         )
 
         out = compute(pbr, inp)
-        short_entries = [o for o in out["orders"] if o["pside"] == "short" and "entry" in o.get("order_type", "")]
+        short_entries = [
+            o for o in out["orders"] if o["pside"] == "short" and "entry" in o.get("order_type", "")
+        ]
 
         # All short entry quantities should be negative
         for order in short_entries:

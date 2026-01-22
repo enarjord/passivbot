@@ -666,7 +666,7 @@ async def test_binance_fetcher_symbol_pool_from_providers(monkeypatch):
     # All three sources should be queried for trades
     assert "BTC/USDT:USDT" in fetched_symbols  # From positions
     assert "ETH/USDT:USDT" in fetched_symbols  # From open orders
-    assert income_symbol in fetched_symbols    # From income events
+    assert income_symbol in fetched_symbols  # From income events
 
 
 @pytest.mark.asyncio
@@ -1399,14 +1399,38 @@ async def test_bybit_fetcher_empty_batches():
     base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
 
     # Empty trades, has positions
-    api1 = _FakeBybitAPI([[]], [[{"symbol": "BTC/USDT:USDT", "realizedPnl": "10.0", "timestamp": base_ts, "info": {"orderId": "o1"}}]])
+    api1 = _FakeBybitAPI(
+        [[]],
+        [
+            [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "realizedPnl": "10.0",
+                    "timestamp": base_ts,
+                    "info": {"orderId": "o1"},
+                }
+            ]
+        ],
+    )
     fetcher1 = BybitFetcher(api1)
     events1 = await fetcher1.fetch(since_ms=base_ts - 1000, until_ms=base_ts + 1000, detail_cache={})
     assert len(events1) == 0  # No trades means no events
 
     # Has trades, empty positions
     api2 = _FakeBybitAPI(
-        [[{"id": "t1", "timestamp": base_ts, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {"orderId": "o1"}}]],
+        [
+            [
+                {
+                    "id": "t1",
+                    "timestamp": base_ts,
+                    "amount": 1.0,
+                    "price": 100.0,
+                    "side": "buy",
+                    "symbol": "BTC/USDT:USDT",
+                    "info": {"orderId": "o1"},
+                }
+            ]
+        ],
         [[]],
     )
     fetcher2 = BybitFetcher(api2)
@@ -1422,9 +1446,33 @@ async def test_bybit_fetcher_time_bounds_filtering():
 
     trades_batches = [
         [
-            {"id": "trade-before", "timestamp": base_ts - 5000, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {}},
-            {"id": "trade-in-range", "timestamp": base_ts, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {}},
-            {"id": "trade-after", "timestamp": base_ts + 5000, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {}},
+            {
+                "id": "trade-before",
+                "timestamp": base_ts - 5000,
+                "amount": 1.0,
+                "price": 100.0,
+                "side": "buy",
+                "symbol": "BTC/USDT:USDT",
+                "info": {},
+            },
+            {
+                "id": "trade-in-range",
+                "timestamp": base_ts,
+                "amount": 1.0,
+                "price": 100.0,
+                "side": "buy",
+                "symbol": "BTC/USDT:USDT",
+                "info": {},
+            },
+            {
+                "id": "trade-after",
+                "timestamp": base_ts + 5000,
+                "amount": 1.0,
+                "price": 100.0,
+                "side": "buy",
+                "symbol": "BTC/USDT:USDT",
+                "info": {},
+            },
         ]
     ]
     positions_batches: List[List[Dict[str, Any]]] = [[]]
@@ -2395,14 +2443,23 @@ def test_kucoin_match_pnls_multiple_positions_multiple_fills():
         {"id": "btc-close-1", "symbol": "BTC/USDT:USDT", "timestamp": now_ms, "qty": 10.0},
         {"id": "btc-close-2", "symbol": "BTC/USDT:USDT", "timestamp": now_ms + 50, "qty": 10.0},
         # Second position close fills (10 min later - well outside 5-min window)
-        {"id": "btc-close-3", "symbol": "BTC/USDT:USDT", "timestamp": now_ms + ten_min_ms, "qty": 5.0},
+        {
+            "id": "btc-close-3",
+            "symbol": "BTC/USDT:USDT",
+            "timestamp": now_ms + ten_min_ms,
+            "qty": 5.0,
+        },
     ]
 
     positions = [
         # First position close (near time 0)
         {"symbol": "BTC/USDT:USDT", "lastUpdateTimestamp": now_ms + 25, "realizedPnl": 100.0},
         # Second position close (10 min later)
-        {"symbol": "BTC/USDT:USDT", "lastUpdateTimestamp": now_ms + ten_min_ms + 10, "realizedPnl": 50.0},
+        {
+            "symbol": "BTC/USDT:USDT",
+            "lastUpdateTimestamp": now_ms + ten_min_ms + 10,
+            "realizedPnl": 50.0,
+        },
     ]
 
     events = {
@@ -2463,18 +2520,20 @@ class _FakeGateioAPI:
             # Convert symbol to contract format (BTC/USDT:USDT -> BTC_USDT)
             symbol = t.get("symbol", "")
             contract = symbol.replace("/", "_").replace(":USDT", "") if symbol else ""
-            raw_trades.append({
-                "trade_id": t.get("id") or info.get("trade_id"),
-                "order_id": t.get("order") or info.get("order_id"),
-                "create_time": str(ts_s),
-                "contract": contract,
-                "size": size,
-                "price": float(t.get("price") or info.get("price") or 0),
-                "fee": float(t.get("fee", {}).get("cost", 0)) if t.get("fee") else 0,
-                "text": info.get("text", ""),
-                "close_size": float(info.get("close_size", 0)),
-                "role": "maker",
-            })
+            raw_trades.append(
+                {
+                    "trade_id": t.get("id") or info.get("trade_id"),
+                    "order_id": t.get("order") or info.get("order_id"),
+                    "create_time": str(ts_s),
+                    "contract": contract,
+                    "size": size,
+                    "price": float(t.get("price") or info.get("price") or 0),
+                    "fee": float(t.get("fee", {}).get("cost", 0)) if t.get("fee") else 0,
+                    "text": info.get("text", ""),
+                    "close_size": float(info.get("close_size", 0)),
+                    "role": "maker",
+                }
+            )
         return raw_trades
 
     async def fetch_closed_orders(self, params: Dict[str, Any] = None):
@@ -2794,9 +2853,13 @@ async def test_gateio_fetcher_position_side_inference(monkeypatch):
 
     orders = [
         _make_gateio_order(order_id="order-1", ts=now_ms - 400, side="buy", pnl=0),
-        _make_gateio_order(order_id="order-2", ts=now_ms - 300, side="sell", pnl=5.0, reduce_only=True),
+        _make_gateio_order(
+            order_id="order-2", ts=now_ms - 300, side="sell", pnl=5.0, reduce_only=True
+        ),
         _make_gateio_order(order_id="order-3", ts=now_ms - 200, side="sell", pnl=0),
-        _make_gateio_order(order_id="order-4", ts=now_ms - 100, side="buy", pnl=3.0, reduce_only=True),
+        _make_gateio_order(
+            order_id="order-4", ts=now_ms - 100, side="buy", pnl=3.0, reduce_only=True
+        ),
     ]
 
     api = _FakeGateioAPI([trades], [orders])
