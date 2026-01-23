@@ -83,21 +83,13 @@ async def prepare_suite_contexts(
     else:
         base_ignored_list = []
 
-    scenarios, aggregate_cfg, include_base, base_label = build_scenarios(suite_cfg)
-    if include_base:
-        base_scenario = SuiteScenario(
-            label=base_label,
-            start_date=base_start,
-            end_date=base_end,
-            coins=list(base_coins_list),
-            ignored_coins=list(base_ignored_list),
-        )
-        scenarios = [base_scenario] + list(scenarios)
+    scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
 
     suite_coin_sources = collect_suite_coin_sources(config, scenarios)
 
-    master_coins = set(base_coins_list) if include_base else set()
-    master_ignored = set(base_ignored_list) if include_base else set()
+    # Collect all coins from scenarios (or use base if no scenario-specific coins)
+    master_coins = set()
+    master_ignored = set()
     for scenario in scenarios:
         if scenario.coins:
             master_coins.update(scenario.coins)
@@ -105,14 +97,15 @@ async def prepare_suite_contexts(
             master_ignored.update(scenario.ignored_coins)
     master_coins.update(suite_coin_sources.keys())
 
-    # If no scenarios define explicit coins and include_base=False,
-    # fall back to base_coins_list to avoid empty coin set
+    # If no scenarios define explicit coins, fall back to base_coins_list
     if not master_coins and base_coins_list:
         logging.info(
             "No scenario-specific coins found; using base approved_coins: %s",
             base_coins_list,
         )
         master_coins = set(base_coins_list)
+    if not master_ignored and base_ignored_list:
+        master_ignored = set(base_ignored_list)
 
     master_coins_list = sorted(master_coins)
     master_ignored_list = sorted(master_ignored)
@@ -318,9 +311,19 @@ def ensure_suite_config(config_path: Path, suite_path: Optional[Path]) -> Dict[s
     config = parse_overrides(config, verbose=False)
     suite_override = None
     if suite_path:
-        suite_override = load_config(str(suite_path), verbose=False).get("backtest", {}).get("suite")
-        if suite_override is None:
-            raise ValueError(f"Suite config {suite_path} must provide backtest.suite definition.")
+        override_config = load_config(str(suite_path), verbose=False)
+        override_backtest = override_config.get("backtest", {})
+        # Support both new (scenarios at top level) and legacy (suite wrapper) formats
+        if "scenarios" in override_backtest:
+            suite_override = {
+                "scenarios": override_backtest.get("scenarios", []),
+                "aggregate": override_backtest.get("aggregate", {"default": "mean"}),
+            }
+        elif "suite" in override_backtest:
+            # Legacy format - extract from suite wrapper
+            suite_override = override_backtest["suite"]
+        else:
+            raise ValueError(f"Suite config {suite_path} must provide backtest.scenarios definition.")
     return extract_suite_config(config, suite_override)
 
 
@@ -335,6 +338,6 @@ def summarized_metrics(
 
 
 #
-# Suite configuration is canonical under backtest.suite.
+# Suite configuration is now canonical under backtest.scenarios.
 # Optimizer suite uses the same schema and reads it via suite_runner.extract_suite_config().
 #

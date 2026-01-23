@@ -69,6 +69,7 @@ from config_utils import (
     format_config,
     add_arguments_recursively,
     update_config_with_args,
+    recursive_config_update,
     require_config_value,
     merge_negative_cli_values,
     strip_config_metadata,
@@ -135,6 +136,7 @@ from suite_runner import (
     SuiteScenario,
     ScenarioResult,
     extract_suite_config,
+    filter_scenarios_by_label,
     aggregate_metrics,
     build_suite_metrics_payload,
 )
@@ -1287,13 +1289,22 @@ async def main():
         default=None,
         type=str2bool,
         metavar="y/n",
-        help="Enable or disable backtest.suite for optimizer run (omit to follow config).",
+        help="Enable or disable suite mode for optimizer run (omit to use config's suite_enabled setting).",
+    )
+    parser.add_argument(
+        "--scenarios",
+        "-sc",
+        type=str,
+        default=None,
+        metavar="LABELS",
+        help="Comma-separated list of scenario labels to run (implies --suite y). "
+        "Example: --scenarios base,binance_only",
     )
     parser.add_argument(
         "--suite-config",
         type=str,
         default=None,
-        help="Optional config file providing backtest.suite overrides.",
+        help="Optional config file providing backtest.scenarios overrides.",
     )
     parser.add_argument(
         "--log-level",
@@ -1353,16 +1364,33 @@ async def main():
     suite_override = None
     if args.suite_config:
         logging.info("loading suite config %s", args.suite_config)
-        suite_override = (
-            load_config(args.suite_config, verbose=False).get("backtest", {}).get("suite")
-        )
-        if suite_override is None:
-            raise ValueError(f"Suite config {args.suite_config} must define backtest.suite.")
+        override_cfg = load_config(args.suite_config, verbose=False)
+        override_backtest = override_cfg.get("backtest", {})
+        # Support both new (scenarios at top level) and legacy (suite wrapper) formats
+        if "scenarios" in override_backtest:
+            suite_override = {
+                "scenarios": override_backtest.get("scenarios", []),
+                "aggregate": override_backtest.get("aggregate", {"default": "mean"}),
+            }
+        elif "suite" in override_backtest:
+            # Legacy format - extract from suite wrapper
+            suite_override = override_backtest["suite"]
+        else:
+            raise ValueError(f"Suite config {args.suite_config} must define backtest.scenarios.")
     suite_cfg = extract_suite_config(config, suite_override)
+
+    # Handle --scenarios filter (implies --suite y)
+    scenario_filter = getattr(args, "scenarios", None)
+    if scenario_filter:
+        labels = [label.strip() for label in scenario_filter.split(",") if label.strip()]
+        suite_cfg["scenarios"] = filter_scenarios_by_label(suite_cfg.get("scenarios", []), labels)
+        suite_cfg["enabled"] = True  # --scenarios implies suite mode
+        logging.info("Filtered to %d scenario(s): %s", len(labels), ", ".join(labels))
+
+    # --suite CLI arg overrides config (applied after --scenarios so explicit --suite n wins)
     if args.suite is not None:
-        enabled = bool(args.suite)
-        suite_cfg["enabled"] = enabled
-        config.setdefault("backtest", {}).setdefault("suite", {})["enabled"] = enabled
+        recursive_config_update(config, "backtest.suite_enabled", bool(args.suite), verbose=True)
+        suite_cfg["enabled"] = bool(args.suite)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
@@ -1396,7 +1424,12 @@ async def main():
             config["backtest"]["coins"] = deepcopy(first_ctx.config["backtest"]["coins"])
             backtest_exchanges = sorted({ex for ctx in scenario_contexts for ex in ctx.exchanges})
         else:
-            if bool(require_config_value(config, "backtest.combine_ohlcvs")):
+            # New behavior: derive data strategy from exchange count
+            # - Single exchange = use that exchange's data only
+            # - Multiple exchanges = best-per-coin combination (combined)
+            use_combined = len(backtest_exchanges) > 1
+
+            if use_combined:
                 exchange = "combined"
                 coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
                     await prepare_hlcvs_mss(config, exchange)
@@ -1441,16 +1474,10 @@ async def main():
                     btc_usd_specs[exchange] = btc_usd_spec
                     del hlcvs, hlcvs_array, btc_usd_prices, btc_usd_array
         exchanges = backtest_exchanges
-        exchanges_fname = (
-            "combined"
-            if bool(require_config_value(config, "backtest.combine_ohlcvs"))
-            else "_".join(exchanges)
-        )
+        exchanges_fname = "combined" if len(backtest_exchanges) > 1 else "_".join(exchanges)
         date_fname = ts_to_date(utc_ms())[:19].replace(":", "_")
         coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
-        suite_flag = bool(config.get("optimize", {}).get("suite", {}).get("enabled"))
-        if args.suite:
-            suite_flag = True
+        suite_flag = suite_enabled or bool(args.suite)
         if suite_flag:
             coins_fname = f"suite_{len(coins)}_coins"
         else:

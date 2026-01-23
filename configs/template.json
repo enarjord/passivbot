@@ -1,119 +1,94 @@
 {
     "backtest": {
+        "aggregate": {"default": "mean"},
         "balance_sample_divider": 60,
         "base_dir": "backtests",
         "btc_collateral_cap": 0.7,
         "btc_collateral_ltv_cap": null,
-        "combine_ohlcvs": true,
         "compress_cache": true,
         "end_date": "now",
-        "exchanges": ["binance","bybit"],
+        "exchanges": ["binance", "bybit"],
         "filter_by_min_effective_cost": false,
         "gap_tolerance_ohlcvs_minutes": 120,
         "maker_fee_override": null,
         "max_warmup_minutes": 0,
+        "scenarios": [
+            {
+                "label": "base"
+            },
+            {
+                "label": "bybit_only",
+                "overrides": {
+                    "bot.backtest.exchanges": ["bybit"]
+                }
+            },
+            {
+                "label": "binance_only",
+                "overrides": {
+                    "bot.backtest.exchanges": ["binance"]
+                }
+            },
+            {
+                "coins": ["ADA", "BTC", "ETH", "SOL", "XRP"],
+                "label": "trump_troupe"
+            },
+            {
+                "coins": [
+                    "ADA", "BCH", "BNB", "BTC", "DOGE",
+                    "ETH", "HYPE", "LINK", "SOL", "TRX", "XRP"
+                ],
+                "label": "subset1"
+            },
+            {
+                "coins": [
+                    "AVAX", "DOT", "HBAR", "LTC", "SHIB",
+                    "SUI", "TON", "UNI", "XLM", "XMR", "ZEC"
+                ],
+                "label": "subset2"
+            },
+            {
+                "coins": [
+                    "AVAX", "BTC", "DOGE", "HYPE", "LINK",
+                    "SHIB", "SOL", "UNI", "XMR", "XRP", "ZEC"
+                ],
+                "label": "subset3"
+            },
+            {
+                "coins": [
+                    "ADA", "BCH", "BNB", "DOT", "ETH",
+                    "HBAR", "LTC", "SUI", "TON", "TRX", "XLM"
+                ],
+                "label": "subset4"
+            },
+            {
+                "coins": ["ADA", "BTC", "ETH", "SOL", "XRP"],
+                "label": "pure_trailing",
+                "overrides": {
+                    "bot.long.close_trailing_grid_ratio": 1,
+                    "bot.long.entry_trailing_grid_ratio": 1
+                }
+            },
+            {
+                "coins": ["ADA", "BTC", "ETH", "SOL", "XRP"],
+                "label": "pure_grid",
+                "overrides": {
+                    "bot.long.close_trailing_grid_ratio": 0,
+                    "bot.long.entry_trailing_grid_ratio": 0
+                }
+            },
+            {
+                "label": "n_positions=3",
+                "overrides": {"bot.long.n_positions": 3}
+            },
+            {
+                "label": "ltwel=2",
+                "overrides": {"bot.long.total_wallet_exposure_limit": 2}
+            }
+        ],
         "start_date": "2021-03-01",
         "starting_balance": 100000,
-        "suite": {
-            "aggregate": {"default":"mean"},
-            "base_label": "base",
-            "enabled": true,
-            "include_base_scenario": true,
-            "scenarios": [
-                {
-                    "coins": ["ADA","BTC","ETH","SOL","XRP"],
-                    "label": "trump_troupe"
-                },
-                {
-                    "coins": [
-                        "ADA",
-                        "BCH",
-                        "BNB",
-                        "BTC",
-                        "DOGE",
-                        "ETH",
-                        "HYPE",
-                        "LINK",
-                        "SOL",
-                        "TRX",
-                        "XRP"
-                    ],
-                    "label": "subset1"
-                },
-                {
-                    "coins": [
-                        "AVAX",
-                        "DOT",
-                        "HBAR",
-                        "LTC",
-                        "SHIB",
-                        "SUI",
-                        "TON",
-                        "UNI",
-                        "XLM",
-                        "XMR",
-                        "ZEC"
-                    ],
-                    "label": "subset2"
-                },
-                {
-                    "coins": [
-                        "AVAX",
-                        "BTC",
-                        "DOGE",
-                        "HYPE",
-                        "LINK",
-                        "SHIB",
-                        "SOL",
-                        "UNI",
-                        "XMR",
-                        "XRP",
-                        "ZEC"
-                    ],
-                    "label": "subset3"
-                },
-                {
-                    "coins": [
-                        "ADA",
-                        "BCH",
-                        "BNB",
-                        "DOT",
-                        "ETH",
-                        "HBAR",
-                        "LTC",
-                        "SUI",
-                        "TON",
-                        "TRX",
-                        "XLM"
-                    ],
-                    "label": "subset4"
-                },
-                {
-                    "coins": ["ADA","BTC","ETH","SOL","XRP"],
-                    "label": "pure_trailing",
-                    "overrides": {
-                        "bot.long.close_trailing_grid_ratio": 1,
-                        "bot.long.entry_trailing_grid_ratio": 1
-                    }
-                },
-                {
-                    "coins": ["ADA","BTC","ETH","SOL","XRP"],
-                    "label": "pure_grid",
-                    "overrides": {
-                        "bot.long.close_trailing_grid_ratio": 0,
-                        "bot.long.entry_trailing_grid_ratio": 0
-                    }
-                },
-                {
-                    "label": "n_positions=3",
-                    "overrides": {"bot.long.n_positions":3}
-                },
-                {
-                    "label": "ltwel=2",
-                    "overrides": {"bot.long.total_wallet_exposure_limit":2}
-                }
-            ]
-        }
+        "suite_enabled": true,
+        "volume_normalization": true
     },
     "bot": {
         "long": {

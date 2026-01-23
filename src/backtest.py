@@ -39,6 +39,7 @@ from config_utils import (
     dump_config,
     add_arguments_recursively,
     update_config_with_args,
+    recursive_config_update,
     format_config,
     get_template_config,
     parse_overrides,
@@ -77,7 +78,7 @@ import logging
 import gzip
 import traceback
 from logging_setup import configure_logging, resolve_log_level
-from suite_runner import extract_suite_config, run_backtest_suite_async
+from suite_runner import extract_suite_config, filter_scenarios_by_label, run_backtest_suite_async
 import passivbot_rust as pbr  # noqa: E402
 from tools.event_loop_policy import set_windows_event_loop_policy
 
@@ -1157,7 +1158,16 @@ async def main():
         default=None,
         type=str2bool,
         metavar="y/n",
-        help="Enable or disable suite mode (omit to use config).",
+        help="Enable or disable suite mode (omit to use config's suite_enabled setting).",
+    )
+    parser.add_argument(
+        "--scenarios",
+        "-sc",
+        type=str,
+        default=None,
+        metavar="LABELS",
+        help="Comma-separated list of scenario labels to run (implies --suite y). "
+        "Example: --scenarios base,binance_only",
     )
     parser.add_argument(
         "--suite-config",
@@ -1224,13 +1234,37 @@ async def main():
     if args.suite_config:
         logging.info("loading suite config %s", args.suite_config)
         override_cfg = load_config(args.suite_config, verbose=False)
-        suite_override = override_cfg.get("backtest", {}).get("suite")
-        if suite_override is None:
-            raise ValueError(f"Suite config {args.suite_config} does not define backtest.suite.")
+        override_backtest = override_cfg.get("backtest", {})
+        # Support both new (scenarios at top level) and legacy (suite wrapper) formats
+        if "scenarios" in override_backtest:
+            suite_override = {
+                "scenarios": override_backtest.get("scenarios", []),
+                "aggregate": override_backtest.get("aggregate", {"default": "mean"}),
+            }
+        elif "suite" in override_backtest:
+            # Legacy format - extract from suite wrapper
+            suite_override = override_backtest["suite"]
+        else:
+            raise ValueError(f"Suite config {args.suite_config} does not define backtest.scenarios.")
 
     suite_cfg = extract_suite_config(config, suite_override)
+
+    # Handle --scenarios filter (implies --suite y)
+    scenario_filter = getattr(args, "scenarios", None)
+    if scenario_filter:
+        labels = [label.strip() for label in scenario_filter.split(",") if label.strip()]
+        suite_cfg["scenarios"] = filter_scenarios_by_label(suite_cfg.get("scenarios", []), labels)
+        suite_cfg["enabled"] = True  # --scenarios implies suite mode
+        logging.info("Filtered to %d scenario(s): %s", len(labels), ", ".join(labels))
+
+    # --suite CLI arg overrides config (applied after --scenarios so explicit --suite n wins)
     if args.suite is not None:
+        recursive_config_update(config, "backtest.suite_enabled", bool(args.suite), verbose=True)
         suite_cfg["enabled"] = bool(args.suite)
+
+    # Log disable_plotting if set (not a config key, just a runtime flag)
+    if args.disable_plotting:
+        logging.info("changed disable_plotting False -> True")
 
     if suite_cfg.get("enabled"):
         logging.info("Running backtest suite (%d scenarios)...", len(suite_cfg.get("scenarios", [])))
@@ -1254,7 +1288,13 @@ async def main():
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
     force_refetch_gaps = getattr(args, "force_refetch_gaps", False)
-    if bool(require_config_value(config, "backtest.combine_ohlcvs")):
+
+    # New behavior: derive data strategy from exchange count
+    # - Single exchange = use that exchange's data only
+    # - Multiple exchanges = best-per-coin combination (combined)
+    use_combined = len(backtest_exchanges) > 1
+
+    if use_combined:
         exchange = "combined"
         coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = (
             await prepare_hlcvs_mss(config, exchange, force_refetch_gaps=force_refetch_gaps)
@@ -1281,7 +1321,7 @@ async def main():
             exchange,
         )
     else:
-        print("combined false")
+        # Single exchange mode
         configs = {exchange: deepcopy(config) for exchange in backtest_exchanges}
         tasks = {}
         for exchange in backtest_exchanges:

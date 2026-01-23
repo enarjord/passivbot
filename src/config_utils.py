@@ -731,6 +731,102 @@ def _apply_backward_compatibility_renames(
                 )
 
 
+def _migrate_suite_to_scenarios(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    """Migrate legacy backtest.suite structure to flattened scenarios structure.
+
+    Old format:
+        backtest.suite.enabled, backtest.suite.scenarios, backtest.suite.aggregate,
+        backtest.suite.include_base_scenario, backtest.suite.base_label, backtest.combine_ohlcvs
+
+    New format:
+        backtest.scenarios, backtest.aggregate, backtest.volume_normalization
+        (behavior derived from scenario exchange count - single = one exchange, multiple = best-per-coin)
+    """
+    backtest = result.setdefault("backtest", {})
+
+    # Migrate suite.scenarios -> scenarios, suite.aggregate -> aggregate
+    suite = backtest.pop("suite", None)
+    if suite and isinstance(suite, dict):
+        old_scenarios = suite.get("scenarios", [])
+        aggregate = suite.get("aggregate", {"default": "mean"})
+        include_base = suite.get("include_base_scenario", False)
+        base_label = suite.get("base_label", "base")
+        suite_enabled = suite.get("enabled", False)
+
+        # Only migrate if suite was actually in use (enabled or has scenarios)
+        if suite_enabled or old_scenarios:
+            # Move aggregate up (merge with existing, suite values take precedence)
+            existing_aggregate = backtest.get("aggregate", {})
+            merged_aggregate = {**existing_aggregate, **aggregate}
+            backtest["aggregate"] = merged_aggregate
+            _log_config(
+                verbose,
+                logging.INFO,
+                "migrated backtest.suite.aggregate -> backtest.aggregate",
+            )
+            if tracker is not None:
+                tracker.rename(
+                    ["backtest", "suite", "aggregate"],
+                    ["backtest", "aggregate"],
+                    merged_aggregate,
+                )
+
+            # Move scenarios up
+            new_scenarios = list(old_scenarios)
+
+            # If include_base_scenario was True, prepend implicit base scenario
+            if include_base and old_scenarios:
+                base_scenario = {"label": base_label}
+                new_scenarios = [base_scenario] + new_scenarios
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "prepended base scenario '%s' (from include_base_scenario=True)",
+                    base_label,
+                )
+
+            if "scenarios" not in backtest or not backtest["scenarios"]:
+                backtest["scenarios"] = new_scenarios
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "migrated backtest.suite.scenarios -> backtest.scenarios (%d scenarios)",
+                    len(new_scenarios),
+                )
+                if tracker is not None:
+                    tracker.rename(
+                        ["backtest", "suite", "scenarios"],
+                        ["backtest", "scenarios"],
+                        new_scenarios,
+                    )
+        else:
+            # Suite existed but was disabled with no scenarios - just remove it
+            if tracker is not None:
+                tracker.remove(["backtest", "suite"], suite)
+
+    # Migrate combine_ohlcvs (just remove it, behavior is now derived from exchange count)
+    if "combine_ohlcvs" in backtest:
+        old_value = backtest.pop("combine_ohlcvs")
+        _log_config(
+            verbose,
+            logging.INFO,
+            "removed backtest.combine_ohlcvs=%s (behavior now derived from scenario exchange count)",
+            old_value,
+        )
+        if tracker is not None:
+            tracker.remove(["backtest", "combine_ohlcvs"], old_value)
+
+    # Ensure new defaults exist
+    if "aggregate" not in backtest:
+        backtest["aggregate"] = {"default": "mean"}
+    if "scenarios" not in backtest:
+        backtest["scenarios"] = []
+    if "volume_normalization" not in backtest:
+        backtest["volume_normalization"] = True
+
+
 def _migrate_btc_collateral_settings(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
@@ -985,6 +1081,7 @@ def _sync_with_template(
             ("coin_overrides",),
             ("backtest", "suite", "aggregate"),
             ("backtest", "suite", "scenarios"),
+            ("backtest", "aggregate"),  # Preserve per-metric aggregation settings
         ],
         tracker=tracker,
     )
@@ -1117,6 +1214,7 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     result = build_base_config_from_flavor(config, template, flavor, verbose)
     _apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
     _migrate_btc_collateral_settings(result, verbose=verbose, tracker=tracker)
+    _migrate_suite_to_scenarios(result, verbose=verbose, tracker=tracker)
     _ensure_bot_defaults_and_bounds(result, verbose=verbose, tracker=tracker)
     result["bot"] = sort_dict_keys(result["bot"])
 
@@ -1131,10 +1229,10 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
 
     if optimize_suite_defined:
         logging.warning(
-            "Config contains optimize.suite, but suite configuration is now canonical under "
-            "backtest.suite only. optimize.suite will be ignored and deleted; backtest.suite will "
-            "be used. If you need different suite definitions, pass --suite-config with a file "
-            "containing backtest.suite."
+            "Config contains optimize.suite, but suite configuration is now defined via "
+            "backtest.scenarios. optimize.suite will be ignored and deleted; backtest.scenarios "
+            "will be used. If you need different suite definitions, pass --suite-config with a "
+            "file containing backtest.scenarios."
         )
         if isinstance(result.get("optimize"), dict) and "suite" in result["optimize"]:
             del result["optimize"]["suite"]
@@ -1883,11 +1981,11 @@ def get_optional_live_value(config: dict, key: str, default=None):
 def get_template_config():
     return {
         "backtest": {
+            "aggregate": {"default": "mean"},
             "balance_sample_divider": 60,
             "base_dir": "backtests",
             "btc_collateral_cap": 1.0,
             "btc_collateral_ltv_cap": None,
-            "combine_ohlcvs": True,
             "compress_cache": True,
             "coin_sources": {},
             "end_date": "now",
@@ -1896,15 +1994,11 @@ def get_template_config():
             "gap_tolerance_ohlcvs_minutes": 120.0,
             "maker_fee_override": None,
             "max_warmup_minutes": 0.0,
+            "scenarios": [],
             "start_date": "2021-04-01",
             "starting_balance": 100000.0,
-            "suite": {
-                "aggregate": {"default": "mean"},
-                "base_label": "base",
-                "enabled": False,
-                "include_base_scenario": False,
-                "scenarios": [],
-            },
+            "suite_enabled": True,
+            "volume_normalization": True,
         },
         "bot": {
             "long": {

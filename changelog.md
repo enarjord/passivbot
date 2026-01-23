@@ -5,12 +5,24 @@ All notable user-facing changes will be documented in this file.
 ## v7.7.0 - Unreleased
 
 ### Changed
+- **BREAKING**: Flattened suite configuration structure for simpler data strategy
+  - `backtest.suite.scenarios` → `backtest.scenarios`
+  - `backtest.suite.aggregate` → `backtest.aggregate`
+  - Added `backtest.volume_normalization` (default: true)
+  - Removed `backtest.suite.enabled`, `backtest.suite.include_base_scenario`, `backtest.suite.base_label`
+  - Removed `backtest.combine_ohlcvs` (behavior now derived from scenario exchange count)
+- Each scenario can now override `exchanges` directly
+- Single exchange in scenario = use that exchange's data only
+- Multiple exchanges in scenario = best-per-coin combination with volume normalization
+- Data strategy is now derived from exchange count rather than explicit flags
 - **PnL tracking now uses FillEventsManager exclusively** - Legacy `update_pnls` path removed. FillEventsManager provides more accurate fill tracking with proper event deduplication, canonical schemas, and exchange-specific fetchers for all supported exchanges.
 - Fill events are now stored in `caches/fill_events/{exchange}/{user}/` instead of the old `caches/{exchange}/{user}_pnls.json` format. Existing legacy cache files are ignored; FillEventsManager will rebuild from exchange API on first run.
 - Unstuck allowances now computed from FillEventsManager data instead of legacy pnls list.
 - Trailing position change timestamps now derived from FillEventsManager events.
 
 ### Removed
+- `backtest.combine_ohlcvs` config key (behavior derived from exchange count)
+- `backtest.suite` wrapper (scenarios/aggregate now at top level of backtest section)
 - `--shadow-mode` CLI flag (no longer needed; FillEventsManager is production-ready)
 - `live.pnls_manager_shadow_mode` config option
 - Legacy `init_pnls`, `update_pnls`, `fetch_pnls` methods in passivbot.py
@@ -18,6 +30,46 @@ All notable user-facing changes will be documented in this file.
 - Shadow mode comparison logging (`_compare_pnls_shadow`, etc.)
 
 ### Migration Notes
+
+#### Suite Configuration Migration
+Old configs are automatically migrated. Manual update recommended for clarity.
+
+**Before (old config):**
+```json
+{
+  "backtest": {
+    "exchanges": ["binance", "bybit"],
+    "combine_ohlcvs": true,
+    "suite": {
+      "enabled": true,
+      "include_base_scenario": true,
+      "base_label": "combined",
+      "aggregate": {"default": "mean"},
+      "scenarios": [
+        {"label": "binance", "exchanges": ["binance"]},
+        {"label": "bybit", "exchanges": ["bybit"]}
+      ]
+    }
+  }
+}
+```
+
+**After (new config):**
+```json
+{
+  "backtest": {
+    "exchanges": ["binance", "bybit"],
+    "aggregate": {"default": "mean"},
+    "scenarios": [
+      {"label": "combined"},
+      {"label": "binance", "exchanges": ["binance"]},
+      {"label": "bybit", "exchanges": ["bybit"]}
+    ]
+  }
+}
+```
+
+#### PnL Manager Migration
 - **No action required** - FillEventsManager automatically fetches and caches fill data
 - Old `{user}_pnls.json` cache files can be safely deleted after upgrading
 - If using custom exchange configurations, ensure the exchange's fill fetcher is supported (Binance, Bybit, Bitget, GateIO, Hyperliquid, KuCoin, OKX)

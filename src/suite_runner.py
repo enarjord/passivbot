@@ -84,10 +84,83 @@ class SuiteSummary:
 def extract_suite_config(
     base_config: Dict[str, Any], suite_override: Optional[Dict[str, Any]]
 ) -> Dict[str, Any]:
-    cfg = deepcopy(base_config.get("backtest", {}).get("suite", {}) or {})
+    """Extract suite configuration from the new flattened config structure.
+
+    New structure reads from:
+    - backtest.scenarios (list of scenario dicts)
+    - backtest.aggregate (aggregation settings)
+    - backtest.exchanges (default exchanges for scenarios)
+    - backtest.volume_normalization (bool, default True)
+    - backtest.suite_enabled (bool, default True) - master switch for suite mode
+
+    Args:
+        base_config: Full config dict
+        suite_override: Optional override dict with scenarios/aggregate keys
+
+    Returns:
+        Dict with 'scenarios', 'aggregate', 'exchanges', 'volume_normalization', and 'enabled' keys
+    """
+    backtest = base_config.get("backtest", {})
+
+    # Build config from new flattened structure
+    cfg = {
+        "scenarios": deepcopy(backtest.get("scenarios", [])),
+        "aggregate": deepcopy(backtest.get("aggregate", {"default": "mean"})),
+        "exchanges": deepcopy(backtest.get("exchanges", [])),
+        "volume_normalization": backtest.get("volume_normalization", True),
+    }
+
+    # Apply overrides if provided
     if suite_override:
-        cfg.update(deepcopy(suite_override))
+        if "scenarios" in suite_override:
+            cfg["scenarios"] = deepcopy(suite_override["scenarios"])
+        if "aggregate" in suite_override:
+            cfg["aggregate"] = deepcopy(suite_override["aggregate"])
+        if "exchanges" in suite_override:
+            cfg["exchanges"] = deepcopy(suite_override["exchanges"])
+        if "volume_normalization" in suite_override:
+            cfg["volume_normalization"] = suite_override["volume_normalization"]
+
+    # Determine if suite mode is enabled:
+    # - suite_enabled config param must be true (default: true)
+    # - AND scenarios must exist
+    suite_enabled_config = backtest.get("suite_enabled", True)
+    has_scenarios = bool(cfg.get("scenarios"))
+    cfg["enabled"] = suite_enabled_config and has_scenarios
+
     return cfg
+
+
+def filter_scenarios_by_label(
+    scenarios: List[Dict[str, Any]],
+    labels: List[str],
+) -> List[Dict[str, Any]]:
+    """Filter scenarios to only include those matching the given labels.
+
+    Args:
+        scenarios: List of scenario dicts (each with a 'label' key)
+        labels: List of labels to keep
+
+    Returns:
+        Filtered list of scenarios
+
+    Raises:
+        ValueError: If no scenarios match the given labels
+    """
+    if not labels:
+        return scenarios
+
+    label_set = set(labels)
+    filtered = [s for s in scenarios if s.get("label") in label_set]
+
+    if not filtered:
+        available = [s.get("label", f"<unnamed_{i}>") for i, s in enumerate(scenarios)]
+        raise ValueError(
+            f"No scenarios match the requested labels {labels}. "
+            f"Available labels: {available}"
+        )
+
+    return filtered
 
 
 def _flatten_coin_list(value: Any) -> List[str]:
@@ -189,16 +262,41 @@ def _collect_date_window(
 
 def build_scenarios(
     suite_cfg: Dict[str, Any],
-) -> Tuple[List[SuiteScenario], Dict[str, Any], bool, str]:
+    base_exchanges: Optional[List[str]] = None,
+) -> Tuple[List[SuiteScenario], Dict[str, Any]]:
+    """Build list of SuiteScenario objects from suite config.
+
+    In the new flattened structure:
+    - Scenarios without explicit 'exchanges' inherit from suite_cfg['exchanges'] or base_exchanges
+    - Single exchange in scenario = use that exchange's data
+    - Multiple exchanges in scenario = best-per-coin combination
+
+    Args:
+        suite_cfg: Suite configuration dict with 'scenarios' and 'aggregate'
+        base_exchanges: Default exchanges to inherit when scenario doesn't specify
+
+    Returns:
+        Tuple of (scenarios list, aggregate config dict)
+    """
     scenarios_cfg = suite_cfg.get("scenarios") or []
     if not scenarios_cfg:
-        raise ValueError("config.backtest.suite.scenarios must contain at least one scenario.")
+        raise ValueError("config.backtest.scenarios must contain at least one scenario.")
+
+    default_exchanges = suite_cfg.get("exchanges") or base_exchanges or []
 
     scenarios: List[SuiteScenario] = []
     for idx, raw in enumerate(scenarios_cfg, 1):
         exchanges_value = raw.get("exchanges")
         coin_sources_value = raw.get("coin_sources")
-        exchanges_list = _coerce_exchange_list(exchanges_value) if exchanges_value else None
+
+        # Resolve exchanges: scenario-specific or inherit from defaults
+        if exchanges_value:
+            exchanges_list = _coerce_exchange_list(exchanges_value)
+        elif default_exchanges:
+            exchanges_list = list(default_exchanges)
+        else:
+            exchanges_list = None
+
         coin_source_map = _coerce_coin_source_dict(coin_sources_value) if coin_sources_value else None
         overrides = raw.get("overrides")
         if overrides is not None and not isinstance(overrides, dict):
@@ -225,9 +323,7 @@ def build_scenarios(
         )
 
     aggregate_cfg = deepcopy(suite_cfg.get("aggregate", {"default": "mean"}))
-    include_base = bool(suite_cfg.get("include_base_scenario", False))
-    base_label = str(suite_cfg.get("base_label") or "base")
-    return scenarios, aggregate_cfg, include_base, base_label
+    return scenarios, aggregate_cfg
 
 
 def collect_suite_coin_sources(
@@ -360,7 +456,12 @@ async def prepare_master_datasets(
             btc_spec=btc_spec,
         )
 
-    if require_config_value(base_config, "backtest.combine_ohlcvs"):
+    # New behavior: derive data strategy from exchange count
+    # - Single exchange = use that exchange's data only
+    # - Multiple exchanges = best-per-coin combination (combined)
+    use_combined = len(exchanges) > 1
+
+    if use_combined:
         (
             coins,
             hlcvs,
@@ -1024,16 +1125,7 @@ async def run_backtest_suite_async(
     base_coins = _flatten_coin_list(require_live_value(config, "approved_coins"))
     base_ignored = _flatten_coin_list(require_live_value(config, "ignored_coins"))
 
-    scenarios, aggregate_cfg, include_base, base_label = build_scenarios(suite_cfg)
-    if include_base:
-        base_scenario = SuiteScenario(
-            label=base_label,
-            start_date=base_start,
-            end_date=base_end,
-            coins=list(base_coins),
-            ignored_coins=list(base_ignored),
-        )
-        scenarios = [base_scenario] + list(scenarios)
+    scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=exchanges_list)
 
     suite_coin_sources = collect_suite_coin_sources(config, scenarios)
 
@@ -1145,12 +1237,20 @@ def run_backtest_suite_sync(
 
     suite_override = None
     if suite_config_path:
-        suite_override = (
-            load_config(str(suite_config_path), verbose=False).get("backtest", {}).get("suite")
-        )
-        if suite_override is None:
+        override_config = load_config(str(suite_config_path), verbose=False)
+        override_backtest = override_config.get("backtest", {})
+        # Support both new (scenarios at top level) and legacy (suite wrapper) formats
+        if "scenarios" in override_backtest:
+            suite_override = {
+                "scenarios": override_backtest.get("scenarios", []),
+                "aggregate": override_backtest.get("aggregate", {"default": "mean"}),
+            }
+        elif "suite" in override_backtest:
+            # Legacy format - extract from suite wrapper
+            suite_override = override_backtest["suite"]
+        else:
             raise ValueError(
-                f"Suite config {suite_config_path} does not contain backtest.suite definition."
+                f"Suite config {suite_config_path} does not contain backtest.scenarios definition."
             )
 
     suite_cfg = extract_suite_config(config, suite_override)
