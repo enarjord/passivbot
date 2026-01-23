@@ -52,9 +52,13 @@ from collections import OrderedDict
 if TYPE_CHECKING:
     import aiohttp
 
+import warnings
+
 import numpy as np
 import portalocker  # type: ignore
 
+# Suppress portalocker's "timeout has no effect in blocking mode" warning
+warnings.filterwarnings("ignore", message="timeout has no effect in blocking mode", module="portalocker")
 
 # ----- Constants and dtypes -----
 
@@ -380,6 +384,9 @@ class CandlestickManager:
         # Rate-limiting for zero-candle synthesis warnings (at most once per minute per symbol)
         self._synth_candle_log_last: Dict[str, float] = {}  # symbol -> last log time (unix sec)
         self._synth_candle_log_throttle_sec: float = 60.0  # minimum seconds between logs per symbol
+        # Batch mode for startup: when enabled, collect warnings and log summary later
+        self._synth_candle_batch_mode: bool = False
+        self._synth_candle_batch: Dict[str, int] = {}  # symbol -> count during batch
         # Track which timestamps were synthesized (per symbol) for EMA recomputation detection
         # When real data arrives for a previously synthetic timestamp, EMAs should be recomputed
         self._synthetic_timestamps: Dict[str, set[int]] = {}  # symbol -> set of synthetic ts (ms)
@@ -448,6 +455,35 @@ class CandlestickManager:
         desired_level = level_map.get(self.debug_level, logging.INFO)
         self.log = logging.getLogger("passivbot.candlestick_manager")
         self.log.setLevel(desired_level)
+
+    def start_synth_candle_batch(self) -> None:
+        """Start batching zero-candle synthesis warnings for later aggregated logging."""
+        self._synth_candle_batch_mode = True
+        self._synth_candle_batch.clear()
+
+    def flush_synth_candle_batch(self) -> None:
+        """Log aggregated zero-candle synthesis warnings and exit batch mode."""
+        self._synth_candle_batch_mode = False
+        if not self._synth_candle_batch:
+            return
+        total_symbols = len(self._synth_candle_batch)
+        total_candles = sum(self._synth_candle_batch.values())
+        if total_symbols == 1:
+            symbol, count = next(iter(self._synth_candle_batch.items()))
+            self.log.warning(
+                "[candle] synthesized %d zero-candle%s for %s (no trades from exchange)",
+                count,
+                "s" if count > 1 else "",
+                symbol,
+            )
+        else:
+            self.log.warning(
+                "[candle] synthesized %d zero-candle%s across %d symbols (no trades from exchange)",
+                total_candles,
+                "s" if total_candles > 1 else "",
+                total_symbols,
+            )
+        self._synth_candle_batch.clear()
 
     # ----- Retention helpers -----
 
@@ -2650,35 +2686,42 @@ class CandlestickManager:
                 ts for ts in self._synthetic_timestamps[symbol] if ts > cutoff
             }
 
-        # Log when zero-candles were synthesized (rate-limited: at most once per minute per symbol)
+        # Log when zero-candles were synthesized (rate-limited or batched)
         if synthesized_count > 0 and symbol:
-            now_sec = time.time()
-            last_log = self._synth_candle_log_last.get(symbol, 0.0)
-            if (now_sec - last_log) >= self._synth_candle_log_throttle_sec:
-                self._synth_candle_log_last[symbol] = now_sec
-                # Format timestamp range for human readability
-                from datetime import datetime, timezone
-
-                first_ts = min(synthesized_timestamps)
-                last_ts = max(synthesized_timestamps)
-                first_dt = datetime.fromtimestamp(first_ts / 1000, tz=timezone.utc).strftime(
-                    "%Y-%m-%dT%H:%M"
+            # In batch mode, collect for later aggregated logging
+            if self._synth_candle_batch_mode:
+                self._synth_candle_batch[symbol] = (
+                    self._synth_candle_batch.get(symbol, 0) + synthesized_count
                 )
-                if synthesized_count == 1:
-                    ts_info = first_dt
-                else:
-                    last_dt = datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc).strftime(
+            else:
+                # Normal mode: rate-limited per symbol (at most once per minute)
+                now_sec = time.time()
+                last_log = self._synth_candle_log_last.get(symbol, 0.0)
+                if (now_sec - last_log) >= self._synth_candle_log_throttle_sec:
+                    self._synth_candle_log_last[symbol] = now_sec
+                    # Format timestamp range for human readability
+                    from datetime import datetime, timezone
+
+                    first_ts = min(synthesized_timestamps)
+                    last_ts = max(synthesized_timestamps)
+                    first_dt = datetime.fromtimestamp(first_ts / 1000, tz=timezone.utc).strftime(
                         "%Y-%m-%dT%H:%M"
                     )
-                    ts_info = f"{first_dt} to {last_dt}"
-                self.log.warning(
-                    "[candle] %s: synthesized %d zero-candle%s at %s (no trades from exchange) using prev_close=%.6f",
-                    symbol,
-                    synthesized_count,
-                    "s" if synthesized_count > 1 else "",
-                    ts_info,
-                    prev_close if prev_close is not None else 0.0,
-                )
+                    if synthesized_count == 1:
+                        ts_info = first_dt
+                    else:
+                        last_dt = datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc).strftime(
+                            "%Y-%m-%dT%H:%M"
+                        )
+                        ts_info = f"{first_dt} to {last_dt}"
+                    self.log.warning(
+                        "[candle] %s: synthesized %d zero-candle%s at %s (no trades from exchange) using prev_close=%.6f",
+                        symbol,
+                        synthesized_count,
+                        "s" if synthesized_count > 1 else "",
+                        ts_info,
+                        prev_close if prev_close is not None else 0.0,
+                    )
 
         if not out_rows:
             return np.empty((0,), dtype=CANDLE_DTYPE)
@@ -3367,6 +3410,7 @@ class CandlestickManager:
         tf: Optional[str] = None,
         force_refetch_gaps: bool = False,
         fill_leading_gaps: bool = False,
+        skip_historical_gap_fill: bool = False,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
 
@@ -3380,6 +3424,9 @@ class CandlestickManager:
           before fetching, forcing a retry of all gaps regardless of retry count
         - If `fill_leading_gaps` is True: synthesize zero-candles even before the
           first real data point (useful for EMA calculation)
+        - If `skip_historical_gap_fill` is True: do not attempt to fetch/fill gaps
+          in historical data older than 1 day. Useful for live bot warmup where
+          recent data is sufficient and filling old gaps wastes time.
         """
         if max_age_ms is not None and max_age_ms < 0:
             raise ValueError("max_age_ms cannot be negative")
@@ -3703,9 +3750,11 @@ class CandlestickManager:
                 fully_covered=fully_covered,
             )
             historical = True
-        if self.exchange is not None and historical:
+        if self.exchange is not None and historical and not skip_historical_gap_fill:
             # If the requested historical window is not fully covered in memory,
             # attempt to fetch unknown missing spans, regardless of shard presence.
+            # Skip this if skip_historical_gap_fill is set (e.g., live warmup where
+            # we only need recent data and old gaps don't matter).
             if not fully_covered:
                 # Hyperliquid special case: cap lookback to last 5000 minutes
                 try:

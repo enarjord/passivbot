@@ -1,4 +1,4 @@
-from exchanges.ccxt_bot import CCXTBot
+from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
 
 import asyncio
@@ -366,12 +366,12 @@ class BinanceBot(CCXTBot):
             to_print = ""
             try:
                 res = await coros_to_call_lev[symbol]
-                to_print += f"set leverage {res} "
+                to_print += f"leverage={format_exchange_config_response(res)} "
             except Exception as e:
                 logging.error(f"{symbol}: error setting leverage {e}")
             try:
                 res_margin = await coros_to_call_margin_mode[symbol]
-                to_print += f"set cross mode {res_margin}"
+                to_print += f"margin={format_exchange_config_response(res_margin)}"
             except Exception as e:
                 logging.error(f"{symbol}: error setting cross mode {e}")
             if to_print:

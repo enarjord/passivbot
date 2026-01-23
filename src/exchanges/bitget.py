@@ -1,4 +1,4 @@
-from exchanges.ccxt_bot import CCXTBot
+from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging, custom_id_to_snake, clip_by_timestamp
 import asyncio
 import json
@@ -569,15 +569,15 @@ class BitgetBot(CCXTBot):
             to_print = ""
             try:
                 res = await coros_to_call_lev[symbol]
-                to_print += f" set leverage {res} "
+                to_print += f"leverage={format_exchange_config_response(res)} "
             except Exception as e:
-                logging.error(f"{symbol} error setting leverage {e} {res}")
+                logging.error(f"{symbol} error setting leverage {e}")
             res = None
             try:
                 res = await coros_to_call_margin_mode[symbol]
-                to_print += f"set cross mode {res}"
+                to_print += f"margin={format_exchange_config_response(res)}"
             except Exception as e:
-                logging.error(f"{symbol} error setting cross mode {e} {res}")
+                logging.error(f"{symbol} error setting cross mode {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 

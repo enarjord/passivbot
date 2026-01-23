@@ -645,19 +645,41 @@ class Passivbot:
         else:
             fills_str = "fills=0"
 
+        # Loop timing
+        loop_ms = getattr(self, "_last_loop_duration_ms", 0)
+        loop_str = f"{loop_ms / 1000:.1f}s" if loop_ms > 0 else "n/a"
+
+        # Error budget: count of errors in last hour vs max
+        error_counts = getattr(self, "error_counts", [])
+        now = utc_ms()
+        recent_errors = len([x for x in error_counts if x > now - 1000 * 60 * 60])
+        max_errors = 10
+        error_budget_str = f"{recent_errors}/{max_errors}"
+
+        # Memory usage
+        try:
+            import resource
+
+            rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 / 1024
+            mem_str = f"rss={rss_mb:.0f}MB"
+        except Exception:
+            mem_str = ""
+
         logging.info(
-            "[health] uptime=%s | positions=%d long, %d short | balance=%s | "
-            "orders_placed=%d | orders_cancelled=%d | %s | errors=%d | ws_reconnects=%d | rate_limits=%d",
+            "[health] uptime=%s | loop=%s | positions=%d long, %d short | balance=%s | "
+            "orders=+%d/-%d | %s | errors=%s | ws_reconnects=%d | rate_limits=%d%s",
             uptime_str,
+            loop_str,
             n_long,
             n_short,
             balance_str,
             self._health_orders_placed,
             self._health_orders_cancelled,
             fills_str,
-            self._health_errors,
+            error_budget_str,
             self._health_ws_reconnects,
             self._health_rate_limits,
+            f" | {mem_str}" if mem_str else "",
         )
 
     async def start_bot(self):
@@ -677,6 +699,15 @@ class Passivbot:
         await self.start_data_maintainers()
 
         logging.info("[boot] starting execution loop...")
+        logging.info(
+            "[boot] ══════════════════════════════════════════════════════════════════════"
+        )
+        logging.info(
+            "[boot] READY - Bot initialization complete, entering main trading loop"
+        )
+        logging.info(
+            "[boot] ══════════════════════════════════════════════════════════════════════"
+        )
         if not self.debug_mode:
             await self.run_execution_loop()
 
@@ -995,8 +1026,27 @@ class Passivbot:
             max_jitter = 30.0
         if max_jitter > 0:
             jitter = random.uniform(0, max_jitter)
-            logging.info("[boot] warmup jitter: sleeping %.1fs (max=%.0fs)", jitter, max_jitter)
-            await asyncio.sleep(jitter)
+            if jitter > 5:
+                logging.info(
+                    "[boot] warmup jitter: waiting %.1fs before starting (max=%.0fs)...",
+                    jitter,
+                    max_jitter,
+                )
+                # For longer waits, log progress every 10 seconds
+                waited = 0.0
+                while waited < jitter:
+                    sleep_chunk = min(10.0, jitter - waited)
+                    await asyncio.sleep(sleep_chunk)
+                    waited += sleep_chunk
+                    if waited < jitter:
+                        logging.info(
+                            "[boot] warmup jitter: %.0fs remaining...", jitter - waited
+                        )
+            else:
+                logging.info(
+                    "[boot] warmup jitter: sleeping %.1fs (max=%.0fs)", jitter, max_jitter
+                )
+                await asyncio.sleep(jitter)
 
         n = len(symbols)
         now = utc_ms()
@@ -1056,6 +1106,8 @@ class Passivbot:
             logging.info(
                 f"warmup starting: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
             )
+            # Enable batch mode for zero-candle synthesis warnings during warmup
+            self.cm.start_synth_candle_batch()
 
         async def one(sym: str):
             nonlocal completed, last_log_ms
@@ -1064,7 +1116,12 @@ class Passivbot:
                     win = int(per_symbol_win.get(sym, default_win))
                     start_ts = int(end_final - ONE_MIN_MS * max(1, win))
                     await self.cm.get_candles(
-                        sym, start_ts=start_ts, end_ts=None, max_age_ms=ttl_ms, strict=False
+                        sym,
+                        start_ts=start_ts,
+                        end_ts=None,
+                        max_age_ms=ttl_ms,
+                        strict=False,
+                        skip_historical_gap_fill=True,  # Live warmup: don't waste time on old gaps
                     )
                 except Exception:
                     pass
@@ -1106,11 +1163,15 @@ class Passivbot:
                         max_age_ms=ttl_ms,
                         timeframe="1h",
                         strict=False,
+                        skip_historical_gap_fill=True,  # Live warmup: don't waste time on old gaps
                     )
                 except Exception:
                     pass
 
         await asyncio.gather(*(warm_hour(s) for s in symbols))
+
+        # Flush batched zero-candle synthesis warnings
+        self.cm.flush_synth_candle_batch()
 
     async def update_first_timestamps(self, symbols=[]):
         """Fetch and cache first trade timestamps for the provided symbols."""
@@ -1189,6 +1250,7 @@ class Passivbot:
         max_n_fails = 10
         while not self.stop_signal_received:
             try:
+                loop_start_ms = utc_ms()
                 self.execution_scheduled = False
                 self.state_change_detected_by_symbol = set()
                 if not await self.update_pos_oos_pnls_ohlcvs():
@@ -1201,6 +1263,8 @@ class Passivbot:
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
                     return res
+                # Track loop duration for health reporting
+                self._last_loop_duration_ms = utc_ms() - loop_start_ms
                 # Periodic health summary
                 self._maybe_log_health_summary()
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
@@ -1213,6 +1277,7 @@ class Passivbot:
                 self._health_errors += 1
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
+                await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(1.0)
 
     async def shutdown_gracefully(self):
@@ -1734,11 +1799,6 @@ class Passivbot:
                                 break
                         except Exception as e:
                             logging.error(f"Error in get_last_position_changes: {e}")
-        as_datetime = {
-            k: {k0: ts_to_date(v0)[:19] for k0, v0 in v.items()}
-            for k, v in last_position_changes.items()
-        }
-        logging.info(f"[fills] [debug] last_position_changes: {as_datetime}")
         return last_position_changes
 
     # Legacy: wait_for_ohlcvs_1m_to_update removed (CandlestickManager handles freshness)
@@ -2493,13 +2553,6 @@ class Passivbot:
                     pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
                     + drop_since_peak_pct
                 )
-                if self.is_pside_enabled(pside):
-                    logging.info(
-                        f"[fills] [debug] {pside} pnls_cumsum_max: {pnls_cumsum_max}, pnls_cumsum_last: {pnls_cumsum_last}, bal: {self.balance} bal peak: {balance_peak}"
-                    )
-                    logging.info(
-                        f"[fills] [debug] drop since peak pct: {drop_since_peak_pct}, allowance_raw: {allowance_raw}, allowance_mod: {allowance_mod}"
-                    )
                 out[pside] = float(
                     pbr.calc_auto_unstuck_allowance(
                         float(self.balance),
@@ -4247,6 +4300,7 @@ class Passivbot:
             except Exception as e:
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
+                await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(5)
 
     async def start_data_maintainers(self):
