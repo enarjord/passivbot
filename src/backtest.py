@@ -1052,6 +1052,7 @@ def post_process(
     analysis,
     results_path,
     exchange,
+    label=None,
 ):
     sts = utc_ms()
     equities_array = np.asarray(equities_array)
@@ -1072,7 +1073,8 @@ def post_process(
         if k not in analysis:
             analysis[k] = analysis_py[k]
     logging.info(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
-    print(pprint.pformat(trim_analysis_aliases(analysis)))
+    label_prefix = f"[{label}] " if label else ""
+    print(f"{label_prefix}{pprint.pformat(trim_analysis_aliases(analysis))}")
     results_path = make_get_filepath(
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )

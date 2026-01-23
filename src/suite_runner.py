@@ -802,6 +802,7 @@ def _run_combined_dataset(
                 analysis,
                 str(output_dir),
                 dataset.exchange,
+                label=scenario.label,
             )
         except Exception as exc:  # pragma: no cover - defensive logging
             logging.error(
@@ -878,6 +879,7 @@ def _run_multi_dataset(
                     analysis,
                     str(exchange_dir),
                     dataset.exchange,
+                    label=f"{scenario.label}/{dataset.exchange}",
                 )
             except Exception as exc:
                 logging.error(
