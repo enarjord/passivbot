@@ -44,6 +44,48 @@ from config_utils import require_live_value
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
+def format_exchange_config_response(res: dict) -> str:
+    """Format exchange config API response (leverage, margin mode) concisely.
+
+    Instead of logging full JSON like:
+        {'symbol': 'ADAUSDT', 'leverage': '10', 'maxNotionalValue': '10000000'}
+    Returns:
+        'ok' or 'leverage=10x' or error message
+    """
+    if not isinstance(res, dict):
+        return str(res)[:50]
+
+    # Check for success indicators
+    code = res.get("code") or res.get("retCode")
+    msg = res.get("msg") or res.get("retMsg") or res.get("message", "")
+    status = res.get("status", "")
+
+    # Success cases
+    if code in (0, "0", "200000", 200000):
+        return "ok"
+    if status == "ok":
+        return "ok"
+
+    # "No need to change" is success
+    if "no need" in str(msg).lower():
+        return "ok (unchanged)"
+
+    # Extract useful info
+    leverage = res.get("leverage") or res.get("lever")
+    if leverage:
+        return f"leverage={leverage}x"
+
+    # Error cases - show code and message
+    if code and msg:
+        return f"code={code}: {msg[:40]}"
+    if msg:
+        return msg[:50]
+
+    # Fallback: truncated string
+    s = str(res)
+    return s[:60] + "..." if len(s) > 60 else s
+
+
 class CCXTBot(Passivbot):
     """Generic exchange bot using CCXT unified API.
 

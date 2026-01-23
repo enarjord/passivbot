@@ -1,4 +1,4 @@
-from exchanges.ccxt_bot import CCXTBot
+from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging, clip_by_timestamp
 from uuid import uuid4
 import asyncio
@@ -464,7 +464,7 @@ class BybitBot(CCXTBot):
             # Handle leverage setting - ignore "not modified" errors (retCode 110043)
             try:
                 res = await coros_to_call_lev[symbol]
-                to_print += f" set leverage {res} "
+                to_print += f"leverage={format_exchange_config_response(res)} "
             except ccxt.BadRequest as e:
                 if "110043" in str(e) or "not modified" in str(e).lower():
                     logging.debug(f"{symbol}: leverage already set (not modified)")
@@ -473,7 +473,7 @@ class BybitBot(CCXTBot):
             # Handle margin mode setting - ignore "not modified" errors
             try:
                 res = await coros_to_call_margin_mode[symbol]
-                to_print += f"set cross mode {res}"
+                to_print += f"margin={format_exchange_config_response(res)}"
             except ccxt.BadRequest as e:
                 if "110026" in str(e) or "not modified" in str(e).lower():
                     logging.debug(f"{symbol}: margin mode already set (not modified)")
