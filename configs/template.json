@@ -18,15 +18,11 @@
             },
             {
                 "label": "bybit_only",
-                "overrides": {
-                    "bot.backtest.exchanges": ["bybit"]
-                }
+                "exchanges": ["bybit"]
             },
             {
                 "label": "binance_only",
-                "overrides": {
-                    "bot.backtest.exchanges": ["binance"]
-                }
+                "exchanges": ["binance"]
             },
             {
                 "coins": ["ADA", "BTC", "ETH", "SOL", "XRP"],
