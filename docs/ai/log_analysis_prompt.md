@@ -412,6 +412,17 @@ Compare to current (noisy):
 4. **Volume/volatility EMA rankings** - Already implemented in Round 1 with ranking change detection. Only logs when top symbols change.
    - File: `src/passivbot.py`
 
+### Round 2b (2026-01-24) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **CCXT API request/response payloads** - Moved full API payloads from DEBUG to TRACE level.
+   - CCXT logs full HTTP request/response data including headers and JSON bodies at DEBUG level
+   - These payloads can be 10KB+ per line (e.g., coin list responses) and accounted for ~23% of DEBUG log volume
+   - Configured CCXT logger to only output at TRACE level (debug level 3); suppressed at DEBUG (level 2) and below
+   - File: `src/logging_setup.py`
+   - Impact: Reduces a 2411-line DEBUG log by 558 lines (~23% reduction), and more importantly removes the very long JSON payload lines
+
 ### Round 3 (TODO)
 
 **Remaining issues to address:**
