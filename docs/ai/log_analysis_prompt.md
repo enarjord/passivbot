@@ -375,16 +375,39 @@ Compare to current (noisy):
 5. **Stale lock removal** - Changed from WARNING to INFO (self-healing is not a warning)
    - File: `src/utils.py`
 
-### Round 2 (TODO)
+### Round 2 (2026-01-24) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **Deprecated API key warnings** - Changed from WARNING to INFO and added log_once pattern to prevent startup spam.
+   - File: `src/exchanges/ccxt_bot.py`
+
+2. **Fetcher.fetch spam** - Changed all fetcher status messages from INFO to DEBUG:
+   - `BitgetFetcher.fetch: start/done` → DEBUG
+   - `BinanceFetcher.fetch: start/done` → DEBUG
+   - `BybitFetcher.fetch: done` → DEBUG
+   - `HyperliquidFetcher.fetch: fetch #N` → DEBUG
+   - `GateioFetcher.fetch: start/done/no trades` → DEBUG
+   - `OkxFetcher.fetch: start/done` → DEBUG
+   - `KucoinFetcher._fetch_trades: fetch #N` → DEBUG
+   - `KucoinFetcher._fetch_positions_history: fetch #N` → DEBUG
+   - File: `src/fill_events_manager.py`
+
+3. **Cache oldest event/full refresh spam** - Changed from INFO to DEBUG with once-per-session logging.
+   - File: `src/passivbot.py`
+
+4. **Volume/volatility EMA rankings** - Already implemented in Round 1 with ranking change detection. Only logs when top symbols change.
+   - File: `src/passivbot.py`
+
+### Round 3 (TODO)
 
 **Remaining issues to address:**
 
-- [ ] Volume/volatility EMA rankings - Only log at INFO when rankings change meaningfully
-- [ ] Deprecated API key warnings - Use `log_once` pattern or move to INFO
 - [ ] Missing INFO-level information:
-  - [ ] EMA gating for entries
-  - [ ] Unstuck gating
-  - [ ] Unstuck coin selection
-  - [ ] WebSocket reconnections
-- [ ] Standardize log tag formats (`[tag]` style)
-- [ ] Convert f-strings to format strings for log aggregation
+  - [ ] EMA gating for entries (when initial entry blocked due to EMA distance)
+  - [ ] Unstuck gating (when unstuck entry blocked)
+  - [ ] Unstuck coin selection (which coin selected for unstuck and why)
+  - [ ] WebSocket reconnections (currently only logs initial connect)
+- [ ] Standardize log tag formats (`[tag]` style) for remaining untagged messages
+- [ ] Convert f-strings to format strings for log aggregation where feasible
+- [ ] Zero-candle synthesis warnings still appear repeatedly for same gaps outside warmup

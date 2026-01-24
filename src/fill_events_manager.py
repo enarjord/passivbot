@@ -991,7 +991,7 @@ class BitgetFetcher(BaseFetcher):
         max_fetches = 400
         fetch_count = 0
 
-        logger.info(
+        logger.debug(
             "BitgetFetcher.fetch: start (since=%s, until=%s, limit=%d)",
             _format_ms(since_ms),
             _format_ms(until_ms),
@@ -1009,7 +1009,7 @@ class BitgetFetcher(BaseFetcher):
             payload = await self.api.private_mix_get_v2_mix_order_fill_history(dict(params))
             fill_list = payload.get("data", {}).get("fillList") or []
             if fetch_count > 1:
-                logger.info(
+                logger.debug(
                     "BitgetFetcher.fetch: fetch #%d endTime=%s size=%d",
                     fetch_count,
                     _format_ms(params.get("endTime")),
@@ -1106,7 +1106,7 @@ class BitgetFetcher(BaseFetcher):
             ordered = [ev for ev in ordered if ev["timestamp"] >= since_ms]
         if until_ms is not None:
             ordered = [ev for ev in ordered if ev["timestamp"] <= until_ms]
-        logger.info(
+        logger.debug(
             "BitgetFetcher.fetch: done (events=%d, detail_cache_hits=%d, detail_fetches=%d)",
             len(ordered),
             detail_hits,
@@ -1271,7 +1271,7 @@ class BinanceFetcher(BaseFetcher):
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
-        logger.info(
+        logger.debug(
             "BinanceFetcher.fetch: start since=%s until=%s",
             _format_ms(since_ms),
             _format_ms(until_ms),
@@ -1441,7 +1441,7 @@ class BinanceFetcher(BaseFetcher):
         if on_batch and ordered:
             on_batch(ordered)
 
-        logger.info(
+        logger.debug(
             "BinanceFetcher.fetch: done events=%d (symbols=%d)",
             len(ordered),
             len(symbol_pool),
@@ -2097,7 +2097,7 @@ class BybitFetcher(BaseFetcher):
             for day in sorted(day_map):
                 on_batch(day_map[day])
 
-        logger.info(
+        logger.debug(
             "BybitFetcher.fetch: done (events=%d, trades=%d, positions=%d)",
             len(events),
             len(trades),
@@ -2420,7 +2420,7 @@ class HyperliquidFetcher(BaseFetcher):
                 continue
             fetch_count += 1
             if fetch_count > 1:
-                logger.info(
+                logger.debug(
                     "HyperliquidFetcher.fetch: fetch #%d since=%s size=%d",
                     fetch_count,
                     _format_ms(params.get("since")),
@@ -2556,7 +2556,7 @@ class GateioFetcher(BaseFetcher):
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
-        logger.info(
+        logger.debug(
             "GateioFetcher.fetch: start (since=%s, until=%s)",
             _format_ms(since_ms),
             _format_ms(until_ms),
@@ -2565,7 +2565,7 @@ class GateioFetcher(BaseFetcher):
         # Step 1: Fetch trades (fill-level data with fees)
         trades = await self._fetch_trades(since_ms, until_ms)
         if not trades:
-            logger.info("GateioFetcher.fetch: no trades found")
+            logger.debug("GateioFetcher.fetch: no trades found")
             return []
 
         # Step 2: Collect unique order IDs
@@ -2592,7 +2592,7 @@ class GateioFetcher(BaseFetcher):
         if on_batch and ordered:
             on_batch(ordered)
 
-        logger.info(
+        logger.debug(
             "GateioFetcher.fetch: done (events=%d, trades=%d, orders=%d)",
             len(ordered),
             len(trades),
@@ -2960,7 +2960,7 @@ class KucoinFetcher(BaseFetcher):
             prev_params = key
             batch = await self.api.fetch_my_trades(params=params)
             if fetch_count > 1:
-                logger.info(
+                logger.debug(
                     "KucoinFetcher._fetch_trades: fetch #%d startAt=%s endAt=%s size=%d",
                     fetch_count,
                     _format_ms(params["startAt"]),
@@ -3015,7 +3015,7 @@ class KucoinFetcher(BaseFetcher):
             fetch_count += 1
             batch = await self.api.fetch_positions_history(params=params)
             if fetch_count > 1:
-                logger.info(
+                logger.debug(
                     "KucoinFetcher._fetch_positions_history: fetch #%d from=%s to=%s size=%d",
                     fetch_count,
                     _format_ms(params.get("from")),
@@ -3433,7 +3433,7 @@ class OkxFetcher(BaseFetcher):
         max_fetches = 400
         fetch_count = 0
 
-        logger.info(
+        logger.debug(
             "OkxFetcher.fetch: start (since=%s, until=%s)",
             _format_ms(since_ms),
             _format_ms(until_ms),
@@ -3492,7 +3492,7 @@ class OkxFetcher(BaseFetcher):
             if not event["pb_order_type"]:
                 event["pb_order_type"] = "unknown"
 
-        logger.info(
+        logger.debug(
             "OkxFetcher.fetch: done (events=%d, fetches=%d)",
             len(events),
             fetch_count,

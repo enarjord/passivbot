@@ -207,10 +207,14 @@ class CCXTBot(Passivbot):
         }
         for old_name, new_name in legacy_mappings.items():
             if old_name in config and new_name not in config:
-                logging.warning(
-                    f"{self.exchange}: '{old_name}' in api-keys.json is deprecated, "
-                    f"use '{new_name}' instead (CCXT-native field name)"
-                )
+                # Log deprecated field name once per session (INFO, not WARNING - this is expected)
+                cache_key = f"_deprecated_key_warned_{self.exchange}_{old_name}"
+                if not getattr(self, cache_key, False):
+                    setattr(self, cache_key, True)
+                    logging.info(
+                        f"{self.exchange}: '{old_name}' in api-keys.json is deprecated, "
+                        f"use '{new_name}' instead (CCXT-native field name)"
+                    )
                 config[new_name] = config.pop(old_name)
 
         return config
