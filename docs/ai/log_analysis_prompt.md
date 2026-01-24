@@ -427,10 +427,11 @@ Compare to current (noisy):
 
 **Issues addressed:**
 
-1. **Zero-candle synthesis warnings repeating** - Changed from rate-limiting (once per minute per symbol) to gap deduplication (once per unique gap range).
+1. **Zero-candle synthesis warnings repeating** - Changed from rate-limiting (once per minute per symbol) to gap deduplication (once per unique gap origin).
    - Same historical gaps were being warned about every minute (e.g., "DOGE: synthesized 7 zero-candles at 2026-01-23T19:16 to 2026-01-24T13:24")
-   - Now uses a set to track which (symbol, first_ts, last_ts) gaps have been warned about
-   - Warns only once per unique gap, eliminating repeated warnings for the same historical data gaps
+   - Now uses a set to track which (symbol, first_ts) gaps have been warned about
+   - Uses gap start timestamp as key since end timestamp changes as time passes
+   - Warns only once per unique gap origin, eliminating repeated warnings
    - File: `src/candlestick_manager.py`
 
 2. **Stale candle lock removal at WARNING** - Changed from WARNING to INFO level.
@@ -438,7 +439,23 @@ Compare to current (noisy):
    - Consistent with symbol map lock removal which is already at INFO level
    - File: `src/candlestick_manager.py`
 
-### Round 4 (TODO)
+### Round 4 (2026-01-24) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **Volume/volatility EMA rankings logging too frequently** - Added 60-second throttle per metric.
+   - Rankings were logged every 1-5 seconds during active trading due to small fluctuations
+   - Now requires both a ranking change AND 60 seconds since last log
+   - Reduces log volume significantly while still showing meaningful ranking changes
+   - Files: `src/passivbot.py` (3 locations: `calc_volumes_and_log_ranges`, `calc_log_range`, `calc_volumes`)
+
+2. **Mode changes flip-flopping creates noisy logs** - Added 60-second throttle for mode change logs.
+   - Forager mode causes coins to oscillate between `normal` and `graceful_stop` when volatility rankings are close
+   - "added" and "removed" logs (startup events) still logged immediately at INFO
+   - "changed" logs throttled to at most once per 60 seconds per symbol
+   - File: `src/passivbot.py`
+
+### Round 5 (TODO)
 
 **Remaining issues to address:**
 
@@ -449,5 +466,5 @@ Compare to current (noisy):
   - [ ] WebSocket reconnections (currently only logs initial connect)
 - [ ] Standardize log tag formats (`[tag]` style) for remaining untagged messages
 - [ ] Convert f-strings to format strings for log aggregation where feasible
-- [ ] Volume/volatility EMA rankings log too frequently (every few seconds during active trading)
-- [ ] Mode changes flip-flopping creates noisy INFO logs (coins switching between normal/graceful_stop rapidly)
+- [ ] Deprecated API key warnings could be aggregated into a single message instead of one per field
+- [ ] Consider adding periodic health summary (every 5-15 min) with key metrics for long-running bots

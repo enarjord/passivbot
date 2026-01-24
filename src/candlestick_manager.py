@@ -382,8 +382,9 @@ class CandlestickManager:
         self._tf_range_cache_cap = 8
         self._step_warning_keys: set[Tuple[str, str, str]] = set()
         # Deduplication for zero-candle synthesis warnings - only warn once per unique gap
-        # Key: (symbol, first_ts, last_ts) to identify a specific gap range
-        self._synth_gap_warned: set[Tuple[str, int, int]] = set()
+        # Key: (symbol, first_ts) to identify a gap by its starting point
+        # The end timestamp changes as time passes, but the start identifies the gap origin
+        self._synth_gap_warned: set[Tuple[str, int]] = set()
         # Batch mode for startup: when enabled, collect warnings and log summary later
         self._synth_candle_batch_mode: bool = False
         self._synth_candle_batch: Dict[str, int] = {}  # symbol -> count during batch
@@ -2737,12 +2738,13 @@ class CandlestickManager:
                     self._synth_candle_batch.get(symbol, 0) + synthesized_count
                 )
             else:
-                # Normal mode: deduplicate by gap range (only warn once per unique gap)
+                # Normal mode: deduplicate by gap start (only warn once per unique gap origin)
+                # The end timestamp changes as time passes, but the start identifies the gap
                 first_ts = min(synthesized_timestamps)
                 last_ts = max(synthesized_timestamps)
-                gap_key = (symbol, first_ts, last_ts)
+                gap_key = (symbol, first_ts)
 
-                # Skip if we've already warned about this exact gap
+                # Skip if we've already warned about a gap starting at this timestamp
                 if gap_key in self._synth_gap_warned:
                     pass  # Already warned, skip
                 else:
