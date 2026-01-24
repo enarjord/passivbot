@@ -22,6 +22,19 @@ You are analyzing logs from **Passivbot**, a cryptocurrency trading bot for perp
 
 The goal is to make each log level serve a distinct purpose:
 
+### Golden Rules
+
+| Level | Audience | Golden Rule |
+|-------|----------|-------------|
+| **INFO** | Operators watching logs | Sustainable to tail indefinitely in production |
+| **DEBUG** | Developers troubleshooting | Tolerable for debugging sessions (won't generate GB/hour) |
+| **TRACE** | Deep debugging specific issues | Full firehose; expect massive logs; enable briefly |
+
+**Key tests:**
+- Can someone run `--debug-level 1` (INFO) for days without log bloat? → If not, move spam to DEBUG
+- Can someone run `--debug-level 2` (DEBUG) for an hour without logs becoming unmanageable? → If not, move to TRACE
+- Is every API payload logged? → That belongs in TRACE, not DEBUG
+
 ### INFO (default, human-friendly, essential)
 The INFO level should be **clean and readable at a glance**. A human watching the logs should be able to understand what the bot is doing without being overwhelmed.
 

@@ -227,9 +227,22 @@ python3 -m jupyter lab
 
 ### Logging
 
-- Use structured, leveled logging (`error`, `warn`, `info`, `debug`, `trace`)
-- Every remote API call must have a debug-level log entry (endpoint, params, timing)
-- Logging should be non-intrusive but detailed enough for full replay/audit
+Use structured, leveled logging with clear separation between levels:
+
+| Level | Audience | Content | Golden Rule |
+|-------|----------|---------|-------------|
+| **INFO** | Operators | Essential events: orders, fills, positions, balance, mode changes, health summaries | Must be sustainable to tail indefinitely in production |
+| **DEBUG** | Developers | Internal state: API timing, cache updates, decision points, fetch summaries | Tolerable for short debugging sessions |
+| **TRACE** | Deep debugging | Full firehose: API payloads, per-item iterations, raw data | Expect GB of logs; enable briefly for specific issues |
+
+**Guidelines:**
+- INFO should answer "what is the bot doing?" without overwhelming
+- DEBUG should answer "why did it make that decision?"
+- TRACE should answer "what exact data did it see?"
+- Use `[tag]` format consistently: `[order]`, `[pos]`, `[fill]`, `[health]`, `[boot]`
+- Prefer `logging.info("msg %s", var)` over f-strings for log aggregation compatibility
+- Every remote API call should have a DEBUG-level log entry (endpoint, timing)
+- See `docs/ai/log_analysis_prompt.md` for detailed level definitions and examples
 
 ## Testing
 
