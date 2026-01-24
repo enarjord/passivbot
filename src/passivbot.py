@@ -1108,6 +1108,8 @@ class Passivbot:
             )
             # Enable batch mode for zero-candle synthesis warnings during warmup
             self.cm.start_synth_candle_batch()
+            # Enable batch mode for candle replacement logs during warmup
+            self.cm.start_candle_replace_batch()
 
         async def one(sym: str):
             nonlocal completed, last_log_ms
@@ -1172,6 +1174,8 @@ class Passivbot:
 
         # Flush batched zero-candle synthesis warnings
         self.cm.flush_synth_candle_batch()
+        # Flush batched candle replacement logs
+        self.cm.flush_candle_replace_batch()
 
     async def update_first_timestamps(self, symbols=[]):
         """Fetch and cache first trade timestamps for the provided symbols."""

@@ -387,6 +387,9 @@ class CandlestickManager:
         # Batch mode for startup: when enabled, collect warnings and log summary later
         self._synth_candle_batch_mode: bool = False
         self._synth_candle_batch: Dict[str, int] = {}  # symbol -> count during batch
+        # Batch mode for candle replacement logs: collect replacements and log summary at INFO
+        self._candle_replace_batch_mode: bool = False
+        self._candle_replace_batch: Dict[str, int] = {}  # symbol -> count replaced during batch
         # Track which timestamps were synthesized (per symbol) for EMA recomputation detection
         # When real data arrives for a previously synthetic timestamp, EMAs should be recomputed
         self._synthetic_timestamps: Dict[str, set[int]] = {}  # symbol -> set of synthetic ts (ms)
@@ -462,28 +465,60 @@ class CandlestickManager:
         self._synth_candle_batch.clear()
 
     def flush_synth_candle_batch(self) -> None:
-        """Log aggregated zero-candle synthesis warnings and exit batch mode."""
+        """Log aggregated zero-candle synthesis summary and exit batch mode."""
         self._synth_candle_batch_mode = False
         if not self._synth_candle_batch:
             return
         total_symbols = len(self._synth_candle_batch)
         total_candles = sum(self._synth_candle_batch.values())
+        # Use WARNING only for large amounts of synthesized candles (>1000), otherwise INFO
+        # This is expected behavior on illiquid pairs during warmup
+        log_fn = self.log.warning if total_candles > 1000 else self.log.info
         if total_symbols == 1:
             symbol, count = next(iter(self._synth_candle_batch.items()))
-            self.log.warning(
+            log_fn(
                 "[candle] synthesized %d zero-candle%s for %s (no trades from exchange)",
                 count,
                 "s" if count > 1 else "",
                 symbol,
             )
         else:
-            self.log.warning(
+            log_fn(
                 "[candle] synthesized %d zero-candle%s across %d symbols (no trades from exchange)",
                 total_candles,
                 "s" if total_candles > 1 else "",
                 total_symbols,
             )
         self._synth_candle_batch.clear()
+
+    def start_candle_replace_batch(self) -> None:
+        """Start batching candle replacement logs for later aggregated logging."""
+        self._candle_replace_batch_mode = True
+        self._candle_replace_batch.clear()
+
+    def flush_candle_replace_batch(self) -> None:
+        """Log aggregated candle replacement summary at INFO and exit batch mode."""
+        self._candle_replace_batch_mode = False
+        if not self._candle_replace_batch:
+            return
+        total_symbols = len(self._candle_replace_batch)
+        total_candles = sum(self._candle_replace_batch.values())
+        if total_symbols == 1:
+            symbol, count = next(iter(self._candle_replace_batch.items()))
+            self.log.info(
+                "[candle] %s: real data replaced %d synthetic candle%s, EMA cache invalidated",
+                symbol,
+                count,
+                "s" if count > 1 else "",
+            )
+        else:
+            self.log.info(
+                "[candle] real data replaced %d synthetic candle%s across %d symbols, EMA caches invalidated",
+                total_candles,
+                "s" if total_candles > 1 else "",
+                total_symbols,
+            )
+        self._candle_replace_batch.clear()
 
     # ----- Retention helpers -----
 
@@ -1660,12 +1695,20 @@ class CandlestickManager:
             # Real data arrived for previously synthetic timestamps - invalidate EMA cache
             self._synthetic_timestamps[symbol] -= replaced
             self._invalidate_ema_cache(symbol)
-            self.log.info(
-                "[candle] %s: real data replaced %d synthetic candle%s, EMA cache invalidated",
-                symbol,
-                len(replaced),
-                "s" if len(replaced) > 1 else "",
-            )
+            count = len(replaced)
+            if self._candle_replace_batch_mode:
+                # Batch mode: collect for aggregated summary later
+                self._candle_replace_batch[symbol] = (
+                    self._candle_replace_batch.get(symbol, 0) + count
+                )
+            else:
+                # Normal operation: log at DEBUG (individual messages are noisy)
+                self.log.debug(
+                    "[candle] %s: real data replaced %d synthetic candle%s, EMA cache invalidated",
+                    symbol,
+                    count,
+                    "s" if count > 1 else "",
+                )
 
     def _invalidate_ema_cache(self, symbol: str) -> None:
         """Invalidate all cached EMA values for a symbol, forcing recomputation."""
@@ -2714,7 +2757,9 @@ class CandlestickManager:
                             "%Y-%m-%dT%H:%M"
                         )
                         ts_info = f"{first_dt} to {last_dt}"
-                    self.log.warning(
+                    # Use WARNING only for large gaps (>5 candles), DEBUG for expected small gaps
+                    log_fn = self.log.warning if synthesized_count > 5 else self.log.debug
+                    log_fn(
                         "[candle] %s: synthesized %d zero-candle%s at %s (no trades from exchange) using prev_close=%.6f",
                         symbol,
                         synthesized_count,
