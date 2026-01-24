@@ -1804,7 +1804,8 @@ class FillEventsManager:
                 self.cache.clear_gap(start_ms, end_ms)
 
         # Consolidated refresh summary log
-        if added_ids or all_days_persisted:
+        # Only log at INFO when there are actually new fills; routine refreshes go to DEBUG
+        if added_ids:
             days_list = sorted(all_days_persisted)
             days_preview = ", ".join(days_list[:5])
             if len(days_list) > 5:
