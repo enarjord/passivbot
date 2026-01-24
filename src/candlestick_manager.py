@@ -381,9 +381,9 @@ class CandlestickManager:
         )
         self._tf_range_cache_cap = 8
         self._step_warning_keys: set[Tuple[str, str, str]] = set()
-        # Rate-limiting for zero-candle synthesis warnings (at most once per minute per symbol)
-        self._synth_candle_log_last: Dict[str, float] = {}  # symbol -> last log time (unix sec)
-        self._synth_candle_log_throttle_sec: float = 60.0  # minimum seconds between logs per symbol
+        # Deduplication for zero-candle synthesis warnings - only warn once per unique gap
+        # Key: (symbol, first_ts, last_ts) to identify a specific gap range
+        self._synth_gap_warned: set[Tuple[str, int, int]] = set()
         # Batch mode for startup: when enabled, collect warnings and log summary later
         self._synth_candle_batch_mode: bool = False
         self._synth_candle_batch: Dict[str, int] = {}  # symbol -> count during batch
@@ -544,7 +544,7 @@ class CandlestickManager:
             if age > threshold:
                 try:
                     lock_path.unlink()
-                    self.log.warning("removed stale candle lock %s (age %.1fs)", lock_path, age)
+                    self.log.info("removed stale candle lock %s (age %.1fs)", lock_path, age)
                 except FileNotFoundError:
                     continue
                 except Exception as exc:
@@ -2737,16 +2737,19 @@ class CandlestickManager:
                     self._synth_candle_batch.get(symbol, 0) + synthesized_count
                 )
             else:
-                # Normal mode: rate-limited per symbol (at most once per minute)
-                now_sec = time.time()
-                last_log = self._synth_candle_log_last.get(symbol, 0.0)
-                if (now_sec - last_log) >= self._synth_candle_log_throttle_sec:
-                    self._synth_candle_log_last[symbol] = now_sec
+                # Normal mode: deduplicate by gap range (only warn once per unique gap)
+                first_ts = min(synthesized_timestamps)
+                last_ts = max(synthesized_timestamps)
+                gap_key = (symbol, first_ts, last_ts)
+
+                # Skip if we've already warned about this exact gap
+                if gap_key in self._synth_gap_warned:
+                    pass  # Already warned, skip
+                else:
+                    self._synth_gap_warned.add(gap_key)
                     # Format timestamp range for human readability
                     from datetime import datetime, timezone
 
-                    first_ts = min(synthesized_timestamps)
-                    last_ts = max(synthesized_timestamps)
                     first_dt = datetime.fromtimestamp(first_ts / 1000, tz=timezone.utc).strftime(
                         "%Y-%m-%dT%H:%M"
                     )
