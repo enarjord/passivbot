@@ -2515,12 +2515,13 @@ class CandlestickManager:
                     max_step = int(diffs.max())
                     min_step = int(diffs.min())
                     # Expect step to match the requested timeframe's period
+                    # Log at DEBUG - unexpected steps are common on illiquid exchanges and aren't actionable
                     if max_step != period_ms or min_step != period_ms:
                         warn_key = (self._ex_id, symbol, tf_norm)
                         if warn_key not in self._step_warning_keys:
                             self._step_warning_keys.add(warn_key)
-                            self.log.warning(
-                                f"unexpected step for tf exchange={self._ex_id} symbol={symbol} tf={tf_norm} expected={period_ms} min_step={min_step} max_step={max_step}"
+                            self.log.debug(
+                                f"[candle] unexpected step for tf exchange={self._ex_id} symbol={symbol} tf={tf_norm} expected={period_ms} min_step={min_step} max_step={max_step}"
                             )
                 else:
                     max_step = ONE_MIN_MS
@@ -2739,12 +2740,15 @@ class CandlestickManager:
                 )
             else:
                 # Normal mode: deduplicate by gap start (only warn once per unique gap origin)
-                # The end timestamp changes as time passes, but the start identifies the gap
+                # Round first_ts to nearest hour to reduce duplicate warnings when the same
+                # underlying gap is detected at slightly different boundaries in different fetch windows
                 first_ts = min(synthesized_timestamps)
                 last_ts = max(synthesized_timestamps)
-                gap_key = (symbol, first_ts)
+                hour_ms = 3600_000
+                first_ts_hour = (first_ts // hour_ms) * hour_ms  # Floor to hour boundary
+                gap_key = (symbol, first_ts_hour)
 
-                # Skip if we've already warned about a gap starting at this timestamp
+                # Skip if we've already warned about a gap starting in this hour window
                 if gap_key in self._synth_gap_warned:
                     pass  # Already warned, skip
                 else:
@@ -2762,8 +2766,9 @@ class CandlestickManager:
                             "%Y-%m-%dT%H:%M"
                         )
                         ts_info = f"{first_dt} to {last_dt}"
-                    # Use WARNING only for large gaps (>5 candles), DEBUG for expected small gaps
-                    log_fn = self.log.warning if synthesized_count > 5 else self.log.debug
+                    # Use DEBUG for individual gap warnings - the batch summary at startup is enough at WARNING
+                    # Only use WARNING for truly exceptional situations (gaps > 100 candles during live operation)
+                    log_fn = self.log.warning if synthesized_count > 100 else self.log.debug
                     log_fn(
                         "[candle] %s: synthesized %d zero-candle%s at %s (no trades from exchange) using prev_close=%.6f",
                         symbol,

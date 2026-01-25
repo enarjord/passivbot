@@ -1505,12 +1505,15 @@ class BinanceFetcher(BaseFetcher):
             fetch_count += 1
             payload = await self.api.fapiprivate_get_income(params=params)
             if fetch_count > 1:
-                logger.info(
+                payload_size = len(payload) if payload else 0
+                # Only log at INFO when there's actual data; DEBUG otherwise
+                log_fn = logger.info if payload_size > 0 else logger.debug
+                log_fn(
                     "BinanceFetcher._fetch_income: fetch #%d startTime=%s endTime=%s size=%d",
                     fetch_count,
                     _format_ms(params.get("startTime")),
                     _format_ms(params.get("endTime")),
-                    len(payload) if payload else 0,
+                    payload_size,
                 )
             if payload == []:
                 if params["startTime"] + week_buffer_ms >= until_ms:
@@ -1566,13 +1569,16 @@ class BinanceFetcher(BaseFetcher):
                     params=dict(params),
                 )
                 if fetch_count > 1:
-                    logger.info(
+                    batch_size = len(batch) if batch else 0
+                    # Only log at INFO when there's actual data; DEBUG otherwise
+                    log_fn = logger.info if batch_size > 0 else logger.debug
+                    log_fn(
                         "BinanceFetcher._fetch_symbol_trades: fetch #%d symbol=%s start=%s end=%s size=%d",
                         fetch_count,
                         ccxt_symbol,
                         _format_ms(params["startTime"]),
                         _format_ms(params["endTime"]),
-                        len(batch) if batch else 0,
+                        batch_size,
                     )
                 if not batch:
                     cursor = window_end + 1
@@ -1890,7 +1896,7 @@ class FillEventsManager:
                 break
             if cur_ts - prev_ts >= gap_ms:
                 gap_start = max(prev_ts, start_ms)
-                gap_end = end_ms if end_ms is not None else cur_ts
+                gap_end = cur_ts
                 if gap_start < gap_end:
                     if is_in_persistent_gap(gap_start, gap_end):
                         logger.debug(
@@ -1907,7 +1913,6 @@ class FillEventsManager:
                             reason=GAP_REASON_AUTO,
                             confidence=GAP_CONFIDENCE_SUSPICIOUS,
                         )
-                break
             prev_ts = cur_ts
 
         # Fetch newer data after latest cached if requested (if not already covered)
