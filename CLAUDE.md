@@ -2,7 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**IMPORTANT:** Also read and follow `docs/ai/passivbot_agent_principles.yaml` for detailed conventions on terminology, error handling, testing, and design principles.
+**IMPORTANT:** Also read and follow the documentation in `docs/ai/`:
+- `passivbot_agent_principles.yaml` - Conventions on terminology, error handling, testing, design principles
+- `exchange_api_quirks.md` - Known exchange API limitations and workarounds (check before implementing exchange code)
+- `debugging_case_studies.md` - Detailed debugging sessions as reference for complex investigations
+- `log_analysis_prompt.md` - Logging level definitions and examples
 
 ## Overview
 
@@ -286,6 +290,28 @@ Configuration sections form an inheritance hierarchy. When adding new parameters
 - Optimizer results go to `optimize_results/YYYY-MM-DDTHH_MM_SS_{exchanges}_{n_days}days_{coin_label}_{hash}/`
 - When adding dependencies, explain necessity and impact
 - Before committing, simulate/dry-run changes
+
+## Documentation Structure
+
+This file (`CLAUDE.md`) serves as the entry point for AI agents. Detailed topic-specific documentation lives in `docs/ai/`:
+
+| File | Purpose |
+|------|---------|
+| `passivbot_agent_principles.yaml` | Core conventions: terminology, error handling, testing |
+| `exchange_api_quirks.md` | Exchange-specific API limitations and workarounds |
+| `debugging_case_studies.md` | Detailed debugging sessions as learning references |
+| `log_analysis_prompt.md` | Logging level definitions and analysis guidance |
+
+**When to add new docs:**
+- **Exchange quirks** → Add to `exchange_api_quirks.md` (or create `{exchange}_quirks.md` if extensive)
+- **Complex debugging** → Add case study to `debugging_case_studies.md`
+- **New subsystem** → Consider a dedicated `{subsystem}.md` if >50 lines of guidance
+
+**Modularization guidelines:**
+- Keep CLAUDE.md as a high-level overview (<300 lines ideal)
+- Move detailed reference material to `docs/ai/` subdirectory
+- Use consistent naming: `{topic}.md` or `{topic}_{subtopic}.md`
+- Always reference new docs from CLAUDE.md's header list
 
 ## Changelog
 

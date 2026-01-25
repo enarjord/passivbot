@@ -2164,51 +2164,145 @@ class BybitFetcher(BaseFetcher):
         return ordered
 
     async def _fetch_positions_history(self, start_ms: int, end_ms: int) -> List[Dict[str, object]]:
-        params = {
+        """Fetch closed-pnl records using Bybit's raw API with hybrid pagination.
+
+        Uses a two-phase approach:
+        1. Cursor pagination for recent records (more efficient, no missed records)
+        2. Time-based sliding window for older records (cursor doesn't go back far enough)
+
+        This is necessary because:
+        - CCXT's fetch_positions_history uses time-based pagination which can miss records
+        - Bybit's cursor pagination only covers ~7 days of recent data
+        """
+        results: Dict[str, Dict[str, object]] = {}  # Dedupe by orderId
+        max_fetches = 500
+        fetch_count = 0
+
+        # Phase 1: Use cursor pagination for recent records
+        params: Dict[str, object] = {
+            "category": "linear",
             "limit": self.position_limit,
             "endTime": int(end_ms),
         }
-        results: List[Dict[str, object]] = []
-        max_fetches = 200
-        fetch_count = 0
-        prev_params = None
+
+        cursor_oldest_ts = end_ms
+
         while True:
-            new_key = _check_pagination_progress(
-                prev_params,
-                params,
-                "BybitFetcher._fetch_positions_history",
-            )
-            if new_key is None:
-                break
-            prev_params = new_key
             fetch_count += 1
-            batch = await self.api.fetch_positions_history(params=params)
-            if fetch_count > 1:
-                logger.info(
-                    "BybitFetcher._fetch_positions_history: fetch #%d endTime=%s size=%d",
-                    fetch_count,
-                    _format_ms(params.get("endTime")),
-                    len(batch) if batch else 0,
-                )
+            if fetch_count > max_fetches:
+                logger.warning("BybitFetcher._fetch_positions_history: max fetches reached (%d)", max_fetches)
+                break
+
+            try:
+                response = await self.api.private_get_v5_position_closed_pnl(params)
+            except Exception as exc:
+                logger.warning("BybitFetcher._fetch_positions_history: API error: %s", exc)
+                break
+
+            batch = response.get("result", {}).get("list", [])
             if not batch:
                 break
-            batch.sort(key=lambda x: x["timestamp"])
-            results.extend(batch)
-            if len(batch) < self.position_limit:
-                if params["endTime"] - start_ms < self._max_span_ms:
+
+            self._process_closed_pnl_batch(batch, start_ms, results)
+
+            oldest_ts = int(batch[-1].get("updatedTime", 0)) if batch else 0
+            cursor_oldest_ts = oldest_ts
+
+            if oldest_ts <= start_ms:
+                break
+
+            cursor = response.get("result", {}).get("nextPageCursor")
+            if not cursor:
+                # Cursor exhausted - switch to time-based sliding window
+                break
+            params["cursor"] = cursor
+
+        # Phase 2: Time-based sliding window for older records (if cursor didn't reach start)
+        if cursor_oldest_ts > start_ms:
+            logger.debug(
+                "BybitFetcher._fetch_positions_history: cursor exhausted at %s, switching to time-based",
+                _format_ms(cursor_oldest_ts),
+            )
+            # Remove cursor and continue with time-based pagination
+            current_end = cursor_oldest_ts
+
+            while current_end > start_ms and fetch_count < max_fetches:
+                fetch_count += 1
+                params = {
+                    "category": "linear",
+                    "limit": self.position_limit,
+                    "endTime": int(current_end),
+                }
+
+                try:
+                    response = await self.api.private_get_v5_position_closed_pnl(params)
+                except Exception as exc:
+                    logger.warning("BybitFetcher._fetch_positions_history: API error: %s", exc)
                     break
-                params["endTime"] = max(start_ms, params["endTime"] - self._max_span_ms)
+
+                batch = response.get("result", {}).get("list", [])
+                if not batch:
+                    # No more records, slide window back
+                    current_end = max(start_ms, current_end - self._max_span_ms)
+                    continue
+
+                self._process_closed_pnl_batch(batch, start_ms, results)
+
+                oldest_ts = int(batch[-1].get("updatedTime", 0)) if batch else 0
+                if oldest_ts <= start_ms:
+                    break
+
+                # Slide window: if batch was full, use oldest ts; otherwise jump back
+                if len(batch) >= self.position_limit:
+                    current_end = oldest_ts
+                else:
+                    current_end = max(start_ms, oldest_ts - self._max_span_ms)
+
+        logger.debug(
+            "BybitFetcher._fetch_positions_history: fetched %d records in %d requests",
+            len(results),
+            fetch_count,
+        )
+        return list(results.values())
+
+    def _process_closed_pnl_batch(
+        self,
+        batch: List[Dict[str, object]],
+        start_ms: int,
+        results: Dict[str, Dict[str, object]],
+    ) -> None:
+        """Process a batch of closed-pnl records and add to results dict."""
+        for record in batch:
+            updated_ts = int(record.get("updatedTime", 0))
+            created_ts = int(record.get("createdTime", 0))
+            order_id = record.get("orderId", "")
+
+            # Skip records outside our time range or already processed
+            if updated_ts < start_ms or order_id in results:
                 continue
-            first_ts = batch[0]["timestamp"]
-            if first_ts <= start_ms:
-                break
-            if params["endTime"] == first_ts:
-                break
-            params["endTime"] = int(first_ts)
-            if fetch_count >= max_fetches:
-                logger.warning("BybitFetcher._fetch_positions_history: max fetches reached")
-                break
-        return results
+
+            # Convert Bybit symbol to CCXT format
+            raw_symbol = record.get("symbol", "")
+            ccxt_symbol = raw_symbol
+            if hasattr(self.api, "markets") and self.api.markets:
+                for market_symbol, market in self.api.markets.items():
+                    if market.get("id") == raw_symbol:
+                        ccxt_symbol = market_symbol
+                        break
+
+            results[order_id] = {
+                "info": record,
+                "symbol": ccxt_symbol,
+                "timestamp": created_ts,
+                "datetime": datetime.fromtimestamp(created_ts / 1000, tz=timezone.utc).isoformat(),
+                "lastUpdateTimestamp": updated_ts,
+                "realizedPnl": float(record.get("closedPnl", 0)),
+                "contracts": float(record.get("closedSize", 0)),
+                "entryPrice": float(record.get("avgEntryPrice", 0)),
+                "lastPrice": float(record.get("avgExitPrice", 0)),
+                "leverage": float(record.get("leverage", 1)),
+                "side": "long" if record.get("side", "").lower() == "sell" else "short",
+            }
 
     def _combine(
         self,
@@ -2216,70 +2310,46 @@ class BybitFetcher(BaseFetcher):
         positions: List[Dict[str, object]],
         detail_cache: Dict[str, Tuple[str, str]],
     ) -> List[Dict[str, object]]:
-        pnls: Dict[str, float] = defaultdict(float)
-        symbol_realized: Dict[str, float] = defaultdict(float)
-        symbol_closed_qty: Dict[str, float] = defaultdict(float)
+        """Combine trades with positions_history to compute per-fill PnL.
+
+        Strategy: For each close fill, use avgEntryPrice from its closed-pnl record
+        to compute accurate PnL as: (exitPrice - avgEntryPrice) * closedSize * direction.
+
+        This ensures each fill gets its correct PnL rather than distributing the
+        total order PnL proportionally (which is incorrect when fills have different
+        exit prices).
+        """
+        # Index closed-pnl records by orderId for fast lookup
+        # Each close fill has its own closed-pnl record with avgEntryPrice
+        pnl_by_order: Dict[str, Dict] = {}
+        raw_pnl_by_order: Dict[str, Dict] = {}  # Keep original data for raw field
         for entry in positions:
-            order_id = str(entry.get("info", {}).get("orderId", entry.get("orderId", "")))
+            info = entry.get("info", {})
+            order_id = str(info.get("orderId", entry.get("orderId", "")))
             if not order_id:
                 continue
-            pnl = float(entry.get("realizedPnl") or entry.get("info", {}).get("closedPnl") or 0.0)
-            pnls[order_id] += pnl
-            symbol = entry.get("symbol")
-            if symbol:
-                symbol_realized[symbol] += pnl
-                closed = float(
-                    entry.get("info", {}).get("closedSize") or entry.get("contracts") or 0.0
-                )
-                symbol_closed_qty[symbol] += closed
-
-        order_total_qty: Dict[str, float] = defaultdict(float)
-        symbol_order_qty: Dict[str, float] = defaultdict(float)
-        symbol_unknown_trade_qty: Dict[str, float] = defaultdict(float)
-        for trade in trades:
-            order_id = str(trade.get("info", {}).get("orderId", trade.get("order")))
-            qty = abs(float(trade.get("amount") or trade.get("info", {}).get("execQty") or 0.0))
-            symbol = trade.get("symbol") or trade.get("info", {}).get("symbol")
-            if order_id and order_id in pnls:
-                order_total_qty[order_id] += qty
-                if symbol:
-                    symbol_order_qty[symbol] += qty
-            elif symbol:
-                symbol_unknown_trade_qty[symbol] += qty
-
-        order_remaining_qty = dict(order_total_qty)
-        order_remaining_pnl = dict(pnls)
-        symbol_remaining_pnl = dict(symbol_realized)
-        symbol_remaining_qty: Dict[str, float] = {}
-        for sym, closed in symbol_closed_qty.items():
-            remaining = max(closed - symbol_order_qty.get(sym, 0.0), 0.0)
-            symbol_remaining_qty[sym] = remaining
-        for sym, qty in symbol_unknown_trade_qty.items():
-            symbol_remaining_qty[sym] = symbol_remaining_qty.get(sym, 0.0) + qty
+            pnl_by_order[order_id] = {
+                "closedPnl": float(entry.get("realizedPnl") or info.get("closedPnl") or 0.0),
+                "avgEntryPrice": float(info.get("avgEntryPrice") or 0.0),
+                "avgExitPrice": float(info.get("avgExitPrice") or 0.0),
+                "closedSize": float(info.get("closedSize") or entry.get("contracts") or 0.0),
+                "closeFee": float(info.get("closeFee") or 0.0),
+                "openFee": float(info.get("openFee") or 0.0),
+                "side": str(info.get("side") or "").lower(),
+                "symbol": entry.get("symbol") or info.get("symbol"),
+            }
+            raw_pnl_by_order[order_id] = dict(entry)
 
         events: List[Dict[str, object]] = []
+        matched_count = 0
+        computed_count = 0
+
         for trade in trades:
             event = self._normalize_trade(trade)
             order_id = event.get("order_id")
             cache_entry = detail_cache.get(event["id"])
-            allocated = False
-            if order_id and order_id in order_remaining_pnl and order_remaining_qty[order_id] > 0:
-                remaining_qty = order_remaining_qty[order_id]
-                remaining_pnl = order_remaining_pnl[order_id]
-                qty = abs(event["qty"])
-                if remaining_qty <= qty * 1.0000001:
-                    event["pnl"] = remaining_pnl
-                else:
-                    event["pnl"] = remaining_pnl * (qty / remaining_qty)
-                order_remaining_qty[order_id] = max(0.0, remaining_qty - qty)
-                order_remaining_pnl[order_id] = remaining_pnl - event["pnl"]
-                symbol_remaining_pnl[event["symbol"]] = (
-                    symbol_remaining_pnl.get(event["symbol"], 0.0) - event["pnl"]
-                )
-                symbol_remaining_qty[event["symbol"]] = max(
-                    0.0, symbol_remaining_qty.get(event["symbol"], 0.0) - qty
-                )
-                allocated = True
+
+            # Set pb_order_type from cache or client_order_id
             if cache_entry:
                 event["client_order_id"], event["pb_order_type"] = cache_entry
                 if not event["pb_order_type"]:
@@ -2289,42 +2359,56 @@ class BybitFetcher(BaseFetcher):
                 event["pb_order_type"] = pb_type or "unknown"
             else:
                 event["pb_order_type"] = "unknown"
-            if (
-                event["pb_order_type"] == "unknown"
-                and not allocated
-                and abs(event.get("pnl", 0.0)) < 1e-12
-            ):
-                symbol = event["symbol"]
-                remaining_symbol_qty = symbol_remaining_qty.get(symbol, 0.0)
-                remaining_symbol_pnl = symbol_remaining_pnl.get(symbol, 0.0)
-                qty = abs(event["qty"])
-                if remaining_symbol_qty > 0:
-                    if remaining_symbol_qty <= qty * 1.0000001:
-                        event["pnl"] = remaining_symbol_pnl
+
+            # Compute PnL for close fills using avgEntryPrice
+            closed_size = float(event.get("closed_size", 0))
+            if closed_size > 0 and order_id and order_id in pnl_by_order:
+                pnl_record = pnl_by_order[order_id]
+                avg_entry = pnl_record["avgEntryPrice"]
+                exit_price = event["price"]
+                position_side = event["position_side"]
+
+                if avg_entry > 0 and exit_price > 0:
+                    # Compute gross PnL based on position direction
+                    # Long close (sell): profit if exit > entry
+                    # Short close (buy): profit if entry > exit
+                    if position_side == "long":
+                        gross_pnl = (exit_price - avg_entry) * closed_size
                     else:
-                        event["pnl"] = remaining_symbol_pnl * (qty / remaining_symbol_qty)
-                    symbol_remaining_qty[symbol] = max(0.0, remaining_symbol_qty - qty)
-                    symbol_remaining_pnl[symbol] = remaining_symbol_pnl - event["pnl"]
+                        gross_pnl = (avg_entry - exit_price) * closed_size
+
+                    # Distribute fees proportionally if this fill is part of larger close
+                    total_closed = pnl_record["closedSize"]
+                    total_fees = pnl_record["closeFee"] + pnl_record["openFee"]
+                    if total_closed > 0:
+                        fee_portion = (closed_size / total_closed) * total_fees
+                    else:
+                        fee_portion = 0.0
+
+                    event["pnl"] = gross_pnl - fee_portion
+                    computed_count += 1
                 else:
-                    event["pnl"] = remaining_symbol_pnl
+                    # Fallback to closedPnl if avgEntryPrice unavailable
+                    event["pnl"] = pnl_record["closedPnl"]
+
+                matched_count += 1
+
+                # Append positions_history (closed-pnl) data to raw field
+                if order_id in raw_pnl_by_order:
+                    event["raw"].append({
+                        "source": "positions_history",
+                        "data": raw_pnl_by_order[order_id],
+                    })
+
             events.append(event)
 
-        remaining_orders = [k for k, v in order_remaining_pnl.items() if abs(v) > 1e-6]
-        if remaining_orders:
-            # Log at debug level - this is historical residual PnL that couldn't be matched
-            # to trades, not an actionable warning
-            total_residual = sum(order_remaining_pnl[k] for k in remaining_orders)
+        if matched_count > 0:
             logger.debug(
-                "[fills] residual PnL: %d orders, total=%.4f (unmatched historical PnL)",
-                len(remaining_orders),
-                total_residual,
+                "[fills] PnL computed for %d/%d close fills using avgEntryPrice",
+                computed_count,
+                matched_count,
             )
-        remaining_symbols = [k for k, v in symbol_remaining_pnl.items() if abs(v) > 1e-6]
-        if remaining_symbols:
-            logger.debug(
-                "BybitFetcher._combine: remaining symbol-level PnL after distribution %s",
-                {k: symbol_remaining_pnl[k] for k in remaining_symbols},
-            )
+
         return events
 
     @staticmethod
@@ -2357,6 +2441,7 @@ class BybitFetcher(BaseFetcher):
             "pb_order_type": "",
             "position_side": position_side,
             "client_order_id": client_order_id or "",
+            "closed_size": closed_size,  # For PnL computation
             "raw": [{"source": "fetch_my_trades", "data": dict(trade)}],
         }
 
