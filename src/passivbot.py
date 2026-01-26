@@ -418,7 +418,8 @@ class Passivbot:
         self._last_plan_detail: dict[str, tuple[int, int, int]] = {}
         self._last_action_summary: dict[tuple[str, str], str] = {}
         # CandlestickManager settings from config.live
-        cm_kwargs = {"exchange": self.cca, "debug": self.logging_level}
+        # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
+        cm_kwargs = {"exchange": self.cca, "exchange_name": self.exchange, "debug": self.logging_level}
         mem_cap_raw = require_live_value(config, "max_memory_candles_per_symbol")
         mem_cap_effective = DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL
         try:

@@ -150,9 +150,10 @@ class HLCVManager:
             # Limit concurrent ccxt requests per exchange to reduce timeouts under heavy parallelism.
             # Bybit tends to be more sensitive.
             max_concurrent_requests = 3 if self.exchange == "bybit" else 5
+            # Use denormalized name for cache paths (e.g., "binance" not "binanceusdm")
             self.cm = CandlestickManager(
                 exchange=self.cc,
-                exchange_name=self.exchange,
+                exchange_name=denormalize_exchange_name(self.exchange),
                 debug=int(self.cm_debug_level),
                 progress_log_interval_seconds=float(self.cm_progress_log_interval_seconds),
                 max_concurrent_requests=max_concurrent_requests,
