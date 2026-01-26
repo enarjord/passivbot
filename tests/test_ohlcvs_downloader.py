@@ -9,7 +9,7 @@ import pytest
 import downloader
 
 
-def test_normalize_exchange_name(monkeypatch):
+def test_to_ccxt_exchange_id(monkeypatch):
     # Make ccxt.exchanges predictable
     monkeypatch.setattr(
         downloader.ccxt,
@@ -18,12 +18,12 @@ def test_normalize_exchange_name(monkeypatch):
         raising=False,
     )
 
-    assert downloader.normalize_exchange_name("binance") == "binanceusdm"
-    assert downloader.normalize_exchange_name("kucoin") == "kucoinfutures"
+    assert downloader.to_ccxt_exchange_id("binance") == "binanceusdm"
+    assert downloader.to_ccxt_exchange_id("kucoin") == "kucoinfutures"
     # Unchanged when no matching futures suffix exists
-    assert downloader.normalize_exchange_name("bybit") == "bybit"
-    # Already normalized stays as-is
-    assert downloader.normalize_exchange_name("binanceusdm") == "binanceusdm"
+    assert downloader.to_ccxt_exchange_id("bybit") == "bybit"
+    # Already ccxt ID stays as-is
+    assert downloader.to_ccxt_exchange_id("binanceusdm") == "binanceusdm"
 
 
 def test_deduplicate_rows():

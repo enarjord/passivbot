@@ -6,14 +6,17 @@ All notable user-facing changes will be documented in this file.
 
 ### Fixed
 - **Bybit: Missing PnL on some close fills** - Fixed pagination bug in `BybitFetcher._fetch_positions_history()` that caused closed-pnl records to be skipped when >100 records existed in a time window. Now uses hybrid pagination: cursor-based for recent records (no gaps), time-based sliding window for older records.
-- **Exchange name normalization in cache paths** - Fixed inconsistent use of `binanceusdm` vs `binance` in OHLCV cache paths. CandlestickManager now consistently uses denormalized names (`binance`, `bybit`) for all cache paths.
+- **Exchange name standardization in cache paths** - Fixed inconsistent use of `binanceusdm` vs `binance` in OHLCV cache paths. All cache paths now consistently use standard names (`binance`, `bybit`, `kucoin`).
 
 ### Added
+- **Legacy data auto-migration** - On startup, CandlestickManager automatically migrates OHLCV data from `historical_data/` to `caches/ohlcv/`. Migration is non-destructive (copies, not moves). Users may delete `historical_data/` after migration to save disk space.
+- **Cache directory standardization** - On startup, CandlestickManager automatically renames cache directories from ccxt IDs to standard names (e.g., `binanceusdm` -> `binance`, `kucoinfutures` -> `kucoin`) and removes any symlinks.
 - **Fill events now include psize/pprice** - Each fill event is annotated with position size (`psize`) and VWAP entry price (`pprice`) after the fill. Values are computed using a two-phase algorithm and persisted to cache for all exchanges.
 - **`--scenarios` CLI filter** - Run specific scenarios by label with `--scenarios label1,label2,...` (implies `--suite y`).
 - **`suite_enabled` config param** - New `backtest.suite_enabled` (default: true) as master toggle for suite mode.
 
 ### Changed
+- **Exchange name functions renamed** - `normalize_exchange_name()` renamed to `to_ccxt_exchange_id()` and `denormalize_exchange_name()` renamed to `to_standard_exchange_name()`. Old names remain as deprecated aliases with warnings.
 - **BREAKING**: Flattened suite configuration structure for simpler data strategy
   - `backtest.suite.scenarios` → `backtest.scenarios`
   - `backtest.suite.aggregate` → `backtest.aggregate`

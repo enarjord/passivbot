@@ -57,6 +57,12 @@ import warnings
 import numpy as np
 import portalocker  # type: ignore
 
+from legacy_data_migrator import (
+    standardize_cache_directories,
+    migrate_legacy_data_on_init,
+    merge_duplicate_symbol_directories,
+)
+
 # Suppress portalocker's "timeout has no effect in blocking mode" warning
 warnings.filterwarnings("ignore", message="timeout has no effect in blocking mode", module="portalocker")
 
@@ -411,6 +417,17 @@ class CandlestickManager:
         self._shutdown_guard = threading.Lock()
         self._closed = False
         atexit.register(self._cleanup_on_exit)
+
+        # Standardize cache directory names (e.g., binanceusdm -> binance),
+        # migrate any legacy data from historical_data/ to caches/ohlcv/,
+        # and merge any duplicate symbol directories from inconsistent sanitization
+        ohlcv_cache_base = os.path.join(self.cache_dir, "ohlcv")
+        standardize_cache_directories(ohlcv_cache_base)
+        migrate_legacy_data_on_init(
+            exchange=self.exchange_name,
+            cache_base=ohlcv_cache_base,
+        )
+        merge_duplicate_symbol_directories(ohlcv_cache_base)
 
         self._setup_logging()
         self._cleanup_stale_locks()
@@ -1377,7 +1394,10 @@ class CandlestickManager:
         """Load any shards intersecting [start_ts, end_ts] and merge into cache.
 
         Primary cache: `{cache_dir}/ohlcv/{exchange}/{tf}/{symbol}/YYYY-MM-DD.npy`
-        Legacy fallback (read-only): `historical_data/` downloader caches.
+
+        Note: Legacy data from `historical_data/` is automatically migrated to the
+        primary cache on CandlestickManager initialization. The legacy fallback below
+        remains as a safety net for any data that wasn't migrated.
         """
         try:
             tf_norm = self._normalize_timeframe_arg(timeframe, tf)

@@ -70,13 +70,13 @@ from ohlcv_utils import dump_ohlcv_data
 from procedures import get_first_timestamps_unified
 from utils import (
     coin_to_symbol,
-    denormalize_exchange_name,
+    to_standard_exchange_name,
     format_end_date,
     get_quote,
     load_ccxt_instance,
     load_markets,
     make_get_filepath,
-    normalize_exchange_name,
+    to_ccxt_exchange_id,
     symbol_to_coin,
     ts_to_date,
     utc_ms,
@@ -100,15 +100,15 @@ class HLCVManager:
         cm_progress_log_interval_seconds: float = 10.0,  # Log progress every 10s by default
         force_refetch_gaps: bool = False,
     ):
-        self.exchange = normalize_exchange_name(exchange)
+        self.exchange = to_ccxt_exchange_id(exchange)
         self.quote = get_quote(self.exchange)
         self.start_date = "2020-01-01" if start_date is None else format_end_date(start_date)
         self.end_date = format_end_date("now" if end_date is None else end_date)
         self.start_ts = int(date_to_ts(self.start_date))
         self.end_ts = int(date_to_ts(self.end_date))
         self.cc = cc
-        # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
-        cache_exchange = denormalize_exchange_name(self.exchange)
+        # Use standard exchange name for cache paths (e.g., "binance" not "binanceusdm")
+        cache_exchange = to_standard_exchange_name(self.exchange)
         self.cache_filepaths = {
             "markets": os.path.join("caches", cache_exchange, "markets.json"),
             "first_timestamps": os.path.join("caches", cache_exchange, "first_timestamps.json"),
@@ -150,10 +150,10 @@ class HLCVManager:
             # Limit concurrent ccxt requests per exchange to reduce timeouts under heavy parallelism.
             # Bybit tends to be more sensitive.
             max_concurrent_requests = 3 if self.exchange == "bybit" else 5
-            # Use denormalized name for cache paths (e.g., "binance" not "binanceusdm")
+            # Use standard name for cache paths (e.g., "binance" not "binanceusdm")
             self.cm = CandlestickManager(
                 exchange=self.cc,
-                exchange_name=denormalize_exchange_name(self.exchange),
+                exchange_name=to_standard_exchange_name(self.exchange),
                 debug=int(self.cm_debug_level),
                 progress_log_interval_seconds=float(self.cm_progress_log_interval_seconds),
                 max_concurrent_requests=max_concurrent_requests,
@@ -521,7 +521,7 @@ async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool
         set(symbol_to_coin(c) for c in approved["long"])
         | set(symbol_to_coin(c) for c in approved["short"])
     )
-    exchange = normalize_exchange_name(exchange)
+    exchange = to_ccxt_exchange_id(exchange)
     requested_start_date = require_config_value(config, "backtest.start_date")
     requested_start_ts = int(date_to_ts(requested_start_date))
     end_date = format_end_date(require_config_value(config, "backtest.end_date"))
@@ -799,10 +799,10 @@ async def prepare_hlcvs_internal(
 
 async def prepare_hlcvs_combined(config, forced_sources=None, *, force_refetch_gaps: bool = False):
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
-    exchanges_to_consider = [normalize_exchange_name(e) for e in backtest_exchanges]
+    exchanges_to_consider = [to_ccxt_exchange_id(e) for e in backtest_exchanges]
     forced_sources = forced_sources or {}
     normalized_forced_sources = {
-        str(coin): normalize_exchange_name(exchange)
+        str(coin): to_ccxt_exchange_id(exchange)
         for coin, exchange in forced_sources.items()
         if exchange
     }
@@ -1034,7 +1034,7 @@ async def _prepare_hlcvs_combined_impl(
 
                 # Prepare market settings
                 mss = om_dict[best_exchange].get_market_specific_settings(coin)
-                mss["exchange"] = denormalize_exchange_name(best_exchange)
+                mss["exchange"] = to_standard_exchange_name(best_exchange)
                 warm_minutes = int(per_coin_warmups.get(coin, default_warm))
                 mss["warmup_minutes"] = warm_minutes
 
@@ -1090,8 +1090,8 @@ async def _prepare_hlcvs_combined_impl(
         valid_coins,
         start_date_for_volume_ratios,
         end_date_for_volume_ratios,
-        # om_dict keys are normalized (e.g. "binanceusdm"), but exchanges_with_data are denormalized
-        {ex: om_dict[normalize_exchange_name(ex)] for ex in exchanges_with_data},
+        # om_dict keys are ccxt IDs (e.g. "binanceusdm"), but exchanges_with_data use standard names
+        {ex: om_dict[to_ccxt_exchange_id(ex)] for ex in exchanges_with_data},
     )
     exchanges_counts = defaultdict(int)
     for coin in chosen_mss_per_coin:

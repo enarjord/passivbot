@@ -97,7 +97,7 @@ async def test_load_markets_fetch_and_cache_creates_maps(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_load_markets_uses_fresh_cache(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    # Use denormalized name since load_markets uses denormalize_exchange_name
+    # Use standard name since load_markets uses to_standard_exchange_name
     ex = "binance"
 
     # Prepare a fresh cached markets file
@@ -128,7 +128,7 @@ async def test_load_markets_uses_fresh_cache(tmp_path, monkeypatch):
 
 def test_coin_to_symbol_in_memory_reload(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    # Use denormalized name since coin_to_symbol uses denormalize_exchange_name
+    # Use standard name since coin_to_symbol uses to_standard_exchange_name
     ex = "binance"
     path = os.path.join("caches", ex, "coin_to_symbol_map.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -162,7 +162,7 @@ def test_coin_to_symbol_fallback_and_logging(tmp_path, monkeypatch, caplog):
 
 def test_coin_to_symbol_multiple_candidates(tmp_path, monkeypatch, caplog):
     monkeypatch.chdir(tmp_path)
-    # Use denormalized name since coin_to_symbol uses denormalize_exchange_name
+    # Use standard name since coin_to_symbol uses to_standard_exchange_name
     ex = "binance"
     path = os.path.join("caches", ex, "coin_to_symbol_map.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)

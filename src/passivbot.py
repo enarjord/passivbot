@@ -40,7 +40,7 @@ from utils import (
     make_get_filepath,
     format_approved_ignored_coins,
     filter_markets,
-    normalize_exchange_name,
+    to_ccxt_exchange_id,
     coin_symbol_warning_counts,
 )
 from prettytable import PrettyTable
@@ -335,7 +335,7 @@ class Passivbot:
         self.user_info = load_user_info(self.user)
         self.exchange = self.user_info["exchange"]
         self.broker_code = load_broker_code(self.user_info["exchange"])
-        self.exchange_ccxt_id = normalize_exchange_name(self.exchange)
+        self.exchange_ccxt_id = to_ccxt_exchange_id(self.exchange)
         self.endpoint_override = resolve_custom_endpoint_override(self.exchange_ccxt_id)
         self.ws_enabled = True
         if self.endpoint_override:

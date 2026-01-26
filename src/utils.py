@@ -439,7 +439,7 @@ def filter_markets(markets: dict, exchange: str, quote=None, verbose=False) -> (
     eligible = {}
     ineligible = {}
     reasons = {}
-    quote = get_quote(normalize_exchange_name(exchange), quote)
+    quote = get_quote(to_ccxt_exchange_id(exchange), quote)
     for k, v in markets.items():
         if not v["active"]:
             ineligible[k] = v
@@ -493,7 +493,7 @@ async def load_markets(
     """
     # Prefer cc.id when a ccxt instance is supplied, otherwise use the provided exchange string.
     # Denormalize to use canonical form for cache paths (e.g., "binance" not "binanceusdm")
-    ex = denormalize_exchange_name(getattr(cc, "id", None) or exchange or "")
+    ex = to_standard_exchange_name(getattr(cc, "id", None) or exchange or "")
     markets_path = os.path.join("caches", ex, "markets.json")
 
     # Try cache first
@@ -539,9 +539,9 @@ async def load_markets(
     return markets
 
 
-def normalize_exchange_name(exchange: str) -> str:
+def to_ccxt_exchange_id(exchange: str) -> str:
     """
-    Normalize an exchange id to its USD-margined perpetual futures id when available.
+    Convert a short exchange name to its ccxt USD-margined perpetual futures id.
 
     Examples:
     - "binance" -> "binanceusdm"
@@ -572,10 +572,9 @@ def normalize_exchange_name(exchange: str) -> str:
     return ex
 
 
-def denormalize_exchange_name(exchange: str) -> str:
+def to_standard_exchange_name(exchange: str) -> str:
     """
-    Convert a ccxt futures exchange id back to the canonical short form used in configs,
-    caches, and logs.
+    Convert a ccxt exchange id to the canonical short form used in configs, caches, and logs.
 
     Examples:
     - "binanceusdm" -> "binance"
@@ -594,13 +593,38 @@ def denormalize_exchange_name(exchange: str) -> str:
     return ex
 
 
+# Deprecated aliases for backward compatibility - will be removed in a future release
+def normalize_exchange_name(exchange: str) -> str:
+    """Deprecated: Use to_ccxt_exchange_id() instead."""
+    import warnings
+
+    warnings.warn(
+        "normalize_exchange_name() is deprecated, use to_ccxt_exchange_id() instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return to_ccxt_exchange_id(exchange)
+
+
+def denormalize_exchange_name(exchange: str) -> str:
+    """Deprecated: Use to_standard_exchange_name() instead."""
+    import warnings
+
+    warnings.warn(
+        "denormalize_exchange_name() is deprecated, use to_standard_exchange_name() instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return to_standard_exchange_name(exchange)
+
+
 def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout_ms: int = 60_000):
     """
     Return a ccxt async-support exchange instance for the given exchange id.
 
     The returned instance should be closed by the caller with: await cc.close()
     """
-    ex = normalize_exchange_name(exchange_id)
+    ex = to_ccxt_exchange_id(exchange_id)
     try:
         cc = getattr(ccxt, ex)(
             {
@@ -639,7 +663,7 @@ def get_quote(exchange, quote=None):
     if quote is not None:
         return quote
     # Legacy hardcoded defaults for backward compatibility
-    exchange = normalize_exchange_name(exchange)
+    exchange = to_ccxt_exchange_id(exchange)
     return "USDC" if exchange in ["hyperliquid", "defx", "paradex"] else "USDT"
 
 
@@ -920,7 +944,7 @@ def coin_to_symbol(coin, exchange, quote=None):
     if coin == "":
         return ""
     # Denormalize to use canonical form for cache paths (e.g., "binance" not "binanceusdm")
-    ex = denormalize_exchange_name(exchange or "")
+    ex = to_standard_exchange_name(exchange or "")
     quote = get_quote(ex, quote)
     coin_sanitized = symbol_to_coin(coin)
     fallback = f"{coin_sanitized}/{quote}:{quote}"
