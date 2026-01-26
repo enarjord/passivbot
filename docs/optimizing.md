@@ -38,17 +38,17 @@ configured.
 
 ### Optimizer Suites
 
-The optimizer reuses `backtest.suite` and allows every candidate to
+The optimizer reuses the backtest suite configuration and allows every candidate to
 be evaluated across multiple scenarios before scoring. Each scenario can override coins,
 date ranges, exchanges, and `coin_sources`. The optimizer prepares a single shared
 dataset that covers the union of the requested data so additional scenarios add minimal
 overhead.
 
-Key fields:
+Key fields (directly under `backtest`):
 
-- `backtest.suite.enabled`: can also be toggled with `--suite [y/n]`
-- `backtest.suite.include_base_scenario` / `base_label`
-- `backtest.suite.scenarios`: same schema as backtest scenarios
+- `backtest.suite_enabled`: master toggle for suite mode, can also be set with `--suite [y/n]`
+- `backtest.scenarios`: list of scenario dictionaries (same schema as backtest scenarios)
+- `backtest.aggregate`: how to combine per-scenario metrics (default: `{"default": "mean"}`)
 
 During evaluation the optimizer records:
 

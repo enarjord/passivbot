@@ -6,9 +6,12 @@ All notable user-facing changes will be documented in this file.
 
 ### Fixed
 - **Bybit: Missing PnL on some close fills** - Fixed pagination bug in `BybitFetcher._fetch_positions_history()` that caused closed-pnl records to be skipped when >100 records existed in a time window. Now uses hybrid pagination: cursor-based for recent records (no gaps), time-based sliding window for older records.
+- **Exchange name normalization in cache paths** - Fixed inconsistent use of `binanceusdm` vs `binance` in OHLCV cache paths. CandlestickManager now consistently uses denormalized names (`binance`, `bybit`) for all cache paths.
 
 ### Added
 - **Fill events now include psize/pprice** - Each fill event is annotated with position size (`psize`) and VWAP entry price (`pprice`) after the fill. Values are computed using a two-phase algorithm and persisted to cache for all exchanges.
+- **`--scenarios` CLI filter** - Run specific scenarios by label with `--scenarios label1,label2,...` (implies `--suite y`).
+- **`suite_enabled` config param** - New `backtest.suite_enabled` (default: true) as master toggle for suite mode.
 
 ### Changed
 - **BREAKING**: Flattened suite configuration structure for simpler data strategy
