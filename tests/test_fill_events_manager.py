@@ -23,7 +23,9 @@ from src.fill_events_manager import (
     FillEvent,
     FillEventCache,
     FillEventsManager,
+    compute_psize_pprice,
     custom_id_to_snake,
+    ensure_qty_signage,
 )
 
 
@@ -2931,3 +2933,277 @@ async def test_gateio_fetcher_position_side_inference(monkeypatch):
     assert events_by_id["close-long"]["position_side"] == "long"
     assert events_by_id["entry-short"]["position_side"] == "short"
     assert events_by_id["close-short"]["position_side"] == "short"
+
+
+# ---------------------------------------------------------------------------
+# compute_psize_pprice tests
+# ---------------------------------------------------------------------------
+
+
+def test_compute_psize_pprice_long_entries():
+    """Test psize/pprice for consecutive long entries."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "position_side": "long",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 110.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 1.0
+    assert events[0]["pprice"] == 100.0
+    assert events[1]["psize"] == 2.0
+    assert events[1]["pprice"] == 105.0  # VWAP: (1*100 + 1*110) / 2
+
+
+def test_compute_psize_pprice_partial_close():
+    """Test psize/pprice when partially closing a long position."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 2.0,
+            "price": 100.0,
+            "position_side": "long",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "BTC",
+            "side": "sell",
+            "qty": 1.0,  # ensure_qty_signage will make this -1.0
+            "price": 120.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 2.0
+    assert events[0]["pprice"] == 100.0
+    assert events[1]["psize"] == 1.0
+    assert events[1]["pprice"] == 100.0  # VWAP unchanged on reduce
+
+
+def test_compute_psize_pprice_full_close():
+    """Test psize/pprice resets when position fully closes."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "position_side": "long",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "BTC",
+            "side": "sell",
+            "qty": 1.0,
+            "price": 120.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 1.0
+    assert events[0]["pprice"] == 100.0
+    assert events[1]["psize"] == 0.0
+    assert events[1]["pprice"] == 0.0
+
+
+def test_compute_psize_pprice_short_entries():
+    """Test psize/pprice for consecutive short entries."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "ETH",
+            "side": "sell",
+            "qty": 2.0,
+            "price": 200.0,
+            "position_side": "short",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "ETH",
+            "side": "sell",
+            "qty": 2.0,
+            "price": 220.0,
+            "position_side": "short",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 2.0
+    assert events[0]["pprice"] == 200.0
+    assert events[1]["psize"] == 4.0
+    assert events[1]["pprice"] == 210.0  # VWAP: (2*200 + 2*220) / 4
+
+
+def test_compute_psize_pprice_short_partial_close():
+    """Test psize/pprice when partially closing a short position."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "ETH",
+            "side": "sell",
+            "qty": 4.0,
+            "price": 200.0,
+            "position_side": "short",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "ETH",
+            "side": "buy",
+            "qty": 2.0,  # buy reduces short
+            "price": 180.0,
+            "position_side": "short",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 4.0
+    assert events[0]["pprice"] == 200.0
+    assert events[1]["psize"] == 2.0
+    assert events[1]["pprice"] == 200.0  # VWAP unchanged on reduce
+
+
+def test_compute_psize_pprice_multiple_symbols():
+    """Test psize/pprice handles multiple symbols independently."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "position_side": "long",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "ETH",
+            "side": "buy",
+            "qty": 10.0,
+            "price": 50.0,
+            "position_side": "long",
+        },
+        {
+            "id": "3",
+            "timestamp": 3000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 120.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 1.0  # BTC
+    assert events[0]["pprice"] == 100.0
+    assert events[1]["psize"] == 10.0  # ETH
+    assert events[1]["pprice"] == 50.0
+    assert events[2]["psize"] == 2.0  # BTC again
+    assert events[2]["pprice"] == 110.0  # VWAP: (1*100 + 1*120) / 2
+
+
+def test_compute_psize_pprice_reopen_after_close():
+    """Test psize/pprice when closing and reopening a position."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "position_side": "long",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "BTC",
+            "side": "sell",
+            "qty": 1.0,
+            "price": 120.0,
+            "position_side": "long",
+        },
+        {
+            "id": "3",
+            "timestamp": 3000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 2.0,
+            "price": 90.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 1.0
+    assert events[0]["pprice"] == 100.0
+    assert events[1]["psize"] == 0.0
+    assert events[1]["pprice"] == 0.0
+    assert events[2]["psize"] == 2.0
+    assert events[2]["pprice"] == 90.0  # Fresh position, new pprice
+
+
+def test_compute_psize_pprice_empty_events():
+    """Test compute_psize_pprice handles empty list."""
+    events: List[Dict[str, object]] = []
+    result = compute_psize_pprice(events)
+    assert result == {}
+
+
+def test_compute_psize_pprice_initial_state():
+    """Test compute_psize_pprice with initial position state."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 120.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    initial = {("BTC", "long"): (2.0, 100.0)}  # Starting with 2 BTC at $100
+    result = compute_psize_pprice(events, initial)
+
+    assert events[0]["psize"] == 3.0  # 2 + 1
+    # VWAP: (2*100 + 1*120) / 3 = 320/3 ≈ 106.67
+    assert abs(events[0]["pprice"] - 106.66666666666667) < 0.01
+    assert result[("BTC", "long")] == (3.0, events[0]["pprice"])

@@ -293,19 +293,51 @@ def ensure_qty_signage(events: List[Dict[str, object]]) -> None:
             ev["qty"] = -abs(qty)
 
 
-def annotate_positions_inplace(
+def _compute_add_reduce(pos_side: str, qty_signed: float) -> Tuple[float, float]:
+    """Compute add/reduce amounts based on position side and signed qty.
+
+    Args:
+        pos_side: "long" or "short"
+        qty_signed: Signed quantity (buy +, sell -)
+
+    Returns:
+        (add_amt, reduce_amt) tuple
+    """
+    if pos_side == "short":
+        add_amt = max(-qty_signed, 0.0)  # sells are negative -> add
+        reduce_amt = max(qty_signed, 0.0)  # buys positive -> reduce short
+    else:
+        add_amt = max(qty_signed, 0.0)  # buys add to long
+        reduce_amt = max(-qty_signed, 0.0)  # sells reduce long
+    return add_amt, reduce_amt
+
+
+def compute_psize_pprice(
     events: List[Dict[str, object]],
-    state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
-    *,
-    recompute_pnl: bool = False,
+    initial_state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
 ) -> Dict[Tuple[str, str], Tuple[float, float]]:
     """
-    Given a list of events (expected in chronological order), compute position
-    size (psize) and vwap (pprice) per (symbol, position_side) after each fill.
-    Qty sign is assumed already normalized (buy +, sell -).
-    If recompute_pnl is True, realized PnL is recomputed per fill from positions.
+    Compute psize/pprice for each fill event using two-phase algorithm.
+
+    Phase 1: Forward iteration to compute final position state, storing
+             the state before each fill for use in phase 2.
+    Phase 2: Backward iteration to annotate each event with the "after" state.
+
+    This approach is cleaner than multi-pass reconciliation because working
+    backwards from a known final state is deterministic - no reconciliation needed.
+
+    Args:
+        events: List of fill event dicts (must have: symbol, position_side, side, qty, price)
+                Qty sign must be normalized (buy +, sell -).
+        initial_state: Optional starting positions {(symbol, pside): (size, price)}
+
+    Returns:
+        Final position state after all fills: {(symbol, pside): (size, price)}
     """
-    positions: Dict[Tuple[str, str], Tuple[float, float]] = state or {}
+    if not events:
+        return {}
+
+    # Group events by (symbol, position_side)
     grouped: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
     for ev in events:
         key = (
@@ -314,75 +346,71 @@ def annotate_positions_inplace(
         )
         grouped[key].append(ev)
 
-    def _add_reduce(pos_side: str, qty_signed: float) -> Tuple[float, float]:
-        if pos_side == "short":
-            add_amt = max(-qty_signed, 0.0)  # sells are negative -> add
-            reduce_amt = max(qty_signed, 0.0)  # buys positive -> reduce short
-        else:
-            add_amt = max(qty_signed, 0.0)  # buys add to long
-            reduce_amt = max(-qty_signed, 0.0)  # sells reduce long
-        return add_amt, reduce_amt
+    final_state: Dict[Tuple[str, str], Tuple[float, float]] = {}
 
     for key, evs in grouped.items():
-        # sort by time to ensure chronological
         evs.sort(key=lambda x: x.get("timestamp", 0))
-        # First forward pass: get tentative sizes with clamping to zero
-        forward_sizes: List[float] = []
-        pos_size = positions.get(key, (0.0, 0.0))[0]
+
+        # Phase 1: Forward to compute final state, storing before-state for each fill
+        psize = initial_state.get(key, (0.0, 0.0))[0] if initial_state else 0.0
+        pprice = initial_state.get(key, (0.0, 0.0))[1] if initial_state else 0.0
+
+        # Store (before_psize, before_pprice, after_psize, after_pprice) for each fill
+        states: List[Tuple[float, float, float, float]] = []
+
         for ev in evs:
             qty_signed = float(ev.get("qty") or ev.get("amount") or 0.0) * float(
                 ev.get("c_mult", 1.0) or 1.0
             )
-            add_amt, reduce_amt = _add_reduce(key[1], qty_signed)
-            pos_size = max(pos_size + add_amt - reduce_amt, 0.0)
-            forward_sizes.append(pos_size)
-        # Backward pass: reconcile sizes starting from final
-        reconciled_sizes: List[float] = [0.0] * len(evs)
-        current = forward_sizes[-1] if forward_sizes else 0.0
-        for idx in range(len(evs) - 1, -1, -1):
-            ev = evs[idx]
-            qty_signed = float(ev.get("qty") or ev.get("amount") or 0.0) * float(
-                ev.get("c_mult", 1.0) or 1.0
-            )
-            add_amt, reduce_amt = _add_reduce(key[1], qty_signed)
-            before = max(current - add_amt + reduce_amt, 0.0)
-            reconciled_sizes[idx] = current
-            current = before
-
-        # Final forward pass to compute pprice with reconciled sizes
-        pos_size = positions.get(key, (0.0, 0.0))[0]
-        vwap = positions.get(key, (0.0, 0.0))[1]
-        for ev, after_size in zip(evs, reconciled_sizes):
-            qty_signed = float(ev.get("qty") or ev.get("amount") or 0.0) * float(
-                ev.get("c_mult", 1.0) or 1.0
-            )
             price = float(ev.get("price") or 0.0)
-            add_amt, reduce_amt = _add_reduce(key[1], qty_signed)
-            before_size = max(after_size - add_amt + reduce_amt, 0.0)
-            if recompute_pnl:
-                realized = 0.0
-                if reduce_amt > 0 and before_size > 0 and price > 0 and vwap >= 0:
-                    close_qty = min(before_size, reduce_amt)
-                    if key[1] == "short":
-                        realized = (vwap - price) * close_qty
-                    else:
-                        realized = (price - vwap) * close_qty
-                    ev["pnl"] = realized - _fee_cost(ev.get("fees"))
-            if add_amt > 0:
-                if before_size <= 0:
-                    vwap = price
-                else:
-                    vwap = ((before_size * vwap) + (add_amt * price)) / max(
-                        before_size + add_amt, 1e-12
-                    )
-            if after_size <= 1e-12:
-                vwap = 0.0
-            ev["psize"] = round(after_size, 12)
-            ev["pprice"] = vwap
-            pos_size, _ = positions.get(key, (0.0, 0.0))
-        positions[key] = (reconciled_sizes[-1] if reconciled_sizes else pos_size, vwap)
+            add_amt, reduce_amt = _compute_add_reduce(key[1], qty_signed)
 
-    return positions
+            before_psize = psize
+            before_pprice = pprice
+
+            # Update position
+            if add_amt > 0:
+                if psize <= 0:
+                    pprice = price
+                else:
+                    pprice = ((psize * pprice) + (add_amt * price)) / (psize + add_amt)
+                psize += add_amt
+            if reduce_amt > 0:
+                psize = max(0.0, psize - reduce_amt)
+                if psize <= 1e-12:
+                    psize = 0.0
+                    pprice = 0.0
+
+            states.append((before_psize, before_pprice, psize, pprice))
+
+        final_state[key] = (psize, pprice)
+
+        # Phase 2: Annotate each event with its after-state
+        # The states list already contains the after-state for each fill
+        for ev, (_, _, after_psize, after_pprice) in zip(evs, states):
+            ev["psize"] = round(after_psize, 12)
+            ev["pprice"] = after_pprice
+
+    return final_state
+
+
+def annotate_positions_inplace(
+    events: List[Dict[str, object]],
+    state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
+    *,
+    recompute_pnl: bool = False,
+) -> Dict[Tuple[str, str], Tuple[float, float]]:
+    """
+    Legacy wrapper around compute_psize_pprice for backward compatibility.
+
+    Note: recompute_pnl is no longer supported in the simplified algorithm.
+    Fetchers are responsible for computing correct PnL values during fetch.
+    """
+    if recompute_pnl:
+        logger.warning(
+            "annotate_positions_inplace: recompute_pnl=True is deprecated and ignored"
+        )
+    return compute_psize_pprice(events, state)
 
 
 def compute_realized_pnls_from_trades(
@@ -1742,6 +1770,14 @@ class FillEventsManager:
                     continue
                 filtered.append(ev)
             self._events = sorted(filtered, key=lambda ev: ev.timestamp)
+
+            # Annotate psize/pprice for legacy caches that may lack these values
+            if self._events:
+                payload = [ev.to_dict() for ev in self._events]
+                ensure_qty_signage(payload)
+                compute_psize_pprice(payload)
+                self._events = [FillEvent.from_dict(ev) for ev in payload]
+
             logger.info(
                 "FillEventsManager.ensure_loaded: loaded %d cached events (dropped %d without raw)",
                 len(self._events),
@@ -1800,6 +1836,18 @@ class FillEventsManager:
         await self.fetcher.fetch(start_ms, end_ms, detail_cache, on_batch=handle_batch)
 
         self._events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
+
+        # Annotate psize/pprice for all events
+        if self._events:
+            payload = [ev.to_dict() for ev in self._events]
+            ensure_qty_signage(payload)
+            compute_psize_pprice(payload)
+            self._events = [FillEvent.from_dict(ev) for ev in payload]
+
+            # Re-persist touched days with annotated psize/pprice values
+            if all_days_persisted:
+                day_payload = self._events_for_days(self._events, all_days_persisted)
+                self.cache.save_days(day_payload)
 
         # Update cache metadata with timestamps
         if self._events:
@@ -1942,6 +1990,12 @@ class FillEventsManager:
         end_ms: Optional[int] = None,
         symbol: Optional[str] = None,
     ) -> List[FillEvent]:
+        """Get fill events with optional filtering.
+
+        Events are returned with pre-computed psize/pprice values based on full
+        history (computed during ensure_loaded/refresh). The values reflect
+        position state after each fill in chronological order.
+        """
         events = self._events
         if start_ms is not None:
             events = [ev for ev in events if ev.timestamp >= start_ms]
@@ -1949,14 +2003,7 @@ class FillEventsManager:
             events = [ev for ev in events if ev.timestamp <= end_ms]
         if symbol:
             events = [ev for ev in events if ev.symbol == symbol]
-        # Annotate positions on a copy so cache on disk remains untouched
-        # Note: PnL is NOT recomputed here - fetchers are responsible for computing
-        # correct PnL values during fetch. Recomputing here would overwrite correct
-        # values (e.g., KuCoinFetcher uses positions_history for accurate PnL).
-        payload = [ev.to_dict() for ev in events]
-        ensure_qty_signage(payload)
-        annotate_positions_inplace(payload)
-        return [FillEvent.from_dict(ev) for ev in payload]
+        return list(events)
 
     def get_pnl_sum(
         self,
@@ -2556,7 +2603,7 @@ class HyperliquidFetcher(BaseFetcher):
 
         events = sorted(collected.values(), key=lambda ev: ev["timestamp"])
         events = _coalesce_events(events)
-        annotate_positions_inplace(events)
+        # Note: psize/pprice annotation is done centrally in FillEventsManager.refresh()
 
         for event in events:
             cache_entry = detail_cache.get(event["id"])
@@ -3566,9 +3613,9 @@ class OkxFetcher(BaseFetcher):
         if until_ms is not None:
             events = [ev for ev in events if ev["timestamp"] <= until_ms]
 
-        # Annotate positions
+        # Coalesce duplicate events
         events = _coalesce_events(events)
-        annotate_positions_inplace(events)
+        # Note: psize/pprice annotation is done centrally in FillEventsManager.refresh()
 
         # Apply pb_order_type from cache or derive from clOrdId
         for event in events:
