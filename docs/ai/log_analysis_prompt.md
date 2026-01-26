@@ -22,6 +22,19 @@ You are analyzing logs from **Passivbot**, a cryptocurrency trading bot for perp
 
 The goal is to make each log level serve a distinct purpose:
 
+### Golden Rules
+
+| Level | Audience | Golden Rule |
+|-------|----------|-------------|
+| **INFO** | Operators watching logs | Sustainable to tail indefinitely in production |
+| **DEBUG** | Developers troubleshooting | Tolerable for debugging sessions (won't generate GB/hour) |
+| **TRACE** | Deep debugging specific issues | Full firehose; expect massive logs; enable briefly |
+
+**Key tests:**
+- Can someone run `--debug-level 1` (INFO) for days without log bloat? → If not, move spam to DEBUG
+- Can someone run `--debug-level 2` (DEBUG) for an hour without logs becoming unmanageable? → If not, move to TRACE
+- Is every API payload logged? → That belongs in TRACE, not DEBUG
+
 ### INFO (default, human-friendly, essential)
 The INFO level should be **clean and readable at a glance**. A human watching the logs should be able to understand what the bot is doing without being overwhelmed.
 
@@ -315,7 +328,7 @@ Structure your findings as follows:
 ```
 2026-01-23T20:00:00 INFO     [bybit] [boot] READY - entering main trading loop
 2026-01-23T20:00:01 INFO     [bybit] [health] uptime=5s | positions=2L/0S | balance=1500.00 | orders=+0/-0 | fills=0 | errors=0/10
-2026-01-23T20:00:15 INFO     [bybit] [fill] BTC long entry filled | qty=0.001 @ 89500.00 | cost=$89.50 | WE: 0.06 -> 0.12
+2026-01-23T20:00:15 INFO     [bybit] [fill] BTC long entry_grid_normal_long +0.001 @ 89500.00 id=trade-abc123
 2026-01-23T20:00:15 INFO     [bybit] [pos] BTC long 0.001 @ 89500.00 -> 0.002 @ 89525.00 | WE: 12% WEL | upnl: -0.05
 2026-01-23T20:00:30 INFO     [bybit] [entry] ETH initial entry blocked: price 2950 is 2.1% above EMA (threshold: 1.5%)
 2026-01-23T20:01:00 INFO     [bybit] [mode] changed long.SUI: normal -> graceful_stop (dropped from forager top 7)
@@ -375,16 +388,131 @@ Compare to current (noisy):
 5. **Stale lock removal** - Changed from WARNING to INFO (self-healing is not a warning)
    - File: `src/utils.py`
 
-### Round 2 (TODO)
+### Round 2 (2026-01-24) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **Deprecated API key warnings** - Changed from WARNING to INFO and added log_once pattern to prevent startup spam.
+   - File: `src/exchanges/ccxt_bot.py`
+
+2. **Fetcher.fetch spam** - Changed all fetcher status messages from INFO to DEBUG:
+   - `BitgetFetcher.fetch: start/done` → DEBUG
+   - `BinanceFetcher.fetch: start/done` → DEBUG
+   - `BybitFetcher.fetch: done` → DEBUG
+   - `HyperliquidFetcher.fetch: fetch #N` → DEBUG
+   - `GateioFetcher.fetch: start/done/no trades` → DEBUG
+   - `OkxFetcher.fetch: start/done` → DEBUG
+   - `KucoinFetcher._fetch_trades: fetch #N` → DEBUG
+   - `KucoinFetcher._fetch_positions_history: fetch #N` → DEBUG
+   - File: `src/fill_events_manager.py`
+
+3. **Cache oldest event/full refresh spam** - Changed from INFO to DEBUG with once-per-session logging.
+   - File: `src/passivbot.py`
+
+4. **Volume/volatility EMA rankings** - Already implemented in Round 1 with ranking change detection. Only logs when top symbols change.
+   - File: `src/passivbot.py`
+
+### Round 2b (2026-01-24) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **CCXT API request/response payloads** - Moved full API payloads from DEBUG to TRACE level.
+   - CCXT logs full HTTP request/response data including headers and JSON bodies at DEBUG level
+   - These payloads can be 10KB+ per line (e.g., coin list responses) and accounted for ~23% of DEBUG log volume
+   - Configured CCXT logger to only output at TRACE level (debug level 3); suppressed at DEBUG (level 2) and below
+   - File: `src/logging_setup.py`
+   - Impact: Reduces a 2411-line DEBUG log by 558 lines (~23% reduction), and more importantly removes the very long JSON payload lines
+
+### Round 3 (2026-01-24) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **Zero-candle synthesis warnings repeating** - Changed from rate-limiting (once per minute per symbol) to gap deduplication (once per unique gap origin).
+   - Same historical gaps were being warned about every minute (e.g., "DOGE: synthesized 7 zero-candles at 2026-01-23T19:16 to 2026-01-24T13:24")
+   - Now uses a set to track which (symbol, first_ts) gaps have been warned about
+   - Uses gap start timestamp as key since end timestamp changes as time passes
+   - Warns only once per unique gap origin, eliminating repeated warnings
+   - File: `src/candlestick_manager.py`
+
+2. **Stale candle lock removal at WARNING** - Changed from WARNING to INFO level.
+   - Stale lock removal is self-healing behavior, not an error condition
+   - Consistent with symbol map lock removal which is already at INFO level
+   - File: `src/candlestick_manager.py`
+
+### Round 4 (2026-01-24) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **Volume/volatility EMA rankings logging too frequently** - Added 60-second throttle per metric.
+   - Rankings were logged every 1-5 seconds during active trading due to small fluctuations
+   - Now requires both a ranking change AND 60 seconds since last log
+   - Reduces log volume significantly while still showing meaningful ranking changes
+   - Files: `src/passivbot.py` (3 locations: `calc_volumes_and_log_ranges`, `calc_log_range`, `calc_volumes`)
+
+2. **Mode changes flip-flopping creates noisy logs** - Added 60-second throttle for mode change logs.
+   - Forager mode causes coins to oscillate between `normal` and `graceful_stop` when volatility rankings are close
+   - "added" and "removed" logs (startup events) still logged immediately at INFO
+   - "changed" logs throttled to at most once per 60 seconds per symbol
+   - File: `src/passivbot.py`
+
+### Round 5 (2026-01-25) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **BinanceFetcher fetch logs with size=0** - Changed to only log at INFO when size > 0.
+   - `_fetch_income` and `_fetch_symbol_trades` were logging at INFO for every fetch page even when no data returned (size=0)
+   - Now logs at DEBUG when size=0, INFO only when there's actual data
+   - File: `src/fill_events_manager.py`
+
+2. **EMA rankings logging too frequently** - Increased throttle from 60 seconds to 5 minutes.
+   - Rankings were still logging every 1-2 minutes due to frequent ranking changes in forager mode
+   - Now uses 5-minute throttle (300,000ms) which is more sustainable for production tailing
+   - Added `[ranking]` tag for consistency
+   - Files: `src/passivbot.py` (3 locations)
+
+3. **Zero-candle synthesis warnings repeating** - Improved deduplication and level thresholds.
+   - Changed gap key from exact `first_ts` to hour-rounded `first_ts` to better deduplicate gaps detected at different window boundaries
+   - Raised WARNING threshold from >5 to >100 candles (startup batch summary already covers normal gaps)
+   - File: `src/candlestick_manager.py`
+
+4. **"unexpected step for tf" warnings** - Changed from WARNING to DEBUG.
+   - These are expected behavior for exchanges with data gaps (especially illiquid pairs)
+   - Not actionable for operators, only useful for debugging data quality
+   - Added `[candle]` tag for consistency
+   - File: `src/candlestick_manager.py`
+
+5. **Deprecated API key warnings aggregated** - Combined into single message.
+   - Was logging one message per deprecated field (key, private_key, passphrase, wallet_address)
+   - Now logs single aggregated message: `[config] bybit: deprecated api-keys.json fields remapped: key->apiKey, private_key->privateKey`
+   - File: `src/exchanges/ccxt_bot.py`
+
+6. **Fill logs improved** - Added fill ID and consistent PnL for closes.
+   - Added truncated fill ID (first 12 chars) to all fill logs for traceability
+   - Close orders now always show `pnl=` even when PnL is 0.0
+   - Helps distinguish duplicate logs from separate fills of different orders
+   - Format: `[fill] SUI long close_unstuck_long -10 @ 1.47, pnl=-0.937 USDT id=trade-abc123`
+   - File: `src/passivbot.py`
+
+### Round 6 (TODO)
 
 **Remaining issues to address:**
 
-- [ ] Volume/volatility EMA rankings - Only log at INFO when rankings change meaningfully
-- [ ] Deprecated API key warnings - Use `log_once` pattern or move to INFO
 - [ ] Missing INFO-level information:
-  - [ ] EMA gating for entries
-  - [ ] Unstuck gating
-  - [ ] Unstuck coin selection
-  - [ ] WebSocket reconnections
-- [ ] Standardize log tag formats (`[tag]` style)
-- [ ] Convert f-strings to format strings for log aggregation
+  - [ ] EMA gating for entries (when initial entry blocked due to EMA distance)
+  - [ ] Unstuck gating (when unstuck entry blocked)
+  - [ ] Unstuck coin selection (which coin selected for unstuck and why)
+  - [ ] WebSocket reconnections (currently only logs initial connect, not reconnects)
+- [ ] Standardize log tag formats (`[tag]` style) for remaining untagged messages:
+  - [ ] `Memory usage rss=...` → `[memory] rss=...`
+  - [ ] `warmup starting: N symbols...` → `[warmup] starting: N symbols...`
+  - [ ] `warmup candles: N/M...` → `[warmup] candles: N/M...`
+  - [ ] `Starting hourly_cycle...` → `[hourly] starting...`
+  - [ ] `Initializing FillEventsManager...` → `[fills] initializing...`
+  - [ ] `FillEventCache.load:...` → `[fills] loaded...`
+  - [ ] `Symbol/coin mapping fallbacks:...` → `[mapping] fallbacks:...`
+- [ ] `[pnl] KucoinFetcher: local sum differs from positions_history` appears repeatedly - should be throttled or deduplicated
+- [ ] `persistent gaps: N new (...)` warnings could be aggregated over time rather than logged per-cycle
+- [ ] `[candle] strict mode gaps: N missing candles across M symbols` at WARNING could be DEBUG (expected for illiquid markets)
+- [ ] Mode change throttle may need adjustment - still seeing frequent changes logged
+- [ ] Convert remaining f-strings to format strings for log aggregation where feasible
+- [ ] Consider adding periodic health summary (every 5-15 min) with key metrics for long-running bots

@@ -2073,8 +2073,25 @@ class Passivbot:
         self.set_wallet_exposure_limits()
         await self.update_trailing_data()
         res = log_dict_changes(previous_PB_modes, self.PB_modes)
+        # Initialize mode change throttle cache if needed
+        if not hasattr(self, "_mode_change_last_log_ms"):
+            self._mode_change_last_log_ms = {}
+        mode_change_throttle_ms = 60_000  # 60 seconds between logs per symbol
+        now_ms = utc_ms()
         for k, v in res.items():
             for elm in v:
+                # "added" and "removed" are startup events, always log at INFO
+                # "changed" can be throttled during forager mode oscillation
+                if k == "changed":
+                    # Extract symbol from the log entry (format: "pside.SYMBOL: old -> new")
+                    try:
+                        symbol_part = elm.split(":")[0]  # "long.XRP/USDT:USDT"
+                        last_log_ms = self._mode_change_last_log_ms.get(symbol_part, 0)
+                        if (now_ms - last_log_ms) < mode_change_throttle_ms:
+                            continue  # Throttle this log
+                        self._mode_change_last_log_ms[symbol_part] = now_ms
+                    except Exception:
+                        pass  # On any parse error, just log normally
                 logging.info(f"[mode] {k:7s} {elm}")
 
     async def get_filtered_coins(self, pside: str) -> List[str]:
@@ -2201,21 +2218,30 @@ class Passivbot:
             volumes[sym] = float(vol)
             log_ranges[sym] = float(lr)
 
-        # Preserve the low-noise "top ranking changed" logging from calc_volumes/calc_log_range.
+        # Throttle EMA ranking logs to at most once per 5 minutes per metric.
+        # Log only when rankings have changed since last logged snapshot.
         elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
+        now_ms = utc_ms()
+        ema_log_throttle_ms = 300_000  # 5 minutes between logs per metric (reduced from 60s to reduce forager noise)
+
         if volumes:
             top_n = min(8, len(volumes))
             top = sorted(volumes.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
             top_syms = tuple(sym for sym, _ in top)
             if not hasattr(self, "_volume_top_cache"):
                 self._volume_top_cache = {}
+            if not hasattr(self, "_volume_top_last_log_ms"):
+                self._volume_top_last_log_ms = {}
             cache_key = (pside, span_volume)
             last_top = self._volume_top_cache.get(cache_key)
-            if last_top != top_syms:
+            last_log_ms = self._volume_top_last_log_ms.get(cache_key, 0)
+            # Require both: rankings changed AND enough time has passed
+            if last_top != top_syms and (now_ms - last_log_ms) >= ema_log_throttle_ms:
                 self._volume_top_cache[cache_key] = top_syms
+                self._volume_top_last_log_ms[cache_key] = now_ms
                 summary = ", ".join(f"{symbol_to_coin(sym)}={val:.2f}" for sym, val in top)
                 logging.info(
-                    f"volume EMA span {span_volume}: {len(syms)} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
+                    f"[ranking] volume EMA span {span_volume}: {len(syms)} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
                 )
         if log_ranges:
             top_n = min(8, len(log_ranges))
@@ -2223,13 +2249,18 @@ class Passivbot:
             top_syms = tuple(sym for sym, _ in top)
             if not hasattr(self, "_log_range_top_cache"):
                 self._log_range_top_cache = {}
+            if not hasattr(self, "_log_range_top_last_log_ms"):
+                self._log_range_top_last_log_ms = {}
             cache_key = (pside, span_volatility)
             last_top = self._log_range_top_cache.get(cache_key)
-            if last_top != top_syms:
+            last_log_ms = self._log_range_top_last_log_ms.get(cache_key, 0)
+            # Require both: rankings changed AND enough time has passed
+            if last_top != top_syms and (now_ms - last_log_ms) >= ema_log_throttle_ms:
                 self._log_range_top_cache[cache_key] = top_syms
+                self._log_range_top_last_log_ms[cache_key] = now_ms
                 summary = ", ".join(f"{symbol_to_coin(sym)}={val:.6f}" for sym, val in top)
                 logging.info(
-                    f"log_range EMA span {span_volatility}: {len(syms)} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
+                    f"[ranking] log_range EMA span {span_volatility}: {len(syms)} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
                 )
 
         return volumes, log_ranges
@@ -2448,15 +2479,20 @@ class Passivbot:
                 oldest_event_ts = events[0].timestamp
                 if oldest_event_ts > age_limit + 1000 * 60 * 60 * 24:  # > 1 day newer than limit
                     needs_full_refresh = True
-                    logging.info(
-                        "[fills] Cache oldest event (%s) is newer than lookback (%s), doing full refresh",
-                        ts_to_date(oldest_event_ts)[:19],
-                        ts_to_date(age_limit)[:19],
-                    )
+                    # Log once per session to avoid spam
+                    cache_key = "_fills_full_refresh_logged"
+                    if not getattr(self, cache_key, False):
+                        setattr(self, cache_key, True)
+                        logging.debug(
+                            "[fills] Cache oldest event (%s) is newer than lookback (%s), doing full refresh",
+                            ts_to_date(oldest_event_ts)[:19],
+                            ts_to_date(age_limit)[:19],
+                        )
 
             if needs_full_refresh:
                 # Full refresh with proper lookback window
-                logging.info("[fills] Performing full refresh from %s", ts_to_date(age_limit)[:19])
+                if not getattr(self, "_fills_full_refresh_logged", False):
+                    logging.debug("[fills] Performing full refresh from %s", ts_to_date(age_limit)[:19])
                 await self._pnls_manager.refresh(start_ms=int(age_limit), end_ms=None)
             else:
                 # Incremental refresh
@@ -2487,9 +2523,9 @@ class Passivbot:
     def _log_fill_event(self, event) -> str:
         """Format a FillEvent for logging.
 
-        Format: [fill] BTC long entry +0.001 @ 100000.00
-        For closes: [fill] BTC long close -0.001 @ 100500.00, pnl=+5.50 USDT
-        For unknown orders: [fill] BTC long unknown -0.2 @ 2.05, pnl=-0.005 USDT (coid=abc123)
+        Format: [fill] BTC long entry +0.001 @ 100000.00 id=abc123
+        For closes: [fill] BTC long close -0.001 @ 100500.00, pnl=+5.50 USDT id=abc123
+        For unknown orders: [fill] BTC long unknown -0.2 @ 2.05, pnl=-0.005 USDT (coid=abc123) id=xyz789
         """
         coin = symbol_to_coin(event.symbol, verbose=False) or event.symbol
         pside = event.position_side.lower()
@@ -2501,14 +2537,23 @@ class Passivbot:
 
         msg = f"[fill] {coin} {pside} {order_type} {qty_str} @ {event.price:.2f}"
 
-        # Add pnl for closes (use 3 significant digits)
-        if event.pnl != 0.0:
+        # Add pnl for close orders (always show, even if 0.0)
+        # Close orders have "close" in their type (e.g., close_grid_long, close_unstuck_long)
+        is_close = "close" in order_type
+        if is_close or event.pnl != 0.0:
             pnl_sign = "+" if event.pnl >= 0 else ""
             msg += f", pnl={pnl_sign}{round_dynamic(event.pnl, 3)} USDT"
 
         # Add client_order_id for unknown orders
         if order_type == "unknown" and event.client_order_id:
             msg += f" (coid={event.client_order_id})"
+
+        # Always add fill ID at the end for traceability
+        fill_id = getattr(event, "id", None)
+        if fill_id:
+            # Truncate long IDs for readability (show first 12 chars)
+            short_id = str(fill_id)[:12] if len(str(fill_id)) > 12 else str(fill_id)
+            msg += f" id={short_id}"
 
         return msg
 
@@ -4373,20 +4418,27 @@ class Passivbot:
             except Exception:
                 out[sym] = 0.0
         elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
+        now_ms = utc_ms()
+        ema_log_throttle_ms = 300_000  # 5 minutes between logs per metric
         if out:
             top_n = min(8, len(out))
             top = sorted(out.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
             top_syms = tuple(sym for sym, _ in top)
             # Only log when the ranking changes (membership/order) to reduce noise.
+            # Also throttle to at most once per 5 minutes per metric.
             if not hasattr(self, "_log_range_top_cache"):
                 self._log_range_top_cache = {}
+            if not hasattr(self, "_log_range_top_last_log_ms"):
+                self._log_range_top_last_log_ms = {}
             cache_key = (pside, span)
             last_top = self._log_range_top_cache.get(cache_key)
-            if last_top != top_syms:
+            last_log_ms = self._log_range_top_last_log_ms.get(cache_key, 0)
+            if last_top != top_syms and (now_ms - last_log_ms) >= ema_log_throttle_ms:
                 self._log_range_top_cache[cache_key] = top_syms
+                self._log_range_top_last_log_ms[cache_key] = now_ms
                 summary = ", ".join(f"{symbol_to_coin(sym)}={val:.6f}" for sym, val in top)
                 logging.info(
-                    f"log_range EMA span {span}: {n} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
+                    f"[ranking] log_range EMA span {span}: {n} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
                 )
         return out
 
@@ -4438,19 +4490,26 @@ class Passivbot:
             except Exception:
                 out[sym] = 0.0
         elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
+        now_ms = utc_ms()
+        ema_log_throttle_ms = 300_000  # 5 minutes between logs per metric
         if out:
             top_n = min(8, len(out))
             top = sorted(out.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
             top_syms = tuple(sym for sym, _ in top)
+            # Throttle to at most once per 5 minutes per metric.
             if not hasattr(self, "_volume_top_cache"):
                 self._volume_top_cache = {}
+            if not hasattr(self, "_volume_top_last_log_ms"):
+                self._volume_top_last_log_ms = {}
             cache_key = (pside, span)
             last_top = self._volume_top_cache.get(cache_key)
-            if last_top != top_syms:
+            last_log_ms = self._volume_top_last_log_ms.get(cache_key, 0)
+            if last_top != top_syms and (now_ms - last_log_ms) >= ema_log_throttle_ms:
                 self._volume_top_cache[cache_key] = top_syms
+                self._volume_top_last_log_ms[cache_key] = now_ms
                 summary = ", ".join(f"{symbol_to_coin(sym)}={val:.2f}" for sym, val in top)
                 logging.info(
-                    f"volume EMA span {span}: {n} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
+                    f"[ranking] volume EMA span {span}: {n} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
                 )
         return out
 
