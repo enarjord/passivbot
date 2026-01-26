@@ -2,7 +2,7 @@
 
 All notable user-facing changes will be documented in this file.
 
-## v7.7.0 - Unreleased
+## v7.7.0 - 2026-01-26
 
 ### Fixed
 - **Bybit: Missing PnL on some close fills** - Fixed pagination bug in `BybitFetcher._fetch_positions_history()` that caused closed-pnl records to be skipped when >100 records existed in a time window. Now uses hybrid pagination: cursor-based for recent records (no gaps), time-based sliding window for older records.
