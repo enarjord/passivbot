@@ -125,4 +125,3 @@ __all__ = [
     "compute_backtest_warmup_minutes",
     "compute_per_coin_warmup_minutes",
 ]
-

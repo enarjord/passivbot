@@ -130,6 +130,7 @@ def _install_passivbot_rust_stub():
     def _compute_ideal_orders_json(input_json: str) -> str:
         """Stub orchestrator that returns empty orders."""
         import json
+
         return json.dumps({"orders": []})
 
     stub.compute_ideal_orders_json = _compute_ideal_orders_json

@@ -26,6 +26,7 @@ class PrefixFilter(logging.Filter):
         record.log_prefix = self.prefix
         return True
 
+
 _LOG_LEVEL_ALIASES = {
     "warning": 0,
     "warn": 0,
@@ -171,3 +172,15 @@ def configure_logging(
 
     for handler in handlers:
         root.addHandler(handler)
+
+    # Configure CCXT logger to only log at TRACE level.
+    # CCXT logs full API request/response payloads at DEBUG, which is too noisy.
+    # These payloads belong at TRACE (level 3) per log_analysis_prompt.md guidelines.
+    ccxt_logger = logging.getLogger("ccxt")
+    if debug_level >= 3:
+        # TRACE mode: allow CCXT logs through
+        ccxt_logger.setLevel(TRACE_LEVEL)
+    else:
+        # DEBUG and below: suppress CCXT's noisy API payloads
+        # Set to WARNING so only actual warnings/errors from CCXT are shown
+        ccxt_logger.setLevel(logging.WARNING)

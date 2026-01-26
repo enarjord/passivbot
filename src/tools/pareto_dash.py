@@ -440,7 +440,18 @@ def get_history_dataframe(run_dir: str) -> pd.DataFrame:
 
 def serve_dash(data_root: str, port: int = 8050):
     try:
-        from dash import Dash, Input, Output, State, dcc, html, dash_table, callback_context, no_update, ALL
+        from dash import (
+            Dash,
+            Input,
+            Output,
+            State,
+            dcc,
+            html,
+            dash_table,
+            callback_context,
+            no_update,
+            ALL,
+        )
         import dash_bootstrap_components as dbc
         import plotly.express as px
         import plotly.graph_objects as go
@@ -466,152 +477,229 @@ def serve_dash(data_root: str, port: int = 8050):
 
     def make_control_card(title: str, children: list, id_prefix: str = "") -> dbc.Card:
         """Create a collapsible control card."""
-        collapse_id = f"{id_prefix}-collapse" if id_prefix else f"{title.lower().replace(' ', '-')}-collapse"
-        button_id = f"{id_prefix}-toggle" if id_prefix else f"{title.lower().replace(' ', '-')}-toggle"
-        return dbc.Card([
-            dbc.CardHeader(
-                dbc.Button(
-                    title,
-                    id=button_id,
-                    color="link",
-                    className="text-start w-100",
+        collapse_id = (
+            f"{id_prefix}-collapse" if id_prefix else f"{title.lower().replace(' ', '-')}-collapse"
+        )
+        button_id = (
+            f"{id_prefix}-toggle" if id_prefix else f"{title.lower().replace(' ', '-')}-toggle"
+        )
+        return dbc.Card(
+            [
+                dbc.CardHeader(
+                    dbc.Button(
+                        title,
+                        id=button_id,
+                        color="link",
+                        className="text-start w-100",
+                    ),
                 ),
-            ),
-            dbc.Collapse(
-                dbc.CardBody(children),
-                id=collapse_id,
-                is_open=True,
-            ),
-        ], className="mb-2")
+                dbc.Collapse(
+                    dbc.CardBody(children),
+                    id=collapse_id,
+                    is_open=True,
+                ),
+            ],
+            className="mb-2",
+        )
 
     # Sidebar controls
-    sidebar = html.Div([
-        html.H4("Pareto Explorer", className="mb-3"),
-
-        # Run selection (always visible)
-        dbc.Card([
-            dbc.CardBody([
-                dbc.Label("Optimization Run"),
-                dcc.Dropdown(
-                    id="run-selection",
-                    options=[{"label": os.path.basename(r), "value": r} for r in run_dirs],
-                    value=run_dirs[-1],
-                    clearable=False,
-                ),
-            ])
-        ], className="mb-2"),
-
-        # Filter status
-        dbc.Alert(
-            id="filter-status",
-            color="info",
-            className="mb-2 py-2",
-        ),
-
-        # Metrics section
-        make_control_card("Scoring Metrics", [
-            dbc.Label("X Axis"),
-            dcc.Dropdown(id="x-metric", placeholder="Select X metric"),
-            dbc.Label("Y Axis", className="mt-2"),
-            dcc.Dropdown(id="y-metric", placeholder="Select Y metric"),
-            dbc.Label("Color By", className="mt-2"),
-            dcc.Dropdown(id="color-metric", placeholder="Color by metric"),
-        ], "metrics"),
-
-        # Filters section
-        make_control_card("Filters", [
-            dbc.Label("Quick Filters"),
-            html.Div(id="range-sliders-container"),
-            html.Hr(),
-            dbc.Label("Filter Presets"),
-            dbc.ButtonGroup([
-                dbc.Button("Conservative", id="preset-conservative", color="success", size="sm", outline=True),
-                dbc.Button("Balanced", id="preset-balanced", color="primary", size="sm", outline=True),
-                dbc.Button("Aggressive", id="preset-aggressive", color="danger", size="sm", outline=True),
-            ], className="mb-2 w-100"),
-            html.Hr(),
-            dbc.Label("Custom Expressions"),
-            dbc.Textarea(
-                id="limit-expressions",
-                placeholder="One per line, e.g.:\nprofit_sum >= 0\ndrawdown_max <= 0.5",
-                style={"height": "80px", "fontFamily": "monospace", "fontSize": "11px"},
+    sidebar = html.Div(
+        [
+            html.H4("Pareto Explorer", className="mb-3"),
+            # Run selection (always visible)
+            dbc.Card(
+                [
+                    dbc.CardBody(
+                        [
+                            dbc.Label("Optimization Run"),
+                            dcc.Dropdown(
+                                id="run-selection",
+                                options=[
+                                    {"label": os.path.basename(r), "value": r} for r in run_dirs
+                                ],
+                                value=run_dirs[-1],
+                                clearable=False,
+                            ),
+                        ]
+                    )
+                ],
+                className="mb-2",
             ),
-            dbc.Button("Clear Filters", id="clear-filters", color="secondary", size="sm", className="mt-2"),
-        ], "filters"),
-
-        # Pareto Frontier section
-        make_control_card("Pareto Frontier", [
-            dbc.Checklist(
-                id="show-frontier-only",
-                options=[{"label": "Show frontier only", "value": "frontier"}],
-                value=[],
-                switch=True,
+            # Filter status
+            dbc.Alert(
+                id="filter-status",
+                color="info",
+                className="mb-2 py-2",
             ),
-            dbc.Checklist(
-                id="highlight-frontier",
-                options=[{"label": "Highlight frontier points", "value": "highlight"}],
-                value=["highlight"],
-                switch=True,
+            # Metrics section
+            make_control_card(
+                "Scoring Metrics",
+                [
+                    dbc.Label("X Axis"),
+                    dcc.Dropdown(id="x-metric", placeholder="Select X metric"),
+                    dbc.Label("Y Axis", className="mt-2"),
+                    dcc.Dropdown(id="y-metric", placeholder="Select Y metric"),
+                    dbc.Label("Color By", className="mt-2"),
+                    dcc.Dropdown(id="color-metric", placeholder="Color by metric"),
+                ],
+                "metrics",
             ),
-            dbc.Label("Frontier Metrics", className="mt-2"),
-            dcc.Dropdown(
-                id="frontier-metrics",
-                placeholder="Select metrics for frontier",
-                multi=True,
+            # Filters section
+            make_control_card(
+                "Filters",
+                [
+                    dbc.Label("Quick Filters"),
+                    html.Div(id="range-sliders-container"),
+                    html.Hr(),
+                    dbc.Label("Filter Presets"),
+                    dbc.ButtonGroup(
+                        [
+                            dbc.Button(
+                                "Conservative",
+                                id="preset-conservative",
+                                color="success",
+                                size="sm",
+                                outline=True,
+                            ),
+                            dbc.Button(
+                                "Balanced",
+                                id="preset-balanced",
+                                color="primary",
+                                size="sm",
+                                outline=True,
+                            ),
+                            dbc.Button(
+                                "Aggressive",
+                                id="preset-aggressive",
+                                color="danger",
+                                size="sm",
+                                outline=True,
+                            ),
+                        ],
+                        className="mb-2 w-100",
+                    ),
+                    html.Hr(),
+                    dbc.Label("Custom Expressions"),
+                    dbc.Textarea(
+                        id="limit-expressions",
+                        placeholder="One per line, e.g.:\nprofit_sum >= 0\ndrawdown_max <= 0.5",
+                        style={"height": "80px", "fontFamily": "monospace", "fontSize": "11px"},
+                    ),
+                    dbc.Button(
+                        "Clear Filters",
+                        id="clear-filters",
+                        color="secondary",
+                        size="sm",
+                        className="mt-2",
+                    ),
+                ],
+                "filters",
             ),
-        ], "frontier"),
-
-        # Scoring section
-        make_control_card("Weighted Scoring", [
-            html.Div(id="scoring-weights-container"),
-            dbc.Button("Apply Weights", id="apply-weights", color="primary", size="sm", className="mt-2"),
-        ], "scoring"),
-
-        # Scenarios section
-        make_control_card("Scenarios", [
-            dbc.Label("Scenarios"),
-            dcc.Dropdown(
-                id="scenario-selection",
-                placeholder="Select scenarios",
-                multi=True,
+            # Pareto Frontier section
+            make_control_card(
+                "Pareto Frontier",
+                [
+                    dbc.Checklist(
+                        id="show-frontier-only",
+                        options=[{"label": "Show frontier only", "value": "frontier"}],
+                        value=[],
+                        switch=True,
+                    ),
+                    dbc.Checklist(
+                        id="highlight-frontier",
+                        options=[{"label": "Highlight frontier points", "value": "highlight"}],
+                        value=["highlight"],
+                        switch=True,
+                    ),
+                    dbc.Label("Frontier Metrics", className="mt-2"),
+                    dcc.Dropdown(
+                        id="frontier-metrics",
+                        placeholder="Select metrics for frontier",
+                        multi=True,
+                    ),
+                ],
+                "frontier",
             ),
-            dbc.Label("Scenario Metric", className="mt-2"),
-            dcc.Dropdown(id="scenario-metric", placeholder="Metric to compare"),
-        ], "scenarios"),
-
-        # Parameters section
-        make_control_card("Parameters", [
-            dbc.Label("Parameter (X)"),
-            dcc.Dropdown(id="param-x", placeholder="Parameter"),
-            dbc.Label("Metric (Y)", className="mt-2"),
-            dcc.Dropdown(id="metric-y", placeholder="Metric"),
-        ], "parameters"),
-
-    ], style={"padding": "15px", "height": "100vh", "overflowY": "auto"})
+            # Scoring section
+            make_control_card(
+                "Weighted Scoring",
+                [
+                    html.Div(id="scoring-weights-container"),
+                    dbc.Button(
+                        "Apply Weights",
+                        id="apply-weights",
+                        color="primary",
+                        size="sm",
+                        className="mt-2",
+                    ),
+                ],
+                "scoring",
+            ),
+            # Scenarios section
+            make_control_card(
+                "Scenarios",
+                [
+                    dbc.Label("Scenarios"),
+                    dcc.Dropdown(
+                        id="scenario-selection",
+                        placeholder="Select scenarios",
+                        multi=True,
+                    ),
+                    dbc.Label("Scenario Metric", className="mt-2"),
+                    dcc.Dropdown(id="scenario-metric", placeholder="Metric to compare"),
+                ],
+                "scenarios",
+            ),
+            # Parameters section
+            make_control_card(
+                "Parameters",
+                [
+                    dbc.Label("Parameter (X)"),
+                    dcc.Dropdown(id="param-x", placeholder="Parameter"),
+                    dbc.Label("Metric (Y)", className="mt-2"),
+                    dcc.Dropdown(id="metric-y", placeholder="Metric"),
+                ],
+                "parameters",
+            ),
+        ],
+        style={"padding": "15px", "height": "100vh", "overflowY": "auto"},
+    )
 
     # Main content with tabs
-    main_content = html.Div([
-        dcc.Tabs(id="main-tabs", value="overview", children=[
-            dcc.Tab(label="Overview", value="overview"),
-            dcc.Tab(label="Explorer", value="explorer"),
-            dcc.Tab(label="Compare", value="compare"),
-            dcc.Tab(label="Export", value="export"),
-        ]),
-        html.Div(id="tab-content", style={"padding": "15px"}),
+    main_content = html.Div(
+        [
+            dcc.Tabs(
+                id="main-tabs",
+                value="overview",
+                children=[
+                    dcc.Tab(label="Overview", value="overview"),
+                    dcc.Tab(label="Explorer", value="explorer"),
+                    dcc.Tab(label="Compare", value="compare"),
+                    dcc.Tab(label="Export", value="export"),
+                ],
+            ),
+            html.Div(id="tab-content", style={"padding": "15px"}),
+            # Store for selected config
+            dcc.Store(id="selected-config-id", data=None),
+            dcc.Store(id="selected-configs-list", data=[]),
+            dcc.Store(id="range-slider-values", data={}),
+            dcc.Store(id="scoring-weights", data={}),
+        ]
+    )
 
-        # Store for selected config
-        dcc.Store(id="selected-config-id", data=None),
-        dcc.Store(id="selected-configs-list", data=[]),
-        dcc.Store(id="range-slider-values", data={}),
-        dcc.Store(id="scoring-weights", data={}),
-    ])
-
-    app.layout = dbc.Container([
-        dbc.Row([
-            dbc.Col(sidebar, width=3, style={"backgroundColor": "#f8f9fa", "padding": 0}),
-            dbc.Col(main_content, width=9),
-        ], className="g-0"),
-    ], fluid=True, style={"height": "100vh"})
+    app.layout = dbc.Container(
+        [
+            dbc.Row(
+                [
+                    dbc.Col(sidebar, width=3, style={"backgroundColor": "#f8f9fa", "padding": 0}),
+                    dbc.Col(main_content, width=9),
+                ],
+                className="g-0",
+            ),
+        ],
+        fluid=True,
+        style={"height": "100vh"},
+    )
 
     # =========================================================================
     # TAB CONTENT RENDERING
@@ -644,164 +732,292 @@ def serve_dash(data_root: str, port: int = 8050):
         n_metrics = len(run_data.aggregated_metrics)
         n_scenarios = len(run_data.scenario_metrics)
 
-        summary_cards = dbc.Row([
-            dbc.Col(dbc.Card([
-                dbc.CardBody([
-                    html.H3(str(n_configs), className="text-primary"),
-                    html.P("Configs", className="mb-0"),
-                ])
-            ]), width=3),
-            dbc.Col(dbc.Card([
-                dbc.CardBody([
-                    html.H3(str(n_params), className="text-success"),
-                    html.P("Parameters", className="mb-0"),
-                ])
-            ]), width=3),
-            dbc.Col(dbc.Card([
-                dbc.CardBody([
-                    html.H3(str(n_metrics), className="text-info"),
-                    html.P("Metrics", className="mb-0"),
-                ])
-            ]), width=3),
-            dbc.Col(dbc.Card([
-                dbc.CardBody([
-                    html.H3(str(n_scenarios), className="text-warning"),
-                    html.P("Scenarios", className="mb-0"),
-                ])
-            ]), width=3),
-        ], className="mb-3")
+        summary_cards = dbc.Row(
+            [
+                dbc.Col(
+                    dbc.Card(
+                        [
+                            dbc.CardBody(
+                                [
+                                    html.H3(str(n_configs), className="text-primary"),
+                                    html.P("Configs", className="mb-0"),
+                                ]
+                            )
+                        ]
+                    ),
+                    width=3,
+                ),
+                dbc.Col(
+                    dbc.Card(
+                        [
+                            dbc.CardBody(
+                                [
+                                    html.H3(str(n_params), className="text-success"),
+                                    html.P("Parameters", className="mb-0"),
+                                ]
+                            )
+                        ]
+                    ),
+                    width=3,
+                ),
+                dbc.Col(
+                    dbc.Card(
+                        [
+                            dbc.CardBody(
+                                [
+                                    html.H3(str(n_metrics), className="text-info"),
+                                    html.P("Metrics", className="mb-0"),
+                                ]
+                            )
+                        ]
+                    ),
+                    width=3,
+                ),
+                dbc.Col(
+                    dbc.Card(
+                        [
+                            dbc.CardBody(
+                                [
+                                    html.H3(str(n_scenarios), className="text-warning"),
+                                    html.P("Scenarios", className="mb-0"),
+                                ]
+                            )
+                        ]
+                    ),
+                    width=3,
+                ),
+            ],
+            className="mb-3",
+        )
 
-        return html.Div([
-            summary_cards,
-            dbc.Row([
-                dbc.Col([
-                    dcc.Graph(id="main-scatter", style={"height": "500px"}),
-                ], width=8),
-                dbc.Col([
-                    html.H5("Selected Config"),
-                    html.Div(id="selected-config-summary"),
-                ], width=4),
-            ]),
-            dbc.Row([
-                dbc.Col([
-                    dcc.Graph(id="histogram-plot", style={"height": "300px"}),
-                ], width=6),
-                dbc.Col([
-                    dcc.Graph(id="scenario-box", style={"height": "300px"}),
-                ], width=6),
-            ]),
-        ])
+        return html.Div(
+            [
+                summary_cards,
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                dcc.Graph(id="main-scatter", style={"height": "500px"}),
+                            ],
+                            width=8,
+                        ),
+                        dbc.Col(
+                            [
+                                html.H5("Selected Config"),
+                                html.Div(id="selected-config-summary"),
+                            ],
+                            width=4,
+                        ),
+                    ]
+                ),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                dcc.Graph(id="histogram-plot", style={"height": "300px"}),
+                            ],
+                            width=6,
+                        ),
+                        dbc.Col(
+                            [
+                                dcc.Graph(id="scenario-box", style={"height": "300px"}),
+                            ],
+                            width=6,
+                        ),
+                    ]
+                ),
+            ]
+        )
 
     def render_explorer_tab(run_data: RunData, df: pd.DataFrame, selected_id: str):
         """Explorer tab with detailed plots and config details."""
-        return html.Div([
-            dbc.Row([
-                dbc.Col([
-                    dcc.Graph(id="explorer-scatter", style={"height": "450px"}),
-                ], width=6),
-                dbc.Col([
-                    dcc.Graph(id="param-scatter-plot", style={"height": "450px"}),
-                ], width=6),
-            ]),
-            dbc.Row([
-                dbc.Col([
-                    dcc.Graph(id="correlation-heatmap", style={"height": "400px"}),
-                ], width=6),
-                dbc.Col([
-                    html.H5("Config Details", className="mt-2"),
-                    html.Div(id="config-details-panel", style={
-                        "maxHeight": "380px",
-                        "overflowY": "auto",
-                        "backgroundColor": "#f8f9fa",
-                        "padding": "10px",
-                        "borderRadius": "5px",
-                    }),
-                ], width=6),
-            ]),
-            dbc.Row([
-                dbc.Col([
-                    html.H5("All Configs (filtered)", className="mt-3"),
-                    dash_table.DataTable(
-                        id="pareto-table",
-                        page_size=10,
-                        sort_action="native",
-                        filter_action="native",
-                        row_selectable="single",
-                        style_table={"overflowX": "auto"},
-                        style_cell={"textAlign": "left", "padding": "5px", "fontSize": "12px"},
-                        style_header={"fontWeight": "bold"},
-                    ),
-                ], width=12),
-            ]),
-        ])
+        return html.Div(
+            [
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                dcc.Graph(id="explorer-scatter", style={"height": "450px"}),
+                            ],
+                            width=6,
+                        ),
+                        dbc.Col(
+                            [
+                                dcc.Graph(id="param-scatter-plot", style={"height": "450px"}),
+                            ],
+                            width=6,
+                        ),
+                    ]
+                ),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                dcc.Graph(id="correlation-heatmap", style={"height": "400px"}),
+                            ],
+                            width=6,
+                        ),
+                        dbc.Col(
+                            [
+                                html.H5("Config Details", className="mt-2"),
+                                html.Div(
+                                    id="config-details-panel",
+                                    style={
+                                        "maxHeight": "380px",
+                                        "overflowY": "auto",
+                                        "backgroundColor": "#f8f9fa",
+                                        "padding": "10px",
+                                        "borderRadius": "5px",
+                                    },
+                                ),
+                            ],
+                            width=6,
+                        ),
+                    ]
+                ),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.H5("All Configs (filtered)", className="mt-3"),
+                                dash_table.DataTable(
+                                    id="pareto-table",
+                                    page_size=10,
+                                    sort_action="native",
+                                    filter_action="native",
+                                    row_selectable="single",
+                                    style_table={"overflowX": "auto"},
+                                    style_cell={
+                                        "textAlign": "left",
+                                        "padding": "5px",
+                                        "fontSize": "12px",
+                                    },
+                                    style_header={"fontWeight": "bold"},
+                                ),
+                            ],
+                            width=12,
+                        ),
+                    ]
+                ),
+            ]
+        )
 
     def render_compare_tab(run_data: RunData, df: pd.DataFrame):
         """Compare tab for side-by-side config comparison."""
-        return html.Div([
-            dbc.Row([
-                dbc.Col([
-                    dbc.Alert(
-                        "Click points in scatter plots to add configs to comparison (up to 5). "
-                        "Use Shift+Click to add multiple configs.",
-                        color="info",
-                    ),
-                    dbc.Label("Configs to Compare"),
-                    dcc.Dropdown(
-                        id="compare-configs-dropdown",
-                        placeholder="Select configs to compare",
-                        multi=True,
-                        options=[{"label": row["_id"][:20] + "...", "value": row["_id"]}
-                                 for _, row in df.head(100).iterrows()] if not df.empty else [],
-                    ),
-                    dbc.Button("Clear Selection", id="clear-comparison", color="secondary", size="sm", className="mt-2"),
-                ], width=12),
-            ]),
-            dbc.Row([
-                dbc.Col([
-                    html.H5("Radar Comparison", className="mt-3"),
-                    dcc.Graph(id="radar-comparison", style={"height": "450px"}),
-                ], width=6),
-                dbc.Col([
-                    html.H5("Metrics Comparison", className="mt-3"),
-                    html.Div(id="comparison-table", style={"maxHeight": "450px", "overflowY": "auto"}),
-                ], width=6),
-            ]),
-            dbc.Row([
-                dbc.Col([
-                    html.H5("Parameter Differences", className="mt-3"),
-                    html.Div(id="param-diff-table", style={"maxHeight": "300px", "overflowY": "auto"}),
-                ], width=12),
-            ]),
-        ])
+        return html.Div(
+            [
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                dbc.Alert(
+                                    "Click points in scatter plots to add configs to comparison (up to 5). "
+                                    "Use Shift+Click to add multiple configs.",
+                                    color="info",
+                                ),
+                                dbc.Label("Configs to Compare"),
+                                dcc.Dropdown(
+                                    id="compare-configs-dropdown",
+                                    placeholder="Select configs to compare",
+                                    multi=True,
+                                    options=(
+                                        [
+                                            {"label": row["_id"][:20] + "...", "value": row["_id"]}
+                                            for _, row in df.head(100).iterrows()
+                                        ]
+                                        if not df.empty
+                                        else []
+                                    ),
+                                ),
+                                dbc.Button(
+                                    "Clear Selection",
+                                    id="clear-comparison",
+                                    color="secondary",
+                                    size="sm",
+                                    className="mt-2",
+                                ),
+                            ],
+                            width=12,
+                        ),
+                    ]
+                ),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.H5("Radar Comparison", className="mt-3"),
+                                dcc.Graph(id="radar-comparison", style={"height": "450px"}),
+                            ],
+                            width=6,
+                        ),
+                        dbc.Col(
+                            [
+                                html.H5("Metrics Comparison", className="mt-3"),
+                                html.Div(
+                                    id="comparison-table",
+                                    style={"maxHeight": "450px", "overflowY": "auto"},
+                                ),
+                            ],
+                            width=6,
+                        ),
+                    ]
+                ),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.H5("Parameter Differences", className="mt-3"),
+                                html.Div(
+                                    id="param-diff-table",
+                                    style={"maxHeight": "300px", "overflowY": "auto"},
+                                ),
+                            ],
+                            width=12,
+                        ),
+                    ]
+                ),
+            ]
+        )
 
     def render_export_tab(run_data: RunData, df: pd.DataFrame, selected_id: str):
         """Export tab for saving configs."""
-        return html.Div([
-            dbc.Row([
-                dbc.Col([
-                    html.H5("Export Selected Config"),
-                    html.P("Click on a config in the scatter plot, then export it here."),
-                    html.Div(id="export-config-id", className="mb-2"),
-                    dbc.ButtonGroup([
-                        dbc.Button("Copy JSON", id="copy-json-btn", color="primary"),
-                        dbc.Button("Download JSON", id="download-json-btn", color="secondary"),
-                    ]),
-                    dcc.Download(id="download-config"),
-                    html.Pre(
-                        id="export-json-preview",
-                        style={
-                            "backgroundColor": "#f8f9fa",
-                            "padding": "10px",
-                            "borderRadius": "5px",
-                            "maxHeight": "500px",
-                            "overflowY": "auto",
-                            "fontSize": "11px",
-                            "marginTop": "15px",
-                        }
-                    ),
-                ], width=12),
-            ]),
-        ])
+        return html.Div(
+            [
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.H5("Export Selected Config"),
+                                html.P("Click on a config in the scatter plot, then export it here."),
+                                html.Div(id="export-config-id", className="mb-2"),
+                                dbc.ButtonGroup(
+                                    [
+                                        dbc.Button("Copy JSON", id="copy-json-btn", color="primary"),
+                                        dbc.Button(
+                                            "Download JSON", id="download-json-btn", color="secondary"
+                                        ),
+                                    ]
+                                ),
+                                dcc.Download(id="download-config"),
+                                html.Pre(
+                                    id="export-json-preview",
+                                    style={
+                                        "backgroundColor": "#f8f9fa",
+                                        "padding": "10px",
+                                        "borderRadius": "5px",
+                                        "maxHeight": "500px",
+                                        "overflowY": "auto",
+                                        "fontSize": "11px",
+                                        "marginTop": "15px",
+                                    },
+                                ),
+                            ],
+                            width=12,
+                        ),
+                    ]
+                ),
+            ]
+        )
 
     # =========================================================================
     # CALLBACKS - Metric dropdowns
@@ -821,9 +1037,12 @@ def serve_dash(data_root: str, port: int = 8050):
         run_data = get_run_data(run_dir)
         df = run_data.dataframe
         numeric_cols = [
-            c for c in df.columns
-            if c != "_id" and pd.api.types.is_numeric_dtype(df[c])
-            and not _looks_like_stat_column(c) and not c.startswith("bot.")
+            c
+            for c in df.columns
+            if c != "_id"
+            and pd.api.types.is_numeric_dtype(df[c])
+            and not _looks_like_stat_column(c)
+            and not c.startswith("bot.")
         ]
         options = [{"label": col, "value": col} for col in numeric_cols]
         # Add weighted score option if weights have been set
@@ -832,7 +1051,11 @@ def serve_dash(data_root: str, port: int = 8050):
             color_options.insert(0, {"label": "Weighted Score", "value": "_weighted_score"})
         preferred = [col for col in run_data.scoring_metrics if col in numeric_cols]
         default_x = preferred[0] if preferred else (numeric_cols[0] if numeric_cols else None)
-        default_y = preferred[1] if len(preferred) > 1 else (numeric_cols[1] if len(numeric_cols) > 1 else default_x)
+        default_y = (
+            preferred[1]
+            if len(preferred) > 1
+            else (numeric_cols[1] if len(numeric_cols) > 1 else default_x)
+        )
         default_color = preferred[2] if len(preferred) > 2 else None
         return options, options, color_options, default_x, default_y, default_color
 
@@ -857,33 +1080,49 @@ def serve_dash(data_root: str, port: int = 8050):
         df = run_data.dataframe
 
         # Scenarios
-        scenario_options = [{"label": name, "value": name} for name in sorted(run_data.scenario_metrics)]
+        scenario_options = [
+            {"label": name, "value": name} for name in sorted(run_data.scenario_metrics)
+        ]
         scenario_value = [opt["value"] for opt in scenario_options]
         scenario_metrics_set = set()
         for metrics in run_data.scenario_metrics.values():
             scenario_metrics_set.update(metrics)
         scenario_metric_options = [{"label": m, "value": m} for m in sorted(scenario_metrics_set)]
-        scenario_metric_value = run_data.scoring_metrics[0] if run_data.scoring_metrics else (
-            scenario_metric_options[0]["value"] if scenario_metric_options else None
+        scenario_metric_value = (
+            run_data.scoring_metrics[0]
+            if run_data.scoring_metrics
+            else (scenario_metric_options[0]["value"] if scenario_metric_options else None)
         )
 
         # Parameters
-        param_cols = [c for c in run_data.param_metrics if c in df.columns and pd.api.types.is_numeric_dtype(df[c])]
+        param_cols = [
+            c
+            for c in run_data.param_metrics
+            if c in df.columns and pd.api.types.is_numeric_dtype(df[c])
+        ]
         param_options = [{"label": col, "value": col} for col in param_cols]
         param_value = param_cols[0] if param_cols else None
 
         # Metrics for Y axis
-        metric_cols = [c for c in run_data.aggregated_metrics if c in df.columns and pd.api.types.is_numeric_dtype(df[c])]
+        metric_cols = [
+            c
+            for c in run_data.aggregated_metrics
+            if c in df.columns and pd.api.types.is_numeric_dtype(df[c])
+        ]
         metric_options = [{"label": col, "value": col} for col in metric_cols]
-        metric_value = run_data.scoring_metrics[0] if run_data.scoring_metrics and run_data.scoring_metrics[0] in metric_cols else (
-            metric_cols[0] if metric_cols else None
+        metric_value = (
+            run_data.scoring_metrics[0]
+            if run_data.scoring_metrics and run_data.scoring_metrics[0] in metric_cols
+            else (metric_cols[0] if metric_cols else None)
         )
 
         limits_default = "\n".join(run_data.default_limits)
 
         # Frontier metrics - default to scoring metrics
         frontier_options = [{"label": col, "value": col} for col in metric_cols]
-        frontier_default = run_data.scoring_metrics[:3] if run_data.scoring_metrics else metric_cols[:3]
+        frontier_default = (
+            run_data.scoring_metrics[:3] if run_data.scoring_metrics else metric_cols[:3]
+        )
 
         # Range sliders for top scoring metrics
         slider_metrics = run_data.scoring_metrics[:3] if run_data.scoring_metrics else metric_cols[:3]
@@ -892,43 +1131,61 @@ def serve_dash(data_root: str, port: int = 8050):
             if metric in df.columns:
                 col_min = float(df[metric].min()) if pd.notna(df[metric].min()) else 0
                 col_max = float(df[metric].max()) if pd.notna(df[metric].max()) else 1
-                range_sliders.append(html.Div([
-                    dbc.Label(metric, style={"fontSize": "11px"}),
-                    dcc.RangeSlider(
-                        id={"type": "range-slider", "metric": metric},
-                        min=col_min,
-                        max=col_max,
-                        value=[col_min, col_max],
-                        marks=None,
-                        tooltip={"placement": "bottom", "always_visible": False},
-                        step=(col_max - col_min) / 100 if col_max > col_min else 0.01,
-                    ),
-                ], className="mb-2"))
+                range_sliders.append(
+                    html.Div(
+                        [
+                            dbc.Label(metric, style={"fontSize": "11px"}),
+                            dcc.RangeSlider(
+                                id={"type": "range-slider", "metric": metric},
+                                min=col_min,
+                                max=col_max,
+                                value=[col_min, col_max],
+                                marks=None,
+                                tooltip={"placement": "bottom", "always_visible": False},
+                                step=(col_max - col_min) / 100 if col_max > col_min else 0.01,
+                            ),
+                        ],
+                        className="mb-2",
+                    )
+                )
 
         # Scoring weights inputs
         weight_inputs = []
         for metric in run_data.scoring_metrics[:5]:
-            weight_inputs.append(dbc.Row([
-                dbc.Col(dbc.Label(metric[:20], style={"fontSize": "10px"}), width=8),
-                dbc.Col(dbc.Input(
-                    id={"type": "weight-input", "metric": metric},
-                    type="number",
-                    value=1.0,
-                    min=0,
-                    max=10,
-                    step=0.1,
-                    size="sm",
-                    style={"fontSize": "11px"},
-                ), width=4),
-            ], className="mb-1"))
+            weight_inputs.append(
+                dbc.Row(
+                    [
+                        dbc.Col(dbc.Label(metric[:20], style={"fontSize": "10px"}), width=8),
+                        dbc.Col(
+                            dbc.Input(
+                                id={"type": "weight-input", "metric": metric},
+                                type="number",
+                                value=1.0,
+                                min=0,
+                                max=10,
+                                step=0.1,
+                                size="sm",
+                                style={"fontSize": "11px"},
+                            ),
+                            width=4,
+                        ),
+                    ],
+                    className="mb-1",
+                )
+            )
 
         return (
-            scenario_options, scenario_value,
-            scenario_metric_options, scenario_metric_value,
-            param_options, param_value,
-            metric_options, metric_value,
+            scenario_options,
+            scenario_value,
+            scenario_metric_options,
+            scenario_metric_value,
+            param_options,
+            param_value,
+            metric_options,
+            metric_value,
             limits_default,
-            frontier_options, frontier_default,
+            frontier_options,
+            frontier_default,
             range_sliders,
             weight_inputs,
         )
@@ -965,8 +1222,18 @@ def serve_dash(data_root: str, port: int = 8050):
     # CALLBACKS - Main scatter plot with click selection
     # =========================================================================
 
-    def _build_scatter_figure(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
-                               show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights):
+    def _build_scatter_figure(
+        run_dir,
+        x_metric,
+        y_metric,
+        color_metric,
+        limit_exprs,
+        selected_id,
+        show_frontier_only,
+        highlight_frontier,
+        frontier_metrics,
+        scoring_weights,
+    ):
         """Build scatter plot figure - shared logic for both tabs."""
         run_data = get_run_data(run_dir)
         df = run_data.dataframe
@@ -1015,7 +1282,13 @@ def serve_dash(data_root: str, port: int = 8050):
                 custom_data=["_id"],
             )
             # Make frontier points larger
-            fig.for_each_trace(lambda t: t.update(marker_size=12) if t.name == "Frontier" else t.update(marker_size=6, opacity=0.5))
+            fig.for_each_trace(
+                lambda t: (
+                    t.update(marker_size=12)
+                    if t.name == "Frontier"
+                    else t.update(marker_size=6, opacity=0.5)
+                )
+            )
         else:
             # Standard scatter with optional color metric
             fig = px.scatter(
@@ -1031,14 +1304,18 @@ def serve_dash(data_root: str, port: int = 8050):
         # Highlight selected point
         if selected_id and selected_id in df_filtered["_id"].values:
             selected_row = df_filtered[df_filtered["_id"] == selected_id].iloc[0]
-            fig.add_trace(go.Scatter(
-                x=[selected_row[x_metric]],
-                y=[selected_row[y_metric]],
-                mode="markers",
-                marker=dict(size=20, color="red", symbol="star", line=dict(width=2, color="black")),
-                name="Selected",
-                showlegend=True,
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=[selected_row[x_metric]],
+                    y=[selected_row[y_metric]],
+                    mode="markers",
+                    marker=dict(
+                        size=20, color="red", symbol="star", line=dict(width=2, color="black")
+                    ),
+                    name="Selected",
+                    showlegend=True,
+                )
+            )
 
         fig.update_layout(clickmode="event+select")
         return fig
@@ -1056,10 +1333,30 @@ def serve_dash(data_root: str, port: int = 8050):
         Input("frontier-metrics", "value"),
         Input("scoring-weights", "data"),
     )
-    def update_main_scatter(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
-                            show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights):
-        return _build_scatter_figure(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
-                                     show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights)
+    def update_main_scatter(
+        run_dir,
+        x_metric,
+        y_metric,
+        color_metric,
+        limit_exprs,
+        selected_id,
+        show_frontier_only,
+        highlight_frontier,
+        frontier_metrics,
+        scoring_weights,
+    ):
+        return _build_scatter_figure(
+            run_dir,
+            x_metric,
+            y_metric,
+            color_metric,
+            limit_exprs,
+            selected_id,
+            show_frontier_only,
+            highlight_frontier,
+            frontier_metrics,
+            scoring_weights,
+        )
 
     @app.callback(
         Output("explorer-scatter", "figure"),
@@ -1074,10 +1371,30 @@ def serve_dash(data_root: str, port: int = 8050):
         Input("frontier-metrics", "value"),
         Input("scoring-weights", "data"),
     )
-    def update_explorer_scatter(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
-                                show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights):
-        return _build_scatter_figure(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
-                                     show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights)
+    def update_explorer_scatter(
+        run_dir,
+        x_metric,
+        y_metric,
+        color_metric,
+        limit_exprs,
+        selected_id,
+        show_frontier_only,
+        highlight_frontier,
+        frontier_metrics,
+        scoring_weights,
+    ):
+        return _build_scatter_figure(
+            run_dir,
+            x_metric,
+            y_metric,
+            color_metric,
+            limit_exprs,
+            selected_id,
+            show_frontier_only,
+            highlight_frontier,
+            frontier_metrics,
+            scoring_weights,
+        )
 
     def _extract_config_id_from_click(click_data):
         """Extract config ID from scatter plot click data."""
@@ -1177,10 +1494,16 @@ def serve_dash(data_root: str, port: int = 8050):
             for key, value in sorted(params.items()):
                 full_key = f"{prefix}.{key}" if prefix else key
                 if isinstance(value, dict):
-                    items.append(html.Div([
-                        html.Strong(f"{key}:"),
-                        html.Div(render_params(value, full_key), style={"marginLeft": "15px"}),
-                    ]))
+                    items.append(
+                        html.Div(
+                            [
+                                html.Strong(f"{key}:"),
+                                html.Div(
+                                    render_params(value, full_key), style={"marginLeft": "15px"}
+                                ),
+                            ]
+                        )
+                    )
                 else:
                     items.append(html.Div(f"{key}: {value}", style={"fontSize": "11px"}))
             return items
@@ -1196,7 +1519,9 @@ def serve_dash(data_root: str, port: int = 8050):
                 if metric in row.columns:
                     val = row[metric].values[0]
                     if pd.notna(val):
-                        details_items.append(html.Div(f"{metric}: {val:.4f}", style={"fontSize": "11px"}))
+                        details_items.append(
+                            html.Div(f"{metric}: {val:.4f}", style={"fontSize": "11px"})
+                        )
 
         return html.Div(details_items)
 
@@ -1243,7 +1568,9 @@ def serve_dash(data_root: str, port: int = 8050):
         if not records:
             return px.box(title="No scenario data")
         plot_df = pd.DataFrame(records)
-        fig = px.box(plot_df, x="scenario", y="value", points="all", title=f"{metric_name} by Scenario")
+        fig = px.box(
+            plot_df, x="scenario", y="value", points="all", title=f"{metric_name} by Scenario"
+        )
         return fig
 
     @app.callback(
@@ -1257,14 +1584,21 @@ def serve_dash(data_root: str, port: int = 8050):
     def update_param_scatter(run_dir, param_col, metric_col, limit_exprs, selected_id):
         run_data = get_run_data(run_dir)
         df = run_data.dataframe
-        if not param_col or not metric_col or param_col not in df.columns or metric_col not in df.columns:
+        if (
+            not param_col
+            or not metric_col
+            or param_col not in df.columns
+            or metric_col not in df.columns
+        ):
             return px.scatter(title="Select parameter and metric")
         mask = _apply_limits(df, limit_exprs)
         df_filtered = df.loc[mask].dropna(subset=[param_col, metric_col])
         if df_filtered.empty:
             return px.scatter(title="No data")
         fig = px.scatter(
-            df_filtered, x=param_col, y=metric_col,
+            df_filtered,
+            x=param_col,
+            y=metric_col,
             hover_data=["_id"],
             title=f"{metric_col} vs {param_col}",
             custom_data=["_id"],
@@ -1272,12 +1606,15 @@ def serve_dash(data_root: str, port: int = 8050):
         # Highlight selected
         if selected_id and selected_id in df_filtered["_id"].values:
             sel = df_filtered[df_filtered["_id"] == selected_id].iloc[0]
-            fig.add_trace(go.Scatter(
-                x=[sel[param_col]], y=[sel[metric_col]],
-                mode="markers",
-                marker=dict(size=15, color="red", symbol="star"),
-                name="Selected",
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=[sel[param_col]],
+                    y=[sel[metric_col]],
+                    mode="markers",
+                    marker=dict(size=15, color="red", symbol="star"),
+                    name="Selected",
+                )
+            )
         return fig
 
     @app.callback(
@@ -1299,9 +1636,13 @@ def serve_dash(data_root: str, port: int = 8050):
             return px.imshow([[0]], title="No data for correlation")
         matrix = corr_df.corr()
         fig = px.imshow(
-            matrix, x=matrix.columns, y=matrix.columns,
-            color_continuous_scale="RdBu", zmin=-1, zmax=1,
-            title="Metric Correlations"
+            matrix,
+            x=matrix.columns,
+            y=matrix.columns,
+            color_continuous_scale="RdBu",
+            zmin=-1,
+            zmax=1,
+            title="Metric Correlations",
         )
         return fig
 
@@ -1454,7 +1795,11 @@ def serve_dash(data_root: str, port: int = 8050):
         df = run_data.dataframe
 
         # Get the slider metrics
-        slider_metrics = run_data.scoring_metrics[:3] if run_data.scoring_metrics else run_data.aggregated_metrics[:3]
+        slider_metrics = (
+            run_data.scoring_metrics[:3]
+            if run_data.scoring_metrics
+            else run_data.aggregated_metrics[:3]
+        )
 
         # Build new expressions from sliders
         slider_exprs = []
@@ -1567,22 +1912,26 @@ def serve_dash(data_root: str, port: int = 8050):
                     else:
                         values.append(0)
                 values.append(values[0])  # Close the polygon
-                radar_data.append({
-                    "name": row["_id"][:12] + "...",
-                    "values": values,
-                })
+                radar_data.append(
+                    {
+                        "name": row["_id"][:12] + "...",
+                        "values": values,
+                    }
+                )
 
             radar_fig = go.Figure()
             colors = px.colors.qualitative.Set1
             for i, data in enumerate(radar_data):
-                radar_fig.add_trace(go.Scatterpolar(
-                    r=data["values"],
-                    theta=available_metrics + [available_metrics[0]],
-                    fill="toself",
-                    name=data["name"],
-                    line_color=colors[i % len(colors)],
-                    opacity=0.6,
-                ))
+                radar_fig.add_trace(
+                    go.Scatterpolar(
+                        r=data["values"],
+                        theta=available_metrics + [available_metrics[0]],
+                        fill="toself",
+                        name=data["name"],
+                        line_color=colors[i % len(colors)],
+                        opacity=0.6,
+                    )
+                )
             radar_fig.update_layout(
                 polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
                 title="Metrics Comparison (normalized)",
@@ -1609,10 +1958,15 @@ def serve_dash(data_root: str, port: int = 8050):
             html.Th(row["_id"][:10] + "...", style={"fontSize": "10px"})
             for _, row in selected_df.iterrows()
         ]
-        metrics_table = dbc.Table([
-            html.Thead(html.Tr(header)),
-            html.Tbody(table_rows),
-        ], bordered=True, size="sm", striped=True)
+        metrics_table = dbc.Table(
+            [
+                html.Thead(html.Tr(header)),
+                html.Tbody(table_rows),
+            ],
+            bordered=True,
+            size="sm",
+            striped=True,
+        )
 
         # Parameter differences table
         param_cols = [c for c in run_data.param_metrics if c in selected_df.columns]
@@ -1621,7 +1975,11 @@ def serve_dash(data_root: str, port: int = 8050):
             values = selected_df[param].values
             # Only show if there's variation
             if len(set(values)) > 1:
-                row_data = [html.Td(param.replace("bot.", ""), style={"fontWeight": "bold", "fontSize": "10px"})]
+                row_data = [
+                    html.Td(
+                        param.replace("bot.", ""), style={"fontWeight": "bold", "fontSize": "10px"}
+                    )
+                ]
                 for val in values:
                     formatted = f"{val:.4f}" if isinstance(val, float) else str(val)
                     row_data.append(html.Td(formatted, style={"fontSize": "10px"}))
@@ -1632,10 +1990,15 @@ def serve_dash(data_root: str, port: int = 8050):
                 html.Th(row["_id"][:10] + "...", style={"fontSize": "9px"})
                 for _, row in selected_df.iterrows()
             ]
-            param_table = dbc.Table([
-                html.Thead(html.Tr(param_header)),
-                html.Tbody(param_rows),
-            ], bordered=True, size="sm", striped=True)
+            param_table = dbc.Table(
+                [
+                    html.Thead(html.Tr(param_header)),
+                    html.Tbody(param_rows),
+                ],
+                bordered=True,
+                size="sm",
+                striped=True,
+            )
         else:
             param_table = html.P("No parameter differences found", className="text-muted")
 
@@ -1654,6 +2017,7 @@ def serve_dash(data_root: str, port: int = 8050):
     # =========================================================================
 
     for section in ["metrics", "filters", "frontier", "scoring", "scenarios", "parameters"]:
+
         @app.callback(
             Output(f"{section}-collapse", "is_open"),
             Input(f"{section}-toggle", "n_clicks"),
@@ -1672,13 +2036,17 @@ def serve_dash(data_root: str, port: int = 8050):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Pareto Dashboard - Interactive optimizer results explorer")
+    parser = argparse.ArgumentParser(
+        description="Pareto Dashboard - Interactive optimizer results explorer"
+    )
     parser.add_argument(
         "--data-root",
         default="optimize_results",
         help="Directory containing optimization runs (default: optimize_results)",
     )
-    parser.add_argument("--port", type=int, default=8050, help="Port to run dashboard on (default: 8050)")
+    parser.add_argument(
+        "--port", type=int, default=8050, help="Port to run dashboard on (default: 8050)"
+    )
     args = parser.parse_args()
     serve_dash(args.data_root, port=args.port)
 

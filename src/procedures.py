@@ -163,7 +163,15 @@ def load_user_info(user: str, api_keys_path="api-keys.json") -> dict:
         raise Exception(f"user {user} not found in {api_keys_path}")
 
     # Start with empty string defaults for legacy fields (backwards compatibility)
-    legacy_fields = ["exchange", "key", "secret", "passphrase", "wallet_address", "private_key", "is_vault"]
+    legacy_fields = [
+        "exchange",
+        "key",
+        "secret",
+        "passphrase",
+        "wallet_address",
+        "private_key",
+        "is_vault",
+    ]
     result = {k: "" for k in legacy_fields}
 
     # Overlay all fields from the user's entry (passthrough for CCXTBot)

@@ -23,7 +23,9 @@ from src.fill_events_manager import (
     FillEvent,
     FillEventCache,
     FillEventsManager,
+    compute_psize_pprice,
     custom_id_to_snake,
+    ensure_qty_signage,
 )
 
 
@@ -92,6 +94,7 @@ class _FakeBybitAPI:
         self._positions_batches = list(positions_batches)
         self.trade_calls: List[Dict[str, Any]] = []
         self.position_calls: List[Dict[str, Any]] = []
+        self.markets: Dict[str, Dict[str, Any]] = {}  # For symbol resolution
 
     async def fetch_my_trades(self, params: Dict[str, Any]):
         self.trade_calls.append(dict(params))
@@ -104,6 +107,37 @@ class _FakeBybitAPI:
         if not self._positions_batches:
             return []
         return self._positions_batches.pop(0)
+
+    async def private_get_v5_position_closed_pnl(self, params: Dict[str, Any]):
+        """Return raw Bybit API format for closed-pnl endpoint."""
+        self.position_calls.append(dict(params))
+        if not self._positions_batches:
+            return {"result": {"list": [], "nextPageCursor": ""}}
+
+        # Convert CCXT-like format back to raw Bybit format
+        ccxt_batch = self._positions_batches.pop(0)
+        raw_list = []
+        for pos in ccxt_batch:
+            info = pos.get("info", {})
+            if info:
+                raw_list.append(info)
+            else:
+                # Construct raw format from CCXT format
+                raw_list.append({
+                    "symbol": pos.get("symbol", "").replace("/", "").replace(":", ""),
+                    "orderId": pos.get("orderId", ""),
+                    "closedPnl": str(pos.get("realizedPnl", 0)),
+                    "closedSize": str(pos.get("contracts", 0)),
+                    "avgEntryPrice": str(pos.get("entryPrice", 0)),
+                    "avgExitPrice": str(pos.get("lastPrice", 0)),
+                    "updatedTime": str(pos.get("timestamp", 0)),
+                    "createdTime": str(pos.get("timestamp", 0)),
+                    "leverage": str(pos.get("leverage", 1)),
+                    "side": "Sell" if pos.get("side") == "long" else "Buy",
+                    "closeFee": "0",
+                    "openFee": "0",
+                })
+        return {"result": {"list": raw_list, "nextPageCursor": ""}}
 
 
 class _ManualFetcher(BaseFetcher):
@@ -666,7 +700,7 @@ async def test_binance_fetcher_symbol_pool_from_providers(monkeypatch):
     # All three sources should be queried for trades
     assert "BTC/USDT:USDT" in fetched_symbols  # From positions
     assert "ETH/USDT:USDT" in fetched_symbols  # From open orders
-    assert income_symbol in fetched_symbols    # From income events
+    assert income_symbol in fetched_symbols  # From income events
 
 
 @pytest.mark.asyncio
@@ -1057,6 +1091,7 @@ async def test_bitget_fetcher_reuses_detail_cache(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bybit_fetcher_merges_pnl_and_batches(monkeypatch):
+    """Test that close fills get PnL computed from avgEntryPrice."""
     base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
     trades_batches = [
         [
@@ -1064,14 +1099,14 @@ async def test_bybit_fetcher_merges_pnl_and_batches(monkeypatch):
                 "id": "trade-1",
                 "timestamp": base_ts + 1_000,
                 "amount": 0.1,
-                "price": 100.0,
-                "side": "buy",
+                "price": 105.0,  # Exit price
+                "side": "sell",  # Selling to close long
                 "symbol": "BTC/USDT",
                 "fee": {"cost": 0.0001, "currency": "USDT"},
                 "info": {
                     "orderId": "order-1",
                     "orderLinkId": "0xabc",
-                    "closedSize": "0",
+                    "closedSize": "0.1",  # This is a close fill
                 },
             }
         ]
@@ -1081,10 +1116,17 @@ async def test_bybit_fetcher_merges_pnl_and_batches(monkeypatch):
             {
                 "timestamp": base_ts + 1_500,
                 "symbol": "BTC/USDT",
-                "realizedPnl": "5.0",
+                "realizedPnl": "0.5",
                 "info": {
                     "orderId": "order-1",
-                    "side": "Buy",
+                    "side": "Sell",
+                    "avgEntryPrice": "100.0",  # Entry at 100
+                    "avgExitPrice": "105.0",  # Exit at 105
+                    "closedSize": "0.1",
+                    "closeFee": "0.0001",
+                    "openFee": "0.0001",
+                    "updatedTime": str(base_ts + 1_500),
+                    "createdTime": str(base_ts + 1_000),
                 },
             }
         ]
@@ -1092,7 +1134,7 @@ async def test_bybit_fetcher_merges_pnl_and_batches(monkeypatch):
 
     api = _FakeBybitAPI(trades_batches, positions_batches)
 
-    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: "entry")
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: "close_grid_long")
 
     fetcher = BybitFetcher(api)
     batches: List[List[Dict[str, object]]] = []
@@ -1107,8 +1149,9 @@ async def test_bybit_fetcher_merges_pnl_and_batches(monkeypatch):
     assert len(events) == 1
     event = events[0]
     assert event["id"] == "trade-1"
-    assert event["pb_order_type"] == "entry"
-    assert event["pnl"] == pytest.approx(5.0)
+    assert event["pb_order_type"] == "close_grid_long"
+    # PnL = (105 - 100) * 0.1 - fees = 0.5 - 0.0002 = 0.4998
+    assert event["pnl"] == pytest.approx(0.4998, rel=1e-3)
     assert event["client_order_id"] == "0xabc"
     assert event["symbol"] == "BTC/USDT"
     assert batches and batches[0][0]["id"] == "trade-1"
@@ -1154,31 +1197,34 @@ async def test_bybit_fetcher_uses_detail_cache(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bybit_fetcher_distributes_pnl_across_fills():
+    """Test that multiple close fills from same order each get computed PnL."""
     base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+    # Two fills from same order, closing a long position
+    # avgEntryPrice = 11.0, exits at 10.0 and 10.5 -> losses
     trades_batches = [
         [
             {
                 "id": "trade-ord-1",
                 "timestamp": base_ts,
                 "amount": 2.0,
-                "price": 10.0,
+                "price": 10.0,  # Exit price for first fill
                 "side": "sell",
                 "symbol": "LTC/USDT:USDT",
                 "info": {
                     "orderId": "order-dist",
-                    "closedSize": "0",
+                    "closedSize": "2.0",  # Closes 2 units
                 },
             },
             {
                 "id": "trade-ord-2",
                 "timestamp": base_ts + 1,
                 "amount": 3.0,
-                "price": 10.5,
+                "price": 10.5,  # Exit price for second fill
                 "side": "sell",
                 "symbol": "LTC/USDT:USDT",
                 "info": {
                     "orderId": "order-dist",
-                    "closedSize": "0",
+                    "closedSize": "3.0",  # Closes 3 units
                 },
             },
         ]
@@ -1191,7 +1237,13 @@ async def test_bybit_fetcher_distributes_pnl_across_fills():
                 "timestamp": base_ts + 5,
                 "info": {
                     "orderId": "order-dist",
+                    "avgEntryPrice": "11.0",  # Entered at 11.0
+                    "avgExitPrice": "10.3",  # Weighted avg exit
                     "closedSize": "5",
+                    "closeFee": "0.0",
+                    "openFee": "0.0",
+                    "updatedTime": str(base_ts + 5),
+                    "createdTime": str(base_ts),
                 },
             }
         ]
@@ -1208,9 +1260,19 @@ async def test_bybit_fetcher_distributes_pnl_across_fills():
 
     assert len(events) == 2
     pnls = [event["pnl"] for event in events]
-    # Expect proportional distribution: qty 2 vs 3, total pnl -5 -> [-2, -3]
-    assert pnls[0] == pytest.approx(-2.0, rel=1e-9, abs=1e-9)
-    assert pnls[1] == pytest.approx(-3.0, rel=1e-9, abs=1e-9)
+    # First fill: (10.0 - 11.0) * 2.0 = -2.0
+    # Second fill: (10.5 - 11.0) * 3.0 = -1.5
+    assert pnls[0] == pytest.approx(-2.0, rel=1e-3)
+    assert pnls[1] == pytest.approx(-1.5, rel=1e-3)
+
+    # Verify raw field includes positions_history data for close fills
+    for event in events:
+        raw_sources = [r["source"] for r in event["raw"]]
+        assert "fetch_my_trades" in raw_sources
+        assert "positions_history" in raw_sources
+        # Verify positions_history contains expected data
+        pos_hist = next(r for r in event["raw"] if r["source"] == "positions_history")
+        assert pos_hist["data"]["info"]["avgEntryPrice"] == "11.0"
 
 
 @pytest.mark.asyncio
@@ -1249,22 +1311,15 @@ async def test_bybit_fetcher_marks_unknown_for_manual():
 
 
 @pytest.mark.asyncio
-async def test_bybit_fetcher_symbol_level_fallback():
-    """Test symbol-level PnL fallback for unknown trades without matching order IDs.
+async def test_bybit_fetcher_no_pnl_without_matching_order():
+    """Test that close fills without matching closed-pnl record get zero PnL.
 
-    The symbol-level fallback distributes remaining PnL proportionally to unknown
-    trades. The remaining qty is calculated as:
-    (position_closed_qty - known_order_qty) + unknown_trade_qty
-
-    For this test:
-    - Position closedSize=1.0, PnL=25.0
-    - Trade qty=1.0 with unknown order ID
-    - remaining_qty = (1.0 - 0) + 1.0 = 2.0
-    - Trade gets: 25.0 * (1.0 / 2.0) = 12.5
+    When a close fill's orderId doesn't match any closed-pnl record,
+    we cannot compute PnL (no avgEntryPrice available), so it stays at 0.
     """
     base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
 
-    # Trade with order ID not in positions (unknown trade)
+    # Trade with order ID not in positions (no matching closed-pnl)
     trades_batches = [
         [
             {
@@ -1281,7 +1336,7 @@ async def test_bybit_fetcher_symbol_level_fallback():
             }
         ]
     ]
-    # Position with different order ID but same symbol
+    # Position with different order ID (won't match)
     positions_batches = [
         [
             {
@@ -1290,6 +1345,7 @@ async def test_bybit_fetcher_symbol_level_fallback():
                 "timestamp": base_ts + 10,
                 "info": {
                     "orderId": "order-other",  # Different order ID
+                    "avgEntryPrice": "95.0",
                     "closedSize": "1.0",
                 },
             }
@@ -1307,10 +1363,8 @@ async def test_bybit_fetcher_symbol_level_fallback():
 
     assert len(events) == 1
     event = events[0]
-    # Symbol-level fallback distributes PnL proportionally
-    # remaining_qty = 2.0 (1.0 from position + 1.0 from trade)
-    # trade gets 25.0 * (1.0 / 2.0) = 12.5
-    assert event["pnl"] == pytest.approx(12.5)
+    # No matching closed-pnl record, so PnL stays at 0
+    assert event["pnl"] == 0.0
 
 
 @pytest.mark.asyncio
@@ -1399,14 +1453,38 @@ async def test_bybit_fetcher_empty_batches():
     base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
 
     # Empty trades, has positions
-    api1 = _FakeBybitAPI([[]], [[{"symbol": "BTC/USDT:USDT", "realizedPnl": "10.0", "timestamp": base_ts, "info": {"orderId": "o1"}}]])
+    api1 = _FakeBybitAPI(
+        [[]],
+        [
+            [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "realizedPnl": "10.0",
+                    "timestamp": base_ts,
+                    "info": {"orderId": "o1"},
+                }
+            ]
+        ],
+    )
     fetcher1 = BybitFetcher(api1)
     events1 = await fetcher1.fetch(since_ms=base_ts - 1000, until_ms=base_ts + 1000, detail_cache={})
     assert len(events1) == 0  # No trades means no events
 
     # Has trades, empty positions
     api2 = _FakeBybitAPI(
-        [[{"id": "t1", "timestamp": base_ts, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {"orderId": "o1"}}]],
+        [
+            [
+                {
+                    "id": "t1",
+                    "timestamp": base_ts,
+                    "amount": 1.0,
+                    "price": 100.0,
+                    "side": "buy",
+                    "symbol": "BTC/USDT:USDT",
+                    "info": {"orderId": "o1"},
+                }
+            ]
+        ],
         [[]],
     )
     fetcher2 = BybitFetcher(api2)
@@ -1422,9 +1500,33 @@ async def test_bybit_fetcher_time_bounds_filtering():
 
     trades_batches = [
         [
-            {"id": "trade-before", "timestamp": base_ts - 5000, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {}},
-            {"id": "trade-in-range", "timestamp": base_ts, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {}},
-            {"id": "trade-after", "timestamp": base_ts + 5000, "amount": 1.0, "price": 100.0, "side": "buy", "symbol": "BTC/USDT:USDT", "info": {}},
+            {
+                "id": "trade-before",
+                "timestamp": base_ts - 5000,
+                "amount": 1.0,
+                "price": 100.0,
+                "side": "buy",
+                "symbol": "BTC/USDT:USDT",
+                "info": {},
+            },
+            {
+                "id": "trade-in-range",
+                "timestamp": base_ts,
+                "amount": 1.0,
+                "price": 100.0,
+                "side": "buy",
+                "symbol": "BTC/USDT:USDT",
+                "info": {},
+            },
+            {
+                "id": "trade-after",
+                "timestamp": base_ts + 5000,
+                "amount": 1.0,
+                "price": 100.0,
+                "side": "buy",
+                "symbol": "BTC/USDT:USDT",
+                "info": {},
+            },
         ]
     ]
     positions_batches: List[List[Dict[str, Any]]] = [[]]
@@ -2395,14 +2497,23 @@ def test_kucoin_match_pnls_multiple_positions_multiple_fills():
         {"id": "btc-close-1", "symbol": "BTC/USDT:USDT", "timestamp": now_ms, "qty": 10.0},
         {"id": "btc-close-2", "symbol": "BTC/USDT:USDT", "timestamp": now_ms + 50, "qty": 10.0},
         # Second position close fills (10 min later - well outside 5-min window)
-        {"id": "btc-close-3", "symbol": "BTC/USDT:USDT", "timestamp": now_ms + ten_min_ms, "qty": 5.0},
+        {
+            "id": "btc-close-3",
+            "symbol": "BTC/USDT:USDT",
+            "timestamp": now_ms + ten_min_ms,
+            "qty": 5.0,
+        },
     ]
 
     positions = [
         # First position close (near time 0)
         {"symbol": "BTC/USDT:USDT", "lastUpdateTimestamp": now_ms + 25, "realizedPnl": 100.0},
         # Second position close (10 min later)
-        {"symbol": "BTC/USDT:USDT", "lastUpdateTimestamp": now_ms + ten_min_ms + 10, "realizedPnl": 50.0},
+        {
+            "symbol": "BTC/USDT:USDT",
+            "lastUpdateTimestamp": now_ms + ten_min_ms + 10,
+            "realizedPnl": 50.0,
+        },
     ]
 
     events = {
@@ -2463,18 +2574,20 @@ class _FakeGateioAPI:
             # Convert symbol to contract format (BTC/USDT:USDT -> BTC_USDT)
             symbol = t.get("symbol", "")
             contract = symbol.replace("/", "_").replace(":USDT", "") if symbol else ""
-            raw_trades.append({
-                "trade_id": t.get("id") or info.get("trade_id"),
-                "order_id": t.get("order") or info.get("order_id"),
-                "create_time": str(ts_s),
-                "contract": contract,
-                "size": size,
-                "price": float(t.get("price") or info.get("price") or 0),
-                "fee": float(t.get("fee", {}).get("cost", 0)) if t.get("fee") else 0,
-                "text": info.get("text", ""),
-                "close_size": float(info.get("close_size", 0)),
-                "role": "maker",
-            })
+            raw_trades.append(
+                {
+                    "trade_id": t.get("id") or info.get("trade_id"),
+                    "order_id": t.get("order") or info.get("order_id"),
+                    "create_time": str(ts_s),
+                    "contract": contract,
+                    "size": size,
+                    "price": float(t.get("price") or info.get("price") or 0),
+                    "fee": float(t.get("fee", {}).get("cost", 0)) if t.get("fee") else 0,
+                    "text": info.get("text", ""),
+                    "close_size": float(info.get("close_size", 0)),
+                    "role": "maker",
+                }
+            )
         return raw_trades
 
     async def fetch_closed_orders(self, params: Dict[str, Any] = None):
@@ -2794,9 +2907,13 @@ async def test_gateio_fetcher_position_side_inference(monkeypatch):
 
     orders = [
         _make_gateio_order(order_id="order-1", ts=now_ms - 400, side="buy", pnl=0),
-        _make_gateio_order(order_id="order-2", ts=now_ms - 300, side="sell", pnl=5.0, reduce_only=True),
+        _make_gateio_order(
+            order_id="order-2", ts=now_ms - 300, side="sell", pnl=5.0, reduce_only=True
+        ),
         _make_gateio_order(order_id="order-3", ts=now_ms - 200, side="sell", pnl=0),
-        _make_gateio_order(order_id="order-4", ts=now_ms - 100, side="buy", pnl=3.0, reduce_only=True),
+        _make_gateio_order(
+            order_id="order-4", ts=now_ms - 100, side="buy", pnl=3.0, reduce_only=True
+        ),
     ]
 
     api = _FakeGateioAPI([trades], [orders])
@@ -2816,3 +2933,277 @@ async def test_gateio_fetcher_position_side_inference(monkeypatch):
     assert events_by_id["close-long"]["position_side"] == "long"
     assert events_by_id["entry-short"]["position_side"] == "short"
     assert events_by_id["close-short"]["position_side"] == "short"
+
+
+# ---------------------------------------------------------------------------
+# compute_psize_pprice tests
+# ---------------------------------------------------------------------------
+
+
+def test_compute_psize_pprice_long_entries():
+    """Test psize/pprice for consecutive long entries."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "position_side": "long",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 110.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 1.0
+    assert events[0]["pprice"] == 100.0
+    assert events[1]["psize"] == 2.0
+    assert events[1]["pprice"] == 105.0  # VWAP: (1*100 + 1*110) / 2
+
+
+def test_compute_psize_pprice_partial_close():
+    """Test psize/pprice when partially closing a long position."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 2.0,
+            "price": 100.0,
+            "position_side": "long",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "BTC",
+            "side": "sell",
+            "qty": 1.0,  # ensure_qty_signage will make this -1.0
+            "price": 120.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 2.0
+    assert events[0]["pprice"] == 100.0
+    assert events[1]["psize"] == 1.0
+    assert events[1]["pprice"] == 100.0  # VWAP unchanged on reduce
+
+
+def test_compute_psize_pprice_full_close():
+    """Test psize/pprice resets when position fully closes."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "position_side": "long",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "BTC",
+            "side": "sell",
+            "qty": 1.0,
+            "price": 120.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 1.0
+    assert events[0]["pprice"] == 100.0
+    assert events[1]["psize"] == 0.0
+    assert events[1]["pprice"] == 0.0
+
+
+def test_compute_psize_pprice_short_entries():
+    """Test psize/pprice for consecutive short entries."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "ETH",
+            "side": "sell",
+            "qty": 2.0,
+            "price": 200.0,
+            "position_side": "short",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "ETH",
+            "side": "sell",
+            "qty": 2.0,
+            "price": 220.0,
+            "position_side": "short",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 2.0
+    assert events[0]["pprice"] == 200.0
+    assert events[1]["psize"] == 4.0
+    assert events[1]["pprice"] == 210.0  # VWAP: (2*200 + 2*220) / 4
+
+
+def test_compute_psize_pprice_short_partial_close():
+    """Test psize/pprice when partially closing a short position."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "ETH",
+            "side": "sell",
+            "qty": 4.0,
+            "price": 200.0,
+            "position_side": "short",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "ETH",
+            "side": "buy",
+            "qty": 2.0,  # buy reduces short
+            "price": 180.0,
+            "position_side": "short",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 4.0
+    assert events[0]["pprice"] == 200.0
+    assert events[1]["psize"] == 2.0
+    assert events[1]["pprice"] == 200.0  # VWAP unchanged on reduce
+
+
+def test_compute_psize_pprice_multiple_symbols():
+    """Test psize/pprice handles multiple symbols independently."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "position_side": "long",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "ETH",
+            "side": "buy",
+            "qty": 10.0,
+            "price": 50.0,
+            "position_side": "long",
+        },
+        {
+            "id": "3",
+            "timestamp": 3000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 120.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 1.0  # BTC
+    assert events[0]["pprice"] == 100.0
+    assert events[1]["psize"] == 10.0  # ETH
+    assert events[1]["pprice"] == 50.0
+    assert events[2]["psize"] == 2.0  # BTC again
+    assert events[2]["pprice"] == 110.0  # VWAP: (1*100 + 1*120) / 2
+
+
+def test_compute_psize_pprice_reopen_after_close():
+    """Test psize/pprice when closing and reopening a position."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "position_side": "long",
+        },
+        {
+            "id": "2",
+            "timestamp": 2000,
+            "symbol": "BTC",
+            "side": "sell",
+            "qty": 1.0,
+            "price": 120.0,
+            "position_side": "long",
+        },
+        {
+            "id": "3",
+            "timestamp": 3000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 2.0,
+            "price": 90.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+
+    assert events[0]["psize"] == 1.0
+    assert events[0]["pprice"] == 100.0
+    assert events[1]["psize"] == 0.0
+    assert events[1]["pprice"] == 0.0
+    assert events[2]["psize"] == 2.0
+    assert events[2]["pprice"] == 90.0  # Fresh position, new pprice
+
+
+def test_compute_psize_pprice_empty_events():
+    """Test compute_psize_pprice handles empty list."""
+    events: List[Dict[str, object]] = []
+    result = compute_psize_pprice(events)
+    assert result == {}
+
+
+def test_compute_psize_pprice_initial_state():
+    """Test compute_psize_pprice with initial position state."""
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1000,
+            "symbol": "BTC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 120.0,
+            "position_side": "long",
+        },
+    ]
+    ensure_qty_signage(events)
+    initial = {("BTC", "long"): (2.0, 100.0)}  # Starting with 2 BTC at $100
+    result = compute_psize_pprice(events, initial)
+
+    assert events[0]["psize"] == 3.0  # 2 + 1
+    # VWAP: (2*100 + 1*120) / 3 = 320/3 ≈ 106.67
+    assert abs(events[0]["pprice"] - 106.66666666666667) < 0.01
+    assert result[("BTC", "long")] == (3.0, events[0]["pprice"])

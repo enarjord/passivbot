@@ -213,9 +213,9 @@ class HLCVManager:
                 since_iso = None
                 try:
                     if since_ms is not None:
-                        since_iso = datetime.fromtimestamp(int(since_ms) / 1000, tz=timezone.utc).strftime(
-                            "%Y-%m-%dT%H:%M:%SZ"
-                        )
+                        since_iso = datetime.fromtimestamp(
+                            int(since_ms) / 1000, tz=timezone.utc
+                        ).strftime("%Y-%m-%dT%H:%M:%SZ")
                 except Exception:
                     since_iso = None
 
@@ -517,7 +517,8 @@ class HLCVManager:
 async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool = False):
     approved = require_live_value(config, "approved_coins")
     coins = sorted(
-        set(symbol_to_coin(c) for c in approved["long"]) | set(symbol_to_coin(c) for c in approved["short"])
+        set(symbol_to_coin(c) for c in approved["long"])
+        | set(symbol_to_coin(c) for c in approved["short"])
     )
     exchange = normalize_exchange_name(exchange)
     requested_start_date = require_config_value(config, "backtest.start_date")
@@ -542,7 +543,9 @@ async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool
         exchange,
         effective_start_date,
         end_date,
-        gap_tolerance_ohlcvs_minutes=require_config_value(config, "backtest.gap_tolerance_ohlcvs_minutes"),
+        gap_tolerance_ohlcvs_minutes=require_config_value(
+            config, "backtest.gap_tolerance_ohlcvs_minutes"
+        ),
         cm_debug_level=int(config.get("backtest", {}).get("cm_debug_level", 0) or 0),
         cm_progress_log_interval_seconds=float(
             config.get("backtest", {}).get("cm_progress_log_interval_seconds", 10.0) or 10.0
@@ -566,7 +569,13 @@ async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool
         if btc_df.empty:
             raise ValueError(f"Failed to fetch BTC/USD prices from {exchange}")
 
-        btc_df = btc_df.set_index("timestamp").reindex(timestamps, method="ffill").ffill().bfill().reset_index()
+        btc_df = (
+            btc_df.set_index("timestamp")
+            .reindex(timestamps, method="ffill")
+            .ffill()
+            .bfill()
+            .reset_index()
+        )
         btc_usd_prices = btc_df["close"].values
 
         warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
@@ -628,7 +637,11 @@ async def prepare_hlcvs_internal(
                     return None
 
                 if coin not in first_timestamps_unified:
-                    _pct_log("info", progress.pct(), f"coin {coin} missing from first_timestamps_unified, skipping")
+                    _pct_log(
+                        "info",
+                        progress.pct(),
+                        f"coin {coin} missing from first_timestamps_unified, skipping",
+                    )
                     return None
 
                 # Minimum coin age validation
@@ -636,32 +649,43 @@ async def prepare_hlcvs_internal(
                     try:
                         first_ts = await om.get_first_timestamp(coin)
                     except Exception as e:
-                        _pct_log("error", progress.pct(), f"error with get_first_timestamp for {coin} {e}. Skipping")
+                        _pct_log(
+                            "error",
+                            progress.pct(),
+                            f"error with get_first_timestamp for {coin} {e}. Skipping",
+                        )
                         traceback.print_exc()
                         return None
 
                     if first_ts >= end_ts:
                         _pct_log(
-                            "info", progress.pct(),
-                            f"{exchange} Coin {coin} too young, start date {ts_to_date(first_ts)}. Skipping"
+                            "info",
+                            progress.pct(),
+                            f"{exchange} Coin {coin} too young, start date {ts_to_date(first_ts)}. Skipping",
                         )
                         return None
 
-                    coin_age_days = int(round(utc_ms() - first_timestamps_unified[coin]) / (1000 * 60 * 60 * 24))
+                    coin_age_days = int(
+                        round(utc_ms() - first_timestamps_unified[coin]) / (1000 * 60 * 60 * 24)
+                    )
                     if coin_age_days < minimum_coin_age_days:
                         _pct_log(
-                            "info", progress.pct(),
+                            "info",
+                            progress.pct(),
                             f"{exchange} Coin {coin}: Not traded due to min_coin_age {int(minimum_coin_age_days)} days. "
-                            f"{coin} is {coin_age_days} days old. Skipping"
+                            f"{coin} is {coin_age_days} days old. Skipping",
                         )
                         return None
 
-                    new_adjusted_start_ts = max(first_timestamps_unified[coin] + min_coin_age_ms, first_ts)
+                    new_adjusted_start_ts = max(
+                        first_timestamps_unified[coin] + min_coin_age_ms, first_ts
+                    )
                     if new_adjusted_start_ts > adjusted_start_ts:
                         _pct_log(
-                            "info", progress.pct(),
+                            "info",
+                            progress.pct(),
                             f"{exchange} Coin {coin}: Adjusting start date from {ts_to_date(adjusted_start_ts)} "
-                            f"to {ts_to_date(new_adjusted_start_ts)}"
+                            f"to {ts_to_date(new_adjusted_start_ts)}",
                         )
                         adjusted_start_ts = int(new_adjusted_start_ts)
 
@@ -757,7 +781,9 @@ async def prepare_hlcvs_internal(
     mss = {}
     for coin in sorted(valid_coins):
         meta = om.get_market_specific_settings(coin)
-        first_idx, last_idx = valid_index_ranges.get(coin, (unified_array.shape[0], unified_array.shape[0]))
+        first_idx, last_idx = valid_index_ranges.get(
+            coin, (unified_array.shape[0], unified_array.shape[0])
+        )
         meta["first_valid_index"] = first_idx
         meta["last_valid_index"] = last_idx
         warm_minutes = int(per_coin_warmups.get(coin, default_warm))
@@ -804,7 +830,9 @@ async def prepare_hlcvs_combined(config, forced_sources=None, *, force_refetch_g
             ex,
             effective_start_date,
             end_date,
-            gap_tolerance_ohlcvs_minutes=require_config_value(config, "backtest.gap_tolerance_ohlcvs_minutes"),
+            gap_tolerance_ohlcvs_minutes=require_config_value(
+                config, "backtest.gap_tolerance_ohlcvs_minutes"
+            ),
             cm_debug_level=int(config.get("backtest", {}).get("cm_debug_level", 0) or 0),
             cm_progress_log_interval_seconds=float(
                 config.get("backtest", {}).get("cm_progress_log_interval_seconds", 10.0) or 10.0
@@ -817,7 +845,9 @@ async def prepare_hlcvs_combined(config, forced_sources=None, *, force_refetch_g
             ex,
             effective_start_date,
             end_date,
-            gap_tolerance_ohlcvs_minutes=require_config_value(config, "backtest.gap_tolerance_ohlcvs_minutes"),
+            gap_tolerance_ohlcvs_minutes=require_config_value(
+                config, "backtest.gap_tolerance_ohlcvs_minutes"
+            ),
             cm_debug_level=int(config.get("backtest", {}).get("cm_debug_level", 0) or 0),
             cm_progress_log_interval_seconds=float(
                 config.get("backtest", {}).get("cm_progress_log_interval_seconds", 10.0) or 10.0
@@ -841,7 +871,9 @@ async def prepare_hlcvs_combined(config, forced_sources=None, *, force_refetch_g
             btc_exchange,
             effective_start_date,
             end_date,
-            gap_tolerance_ohlcvs_minutes=require_config_value(config, "backtest.gap_tolerance_ohlcvs_minutes"),
+            gap_tolerance_ohlcvs_minutes=require_config_value(
+                config, "backtest.gap_tolerance_ohlcvs_minutes"
+            ),
         )
         # Align BTC date range to actual timestamps (mirrors single-exchange case)
         btc_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
@@ -849,7 +881,13 @@ async def prepare_hlcvs_combined(config, forced_sources=None, *, force_refetch_g
         if btc_df.empty:
             raise ValueError(f"Failed to fetch BTC/USD prices from {btc_exchange}")
 
-        btc_df = btc_df.set_index("timestamp").reindex(timestamps, method="ffill").ffill().bfill().reset_index()
+        btc_df = (
+            btc_df.set_index("timestamp")
+            .reindex(timestamps, method="ffill")
+            .ffill()
+            .bfill()
+            .reset_index()
+        )
         btc_usd_prices = btc_df["close"].values
 
         warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
@@ -884,7 +922,8 @@ async def _prepare_hlcvs_combined_impl(
 ):
     approved = require_live_value(config, "approved_coins")
     coins = sorted(
-        set(symbol_to_coin(c) for c in approved["long"]) | set(symbol_to_coin(c) for c in approved["short"])
+        set(symbol_to_coin(c) for c in approved["long"])
+        | set(symbol_to_coin(c) for c in approved["short"])
     )
     exchanges_to_consider = sorted(list(om_dict.keys()))
     minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
@@ -916,7 +955,25 @@ async def _prepare_hlcvs_combined_impl(
                 coin_fts = int(first_timestamps_unified[coin])
                 effective_start_ts = max(int(base_start_ts), coin_fts + int(min_coin_age_ms))
                 if effective_start_ts >= end_ts:
+                    logging.info(
+                        "%s: skipping - effective start %s >= end %s "
+                        "(coin first available: %s, min_age=%d days)",
+                        coin,
+                        ts_to_date(effective_start_ts),
+                        ts_to_date(end_ts),
+                        ts_to_date(coin_fts),
+                        int(minimum_coin_age_days),
+                    )
                     return None
+                if effective_start_ts > base_start_ts:
+                    logging.info(
+                        "%s: adjusting start from %s to %s (coin first available: %s, min_age=%d days)",
+                        coin,
+                        ts_to_date(base_start_ts),
+                        ts_to_date(effective_start_ts),
+                        ts_to_date(coin_fts),
+                        int(minimum_coin_age_days),
+                    )
 
                 forced_exchange = forced_sources.get(coin)
                 candidate_exchanges = [forced_exchange] if forced_exchange else exchanges_to_consider
@@ -962,7 +1019,9 @@ async def _prepare_hlcvs_combined_impl(
                 if forced_exchange:
                     chosen = [c for c in exchange_candidates if c[0] == forced_exchange]
                     if not chosen:
-                        raise ValueError(f"Forced exchange {forced_exchange} returned no usable data for coin {coin}.")
+                        raise ValueError(
+                            f"Forced exchange {forced_exchange} returned no usable data for coin {coin}."
+                        )
                     best_exchange, best_df, best_cov, best_gaps, best_vol = chosen[0]
                 elif len(exchange_candidates) == 1:
                     best_exchange, best_df, best_cov, best_gaps, best_vol = exchange_candidates[0]
@@ -1019,7 +1078,9 @@ async def _prepare_hlcvs_combined_impl(
     valid_coins = sorted(chosen_data_per_coin.keys())
     n_coins = len(valid_coins)
 
-    start_date_for_volume_ratios = ts_to_date(max(global_start_time, global_end_time - 1000 * 60 * 60 * 24 * 60))
+    start_date_for_volume_ratios = ts_to_date(
+        max(global_start_time, global_end_time - 1000 * 60 * 60 * 24 * 60)
+    )
     end_date_for_volume_ratios = ts_to_date(global_end_time)
 
     exchanges_with_data = sorted(set([chosen_mss_per_coin[coin]["exchange"] for coin in valid_coins]))
@@ -1058,7 +1119,9 @@ async def _prepare_hlcvs_combined_impl(
 
         coin_data = df[["high", "low", "close", "volume"]].values
         unified_array[:, i, :] = coin_data
-        start_idx = int((chosen_data_per_coin[coin].timestamp.iloc[0] - global_start_time) / interval_ms)
+        start_idx = int(
+            (chosen_data_per_coin[coin].timestamp.iloc[0] - global_start_time) / interval_ms
+        )
         end_idx = start_idx + len(chosen_data_per_coin[coin]) - 1
         chosen_mss_per_coin[coin]["first_valid_index"] = start_idx
         chosen_mss_per_coin[coin]["last_valid_index"] = end_idx
@@ -1095,7 +1158,12 @@ async def fetch_data_for_coin_and_exchange(
     )
 
     if not om.has_coin(coin):
-        logging.info("%s candles fetch skip coin=%s reason=missing_market elapsed_s=%.1f", ex, coin, time.monotonic() - t0)
+        logging.info(
+            "%s candles fetch skip coin=%s reason=missing_market elapsed_s=%.1f",
+            ex,
+            coin,
+            time.monotonic() - t0,
+        )
         return None
     om.update_date_range(effective_start_ts, end_ts)
     try:

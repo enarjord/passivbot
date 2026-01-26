@@ -26,7 +26,9 @@ async def test_loads_legacy_historical_data_shard_when_primary_missing(tmp_path,
     )
     np.save(legacy_path, legacy)
 
-    cm = CandlestickManager(exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches"))
+    cm = CandlestickManager(
+        exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches")
+    )
     out = await cm.get_candles(
         "BTC/USDT:USDT",
         start_ts=start_ts,
@@ -61,7 +63,9 @@ async def test_legacy_leading_minutes_are_not_backfilled_by_default(tmp_path, mo
     )
     np.save(legacy_path, legacy)
 
-    cm = CandlestickManager(exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches"))
+    cm = CandlestickManager(
+        exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches")
+    )
     out = await cm.get_candles(
         "BTC/USDT:USDT",
         start_ts=day_start,
@@ -93,7 +97,9 @@ async def test_legacy_leading_minutes_are_backfilled_when_requested(tmp_path, mo
     )
     np.save(legacy_path, legacy)
 
-    cm = CandlestickManager(exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches"))
+    cm = CandlestickManager(
+        exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches")
+    )
 
     # First get the raw candles
     raw = await cm.get_candles(
@@ -120,7 +126,9 @@ async def test_legacy_leading_minutes_are_backfilled_when_requested(tmp_path, mo
     assert float(out[1]["bv"]) == pytest.approx(0.0)
 
 
-def test_partial_but_continuous_legacy_day_does_not_block_primary_overlay_write(tmp_path, monkeypatch):
+def test_partial_but_continuous_legacy_day_does_not_block_primary_overlay_write(
+    tmp_path, monkeypatch
+):
     """A partial legacy day (continuous, but not full 00:00-23:59 coverage) must not be treated as complete.
 
     Otherwise `_save_shard()` would skip writing the primary overlay shard and the missing minutes
@@ -144,7 +152,9 @@ def test_partial_but_continuous_legacy_day_does_not_block_primary_overlay_write(
     )
     np.save(legacy_path, legacy)
 
-    cm = CandlestickManager(exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches"))
+    cm = CandlestickManager(
+        exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches")
+    )
     symbol = "BTC/USDT:USDT"
 
     # Attempt to write a primary shard for this day.
@@ -160,4 +170,3 @@ def test_partial_but_continuous_legacy_day_does_not_block_primary_overlay_write(
 
     # With strict legacy completeness, this MUST be written.
     assert os.path.exists(cm._shard_path(symbol, day, tf="1m"))
-

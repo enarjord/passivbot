@@ -128,9 +128,7 @@ class GateIOBot(CCXTBot):
         limit=None,
     ):
         n_pnls_limit = 1000 if limit is None else limit
-        fetched = await self.cca.fetch_closed_orders(
-            limit=n_pnls_limit, params={"offset": offset}
-        )
+        fetched = await self.cca.fetch_closed_orders(limit=n_pnls_limit, params={"offset": offset})
         for i in range(len(fetched)):
             fetched[i]["pnl"] = float(fetched[i]["info"]["pnl"])
             fetched[i]["position_side"] = self.determine_pos_side(fetched[i])

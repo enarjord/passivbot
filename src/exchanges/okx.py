@@ -1,4 +1,4 @@
-from exchanges.ccxt_bot import CCXTBot
+from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
 import passivbot_rust as pbr
 
@@ -62,12 +62,14 @@ class OKXBot(CCXTBot):
                 continue
             contracts = float(elm.get("contracts", 0))
             if contracts != 0:
-                positions.append({
-                    "symbol": elm["symbol"],
-                    "position_side": elm.get("side", "long").lower(),
-                    "size": contracts,
-                    "price": float(elm.get("entryPrice", 0)),
-                })
+                positions.append(
+                    {
+                        "symbol": elm["symbol"],
+                        "position_side": elm.get("side", "long").lower(),
+                        "size": contracts,
+                        "price": float(elm.get("entryPrice", 0)),
+                    }
+                )
         return positions
 
     def _get_pnl_from_trade(self, trade: dict) -> float:
@@ -213,18 +215,18 @@ class OKXBot(CCXTBot):
             to_print = ""
             try:
                 res = await coros_to_call_margin_mode[symbol]
-                to_print += f"set cross mode {res}"
+                to_print += f"margin={format_exchange_config_response(res)}"
             except Exception as e:
                 err_str = str(e)
                 if '"code":"59107"' in err_str:
-                    to_print += f" cross mode and leverage: {res} {e}"
+                    to_print += f"margin=ok (unchanged)"
                 elif '"code":"51039"' in err_str:
                     logging.warning(
-                        f"{symbol}: unable to adjust margin mode/leverage (possibly PM or open positions): {e}"
+                        f"{symbol}: unable to adjust margin mode/leverage (possibly PM or open positions)"
                     )
                     continue
                 else:
-                    logging.error(f"{symbol} error setting cross mode {res} {e}")
+                    logging.error(f"{symbol} error setting cross mode {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 

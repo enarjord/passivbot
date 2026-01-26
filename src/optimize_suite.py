@@ -105,6 +105,15 @@ async def prepare_suite_contexts(
             master_ignored.update(scenario.ignored_coins)
     master_coins.update(suite_coin_sources.keys())
 
+    # If no scenarios define explicit coins and include_base=False,
+    # fall back to base_coins_list to avoid empty coin set
+    if not master_coins and base_coins_list:
+        logging.info(
+            "No scenario-specific coins found; using base approved_coins: %s",
+            base_coins_list,
+        )
+        master_coins = set(base_coins_list)
+
     master_coins_list = sorted(master_coins)
     master_ignored_list = sorted(master_ignored)
 

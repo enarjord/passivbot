@@ -52,9 +52,13 @@ from collections import OrderedDict
 if TYPE_CHECKING:
     import aiohttp
 
+import warnings
+
 import numpy as np
 import portalocker  # type: ignore
 
+# Suppress portalocker's "timeout has no effect in blocking mode" warning
+warnings.filterwarnings("ignore", message="timeout has no effect in blocking mode", module="portalocker")
 
 # ----- Constants and dtypes -----
 
@@ -67,7 +71,10 @@ _LOCK_BACKOFF_MAX = 2.0
 
 # See: https://github.com/enarjord/passivbot/issues/547
 # True if running on Windows (used for file/path compatible names)
-windows_compatibility = sys.platform.startswith("win") or os.environ.get("WINDOWS_COMPATIBILITY") == "1"
+windows_compatibility = (
+    sys.platform.startswith("win") or os.environ.get("WINDOWS_COMPATIBILITY") == "1"
+)
+
 
 @dataclass
 class _LockRecord:
@@ -374,9 +381,16 @@ class CandlestickManager:
         )
         self._tf_range_cache_cap = 8
         self._step_warning_keys: set[Tuple[str, str, str]] = set()
-        # Rate-limiting for zero-candle synthesis warnings (at most once per minute per symbol)
-        self._synth_candle_log_last: Dict[str, float] = {}  # symbol -> last log time (unix sec)
-        self._synth_candle_log_throttle_sec: float = 60.0  # minimum seconds between logs per symbol
+        # Deduplication for zero-candle synthesis warnings - only warn once per unique gap
+        # Key: (symbol, first_ts) to identify a gap by its starting point
+        # The end timestamp changes as time passes, but the start identifies the gap origin
+        self._synth_gap_warned: set[Tuple[str, int]] = set()
+        # Batch mode for startup: when enabled, collect warnings and log summary later
+        self._synth_candle_batch_mode: bool = False
+        self._synth_candle_batch: Dict[str, int] = {}  # symbol -> count during batch
+        # Batch mode for candle replacement logs: collect replacements and log summary at INFO
+        self._candle_replace_batch_mode: bool = False
+        self._candle_replace_batch: Dict[str, int] = {}  # symbol -> count replaced during batch
         # Track which timestamps were synthesized (per symbol) for EMA recomputation detection
         # When real data arrives for a previously synthetic timestamp, EMAs should be recomputed
         self._synthetic_timestamps: Dict[str, set[int]] = {}  # symbol -> set of synthetic ts (ms)
@@ -446,6 +460,67 @@ class CandlestickManager:
         self.log = logging.getLogger("passivbot.candlestick_manager")
         self.log.setLevel(desired_level)
 
+    def start_synth_candle_batch(self) -> None:
+        """Start batching zero-candle synthesis warnings for later aggregated logging."""
+        self._synth_candle_batch_mode = True
+        self._synth_candle_batch.clear()
+
+    def flush_synth_candle_batch(self) -> None:
+        """Log aggregated zero-candle synthesis summary and exit batch mode."""
+        self._synth_candle_batch_mode = False
+        if not self._synth_candle_batch:
+            return
+        total_symbols = len(self._synth_candle_batch)
+        total_candles = sum(self._synth_candle_batch.values())
+        # Use WARNING only for large amounts of synthesized candles (>1000), otherwise INFO
+        # This is expected behavior on illiquid pairs during warmup
+        log_fn = self.log.warning if total_candles > 1000 else self.log.info
+        if total_symbols == 1:
+            symbol, count = next(iter(self._synth_candle_batch.items()))
+            log_fn(
+                "[candle] synthesized %d zero-candle%s for %s (no trades from exchange)",
+                count,
+                "s" if count > 1 else "",
+                symbol,
+            )
+        else:
+            log_fn(
+                "[candle] synthesized %d zero-candle%s across %d symbols (no trades from exchange)",
+                total_candles,
+                "s" if total_candles > 1 else "",
+                total_symbols,
+            )
+        self._synth_candle_batch.clear()
+
+    def start_candle_replace_batch(self) -> None:
+        """Start batching candle replacement logs for later aggregated logging."""
+        self._candle_replace_batch_mode = True
+        self._candle_replace_batch.clear()
+
+    def flush_candle_replace_batch(self) -> None:
+        """Log aggregated candle replacement summary at INFO and exit batch mode."""
+        self._candle_replace_batch_mode = False
+        if not self._candle_replace_batch:
+            return
+        total_symbols = len(self._candle_replace_batch)
+        total_candles = sum(self._candle_replace_batch.values())
+        if total_symbols == 1:
+            symbol, count = next(iter(self._candle_replace_batch.items()))
+            self.log.info(
+                "[candle] %s: real data replaced %d synthetic candle%s, EMA cache invalidated",
+                symbol,
+                count,
+                "s" if count > 1 else "",
+            )
+        else:
+            self.log.info(
+                "[candle] real data replaced %d synthetic candle%s across %d symbols, EMA caches invalidated",
+                total_candles,
+                "s" if total_candles > 1 else "",
+                total_symbols,
+            )
+        self._candle_replace_batch.clear()
+
     # ----- Retention helpers -----
 
     def _cleanup_stale_locks(self) -> None:
@@ -470,7 +545,7 @@ class CandlestickManager:
             if age > threshold:
                 try:
                     lock_path.unlink()
-                    self.log.warning("removed stale candle lock %s (age %.1fs)", lock_path, age)
+                    self.log.info("removed stale candle lock %s (age %.1fs)", lock_path, age)
                 except FileNotFoundError:
                     continue
                 except Exception as exc:
@@ -681,8 +756,11 @@ class CandlestickManager:
         symbols = ", ".join(f"{s}:{c}" for s, c in sorted(summary.items())[:5])
         if len(summary) > 5:
             symbols += f", +{len(summary) - 5} more"
-        self.log.warning(
-            f"persistent gaps: {total} new ({symbols}). Use --force-refetch-gaps to retry."
+        self.log.info(
+            "[candle] persistent gaps: %d across %d symbols (%s). Use --force-refetch-gaps to retry.",
+            total,
+            len(summary),
+            symbols,
         )
         self._persistent_gap_summary.clear()
 
@@ -717,7 +795,7 @@ class CandlestickManager:
         symbols = ", ".join(f"{s}:{c}" for s, c in sorted(summary.items(), key=lambda x: -x[1])[:5])
         if len(summary) > 5:
             symbols += f", +{len(summary) - 5} more"
-        self.log.warning(
+        self.log.debug(
             "[candle] strict mode gaps: %d missing candles across %d symbols (%s)",
             total,
             len(summary),
@@ -1162,9 +1240,7 @@ class CandlestickManager:
         if coin:
             out.append(os.path.join("historical_data", f"ohlcvs_{ex}", coin, f"{date_key}.npy"))
         if ex == "binanceusdm" and sym_code:
-            out.append(
-                os.path.join("historical_data", "ohlcvs_futures", sym_code, f"{date_key}.npy")
-            )
+            out.append(os.path.join("historical_data", "ohlcvs_futures", sym_code, f"{date_key}.npy"))
         if ex == "bybit" and sym_code:
             out.append(os.path.join("historical_data", "ohlcvs_bybit", sym_code, f"{date_key}.npy"))
         return out
@@ -1559,7 +1635,7 @@ class CandlestickManager:
 
         # Second pass: flush with is_last flag
         for i, (key, bucket_data) in enumerate(keys_to_process):
-            is_last = (i == len(keys_to_process) - 1)
+            is_last = i == len(keys_to_process) - 1
             flush_bucket(key, bucket_data, is_last=is_last)
 
     def _persist_batch(
@@ -1623,12 +1699,20 @@ class CandlestickManager:
             # Real data arrived for previously synthetic timestamps - invalidate EMA cache
             self._synthetic_timestamps[symbol] -= replaced
             self._invalidate_ema_cache(symbol)
-            self.log.info(
-                "[candle] %s: real data replaced %d synthetic candle%s, EMA cache invalidated",
-                symbol,
-                len(replaced),
-                "s" if len(replaced) > 1 else "",
-            )
+            count = len(replaced)
+            if self._candle_replace_batch_mode:
+                # Batch mode: collect for aggregated summary later
+                self._candle_replace_batch[symbol] = (
+                    self._candle_replace_batch.get(symbol, 0) + count
+                )
+            else:
+                # Normal operation: log at DEBUG (individual messages are noisy)
+                self.log.debug(
+                    "[candle] %s: real data replaced %d synthetic candle%s, EMA cache invalidated",
+                    symbol,
+                    count,
+                    "s" if count > 1 else "",
+                )
 
     def _invalidate_ema_cache(self, symbol: str) -> None:
         """Invalidate all cached EMA values for a symbol, forcing recomputation."""
@@ -1713,13 +1797,15 @@ class CandlestickManager:
                     # Legacy format: auto-upgrade to enhanced
                     a, b = int(it[0]), int(it[1])
                     if a <= b:
-                        out.append({
-                            "start_ts": a,
-                            "end_ts": b,
-                            "retry_count": _GAP_MAX_RETRIES,  # Assume old gaps are persistent
-                            "reason": GAP_REASON_AUTO,
-                            "added_at": now_ms,
-                        })
+                        out.append(
+                            {
+                                "start_ts": a,
+                                "end_ts": b,
+                                "retry_count": _GAP_MAX_RETRIES,  # Assume old gaps are persistent
+                                "reason": GAP_REASON_AUTO,
+                                "added_at": now_ms,
+                            }
+                        )
             except Exception:
                 continue
         return out
@@ -1848,8 +1934,12 @@ class CandlestickManager:
             # (retry_count goes from <max to >=max). Use throttling to prevent spam
             # in edge cases where the same gap is processed multiple times.
             updated_gap = next(
-                (g for g in gaps if g["start_ts"] <= end_ts + ONE_MIN_MS and g["end_ts"] >= start_ts - ONE_MIN_MS),
-                None
+                (
+                    g
+                    for g in gaps
+                    if g["start_ts"] <= end_ts + ONE_MIN_MS and g["end_ts"] >= start_ts - ONE_MIN_MS
+                ),
+                None,
             )
             if updated_gap:
                 current_retry_count = updated_gap.get("retry_count", 0)
@@ -1864,7 +1954,9 @@ class CandlestickManager:
                     # Track persistent gaps for summary logging
                     if not hasattr(self, "_persistent_gap_summary"):
                         self._persistent_gap_summary: Dict[str, int] = {}
-                    self._persistent_gap_summary[symbol] = self._persistent_gap_summary.get(symbol, 0) + 1
+                    self._persistent_gap_summary[symbol] = (
+                        self._persistent_gap_summary.get(symbol, 0) + 1
+                    )
 
         self._save_known_gaps_enhanced(symbol, gaps)
 
@@ -1952,10 +2044,7 @@ class CandlestickManager:
                 "gaps": [],
             }
 
-        total_minutes = sum(
-            (g["end_ts"] - g["start_ts"]) // ONE_MIN_MS + 1
-            for g in gaps
-        )
+        total_minutes = sum((g["end_ts"] - g["start_ts"]) // ONE_MIN_MS + 1 for g in gaps)
         persistent = sum(1 for g in gaps if g.get("retry_count", 0) >= _GAP_MAX_RETRIES)
         retryable = len(gaps) - persistent
 
@@ -2291,7 +2380,7 @@ class CandlestickManager:
                     error_repr=err_repr,
                 )
                 sleep_s = backoff
-                msg = (str(e) or "")
+                msg = str(e) or ""
                 msg_l = msg.lower()
                 # Heuristic: slow down harder on rate-limit style responses.
                 is_rate_limit = any(x in msg_l for x in ("rate limit", "too many", "429", "10006"))
@@ -2303,8 +2392,20 @@ class CandlestickManager:
                     sleep_s = max(sleep_s, global_backoff)
                 # Bybit: be more persistent on transient network-ish errors.
                 if is_bybit and (
-                    err_type in {"RequestTimeout", "NetworkError", "ExchangeNotAvailable", "DDoSProtection"}
-                    or any(x in msg_l for x in ("timed out", "timeout", "etimedout", "econnreset", "502", "503", "504"))
+                    err_type
+                    in {"RequestTimeout", "NetworkError", "ExchangeNotAvailable", "DDoSProtection"}
+                    or any(
+                        x in msg_l
+                        for x in (
+                            "timed out",
+                            "timeout",
+                            "etimedout",
+                            "econnreset",
+                            "502",
+                            "503",
+                            "504",
+                        )
+                    )
                 ):
                     sleep_s = max(sleep_s, 2.0)
                 await asyncio.sleep(sleep_s)
@@ -2417,12 +2518,13 @@ class CandlestickManager:
                     max_step = int(diffs.max())
                     min_step = int(diffs.min())
                     # Expect step to match the requested timeframe's period
+                    # Log at DEBUG - unexpected steps are common on illiquid exchanges and aren't actionable
                     if max_step != period_ms or min_step != period_ms:
                         warn_key = (self._ex_id, symbol, tf_norm)
                         if warn_key not in self._step_warning_keys:
                             self._step_warning_keys.add(warn_key)
-                            self.log.warning(
-                                f"unexpected step for tf exchange={self._ex_id} symbol={symbol} tf={tf_norm} expected={period_ms} min_step={min_step} max_step={max_step}"
+                            self.log.debug(
+                                f"[candle] unexpected step for tf exchange={self._ex_id} symbol={symbol} tf={tf_norm} expected={period_ms} min_step={min_step} max_step={max_step}"
                             )
                 else:
                     max_step = ONE_MIN_MS
@@ -2446,7 +2548,9 @@ class CandlestickManager:
             last_ts = int(arr[-1]["ts"])  # inclusive last
             # Throttled progress logs (INFO) for long-running paginated fetches
             try:
-                progressed = max(0, min(100.0, 100.0 * float(last_ts - since_start) / float(total_span)))
+                progressed = max(
+                    0, min(100.0, 100.0 * float(last_ts - since_start) / float(total_span))
+                )
             except Exception:
                 progressed = 0.0
             self._progress_log(
@@ -2568,7 +2672,9 @@ class CandlestickManager:
                         if gaps.size:
                             missing_count += int(np.sum((gaps // ONE_MIN_MS) - 1))
                     # If duplicates exist, treat them as missing coverage too
-                    missing_count += int(max(0, expected_len - int(np.unique(slice_ts).size) - missing_count))
+                    missing_count += int(
+                        max(0, expected_len - int(np.unique(slice_ts).size) - missing_count)
+                    )
                 else:
                     missing_count = expected_len
             except Exception:
@@ -2628,34 +2734,52 @@ class CandlestickManager:
                 ts for ts in self._synthetic_timestamps[symbol] if ts > cutoff
             }
 
-        # Log when zero-candles were synthesized (rate-limited: at most once per minute per symbol)
+        # Log when zero-candles were synthesized (rate-limited or batched)
         if synthesized_count > 0 and symbol:
-            now_sec = time.time()
-            last_log = self._synth_candle_log_last.get(symbol, 0.0)
-            if (now_sec - last_log) >= self._synth_candle_log_throttle_sec:
-                self._synth_candle_log_last[symbol] = now_sec
-                # Format timestamp range for human readability
-                from datetime import datetime, timezone
+            # In batch mode, collect for later aggregated logging
+            if self._synth_candle_batch_mode:
+                self._synth_candle_batch[symbol] = (
+                    self._synth_candle_batch.get(symbol, 0) + synthesized_count
+                )
+            else:
+                # Normal mode: deduplicate by gap start (only warn once per unique gap origin)
+                # Round first_ts to nearest hour to reduce duplicate warnings when the same
+                # underlying gap is detected at slightly different boundaries in different fetch windows
                 first_ts = min(synthesized_timestamps)
                 last_ts = max(synthesized_timestamps)
-                first_dt = datetime.fromtimestamp(first_ts / 1000, tz=timezone.utc).strftime(
-                    "%Y-%m-%dT%H:%M"
-                )
-                if synthesized_count == 1:
-                    ts_info = first_dt
+                hour_ms = 3600_000
+                first_ts_hour = (first_ts // hour_ms) * hour_ms  # Floor to hour boundary
+                gap_key = (symbol, first_ts_hour)
+
+                # Skip if we've already warned about a gap starting in this hour window
+                if gap_key in self._synth_gap_warned:
+                    pass  # Already warned, skip
                 else:
-                    last_dt = datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc).strftime(
+                    self._synth_gap_warned.add(gap_key)
+                    # Format timestamp range for human readability
+                    from datetime import datetime, timezone
+
+                    first_dt = datetime.fromtimestamp(first_ts / 1000, tz=timezone.utc).strftime(
                         "%Y-%m-%dT%H:%M"
                     )
-                    ts_info = f"{first_dt} to {last_dt}"
-                self.log.warning(
-                    "[candle] %s: synthesized %d zero-candle%s at %s (no trades from exchange) using prev_close=%.6f",
-                    symbol,
-                    synthesized_count,
-                    "s" if synthesized_count > 1 else "",
-                    ts_info,
-                    prev_close if prev_close is not None else 0.0,
-                )
+                    if synthesized_count == 1:
+                        ts_info = first_dt
+                    else:
+                        last_dt = datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc).strftime(
+                            "%Y-%m-%dT%H:%M"
+                        )
+                        ts_info = f"{first_dt} to {last_dt}"
+                    # Use DEBUG for individual gap warnings - the batch summary at startup is enough at WARNING
+                    # Only use WARNING for truly exceptional situations (gaps > 100 candles during live operation)
+                    log_fn = self.log.warning if synthesized_count > 100 else self.log.debug
+                    log_fn(
+                        "[candle] %s: synthesized %d zero-candle%s at %s (no trades from exchange) using prev_close=%.6f",
+                        symbol,
+                        synthesized_count,
+                        "s" if synthesized_count > 1 else "",
+                        ts_info,
+                        prev_close if prev_close is not None else 0.0,
+                    )
 
         if not out_rows:
             return np.empty((0,), dtype=CANDLE_DTYPE)
@@ -2865,7 +2989,9 @@ class CandlestickManager:
             for name in z.namelist():
                 with z.open(name) as f:
                     df = pd.read_csv(f, header=None)
-                df.columns = col_names + [f"extra_{i}" for i in range(len(df.columns) - len(col_names))]
+                df.columns = col_names + [
+                    f"extra_{i}" for i in range(len(df.columns) - len(col_names))
+                ]
                 dfs.append(df[col_names])
         if not dfs:
             return None
@@ -2896,7 +3022,9 @@ class CandlestickManager:
                 with z.open(name) as f:
                     # Bitget provides xlsx-like sheets; pandas can read excel from bytes.
                     df = pd.read_excel(f)
-                df.columns = col_names + [f"extra_{i}" for i in range(len(df.columns) - len(col_names))]
+                df.columns = col_names + [
+                    f"extra_{i}" for i in range(len(df.columns) - len(col_names))
+                ]
                 dfs.append(df[col_names])
         if not dfs:
             return None
@@ -2998,8 +3126,10 @@ class CandlestickManager:
         cols = ["timestamp", "open", "high", "low", "close", "volume"]
         for c in cols:
             df[c] = df[c].astype("float64")
-        df = df.dropna(subset=["timestamp", "close"]).sort_values("timestamp").drop_duplicates(
-            subset=["timestamp"], keep="last"
+        df = (
+            df.dropna(subset=["timestamp", "close"])
+            .sort_values("timestamp")
+            .drop_duplicates(subset=["timestamp"], keep="last")
         )
         # Convert to CANDLE_DTYPE and then standardize to full-day grid.
         arr = np.empty((df.shape[0],), dtype=CANDLE_DTYPE)
@@ -3176,7 +3306,7 @@ class CandlestickManager:
                 return (type(exc).__name__, "<unrepresentable exception>")
 
         async def fetch_single_day(
-            day_info: Tuple[str, int, int]
+            day_info: Tuple[str, int, int],
         ) -> Tuple[str, Optional[np.ndarray], Optional[Tuple[str, str]]]:
             """Fetch a single day's archive data. Returns (day_key, array or None, (err_type, err_repr) or None)."""
             day_key, day_start, day_end = day_info
@@ -3193,7 +3323,7 @@ class CandlestickManager:
             batch_size = max(1, parallel_days)  # Match semaphore for optimal throughput
 
             for batch_start in range(0, total_days, batch_size):
-                batch = days_to_fetch[batch_start:batch_start + batch_size]
+                batch = days_to_fetch[batch_start : batch_start + batch_size]
                 batch_start_time = time.monotonic()
 
                 # Throttled progress log (every ~10 seconds)
@@ -3208,7 +3338,9 @@ class CandlestickManager:
                 )
                 try:
                     now = time.monotonic()
-                    if (now - last_progress_emit) >= float(self._progress_log_interval_seconds or 0.0):
+                    if (now - last_progress_emit) >= float(
+                        self._progress_log_interval_seconds or 0.0
+                    ):
                         last_progress_emit = now
                         self._emit_remote_fetch(
                             {
@@ -3336,6 +3468,7 @@ class CandlestickManager:
         tf: Optional[str] = None,
         force_refetch_gaps: bool = False,
         fill_leading_gaps: bool = False,
+        skip_historical_gap_fill: bool = False,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
 
@@ -3349,6 +3482,9 @@ class CandlestickManager:
           before fetching, forcing a retry of all gaps regardless of retry count
         - If `fill_leading_gaps` is True: synthesize zero-candles even before the
           first real data point (useful for EMA calculation)
+        - If `skip_historical_gap_fill` is True: do not attempt to fetch/fill gaps
+          in historical data older than 1 day. Useful for live bot warmup where
+          recent data is sufficient and filling old gaps wastes time.
         """
         if max_age_ms is not None and max_age_ms < 0:
             raise ValueError("max_age_ms cannot be negative")
@@ -3358,8 +3494,10 @@ class CandlestickManager:
             # Compute actual range first
             now = _utc_now_ms()
             eff_end = end_ts if end_ts is not None else _floor_minute(now)
-            eff_start = start_ts if start_ts is not None else (
-                int(eff_end) - self.default_window_candles * ONE_MIN_MS
+            eff_start = (
+                start_ts
+                if start_ts is not None
+                else (int(eff_end) - self.default_window_candles * ONE_MIN_MS)
             )
             cleared = self.clear_known_gaps(symbol, date_range=(eff_start, eff_end))
             if cleared > 0:
@@ -3670,9 +3808,11 @@ class CandlestickManager:
                 fully_covered=fully_covered,
             )
             historical = True
-        if self.exchange is not None and historical:
+        if self.exchange is not None and historical and not skip_historical_gap_fill:
             # If the requested historical window is not fully covered in memory,
             # attempt to fetch unknown missing spans, regardless of shard presence.
+            # Skip this if skip_historical_gap_fill is set (e.g., live warmup where
+            # we only need recent data and old gaps don't matter).
             if not fully_covered:
                 # Hyperliquid special case: cap lookback to last 5000 minutes
                 try:
@@ -3705,7 +3845,9 @@ class CandlestickManager:
                                 return True
                     return False
 
-                unknown_missing = [(s, e) for (s, e) in missing_before if not span_in_persistent_gap(s, e)]
+                unknown_missing = [
+                    (s, e) for (s, e) in missing_before if not span_in_persistent_gap(s, e)
+                ]
 
                 if unknown_missing:
                     end_excl = min(end_ts + ONE_MIN_MS, end_finalized + ONE_MIN_MS)
@@ -3736,7 +3878,9 @@ class CandlestickManager:
                                 sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                                 missing_after = self._missing_spans(sub, start_ts, end_ts)
                                 unknown_after = [
-                                    (s, e) for (s, e) in missing_after if not span_in_persistent_gap(s, e)
+                                    (s, e)
+                                    for (s, e) in missing_after
+                                    if not span_in_persistent_gap(s, e)
                                 ]
                             if unknown_after:
                                 persisted_batches = False
@@ -3757,6 +3901,7 @@ class CandlestickManager:
                                         defer_index=True,
                                         skip_memory_retention=True,
                                     )
+
                                 self._log(
                                     "info",
                                     "historical_missing_spans",
@@ -3791,7 +3936,9 @@ class CandlestickManager:
                                                         max(int(prev[1]), w_end),
                                                     )
                                             s = int(de) + ONE_MIN_MS
-                                    spans_to_fetch = [day_windows[k] for k in sorted(day_windows.keys())]
+                                    spans_to_fetch = [
+                                        day_windows[k] for k in sorted(day_windows.keys())
+                                    ]
                                     if len(spans_to_fetch) != len(unknown_after):
                                         self._log(
                                             "info",
@@ -3828,7 +3975,9 @@ class CandlestickManager:
                                     if deferred_index_any:
                                         try:
                                             self.flush_deferred_index(symbol, tf="1m")
-                                        except Exception as exc:  # best-effort; keep fetching even if index update fails
+                                        except (
+                                            Exception
+                                        ) as exc:  # best-effort; keep fetching even if index update fails
                                             if not flush_failed_once:
                                                 try:
                                                     err_type = type(exc).__name__
@@ -3859,7 +4008,9 @@ class CandlestickManager:
                                         )
                                         try:
                                             self.flush_deferred_index(symbol, tf="1m")
-                                        except Exception as exc:  # best-effort; keep fetching even if index update fails
+                                        except (
+                                            Exception
+                                        ) as exc:  # best-effort; keep fetching even if index update fails
                                             if not flush_failed_once:
                                                 try:
                                                     err_type = type(exc).__name__
@@ -3891,14 +4042,18 @@ class CandlestickManager:
                                     # immediately (no retries, no warning)
                                     if inception_ts is not None and e < inception_ts:
                                         self._add_known_gap(
-                                            symbol, s, e,
+                                            symbol,
+                                            s,
+                                            e,
                                             reason="pre_inception",
                                             retry_count=_GAP_MAX_RETRIES,  # Persistent immediately
                                         )
                                     else:
                                         # Normal gap - will retry and eventually warn
                                         self._add_known_gap(
-                                            symbol, s, e,
+                                            symbol,
+                                            s,
+                                            e,
                                             reason=GAP_REASON_FETCH_FAILED,
                                             increment_retry=True,
                                         )
@@ -5098,7 +5253,9 @@ class CandlestickManager:
             try:
                 if self._legacy_day_is_complete(symbol, tf_norm, date_key):
                     return
-            except Exception as exc:  # best-effort; legacy cache may be unreadable, fall back to primary write
+            except (
+                Exception
+            ) as exc:  # best-effort; legacy cache may be unreadable, fall back to primary write
                 try:
                     err_type = type(exc).__name__
                     err_repr = repr(exc)

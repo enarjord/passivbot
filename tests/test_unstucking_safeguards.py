@@ -344,9 +344,7 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
         captured["input"] = input_json
         return '{"orders": [], "diagnostics": {"warnings": []}}'
 
-    monkeypatch.setattr(
-        bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
-    )
+    monkeypatch.setattr(bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot))
     monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
 
     await bot.calc_ideal_orders_orchestrator()

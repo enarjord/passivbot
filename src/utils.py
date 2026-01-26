@@ -89,7 +89,7 @@ def _cleanup_stale_symbol_map_locks() -> None:
                 age = now - stat.st_mtime
                 if age > threshold:
                     lock_path.unlink()
-                    logging.warning("removed stale symbol map lock %s (age %.1fs)", lock_path, age)
+                    logging.info("removed stale symbol map lock %s (age %.1fs)", lock_path, age)
             except FileNotFoundError:
                 continue
             except Exception as exc:
@@ -788,7 +788,7 @@ def _write_coin_symbol_maps(
     try:
         with portalocker.Lock(c2s_lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT):
             if verbose:
-                logging.info("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
+                logging.debug("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
             _atomic_write_json(coin_to_symbol_map_path, coin_to_symbol_map, indent=4, sort_keys=True)
     except portalocker.LockException:
         logging.warning("Could not acquire lock for %s, skipping write", coin_to_symbol_map_path)
@@ -798,7 +798,7 @@ def _write_coin_symbol_maps(
     try:
         with portalocker.Lock(s2c_lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT):
             if verbose:
-                logging.info("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
+                logging.debug("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
             _atomic_write_json(symbol_to_coin_map_path, symbol_to_coin_map)
     except portalocker.LockException:
         logging.warning("Could not acquire lock for %s, skipping write", symbol_to_coin_map_path)
@@ -866,7 +866,7 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
 
                 # Write symbol_to_coin_map atomically while still holding lock
                 if verbose:
-                    logging.info("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
+                    logging.debug("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
                 _atomic_write_json(symbol_to_coin_map_path, symbol_to_coin_map)
 
                 # Update in-memory cache
@@ -886,8 +886,10 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
             try:
                 with portalocker.Lock(c2s_lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT):
                     if verbose:
-                        logging.info("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
-                    _atomic_write_json(coin_to_symbol_map_path, coin_to_symbol_map, indent=4, sort_keys=True)
+                        logging.debug("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
+                    _atomic_write_json(
+                        coin_to_symbol_map_path, coin_to_symbol_map, indent=4, sort_keys=True
+                    )
                     # Update in-memory cache
                     try:
                         st = os.stat(coin_to_symbol_map_path)
@@ -899,7 +901,9 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
                     except Exception:
                         pass
             except portalocker.LockException:
-                logging.warning("Could not acquire lock for %s, skipping write", coin_to_symbol_map_path)
+                logging.warning(
+                    "Could not acquire lock for %s, skipping write", coin_to_symbol_map_path
+                )
 
         except portalocker.LockException:
             logging.warning("Could not acquire lock for symbol map cache update, skipping")
@@ -1049,7 +1053,9 @@ async def format_approved_ignored_coins(config, exchanges: [str], quote=None, ve
         {"long": [""], "short": [""]},
     ]:
         if bool(_require_live_value(config, "empty_means_all_approved")):
-            marketss = await asyncio.gather(*[load_markets(ex, verbose=False, quote=quote) for ex in exchanges])
+            marketss = await asyncio.gather(
+                *[load_markets(ex, verbose=False, quote=quote) for ex in exchanges]
+            )
             marketss = [filter_markets(m, ex, quote=quote)[0] for m, ex in zip(marketss, exchanges)]
             approved_coins = set()
             for markets in marketss:

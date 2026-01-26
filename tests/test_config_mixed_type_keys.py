@@ -11,10 +11,10 @@ def test_remove_unused_keys_handles_integer_keys():
     """Test that remove_unused_keys_recursively handles integer keys without crashing."""
     template = {"a": 1, "b": 2}
     config = {"a": 1, "b": 2, 123: "invalid_int_key", 456: "another_int"}
-    
+
     # Should not crash, and should remove integer keys
     remove_unused_keys_recursively(template, config, verbose=False)
-    
+
     assert 123 not in config
     assert 456 not in config
     assert "a" in config
@@ -31,10 +31,10 @@ def test_remove_unused_keys_handles_mixed_type_keys():
         (1, 2): "tuple_key",
         True: "bool_key",
     }
-    
+
     # Should remove all non-string keys
     remove_unused_keys_recursively(template, config, verbose=False)
-    
+
     assert "valid_key" in config
     assert 123 not in config
     assert 45.6 not in config
@@ -46,9 +46,9 @@ def test_remove_unused_keys_preserves_underscore_string_keys():
     """Test that string keys starting with underscore are preserved."""
     template = {"a": 1}
     config = {"a": 1, "_internal": "should_stay", "_raw": "metadata"}
-    
+
     remove_unused_keys_recursively(template, config, verbose=False)
-    
+
     assert "_internal" in config
     assert "_raw" in config
     assert "a" in config
@@ -65,10 +65,10 @@ def test_remove_unused_keys_sorting_stability():
         200: "int2",
         "a": 4,  # Will be removed
     }
-    
+
     # Should process without crashes despite mixed types
     remove_unused_keys_recursively(template, config, verbose=False)
-    
+
     # Template keys preserved
     assert "x" in config
     assert "y" in config
@@ -91,14 +91,14 @@ def test_remove_unused_keys_in_nested_structure():
             "valid_key": 1,
             "another_key": 2,
             123: "invalid_int_key",
-            "extra_string": "remove_me"
+            "extra_string": "remove_me",
         },
-        456: "root_level_int"
+        456: "root_level_int",
     }
-    
+
     # This is what format_config does - should not crash
     remove_unused_keys_recursively(template, config, verbose=False)
-    
+
     # Integer keys should be removed
     assert 456 not in config
     assert 123 not in config["section"]
@@ -113,9 +113,9 @@ def test_remove_unused_keys_with_numeric_string_keys():
     """Test that string representations of numbers are handled as strings."""
     template = {"1": "one", "2": "two"}
     config = {"1": "one", "2": "two", 1: "int_one", 2: "int_two"}
-    
+
     remove_unused_keys_recursively(template, config, verbose=False)
-    
+
     # String keys preserved
     assert "1" in config
     assert "2" in config
@@ -130,7 +130,7 @@ def test_json_coercion_scenario():
     This simulates real-world cases where configs might have mixed key types.
     """
     import json
-    
+
     # This can happen when JSON is parsed in certain ways
     template = {"setting_1": True, "setting_2": False}
     config_with_int_keys = {
@@ -139,10 +139,10 @@ def test_json_coercion_scenario():
         0: "zero",  # Could come from JSON coercion
         1: "one",
     }
-    
+
     # Should handle gracefully
     remove_unused_keys_recursively(template, config_with_int_keys, verbose=False)
-    
+
     assert "setting_1" in config_with_int_keys
     assert "setting_2" in config_with_int_keys
     assert 0 not in config_with_int_keys

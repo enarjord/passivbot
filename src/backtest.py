@@ -925,9 +925,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
         btc_collateral_ltv_cap = require_config_value(config, "backtest.btc_collateral_ltv_cap")
         if btc_collateral_ltv_cap is not None:
             btc_collateral_ltv_cap = float(btc_collateral_ltv_cap)
-        maker_fee_override = get_optional_config_value(
-            config, "backtest.maker_fee_override", None
-        )
+        maker_fee_override = get_optional_config_value(config, "backtest.maker_fee_override", None)
         if maker_fee_override is None:
             maker_fee = mss[coins[0]]["maker"]
         else:

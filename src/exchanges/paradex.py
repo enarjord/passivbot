@@ -127,7 +127,9 @@ class ParadexBot(CCXTBot):
 
         jwt = await self.cca.authenticate_rest()
         await self._ws_send_and_expect("auth", {"bearer": jwt}, 1, "paradex: WS authenticated")
-        await self._ws_send_and_expect("subscribe", {"channel": "orders.ALL"}, 2, "paradex: subscribed to orders.ALL")
+        await self._ws_send_and_expect(
+            "subscribe", {"channel": "orders.ALL"}, 2, "paradex: subscribed to orders.ALL"
+        )
 
     async def _ws_receive_orders(self) -> list:
         """Receive next message and extract order updates."""

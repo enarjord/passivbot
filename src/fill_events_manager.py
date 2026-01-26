@@ -42,7 +42,9 @@ logger = logging.getLogger(__name__)
 
 # Throttle state for spammy warnings
 _pnl_discrepancy_last_log: Dict[str, float] = {}  # exchange:user -> last log time
-_PNL_DISCREPANCY_THROTTLE_SECONDS = 300.0  # Log at most once per 5 minutes
+_pnl_discrepancy_last_delta: Dict[str, float] = {}  # exchange:user -> last delta value
+_PNL_DISCREPANCY_THROTTLE_SECONDS = 3600.0  # Log at most once per hour if delta unchanged
+_PNL_DISCREPANCY_CHANGE_THRESHOLD = 0.10  # Log immediately if delta changes by >10%
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +58,12 @@ _DEFAULT_RATE_LIMITS: Dict[str, Dict[str, int]] = {
     "bitget": {"fill_history": 120, "fetch_order": 60, "default": 120},
     "hyperliquid": {"fetch_my_trades": 120, "default": 120},
     "gateio": {"fetch_closed_orders": 120, "default": 120},
-    "kucoin": {"fetch_my_trades": 120, "fetch_positions_history": 120, "fetch_order": 60, "default": 120},
+    "kucoin": {
+        "fetch_my_trades": 120,
+        "fetch_positions_history": 120,
+        "fetch_order": 60,
+        "default": 120,
+    },
     # OKX: /fills = 60 req/2s, /fills-history = 10 req/2s (conservative estimates)
     "okx": {"fetch_my_trades": 1800, "fills_history": 300, "default": 300},
 }
@@ -144,7 +151,9 @@ class RateLimitCoordinator:
         calls = self._load_calls()
         now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
         cutoff = now_ms - self.window_ms
-        return sum(1 for c in calls if c.get("endpoint") == endpoint and c.get("timestamp_ms", 0) > cutoff)
+        return sum(
+            1 for c in calls if c.get("endpoint") == endpoint and c.get("timestamp_ms", 0) > cutoff
+        )
 
     def get_limit(self, endpoint: str) -> int:
         """Get rate limit for an endpoint."""
@@ -153,11 +162,13 @@ class RateLimitCoordinator:
     def record_call(self, endpoint: str) -> None:
         """Record an API call."""
         calls = self._load_calls()
-        calls.append({
-            "endpoint": endpoint,
-            "timestamp_ms": int(datetime.now(tz=timezone.utc).timestamp() * 1000),
-            "user": self.user,
-        })
+        calls.append(
+            {
+                "endpoint": endpoint,
+                "timestamp_ms": int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+                "user": self.user,
+            }
+        )
         self._save_calls(calls)
 
     async def wait_if_needed(self, endpoint: str) -> float:
@@ -170,7 +181,11 @@ class RateLimitCoordinator:
             wait_time = self.window_ms / 1000.0
             logger.info(
                 "RateLimitCoordinator: %s:%s at limit (%d/%d), waiting %.1fs",
-                self.exchange, endpoint, current, limit, wait_time
+                self.exchange,
+                endpoint,
+                current,
+                limit,
+                wait_time,
             )
             await asyncio.sleep(wait_time)
             return wait_time
@@ -179,7 +194,11 @@ class RateLimitCoordinator:
             jitter = random.uniform(0.1, 2.0)
             logger.debug(
                 "RateLimitCoordinator: %s:%s approaching limit (%d/%d), jitter %.2fs",
-                self.exchange, endpoint, current, limit, jitter
+                self.exchange,
+                endpoint,
+                current,
+                limit,
+                jitter,
             )
             await asyncio.sleep(jitter)
             return jitter
@@ -276,19 +295,51 @@ def ensure_qty_signage(events: List[Dict[str, object]]) -> None:
             ev["qty"] = -abs(qty)
 
 
-def annotate_positions_inplace(
+def _compute_add_reduce(pos_side: str, qty_signed: float) -> Tuple[float, float]:
+    """Compute add/reduce amounts based on position side and signed qty.
+
+    Args:
+        pos_side: "long" or "short"
+        qty_signed: Signed quantity (buy +, sell -)
+
+    Returns:
+        (add_amt, reduce_amt) tuple
+    """
+    if pos_side == "short":
+        add_amt = max(-qty_signed, 0.0)  # sells are negative -> add
+        reduce_amt = max(qty_signed, 0.0)  # buys positive -> reduce short
+    else:
+        add_amt = max(qty_signed, 0.0)  # buys add to long
+        reduce_amt = max(-qty_signed, 0.0)  # sells reduce long
+    return add_amt, reduce_amt
+
+
+def compute_psize_pprice(
     events: List[Dict[str, object]],
-    state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
-    *,
-    recompute_pnl: bool = False,
+    initial_state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
 ) -> Dict[Tuple[str, str], Tuple[float, float]]:
     """
-    Given a list of events (expected in chronological order), compute position
-    size (psize) and vwap (pprice) per (symbol, position_side) after each fill.
-    Qty sign is assumed already normalized (buy +, sell -).
-    If recompute_pnl is True, realized PnL is recomputed per fill from positions.
+    Compute psize/pprice for each fill event using two-phase algorithm.
+
+    Phase 1: Forward iteration to compute final position state, storing
+             the state before each fill for use in phase 2.
+    Phase 2: Backward iteration to annotate each event with the "after" state.
+
+    This approach is cleaner than multi-pass reconciliation because working
+    backwards from a known final state is deterministic - no reconciliation needed.
+
+    Args:
+        events: List of fill event dicts (must have: symbol, position_side, side, qty, price)
+                Qty sign must be normalized (buy +, sell -).
+        initial_state: Optional starting positions {(symbol, pside): (size, price)}
+
+    Returns:
+        Final position state after all fills: {(symbol, pside): (size, price)}
     """
-    positions: Dict[Tuple[str, str], Tuple[float, float]] = state or {}
+    if not events:
+        return {}
+
+    # Group events by (symbol, position_side)
     grouped: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
     for ev in events:
         key = (
@@ -297,75 +348,71 @@ def annotate_positions_inplace(
         )
         grouped[key].append(ev)
 
-    def _add_reduce(pos_side: str, qty_signed: float) -> Tuple[float, float]:
-        if pos_side == "short":
-            add_amt = max(-qty_signed, 0.0)  # sells are negative -> add
-            reduce_amt = max(qty_signed, 0.0)  # buys positive -> reduce short
-        else:
-            add_amt = max(qty_signed, 0.0)  # buys add to long
-            reduce_amt = max(-qty_signed, 0.0)  # sells reduce long
-        return add_amt, reduce_amt
+    final_state: Dict[Tuple[str, str], Tuple[float, float]] = {}
 
     for key, evs in grouped.items():
-        # sort by time to ensure chronological
         evs.sort(key=lambda x: x.get("timestamp", 0))
-        # First forward pass: get tentative sizes with clamping to zero
-        forward_sizes: List[float] = []
-        pos_size = positions.get(key, (0.0, 0.0))[0]
+
+        # Phase 1: Forward to compute final state, storing before-state for each fill
+        psize = initial_state.get(key, (0.0, 0.0))[0] if initial_state else 0.0
+        pprice = initial_state.get(key, (0.0, 0.0))[1] if initial_state else 0.0
+
+        # Store (before_psize, before_pprice, after_psize, after_pprice) for each fill
+        states: List[Tuple[float, float, float, float]] = []
+
         for ev in evs:
             qty_signed = float(ev.get("qty") or ev.get("amount") or 0.0) * float(
                 ev.get("c_mult", 1.0) or 1.0
             )
-            add_amt, reduce_amt = _add_reduce(key[1], qty_signed)
-            pos_size = max(pos_size + add_amt - reduce_amt, 0.0)
-            forward_sizes.append(pos_size)
-        # Backward pass: reconcile sizes starting from final
-        reconciled_sizes: List[float] = [0.0] * len(evs)
-        current = forward_sizes[-1] if forward_sizes else 0.0
-        for idx in range(len(evs) - 1, -1, -1):
-            ev = evs[idx]
-            qty_signed = float(ev.get("qty") or ev.get("amount") or 0.0) * float(
-                ev.get("c_mult", 1.0) or 1.0
-            )
-            add_amt, reduce_amt = _add_reduce(key[1], qty_signed)
-            before = max(current - add_amt + reduce_amt, 0.0)
-            reconciled_sizes[idx] = current
-            current = before
-
-        # Final forward pass to compute pprice with reconciled sizes
-        pos_size = positions.get(key, (0.0, 0.0))[0]
-        vwap = positions.get(key, (0.0, 0.0))[1]
-        for ev, after_size in zip(evs, reconciled_sizes):
-            qty_signed = float(ev.get("qty") or ev.get("amount") or 0.0) * float(
-                ev.get("c_mult", 1.0) or 1.0
-            )
             price = float(ev.get("price") or 0.0)
-            add_amt, reduce_amt = _add_reduce(key[1], qty_signed)
-            before_size = max(after_size - add_amt + reduce_amt, 0.0)
-            if recompute_pnl:
-                realized = 0.0
-                if reduce_amt > 0 and before_size > 0 and price > 0 and vwap >= 0:
-                    close_qty = min(before_size, reduce_amt)
-                    if key[1] == "short":
-                        realized = (vwap - price) * close_qty
-                    else:
-                        realized = (price - vwap) * close_qty
-                    ev["pnl"] = realized - _fee_cost(ev.get("fees"))
-            if add_amt > 0:
-                if before_size <= 0:
-                    vwap = price
-                else:
-                    vwap = ((before_size * vwap) + (add_amt * price)) / max(
-                        before_size + add_amt, 1e-12
-                    )
-            if after_size <= 1e-12:
-                vwap = 0.0
-            ev["psize"] = round(after_size, 12)
-            ev["pprice"] = vwap
-            pos_size, _ = positions.get(key, (0.0, 0.0))
-        positions[key] = (reconciled_sizes[-1] if reconciled_sizes else pos_size, vwap)
+            add_amt, reduce_amt = _compute_add_reduce(key[1], qty_signed)
 
-    return positions
+            before_psize = psize
+            before_pprice = pprice
+
+            # Update position
+            if add_amt > 0:
+                if psize <= 0:
+                    pprice = price
+                else:
+                    pprice = ((psize * pprice) + (add_amt * price)) / (psize + add_amt)
+                psize += add_amt
+            if reduce_amt > 0:
+                psize = max(0.0, psize - reduce_amt)
+                if psize <= 1e-12:
+                    psize = 0.0
+                    pprice = 0.0
+
+            states.append((before_psize, before_pprice, psize, pprice))
+
+        final_state[key] = (psize, pprice)
+
+        # Phase 2: Annotate each event with its after-state
+        # The states list already contains the after-state for each fill
+        for ev, (_, _, after_psize, after_pprice) in zip(evs, states):
+            ev["psize"] = round(after_psize, 12)
+            ev["pprice"] = after_pprice
+
+    return final_state
+
+
+def annotate_positions_inplace(
+    events: List[Dict[str, object]],
+    state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
+    *,
+    recompute_pnl: bool = False,
+) -> Dict[Tuple[str, str], Tuple[float, float]]:
+    """
+    Legacy wrapper around compute_psize_pprice for backward compatibility.
+
+    Note: recompute_pnl is no longer supported in the simplified algorithm.
+    Fetchers are responsible for computing correct PnL values during fetch.
+    """
+    if recompute_pnl:
+        logger.warning(
+            "annotate_positions_inplace: recompute_pnl=True is deprecated and ignored"
+        )
+    return compute_psize_pprice(events, state)
 
 
 def compute_realized_pnls_from_trades(
@@ -664,16 +711,16 @@ class FillEventCache:
                 with path.open("r", encoding="utf-8") as fh:
                     payload = json.load(fh) or []
             except Exception as exc:
-                logger.warning("FillEventCache.load: failed to read %s (%s)", path, exc)
+                logger.warning("[fills] cache load: failed to read %s (%s)", path, exc)
                 continue
             for raw in payload:
                 try:
                     events.append(FillEvent.from_dict(raw))
                 except Exception:
-                    logger.debug("FillEventCache.load: skipping malformed record in %s", path)
+                    logger.debug("[fills] cache load: skipping malformed record in %s", path)
         events.sort(key=lambda ev: ev.timestamp)
         logger.info(
-            "FillEventCache.load: loaded %d events from %d files in %s",
+            "[fills] cache loaded: %d events from %d files in %s",
             len(events),
             len(files),
             self.root,
@@ -741,7 +788,9 @@ class FillEventCache:
                 data.setdefault(key, default[key])
             self._metadata = data
         except Exception as exc:
-            logger.warning("FillEventCache.load_metadata: failed to read %s (%s)", self.metadata_path, exc)
+            logger.warning(
+                "[fills] cache metadata: failed to read %s (%s)", self.metadata_path, exc
+            )
             self._metadata = default
 
         return self._metadata
@@ -761,7 +810,9 @@ class FillEventCache:
             os.replace(tmp_path, self.metadata_path)
             logger.debug("FillEventCache.save_metadata: wrote to %s", self.metadata_path)
         except Exception as exc:
-            logger.error("FillEventCache.save_metadata: failed to write %s (%s)", self.metadata_path, exc)
+            logger.error(
+                "FillEventCache.save_metadata: failed to write %s (%s)", self.metadata_path, exc
+            )
 
     def update_metadata_from_events(self, events: Sequence[FillEvent]) -> None:
         """Update metadata timestamps based on events."""
@@ -809,7 +860,9 @@ class FillEventCache:
                 gap["end_ts"] = max(gap["end_ts"], end_ts)
                 gap["retry_count"] = gap.get("retry_count", 0) + 1
                 if gap["retry_count"] >= _GAP_MAX_RETRIES:
-                    gap["confidence"] = max(gap.get("confidence", 0), GAP_CONFIDENCE_LIKELY_LEGITIMATE)
+                    gap["confidence"] = max(
+                        gap.get("confidence", 0), GAP_CONFIDENCE_LIKELY_LEGITIMATE
+                    )
                 logger.info(
                     "FillEventCache.add_known_gap: updated gap %s → %s (retry_count=%d)",
                     _format_ms(gap["start_ts"]),
@@ -968,7 +1021,7 @@ class BitgetFetcher(BaseFetcher):
         max_fetches = 400
         fetch_count = 0
 
-        logger.info(
+        logger.debug(
             "BitgetFetcher.fetch: start (since=%s, until=%s, limit=%d)",
             _format_ms(since_ms),
             _format_ms(until_ms),
@@ -986,7 +1039,7 @@ class BitgetFetcher(BaseFetcher):
             payload = await self.api.private_mix_get_v2_mix_order_fill_history(dict(params))
             fill_list = payload.get("data", {}).get("fillList") or []
             if fetch_count > 1:
-                logger.info(
+                logger.debug(
                     "BitgetFetcher.fetch: fetch #%d endTime=%s size=%d",
                     fetch_count,
                     _format_ms(params.get("endTime")),
@@ -1083,7 +1136,7 @@ class BitgetFetcher(BaseFetcher):
             ordered = [ev for ev in ordered if ev["timestamp"] >= since_ms]
         if until_ms is not None:
             ordered = [ev for ev in ordered if ev["timestamp"] <= until_ms]
-        logger.info(
+        logger.debug(
             "BitgetFetcher.fetch: done (events=%d, detail_cache_hits=%d, detail_fetches=%d)",
             len(ordered),
             detail_hits,
@@ -1248,7 +1301,7 @@ class BinanceFetcher(BaseFetcher):
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
-        logger.info(
+        logger.debug(
             "BinanceFetcher.fetch: start since=%s until=%s",
             _format_ms(since_ms),
             _format_ms(until_ms),
@@ -1418,7 +1471,7 @@ class BinanceFetcher(BaseFetcher):
         if on_batch and ordered:
             on_batch(ordered)
 
-        logger.info(
+        logger.debug(
             "BinanceFetcher.fetch: done events=%d (symbols=%d)",
             len(ordered),
             len(symbol_pool),
@@ -1482,12 +1535,15 @@ class BinanceFetcher(BaseFetcher):
             fetch_count += 1
             payload = await self.api.fapiprivate_get_income(params=params)
             if fetch_count > 1:
-                logger.info(
+                payload_size = len(payload) if payload else 0
+                # Only log at INFO when there's actual data; DEBUG otherwise
+                log_fn = logger.info if payload_size > 0 else logger.debug
+                log_fn(
                     "BinanceFetcher._fetch_income: fetch #%d startTime=%s endTime=%s size=%d",
                     fetch_count,
                     _format_ms(params.get("startTime")),
                     _format_ms(params.get("endTime")),
-                    len(payload) if payload else 0,
+                    payload_size,
                 )
             if payload == []:
                 if params["startTime"] + week_buffer_ms >= until_ms:
@@ -1543,13 +1599,16 @@ class BinanceFetcher(BaseFetcher):
                     params=dict(params),
                 )
                 if fetch_count > 1:
-                    logger.info(
+                    batch_size = len(batch) if batch else 0
+                    # Only log at INFO when there's actual data; DEBUG otherwise
+                    log_fn = logger.info if batch_size > 0 else logger.debug
+                    log_fn(
                         "BinanceFetcher._fetch_symbol_trades: fetch #%d symbol=%s start=%s end=%s size=%d",
                         fetch_count,
                         ccxt_symbol,
                         _format_ms(params["startTime"]),
                         _format_ms(params["endTime"]),
-                        len(batch) if batch else 0,
+                        batch_size,
                     )
                 if not batch:
                     cursor = window_end + 1
@@ -1713,6 +1772,14 @@ class FillEventsManager:
                     continue
                 filtered.append(ev)
             self._events = sorted(filtered, key=lambda ev: ev.timestamp)
+
+            # Annotate psize/pprice for legacy caches that may lack these values
+            if self._events:
+                payload = [ev.to_dict() for ev in self._events]
+                ensure_qty_signage(payload)
+                compute_psize_pprice(payload)
+                self._events = [FillEvent.from_dict(ev) for ev in payload]
+
             logger.info(
                 "FillEventsManager.ensure_loaded: loaded %d cached events (dropped %d without raw)",
                 len(self._events),
@@ -1772,6 +1839,18 @@ class FillEventsManager:
 
         self._events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
 
+        # Annotate psize/pprice for all events
+        if self._events:
+            payload = [ev.to_dict() for ev in self._events]
+            ensure_qty_signage(payload)
+            compute_psize_pprice(payload)
+            self._events = [FillEvent.from_dict(ev) for ev in payload]
+
+            # Re-persist touched days with annotated psize/pprice values
+            if all_days_persisted:
+                day_payload = self._events_for_days(self._events, all_days_persisted)
+                self.cache.save_days(day_payload)
+
         # Update cache metadata with timestamps
         if self._events:
             self.cache.update_metadata_from_events(self._events)
@@ -1781,7 +1860,8 @@ class FillEventsManager:
                 self.cache.clear_gap(start_ms, end_ms)
 
         # Consolidated refresh summary log
-        if added_ids or all_days_persisted:
+        # Only log at INFO when there are actually new fills; routine refreshes go to DEBUG
+        if added_ids:
             days_list = sorted(all_days_persisted)
             days_preview = ", ".join(days_list[:5])
             if len(days_list) > 5:
@@ -1866,7 +1946,7 @@ class FillEventsManager:
                 break
             if cur_ts - prev_ts >= gap_ms:
                 gap_start = max(prev_ts, start_ms)
-                gap_end = end_ms if end_ms is not None else cur_ts
+                gap_end = cur_ts
                 if gap_start < gap_end:
                     if is_in_persistent_gap(gap_start, gap_end):
                         logger.debug(
@@ -1883,7 +1963,6 @@ class FillEventsManager:
                             reason=GAP_REASON_AUTO,
                             confidence=GAP_CONFIDENCE_SUSPICIOUS,
                         )
-                break
             prev_ts = cur_ts
 
         # Fetch newer data after latest cached if requested (if not already covered)
@@ -1913,6 +1992,12 @@ class FillEventsManager:
         end_ms: Optional[int] = None,
         symbol: Optional[str] = None,
     ) -> List[FillEvent]:
+        """Get fill events with optional filtering.
+
+        Events are returned with pre-computed psize/pprice values based on full
+        history (computed during ensure_loaded/refresh). The values reflect
+        position state after each fill in chronological order.
+        """
         events = self._events
         if start_ms is not None:
             events = [ev for ev in events if ev.timestamp >= start_ms]
@@ -1920,14 +2005,7 @@ class FillEventsManager:
             events = [ev for ev in events if ev.timestamp <= end_ms]
         if symbol:
             events = [ev for ev in events if ev.symbol == symbol]
-        # Annotate positions on a copy so cache on disk remains untouched
-        # Note: PnL is NOT recomputed here - fetchers are responsible for computing
-        # correct PnL values during fetch. Recomputing here would overwrite correct
-        # values (e.g., KuCoinFetcher uses positions_history for accurate PnL).
-        payload = [ev.to_dict() for ev in events]
-        ensure_qty_signage(payload)
-        annotate_positions_inplace(payload)
-        return [FillEvent.from_dict(ev) for ev in payload]
+        return list(events)
 
     def get_pnl_sum(
         self,
@@ -2073,7 +2151,7 @@ class BybitFetcher(BaseFetcher):
             for day in sorted(day_map):
                 on_batch(day_map[day])
 
-        logger.info(
+        logger.debug(
             "BybitFetcher.fetch: done (events=%d, trades=%d, positions=%d)",
             len(events),
             len(trades),
@@ -2135,51 +2213,145 @@ class BybitFetcher(BaseFetcher):
         return ordered
 
     async def _fetch_positions_history(self, start_ms: int, end_ms: int) -> List[Dict[str, object]]:
-        params = {
+        """Fetch closed-pnl records using Bybit's raw API with hybrid pagination.
+
+        Uses a two-phase approach:
+        1. Cursor pagination for recent records (more efficient, no missed records)
+        2. Time-based sliding window for older records (cursor doesn't go back far enough)
+
+        This is necessary because:
+        - CCXT's fetch_positions_history uses time-based pagination which can miss records
+        - Bybit's cursor pagination only covers ~7 days of recent data
+        """
+        results: Dict[str, Dict[str, object]] = {}  # Dedupe by orderId
+        max_fetches = 500
+        fetch_count = 0
+
+        # Phase 1: Use cursor pagination for recent records
+        params: Dict[str, object] = {
+            "category": "linear",
             "limit": self.position_limit,
             "endTime": int(end_ms),
         }
-        results: List[Dict[str, object]] = []
-        max_fetches = 200
-        fetch_count = 0
-        prev_params = None
+
+        cursor_oldest_ts = end_ms
+
         while True:
-            new_key = _check_pagination_progress(
-                prev_params,
-                params,
-                "BybitFetcher._fetch_positions_history",
-            )
-            if new_key is None:
-                break
-            prev_params = new_key
             fetch_count += 1
-            batch = await self.api.fetch_positions_history(params=params)
-            if fetch_count > 1:
-                logger.info(
-                    "BybitFetcher._fetch_positions_history: fetch #%d endTime=%s size=%d",
-                    fetch_count,
-                    _format_ms(params.get("endTime")),
-                    len(batch) if batch else 0,
-                )
+            if fetch_count > max_fetches:
+                logger.warning("BybitFetcher._fetch_positions_history: max fetches reached (%d)", max_fetches)
+                break
+
+            try:
+                response = await self.api.private_get_v5_position_closed_pnl(params)
+            except Exception as exc:
+                logger.warning("BybitFetcher._fetch_positions_history: API error: %s", exc)
+                break
+
+            batch = response.get("result", {}).get("list", [])
             if not batch:
                 break
-            batch.sort(key=lambda x: x["timestamp"])
-            results.extend(batch)
-            if len(batch) < self.position_limit:
-                if params["endTime"] - start_ms < self._max_span_ms:
+
+            self._process_closed_pnl_batch(batch, start_ms, results)
+
+            oldest_ts = int(batch[-1].get("updatedTime", 0)) if batch else 0
+            cursor_oldest_ts = oldest_ts
+
+            if oldest_ts <= start_ms:
+                break
+
+            cursor = response.get("result", {}).get("nextPageCursor")
+            if not cursor:
+                # Cursor exhausted - switch to time-based sliding window
+                break
+            params["cursor"] = cursor
+
+        # Phase 2: Time-based sliding window for older records (if cursor didn't reach start)
+        if cursor_oldest_ts > start_ms:
+            logger.debug(
+                "BybitFetcher._fetch_positions_history: cursor exhausted at %s, switching to time-based",
+                _format_ms(cursor_oldest_ts),
+            )
+            # Remove cursor and continue with time-based pagination
+            current_end = cursor_oldest_ts
+
+            while current_end > start_ms and fetch_count < max_fetches:
+                fetch_count += 1
+                params = {
+                    "category": "linear",
+                    "limit": self.position_limit,
+                    "endTime": int(current_end),
+                }
+
+                try:
+                    response = await self.api.private_get_v5_position_closed_pnl(params)
+                except Exception as exc:
+                    logger.warning("BybitFetcher._fetch_positions_history: API error: %s", exc)
                     break
-                params["endTime"] = max(start_ms, params["endTime"] - self._max_span_ms)
+
+                batch = response.get("result", {}).get("list", [])
+                if not batch:
+                    # No more records, slide window back
+                    current_end = max(start_ms, current_end - self._max_span_ms)
+                    continue
+
+                self._process_closed_pnl_batch(batch, start_ms, results)
+
+                oldest_ts = int(batch[-1].get("updatedTime", 0)) if batch else 0
+                if oldest_ts <= start_ms:
+                    break
+
+                # Slide window: if batch was full, use oldest ts; otherwise jump back
+                if len(batch) >= self.position_limit:
+                    current_end = oldest_ts
+                else:
+                    current_end = max(start_ms, oldest_ts - self._max_span_ms)
+
+        logger.debug(
+            "BybitFetcher._fetch_positions_history: fetched %d records in %d requests",
+            len(results),
+            fetch_count,
+        )
+        return list(results.values())
+
+    def _process_closed_pnl_batch(
+        self,
+        batch: List[Dict[str, object]],
+        start_ms: int,
+        results: Dict[str, Dict[str, object]],
+    ) -> None:
+        """Process a batch of closed-pnl records and add to results dict."""
+        for record in batch:
+            updated_ts = int(record.get("updatedTime", 0))
+            created_ts = int(record.get("createdTime", 0))
+            order_id = record.get("orderId", "")
+
+            # Skip records outside our time range or already processed
+            if updated_ts < start_ms or order_id in results:
                 continue
-            first_ts = batch[0]["timestamp"]
-            if first_ts <= start_ms:
-                break
-            if params["endTime"] == first_ts:
-                break
-            params["endTime"] = int(first_ts)
-            if fetch_count >= max_fetches:
-                logger.warning("BybitFetcher._fetch_positions_history: max fetches reached")
-                break
-        return results
+
+            # Convert Bybit symbol to CCXT format
+            raw_symbol = record.get("symbol", "")
+            ccxt_symbol = raw_symbol
+            if hasattr(self.api, "markets") and self.api.markets:
+                for market_symbol, market in self.api.markets.items():
+                    if market.get("id") == raw_symbol:
+                        ccxt_symbol = market_symbol
+                        break
+
+            results[order_id] = {
+                "info": record,
+                "symbol": ccxt_symbol,
+                "timestamp": created_ts,
+                "datetime": datetime.fromtimestamp(created_ts / 1000, tz=timezone.utc).isoformat(),
+                "lastUpdateTimestamp": updated_ts,
+                "realizedPnl": float(record.get("closedPnl", 0)),
+                "contracts": float(record.get("closedSize", 0)),
+                "entryPrice": float(record.get("avgEntryPrice", 0)),
+                "lastPrice": float(record.get("avgExitPrice", 0)),
+                "leverage": float(record.get("leverage", 1)),
+                "side": "long" if record.get("side", "").lower() == "sell" else "short",
+            }
 
     def _combine(
         self,
@@ -2187,70 +2359,46 @@ class BybitFetcher(BaseFetcher):
         positions: List[Dict[str, object]],
         detail_cache: Dict[str, Tuple[str, str]],
     ) -> List[Dict[str, object]]:
-        pnls: Dict[str, float] = defaultdict(float)
-        symbol_realized: Dict[str, float] = defaultdict(float)
-        symbol_closed_qty: Dict[str, float] = defaultdict(float)
+        """Combine trades with positions_history to compute per-fill PnL.
+
+        Strategy: For each close fill, use avgEntryPrice from its closed-pnl record
+        to compute accurate PnL as: (exitPrice - avgEntryPrice) * closedSize * direction.
+
+        This ensures each fill gets its correct PnL rather than distributing the
+        total order PnL proportionally (which is incorrect when fills have different
+        exit prices).
+        """
+        # Index closed-pnl records by orderId for fast lookup
+        # Each close fill has its own closed-pnl record with avgEntryPrice
+        pnl_by_order: Dict[str, Dict] = {}
+        raw_pnl_by_order: Dict[str, Dict] = {}  # Keep original data for raw field
         for entry in positions:
-            order_id = str(entry.get("info", {}).get("orderId", entry.get("orderId", "")))
+            info = entry.get("info", {})
+            order_id = str(info.get("orderId", entry.get("orderId", "")))
             if not order_id:
                 continue
-            pnl = float(entry.get("realizedPnl") or entry.get("info", {}).get("closedPnl") or 0.0)
-            pnls[order_id] += pnl
-            symbol = entry.get("symbol")
-            if symbol:
-                symbol_realized[symbol] += pnl
-                closed = float(
-                    entry.get("info", {}).get("closedSize") or entry.get("contracts") or 0.0
-                )
-                symbol_closed_qty[symbol] += closed
-
-        order_total_qty: Dict[str, float] = defaultdict(float)
-        symbol_order_qty: Dict[str, float] = defaultdict(float)
-        symbol_unknown_trade_qty: Dict[str, float] = defaultdict(float)
-        for trade in trades:
-            order_id = str(trade.get("info", {}).get("orderId", trade.get("order")))
-            qty = abs(float(trade.get("amount") or trade.get("info", {}).get("execQty") or 0.0))
-            symbol = trade.get("symbol") or trade.get("info", {}).get("symbol")
-            if order_id and order_id in pnls:
-                order_total_qty[order_id] += qty
-                if symbol:
-                    symbol_order_qty[symbol] += qty
-            elif symbol:
-                symbol_unknown_trade_qty[symbol] += qty
-
-        order_remaining_qty = dict(order_total_qty)
-        order_remaining_pnl = dict(pnls)
-        symbol_remaining_pnl = dict(symbol_realized)
-        symbol_remaining_qty: Dict[str, float] = {}
-        for sym, closed in symbol_closed_qty.items():
-            remaining = max(closed - symbol_order_qty.get(sym, 0.0), 0.0)
-            symbol_remaining_qty[sym] = remaining
-        for sym, qty in symbol_unknown_trade_qty.items():
-            symbol_remaining_qty[sym] = symbol_remaining_qty.get(sym, 0.0) + qty
+            pnl_by_order[order_id] = {
+                "closedPnl": float(entry.get("realizedPnl") or info.get("closedPnl") or 0.0),
+                "avgEntryPrice": float(info.get("avgEntryPrice") or 0.0),
+                "avgExitPrice": float(info.get("avgExitPrice") or 0.0),
+                "closedSize": float(info.get("closedSize") or entry.get("contracts") or 0.0),
+                "closeFee": float(info.get("closeFee") or 0.0),
+                "openFee": float(info.get("openFee") or 0.0),
+                "side": str(info.get("side") or "").lower(),
+                "symbol": entry.get("symbol") or info.get("symbol"),
+            }
+            raw_pnl_by_order[order_id] = dict(entry)
 
         events: List[Dict[str, object]] = []
+        matched_count = 0
+        computed_count = 0
+
         for trade in trades:
             event = self._normalize_trade(trade)
             order_id = event.get("order_id")
             cache_entry = detail_cache.get(event["id"])
-            allocated = False
-            if order_id and order_id in order_remaining_pnl and order_remaining_qty[order_id] > 0:
-                remaining_qty = order_remaining_qty[order_id]
-                remaining_pnl = order_remaining_pnl[order_id]
-                qty = abs(event["qty"])
-                if remaining_qty <= qty * 1.0000001:
-                    event["pnl"] = remaining_pnl
-                else:
-                    event["pnl"] = remaining_pnl * (qty / remaining_qty)
-                order_remaining_qty[order_id] = max(0.0, remaining_qty - qty)
-                order_remaining_pnl[order_id] = remaining_pnl - event["pnl"]
-                symbol_remaining_pnl[event["symbol"]] = (
-                    symbol_remaining_pnl.get(event["symbol"], 0.0) - event["pnl"]
-                )
-                symbol_remaining_qty[event["symbol"]] = max(
-                    0.0, symbol_remaining_qty.get(event["symbol"], 0.0) - qty
-                )
-                allocated = True
+
+            # Set pb_order_type from cache or client_order_id
             if cache_entry:
                 event["client_order_id"], event["pb_order_type"] = cache_entry
                 if not event["pb_order_type"]:
@@ -2260,42 +2408,56 @@ class BybitFetcher(BaseFetcher):
                 event["pb_order_type"] = pb_type or "unknown"
             else:
                 event["pb_order_type"] = "unknown"
-            if (
-                event["pb_order_type"] == "unknown"
-                and not allocated
-                and abs(event.get("pnl", 0.0)) < 1e-12
-            ):
-                symbol = event["symbol"]
-                remaining_symbol_qty = symbol_remaining_qty.get(symbol, 0.0)
-                remaining_symbol_pnl = symbol_remaining_pnl.get(symbol, 0.0)
-                qty = abs(event["qty"])
-                if remaining_symbol_qty > 0:
-                    if remaining_symbol_qty <= qty * 1.0000001:
-                        event["pnl"] = remaining_symbol_pnl
+
+            # Compute PnL for close fills using avgEntryPrice
+            closed_size = float(event.get("closed_size", 0))
+            if closed_size > 0 and order_id and order_id in pnl_by_order:
+                pnl_record = pnl_by_order[order_id]
+                avg_entry = pnl_record["avgEntryPrice"]
+                exit_price = event["price"]
+                position_side = event["position_side"]
+
+                if avg_entry > 0 and exit_price > 0:
+                    # Compute gross PnL based on position direction
+                    # Long close (sell): profit if exit > entry
+                    # Short close (buy): profit if entry > exit
+                    if position_side == "long":
+                        gross_pnl = (exit_price - avg_entry) * closed_size
                     else:
-                        event["pnl"] = remaining_symbol_pnl * (qty / remaining_symbol_qty)
-                    symbol_remaining_qty[symbol] = max(0.0, remaining_symbol_qty - qty)
-                    symbol_remaining_pnl[symbol] = remaining_symbol_pnl - event["pnl"]
+                        gross_pnl = (avg_entry - exit_price) * closed_size
+
+                    # Distribute fees proportionally if this fill is part of larger close
+                    total_closed = pnl_record["closedSize"]
+                    total_fees = pnl_record["closeFee"] + pnl_record["openFee"]
+                    if total_closed > 0:
+                        fee_portion = (closed_size / total_closed) * total_fees
+                    else:
+                        fee_portion = 0.0
+
+                    event["pnl"] = gross_pnl - fee_portion
+                    computed_count += 1
                 else:
-                    event["pnl"] = remaining_symbol_pnl
+                    # Fallback to closedPnl if avgEntryPrice unavailable
+                    event["pnl"] = pnl_record["closedPnl"]
+
+                matched_count += 1
+
+                # Append positions_history (closed-pnl) data to raw field
+                if order_id in raw_pnl_by_order:
+                    event["raw"].append({
+                        "source": "positions_history",
+                        "data": raw_pnl_by_order[order_id],
+                    })
+
             events.append(event)
 
-        remaining_orders = [k for k, v in order_remaining_pnl.items() if abs(v) > 1e-6]
-        if remaining_orders:
-            # Log at debug level - this is historical residual PnL that couldn't be matched
-            # to trades, not an actionable warning
-            total_residual = sum(order_remaining_pnl[k] for k in remaining_orders)
+        if matched_count > 0:
             logger.debug(
-                "[fills] residual PnL: %d orders, total=%.4f (unmatched historical PnL)",
-                len(remaining_orders),
-                total_residual,
+                "[fills] PnL computed for %d/%d close fills using avgEntryPrice",
+                computed_count,
+                matched_count,
             )
-        remaining_symbols = [k for k, v in symbol_remaining_pnl.items() if abs(v) > 1e-6]
-        if remaining_symbols:
-            logger.debug(
-                "BybitFetcher._combine: remaining symbol-level PnL after distribution %s",
-                {k: symbol_remaining_pnl[k] for k in remaining_symbols},
-            )
+
         return events
 
     @staticmethod
@@ -2328,6 +2490,7 @@ class BybitFetcher(BaseFetcher):
             "pb_order_type": "",
             "position_side": position_side,
             "client_order_id": client_order_id or "",
+            "closed_size": closed_size,  # For PnL computation
             "raw": [{"source": "fetch_my_trades", "data": dict(trade)}],
         }
 
@@ -2396,7 +2559,7 @@ class HyperliquidFetcher(BaseFetcher):
                 continue
             fetch_count += 1
             if fetch_count > 1:
-                logger.info(
+                logger.debug(
                     "HyperliquidFetcher.fetch: fetch #%d since=%s size=%d",
                     fetch_count,
                     _format_ms(params.get("since")),
@@ -2442,7 +2605,7 @@ class HyperliquidFetcher(BaseFetcher):
 
         events = sorted(collected.values(), key=lambda ev: ev["timestamp"])
         events = _coalesce_events(events)
-        annotate_positions_inplace(events)
+        # Note: psize/pprice annotation is done centrally in FillEventsManager.refresh()
 
         for event in events:
             cache_entry = detail_cache.get(event["id"])
@@ -2532,7 +2695,7 @@ class GateioFetcher(BaseFetcher):
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
-        logger.info(
+        logger.debug(
             "GateioFetcher.fetch: start (since=%s, until=%s)",
             _format_ms(since_ms),
             _format_ms(until_ms),
@@ -2541,7 +2704,7 @@ class GateioFetcher(BaseFetcher):
         # Step 1: Fetch trades (fill-level data with fees)
         trades = await self._fetch_trades(since_ms, until_ms)
         if not trades:
-            logger.info("GateioFetcher.fetch: no trades found")
+            logger.debug("GateioFetcher.fetch: no trades found")
             return []
 
         # Step 2: Collect unique order IDs
@@ -2568,7 +2731,7 @@ class GateioFetcher(BaseFetcher):
         if on_batch and ordered:
             on_batch(ordered)
 
-        logger.info(
+        logger.debug(
             "GateioFetcher.fetch: done (events=%d, trades=%d, orders=%d)",
             len(ordered),
             len(trades),
@@ -2601,20 +2764,21 @@ class GateioFetcher(BaseFetcher):
             fetch_count += 1
             try:
                 # Use the timerange endpoint directly via CCXT's private API
-                batch = await self.api.private_futures_get_settle_my_trades_timerange({
-                    "settle": "usdt",
-                    "from": from_s,
-                    "to": to_s,
-                    "limit": self.trade_limit,
-                    "offset": offset,
-                })
+                batch = await self.api.private_futures_get_settle_my_trades_timerange(
+                    {
+                        "settle": "usdt",
+                        "from": from_s,
+                        "to": to_s,
+                        "limit": self.trade_limit,
+                        "offset": offset,
+                    }
+                )
                 consecutive_rate_limits = 0
             except RateLimitExceeded as exc:
                 consecutive_rate_limits += 1
-                sleep_time = min(2 ** consecutive_rate_limits, 30)
+                sleep_time = min(2**consecutive_rate_limits, 30)
                 logger.debug(
-                    "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs",
-                    exc, sleep_time
+                    "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs", exc, sleep_time
                 )
                 await asyncio.sleep(sleep_time)
                 continue
@@ -2622,10 +2786,11 @@ class GateioFetcher(BaseFetcher):
                 # Check if it's a rate limit error in disguise
                 if "TOO_MANY_REQUESTS" in str(exc):
                     consecutive_rate_limits += 1
-                    sleep_time = min(2 ** consecutive_rate_limits, 30)
+                    sleep_time = min(2**consecutive_rate_limits, 30)
                     logger.debug(
                         "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs",
-                        exc, sleep_time
+                        exc,
+                        sleep_time,
                     )
                     await asyncio.sleep(sleep_time)
                     continue
@@ -2705,9 +2870,7 @@ class GateioFetcher(BaseFetcher):
             "info": raw,  # Keep raw data for _normalize_trade to access
         }
 
-    async def _fetch_orders_for_pnl(
-        self, order_ids: set[str]
-    ) -> Dict[str, Dict[str, object]]:
+    async def _fetch_orders_for_pnl(self, order_ids: set[str]) -> Dict[str, Dict[str, object]]:
         """Fetch closed orders to get PnL data."""
         orders_by_id: Dict[str, Dict[str, object]] = {}
         max_fetches = 400
@@ -2805,10 +2968,7 @@ class GateioFetcher(BaseFetcher):
 
         # Get client order ID from trade or order
         client_order_id = str(
-            info.get("text")
-            or order.get("clientOrderId")
-            or order_info.get("text")
-            or ""
+            info.get("text") or order.get("clientOrderId") or order_info.get("text") or ""
         )
 
         # Check detail cache first
@@ -2939,7 +3099,7 @@ class KucoinFetcher(BaseFetcher):
             prev_params = key
             batch = await self.api.fetch_my_trades(params=params)
             if fetch_count > 1:
-                logger.info(
+                logger.debug(
                     "KucoinFetcher._fetch_trades: fetch #%d startAt=%s endAt=%s size=%d",
                     fetch_count,
                     _format_ms(params["startAt"]),
@@ -2994,7 +3154,7 @@ class KucoinFetcher(BaseFetcher):
             fetch_count += 1
             batch = await self.api.fetch_positions_history(params=params)
             if fetch_count > 1:
-                logger.info(
+                logger.debug(
                     "KucoinFetcher._fetch_positions_history: fetch #%d from=%s to=%s size=%d",
                     fetch_count,
                     _format_ms(params.get("from")),
@@ -3059,7 +3219,8 @@ class KucoinFetcher(BaseFetcher):
 
                 # Find all fills within the match window that haven't been assigned yet
                 matching_fills = [
-                    c for c in symbol_closes
+                    c
+                    for c in symbol_closes
                     if c["id"] not in assigned_trade_ids
                     and abs(c["timestamp"] - p_ts) < match_window_ms
                 ]
@@ -3070,7 +3231,9 @@ class KucoinFetcher(BaseFetcher):
                     continue
 
                 # Compute total qty across matching fills
-                total_qty = sum(abs(float(f.get("qty", 0) or f.get("amount", 0) or 0)) for f in matching_fills)
+                total_qty = sum(
+                    abs(float(f.get("qty", 0) or f.get("amount", 0) or 0)) for f in matching_fills
+                )
 
                 if total_qty <= 0:
                     # Fallback: assign all PnL to closest fill
@@ -3094,7 +3257,9 @@ class KucoinFetcher(BaseFetcher):
 
         # Log unmatched positions for debugging
         if unmatched_positions:
-            total_unmatched_pnl = sum(float(p.get("realizedPnl", 0) or 0) for p in unmatched_positions)
+            total_unmatched_pnl = sum(
+                float(p.get("realizedPnl", 0) or 0) for p in unmatched_positions
+            )
             logger.debug(
                 "[pnl] KucoinFetcher._match_pnls: %d position closes (%s total PnL) "
                 "could not be matched to any trade fills",
@@ -3123,17 +3288,26 @@ class KucoinFetcher(BaseFetcher):
         local_total = sum(local_pnls.values())
         remote_total = sum(pos_sum.values())
         if abs(local_total - remote_total) > max(1e-8, 0.05 * (abs(remote_total) + 1e-8)):
-            # Throttle this warning to once per 5 minutes
+            # Throttle: log once per hour, or immediately if delta changes significantly
             now = time.time()
             throttle_key = f"kucoin:{id(self.api)}"
             last_log = _pnl_discrepancy_last_log.get(throttle_key, 0.0)
-            if (now - last_log) >= _PNL_DISCREPANCY_THROTTLE_SECONDS:
+            last_delta = _pnl_discrepancy_last_delta.get(throttle_key)
+            current_delta = local_total - remote_total
+            # Log if: (1) delta changed significantly, or (2) throttle window expired
+            delta_changed = (
+                last_delta is None
+                or abs(current_delta - last_delta) > _PNL_DISCREPANCY_CHANGE_THRESHOLD * (abs(last_delta) + 1.0)
+            )
+            should_log = delta_changed or (now - last_log) >= _PNL_DISCREPANCY_THROTTLE_SECONDS
+            if should_log:
                 _pnl_discrepancy_last_log[throttle_key] = now
+                _pnl_discrepancy_last_delta[throttle_key] = current_delta
                 logger.warning(
                     "[pnl] KucoinFetcher: local sum %.2f differs from positions_history %.2f (delta=%.2f)",
                     local_total,
                     remote_total,
-                    local_total - remote_total,
+                    current_delta,
                 )
 
     @staticmethod
@@ -3293,7 +3467,9 @@ class KucoinFetcher(BaseFetcher):
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             if total > 50:
-                logger.info("KucoinFetcher: enrichment complete (%d orders, %d events)", total, total_events)
+                logger.info(
+                    "KucoinFetcher: enrichment complete (%d orders, %d events)", total, total_events
+                )
 
             # Apply results to all events sharing the same orderId
             for res in results:
@@ -3405,7 +3581,7 @@ class OkxFetcher(BaseFetcher):
         max_fetches = 400
         fetch_count = 0
 
-        logger.info(
+        logger.debug(
             "OkxFetcher.fetch: start (since=%s, until=%s)",
             _format_ms(since_ms),
             _format_ms(until_ms),
@@ -3448,9 +3624,9 @@ class OkxFetcher(BaseFetcher):
         if until_ms is not None:
             events = [ev for ev in events if ev["timestamp"] <= until_ms]
 
-        # Annotate positions
+        # Coalesce duplicate events
         events = _coalesce_events(events)
-        annotate_positions_inplace(events)
+        # Note: psize/pprice annotation is done centrally in FillEventsManager.refresh()
 
         # Apply pb_order_type from cache or derive from clOrdId
         for event in events:
@@ -3464,7 +3640,7 @@ class OkxFetcher(BaseFetcher):
             if not event["pb_order_type"]:
                 event["pb_order_type"] = "unknown"
 
-        logger.info(
+        logger.debug(
             "OkxFetcher.fetch: done (events=%d, fetches=%d)",
             len(events),
             fetch_count,

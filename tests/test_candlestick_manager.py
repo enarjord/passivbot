@@ -229,7 +229,15 @@ async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypa
     calls = {"n": 0}
 
     async def fake_get_candles(
-        symbol_, *, start_ts=None, end_ts=None, max_age_ms=None, strict=False, timeframe=None, tf=None, fill_leading_gaps=False
+        symbol_,
+        *,
+        start_ts=None,
+        end_ts=None,
+        max_age_ms=None,
+        strict=False,
+        timeframe=None,
+        tf=None,
+        fill_leading_gaps=False,
     ):
         calls["n"] += 1
         return arr
@@ -767,10 +775,9 @@ async def test_force_refetch_gaps_clears_gaps(tmp_path):
 
     # Pre-populate cache to avoid network fetch
     base = 1000000
-    arr = np.array([
-        (base + i * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0)
-        for i in range(20)
-    ], dtype=CANDLE_DTYPE)
+    arr = np.array(
+        [(base + i * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0) for i in range(20)], dtype=CANDLE_DTYPE
+    )
     cm._cache[symbol] = arr
 
     # Call get_candles with force_refetch_gaps
