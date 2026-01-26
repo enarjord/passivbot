@@ -756,8 +756,11 @@ class CandlestickManager:
         symbols = ", ".join(f"{s}:{c}" for s, c in sorted(summary.items())[:5])
         if len(summary) > 5:
             symbols += f", +{len(summary) - 5} more"
-        self.log.warning(
-            f"persistent gaps: {total} new ({symbols}). Use --force-refetch-gaps to retry."
+        self.log.info(
+            "[candle] persistent gaps: %d across %d symbols (%s). Use --force-refetch-gaps to retry.",
+            total,
+            len(summary),
+            symbols,
         )
         self._persistent_gap_summary.clear()
 
@@ -792,7 +795,7 @@ class CandlestickManager:
         symbols = ", ".join(f"{s}:{c}" for s, c in sorted(summary.items(), key=lambda x: -x[1])[:5])
         if len(summary) > 5:
             symbols += f", +{len(summary) - 5} more"
-        self.log.warning(
+        self.log.debug(
             "[candle] strict mode gaps: %d missing candles across %d symbols (%s)",
             total,
             len(summary),

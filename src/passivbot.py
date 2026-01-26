@@ -821,7 +821,7 @@ class Passivbot:
             prev_rss = prev["rss"]
             if prev_rss:
                 pct_change = 100.0 * (rss - prev_rss) / prev_rss
-        parts = [f"Memory usage rss={rss / (1024 * 1024):.2f} MiB"]
+        parts = [f"[memory] rss={rss / (1024 * 1024):.2f} MiB"]
         if pct_change is not None:
             parts.append(f"Δ={pct_change:+.2f}% vs previous snapshot")
         if cache_bytes is not None:
@@ -1104,7 +1104,7 @@ class Passivbot:
             wmins = [per_symbol_win[s] for s in symbols]
             wmin, wmax = (min(wmins), max(wmins)) if wmins else (default_win, default_win)
             logging.info(
-                f"warmup starting: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
+                f"[warmup] starting: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
             )
             # Enable batch mode for zero-candle synthesis warnings during warmup
             self.cm.start_synth_candle_batch()
@@ -1139,7 +1139,7 @@ class Passivbot:
                             eta_s = int(remaining / max(1e-6, rate))
                             pct = int(100 * completed / n)
                             logging.info(
-                                f"warmup candles: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
+                                f"[warmup] candles: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
                             )
                             last_log_ms = now_ms
 
@@ -2075,22 +2075,22 @@ class Passivbot:
         # Initialize mode change throttle cache if needed
         if not hasattr(self, "_mode_change_last_log_ms"):
             self._mode_change_last_log_ms = {}
-        mode_change_throttle_ms = 60_000  # 60 seconds between logs per symbol
+        mode_change_throttle_ms = 120_000  # 2 minutes between logs per symbol+type
         now_ms = utc_ms()
         for k, v in res.items():
             for elm in v:
-                # "added" and "removed" are startup events, always log at INFO
-                # "changed" can be throttled during forager mode oscillation
-                if k == "changed":
-                    # Extract symbol from the log entry (format: "pside.SYMBOL: old -> new")
-                    try:
-                        symbol_part = elm.split(":")[0]  # "long.XRP/USDT:USDT"
-                        last_log_ms = self._mode_change_last_log_ms.get(symbol_part, 0)
-                        if (now_ms - last_log_ms) < mode_change_throttle_ms:
-                            continue  # Throttle this log
-                        self._mode_change_last_log_ms[symbol_part] = now_ms
-                    except Exception:
-                        pass  # On any parse error, just log normally
+                # Throttle all mode changes (added/removed/changed) per symbol to reduce
+                # noise from forager mode oscillation where coins frequently enter/leave
+                try:
+                    # Extract symbol from the log entry (format: "pside.SYMBOL: ...")
+                    symbol_part = elm.split(":")[0]  # "long.XRP/USDT:USDT"
+                    throttle_key = f"{k}:{symbol_part}"  # Include event type in key
+                    last_log_ms = self._mode_change_last_log_ms.get(throttle_key, 0)
+                    if (now_ms - last_log_ms) < mode_change_throttle_ms:
+                        continue  # Throttle this log
+                    self._mode_change_last_log_ms[throttle_key] = now_ms
+                except Exception:
+                    pass  # On any parse error, just log normally
                 logging.info(f"[mode] {k:7s} {elm}")
 
     async def get_filtered_coins(self, pside: str) -> List[str]:
@@ -2421,7 +2421,7 @@ class Passivbot:
             return
 
         try:
-            logging.info("Initializing FillEventsManager...")
+            logging.info("[fills] initializing FillEventsManager")
 
             # Extract symbol pool from config
             symbol_pool = _extract_symbol_pool(self.config, None)
@@ -4331,7 +4331,7 @@ class Passivbot:
 
     async def maintain_hourly_cycle(self):
         """Periodically refresh market metadata while the bot is running."""
-        logging.info(f"Starting hourly_cycle...")
+        logging.info("[hourly] starting maintenance cycle")
         while not self.stop_signal_received:
             try:
                 now = utc_ms()
@@ -4720,7 +4720,7 @@ class Passivbot:
         if counts != self._last_coin_symbol_warning_counts:
             if counts["symbol_to_coin_fallbacks"] or counts["coin_to_symbol_fallbacks"]:
                 logging.info(
-                    "Symbol/coin mapping fallbacks: symbol->coin=%d | coin->symbol=%d (unique)",
+                    "[mapping] fallbacks: symbol->coin=%d | coin->symbol=%d (unique)",
                     counts["symbol_to_coin_fallbacks"],
                     counts["coin_to_symbol_fallbacks"],
                 )

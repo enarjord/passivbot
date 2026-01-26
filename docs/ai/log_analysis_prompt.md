@@ -225,10 +225,11 @@ Traceback (most recent call last):
 
 ### 5. Inconsistencies
 
-**Mixed tag formats:**
+**Mixed tag formats:** ✅ MOSTLY FIXED (Round 6)
 - Some use `[tag]` format: `[boot]`, `[order]`, `[pos]`, `[balance]`
 - Some don't: `BybitFetcher.fetch:`, `Memory usage rss=...`
 *Solution: Standardize on `[tag]` format for all log categories.*
+*Status: Core messages now use `[tag]` format. `BybitFetcher.fetch:` was already moved to DEBUG in Round 2.*
 
 **Mixed f-string vs format strings:**
 ```python
@@ -493,7 +494,53 @@ Compare to current (noisy):
    - Format: `[fill] SUI long close_unstuck_long -10 @ 1.47, pnl=-0.937 USDT id=trade-abc123`
    - File: `src/passivbot.py`
 
-### Round 6 (TODO)
+### Round 6 (2026-01-26) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **Standardized log tag formats** - Added `[tag]` style to untagged messages for consistency.
+   - `Memory usage rss=...` → `[memory] rss=...`
+   - `warmup starting: N symbols...` → `[warmup] starting: N symbols...`
+   - `warmup candles: N/M...` → `[warmup] candles: N/M...`
+   - `Starting hourly_cycle...` → `[hourly] starting maintenance cycle`
+   - `Initializing FillEventsManager...` → `[fills] initializing FillEventsManager`
+   - `FillEventCache.load:...` → `[fills] cache loaded/load:...`
+   - `Symbol/coin mapping fallbacks:...` → `[mapping] fallbacks:...`
+   - Files: `src/passivbot.py`, `src/fill_events_manager.py`
+
+2. **Strict mode gaps** - Changed from WARNING to DEBUG level.
+   - These are expected for illiquid markets and not actionable for operators
+   - File: `src/candlestick_manager.py`
+
+3. **Persistent gaps message** - Changed from WARNING to INFO and added `[candle]` tag.
+   - Already had 60-second throttling; message is informational about expected behavior
+   - Now uses format string for log aggregation compatibility
+   - File: `src/candlestick_manager.py`
+
+### Round 7 (2026-01-26) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **KucoinFetcher PnL discrepancy throttling** - Enhanced deduplication.
+   - Increased throttle from 5 minutes to 1 hour
+   - Added delta-based deduplication: only logs again if delta changes by >10%
+   - Same discrepancy no longer spams logs every 5 minutes
+   - File: `src/fill_events_manager.py`
+
+2. **WebSocket reconnection logging** - Added explicit reconnection messages.
+   - `[ws] {exchange}: connection lost (reconnect #N), retrying in 1s: {error_type}` at WARNING
+   - `[ws] {exchange}: reconnecting...` at INFO before retry
+   - Full traceback moved to DEBUG level to reduce log noise
+   - Files: `src/exchanges/ccxt_bot.py`, `src/exchanges/hyperliquid.py`
+
+3. **Mode change throttle** - Extended and improved throttle.
+   - Increased throttle from 60s to 120s (2 minutes)
+   - Now throttles ALL mode change types (added/removed/changed), not just "changed"
+   - Throttle key includes event type to avoid cross-type interference
+   - Reduces forager mode oscillation noise significantly
+   - File: `src/passivbot.py`
+
+### Round 8 (TODO)
 
 **Remaining issues to address:**
 
@@ -501,18 +548,6 @@ Compare to current (noisy):
   - [ ] EMA gating for entries (when initial entry blocked due to EMA distance)
   - [ ] Unstuck gating (when unstuck entry blocked)
   - [ ] Unstuck coin selection (which coin selected for unstuck and why)
-  - [ ] WebSocket reconnections (currently only logs initial connect, not reconnects)
-- [ ] Standardize log tag formats (`[tag]` style) for remaining untagged messages:
-  - [ ] `Memory usage rss=...` → `[memory] rss=...`
-  - [ ] `warmup starting: N symbols...` → `[warmup] starting: N symbols...`
-  - [ ] `warmup candles: N/M...` → `[warmup] candles: N/M...`
-  - [ ] `Starting hourly_cycle...` → `[hourly] starting...`
-  - [ ] `Initializing FillEventsManager...` → `[fills] initializing...`
-  - [ ] `FillEventCache.load:...` → `[fills] loaded...`
-  - [ ] `Symbol/coin mapping fallbacks:...` → `[mapping] fallbacks:...`
-- [ ] `[pnl] KucoinFetcher: local sum differs from positions_history` appears repeatedly - should be throttled or deduplicated
-- [ ] `persistent gaps: N new (...)` warnings could be aggregated over time rather than logged per-cycle
-- [ ] `[candle] strict mode gaps: N missing candles across M symbols` at WARNING could be DEBUG (expected for illiquid markets)
-- [ ] Mode change throttle may need adjustment - still seeing frequent changes logged
 - [ ] Convert remaining f-strings to format strings for log aggregation where feasible
 - [ ] Consider adding periodic health summary (every 5-15 min) with key metrics for long-running bots
+- [ ] Zero-candle synthesis warnings still show multiple warnings for same symbol with overlapping gaps

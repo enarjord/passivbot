@@ -42,7 +42,9 @@ logger = logging.getLogger(__name__)
 
 # Throttle state for spammy warnings
 _pnl_discrepancy_last_log: Dict[str, float] = {}  # exchange:user -> last log time
-_PNL_DISCREPANCY_THROTTLE_SECONDS = 300.0  # Log at most once per 5 minutes
+_pnl_discrepancy_last_delta: Dict[str, float] = {}  # exchange:user -> last delta value
+_PNL_DISCREPANCY_THROTTLE_SECONDS = 3600.0  # Log at most once per hour if delta unchanged
+_PNL_DISCREPANCY_CHANGE_THRESHOLD = 0.10  # Log immediately if delta changes by >10%
 
 
 # ---------------------------------------------------------------------------
@@ -709,16 +711,16 @@ class FillEventCache:
                 with path.open("r", encoding="utf-8") as fh:
                     payload = json.load(fh) or []
             except Exception as exc:
-                logger.warning("FillEventCache.load: failed to read %s (%s)", path, exc)
+                logger.warning("[fills] cache load: failed to read %s (%s)", path, exc)
                 continue
             for raw in payload:
                 try:
                     events.append(FillEvent.from_dict(raw))
                 except Exception:
-                    logger.debug("FillEventCache.load: skipping malformed record in %s", path)
+                    logger.debug("[fills] cache load: skipping malformed record in %s", path)
         events.sort(key=lambda ev: ev.timestamp)
         logger.info(
-            "FillEventCache.load: loaded %d events from %d files in %s",
+            "[fills] cache loaded: %d events from %d files in %s",
             len(events),
             len(files),
             self.root,
@@ -787,7 +789,7 @@ class FillEventCache:
             self._metadata = data
         except Exception as exc:
             logger.warning(
-                "FillEventCache.load_metadata: failed to read %s (%s)", self.metadata_path, exc
+                "[fills] cache metadata: failed to read %s (%s)", self.metadata_path, exc
             )
             self._metadata = default
 
@@ -3286,17 +3288,26 @@ class KucoinFetcher(BaseFetcher):
         local_total = sum(local_pnls.values())
         remote_total = sum(pos_sum.values())
         if abs(local_total - remote_total) > max(1e-8, 0.05 * (abs(remote_total) + 1e-8)):
-            # Throttle this warning to once per 5 minutes
+            # Throttle: log once per hour, or immediately if delta changes significantly
             now = time.time()
             throttle_key = f"kucoin:{id(self.api)}"
             last_log = _pnl_discrepancy_last_log.get(throttle_key, 0.0)
-            if (now - last_log) >= _PNL_DISCREPANCY_THROTTLE_SECONDS:
+            last_delta = _pnl_discrepancy_last_delta.get(throttle_key)
+            current_delta = local_total - remote_total
+            # Log if: (1) delta changed significantly, or (2) throttle window expired
+            delta_changed = (
+                last_delta is None
+                or abs(current_delta - last_delta) > _PNL_DISCREPANCY_CHANGE_THRESHOLD * (abs(last_delta) + 1.0)
+            )
+            should_log = delta_changed or (now - last_log) >= _PNL_DISCREPANCY_THROTTLE_SECONDS
+            if should_log:
                 _pnl_discrepancy_last_log[throttle_key] = now
+                _pnl_discrepancy_last_delta[throttle_key] = current_delta
                 logger.warning(
                     "[pnl] KucoinFetcher: local sum %.2f differs from positions_history %.2f (delta=%.2f)",
                     local_total,
                     remote_total,
-                    local_total - remote_total,
+                    current_delta,
                 )
 
     @staticmethod
