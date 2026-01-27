@@ -526,6 +526,10 @@ class Passivbot:
         self._health_last_summary_ms = 0
         self._health_summary_interval_ms = 15 * 60 * 1000  # 15 minutes
 
+        # Unstuck logging throttle
+        self._unstuck_last_log_ms = 0
+        self._unstuck_log_interval_ms = 5 * 60 * 1000  # 5 minutes
+
     def live_value(self, key: str):
         return require_live_value(self.config, key)
 
@@ -681,6 +685,67 @@ class Passivbot:
             self._health_rate_limits,
             f" | {mem_str}" if mem_str else "",
         )
+
+    def _calc_unstuck_allowance_for_logging(self, pside: str) -> dict:
+        """Calculate raw unstuck allowance values for logging (including negative)."""
+        if self._pnls_manager is None:
+            return {"status": "no_pnl_manager"}
+
+        events = self._pnls_manager.get_events()
+        if not events:
+            return {"status": "no_history"}
+
+        pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
+        if pct <= 0.0:
+            return {"status": "disabled"}
+
+        pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
+        pnls_cumsum_max, pnls_cumsum_last = float(pnls_cumsum.max()), float(pnls_cumsum[-1])
+
+        balance_peak = float(self.balance) + (pnls_cumsum_max - pnls_cumsum_last)
+        drop_since_peak_pct = float(self.balance) / balance_peak - 1.0
+        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+        # Raw allowance WITHOUT .max(0.0) - can be negative
+        allowance_raw = balance_peak * (pct * twel + drop_since_peak_pct)
+
+        return {
+            "status": "ok",
+            "allowance": allowance_raw,
+            "peak": balance_peak,
+            "dd_pct": drop_since_peak_pct * 100.0,
+        }
+
+    def _log_unstuck_status(self) -> None:
+        """Log unstuck allowance budget for both sides."""
+        parts = []
+        for pside in ["long", "short"]:
+            info = self._calc_unstuck_allowance_for_logging(pside)
+            status = info.get("status")
+            if status == "no_pnl_manager" or status == "no_history":
+                parts.append(f"{pside}: no pnl history")
+            elif status == "disabled":
+                parts.append(f"{pside}: disabled")
+            else:
+                allowance = info["allowance"]
+                if allowance < 0:
+                    parts.append(
+                        "%s: allowance=%.2f (over budget) | peak=%.2f | dd=%.1f%%"
+                        % (pside, allowance, info["peak"], info["dd_pct"])
+                    )
+                else:
+                    parts.append(
+                        "%s: allowance=%.2f | peak=%.2f | dd=%.1f%%"
+                        % (pside, allowance, info["peak"], info["dd_pct"])
+                    )
+        logging.info("[unstuck] %s", " | ".join(parts))
+
+    def _maybe_log_unstuck_status(self) -> None:
+        """Log periodic unstuck status if interval has elapsed."""
+        now_ms = utc_ms()
+        if (now_ms - self._unstuck_last_log_ms) < self._unstuck_log_interval_ms:
+            return
+        self._unstuck_last_log_ms = now_ms
+        self._log_unstuck_status()
 
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
@@ -1271,6 +1336,7 @@ class Passivbot:
                 self._last_loop_duration_ms = utc_ms() - loop_start_ms
                 # Periodic health summary
                 self._maybe_log_health_summary()
+                self._maybe_log_unstuck_status()
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
                 sleep_duration = 30
                 for i in range(sleep_duration * 10):
@@ -3468,6 +3534,30 @@ class Passivbot:
             tup = (float(o["qty"]), float(o["price"]), order_type, order_type_id)
             ideal_orders.setdefault(symbol, []).append(tup)
 
+        # Log unstuck coin selection
+        for o in orders:
+            order_type_str = o.get("order_type", "")
+            if "close_unstuck" in order_type_str:
+                symbol = idx_to_symbol.get(int(o.get("symbol_idx", -1)))
+                if symbol:
+                    pside = "long" if "long" in order_type_str else "short"
+                    pos = self.positions.get(symbol, {}).get(pside, {})
+                    entry_price = pos.get("price", 0.0)
+                    current_price = last_prices.get(symbol, 0.0)
+                    if entry_price > 0 and current_price > 0:
+                        price_diff_pct = (current_price / entry_price - 1.0) * 100
+                        sign = "+" if price_diff_pct >= 0 else ""
+                    else:
+                        price_diff_pct = 0.0
+                        sign = ""
+                    coin = symbol.split("/")[0] if "/" in symbol else symbol
+                    allowance = unstuck_allowances.get(pside, 0.0)
+                    logging.info(
+                        "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
+                        coin, pside, entry_price, current_price, sign, price_diff_pct, allowance
+                    )
+                break  # Only one unstuck order per cycle
+
         ideal_orders_f, _wel_blocked = self._to_executable_orders(ideal_orders, last_prices)
         ideal_orders_f = self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
 
@@ -3740,6 +3830,30 @@ class Passivbot:
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
             tup = (float(o["qty"]), float(o["price"]), order_type, order_type_id)
             ideal_orders.setdefault(symbol, []).append(tup)
+
+        # Log unstuck coin selection
+        for o in orders:
+            order_type_str = o.get("order_type", "")
+            if "close_unstuck" in order_type_str:
+                symbol = idx_to_symbol.get(int(o.get("symbol_idx", -1)))
+                if symbol:
+                    pside = "long" if "long" in order_type_str else "short"
+                    pos = self.positions.get(symbol, {}).get(pside, {})
+                    entry_price = pos.get("price", 0.0)
+                    current_price = last_prices.get(symbol, 0.0)
+                    if entry_price > 0 and current_price > 0:
+                        price_diff_pct = (current_price / entry_price - 1.0) * 100
+                        sign = "+" if price_diff_pct >= 0 else ""
+                    else:
+                        price_diff_pct = 0.0
+                        sign = ""
+                    coin = symbol.split("/")[0] if "/" in symbol else symbol
+                    allowance = unstuck_allowances.get(pside, 0.0)
+                    logging.info(
+                        "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
+                        coin, pside, entry_price, current_price, sign, price_diff_pct, allowance
+                    )
+                break  # Only one unstuck order per cycle
 
         ideal_orders_f, _wel_blocked = self._to_executable_orders(ideal_orders, last_prices)
         ideal_orders_f = self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
