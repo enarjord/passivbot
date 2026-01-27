@@ -23,7 +23,6 @@ from urllib.request import urlopen
 from collections import defaultdict
 
 import aiohttp
-import pprint
 import ccxt.async_support as ccxt
 import numpy as np
 import pandas as pd
@@ -1864,7 +1863,19 @@ async def _prepare_hlcvs_combined_impl(
             exchange_volume_ratios_mapped[ex1][ex1] = 1.0
             exchange_volume_ratios_mapped[ex0][ex0] = 1.0
 
-    pprint.pprint(dict(exchange_volume_ratios_mapped))
+    # Log volume normalization ratios (used to scale volumes when combining multi-exchange data)
+    if len(exchanges_counts) > 1:
+        ratio_summary = ", ".join(
+            f"{ex}={exchange_volume_ratios_mapped[ex][reference_exchange]:.3f}"
+            for ex in sorted(exchanges_counts.keys())
+            if ex != reference_exchange
+        )
+        logging.info(
+            "volume normalization: reference=%s ratios=[%s] (coins per exchange: %s)",
+            reference_exchange,
+            ratio_summary,
+            ", ".join(f"{ex}={cnt}" for ex, cnt in sorted(exchanges_counts.items())),
+        )
 
     # We'll store [high, low, close, volume] in the last dimension
     unified_array = np.full((n_timesteps, n_coins, 4), np.nan, dtype=np.float64)

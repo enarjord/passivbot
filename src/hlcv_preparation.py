@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import pprint
 import sys
 import time
 import traceback
@@ -410,6 +409,7 @@ class HLCVManager:
         if not self.markets:
             await self.load_markets()
         if not self.has_coin(coin):
+            logging.debug("[%s] get_ohlcvs: coin %s not found in markets", self.exchange, coin)
             return empty_df
         self.load_cc()
         assert self.cm is not None
@@ -417,6 +417,12 @@ class HLCVManager:
         start_ts = int(self.start_ts)
         end_ts = int(self.end_ts)
         if start_ts > end_ts:
+            logging.debug(
+                "[%s] get_ohlcvs: invalid range start_ts=%s > end_ts=%s",
+                self.exchange,
+                start_ts,
+                end_ts,
+            )
             return empty_df
 
         # Fetch strict (real) candles first to detect large gaps.
@@ -430,6 +436,13 @@ class HLCVManager:
             force_refetch_gaps=self.force_refetch_gaps,
         )
         if real.size == 0:
+            logging.warning(
+                "[%s] get_ohlcvs: cm.get_candles returned empty for %s range %s to %s",
+                self.exchange,
+                symbol,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
             return empty_df
 
         ts = real["ts"].astype(np.int64, copy=False)
@@ -878,8 +891,20 @@ async def prepare_hlcvs_combined(config, forced_sources=None, *, force_refetch_g
         )
         # Align BTC date range to actual timestamps (mirrors single-exchange case)
         btc_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
+        logging.info(
+            "fetching BTC/USD prices from %s for range %s to %s",
+            btc_exchange,
+            ts_to_date(int(timestamps[0])),
+            ts_to_date(int(timestamps[-1])),
+        )
         btc_df = await btc_om.get_ohlcvs("BTC")
         if btc_df.empty:
+            logging.error(
+                "BTC/USD fetch returned empty for %s (start=%s end=%s)",
+                btc_exchange,
+                btc_om.start_date,
+                btc_om.end_date,
+            )
             raise ValueError(f"Failed to fetch BTC/USD prices from {btc_exchange}")
 
         btc_df = (
@@ -1107,7 +1132,19 @@ async def _prepare_hlcvs_combined_impl(
             exchange_volume_ratios_mapped[ex1][ex1] = 1.0
             exchange_volume_ratios_mapped[ex0][ex0] = 1.0
 
-    pprint.pprint(dict(exchange_volume_ratios_mapped))
+    # Log volume normalization ratios (used to scale volumes when combining multi-exchange data)
+    if len(exchanges_counts) > 1:
+        ratio_summary = ", ".join(
+            f"{ex}={exchange_volume_ratios_mapped[ex][reference_exchange]:.3f}"
+            for ex in sorted(exchanges_counts.keys())
+            if ex != reference_exchange
+        )
+        logging.info(
+            "volume normalization: reference=%s ratios=[%s] (coins per exchange: %s)",
+            reference_exchange,
+            ratio_summary,
+            ", ".join(f"{ex}={cnt}" for ex, cnt in sorted(exchanges_counts.items())),
+        )
 
     unified_array = np.full((n_timesteps, n_coins, 4), np.nan, dtype=np.float64)
 
