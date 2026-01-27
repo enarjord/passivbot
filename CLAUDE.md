@@ -8,6 +8,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `debugging_case_studies.md` - Detailed debugging sessions as reference for complex investigations
 - `log_analysis_prompt.md` - Logging level definitions and examples
 
+## Known LLM Pitfalls — Avoid These
+
+Common failure modes when coding with LLMs (ref: Karpathy, Dec 2025). Actively counteract:
+
+- **Unchecked assumptions** — Don't silently assume intent; verify ambiguous requirements or ask
+- **Hiding confusion** — Surface uncertainty explicitly; seek clarification rather than guessing
+- **Ignoring inconsistencies** — Flag contradictions in specs/code; don't silently pick one interpretation
+- **Concealing tradeoffs** — Present options with pros/cons when multiple valid approaches exist
+- **Failure to push back** — Disagree when a request seems wrong, suboptimal, or underspecified
+- **Sycophancy** — No cheerleading ("Great question!"); be direct, factual, and professionally objective
+- **Overengineering** — Prefer the simplest solution; don't add abstraction layers, config options, or generality until justified by actual need
+- **Abstraction bloat** — Resist premature DRY; three similar lines beats a premature helper
+- **Dead code accumulation** — Clean up anything you obsolete; don't leave commented-out code or unused imports
+- **Scope creep in edits** — Don't "improve" code orthogonal to the task; don't add docstrings, type hints, or refactors unless requested
+- **Runaway implementation** — Stop and reconsider if a solution is growing large; ask "couldn't this be simpler?" before writing 500+ lines
+
 ## Overview
 
 Passivbot is a cryptocurrency trading bot for perpetual futures markets. It uses a contrarian market-making strategy inspired by Martingale betting, written in Python for orchestration and Rust for performance-critical components (backtesting, order calculations, analysis).
