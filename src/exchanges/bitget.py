@@ -1,4 +1,4 @@
-from exchanges.ccxt_bot import CCXTBot
+from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging, custom_id_to_snake, clip_by_timestamp
 import asyncio
 import json
@@ -121,9 +121,7 @@ class BitgetBot(CCXTBot):
         for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
             # Bitget requires minimum 5.1 USDT per order
-            self.min_costs[symbol] = max(
-                5.1, elm["limits"]["cost"]["min"] or 0.1
-            )
+            self.min_costs[symbol] = max(5.1, elm["limits"]["cost"]["min"] or 0.1)
 
     def _normalize_order_update(self, order: dict) -> dict:
         """Bitget override: derive side from tradeSide/posSide."""
@@ -174,9 +172,7 @@ class BitgetBot(CCXTBot):
             and "unionTotalMargin" in balance_info
             and balance_info["assetMode"] == "union"
         ):
-            return float(balance_info["unionTotalMargin"]) - float(
-                balance_info["unrealizedPL"]
-            )
+            return float(balance_info["unionTotalMargin"]) - float(balance_info["unrealizedPL"])
         return float(balance_info["available"])
 
     # ═══════════════════ BITGET-SPECIFIC METHODS ═══════════════════
@@ -573,15 +569,15 @@ class BitgetBot(CCXTBot):
             to_print = ""
             try:
                 res = await coros_to_call_lev[symbol]
-                to_print += f" set leverage {res} "
+                to_print += f"leverage={format_exchange_config_response(res)} "
             except Exception as e:
-                logging.error(f"{symbol} error setting leverage {e} {res}")
+                logging.error(f"{symbol} error setting leverage {e}")
             res = None
             try:
                 res = await coros_to_call_margin_mode[symbol]
-                to_print += f"set cross mode {res}"
+                to_print += f"margin={format_exchange_config_response(res)}"
             except Exception as e:
-                logging.error(f"{symbol} error setting cross mode {e} {res}")
+                logging.error(f"{symbol} error setting cross mode {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 

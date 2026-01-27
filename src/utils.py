@@ -89,7 +89,7 @@ def _cleanup_stale_symbol_map_locks() -> None:
                 age = now - stat.st_mtime
                 if age > threshold:
                     lock_path.unlink()
-                    logging.warning("removed stale symbol map lock %s (age %.1fs)", lock_path, age)
+                    logging.info("removed stale symbol map lock %s (age %.1fs)", lock_path, age)
             except FileNotFoundError:
                 continue
             except Exception as exc:
@@ -492,7 +492,8 @@ async def load_markets(
     consistency with other cache paths (pnls, ohlcv, fill_events).
     """
     # Prefer cc.id when a ccxt instance is supplied, otherwise use the provided exchange string.
-    ex = (getattr(cc, "id", None) or exchange or "").lower()
+    # Denormalize to use canonical form for cache paths (e.g., "binance" not "binanceusdm")
+    ex = denormalize_exchange_name(getattr(cc, "id", None) or exchange or "")
     markets_path = os.path.join("caches", ex, "markets.json")
 
     # Try cache first
@@ -567,6 +568,28 @@ def normalize_exchange_name(exchange: str) -> str:
         cand = f"{ex}{suffix}"
         if cand in valid:
             return cand
+
+    return ex
+
+
+def denormalize_exchange_name(exchange: str) -> str:
+    """
+    Convert a ccxt futures exchange id back to the canonical short form used in configs,
+    caches, and logs.
+
+    Examples:
+    - "binanceusdm" -> "binance"
+    - "kucoinfutures" -> "kucoin"
+    - "krakenfutures" -> "kraken"
+
+    If the exchange doesn't have a known suffix, returns it unchanged.
+    """
+    ex = (exchange or "").lower()
+
+    # Remove known futures suffixes
+    for suffix in ("usdm", "futures"):
+        if ex.endswith(suffix):
+            return ex[: -len(suffix)]
 
     return ex
 
@@ -765,7 +788,7 @@ def _write_coin_symbol_maps(
     try:
         with portalocker.Lock(c2s_lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT):
             if verbose:
-                logging.info("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
+                logging.debug("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
             _atomic_write_json(coin_to_symbol_map_path, coin_to_symbol_map, indent=4, sort_keys=True)
     except portalocker.LockException:
         logging.warning("Could not acquire lock for %s, skipping write", coin_to_symbol_map_path)
@@ -775,7 +798,7 @@ def _write_coin_symbol_maps(
     try:
         with portalocker.Lock(s2c_lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT):
             if verbose:
-                logging.info("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
+                logging.debug("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
             _atomic_write_json(symbol_to_coin_map_path, symbol_to_coin_map)
     except portalocker.LockException:
         logging.warning("Could not acquire lock for %s, skipping write", symbol_to_coin_map_path)
@@ -843,7 +866,7 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
 
                 # Write symbol_to_coin_map atomically while still holding lock
                 if verbose:
-                    logging.info("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
+                    logging.debug("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
                 _atomic_write_json(symbol_to_coin_map_path, symbol_to_coin_map)
 
                 # Update in-memory cache
@@ -863,8 +886,10 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
             try:
                 with portalocker.Lock(c2s_lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT):
                     if verbose:
-                        logging.info("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
-                    _atomic_write_json(coin_to_symbol_map_path, coin_to_symbol_map, indent=4, sort_keys=True)
+                        logging.debug("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
+                    _atomic_write_json(
+                        coin_to_symbol_map_path, coin_to_symbol_map, indent=4, sort_keys=True
+                    )
                     # Update in-memory cache
                     try:
                         st = os.stat(coin_to_symbol_map_path)
@@ -876,7 +901,9 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
                     except Exception:
                         pass
             except portalocker.LockException:
-                logging.warning("Could not acquire lock for %s, skipping write", coin_to_symbol_map_path)
+                logging.warning(
+                    "Could not acquire lock for %s, skipping write", coin_to_symbol_map_path
+                )
 
         except portalocker.LockException:
             logging.warning("Could not acquire lock for symbol map cache update, skipping")
@@ -892,7 +919,8 @@ def coin_to_symbol(coin, exchange, quote=None):
     # caches coin_to_symbol_map in memory and reloads if file changes
     if coin == "":
         return ""
-    ex = (exchange or "").lower()
+    # Denormalize to use canonical form for cache paths (e.g., "binance" not "binanceusdm")
+    ex = denormalize_exchange_name(exchange or "")
     quote = get_quote(ex, quote)
     coin_sanitized = symbol_to_coin(coin)
     fallback = f"{coin_sanitized}/{quote}:{quote}"
@@ -1025,7 +1053,9 @@ async def format_approved_ignored_coins(config, exchanges: [str], quote=None, ve
         {"long": [""], "short": [""]},
     ]:
         if bool(_require_live_value(config, "empty_means_all_approved")):
-            marketss = await asyncio.gather(*[load_markets(ex, verbose=False, quote=quote) for ex in exchanges])
+            marketss = await asyncio.gather(
+                *[load_markets(ex, verbose=False, quote=quote) for ex in exchanges]
+            )
             marketss = [filter_markets(m, ex, quote=quote)[0] for m, ex in zip(marketss, exchanges)]
             approved_coins = set()
             for markets in marketss:

@@ -59,17 +59,12 @@ class TestParadexWsSendAndExpect:
 
             bot = ParadexBot.__new__(ParadexBot)
             bot._ws = AsyncMock()
-            bot._ws.recv = AsyncMock(return_value=json.dumps({
-                "jsonrpc": "2.0",
-                "result": {"node_id": "abc123"},
-                "id": 1
-            }))
+            bot._ws.recv = AsyncMock(
+                return_value=json.dumps({"jsonrpc": "2.0", "result": {"node_id": "abc123"}, "id": 1})
+            )
 
             response = await bot._ws_send_and_expect(
-                method="auth",
-                params={"bearer": "token"},
-                msg_id=1,
-                success_log="auth ok"
+                method="auth", params={"bearer": "token"}, msg_id=1, success_log="auth ok"
             )
 
             assert response["result"]["node_id"] == "abc123"
@@ -83,18 +78,19 @@ class TestParadexWsSendAndExpect:
 
             bot = ParadexBot.__new__(ParadexBot)
             bot._ws = AsyncMock()
-            bot._ws.recv = AsyncMock(return_value=json.dumps({
-                "jsonrpc": "2.0",
-                "error": {"code": 40111, "message": "Invalid Bearer Token"},
-                "id": 1
-            }))
+            bot._ws.recv = AsyncMock(
+                return_value=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {"code": 40111, "message": "Invalid Bearer Token"},
+                        "id": 1,
+                    }
+                )
+            )
 
             with pytest.raises(ccxt.AuthenticationError, match="40111"):
                 await bot._ws_send_and_expect(
-                    method="auth",
-                    params={"bearer": "bad_token"},
-                    msg_id=1,
-                    success_log="auth ok"
+                    method="auth", params={"bearer": "bad_token"}, msg_id=1, success_log="auth ok"
                 )
 
     @pytest.mark.asyncio
@@ -105,18 +101,19 @@ class TestParadexWsSendAndExpect:
 
             bot = ParadexBot.__new__(ParadexBot)
             bot._ws = AsyncMock()
-            bot._ws.recv = AsyncMock(return_value=json.dumps({
-                "jsonrpc": "2.0",
-                "error": {"code": -32601, "message": "method not found"},
-                "id": 1
-            }))
+            bot._ws.recv = AsyncMock(
+                return_value=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32601, "message": "method not found"},
+                        "id": 1,
+                    }
+                )
+            )
 
             with pytest.raises(Exception, match="-32601"):
                 await bot._ws_send_and_expect(
-                    method="bad_method",
-                    params={},
-                    msg_id=1,
-                    success_log="ok"
+                    method="bad_method", params={}, msg_id=1, success_log="ok"
                 )
 
     @pytest.mark.asyncio
@@ -132,12 +129,7 @@ class TestParadexWsSendAndExpect:
             bot._ws.send = AsyncMock(side_effect=ConnectionClosed(None, None))
 
             with pytest.raises(ConnectionError):
-                await bot._ws_send_and_expect(
-                    method="auth",
-                    params={},
-                    msg_id=1,
-                    success_log="ok"
-                )
+                await bot._ws_send_and_expect(method="auth", params={}, msg_id=1, success_log="ok")
 
             assert bot._ws is None
 
@@ -154,10 +146,12 @@ class TestParadexWsConnect:
 
                 # Setup mock WebSocket
                 mock_conn = AsyncMock()
-                mock_conn.recv = AsyncMock(side_effect=[
-                    json.dumps({"jsonrpc": "2.0", "result": {"node_id": "abc"}, "id": 1}),
-                    json.dumps({"jsonrpc": "2.0", "result": {}, "id": 2}),
-                ])
+                mock_conn.recv = AsyncMock(
+                    side_effect=[
+                        json.dumps({"jsonrpc": "2.0", "result": {"node_id": "abc"}, "id": 1}),
+                        json.dumps({"jsonrpc": "2.0", "result": {}, "id": 2}),
+                    ]
+                )
                 mock_ws.connect = AsyncMock(return_value=mock_conn)
 
                 bot = ParadexBot.__new__(ParadexBot)
@@ -198,19 +192,20 @@ class TestParadexWsReceiveOrders:
                 "side": "BUY",
                 "size": "0.5",
                 "price": "2000.00",
-                "status": "OPEN"
+                "status": "OPEN",
             }
 
             bot = ParadexBot.__new__(ParadexBot)
             bot._ws = AsyncMock()
-            bot._ws.recv = AsyncMock(return_value=json.dumps({
-                "jsonrpc": "2.0",
-                "method": "subscription",
-                "params": {
-                    "channel": "orders.ETH-USD-PERP",
-                    "data": order_data
-                }
-            }))
+            bot._ws.recv = AsyncMock(
+                return_value=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "subscription",
+                        "params": {"channel": "orders.ETH-USD-PERP", "data": order_data},
+                    }
+                )
+            )
 
             result = await bot._ws_receive_orders()
 
@@ -225,11 +220,9 @@ class TestParadexWsReceiveOrders:
 
             bot = ParadexBot.__new__(ParadexBot)
             bot._ws = AsyncMock()
-            bot._ws.recv = AsyncMock(return_value=json.dumps({
-                "jsonrpc": "2.0",
-                "result": {"status": "ok"},
-                "id": 5
-            }))
+            bot._ws.recv = AsyncMock(
+                return_value=json.dumps({"jsonrpc": "2.0", "result": {"status": "ok"}, "id": 5})
+            )
 
             result = await bot._ws_receive_orders()
 
@@ -243,14 +236,15 @@ class TestParadexWsReceiveOrders:
 
             bot = ParadexBot.__new__(ParadexBot)
             bot._ws = AsyncMock()
-            bot._ws.recv = AsyncMock(return_value=json.dumps({
-                "jsonrpc": "2.0",
-                "method": "subscription",
-                "params": {
-                    "channel": "trades.ETH-USD-PERP",
-                    "data": {"id": "trade123"}
-                }
-            }))
+            bot._ws.recv = AsyncMock(
+                return_value=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "subscription",
+                        "params": {"channel": "trades.ETH-USD-PERP", "data": {"id": "trade123"}},
+                    }
+                )
+            )
 
             result = await bot._ws_receive_orders()
 
@@ -292,6 +286,7 @@ class TestParadexDoWatchOrders:
             async def set_ws():
                 bot._ws = AsyncMock()
                 bot._ws.closed = False
+
             bot._ws_connect.side_effect = set_ws
 
             result = await bot._do_watch_orders()
@@ -332,6 +327,7 @@ class TestParadexDoWatchOrders:
             async def reconnect():
                 bot._ws = AsyncMock()
                 bot._ws.closed = False
+
             bot._ws_connect.side_effect = reconnect
 
             await bot._do_watch_orders()
@@ -387,11 +383,9 @@ class TestParadexNormalizeOrderUpdate:
             bot.markets_dict = {}
 
             # 0x0007 = close_grid_long - a SELL order to close a LONG position
-            result = bot._normalize_order_update({
-                "side": "SELL",
-                "market": "X",
-                "client_id": "order-0x0007"
-            })
+            result = bot._normalize_order_update(
+                {"side": "SELL", "market": "X", "client_id": "order-0x0007"}
+            )
 
             assert result["position_side"] == "long"  # NOT short!
             assert result["side"] == "sell"

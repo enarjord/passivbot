@@ -44,6 +44,48 @@ from config_utils import require_live_value
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
+def format_exchange_config_response(res: dict) -> str:
+    """Format exchange config API response (leverage, margin mode) concisely.
+
+    Instead of logging full JSON like:
+        {'symbol': 'ADAUSDT', 'leverage': '10', 'maxNotionalValue': '10000000'}
+    Returns:
+        'ok' or 'leverage=10x' or error message
+    """
+    if not isinstance(res, dict):
+        return str(res)[:50]
+
+    # Check for success indicators
+    code = res.get("code") or res.get("retCode")
+    msg = res.get("msg") or res.get("retMsg") or res.get("message", "")
+    status = res.get("status", "")
+
+    # Success cases
+    if code in (0, "0", "200000", 200000):
+        return "ok"
+    if status == "ok":
+        return "ok"
+
+    # "No need to change" is success
+    if "no need" in str(msg).lower():
+        return "ok (unchanged)"
+
+    # Extract useful info
+    leverage = res.get("leverage") or res.get("lever")
+    if leverage:
+        return f"leverage={leverage}x"
+
+    # Error cases - show code and message
+    if code and msg:
+        return f"code={code}: {msg[:40]}"
+    if msg:
+        return msg[:50]
+
+    # Fallback: truncated string
+    s = str(res)
+    return s[:60] + "..." if len(s) > 60 else s
+
+
 class CCXTBot(Passivbot):
     """Generic exchange bot using CCXT unified API.
 
@@ -163,13 +205,22 @@ class CCXTBot(Passivbot):
             "passphrase": "password",
             "wallet_address": "walletAddress",
         }
+        deprecated_fields = []  # Collect for aggregated logging
         for old_name, new_name in legacy_mappings.items():
             if old_name in config and new_name not in config:
-                logging.warning(
-                    f"{self.exchange}: '{old_name}' in api-keys.json is deprecated, "
-                    f"use '{new_name}' instead (CCXT-native field name)"
-                )
+                deprecated_fields.append(f"{old_name}->{new_name}")
                 config[new_name] = config.pop(old_name)
+
+        # Log all deprecated fields in a single message (once per exchange)
+        if deprecated_fields:
+            cache_key = f"_deprecated_keys_warned_{self.exchange}"
+            if not getattr(self, cache_key, False):
+                setattr(self, cache_key, True)
+                logging.info(
+                    "[config] %s: deprecated api-keys.json fields remapped: %s (use CCXT-native names)",
+                    self.exchange,
+                    ", ".join(deprecated_fields),
+                )
 
         return config
 
@@ -217,9 +268,7 @@ class CCXTBot(Passivbot):
         if self.ccp.has.get("watchOrders"):
             logging.info(f"{self.exchange}: watchOrders support confirmed")
         else:
-            logging.info(
-                f"{self.exchange}: watchOrders not supported in CCXT, using REST polling"
-            )
+            logging.info(f"{self.exchange}: watchOrders not supported in CCXT, using REST polling")
 
     async def determine_utc_offset(self, verbose=True):
         """Derive the exchange server time offset using CCXT's fetch_time().
@@ -230,9 +279,7 @@ class CCXTBot(Passivbot):
 
         try:
             server_time = await self.cca.fetch_time()
-            self.utc_offset = round((server_time - utc_ms()) / (1000 * 60 * 60)) * (
-                1000 * 60 * 60
-            )
+            self.utc_offset = round((server_time - utc_ms()) / (1000 * 60 * 60)) * (1000 * 60 * 60)
             if verbose:
                 logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
         except Exception as e:
@@ -303,7 +350,9 @@ class CCXTBot(Passivbot):
         t0 = time.time()
         result = await self.cca.fetch_positions()
         elapsed_ms = (time.time() - t0) * 1000
-        logging.debug(f"{self.exchange}: fetch_positions completed in {elapsed_ms:.1f}ms, {len(result)} raw positions")
+        logging.debug(
+            f"{self.exchange}: fetch_positions completed in {elapsed_ms:.1f}ms, {len(result)} raw positions"
+        )
         return result
 
     def _normalize_positions(self, fetched: list) -> list:
@@ -316,12 +365,14 @@ class CCXTBot(Passivbot):
         for elm in fetched:
             contracts = float(elm.get("contracts", 0))
             if contracts != 0:
-                positions.append({
-                    "symbol": elm["symbol"],
-                    "position_side": self._get_position_side(elm),
-                    "size": contracts,
-                    "price": float(elm.get("entryPrice", 0)),
-                })
+                positions.append(
+                    {
+                        "symbol": elm["symbol"],
+                        "position_side": self._get_position_side(elm),
+                        "size": contracts,
+                        "price": float(elm.get("entryPrice", 0)),
+                    }
+                )
         return positions
 
     def _get_position_side(self, elm: dict) -> str:
@@ -349,7 +400,9 @@ class CCXTBot(Passivbot):
         t0 = time.time()
         fetched = await self.cca.fetch_open_orders(symbol=symbol)
         elapsed_ms = (time.time() - t0) * 1000
-        logging.debug(f"{self.exchange}: fetch_open_orders completed in {elapsed_ms:.1f}ms, {len(fetched)} orders")
+        logging.debug(
+            f"{self.exchange}: fetch_open_orders completed in {elapsed_ms:.1f}ms, {len(fetched)} orders"
+        )
         for elm in fetched:
             elm["position_side"] = self._get_position_side_for_order(elm)
             elm["qty"] = elm["amount"]
@@ -379,9 +432,16 @@ class CCXTBot(Passivbot):
                 self.handle_order_update(normalized)
             except Exception as e:
                 self._health_ws_reconnects += 1
-                logging.error(f"[ws] exception in watch_orders: {e}")
-                traceback.print_exc()
+                logging.warning(
+                    "[ws] %s: connection lost (reconnect #%d), retrying in 1s: %s",
+                    self.exchange,
+                    self._health_ws_reconnects,
+                    type(e).__name__,
+                )
+                logging.debug("[ws] %s: full exception: %s", self.exchange, e)
+                logging.debug("".join(traceback.format_exc()))
                 await asyncio.sleep(1)
+                logging.info("[ws] %s: reconnecting...", self.exchange)
 
     async def update_exchange_config(self):
         """Set exchange to hedge mode if supported.
@@ -396,7 +456,9 @@ class CCXTBot(Passivbot):
             logging.info(f"{self.exchange} does not support setPositionMode, skipping")
             return
 
-        logging.debug(f"{self.exchange}: setting position mode to hedge via CCXT set_position_mode(True)")
+        logging.debug(
+            f"{self.exchange}: setting position mode to hedge via CCXT set_position_mode(True)"
+        )
         t0 = time.time()
         res = await self.cca.set_position_mode(True)
         elapsed_ms = (time.time() - t0) * 1000
@@ -485,7 +547,9 @@ class CCXTBot(Passivbot):
         t0 = time.time()
         result = await self.cca.fetch_tickers()
         elapsed_ms = (time.time() - t0) * 1000
-        logging.debug(f"{self.exchange}: fetch_tickers completed in {elapsed_ms:.1f}ms, {len(result)} tickers")
+        logging.debug(
+            f"{self.exchange}: fetch_tickers completed in {elapsed_ms:.1f}ms, {len(result)} tickers"
+        )
         return result
 
     def _normalize_tickers(self, fetched: dict) -> dict:
@@ -521,7 +585,9 @@ class CCXTBot(Passivbot):
         t0 = time.time()
         result = await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, limit=1000)
         elapsed_ms = (time.time() - t0) * 1000
-        logging.debug(f"{self.exchange}: fetch_ohlcv completed in {elapsed_ms:.1f}ms, {len(result)} candles")
+        logging.debug(
+            f"{self.exchange}: fetch_ohlcv completed in {elapsed_ms:.1f}ms, {len(result)} candles"
+        )
         return result
 
     async def fetch_ohlcvs_1m(self, symbol: str, since: float = None, limit: int = None) -> list:
@@ -539,22 +605,24 @@ class CCXTBot(Passivbot):
             Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
         """
         n_limit = limit or 1000
-        logging.debug(f"{self.exchange}: fetching 1m OHLCV for {symbol}, since={since}, limit={n_limit}")
+        logging.debug(
+            f"{self.exchange}: fetching 1m OHLCV for {symbol}, since={since}, limit={n_limit}"
+        )
         t0 = time.time()
 
         if since is None:
             result = await self.cca.fetch_ohlcv(symbol, timeframe="1m", limit=n_limit)
             elapsed_ms = (time.time() - t0) * 1000
-            logging.debug(f"{self.exchange}: fetch_ohlcvs_1m completed in {elapsed_ms:.1f}ms, {len(result)} candles")
+            logging.debug(
+                f"{self.exchange}: fetch_ohlcvs_1m completed in {elapsed_ms:.1f}ms, {len(result)} candles"
+            )
             return result
 
         since = int(since // 60000 * 60000)  # Round to minute
         all_candles = {}
         page_count = 0
         for _ in range(5):  # Max 5 paginated requests
-            fetched = await self.cca.fetch_ohlcv(
-                symbol, timeframe="1m", since=since, limit=n_limit
-            )
+            fetched = await self.cca.fetch_ohlcv(symbol, timeframe="1m", since=since, limit=n_limit)
             page_count += 1
             if not fetched:
                 break
@@ -565,7 +633,9 @@ class CCXTBot(Passivbot):
             since = fetched[-1][0]
 
         elapsed_ms = (time.time() - t0) * 1000
-        logging.debug(f"{self.exchange}: fetch_ohlcvs_1m completed in {elapsed_ms:.1f}ms, {len(all_candles)} candles ({page_count} pages)")
+        logging.debug(
+            f"{self.exchange}: fetch_ohlcvs_1m completed in {elapsed_ms:.1f}ms, {len(all_candles)} candles ({page_count} pages)"
+        )
         return sorted(all_candles.values(), key=lambda x: x[0])
 
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None) -> list:

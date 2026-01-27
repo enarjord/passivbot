@@ -48,6 +48,7 @@ from utils import (
     date_to_ts,
     get_file_mod_ms,
     normalize_exchange_name,
+    denormalize_exchange_name,
     get_quote,
     symbol_to_coin,
     coin_to_symbol,
@@ -519,10 +520,12 @@ class OHLCVManager:
         self.start_ts = date_to_ts(self.start_date)
         self.end_ts = date_to_ts(self.end_date)
         self.cc = cc
+        # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
+        cache_exchange = denormalize_exchange_name(self.exchange)
         self.cache_filepaths = {
-            "markets": os.path.join("caches", self.exchange, "markets.json"),
-            "ohlcvs": os.path.join("historical_data", f"ohlcvs_{self.exchange}"),
-            "first_timestamps": os.path.join("caches", self.exchange, "first_timestamps.json"),
+            "markets": os.path.join("caches", cache_exchange, "markets.json"),
+            "ohlcvs": os.path.join("historical_data", f"ohlcvs_{cache_exchange}"),
+            "first_timestamps": os.path.join("caches", cache_exchange, "first_timestamps.json"),
         }
         self.markets = None
         self.verbose = verbose
@@ -1815,7 +1818,7 @@ async def _prepare_hlcvs_combined_impl(
 
         chosen_data_per_coin[coin] = best_df
         chosen_mss_per_coin[coin] = om_dict[best_exchange].get_market_specific_settings(coin)
-        chosen_mss_per_coin[coin]["exchange"] = best_exchange
+        chosen_mss_per_coin[coin]["exchange"] = denormalize_exchange_name(best_exchange)
     # ---------------------------------------------------------------
     # If no coins survived, raise error
     # ---------------------------------------------------------------

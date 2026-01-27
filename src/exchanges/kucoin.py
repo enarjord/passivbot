@@ -1,5 +1,5 @@
 from __future__ import annotations
-from exchanges.ccxt_bot import CCXTBot
+from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
@@ -481,9 +481,9 @@ class KucoinBot(CCXTBot):
             to_print = ""
             try:
                 res = await task
-                to_print += f"{task_name} {res}"
+                to_print += f"{task_name}={format_exchange_config_response(res)}"
             except Exception as e:
-                logging.error(f"{symbol} error {task_name} {res} {e}")
+                logging.error(f"{symbol} error {task_name} {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 
@@ -510,8 +510,8 @@ class KucoinBot(CCXTBot):
             to_print = ""
             try:
                 res = await task
-                to_print += f"{task_name} {res}"
+                to_print += f"{task_name}={format_exchange_config_response(res)}"
             except Exception as e:
-                logging.error(f"{symbol} error {task_name} {res} {e}")
+                logging.error(f"{symbol} error {task_name} {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")

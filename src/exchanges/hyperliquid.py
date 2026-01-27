@@ -6,7 +6,7 @@ import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 import passivbot_rust as pbr
 
-from exchanges.ccxt_bot import CCXTBot
+from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
 from utils import ts_to_date, utc_ms
 from config_utils import require_live_value
@@ -90,9 +90,16 @@ class HyperliquidBot(CCXTBot):
                 self.handle_order_update(res)
             except Exception as e:
                 self._health_ws_reconnects += 1
-                logging.error(f"exception watch_orders {res} {e}")
-                traceback.print_exc()
+                logging.warning(
+                    "[ws] %s: connection lost (reconnect #%d), retrying in 1s: %s",
+                    self.exchange,
+                    self._health_ws_reconnects,
+                    type(e).__name__,
+                )
+                logging.debug("[ws] %s: full exception: %s", self.exchange, e)
+                logging.debug("".join(traceback.format_exc()))
                 await asyncio.sleep(1)
+                logging.info("[ws] %s: reconnecting...", self.exchange)
 
     def determine_pos_side(self, order):
         # hyperliquid is not hedge mode
@@ -264,9 +271,7 @@ class HyperliquidBot(CCXTBot):
     async def execute_cancellation(self, order: dict) -> dict:
         """Hyperliquid: Cancel order with vault support."""
         params = (
-            {"vaultAddress": self.user_info["wallet_address"]}
-            if self.user_info["is_vault"]
-            else {}
+            {"vaultAddress": self.user_info["wallet_address"]} if self.user_info["is_vault"] else {}
         )
         return await self.cca.cancel_order(order["id"], symbol=order["symbol"], params=params)
 
@@ -391,12 +396,12 @@ class HyperliquidBot(CCXTBot):
             to_print = ""
             try:
                 res = await coros_to_call_margin_mode[symbol]
-                to_print += f"set cross mode {res}"
+                to_print += f"margin={format_exchange_config_response(res)}"
             except Exception as e:
                 if '"code":"59107"' in str(e):
-                    to_print += f" cross mode and leverage: {res} {e}"
+                    to_print += "margin=ok (unchanged)"
                 else:
-                    logging.error(f"{symbol} error setting cross mode {res} {e}")
+                    logging.error(f"{symbol} error setting cross mode {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 

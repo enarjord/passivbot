@@ -66,10 +66,7 @@ class TestGapHandlingEdgeCases:
 
         # No cache, no exchange -> should return empty gracefully
         result = cm.standardize_gaps(
-            np.empty(0, dtype=CANDLE_DTYPE),
-            start_ts=1609459200000,
-            end_ts=1609545600000,
-            strict=True
+            np.empty(0, dtype=CANDLE_DTYPE), start_ts=1609459200000, end_ts=1609545600000, strict=True
         )
         assert result.size == 0
 
@@ -127,13 +124,13 @@ class TestGapHandlingEdgeCases:
         # Minutes 0-2, gap at 3-4, minutes 5-7, gap at 8-9, minute 10
         candles = np.zeros(7, dtype=CANDLE_DTYPE)
         candles["ts"] = [
-            start_ts,                      # 0
-            start_ts + 1 * ONE_MIN_MS,     # 1
-            start_ts + 2 * ONE_MIN_MS,     # 2
-            start_ts + 5 * ONE_MIN_MS,     # 5 (gap at 3,4)
-            start_ts + 6 * ONE_MIN_MS,     # 6
-            start_ts + 7 * ONE_MIN_MS,     # 7
-            start_ts + 10 * ONE_MIN_MS,    # 10 (gap at 8,9)
+            start_ts,  # 0
+            start_ts + 1 * ONE_MIN_MS,  # 1
+            start_ts + 2 * ONE_MIN_MS,  # 2
+            start_ts + 5 * ONE_MIN_MS,  # 5 (gap at 3,4)
+            start_ts + 6 * ONE_MIN_MS,  # 6
+            start_ts + 7 * ONE_MIN_MS,  # 7
+            start_ts + 10 * ONE_MIN_MS,  # 10 (gap at 8,9)
         ]
         candles["c"] = [100, 101, 102, 105, 106, 107, 110]
         candles["bv"] = 1000.0
@@ -161,7 +158,9 @@ class TestGapHandlingEdgeCases:
 
         # Add gap repeatedly until max retries
         for i in range(_GAP_MAX_RETRIES + 1):
-            cm._add_known_gap(symbol, gap_start, gap_end, reason=GAP_REASON_FETCH_FAILED, increment_retry=True)
+            cm._add_known_gap(
+                symbol, gap_start, gap_end, reason=GAP_REASON_FETCH_FAILED, increment_retry=True
+            )
 
         gaps = cm._get_known_gaps_enhanced(symbol)
         assert len(gaps) == 1
@@ -391,11 +390,7 @@ class TestBoundaryConditions:
 
         # Should not crash, return what's available (empty)
         result = await cm.get_candles(
-            symbol,
-            start_ts=fixed_now_ms,
-            end_ts=future_ts,
-            max_age_ms=0,
-            strict=True
+            symbol, start_ts=fixed_now_ms, end_ts=future_ts, max_age_ms=0, strict=True
         )
         # No data available, should be empty
         assert result.size == 0
@@ -427,10 +422,7 @@ class TestDataIntegrity:
         candles["bv"] = 1.0
 
         result = cm.standardize_gaps(
-            candles,
-            start_ts=base_ts,
-            end_ts=base_ts + 4 * ONE_MIN_MS,
-            strict=True
+            candles, start_ts=base_ts, end_ts=base_ts + 4 * ONE_MIN_MS, strict=True
         )
 
         # Should be sorted
@@ -473,7 +465,12 @@ class TestDataIntegrity:
         base_ts = 1609459200000
         # Create candles with gap at minute 2
         candles = np.zeros(4, dtype=CANDLE_DTYPE)
-        candles["ts"] = [base_ts, base_ts + ONE_MIN_MS, base_ts + 3 * ONE_MIN_MS, base_ts + 4 * ONE_MIN_MS]
+        candles["ts"] = [
+            base_ts,
+            base_ts + ONE_MIN_MS,
+            base_ts + 3 * ONE_MIN_MS,
+            base_ts + 4 * ONE_MIN_MS,
+        ]
         candles["c"] = 100.0
         candles["bv"] = 1.0
 
@@ -518,16 +515,18 @@ class TestDataIntegrity:
 
         # Create candles with duplicate timestamp at minute 1
         candles = np.zeros(4, dtype=CANDLE_DTYPE)
-        candles["ts"] = [base_ts, base_ts + ONE_MIN_MS, base_ts + ONE_MIN_MS, base_ts + 2 * ONE_MIN_MS]
+        candles["ts"] = [
+            base_ts,
+            base_ts + ONE_MIN_MS,
+            base_ts + ONE_MIN_MS,
+            base_ts + 2 * ONE_MIN_MS,
+        ]
         candles["c"] = [100.0, 101.0, 999.0, 102.0]  # 999 is the duplicate (last wins)
         candles["bv"] = 1.0
 
         # Non-strict mode: deduplicates via dict lookup
         result = cm.standardize_gaps(
-            candles,
-            start_ts=base_ts,
-            end_ts=base_ts + 2 * ONE_MIN_MS,
-            strict=False
+            candles, start_ts=base_ts, end_ts=base_ts + 2 * ONE_MIN_MS, strict=False
         )
 
         # Output should have no duplicates in non-strict mode
@@ -552,16 +551,18 @@ class TestDataIntegrity:
 
         # Create candles with duplicate timestamp
         candles = np.zeros(4, dtype=CANDLE_DTYPE)
-        candles["ts"] = [base_ts, base_ts + ONE_MIN_MS, base_ts + ONE_MIN_MS, base_ts + 2 * ONE_MIN_MS]
+        candles["ts"] = [
+            base_ts,
+            base_ts + ONE_MIN_MS,
+            base_ts + ONE_MIN_MS,
+            base_ts + 2 * ONE_MIN_MS,
+        ]
         candles["c"] = [100.0, 101.0, 999.0, 102.0]
         candles["bv"] = 1.0
 
         # Strict mode: returns raw slice (preserves duplicates)
         result = cm.standardize_gaps(
-            candles,
-            start_ts=base_ts,
-            end_ts=base_ts + 2 * ONE_MIN_MS,
-            strict=True
+            candles, start_ts=base_ts, end_ts=base_ts + 2 * ONE_MIN_MS, strict=True
         )
 
         # Strict mode preserves duplicates (raw slice)
@@ -579,6 +580,7 @@ class TestConcurrentAccess:
     @pytest.mark.asyncio
     async def test_parallel_requests_same_symbol(self, tmp_cache_dir, monkeypatch):
         """Parallel requests for same symbol don't cause race conditions."""
+
         class _Ex:
             id = "test"
 
@@ -621,6 +623,7 @@ class TestConcurrentAccess:
     @pytest.mark.asyncio
     async def test_parallel_different_symbols(self, tmp_cache_dir, monkeypatch):
         """Parallel requests for different symbols work independently."""
+
         class _Ex:
             id = "test"
 
@@ -674,7 +677,7 @@ class TestMemoryManagement:
             exchange=None,
             exchange_name="test",
             cache_dir=tmp_cache_dir,
-            max_memory_candles_per_symbol=100
+            max_memory_candles_per_symbol=100,
         )
         symbol = "BTC/USDT:USDT"
 
@@ -694,7 +697,7 @@ class TestMemoryManagement:
             exchange=None,
             exchange_name="test",
             cache_dir=tmp_cache_dir,
-            max_memory_candles_per_symbol=1000
+            max_memory_candles_per_symbol=1000,
         )
         symbol = "BTC/USDT:USDT"
 
@@ -705,10 +708,7 @@ class TestMemoryManagement:
         # Multiple standardize_gaps calls
         for i in range(10):
             cm.standardize_gaps(
-                candles,
-                start_ts=base_ts,
-                end_ts=base_ts + 499 * ONE_MIN_MS,
-                strict=True
+                candles, start_ts=base_ts, end_ts=base_ts + 499 * ONE_MIN_MS, strict=True
             )
 
         # Cache shouldn't grow unbounded
@@ -733,7 +733,9 @@ class TestSpecialCases:
         candles["c"] = 100.0
         candles["bv"] = 0.0  # Zero volume
 
-        result = cm.standardize_gaps(candles, start_ts=base_ts, end_ts=base_ts + 9 * ONE_MIN_MS, strict=True)
+        result = cm.standardize_gaps(
+            candles, start_ts=base_ts, end_ts=base_ts + 9 * ONE_MIN_MS, strict=True
+        )
         assert result.size == 10
 
     def test_extreme_price_values(self, tmp_cache_dir):
@@ -746,7 +748,9 @@ class TestSpecialCases:
         candles["c"] = [0.000001, 100000.0, 1e-10]  # Very small and large values
         candles["bv"] = 1.0
 
-        result = cm.standardize_gaps(candles, start_ts=base_ts, end_ts=base_ts + 2 * ONE_MIN_MS, strict=True)
+        result = cm.standardize_gaps(
+            candles, start_ts=base_ts, end_ts=base_ts + 2 * ONE_MIN_MS, strict=True
+        )
         assert result.size == 3
         assert float(result[0]["c"]) == pytest.approx(0.000001)
         assert float(result[1]["c"]) == pytest.approx(100000.0)

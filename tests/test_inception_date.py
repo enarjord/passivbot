@@ -1,4 +1,5 @@
 """Tests for inception date tracking in CandlestickManager."""
+
 import numpy as np
 import pytest
 import os

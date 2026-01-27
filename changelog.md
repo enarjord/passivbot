@@ -2,7 +2,47 @@
 
 All notable user-facing changes will be documented in this file.
 
-## Unreleased
+## v7.7.0 - 2026-01-26
+
+### Fixed
+- **Bybit: Missing PnL on some close fills** - Fixed pagination bug in `BybitFetcher._fetch_positions_history()` that caused closed-pnl records to be skipped when >100 records existed in a time window. Now uses hybrid pagination: cursor-based for recent records (no gaps), time-based sliding window for older records.
+
+### Added
+- **Fill events now include psize/pprice** - Each fill event is annotated with position size (`psize`) and VWAP entry price (`pprice`) after the fill. Values are computed using a two-phase algorithm and persisted to cache for all exchanges.
+- **Logging best practices documentation** - New `docs/ai/log_analysis_prompt.md` with comprehensive logging guidelines, level definitions, and improvement tracking.
+- **Exchange API quirks documentation** - New `docs/ai/exchange_api_quirks.md` documenting known exchange-specific limitations and workarounds.
+- **Debugging case studies** - New `docs/ai/debugging_case_studies.md` with detailed debugging sessions as reference.
+
+### Changed
+- **Logging improvements (7 rounds of refinement)**:
+  - Standardized log tags: `[memory]`, `[warmup]`, `[hourly]`, `[fills]`, `[mapping]`, `[candle]`, `[ranking]`, `[mode]`
+  - Moved routine API/cache messages from INFO to DEBUG level (CCXT fetch details, cache updates)
+  - Moved CCXT API payloads from DEBUG to TRACE level
+  - EMA ranking logs now throttled to every 5 minutes (was every cycle)
+  - Mode changes throttled to 2 minutes per symbol (reduces forager oscillation noise)
+  - KucoinFetcher PnL discrepancy warnings throttled to 1 hour with delta-based deduplication
+  - WebSocket reconnection now logs explicit `[ws] reconnecting...` messages
+  - Strict mode gaps changed from WARNING to DEBUG (expected for illiquid markets)
+  - Persistent gaps changed from WARNING to INFO with throttling
+  - Zero-candle synthesis warnings aggregated and rate-limited
+- **PnL tracking now uses FillEventsManager exclusively** - Legacy `update_pnls` path removed. FillEventsManager provides more accurate fill tracking with proper event deduplication, canonical schemas, and exchange-specific fetchers for all supported exchanges.
+- Fill events are now stored in `caches/fill_events/{exchange}/{user}/` instead of the old `caches/{exchange}/{user}_pnls.json` format. Existing legacy cache files are ignored; FillEventsManager will rebuild from exchange API on first run.
+- Unstuck allowances now computed from FillEventsManager data instead of legacy pnls list.
+- Trailing position change timestamps now derived from FillEventsManager events.
+
+### Removed
+- `--shadow-mode` CLI flag (no longer needed; FillEventsManager is production-ready)
+- `live.pnls_manager_shadow_mode` config option
+- Legacy `init_pnls`, `update_pnls`, `fetch_pnls` methods in passivbot.py
+- Legacy `init_fill_events`, `update_fill_events`, `fetch_fill_events` methods (dead code)
+- Shadow mode comparison logging (`_compare_pnls_shadow`, etc.)
+
+### Migration Notes
+- **No action required** - FillEventsManager automatically fetches and caches fill data
+- Old `{user}_pnls.json` cache files can be safely deleted after upgrading
+- If using custom exchange configurations, ensure the exchange's fill fetcher is supported (Binance, Bybit, Bitget, GateIO, Hyperliquid, KuCoin, OKX)
+
+## v7.6.2 - 2026-01-20
 
 ### Fixed
 - One-way mode now respects disabled sides when choosing initial entry side, preventing a disabled side from blocking entries.

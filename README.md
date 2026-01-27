@@ -4,7 +4,7 @@
 
 :warning: **Used at one's own risk** :warning:
 
-v7.6.1
+v7.7.0
 
 
 ## Overview

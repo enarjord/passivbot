@@ -2,6 +2,28 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**IMPORTANT:** Also read and follow the documentation in `docs/ai/`:
+- `passivbot_agent_principles.yaml` - Conventions on terminology, error handling, testing, design principles
+- `exchange_api_quirks.md` - Known exchange API limitations and workarounds (check before implementing exchange code)
+- `debugging_case_studies.md` - Detailed debugging sessions as reference for complex investigations
+- `log_analysis_prompt.md` - Logging level definitions and examples
+
+## Known LLM Pitfalls — Avoid These
+
+Common failure modes when coding with LLMs (ref: Karpathy, Dec 2025). Actively counteract:
+
+- **Unchecked assumptions** — Don't silently assume intent; verify ambiguous requirements or ask
+- **Hiding confusion** — Surface uncertainty explicitly; seek clarification rather than guessing
+- **Ignoring inconsistencies** — Flag contradictions in specs/code; don't silently pick one interpretation
+- **Concealing tradeoffs** — Present options with pros/cons when multiple valid approaches exist
+- **Failure to push back** — Disagree when a request seems wrong, suboptimal, or underspecified
+- **Sycophancy** — No cheerleading ("Great question!"); be direct, factual, and professionally objective
+- **Overengineering** — Prefer the simplest solution; don't add abstraction layers, config options, or generality until justified by actual need
+- **Abstraction bloat** — Resist premature DRY; three similar lines beats a premature helper
+- **Dead code accumulation** — Clean up anything you obsolete; don't leave commented-out code or unused imports
+- **Scope creep in edits** — Don't "improve" code orthogonal to the task; don't add docstrings, type hints, or refactors unless requested
+- **Runaway implementation** — Stop and reconsider if a solution is growing large; ask "couldn't this be simpler?" before writing 500+ lines
+
 ## Overview
 
 Passivbot is a cryptocurrency trading bot for perpetual futures markets. It uses a contrarian market-making strategy inspired by Martingale betting, written in Python for orchestration and Rust for performance-critical components (backtesting, order calculations, analysis).
@@ -202,7 +224,7 @@ python3 -m jupyter lab
 
 ### Important Conventions
 
-**From `passivbot_agent_principles.yaml`:**
+**See `docs/ai/passivbot_agent_principles.yaml` for the full list.** Key points:
 
 - **Position side** (long/short) → `[position_side, pos_side, pside, PositionSide, PosSide, Pside]`
 - **Order side** (buy/sell) → `[side, order_side, Side, OrderSide]`
@@ -230,9 +252,22 @@ python3 -m jupyter lab
 
 ### Logging
 
-- Use structured, leveled logging (`error`, `warn`, `info`, `debug`, `trace`)
-- Every remote API call must have a debug-level log entry (endpoint, params, timing)
-- Logging should be non-intrusive but detailed enough for full replay/audit
+Use structured, leveled logging with clear separation between levels:
+
+| Level | Audience | Content | Golden Rule |
+|-------|----------|---------|-------------|
+| **INFO** | Operators | Essential events: orders, fills, positions, balance, mode changes, health summaries | Must be sustainable to tail indefinitely in production |
+| **DEBUG** | Developers | Internal state: API timing, cache updates, decision points, fetch summaries | Tolerable for short debugging sessions |
+| **TRACE** | Deep debugging | Full firehose: API payloads, per-item iterations, raw data | Expect GB of logs; enable briefly for specific issues |
+
+**Guidelines:**
+- INFO should answer "what is the bot doing?" without overwhelming
+- DEBUG should answer "why did it make that decision?"
+- TRACE should answer "what exact data did it see?"
+- Use `[tag]` format consistently: `[order]`, `[pos]`, `[fill]`, `[health]`, `[boot]`
+- Prefer `logging.info("msg %s", var)` over f-strings for log aggregation compatibility
+- Every remote API call should have a DEBUG-level log entry (endpoint, timing)
+- See `docs/ai/log_analysis_prompt.md` for detailed level definitions and examples
 
 ## Testing
 
@@ -276,6 +311,28 @@ Configuration sections form an inheritance hierarchy. When adding new parameters
 - Optimizer results go to `optimize_results/YYYY-MM-DDTHH_MM_SS_{exchanges}_{n_days}days_{coin_label}_{hash}/`
 - When adding dependencies, explain necessity and impact
 - Before committing, simulate/dry-run changes
+
+## Documentation Structure
+
+This file (`CLAUDE.md`) serves as the entry point for AI agents. Detailed topic-specific documentation lives in `docs/ai/`:
+
+| File | Purpose |
+|------|---------|
+| `passivbot_agent_principles.yaml` | Core conventions: terminology, error handling, testing |
+| `exchange_api_quirks.md` | Exchange-specific API limitations and workarounds |
+| `debugging_case_studies.md` | Detailed debugging sessions as learning references |
+| `log_analysis_prompt.md` | Logging level definitions and analysis guidance |
+
+**When to add new docs:**
+- **Exchange quirks** → Add to `exchange_api_quirks.md` (or create `{exchange}_quirks.md` if extensive)
+- **Complex debugging** → Add case study to `debugging_case_studies.md`
+- **New subsystem** → Consider a dedicated `{subsystem}.md` if >50 lines of guidance
+
+**Modularization guidelines:**
+- Keep CLAUDE.md as a high-level overview (<300 lines ideal)
+- Move detailed reference material to `docs/ai/` subdirectory
+- Use consistent naming: `{topic}.md` or `{topic}_{subtopic}.md`
+- Always reference new docs from CLAUDE.md's header list
 
 ## Changelog
 

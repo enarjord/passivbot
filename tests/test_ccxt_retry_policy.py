@@ -52,7 +52,9 @@ async def test_non_bybit_keeps_default_retry_budget(tmp_path, monkeypatch):
     monkeypatch.setattr("candlestick_manager.asyncio.sleep", _nosleep)
 
     ex = DummyExchange(exid="binanceusdm", fail_times=6)
-    cm = CandlestickManager(exchange=ex, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches"))
+    cm = CandlestickManager(
+        exchange=ex, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches")
+    )
 
     rows = await cm._ccxt_fetch_ohlcv_once(
         "BTC/USDT:USDT",

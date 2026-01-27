@@ -64,10 +64,12 @@ class TestCCXTBotFetchBalance:
         bot.exchange = "testexchange"
         bot.quote = "USDT"
         bot.cca = AsyncMock()
-        bot.cca.fetch_balance = AsyncMock(return_value={
-            "total": {"USDT": 1000.50, "BTC": 0.5},
-            "free": {"USDT": 900.0},
-        })
+        bot.cca.fetch_balance = AsyncMock(
+            return_value={
+                "total": {"USDT": 1000.50, "BTC": 0.5},
+                "free": {"USDT": 900.0},
+            }
+        )
 
         balance = await bot.fetch_balance()
 
@@ -83,9 +85,11 @@ class TestCCXTBotFetchBalance:
         bot.exchange = "testexchange"
         bot.quote = "USDC"
         bot.cca = AsyncMock()
-        bot.cca.fetch_balance = AsyncMock(return_value={
-            "total": {"USDT": 1000.0},
-        })
+        bot.cca.fetch_balance = AsyncMock(
+            return_value={
+                "total": {"USDT": 1000.0},
+            }
+        )
 
         balance = await bot.fetch_balance()
 
@@ -104,26 +108,28 @@ class TestCCXTBotFetchPositions:
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
         bot.cca = AsyncMock()
-        bot.cca.fetch_positions = AsyncMock(return_value=[
-            {
-                "symbol": "BTC/USDT:USDT",
-                "side": "long",
-                "contracts": 0.5,
-                "entryPrice": 50000.0,
-            },
-            {
-                "symbol": "ETH/USDT:USDT",
-                "side": "short",
-                "contracts": 2.0,
-                "entryPrice": 3000.0,
-            },
-            {
-                "symbol": "SOL/USDT:USDT",
-                "side": "long",
-                "contracts": 0,  # No position
-                "entryPrice": 0,
-            },
-        ])
+        bot.cca.fetch_positions = AsyncMock(
+            return_value=[
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "long",
+                    "contracts": 0.5,
+                    "entryPrice": 50000.0,
+                },
+                {
+                    "symbol": "ETH/USDT:USDT",
+                    "side": "short",
+                    "contracts": 2.0,
+                    "entryPrice": 3000.0,
+                },
+                {
+                    "symbol": "SOL/USDT:USDT",
+                    "side": "long",
+                    "contracts": 0,  # No position
+                    "entryPrice": 0,
+                },
+            ]
+        )
 
         positions = await bot.fetch_positions()
 
@@ -162,26 +168,28 @@ class TestCCXTBotFetchOpenOrders:
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
         bot.cca = AsyncMock()
-        bot.cca.fetch_open_orders = AsyncMock(return_value=[
-            {
-                "id": "123",
-                "symbol": "BTC/USDT:USDT",
-                "side": "buy",
-                "amount": 0.1,
-                "price": 50000.0,
-                "timestamp": 1000,
-                "info": {"positionSide": "LONG"},
-            },
-            {
-                "id": "456",
-                "symbol": "BTC/USDT:USDT",
-                "side": "sell",
-                "amount": 0.2,
-                "price": 55000.0,
-                "timestamp": 2000,
-                "info": {},  # No positionSide
-            },
-        ])
+        bot.cca.fetch_open_orders = AsyncMock(
+            return_value=[
+                {
+                    "id": "123",
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "buy",
+                    "amount": 0.1,
+                    "price": 50000.0,
+                    "timestamp": 1000,
+                    "info": {"positionSide": "LONG"},
+                },
+                {
+                    "id": "456",
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "sell",
+                    "amount": 0.2,
+                    "price": 55000.0,
+                    "timestamp": 2000,
+                    "info": {},  # No positionSide
+                },
+            ]
+        )
 
         orders = await bot.fetch_open_orders()
 
@@ -213,23 +221,16 @@ class TestCCXTBotWatchOrders:
 
         # Mock WebSocket client
         call_count = [0]
+
         async def mock_watch_orders():
             call_count[0] += 1
             if call_count[0] == 1:
-                return [{
-                    "id": "order1",
-                    "amount": 0.5,
-                    "info": {"positionSide": "LONG"}
-                }]
+                return [{"id": "order1", "amount": 0.5, "info": {"positionSide": "LONG"}}]
             else:
                 # Stop after processing first batch
                 bot.stop_websocket = True
                 # Return order that triggers stop on next iteration
-                return [{
-                    "id": "order2",
-                    "amount": 1.0,
-                    "info": {}
-                }]
+                return [{"id": "order2", "amount": 1.0, "info": {}}]
 
         bot.ccp = MagicMock()
         bot.ccp.has = {"watchOrders": True}  # Required for can_watch_orders()
@@ -431,7 +432,7 @@ class TestCCXTBotSetMarketSpecificSettings:
         }
 
         # Mock parent's method
-        with patch.object(Passivbot, 'set_market_specific_settings', lambda self: None):
+        with patch.object(Passivbot, "set_market_specific_settings", lambda self: None):
             bot.set_market_specific_settings()
 
         assert bot.symbol_ids["BTC/USDT:USDT"] == "BTCUSDT"
@@ -468,7 +469,7 @@ class TestCCXTBotSetMarketSpecificSettings:
             }
         }
 
-        with patch.object(Passivbot, 'set_market_specific_settings', lambda self: None):
+        with patch.object(Passivbot, "set_market_specific_settings", lambda self: None):
             bot.set_market_specific_settings()
 
         assert bot.min_costs["ETH/USDT:USDT"] == 0.1  # Default fallback
@@ -487,11 +488,13 @@ class TestCCXTBotFetchTickers:
         bot.exchange = "testexchange"
         bot.markets_dict = {"BTC/USDT:USDT": {}, "ETH/USDT:USDT": {}}
         bot.cca = AsyncMock()
-        bot.cca.fetch_tickers = AsyncMock(return_value={
-            "BTC/USDT:USDT": {"bid": 50000.0, "ask": 50010.0, "last": 50005.0},
-            "ETH/USDT:USDT": {"bid": 3000.0, "ask": 3001.0, "last": 3000.5},
-            "DOGE/USDT:USDT": {"bid": 0.1, "ask": 0.11, "last": 0.105},  # Not in markets_dict
-        })
+        bot.cca.fetch_tickers = AsyncMock(
+            return_value={
+                "BTC/USDT:USDT": {"bid": 50000.0, "ask": 50010.0, "last": 50005.0},
+                "ETH/USDT:USDT": {"bid": 3000.0, "ask": 3001.0, "last": 3000.5},
+                "DOGE/USDT:USDT": {"bid": 0.1, "ask": 0.11, "last": 0.105},  # Not in markets_dict
+            }
+        )
 
         tickers = await bot.fetch_tickers()
 
@@ -512,9 +515,11 @@ class TestCCXTBotFetchTickers:
         bot.exchange = "testexchange"
         bot.markets_dict = {"BTC/USDT:USDT": {}}
         bot.cca = AsyncMock()
-        bot.cca.fetch_tickers = AsyncMock(return_value={
-            "BTC/USDT:USDT": {"bid": 50000.0, "ask": None, "last": None},
-        })
+        bot.cca.fetch_tickers = AsyncMock(
+            return_value={
+                "BTC/USDT:USDT": {"bid": 50000.0, "ask": None, "last": None},
+            }
+        )
 
         tickers = await bot.fetch_tickers()
 
@@ -548,10 +553,12 @@ class TestCCXTBotFetchOHLCV:
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
         bot.cca = AsyncMock()
-        bot.cca.fetch_ohlcv = AsyncMock(return_value=[
-            [1704067200000, 42000.0, 42100.0, 41900.0, 42050.0, 100.0],
-            [1704067260000, 42050.0, 42150.0, 42000.0, 42100.0, 150.0],
-        ])
+        bot.cca.fetch_ohlcv = AsyncMock(
+            return_value=[
+                [1704067200000, 42000.0, 42100.0, 41900.0, 42050.0, 100.0],
+                [1704067260000, 42050.0, 42150.0, 42000.0, 42100.0, 150.0],
+            ]
+        )
 
         result = await bot.fetch_ohlcv("BTC/USDT:USDT", "1m")
 
@@ -580,9 +587,11 @@ class TestCCXTBotFetchOHLCV:
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
         bot.cca = AsyncMock()
-        bot.cca.fetch_ohlcv = AsyncMock(return_value=[
-            [1704067200000, 42000.0, 42100.0, 41900.0, 42050.0, 100.0],
-        ])
+        bot.cca.fetch_ohlcv = AsyncMock(
+            return_value=[
+                [1704067200000, 42000.0, 42100.0, 41900.0, 42050.0, 100.0],
+            ]
+        )
 
         result = await bot.fetch_ohlcvs_1m("BTC/USDT:USDT")
 
@@ -600,6 +609,7 @@ class TestCCXTBotFetchOHLCV:
 
         # Simulate two pages of results
         call_count = [0]
+
         async def mock_fetch(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:

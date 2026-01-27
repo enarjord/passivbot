@@ -1,4 +1,4 @@
-from exchanges.ccxt_bot import CCXTBot
+from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging, clip_by_timestamp
 from uuid import uuid4
 import asyncio
@@ -136,14 +136,10 @@ class BybitBot(CCXTBot):
             params["endTime"] = int(end_time)
         fetched = (await self.cca.private_get_v5_position_closed_pnl(params))["result"]
         while True:
-            fetched["list"] = sorted(
-                floatify(fetched["list"]), key=lambda x: float(x["updatedTime"])
-            )
+            fetched["list"] = sorted(floatify(fetched["list"]), key=lambda x: float(x["updatedTime"]))
             for i in range(len(fetched["list"])):
                 fetched["list"][i]["timestamp"] = float(fetched["list"][i]["updatedTime"])
-                fetched["list"][i]["symbol"] = self.get_symbol_id_inv(
-                    fetched["list"][i]["symbol"]
-                )
+                fetched["list"][i]["symbol"] = self.get_symbol_id_inv(fetched["list"][i]["symbol"])
                 fetched["list"][i]["pnl"] = float(fetched["list"][i]["closedPnl"])
                 fetched["list"][i]["side"] = fetched["list"][i]["side"].lower()
                 fetched["list"][i]["position_side"] = (
@@ -455,9 +451,7 @@ class BybitBot(CCXTBot):
                 self.cca.set_margin_mode(
                     "cross",
                     symbol=symbol,
-                    params={
-                        "leverage": int(self.config_get(["live", "leverage"], symbol=symbol))
-                    },
+                    params={"leverage": int(self.config_get(["live", "leverage"], symbol=symbol))},
                 )
             )
             coros_to_call_lev[symbol] = asyncio.create_task(
@@ -470,7 +464,7 @@ class BybitBot(CCXTBot):
             # Handle leverage setting - ignore "not modified" errors (retCode 110043)
             try:
                 res = await coros_to_call_lev[symbol]
-                to_print += f" set leverage {res} "
+                to_print += f"leverage={format_exchange_config_response(res)} "
             except ccxt.BadRequest as e:
                 if "110043" in str(e) or "not modified" in str(e).lower():
                     logging.debug(f"{symbol}: leverage already set (not modified)")
@@ -479,7 +473,7 @@ class BybitBot(CCXTBot):
             # Handle margin mode setting - ignore "not modified" errors
             try:
                 res = await coros_to_call_margin_mode[symbol]
-                to_print += f"set cross mode {res}"
+                to_print += f"margin={format_exchange_config_response(res)}"
             except ccxt.BadRequest as e:
                 if "110026" in str(e) or "not modified" in str(e).lower():
                     logging.debug(f"{symbol}: margin mode already set (not modified)")
