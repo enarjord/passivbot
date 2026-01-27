@@ -3785,8 +3785,9 @@ class CandlestickManager:
             and self._archive_supported()
         ):
             # Prefetch archives for the historical portion (up to 2 days ago, since
-            # archives typically lag by 1-2 days)
-            archive_end_ts = end_finalized - 2 * 24 * 60 * ONE_MIN_MS
+            # archives typically lag by 1-2 days). Also respect the user's requested
+            # end_ts to avoid fetching beyond the requested date range.
+            archive_end_ts = min(end_finalized - 2 * 24 * 60 * ONE_MIN_MS, end_ts)
             if start_ts < archive_end_ts:
                 self._log(
                     "info",
