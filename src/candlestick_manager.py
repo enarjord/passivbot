@@ -2819,7 +2819,9 @@ class CandlestickManager:
             exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
         except Exception:
             exid = ""
-        return exid in {"binanceusdm", "bybit", "bitget", "kucoinfutures"}
+        # Note: Bybit excluded - CCXT is faster and uses far less bandwidth
+        # (archive returns raw trades requiring bucketing; ~700x more data for BTC)
+        return exid in {"binanceusdm", "bitget", "kucoinfutures"}
 
     @staticmethod
     def _archive_symbol_code(symbol: str) -> str:
