@@ -688,6 +688,14 @@ class Passivbot:
 
     def _calc_unstuck_allowance_for_logging(self, pside: str) -> dict:
         """Calculate raw unstuck allowance values for logging (including negative)."""
+        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+        if twel <= 0.0:
+            return {"status": "disabled"}
+
+        pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
+        if pct <= 0.0:
+            return {"status": "unstuck_disabled"}
+
         if self._pnls_manager is None:
             return {"status": "no_pnl_manager"}
 
@@ -695,24 +703,19 @@ class Passivbot:
         if not events:
             return {"status": "no_history"}
 
-        pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
-        if pct <= 0.0:
-            return {"status": "disabled"}
-
         pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = float(pnls_cumsum.max()), float(pnls_cumsum[-1])
 
         balance_peak = float(self.balance) + (pnls_cumsum_max - pnls_cumsum_last)
-        drop_since_peak_pct = float(self.balance) / balance_peak - 1.0
-        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+        pct_from_peak = (float(self.balance) / balance_peak - 1.0) * 100.0
         # Raw allowance WITHOUT .max(0.0) - can be negative
-        allowance_raw = balance_peak * (pct * twel + drop_since_peak_pct)
+        allowance_raw = balance_peak * (pct * twel + pct_from_peak / 100.0)
 
         return {
             "status": "ok",
             "allowance": allowance_raw,
             "peak": balance_peak,
-            "dd_pct": drop_since_peak_pct * 100.0,
+            "pct_from_peak": pct_from_peak,
         }
 
     def _log_unstuck_status(self) -> None:
@@ -721,21 +724,23 @@ class Passivbot:
         for pside in ["long", "short"]:
             info = self._calc_unstuck_allowance_for_logging(pside)
             status = info.get("status")
-            if status == "no_pnl_manager" or status == "no_history":
-                parts.append(f"{pside}: no pnl history")
-            elif status == "disabled":
+            if status == "disabled":
                 parts.append(f"{pside}: disabled")
+            elif status == "unstuck_disabled":
+                parts.append(f"{pside}: unstuck disabled")
+            elif status == "no_pnl_manager" or status == "no_history":
+                parts.append(f"{pside}: no pnl history")
             else:
                 allowance = info["allowance"]
                 if allowance < 0:
                     parts.append(
-                        "%s: allowance=%.2f (over budget) | peak=%.2f | dd=%.1f%%"
-                        % (pside, allowance, info["peak"], info["dd_pct"])
+                        "%s: allowance=%.2f (over budget) | peak=%.2f | pct_from_peak=%.1f%%"
+                        % (pside, allowance, info["peak"], info["pct_from_peak"])
                     )
                 else:
                     parts.append(
-                        "%s: allowance=%.2f | peak=%.2f | dd=%.1f%%"
-                        % (pside, allowance, info["peak"], info["dd_pct"])
+                        "%s: allowance=%.2f | peak=%.2f | pct_from_peak=%.1f%%"
+                        % (pside, allowance, info["peak"], info["pct_from_peak"])
                     )
         logging.info("[unstuck] %s", " | ".join(parts))
 
