@@ -773,8 +773,11 @@ class CandlestickManager:
         symbols = ", ".join(f"{s}:{c}" for s, c in sorted(summary.items())[:5])
         if len(summary) > 5:
             symbols += f", +{len(summary) - 5} more"
-        self.log.warning(
-            f"persistent gaps: {total} new ({symbols}). Use --force-refetch-gaps to retry."
+        self.log.info(
+            "[candle] persistent gaps: %d across %d symbols (%s). Use --force-refetch-gaps to retry.",
+            total,
+            len(summary),
+            symbols,
         )
         self._persistent_gap_summary.clear()
 
@@ -809,7 +812,7 @@ class CandlestickManager:
         symbols = ", ".join(f"{s}:{c}" for s, c in sorted(summary.items(), key=lambda x: -x[1])[:5])
         if len(summary) > 5:
             symbols += f", +{len(summary) - 5} more"
-        self.log.warning(
+        self.log.debug(
             "[candle] strict mode gaps: %d missing candles across %d symbols (%s)",
             total,
             len(summary),
@@ -1654,6 +1657,10 @@ class CandlestickManager:
         for i, (key, bucket_data) in enumerate(keys_to_process):
             is_last = i == len(keys_to_process) - 1
             flush_bucket(key, bucket_data, is_last=is_last)
+
+        # Invalidate shard paths cache so subsequent lookups see newly saved files
+        if shards_saved:
+            self._invalidate_shard_paths_cache(symbol, tf=tf_norm)
 
     def _persist_batch(
         self,
@@ -3182,31 +3189,64 @@ class CandlestickManager:
         if not self._archive_supported():
             return
 
-        # Skip fetches before known inception date
+        # Skip fetches before known inception date - but DON'T trust inception_ts if it
+        # would skip the entire requested range (suggests stale/incorrect inception_ts).
         inception_ts = self._get_inception_ts(symbol)
         if inception_ts is not None and start_ts < inception_ts:
-            # Mark pre-inception range as persistent gap (no retries needed)
-            pre_inception_end = min(inception_ts - ONE_MIN_MS, end_ts)
-            if start_ts <= pre_inception_end:
-                self._add_known_gap(
-                    symbol,
-                    start_ts,
-                    pre_inception_end,
-                    reason="pre_inception",
-                    retry_count=_GAP_MAX_RETRIES,  # Mark as persistent immediately
-                )
+            # If inception_ts is AFTER the entire requested range, don't trust it -
+            # it was likely set incorrectly when only recent data was fetched.
+            # Clear it and let the archive fetch discover the real inception.
+            if inception_ts > end_ts:
                 self._log(
-                    "debug",
-                    "skip_pre_inception_fetch",
+                    "info",
+                    "inception_ts_stale_cleared",
                     symbol=symbol,
-                    original_start=start_ts,
-                    inception_ts=inception_ts,
-                    clipped_start=inception_ts,
+                    cached_inception_ts=inception_ts,
+                    requested_end_ts=end_ts,
+                    reason="inception_ts after requested range suggests stale cache",
                 )
-            # Clip to inception date
-            start_ts = inception_ts
-            if start_ts > end_ts:
-                return  # Nothing left to fetch
+                # Clear the stale inception_ts and any pre_inception gaps
+                idx = self._ensure_symbol_index(symbol)
+                if "meta" in idx:
+                    idx["meta"].pop("inception_ts", None)
+                    # Also clear pre_inception gaps since they're based on stale data
+                    gaps = idx["meta"].get("known_gaps", [])
+                    if gaps:
+                        new_gaps = [g for g in gaps if g.get("reason") != "pre_inception"]
+                        if len(new_gaps) != len(gaps):
+                            idx["meta"]["known_gaps"] = new_gaps
+                            self._log(
+                                "debug",
+                                "pre_inception_gaps_cleared",
+                                symbol=symbol,
+                                cleared=len(gaps) - len(new_gaps),
+                            )
+                    self._index[f"{symbol}::1m"] = idx
+                    self._save_index(symbol)
+                inception_ts = None
+            else:
+                # inception_ts is within the requested range - trust it and clip
+                pre_inception_end = min(inception_ts - ONE_MIN_MS, end_ts)
+                if start_ts <= pre_inception_end:
+                    self._add_known_gap(
+                        symbol,
+                        start_ts,
+                        pre_inception_end,
+                        reason="pre_inception",
+                        retry_count=_GAP_MAX_RETRIES,  # Mark as persistent immediately
+                    )
+                    self._log(
+                        "debug",
+                        "skip_pre_inception_fetch",
+                        symbol=symbol,
+                        original_start=start_ts,
+                        inception_ts=inception_ts,
+                        clipped_start=inception_ts,
+                    )
+                # Clip to inception date
+                start_ts = inception_ts
+                if start_ts > end_ts:
+                    return  # Nothing left to fetch
 
         day_map = self._date_keys_between(start_ts, end_ts)
         shard_paths = self._iter_shard_paths(symbol, tf="1m")
@@ -3234,6 +3274,7 @@ class CandlestickManager:
             "too_recent": 0,
             "legacy_present": 0,
             "primary_complete": 0,
+            "verified_from_disk": 0,  # Files verified by loading (no index metadata)
         }
         for day_key, (day_start, day_end) in day_map.items():
             if start_ts > day_start or end_ts < day_end:
@@ -3261,11 +3302,51 @@ class CandlestickManager:
                         ):
                             skipped_reasons["primary_complete"] += 1
                             continue
+                    else:
+                        # No index metadata but file exists - verify by loading the shard
+                        # to avoid redundant re-downloads of already complete files.
+                        try:
+                            arr = self._load_shard(shard_paths[day_key])
+                            if (
+                                len(arr) == 1440
+                                and len(arr) > 0
+                                and int(arr["ts"][0]) == int(day_start)
+                                and int(arr["ts"][-1]) == int(day_end)
+                            ):
+                                # File is complete - update index with metadata and skip
+                                crc = int(zlib.crc32(arr.tobytes()) & 0xFFFFFFFF)
+                                idx_shards[day_key] = {
+                                    "path": shard_paths[day_key],
+                                    "min_ts": int(arr["ts"][0]),
+                                    "max_ts": int(arr["ts"][-1]),
+                                    "count": int(len(arr)),
+                                    "crc32": crc,
+                                }
+                                skipped_reasons["verified_from_disk"] += 1
+                                continue
+                        except Exception:
+                            # Load failed - proceed to re-download
+                            pass
                 except Exception:
                     # If meta is missing/corrupt, treat as incomplete and allow archive fetch.
                     pass
 
             days_to_fetch.append((day_key, day_start, day_end))
+
+        # If we verified any files from disk, persist the index updates
+        if skipped_reasons["verified_from_disk"] > 0:
+            try:
+                idx["shards"] = idx_shards
+                self._index[f"{symbol}::1m"] = idx
+                self._save_index(symbol, tf="1m")
+                self._log(
+                    "debug",
+                    "index_updated_from_disk_verification",
+                    symbol=symbol,
+                    shards_verified=skipped_reasons["verified_from_disk"],
+                )
+            except Exception:
+                pass
 
         if not days_to_fetch:
             # Surface why archive prefetch didn't run (useful when large gaps exist but
@@ -3778,11 +3859,23 @@ class CandlestickManager:
         # previously skipping archive fetch because end_ts == latest_finalized.
         span_minutes = (end_ts - start_ts) // ONE_MIN_MS
         large_span_threshold = 2 * 24 * 60  # 2 days in minutes
+        archive_supported = self._archive_supported()
+        if not fully_covered and span_minutes > large_span_threshold:
+            self._log(
+                "debug",
+                "large_span_check",
+                symbol=symbol,
+                exchange_present=self.exchange is not None,
+                span_minutes=int(span_minutes),
+                fully_covered=fully_covered,
+                archive_supported=archive_supported,
+                sub_size=sub.size if hasattr(sub, "size") else 0,
+            )
         if (
             self.exchange is not None
             and span_minutes > large_span_threshold
             and not fully_covered
-            and self._archive_supported()
+            and archive_supported
         ):
             # Prefetch archives for the historical portion (up to 2 days ago, since
             # archives typically lag by 1-2 days). Also respect the user's requested

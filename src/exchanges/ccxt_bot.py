@@ -432,9 +432,16 @@ class CCXTBot(Passivbot):
                 self.handle_order_update(normalized)
             except Exception as e:
                 self._health_ws_reconnects += 1
-                logging.error(f"[ws] exception in watch_orders: {e}")
-                traceback.print_exc()
+                logging.warning(
+                    "[ws] %s: connection lost (reconnect #%d), retrying in 1s: %s",
+                    self.exchange,
+                    self._health_ws_reconnects,
+                    type(e).__name__,
+                )
+                logging.debug("[ws] %s: full exception: %s", self.exchange, e)
+                logging.debug("".join(traceback.format_exc()))
                 await asyncio.sleep(1)
+                logging.info("[ws] %s: reconnecting...", self.exchange)
 
     async def update_exchange_config(self):
         """Set exchange to hedge mode if supported.

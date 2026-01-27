@@ -2,7 +2,7 @@
 
 All notable user-facing changes will be documented in this file.
 
-## v7.7.0 - Unreleased
+## v7.7.0 - 2026-01-26
 
 ### Fixed
 - **Bybit: Missing PnL on some close fills** - Fixed pagination bug in `BybitFetcher._fetch_positions_history()` that caused closed-pnl records to be skipped when >100 records existed in a time window. Now uses hybrid pagination: cursor-based for recent records (no gaps), time-based sliding window for older records.
@@ -14,6 +14,9 @@ All notable user-facing changes will be documented in this file.
 - **Fill events now include psize/pprice** - Each fill event is annotated with position size (`psize`) and VWAP entry price (`pprice`) after the fill. Values are computed using a two-phase algorithm and persisted to cache for all exchanges.
 - **`--scenarios` CLI filter** - Run specific scenarios by label with `--scenarios label1,label2,...` (implies `--suite y`).
 - **`suite_enabled` config param** - New `backtest.suite_enabled` (default: true) as master toggle for suite mode.
+- **Logging best practices documentation** - New `docs/ai/log_analysis_prompt.md` with comprehensive logging guidelines, level definitions, and improvement tracking.
+- **Exchange API quirks documentation** - New `docs/ai/exchange_api_quirks.md` documenting known exchange-specific limitations and workarounds.
+- **Debugging case studies** - New `docs/ai/debugging_case_studies.md` with detailed debugging sessions as reference.
 
 ### Changed
 - **Exchange name functions renamed** - `normalize_exchange_name()` renamed to `to_ccxt_exchange_id()` and `denormalize_exchange_name()` renamed to `to_standard_exchange_name()`. Old names remain as deprecated aliases with warnings.
@@ -27,6 +30,17 @@ All notable user-facing changes will be documented in this file.
 - Single exchange in scenario = use that exchange's data only
 - Multiple exchanges in scenario = best-per-coin combination with volume normalization
 - Data strategy is now derived from exchange count rather than explicit flags
+- **Logging improvements (7 rounds of refinement)**:
+  - Standardized log tags: `[memory]`, `[warmup]`, `[hourly]`, `[fills]`, `[mapping]`, `[candle]`, `[ranking]`, `[mode]`
+  - Moved routine API/cache messages from INFO to DEBUG level (CCXT fetch details, cache updates)
+  - Moved CCXT API payloads from DEBUG to TRACE level
+  - EMA ranking logs now throttled to every 5 minutes (was every cycle)
+  - Mode changes throttled to 2 minutes per symbol (reduces forager oscillation noise)
+  - KucoinFetcher PnL discrepancy warnings throttled to 1 hour with delta-based deduplication
+  - WebSocket reconnection now logs explicit `[ws] reconnecting...` messages
+  - Strict mode gaps changed from WARNING to DEBUG (expected for illiquid markets)
+  - Persistent gaps changed from WARNING to INFO with throttling
+  - Zero-candle synthesis warnings aggregated and rate-limited
 - **PnL tracking now uses FillEventsManager exclusively** - Legacy `update_pnls` path removed. FillEventsManager provides more accurate fill tracking with proper event deduplication, canonical schemas, and exchange-specific fetchers for all supported exchanges.
 - Fill events are now stored in `caches/fill_events/{exchange}/{user}/` instead of the old `caches/{exchange}/{user}_pnls.json` format. Existing legacy cache files are ignored; FillEventsManager will rebuild from exchange API on first run.
 - Unstuck allowances now computed from FillEventsManager data instead of legacy pnls list.
