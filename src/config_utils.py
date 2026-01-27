@@ -1798,16 +1798,108 @@ def create_acronym(full_name, acronyms=set()):
     return acronym
 
 
-def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
+# Hard-coded CLI shortcuts for backwards compatibility
+# Format: config_key -> (acronym, [extra_aliases], type_converter, help_text)
+RESERVED_CLI_ARGS = {
+    "live.approved_coins": (
+        "s",
+        ["--symbols"],
+        comma_separated_values,
+        "Override live.approved_coins: comma_separated_values",
+    ),
+    "optimize.iters": (
+        "i",
+        ["--iters"],
+        int,
+        "Override optimize.iters: int",
+    ),
+    "optimize.cpus": (
+        "c",
+        ["--cpus"],
+        int,
+        "Override optimize.cpus: int",
+    ),
+    "optimize.scoring": (
+        "os",
+        ["--scoring"],
+        comma_separated_values,
+        "Override optimize.scoring: comma_separated_values",
+    ),
+}
+
+
+def add_reserved_arguments(parser) -> Tuple[set, set]:
+    """Add hard-coded CLI arguments for backwards compatibility.
+
+    Returns the set of reserved acronyms and config keys that should be
+    skipped by add_arguments_recursively().
+    """
+    reserved_acronyms = set()
+    reserved_keys = set()
+
+    for config_key, (acronym, aliases, type_conv, help_text) in RESERVED_CLI_ARGS.items():
+        arg_names = [
+            f"--{config_key}",
+            f"--{config_key.replace('.', '_')}",
+            f"-{acronym}",
+        ] + aliases
+
+        parser.add_argument(
+            *arg_names,
+            type=type_conv,
+            dest=config_key,
+            required=False,
+            default=None,
+            metavar="",
+            help=help_text,
+        )
+        reserved_acronyms.add(acronym)
+        reserved_keys.add(config_key)
+
+    return reserved_acronyms, reserved_keys
+
+
+def add_config_arguments(parser, config):
+    """Add all CLI arguments for config parameters.
+
+    This is the main entry point for adding config-based arguments.
+    It first adds hard-coded reserved arguments (for backwards compat),
+    then recursively adds remaining config parameters.
+
+    Args:
+        parser: argparse.ArgumentParser
+        config: Config dict (typically from get_template_config())
+    """
+    reserved_acronyms, reserved_keys = add_reserved_arguments(parser)
+    add_arguments_recursively(parser, config, acronyms=reserved_acronyms, skip_keys=reserved_keys)
+
+
+def add_arguments_recursively(parser, config, prefix="", acronyms=None, skip_keys=None):
+    """Recursively add CLI arguments for config parameters.
+
+    Args:
+        parser: argparse.ArgumentParser
+        config: Config dict to process
+        prefix: Current key prefix (e.g., "live.")
+        acronyms: Set of already-used acronyms to avoid collisions
+        skip_keys: Set of full config keys to skip (already added by reserved args)
+    """
+    if acronyms is None:
+        acronyms = set()
+    if skip_keys is None:
+        skip_keys = set()
 
     for key, value in config.items():
         full_name = f"{prefix}{key}"
 
+        # Skip if this key was already added as a reserved argument
+        if full_name in skip_keys:
+            continue
+
         if isinstance(value, dict):
             if any(full_name.endswith(x) for x in ["approved_coins", "ignored_coins"]):
-                acronym = "s" if full_name.endswith("approved_coins") else "i"
-                if acronym in acronyms:
-                    acronym = create_acronym(full_name, acronyms)
+                # Handle coin dict configs as comma-separated values
+                acronym = create_acronym(full_name, acronyms)
                 parser.add_argument(
                     f"--{full_name}",
                     f"--{full_name.replace('.', '_')}",
@@ -1821,7 +1913,9 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
                 )
                 acronyms.add(acronym)
                 continue
-            add_arguments_recursively(parser, value, f"{full_name}.", acronyms=acronyms)
+            add_arguments_recursively(
+                parser, value, f"{full_name}.", acronyms=acronyms, skip_keys=skip_keys
+            )
             continue
         else:
             acronym = create_acronym(full_name, acronyms)
@@ -1832,20 +1926,12 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             if "limits" in full_name:
                 type_ = str
                 appendix = 'Example: "--loss_profit_ratio 0.5 --drawdown_worst 0.3333"'
-            elif "approved_coins" in full_name:
-                acronym = "s"
-                type_ = comma_separated_values
-            elif any([x in full_name for x in ["ignored_coins", "exchanges"]]):
+            elif any([x in full_name for x in ["approved_coins", "ignored_coins", "exchanges"]]):
                 type_ = comma_separated_values
                 appendix = "item1,item2,item3,..."
             elif "scoring" in full_name:
                 type_ = comma_separated_values
-                acronym = "os"
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
-            elif "cpus" in full_name:
-                acronym = "c"
-            elif "iters" in full_name:
-                acronym = "i"
             elif value is None:
                 if full_name == "backtest.btc_collateral_ltv_cap":
                     type_ = optional_float

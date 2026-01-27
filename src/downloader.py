@@ -30,7 +30,7 @@ import pandas as pd
 from dateutil import parser
 from tqdm import tqdm
 from config_utils import (
-    add_arguments_recursively,
+    add_config_arguments,
     load_config,
     get_template_config,
     update_config_with_args,
@@ -2125,7 +2125,7 @@ async def main():
             "exchanges",
         }
     }
-    add_arguments_recursively(parser, template_config)
+    add_config_arguments(parser, template_config)
     args = parser.parse_args()
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")

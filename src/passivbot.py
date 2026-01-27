@@ -61,7 +61,7 @@ except Exception:
     resource = None
 from config_utils import (
     load_config,
-    add_arguments_recursively,
+    add_config_arguments,
     update_config_with_args,
     format_config,
     get_optional_config_value,
@@ -4887,7 +4887,7 @@ async def main():
     del template_config["backtest"]
     if "logging" in template_config and isinstance(template_config["logging"], dict):
         template_config["logging"].pop("level", None)
-    add_arguments_recursively(parser, template_config)
+    add_config_arguments(parser, template_config)
     raw_args = merge_negative_cli_values(sys.argv[1:])
     args = parser.parse_args(raw_args)
     # --verbose flag overrides --log-level to debug (level 2)

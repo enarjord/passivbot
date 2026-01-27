@@ -37,7 +37,7 @@ from typing import Any, Iterable, Sequence
 from config_utils import (
     load_config,
     dump_config,
-    add_arguments_recursively,
+    add_config_arguments,
     update_config_with_args,
     recursive_config_update,
     format_config,
@@ -1196,7 +1196,7 @@ async def main():
             del template_config["live"][key]
     if "logging" in template_config and isinstance(template_config["logging"], dict):
         template_config["logging"].pop("level", None)
-    add_arguments_recursively(parser, template_config)
+    add_config_arguments(parser, template_config)
     raw_args = _normalize_optional_bool_flag(sys.argv[1:], "--suite")
     args = parser.parse_args(raw_args)
     cli_log_level = args.log_level

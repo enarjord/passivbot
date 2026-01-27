@@ -67,7 +67,7 @@ from config_utils import (
     load_hjson_config,
     load_config,
     format_config,
-    add_arguments_recursively,
+    add_config_arguments,
     update_config_with_args,
     recursive_config_update,
     require_config_value,
@@ -1321,7 +1321,7 @@ async def main():
     for key in sorted(template_config["live"]):
         if key not in keep_live_keys:
             del template_config["live"][key]
-    add_arguments_recursively(parser, template_config)
+    add_config_arguments(parser, template_config)
     add_extra_options(parser)
     raw_args = merge_negative_cli_values(sys.argv[1:])
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
