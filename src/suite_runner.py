@@ -410,10 +410,35 @@ class ExchangeDataset:
     btc_spec: Optional[SharedArraySpec] = None
 
 
+def _determine_needed_individual_exchanges(
+    scenarios: List["SuiteScenario"],
+    base_exchanges: List[str],
+) -> Set[str]:
+    """
+    Analyze scenarios to determine which individual exchange datasets are needed.
+
+    Returns a set of exchange names that need individual datasets (for scenarios
+    that restrict to a subset of exchanges). Empty set means only combined is needed.
+    """
+    base_set = set(base_exchanges)
+    needed: Set[str] = set()
+
+    for scenario in scenarios:
+        if scenario.exchanges:
+            scenario_set = set(scenario.exchanges)
+            # If scenario uses a strict subset, we need individual datasets for those exchanges
+            if scenario_set and scenario_set != base_set:
+                needed.update(scenario_set)
+
+    return needed
+
+
 async def prepare_master_datasets(
     base_config: Dict[str, Any],
     exchanges: List[str],
     shared_array_manager=None,
+    *,
+    needed_individual_exchanges: Optional[Set[str]] = None,
 ) -> Dict[str, ExchangeDataset]:
     from backtest import prepare_hlcvs_mss
 
@@ -456,12 +481,15 @@ async def prepare_master_datasets(
             btc_spec=btc_spec,
         )
 
-    # New behavior: derive data strategy from exchange count
+    # Data strategy:
     # - Single exchange = use that exchange's data only
-    # - Multiple exchanges = best-per-coin combination (combined)
+    # - Multiple exchanges = prepare combined (best-per-coin) dataset
+    # - If any scenario restricts to a subset of exchanges, also prepare
+    #   individual datasets for those exchanges (determined by caller)
     use_combined = len(exchanges) > 1
 
     if use_combined:
+        # Prepare combined (best-per-coin) dataset
         (
             coins,
             hlcvs,
@@ -481,6 +509,35 @@ async def prepare_master_datasets(
             btc_usd_prices,
             timestamps,
         )
+
+        # Only prepare individual exchange datasets if scenarios need them
+        if needed_individual_exchanges:
+            for exchange in exchanges:
+                if exchange not in needed_individual_exchanges:
+                    continue
+                logging.info(
+                    "Preparing individual %s dataset for single-exchange scenarios",
+                    exchange,
+                )
+                (
+                    ex_coins,
+                    ex_hlcvs,
+                    ex_mss,
+                    _ex_store_path,
+                    ex_cache_dir,
+                    ex_btc_usd_prices,
+                    ex_timestamps,
+                ) = await prepare_hlcvs_mss(base_config, exchange)
+                datasets[exchange] = _build_dataset(
+                    exchange,
+                    exchange,
+                    ex_coins,
+                    ex_hlcvs,
+                    ex_mss,
+                    ex_cache_dir,
+                    ex_btc_usd_prices,
+                    ex_timestamps,
+                )
     else:
         for exchange in exchanges:
             (
@@ -687,9 +744,17 @@ async def run_backtest_scenario(
         scenario_dir = results_root / scenario.label
         scenario_dir.mkdir(parents=True, exist_ok=True)
 
-    has_master_dataset = len(datasets) == 1 and "combined" in datasets
+    # Determine which dataset(s) to use based on scenario's exchange restriction
+    has_combined = "combined" in datasets
+    scenario_exchanges = set(scenario.exchanges) if scenario.exchanges else set(available_exchanges)
+    all_exchanges_set = set(available_exchanges)
 
-    if has_master_dataset:
+    # Use combined dataset when:
+    # 1. It exists, AND
+    # 2. Scenario uses all available exchanges (or doesn't restrict)
+    use_combined = has_combined and scenario_exchanges == all_exchanges_set
+
+    if use_combined:
         dataset = datasets["combined"]
         per_exchange = _run_combined_dataset(
             dataset,
@@ -702,8 +767,19 @@ async def run_backtest_scenario(
             post_process,
         )
     else:
+        # Use per-exchange datasets for scenarios with exchange restrictions
+        # Filter datasets to only include those requested by the scenario
+        filtered_datasets = {
+            k: v for k, v in datasets.items()
+            if k != "combined" and k in scenario_exchanges
+        }
+        if not filtered_datasets:
+            raise ValueError(
+                f"Scenario {scenario.label} requests exchanges {scenario_exchanges} "
+                f"but no matching datasets are available (have: {list(datasets.keys())})"
+            )
         per_exchange = _run_multi_dataset(
-            datasets,
+            filtered_datasets,
             scenario,
             scenario_config,
             scenario_coins,
@@ -1129,6 +1205,9 @@ async def run_backtest_suite_async(
 
     scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=exchanges_list)
 
+    # Determine which individual exchange datasets are needed for single-exchange scenarios
+    needed_individual = _determine_needed_individual_exchanges(scenarios, exchanges_list)
+
     suite_coin_sources = collect_suite_coin_sources(config, scenarios)
 
     master_coins = _collect_union((s.coins for s in scenarios), base_coins)
@@ -1153,7 +1232,9 @@ async def run_backtest_suite_async(
     else:
         base_config["live"]["ignored_coins"] = list(master_ignored)
 
-    datasets = await prepare_master_datasets(base_config, exchanges_list)
+    datasets = await prepare_master_datasets(
+        base_config, exchanges_list, needed_individual_exchanges=needed_individual
+    )
     available_coins: set[str] = set()
     for dataset in datasets.values():
         available_coins.update(dataset.coins)

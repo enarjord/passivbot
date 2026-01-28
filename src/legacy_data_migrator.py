@@ -639,19 +639,21 @@ def migrate_legacy_data_on_init(
     if migrated > 0:
         logging.info(
             "[boot] Migrated %d legacy shards for %s (%d already existed). "
-            "You may safely delete %s/ to save disk space.",
+            "You may safely delete %s/ohlcvs_%s/ to save disk space.",
             migrated,
             exchange,
             skipped,
             historical_data_path,
+            exchange,
         )
     elif skipped > 0:
         logging.info(
             "[boot] Legacy data for %s already migrated (%d shards). "
-            "You may safely delete %s/ to save disk space.",
+            "You may safely delete %s/ohlcvs_%s/ to save disk space.",
             exchange,
             skipped,
             historical_data_path,
+            exchange,
         )
 
     return migrated

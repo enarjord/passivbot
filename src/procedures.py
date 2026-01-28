@@ -53,9 +53,9 @@ def get_all_eligible_symbols(exchange="binance"):
     exchange_map = {
         "bybit": "bybit",
         "binance": "binanceusdm",
+        "gateio": "gateio",
         # "bitget": "bitget", TODO
         # "hyperliquid": "hyperliquid", TODO
-        # "gateio": "gateio", TODO
     }
     quote_map = {k: "USDT" for k in exchange_map}
     quote_map["hyperliquid"] = "USDC"

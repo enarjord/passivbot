@@ -30,6 +30,7 @@ from suite_runner import (
     filter_coins_by_exchange_assignment,
     prepare_master_datasets,
     _prepare_dataset_subset,
+    _determine_needed_individual_exchanges,
 )
 from utils import format_approved_ignored_coins, load_markets, ts_to_date, utc_ms
 
@@ -85,6 +86,9 @@ async def prepare_suite_contexts(
 
     scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
 
+    # Determine which individual exchange datasets are needed for single-exchange scenarios
+    needed_individual = _determine_needed_individual_exchanges(scenarios, base_exchanges)
+
     suite_coin_sources = collect_suite_coin_sources(config, scenarios)
 
     # Collect all coins from scenarios (or use base if no scenario-specific coins)
@@ -125,7 +129,10 @@ async def prepare_suite_contexts(
     base_config["backtest"]["coin_sources"] = suite_coin_sources
 
     datasets = await prepare_master_datasets(
-        base_config, base_exchanges, shared_array_manager=shared_array_manager
+        base_config,
+        base_exchanges,
+        shared_array_manager=shared_array_manager,
+        needed_individual_exchanges=needed_individual,
     )
     available_coins = set()
     for dataset in datasets.values():
@@ -133,11 +140,11 @@ async def prepare_suite_contexts(
     if not available_coins:
         raise ValueError("No coins available after preparing master datasets.")
 
-    has_master_dataset = len(datasets) == 1 and "combined" in datasets
-    if has_master_dataset:
-        dataset_available_exchanges = datasets["combined"].available_exchanges
-    else:
-        dataset_available_exchanges = [ds.exchange for ds in datasets.values()]
+    has_combined = "combined" in datasets
+    # Available exchanges exclude "combined" pseudo-exchange
+    dataset_available_exchanges = sorted(
+        set(ds.exchange for ds in datasets.values() if ds.exchange != "combined")
+    ) or (datasets["combined"].available_exchanges if has_combined else [])
 
     contexts: List[ScenarioEvalContext] = []
 
@@ -170,11 +177,18 @@ async def prepare_suite_contexts(
             bool(scenario.overrides),
         )
 
-        if has_master_dataset:
+        # Determine which dataset(s) to use based on scenario's exchange restriction
+        scenario_exchanges = set(scenario.exchanges) if scenario.exchanges else set(dataset_available_exchanges)
+        all_exchanges_set = set(dataset_available_exchanges)
+
+        # Use combined dataset when:
+        # 1. It exists, AND
+        # 2. Scenario uses all available exchanges (or doesn't restrict)
+        use_combined = has_combined and scenario_exchanges == all_exchanges_set
+
+        if use_combined:
             dataset = datasets["combined"]
-            allowed_exchanges = (
-                list(scenario.exchanges) if scenario.exchanges else list(dataset.available_exchanges)
-            )
+            allowed_exchanges = list(dataset.available_exchanges)
             selected_coins, skipped_coins = filter_coins_by_exchange_assignment(
                 scenario_coins,
                 allowed_exchanges,
@@ -243,8 +257,12 @@ async def prepare_suite_contexts(
         coin_index_map: Dict[str, Optional[List[int]]] = {}
         exchanges_for_scenario: List[str] = []
 
+        # Use per-exchange datasets for scenarios with exchange restrictions
         allowed_exchange_names = set(scenario.exchanges or dataset_available_exchanges)
         for exchange_key, dataset in datasets.items():
+            # Skip "combined" pseudo-dataset; use actual exchange datasets
+            if exchange_key == "combined":
+                continue
             if allowed_exchange_names and dataset.exchange not in allowed_exchange_names:
                 continue
             coins_for_exchange = [coin for coin in scenario_coins if coin in dataset.coin_index]
