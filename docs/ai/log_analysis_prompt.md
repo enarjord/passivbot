@@ -653,5 +653,18 @@ Phase 3 (Defer to Round 9):
    - File: `src/exchanges/kucoin.py:478,486,507,515`
 
 **Remaining for future rounds:**
-- EMA gating information (when initial entry blocked due to EMA distance)
 - Zero-candle deduplication improvements
+
+### Round 10 (2026-01-28) ✅ COMPLETED
+
+**Issue addressed:**
+
+1. **EMA gating information** - Log when initial entries are blocked due to EMA distance.
+   - Added `_log_ema_gating()` method to detect when entries should exist but don't
+   - For symbols in "normal" mode with no position and no initial entry order:
+     - Calculates EMA bands (min/max of ema_span_0, ema_span_1, sqrt(span0*span1))
+     - Calculates EMA entry threshold (ema_lower * (1-dist) for long, ema_upper * (1+dist) for short)
+     - Logs when current price is beyond the EMA threshold
+   - Throttled to once per 5 minutes per symbol/pside to avoid spam
+   - Log format: `[ema] COIN pside entry gated | price=X ema_thresh=Y (+Z% away)`
+   - File: `src/passivbot.py` (added `_log_ema_gating` method, called in both orchestrator methods)
