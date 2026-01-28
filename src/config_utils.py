@@ -1813,11 +1813,11 @@ RESERVED_CLI_ARGS = {
         int,
         "Override optimize.iters: int",
     ),
-    "optimize.cpus": (
+    "optimize.n_cpus": (
         "c",
         ["--cpus"],
         int,
-        "Override optimize.cpus: int",
+        "Override optimize.n_cpus: int",
     ),
     "optimize.scoring": (
         "os",
