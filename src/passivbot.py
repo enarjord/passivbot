@@ -4080,7 +4080,10 @@ class Passivbot:
                         extra.append(f"unchanged_cancel={untouched_cancel}")
                     if untouched_create:
                         extra.append(f"unchanged_create={untouched_create}")
-                    logging.info(
+                    # Use DEBUG when no actual work was done (all orders skipped/unchanged)
+                    log_level = logging.INFO if (total_cancel or total_create) else logging.DEBUG
+                    logging.log(
+                        log_level,
                         "order plan summary | cancel %d->%d | create %d->%d | skipped=%d%s%s",
                         total_pre_cancel,
                         total_cancel,

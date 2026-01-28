@@ -632,7 +632,26 @@ Phase 2 (MEDIUM priority): ✅ COMPLETED
 - [ ] Consider mode change hysteresis (deferred - requires design discussion)
 
 Phase 3 (Defer to Round 9):
-- [ ] Order plan summary conditional levels
-- [ ] KuCoin margin mode error handling
+- [x] Order plan summary conditional levels → see Round 9
+- [x] KuCoin margin mode error handling → see Round 9
 - [ ] EMA gating information
 - [ ] Zero-candle deduplication improvements
+
+### Round 9 (2026-01-28) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **Order plan summary conditional levels** - Use DEBUG when no work done.
+   - Changed from always INFO to conditional: INFO when orders created/cancelled, DEBUG when all skipped
+   - Reduces noise from no-op order cycles (e.g., `cancel 1->0 | create 1->0 | skipped=1`)
+   - File: `src/passivbot.py:4083`
+
+2. **KuCoin exchange config error handling** - Reduce ERROR to WARNING.
+   - Changed ERROR to WARNING for set_margin_mode failures (expected on some symbols)
+   - Changed ERROR to WARNING for set_leverage failures (expected when symbol not in max_leverage)
+   - Fixed copy-paste bug: line 507 said "error set_margin_mode" in set_leverage section
+   - File: `src/exchanges/kucoin.py:478,486,507,515`
+
+**Remaining for future rounds:**
+- EMA gating information (when initial entry blocked due to EMA distance)
+- Zero-candle deduplication improvements
