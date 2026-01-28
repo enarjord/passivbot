@@ -43,13 +43,15 @@ def _sanitize_symbol(symbol: str) -> str:
         sanitized = sanitized.replace(":", "_")
     return sanitized
 
-# Mapping from ccxt exchange IDs to standard (short) names
+# Mapping from ccxt exchange IDs to standard (short) names.
+# Only include entries where the ccxt ID differs from the standard name.
+# IMPORTANT: Never add identity mappings (e.g., "gateio": "gateio") as this
+# causes the merge logic to delete the directory after merging into itself!
 CCXT_ID_TO_STANDARD = {
     "binanceusdm": "binance",
     "kucoinfutures": "kucoin",
     "krakenfutures": "kraken",
-    "gateio": "gateio",
-    # Add other known mappings as needed
+    # gateio, bybit, okx, hyperliquid use the same name in ccxt and standard
 }
 
 # Reverse mapping
@@ -105,6 +107,11 @@ def standardize_cache_directories(cache_base: str = "caches/ohlcv", dry_run: boo
 
     # Then, rename directories from ccxt IDs to standard names
     for ccxt_id, standard_name in CCXT_ID_TO_STANDARD.items():
+        # Safety: skip identity mappings to avoid merging a directory into itself
+        # and then deleting it (catastrophic data loss)
+        if ccxt_id == standard_name:
+            continue
+
         ccxt_path = base_path / ccxt_id
         standard_path = base_path / standard_name
 
