@@ -542,12 +542,97 @@ Compare to current (noisy):
 
 ### Round 8 (TODO)
 
-**Remaining issues to address:**
+**Log analysis date:** 2026-01-28
 
-- [ ] Missing INFO-level information:
-  - [ ] EMA gating for entries (when initial entry blocked due to EMA distance)
-  - [ ] Unstuck gating (when unstuck entry blocked)
-  - [ ] Unstuck coin selection (which coin selected for unstuck and why)
-- [ ] Convert remaining f-strings to format strings for log aggregation where feasible
-- [ ] Consider adding periodic health summary (every 5-15 min) with key metrics for long-running bots
-- [ ] Zero-candle synthesis warnings still show multiple warnings for same symbol with overlapping gaps
+**Logs reviewed:**
+- `hyperliquid_canon` (5 coins, BTC/ETH/XRP/SOL/ADA long)
+- `bitget_01` (forager mode)
+- `bybit_01` (forager mode)
+- `ebybitsub03` (XMR long/short)
+- `hyperliquid_trump` (5 coins long)
+- `kucoin_01` (forager mode, 3 positions)
+- `gateio_01` (forager mode, 3 positions)
+- `okx_faisal` (forager mode, 3 positions)
+
+**Positive observations:**
+- Boot sequence is clear and informative
+- Health summaries are periodic and useful (~15min intervals)
+- Order operations well-tagged with reasons
+- Fill logs include relevant details (ID, PnL for closes)
+- Position changes show before/after state with WE and upnl
+- WebSocket reconnection logging improved (Round 7)
+- Unstuck logging now shows allowance, peak, pct_from_peak
+
+**Issues identified (priority ordered):**
+
+1. **HIGH: OkxFetcher.fetch spam at INFO** - Every 30-40 seconds:
+   ```
+   INFO [okx] OkxFetcher.fetch: /fills #2 after=None size=12
+   ```
+   This should be DEBUG level. OKX appears to have been missed in Round 2 fix.
+   - **Action:** Move to DEBUG in `src/fill_events_manager.py`
+
+2. **HIGH: FillEventsManager messages lack [fills] tag** - Messages like:
+   ```
+   FillEventsManager.ensure_loaded: loaded 3507 cached events
+   FillEventsManager initialized: 3507 cached events loaded
+   ```
+   Should be `[fills] ensure_loaded:...` and `[fills] initialized:...`
+   - **Action:** Add [fills] tag prefix in `src/fill_events_manager.py`
+
+3. **MEDIUM: Persistent gaps messages too frequent** - KuCoin logs show:
+   ```
+   INFO [kucoin] [candle] persistent gaps: 1 across 1 symbols (TRX/USDT:USDT:1).
+   ```
+   Logged every ~1 minute. Should be throttled to once per hour per symbol.
+   - **Action:** Add throttle in `src/candlestick_manager.py`
+
+4. **MEDIUM: Hyperliquid "Could not fetch server time" WARNING repetition** - Hourly:
+   ```
+   WARNING Could not fetch server time: hyperliquid fetchTime() is not supported yet
+   ```
+   This is expected behavior. Should be INFO + log_once or removed entirely.
+   - **Action:** Change to DEBUG or log_once at INFO in exchange time sync code
+
+5. **MEDIUM: Mode change oscillation still noisy** - Despite 2-minute throttle:
+   - Gate.io SUI mode changes every 2-5 minutes
+   - Hyperliquid coins flip frequently
+   Consider longer throttle (5min?) or hysteresis (require N minutes stable before switching)
+   - **Action:** Increase throttle or add hysteresis logic
+
+6. **LOW: Order plan summary for no-ops** - When nothing happens:
+   ```
+   order plan summary | cancel 1->0 | create 1->0 | skipped=1 | unchanged_cancel=1 unchanged_create=1
+   ```
+   Could be DEBUG when all orders are skipped (no actual work done).
+   - **Action:** Conditional level based on whether actual work was done
+
+7. **LOW: KuCoin set_margin_mode errors for expected failures**:
+   ```
+   ERROR [kucoin] HYPE/USDT:USDT: error set_margin_mode 'HYPE/USDT:USDT'
+   ```
+   If margin mode is already correctly set, this shouldn't be ERROR.
+   - **Action:** Check if already set before logging error
+
+8. **DEFERRED: Missing INFO-level information** (from previous rounds):
+   - [ ] EMA gating for entries (when initial entry blocked due to EMA distance)
+   - [ ] Unstuck coin selection logging improvements
+
+9. **DEFERRED: Zero-candle synthesis improvements** - Low priority, doesn't affect operations
+
+**Plan for Round 8 execution:**
+
+Phase 1 (HIGH priority - fix now): ✅ COMPLETED
+- [x] Fix OkxFetcher.fetch INFO spam → moved to DEBUG (`src/fill_events_manager.py:3703`)
+- [x] Add [fills] tag to FillEventsManager messages (`src/fill_events_manager.py:1783`, `src/passivbot.py:2517`)
+
+Phase 2 (MEDIUM priority): ✅ COMPLETED
+- [x] Throttle persistent gaps messages → increased from 60s to 30min (`src/candlestick_manager.py:746`)
+- [x] Fix Hyperliquid fetchTime warning → use log_once to avoid hourly repetition (`src/exchanges/ccxt_bot.py:286`)
+- [ ] Consider mode change hysteresis (deferred - requires design discussion)
+
+Phase 3 (Defer to Round 9):
+- [ ] Order plan summary conditional levels
+- [ ] KuCoin margin mode error handling
+- [ ] EMA gating information
+- [ ] Zero-candle deduplication improvements

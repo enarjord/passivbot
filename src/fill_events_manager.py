@@ -1781,7 +1781,7 @@ class FillEventsManager:
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
 
             logger.info(
-                "FillEventsManager.ensure_loaded: loaded %d cached events (dropped %d without raw)",
+                "[fills] ensure_loaded: %d cached events (dropped %d without raw)",
                 len(self._events),
                 dropped,
             )
@@ -3700,7 +3700,7 @@ class OkxFetcher(BaseFetcher):
             fills = response.get("data", [])
 
             if fetch_count > 1:
-                logger.info(
+                logger.debug(
                     "OkxFetcher.fetch: /%s #%d after=%s size=%d",
                     endpoint_name,
                     fetch_count,

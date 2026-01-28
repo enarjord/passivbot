@@ -283,7 +283,8 @@ class CCXTBot(Passivbot):
             if verbose:
                 logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
         except Exception as e:
-            logging.warning(f"Could not fetch server time: {e}, using 0 offset")
+            # Log once per session to avoid hourly noise (e.g., Hyperliquid doesn't support fetchTime)
+            self.log_once(f"Could not fetch server time: {e}, using 0 offset")
             self.utc_offset = 0
 
     async def fetch_balance(self) -> float:

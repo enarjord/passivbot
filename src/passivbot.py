@@ -2514,7 +2514,7 @@ class Passivbot:
             await self._pnls_manager.ensure_loaded()
 
             cached_count = len(self._pnls_manager._events)
-            logging.info("FillEventsManager initialized: %d cached events loaded", cached_count)
+            logging.info("[fills] initialized: %d cached events loaded", cached_count)
 
             self._pnls_initialized = True
 
