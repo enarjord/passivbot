@@ -7,7 +7,7 @@
         "btc_collateral_ltv_cap": null,
         "compress_cache": true,
         "end_date": "now",
-        "exchanges": ["binance", "bybit"],
+        "exchanges": ["binance", "bybit", "gateio"],
         "filter_by_min_effective_cost": false,
         "gap_tolerance_ohlcvs_minutes": 120,
         "maker_fee_override": null,
@@ -23,6 +23,10 @@
             {
                 "label": "binance_only",
                 "exchanges": ["binance"]
+            },
+            {
+                "label": "gateio_only",
+                "exchanges": ["gateio"]
             },
             {
                 "coins": ["ADA", "BTC", "ETH", "SOL", "XRP"],
