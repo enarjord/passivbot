@@ -1193,20 +1193,32 @@ async def run_backtest_suite_async(
     disable_plotting: bool,
     suite_output_root: Optional[Path] = None,
 ) -> SuiteSummary:
-    exchanges_list = require_config_value(config, "backtest.exchanges")
-    for exchange in exchanges_list:
-        await load_markets(exchange, verbose=False)
-    await format_approved_ignored_coins(config, exchanges_list, verbose=False)
+    base_exchanges = require_config_value(config, "backtest.exchanges")
 
     base_start = require_config_value(config, "backtest.start_date")
     base_end = require_config_value(config, "backtest.end_date")
     base_coins = _flatten_coin_list(require_live_value(config, "approved_coins"))
     base_ignored = _flatten_coin_list(require_live_value(config, "ignored_coins"))
 
-    scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=exchanges_list)
+    scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
 
     # Determine which individual exchange datasets are needed for single-exchange scenarios
-    needed_individual = _determine_needed_individual_exchanges(scenarios, exchanges_list)
+    needed_individual = _determine_needed_individual_exchanges(scenarios, base_exchanges)
+
+    # Expand exchanges_list to include scenario-required exchanges that aren't in base
+    exchanges_list = sorted(set(base_exchanges) | needed_individual)
+    added_exchanges = needed_individual - set(base_exchanges)
+    if added_exchanges:
+        logging.info(
+            "Expanded exchanges from %s to %s (added %s from scenario requirements)",
+            base_exchanges,
+            exchanges_list,
+            sorted(added_exchanges),
+        )
+
+    for exchange in exchanges_list:
+        await load_markets(exchange, verbose=False)
+    await format_approved_ignored_coins(config, exchanges_list, verbose=False)
 
     suite_coin_sources = collect_suite_coin_sources(config, scenarios)
 
