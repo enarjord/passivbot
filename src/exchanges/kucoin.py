@@ -475,7 +475,7 @@ class KucoinBot(CCXTBot):
                     )
                 )
             except Exception as e:
-                logging.error(f"{symbol}: error set_margin_mode {e}")
+                logging.warning(f"{symbol}: error set_margin_mode {e}")
         for symbol, task_name, task in coros_to_call:
             res = None
             to_print = ""
@@ -483,7 +483,7 @@ class KucoinBot(CCXTBot):
                 res = await task
                 to_print += f"{task_name}={format_exchange_config_response(res)}"
             except Exception as e:
-                logging.error(f"{symbol} error {task_name} {e}")
+                logging.warning(f"{symbol} error {task_name} {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 
@@ -504,7 +504,7 @@ class KucoinBot(CCXTBot):
                     (symbol, "set_leverage", asyncio.create_task(self.cca.set_leverage(**params)))
                 )
             except Exception as e:
-                logging.error(f"{symbol}: error set_margin_mode {e}")
+                logging.warning(f"{symbol}: error set_leverage {e}")
         for symbol, task_name, task in coros_to_call:
             res = None
             to_print = ""
@@ -512,6 +512,6 @@ class KucoinBot(CCXTBot):
                 res = await task
                 to_print += f"{task_name}={format_exchange_config_response(res)}"
             except Exception as e:
-                logging.error(f"{symbol} error {task_name} {e}")
+                logging.warning(f"{symbol} error {task_name} {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")

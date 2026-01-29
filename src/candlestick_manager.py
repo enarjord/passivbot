@@ -760,12 +760,12 @@ class CandlestickManager:
         self._log("debug", event, **fields)
 
     def _log_persistent_gap_summary(self) -> None:
-        """Log accumulated persistent gap summary if any, throttled to once per 60s."""
+        """Log accumulated persistent gap summary if any, throttled to once per 30 min."""
         if not hasattr(self, "_persistent_gap_summary") or not self._persistent_gap_summary:
             return
         now = time.monotonic()
         last = getattr(self, "_persistent_gap_summary_last_log", 0.0)
-        if (now - last) < 60.0:  # Only log summary once per minute
+        if (now - last) < 1800.0:  # Only log summary once per 30 minutes
             return
         self._persistent_gap_summary_last_log = now
         summary = self._persistent_gap_summary

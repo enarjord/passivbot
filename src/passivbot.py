@@ -824,6 +824,95 @@ class Passivbot:
         logging.info(msg)
         self.log_once_set.add(msg)
 
+    def _log_ema_gating(
+        self,
+        ideal_orders: dict,
+        m1_close_emas: dict,
+        last_prices: dict,
+        symbols: list,
+    ) -> None:
+        """Log when entries are blocked due to EMA distance gating.
+
+        For symbols in normal mode with no position, if there's no initial entry order,
+        check if price is beyond the EMA entry threshold and log the reason.
+        """
+        if not hasattr(self, "_ema_gating_last_log_ms"):
+            self._ema_gating_last_log_ms = {}
+        ema_gating_throttle_ms = 300_000  # 5 minutes between logs per symbol/pside
+        now_ms = utc_ms()
+
+        for symbol in symbols:
+            for pside in ("long", "short"):
+                # Check if mode is normal (not graceful_stop, manual, etc.)
+                mode = self.PB_modes.get(symbol, {}).get(pside)
+                if mode != "normal":
+                    continue
+
+                # Check if we have a position already
+                pos = self.positions.get(symbol, {}).get(pside, {})
+                pos_size = abs(pos.get("size", 0.0))
+                if pos_size > 0:
+                    continue
+
+                # Check if there's an initial entry order for this symbol/pside
+                symbol_orders = ideal_orders.get(symbol, [])
+                has_initial_entry = any(
+                    f"entry_initial" in (o[2] if len(o) > 2 else "") and pside in (o[2] if len(o) > 2 else "")
+                    for o in symbol_orders
+                )
+                if has_initial_entry:
+                    continue
+
+                # No initial entry - check if EMA gating is the reason
+                try:
+                    span0 = float(self.bp(pside, "ema_span_0", symbol))
+                    span1 = float(self.bp(pside, "ema_span_1", symbol))
+                    ema_dist = float(self.bp(pside, "entry_initial_ema_dist", symbol))
+
+                    if span0 <= 0 or span1 <= 0:
+                        continue
+
+                    span2 = (span0 * span1) ** 0.5
+                    emas = m1_close_emas.get(symbol, {})
+                    ema0 = emas.get(span0, 0.0)
+                    ema1 = emas.get(span1, 0.0)
+                    ema2 = emas.get(span2, 0.0)
+
+                    if ema0 <= 0 or ema1 <= 0 or ema2 <= 0:
+                        continue
+
+                    ema_lower = min(ema0, ema1, ema2)
+                    ema_upper = max(ema0, ema1, ema2)
+                    current_price = last_prices.get(symbol, 0.0)
+
+                    if current_price <= 0:
+                        continue
+
+                    # Calculate EMA entry threshold and check if gated
+                    if pside == "long":
+                        ema_entry_price = ema_lower * (1.0 - ema_dist)
+                        is_gated = current_price > ema_entry_price
+                        dist_pct = (current_price / ema_entry_price - 1.0) * 100 if ema_entry_price > 0 else 0
+                    else:  # short
+                        ema_entry_price = ema_upper * (1.0 + ema_dist)
+                        is_gated = current_price < ema_entry_price
+                        dist_pct = (1.0 - current_price / ema_entry_price) * 100 if ema_entry_price > 0 else 0
+
+                    if is_gated and abs(dist_pct) > 0.1:  # Only log if meaningfully gated
+                        throttle_key = f"{symbol}:{pside}"
+                        last_log_ms = self._ema_gating_last_log_ms.get(throttle_key, 0)
+                        if (now_ms - last_log_ms) < ema_gating_throttle_ms:
+                            continue
+                        self._ema_gating_last_log_ms[throttle_key] = now_ms
+
+                        coin = symbol.split("/")[0] if "/" in symbol else symbol
+                        logging.info(
+                            "[ema] %s %s entry gated | price=%.4g ema_thresh=%.4g (+%.1f%% away)",
+                            coin, pside, current_price, ema_entry_price, dist_pct
+                        )
+                except Exception:
+                    pass  # Silently skip on any calculation errors
+
     def debug_print(self, *args):
         """Emit debug output only when the instance is in debug mode."""
         if hasattr(self, "debug_mode") and self.debug_mode:
@@ -2515,7 +2604,7 @@ class Passivbot:
             await self._pnls_manager.ensure_loaded()
 
             cached_count = len(self._pnls_manager._events)
-            logging.info("FillEventsManager initialized: %d cached events loaded", cached_count)
+            logging.info("[fills] initialized: %d cached events loaded", cached_count)
 
             self._pnls_initialized = True
 
@@ -3564,6 +3653,9 @@ class Passivbot:
                     )
                 break  # Only one unstuck order per cycle
 
+        # Log EMA gating for symbols in normal mode with no position and no initial entry
+        self._log_ema_gating(ideal_orders, m1_close_emas, last_prices, symbols)
+
         ideal_orders_f, _wel_blocked = self._to_executable_orders(ideal_orders, last_prices)
         ideal_orders_f = self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
 
@@ -3861,6 +3953,9 @@ class Passivbot:
                     )
                 break  # Only one unstuck order per cycle
 
+        # Log EMA gating for symbols in normal mode with no position and no initial entry
+        self._log_ema_gating(ideal_orders, m1_close_emas, last_prices, symbols)
+
         ideal_orders_f, _wel_blocked = self._to_executable_orders(ideal_orders, last_prices)
         ideal_orders_f = self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
 
@@ -4081,7 +4176,10 @@ class Passivbot:
                         extra.append(f"unchanged_cancel={untouched_cancel}")
                     if untouched_create:
                         extra.append(f"unchanged_create={untouched_create}")
-                    logging.info(
+                    # Use DEBUG when no actual work was done (all orders skipped/unchanged)
+                    log_level = logging.INFO if (total_cancel or total_create) else logging.DEBUG
+                    logging.log(
+                        log_level,
                         "order plan summary | cancel %d->%d | create %d->%d | skipped=%d%s%s",
                         total_pre_cancel,
                         total_cancel,
