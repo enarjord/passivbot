@@ -1080,7 +1080,7 @@ def post_process(
     )
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
     config["analysis"] = analysis
-    formatted_config = format_config(config)
+    formatted_config = format_config(config, verbose=False)
     sanitized_config = strip_config_metadata(formatted_config)
     dump_config(sanitized_config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
