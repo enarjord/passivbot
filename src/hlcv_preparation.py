@@ -321,7 +321,8 @@ class HLCVManager:
 
     def has_coin(self, coin: str) -> bool:
         symbol = self.get_symbol(coin)
-        return bool(symbol)
+        # Also verify symbol exists in markets (fallback symbols won't be present)
+        return symbol and symbol in self.markets
 
     def get_market_specific_settings(self, coin: str) -> dict:
         mss = dict(self.markets[self.get_symbol(coin)])
@@ -1145,6 +1146,20 @@ async def _prepare_hlcvs_combined_impl(
             ratio_summary,
             ", ".join(f"{ex}={cnt}" for ex, cnt in sorted(exchanges_counts.items())),
         )
+
+    # Log exchange assignment summary (which exchange was chosen for which coins)
+    if len(exchanges_counts) > 1:
+        coins_by_exchange = defaultdict(list)
+        for coin in valid_coins:
+            coins_by_exchange[chosen_mss_per_coin[coin]["exchange"]].append(symbol_to_coin(coin))
+        for ex in sorted(coins_by_exchange.keys()):
+            coins_list = coins_by_exchange[ex]
+            logging.info(
+                "[combined] chose %s for %d coins: %s",
+                ex,
+                len(coins_list),
+                ", ".join(sorted(coins_list)),
+            )
 
     unified_array = np.full((n_timesteps, n_coins, 4), np.nan, dtype=np.float64)
 

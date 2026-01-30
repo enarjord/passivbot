@@ -8,6 +8,7 @@ All notable user-facing changes will be documented in this file.
 - **Suite mode: "no exchanges after filtering" error** - Fixed bug where suite scenarios would fail with "no exchanges after filtering" when the config specified exchanges that had no data (e.g., bybit data missing due to fetch failures). Scenario exchanges are now filtered to only those actually available in the dataset, with a debug log when exchanges are unavailable.
 - **Bybit: Missing PnL on some close fills** - Fixed pagination bug in `BybitFetcher._fetch_positions_history()` that caused closed-pnl records to be skipped when >100 records existed in a time window. Now uses hybrid pagination: cursor-based for recent records (no gaps), time-based sliding window for older records.
 - **Exchange name standardization in cache paths** - Fixed inconsistent use of `binanceusdm` vs `binance` in OHLCV cache paths. All cache paths now consistently use standard names (`binance`, `bybit`, `kucoin`).
+- **Skip unsupported coins when fetching OHLCV data** - Fixed issue where CandlestickManager would attempt to download data for coins not supported by an exchange (e.g., CRO on Binance). Now properly checks if the symbol exists in the exchange's market info before attempting to fetch, eliminating spurious "No mapping for X on Y; using fallback" warnings.
 
 ### Added
 - **Gate.io backtest data support** - Gate.io is now a supported exchange for backtesting and optimization OHLCV data. The default template config includes all three exchanges: `["binance", "bybit", "gateio"]`.
@@ -21,6 +22,7 @@ All notable user-facing changes will be documented in this file.
 - **Logging best practices documentation** - New `docs/ai/log_analysis_prompt.md` with comprehensive logging guidelines, level definitions, and improvement tracking.
 - **Exchange API quirks documentation** - New `docs/ai/exchange_api_quirks.md` documenting known exchange-specific limitations and workarounds.
 - **Debugging case studies** - New `docs/ai/debugging_case_studies.md` with detailed debugging sessions as reference.
+- **Combined mode exchange assignment log** - When using multi-exchange combined data (best-per-coin mode), a summary log now shows which exchange was chosen for each coin, e.g., `[combined] chose binance for 45 coins: BTC, ETH, ...`.
 
 ### Changed
 - **Exchange name functions renamed** - `normalize_exchange_name()` renamed to `to_ccxt_exchange_id()` and `denormalize_exchange_name()` renamed to `to_standard_exchange_name()`. Old names remain as deprecated aliases with warnings.
