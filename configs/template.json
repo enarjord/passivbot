@@ -17,51 +17,26 @@
                 "label": "base"
             },
             {
-                "label": "bybit_only",
-                "exchanges": ["bybit"]
-            },
-            {
-                "label": "binance_only",
-                "exchanges": ["binance"]
-            },
-            {
-                "label": "gateio_only",
-                "exchanges": ["gateio"]
-            },
-            {
                 "coins": ["ADA", "BTC", "ETH", "SOL", "XRP"],
                 "label": "trump_troupe"
             },
             {
-                "coins": [
-                    "ADA", "BCH", "BNB", "BTC", "DOGE",
-                    "ETH", "HYPE", "LINK", "SOL", "TRX", "XRP"
-                ],
+                "coins": ["ADA", "BCH", "BTC", "CRO", "DOT", "HBAR", "LINK", "MNT", "SOL", "TON", "UNI", "XLM", "XRP"],
                 "label": "subset1"
             },
             {
-                "coins": [
-                    "AVAX", "DOT", "HBAR", "LTC", "SHIB",
-                    "SUI", "TON", "UNI", "XLM", "XMR", "ZEC"
-                ],
+                "coins": ["AVAX", "BNB", "CC", "DOGE", "ETH", "HYPE", "LTC", "SHIB", "SUI", "TRX", "XAUT", "XMR", "ZEC"],
                 "label": "subset2"
             },
             {
-                "coins": [
-                    "AVAX", "BTC", "DOGE", "HYPE", "LINK",
-                    "SHIB", "SOL", "UNI", "XMR", "XRP", "ZEC"
-                ],
+                "coins": ["BTC", "ETH", "BNB", "XRP", "SOL", "TRX", "DOGE", "ADA", "BCH", "XMR", "LINK", "HYPE", "CC"],
                 "label": "subset3"
             },
             {
-                "coins": [
-                    "ADA", "BCH", "BNB", "DOT", "ETH",
-                    "HBAR", "LTC", "SUI", "TON", "TRX", "XLM"
-                ],
+                "coins": ["XLM", "ZEC", "LTC", "SUI", "AVAX", "SHIB", "HBAR", "TON", "CRO", "DOT", "UNI", "XAUT", "MNT"],
                 "label": "subset4"
             },
             {
-                "coins": ["ADA", "BTC", "ETH", "SOL", "XRP"],
                 "label": "pure_trailing",
                 "overrides": {
                     "bot.long.close_trailing_grid_ratio": 1,
@@ -71,7 +46,6 @@
                 }
             },
             {
-                "coins": ["ADA", "BTC", "ETH", "SOL", "XRP"],
                 "label": "pure_grid",
                 "overrides": {
                     "bot.long.close_trailing_grid_ratio": 0,
@@ -88,9 +62,15 @@
                 }
             },
             {
-                "label": "ltwel=2",
+                "label": "twel=2",
                 "overrides": {
                     "bot.long.total_wallet_exposure_limit": 2
+                }
+            },
+            {
+                "label": "twel=4",
+                "overrides": {
+                    "bot.long.total_wallet_exposure_limit": 4
                 }
             }
         ],
@@ -203,7 +183,7 @@
         "max_n_creations_per_batch": 3,
         "max_n_restarts_per_day": 10,
         "max_warmup_minutes": 0,
-        "minimum_coin_age_days": 180,
+        "minimum_coin_age_days": 90,
         "order_match_tolerance_pct": 0.0002,
         "pnls_max_lookback_days": 30,
         "price_distance_threshold": 0.002,
