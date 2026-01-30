@@ -746,8 +746,25 @@ async def run_backtest_scenario(
 
     # Determine which dataset(s) to use based on scenario's exchange restriction
     has_combined = "combined" in datasets
-    scenario_exchanges = set(scenario.exchanges) if scenario.exchanges else set(available_exchanges)
+    raw_scenario_exchanges = set(scenario.exchanges) if scenario.exchanges else None
     all_exchanges_set = set(available_exchanges)
+
+    # Filter scenario exchanges to only those actually available in the dataset
+    if raw_scenario_exchanges:
+        unavailable = raw_scenario_exchanges - all_exchanges_set
+        if unavailable:
+            logging.debug(
+                "Scenario %s: exchanges %s not available in dataset, using %s",
+                scenario.label,
+                sorted(unavailable),
+                sorted(raw_scenario_exchanges & all_exchanges_set) or "all available",
+            )
+        scenario_exchanges = raw_scenario_exchanges & all_exchanges_set
+        if not scenario_exchanges:
+            # If no overlap, fall back to all available exchanges
+            scenario_exchanges = all_exchanges_set
+    else:
+        scenario_exchanges = all_exchanges_set
 
     # Use combined dataset when:
     # 1. It exists, AND
