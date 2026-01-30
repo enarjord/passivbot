@@ -10,8 +10,8 @@ python3 src/optimize.py [path/to/config.json]
 
 - Defaults to `configs/template.json` if no config is specified
 - Use existing configs as starting points: `--start path/to/config(s)`
-- Enable suite scenarios defined in `backtest.suite` with `--suite [y/n]` (omit value to enable)
-- Layer an external `backtest.suite` definition via `--suite-config path/to/file.json`
+- Enable suite scenarios defined in `backtest.scenarios` with `--suite [y/n]` (omit value to enable)
+- Layer additional scenario definitions via `--suite-config path/to/file.json`
 
 Example:
 ```bash
@@ -40,9 +40,9 @@ configured.
 
 The optimizer reuses the backtest suite configuration and allows every candidate to
 be evaluated across multiple scenarios before scoring. Each scenario can override coins,
-date ranges, exchanges, and `coin_sources`. The optimizer prepares a single shared
-dataset that covers the union of the requested data so additional scenarios add minimal
-overhead.
+date ranges, exchanges, `coin_sources`, and bot parameters via `overrides`. The optimizer
+prepares a single shared dataset that covers the union of the requested data so additional
+scenarios add minimal overhead.
 
 Key fields (directly under `backtest`):
 
@@ -54,8 +54,11 @@ During evaluation the optimizer records:
 
 - Per-scenario combined metrics (the same mean/min/max/std set produced by standalone
   backtests). These are exposed on each individual as `<label>__{metric}`.
-- Aggregated metrics computed with the `backtest.suite.aggregate` rules (default `mean`).
+- Aggregated metrics computed with the `backtest.aggregate` rules (default `mean`).
   These aggregated values feed directly into `optimize.scoring` and `optimize.limits`.
+
+See [Suite Examples](suite_examples.md) for comprehensive scenario configurations including
+exchange comparisons, date range testing, and parameter sensitivity analysis.
 
 Result directories stay under `optimize_results/`, but the coin portion of the folder
 name switches to `suite_{n}_coins` to make suite runs easy to locate.

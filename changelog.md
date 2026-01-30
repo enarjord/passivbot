@@ -5,15 +5,19 @@ All notable user-facing changes will be documented in this file.
 ## v7.7.0 - 2026-01-26
 
 ### Fixed
+- **Suite mode: "no exchanges after filtering" error** - Fixed bug where suite scenarios would fail with "no exchanges after filtering" when the config specified exchanges that had no data (e.g., bybit data missing due to fetch failures). Scenario exchanges are now filtered to only those actually available in the dataset, with a debug log when exchanges are unavailable.
 - **Bybit: Missing PnL on some close fills** - Fixed pagination bug in `BybitFetcher._fetch_positions_history()` that caused closed-pnl records to be skipped when >100 records existed in a time window. Now uses hybrid pagination: cursor-based for recent records (no gaps), time-based sliding window for older records.
 - **Exchange name standardization in cache paths** - Fixed inconsistent use of `binanceusdm` vs `binance` in OHLCV cache paths. All cache paths now consistently use standard names (`binance`, `bybit`, `kucoin`).
 
 ### Added
+- **Gate.io backtest data support** - Gate.io is now a supported exchange for backtesting and optimization OHLCV data. The default template config includes all three exchanges: `["binance", "bybit", "gateio"]`.
+- **Suite examples documentation** - New `docs/suite_examples.md` with comprehensive examples covering exchange comparison, date range scenarios, long-only/short-only configurations, parameter sensitivity testing, and coin subset analysis.
 - **Legacy data auto-migration** - On startup, CandlestickManager automatically migrates OHLCV data from `historical_data/` to `caches/ohlcv/`. Migration is non-destructive (copies, not moves). Users may delete `historical_data/` after migration to save disk space.
-- **Cache directory standardization** - On startup, CandlestickManager automatically renames cache directories from ccxt IDs to standard names (e.g., `binanceusdm` -> `binance`, `kucoinfutures` -> `kucoin`) and removes any symlinks.
+- **Cache directory standardization** - On startup, CandlestickManager automatically renames cache directories from ccxt IDs to standard names (e.g., `binanceusdm` -> `binance`, `kucoinfutures` -> `kucoin`, `gateio` stays as-is) and removes any symlinks.
 - **Fill events now include psize/pprice** - Each fill event is annotated with position size (`psize`) and VWAP entry price (`pprice`) after the fill. Values are computed using a two-phase algorithm and persisted to cache for all exchanges.
 - **`--scenarios` CLI filter** - Run specific scenarios by label with `--scenarios label1,label2,...` (implies `--suite y`).
 - **`suite_enabled` config param** - New `backtest.suite_enabled` (default: true) as master toggle for suite mode.
+- **Scenario `overrides`** - Scenarios can now include arbitrary config path overrides (e.g., `{"bot.long.total_wallet_exposure_limit": 2}`) to test parameter variations.
 - **Logging best practices documentation** - New `docs/ai/log_analysis_prompt.md` with comprehensive logging guidelines, level definitions, and improvement tracking.
 - **Exchange API quirks documentation** - New `docs/ai/exchange_api_quirks.md` documenting known exchange-specific limitations and workarounds.
 - **Debugging case studies** - New `docs/ai/debugging_case_studies.md` with detailed debugging sessions as reference.

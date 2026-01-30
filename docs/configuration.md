@@ -7,9 +7,9 @@ This document provides an overview of the parameters found in `config/template.j
 - **base_dir**: Location to save backtest results.
 - **compress_cache**: Set to `true` to save disk space. Set to `false` for faster loading.
 - **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
-- **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. The template ships with `['binance', 'bybit']`; additional exchanges can be wired up manually if you maintain your own archives.
-- **combine_ohlcvs**: When `true`, build a single “combined” dataset by taking the best-quality feed for each coin across all configured exchanges. When `false`, the backtester/optimizer runs each exchange independently.
-- **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic selection performed when `combine_ohlcvs` is `true`. Scenarios may add more overrides; conflicting assignments raise an error.
+- **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. Supported exchanges: `binance`, `bybit`, `gateio`. The template ships with `['binance', 'bybit', 'gateio']`.
+- **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic exchange selection when multiple exchanges are configured. Scenarios may add more overrides; conflicting assignments raise an error.
+- **volume_normalization**: When `true` (default), normalize volume data across exchanges to make combined datasets comparable.
 - **start_date**: Start date of backtest.
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.
 - **filter_by_min_effective_cost**: When `true`, skip coins whose projected initial entry
@@ -21,31 +21,32 @@ This document provides an overview of the parameters found in `config/template.j
   thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes.
 - **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` mirrors the legacy 100% BTC mode; values `>1` allow leveraged BTC collateral, accepting negative USD balances.
 - **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
+
 ### Suite Scenarios
 
-- **backtest.suite.enabled**: Master switch for suite runs (`--suite [y/n]` overrides it at runtime).
-- **backtest.suite.include_base_scenario** / **base_label**: Optionally prepend a scenario that mirrors the base config.
-- **backtest.suite.aggregate**: Dict of metric-specific aggregation modes (default `mean`). Keys fall back to the `default` entry if unspecified.
-- **backtest.suite.scenarios**: List of scenario dicts. Supported per-scenario keys:
+Suite configuration uses a flattened structure directly under `backtest`:
+
+- **backtest.suite_enabled**: Master switch for suite runs (`--suite [y/n]` overrides it at runtime).
+- **backtest.scenarios**: List of scenario dicts. Supported per-scenario keys:
   - `label`: Directory name under `backtests/suite_runs/<timestamp>/`.
   - `start_date`, `end_date`: Override the global date window.
   - `coins`, `ignored_coins`: Restrict or skip symbols.
   - `exchanges`: Limit which exchanges can contribute data to this scenario.
   - `coin_sources`: Scenario-specific overrides for `coin_sources`.
+  - `overrides`: Arbitrary config path overrides (e.g., `{"bot.long.total_wallet_exposure_limit": 2}`).
+- **backtest.aggregate**: Dict of metric-specific aggregation modes (default `mean`). Keys fall back to the `default` entry if unspecified.
 
-Refer to `configs/examples/suite_example.json` for a practical template.
+See `docs/suite_examples.md` for comprehensive examples and use cases.
 
 Example per-metric aggregation:
 
 ```json
 "backtest": {
-  "suite": {
-    "aggregate": {
-      "default": "mean",
-      "mdg_usd": "median",
-      "sharpe_ratio": "std",
-      "drawdown_worst_usd": "max"
-    }
+  "aggregate": {
+    "default": "mean",
+    "mdg_usd": "median",
+    "sharpe_ratio": "std",
+    "drawdown_worst_usd": "max"
   }
 }
 ```
@@ -362,14 +363,13 @@ In this example:
 
 ### Optimizer Suites
 
-The optimizer uses `backtest.suite` as its canonical suite configuration when `--suite [y/n]` is enabled.
+The optimizer reuses the backtest suite configuration when `--suite [y/n]` is enabled.
 
-- **backtest.suite.enabled**: Can be toggled for optimizer runs via `--suite [y/n]` on `src/optimize.py`.
-- **backtest.suite.include_base_scenario** / **base_label**: Include the base scenario alongside the configured scenarios.
-- **backtest.suite.aggregate**: Per-metric aggregation rules applied to scenario results before feeding into `optimize.scoring` and `optimize.limits`.
-- **backtest.suite.scenarios**: Scenario dictionaries. Each one may override `coins`, `ignored_coins`, `start_date`, `end_date`, `exchanges`, and `coin_sources`.
+- **backtest.suite_enabled**: Can be toggled for optimizer runs via `--suite [y/n]` on `src/optimize.py`.
+- **backtest.aggregate**: Per-metric aggregation rules applied to scenario results before feeding into `optimize.scoring` and `optimize.limits`.
+- **backtest.scenarios**: Scenario dictionaries. Each one may override `coins`, `ignored_coins`, `start_date`, `end_date`, `exchanges`, `coin_sources`, and `overrides` (arbitrary config path overrides).
 
-Use `--suite-config path/to/file.json` to layer a different `backtest.suite` definition at runtime.
+Use `--suite-config path/to/file.json` to layer additional scenario definitions at runtime.
 
 ### Optimization Limits
 

@@ -67,6 +67,8 @@ backtests/suite_runs/<timestamp>/<scenario_label>/
 Every suite also receives a `suite_summary.json` containing per-scenario metrics and the aggregated statistics defined in `backtest.aggregate`.
 Each scenario's entry exposes `metrics.stats[metric] = {mean,min,max,std}` so you can inspect exchange-combined performance without digging through `analysis.json` files.
 
+See [Suite Examples](suite_examples.md) for comprehensive examples including exchange comparisons, date range scenarios, long-only/short-only configurations, and parameter sensitivity testing.
+
 ### Data Strategy
 
 The data strategy is determined implicitly by the number of exchanges configured:
@@ -84,15 +86,16 @@ To compare performance across exchanges, define one scenario per exchange using 
 "backtest": {
   "suite_enabled": true,
   "aggregate": {"default": "mean"},
-  "exchanges": ["binance", "bybit"],
+  "exchanges": ["binance", "bybit", "gateio"],
   "scenarios": [
     {"label": "binance_only", "exchanges": ["binance"]},
-    {"label": "bybit_only", "exchanges": ["bybit"]}
+    {"label": "bybit_only", "exchanges": ["bybit"]},
+    {"label": "gateio_only", "exchanges": ["gateio"]}
   ]
 }
 ```
 
-Each scenario will then run against only that exchange's data, and `suite_summary.json` will contain separate `metrics.stats` blocks for `binance_only` and `bybit_only`.
+Each scenario will then run against only that exchange's data, and `suite_summary.json` will contain separate `metrics.stats` blocks for each exchange scenario.
 
 ## Coin Sources
 
@@ -109,6 +112,15 @@ When multiple exchanges are configured (`backtest.exchanges` has >1 entry), the 
 
 Suite scenarios can add more overrides under `coin_sources`; conflicts between scenarios are rejected so every run uses a single consistent exchange assignment.
 
+## Supported Exchanges
+
+The backtester supports OHLCV data from the following exchanges:
+- **binance** - Binance USDT-M Futures
+- **bybit** - Bybit USDT Perpetuals
+- **gateio** - Gate.io USDT Perpetuals
+
+All three exchanges are included in the default template configuration.
+
 ## Exchange Name Conventions
 
-Cache paths and output directories use denormalized exchange names (e.g., `binance`, `bybit`). The ccxt-specific suffixes (`binanceusdm`, `bybitusdt`) are only used internally when communicating with the exchange API. You should always use the short names in your configuration files.
+Cache paths and output directories use standard exchange names (e.g., `binance`, `bybit`, `gateio`). The ccxt-specific suffixes (`binanceusdm`, `bybitusdt`) are only used internally when communicating with the exchange API. Always use the short names in your configuration files.
