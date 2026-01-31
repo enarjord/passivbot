@@ -109,6 +109,13 @@ FILL_EVENT_FETCH_OVERLAP_COUNT = 20
 FILL_EVENT_FETCH_OVERLAP_MAX_MS = 86_400_000  # 24 hours
 FILL_EVENT_FETCH_LIMIT_DEFAULT = 20
 
+
+class RestartBotException(Exception):
+    """Raised to trigger a clean bot restart without incrementing error counts."""
+
+    pass
+
+
 # Match "...0xABCD..." anywhere (case-insensitive)
 _TYPE_MARKER_RE = re.compile(r"0x([0-9a-fA-F]{4})", re.IGNORECASE)
 # Leading pure-hex fallback: optional 0x then 4 hex at the very start
@@ -1438,6 +1445,8 @@ class Passivbot:
                     if self.execution_scheduled:
                         break
                     await asyncio.sleep(0.1)
+            except RestartBotException:
+                raise  # Propagate restart without incrementing error count
             except Exception as e:
                 self._health_errors += 1
                 logging.error(f"error with {get_function_name()} {e}")
@@ -1589,6 +1598,8 @@ class Passivbot:
             res = None
             try:
                 res = await self.execute_orders_parent(to_create_mod)
+            except RestartBotException:
+                raise  # Propagate restart without incrementing error count
             except Exception as e:
                 logging.error(f"error executing orders {to_create_mod} {e}")
                 print_async_exception(res)
@@ -4504,12 +4515,14 @@ class Passivbot:
     async def restart_bot(self):
         """Stop all tasks and raise to trigger an external bot restart."""
         logging.info("Initiating bot restart...")
-        self.stop_signal_received = True
+        # Note: Do NOT set stop_signal_received=True here - that would cause
+        # the main loop to exit instead of restart. The flag is only for
+        # user-initiated stops (SIGINT/SIGTERM).
         self.stop_data_maintainers()
         await self.cca.close()
         if self.ccp is not None:
             await self.ccp.close()
-        raise Exception("Bot will restart.")
+        raise RestartBotException("Bot will restart.")
 
     async def update_ohlcvs_1m_for_actives(self):
         """Ensure active symbols have fresh 1m candles in CandlestickManager (<=10s old).
