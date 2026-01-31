@@ -464,8 +464,13 @@ async def prepare_master_datasets(
         hlcvs_spec = None
         btc_spec = None
         if shared_array_manager is not None:
-            hlcvs_spec, hlcvs_array = shared_array_manager.create_from(hlcvs_array)
-            btc_spec, btc_array = shared_array_manager.create_from(btc_array)
+            # Copy to SharedMemory, then reassign to view (frees intermediate copy)
+            hlcvs_spec, hlcvs_view = shared_array_manager.create_from(hlcvs_array)
+            del hlcvs_array  # Free intermediate contiguous array
+            hlcvs_array = hlcvs_view
+            btc_spec, btc_view = shared_array_manager.create_from(btc_array)
+            del btc_array  # Free intermediate contiguous array
+            btc_array = btc_view
         return ExchangeDataset(
             exchange=exchange_label,
             coins=coins,
@@ -509,6 +514,8 @@ async def prepare_master_datasets(
             btc_usd_prices,
             timestamps,
         )
+        # Free original arrays after copying to SharedMemory (can save ~5GB+ RAM)
+        del hlcvs, btc_usd_prices
 
         # Only prepare individual exchange datasets if scenarios need them
         if needed_individual_exchanges:
@@ -538,6 +545,8 @@ async def prepare_master_datasets(
                     ex_btc_usd_prices,
                     ex_timestamps,
                 )
+                # Free original arrays after copying to SharedMemory
+                del ex_hlcvs, ex_btc_usd_prices
     else:
         for exchange in exchanges:
             (
@@ -559,6 +568,8 @@ async def prepare_master_datasets(
                 btc_usd_prices,
                 timestamps,
             )
+            # Free original arrays after copying to SharedMemory
+            del hlcvs, btc_usd_prices
     return datasets
 
 
