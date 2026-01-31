@@ -1500,6 +1500,48 @@ async def main():
             timestamps_dict = first_ctx.timestamps
             config["backtest"]["coins"] = deepcopy(first_ctx.config["backtest"]["coins"])
             backtest_exchanges = sorted({ex for ctx in scenario_contexts for ex in ctx.exchanges})
+
+            # Estimate memory usage and warn if it might exceed available RAM
+            n_cpus = config["optimize"]["n_cpus"]
+            master_size_bytes = 0
+            for ctx in scenario_contexts:
+                if ctx.master_hlcvs_specs:
+                    for spec in ctx.master_hlcvs_specs.values():
+                        if spec is not None:
+                            size = np.prod(spec.shape) * np.dtype(spec.dtype).itemsize
+                            master_size_bytes = max(master_size_bytes, size)
+                            break
+                    break
+            if master_size_bytes > 0:
+                master_size_gb = master_size_bytes / (1024**3)
+                # Each worker creates a copy of scenario data for Rust backtesting
+                estimated_peak_gb = master_size_gb * (1 + n_cpus)
+                try:
+                    import os
+                    if hasattr(os, "sysconf"):
+                        pages = os.sysconf("SC_PHYS_PAGES")
+                        page_size = os.sysconf("SC_PAGE_SIZE")
+                        available_gb = (pages * page_size) / (1024**3)
+                    else:
+                        available_gb = None
+                except Exception:
+                    available_gb = None
+                logging.info(
+                    "Memory estimate | master=%.1fGB | n_cpus=%d | peak=%.1fGB%s",
+                    master_size_gb,
+                    n_cpus,
+                    estimated_peak_gb,
+                    f" | system={available_gb:.1f}GB" if available_gb else "",
+                )
+                if available_gb and estimated_peak_gb > available_gb * 0.8:
+                    safe_cpus = max(1, int((available_gb * 0.8 - master_size_gb) / master_size_gb))
+                    logging.warning(
+                        "Estimated peak memory (%.1fGB) may exceed available RAM (%.1fGB). "
+                        "Consider reducing n_cpus to %d or less to avoid OOM.",
+                        estimated_peak_gb,
+                        available_gb,
+                        safe_cpus,
+                    )
         else:
             # New behavior: derive data strategy from exchange count
             # - Single exchange = use that exchange's data only
