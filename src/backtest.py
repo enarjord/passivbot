@@ -75,6 +75,7 @@ from plotting import (
 )
 from collections import defaultdict
 import logging
+import resource
 import gzip
 import traceback
 from logging_setup import configure_logging, resolve_log_level
@@ -231,6 +232,29 @@ def _build_hlcvs_bundle(
                 f"coin_indices length ({len(coin_indices)}) does not match coins ({len(coins_order)})"
             )
         subset_positions = [int(idx) for idx in coin_indices]
+        n_coins = int(hlcvs.shape[1])
+        if len(subset_positions) == n_coins and subset_positions == list(range(n_coins)):
+            subset_positions = None
+
+    def _rss_mb() -> float | None:
+        try:
+            rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            # Linux reports in KB, macOS in bytes.
+            if sys.platform == "darwin":
+                return rss_kb / (1024**2)
+            return rss_kb / 1024
+        except Exception:
+            return None
+
+    rss_before = _rss_mb()
+    logging.debug(
+        "Build bundle | pid=%s hlcvs_shape=%s coins=%d subset=%s rss_mb=%s",
+        os.getpid(),
+        getattr(hlcvs, "shape", None),
+        len(coins_order),
+        subset_positions is not None,
+        f"{rss_before:.1f}" if rss_before is not None else "na",
+    )
     if subset_positions is not None:
         hlcvs_view = hlcvs[:, subset_positions, :]
         hlcvs_arr = np.ascontiguousarray(hlcvs_view, dtype=np.float64)
@@ -266,6 +290,12 @@ def _build_hlcvs_bundle(
         "warmup_minutes_provided": warmup_provided,
         "coins": coin_meta_entries,
     }
+    rss_after = _rss_mb()
+    logging.debug(
+        "Build bundle done | pid=%s rss_mb=%s",
+        os.getpid(),
+        f"{rss_after:.1f}" if rss_after is not None else "na",
+    )
     return pbr.HlcvsBundle(hlcvs_arr, btc_arr, timestamps_arr, bundle_meta)
 
 
