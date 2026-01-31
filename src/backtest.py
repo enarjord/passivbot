@@ -231,9 +231,11 @@ def _build_hlcvs_bundle(
                 f"coin_indices length ({len(coin_indices)}) does not match coins ({len(coins_order)})"
             )
         subset_positions = [int(idx) for idx in coin_indices]
-    hlcvs_arr = np.ascontiguousarray(hlcvs, dtype=np.float64)
     if subset_positions is not None:
-        hlcvs_arr = np.ascontiguousarray(hlcvs_arr[:, subset_positions, :], dtype=np.float64)
+        hlcvs_view = hlcvs[:, subset_positions, :]
+        hlcvs_arr = np.ascontiguousarray(hlcvs_view, dtype=np.float64)
+    else:
+        hlcvs_arr = np.ascontiguousarray(hlcvs, dtype=np.float64)
     btc_arr = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
     if timestamps is None:
         timestamps_arr = np.arange(hlcvs_arr.shape[0], dtype=np.int64)
