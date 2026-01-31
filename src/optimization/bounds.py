@@ -96,6 +96,12 @@ class Bound:
 
         quantized = self.low + clamped_index * self.step
 
+        # Clean up floating-point artifacts by rounding to step precision
+        # e.g., step=0.0002 -> 4 decimal places, step=0.01 -> 2 decimal places
+        if self.step < 1:
+            decimal_places = -int(math.floor(math.log10(self.step)))
+            quantized = round(quantized, decimal_places)
+
         # Final safety clamp
         return max(self.low, min(self.high, quantized))
 
