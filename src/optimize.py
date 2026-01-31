@@ -1503,31 +1503,47 @@ async def main():
 
             # Estimate memory usage (per-scenario SharedMemory, shared by all workers)
             total_shm_bytes = 0
+            seen_specs = set()
             for ctx in scenario_contexts:
-                for spec in ctx.hlcvs_specs.values():
-                    if spec is not None:
-                        total_shm_bytes += np.prod(spec.shape) * np.dtype(spec.dtype).itemsize
-                for spec in ctx.btc_usd_specs.values():
-                    if spec is not None:
+                for spec_map in (
+                    ctx.hlcvs_specs,
+                    ctx.btc_usd_specs,
+                    ctx.master_hlcvs_specs or {},
+                    ctx.master_btc_specs or {},
+                ):
+                    for spec in spec_map.values():
+                        if spec is None:
+                            continue
+                        if spec.name in seen_specs:
+                            continue
+                        seen_specs.add(spec.name)
                         total_shm_bytes += np.prod(spec.shape) * np.dtype(spec.dtype).itemsize
             if total_shm_bytes > 0:
                 total_shm_gb = total_shm_bytes / (1024**3)
                 try:
                     import os
+                    import shutil
                     if hasattr(os, "sysconf"):
                         pages = os.sysconf("SC_PHYS_PAGES")
                         page_size = os.sysconf("SC_PAGE_SIZE")
                         available_gb = (pages * page_size) / (1024**3)
                     else:
                         available_gb = None
+                    shm_gb = None
+                    if os.path.exists("/dev/shm"):
+                        usage = shutil.disk_usage("/dev/shm")
+                        shm_gb = usage.total / (1024**3)
                 except Exception:
                     available_gb = None
+                    shm_gb = None
                 logging.info(
                     "Memory estimate | scenarios=%d | shared_memory=%.1fGB%s",
                     len(scenario_contexts),
                     total_shm_gb,
                     f" | system={available_gb:.1f}GB" if available_gb else "",
                 )
+                if shm_gb is not None:
+                    logging.info("Shared memory filesystem size | /dev/shm=%.1fGB", shm_gb)
                 if available_gb and total_shm_gb > available_gb * 0.7:
                     logging.warning(
                         "Shared memory for scenarios (%.1fGB) is high relative to RAM (%.1fGB). "
