@@ -222,6 +222,48 @@ python3 -m jupyter lab
    - Apply penalties for violated limits
    - NSGA-II selection keeps Pareto front, mutates/crosses for next generation
 
+### Multiprocessing & Shared Memory (Optimizer)
+
+The optimizer uses `multiprocessing.Pool` with SharedMemory for parallel backtest evaluation.
+
+**SharedMemory Allocation**
+- Create SharedMemory ONCE for master datasets, not per-scenario/per-worker
+- SharedMemory is shared across all workers (good), but each allocation consumes physical RAM
+- N scenarios × dataset_size = disaster; master_dataset + indices = efficient
+
+**Numpy Views vs Copies**
+- **Basic slicing creates VIEWS** (O(1) memory): `array[start:end]`, `array[::2]`
+- **Fancy indexing creates COPIES**: `array[:, [0, 3, 5], :]`, `array[indices]`
+- When subsetting coins by index, you WILL get a copy - plan for it
+
+**Memory-Efficient Data Flow**
+1. Keep master data in SharedMemory (workers attach, not copy)
+2. Use time slicing for views (basic slicing = no copy)
+3. Pass coin indices downstream; let the lowest level create ONE copy
+4. Don't pre-slice then pass to functions that will copy again (double-copy trap)
+
+```python
+# BAD: Double copy
+slice = master[time_start:time_end, coin_indices, :]  # Copy #1 (fancy indexing)
+payload = build_payload(slice)  # Copy #2 inside (ascontiguousarray)
+
+# GOOD: Single copy
+time_view = master[time_start:time_end]  # View (O(1))
+payload = build_payload(time_view, coin_indices=coin_indices)  # Copy #1 inside
+```
+
+**Don't Rely on Garbage Collection**
+- `del` doesn't guarantee immediate memory release
+- `gc.collect()` is a bandaid, not a solution
+- Design data flow so copies are created and freed within tight scopes
+- Rust-owned data (via PyO3) is freed deterministically when dropped
+
+**Worker Memory Model**
+- Each worker is a separate process (fork or spawn)
+- Python objects passed to workers are pickled → unpickled (copied)
+- SharedMemory segments are attached by name (no copy, shared physical RAM)
+- Contexts/configs are small (OK to copy); large arrays should use SharedMemory
+
 ### Important Conventions
 
 **See `docs/ai/passivbot_agent_principles.yaml` for the full list.** Key points:
