@@ -30,6 +30,7 @@ from suite_runner import (
     filter_coins_by_exchange_assignment,
     prepare_master_datasets,
     _prepare_dataset_subset,
+    _compute_slice_indices,
     _determine_needed_individual_exchanges,
 )
 from utils import format_approved_ignored_coins, load_markets, ts_to_date, utc_ms
@@ -49,6 +50,11 @@ class ScenarioEvalContext:
     attachments: Dict[str, Dict[str, Any]]
     coin_indices: Dict[str, Optional[List[int]]]
     overrides: Dict[str, Any]
+    # Slice metadata for lazy slicing from master dataset (memory optimization)
+    master_hlcvs_specs: Optional[Dict[str, Any]] = None
+    master_btc_specs: Optional[Dict[str, Any]] = None
+    time_slice: Optional[tuple] = None  # (start_idx, end_idx)
+    coin_slice_indices: Optional[Dict[str, List[int]]] = None  # per-exchange coin indices
 
 
 async def prepare_suite_contexts(
@@ -226,9 +232,17 @@ async def prepare_suite_contexts(
                     scenario.label,
                 )
                 continue
+            # Compute slice metadata for lazy slicing (memory optimization)
+            start_idx, end_idx, coin_indices_list = _compute_slice_indices(
+                dataset,
+                scenario_config,
+                selected_coins,
+                scenario.label,
+            )
+            # Still need mss_slice for per-coin metadata (small, cheap)
             (
-                hlcvs_slice,
-                btc_window,
+                _hlcvs_slice,
+                _btc_window,
                 ts_window,
                 mss_slice,
             ) = _prepare_dataset_subset(
@@ -238,40 +252,38 @@ async def prepare_suite_contexts(
                 scenario.label,
             )
             scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
-            if shared_array_manager is not None:
-                hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
-                btc_spec, _ = shared_array_manager.create_from(np.ascontiguousarray(btc_window))
-            else:
-                hlcvs_spec = None
-                btc_spec = None
 
-            shared_hlcvs = {} if hlcvs_spec else {dataset.exchange: hlcvs_slice}
-            shared_btc = {} if btc_spec else {dataset.exchange: btc_window}
+            # Use lazy slicing: reference master dataset specs + slice indices
+            # instead of creating per-scenario SharedMemory (saves ~N*dataset_size RAM)
             contexts.append(
                 ScenarioEvalContext(
                     label=scenario.label,
                     config=scenario_config,
                     exchanges=[dataset.exchange],
-                    hlcvs_specs={dataset.exchange: hlcvs_spec},
-                    btc_usd_specs={dataset.exchange: btc_spec} if btc_spec is not None else {},
+                    hlcvs_specs={},  # Empty - will use master_hlcvs_specs + lazy slice
+                    btc_usd_specs={},  # Empty - will use master_btc_specs + lazy slice
                     msss={dataset.exchange: mss_slice},
                     timestamps={dataset.exchange: ts_window},
-                    shared_hlcvs_np=shared_hlcvs,
-                    shared_btc_np=shared_btc,
+                    shared_hlcvs_np={},  # Empty - computed lazily in workers
+                    shared_btc_np={},  # Empty - computed lazily in workers
                     attachments={"hlcvs": {}, "btc": {}},
-                    coin_indices={dataset.exchange: None},
+                    coin_indices={dataset.exchange: None},  # None - array already sliced via lazy slicing
                     overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
+                    # Lazy slicing metadata - reference master dataset
+                    master_hlcvs_specs={dataset.exchange: dataset.hlcvs_spec},
+                    master_btc_specs={dataset.exchange: dataset.btc_spec},
+                    time_slice=(start_idx, end_idx),
+                    coin_slice_indices={dataset.exchange: coin_indices_list},
                 )
             )
             continue
 
-        hlcvs_specs: Dict[str, Any] = {}
-        btc_specs: Dict[str, Any] = {}
-        preloaded_hlcvs: Dict[str, np.ndarray] = {}
-        preloaded_btc: Dict[str, np.ndarray] = {}
         mss_slices: Dict[str, Any] = {}
         timestamps_map: Dict[str, Any] = {}
-        coin_index_map: Dict[str, Optional[List[int]]] = {}
+        coin_slice_map: Dict[str, List[int]] = {}  # For lazy slicing from master
+        master_hlcvs_specs_map: Dict[str, Any] = {}
+        master_btc_specs_map: Dict[str, Any] = {}
+        time_slice_map: Dict[str, tuple] = {}
         exchanges_for_scenario: List[str] = []
 
         # Use per-exchange datasets for scenarios with exchange restrictions
@@ -287,9 +299,18 @@ async def prepare_suite_contexts(
                 continue
             exchanges_for_scenario.append(exchange_key)
             scenario_config["backtest"]["coins"][exchange_key] = list(coins_for_exchange)
+
+            # Compute slice indices for lazy slicing
+            start_idx, end_idx, coin_indices_list = _compute_slice_indices(
+                dataset,
+                scenario_config,
+                coins_for_exchange,
+                scenario.label,
+            )
+            # Still need mss_slice for metadata
             (
-                hlcvs_slice,
-                btc_window,
+                _hlcvs_slice,
+                _btc_window,
                 ts_window,
                 mss_slice,
             ) = _prepare_dataset_subset(
@@ -298,40 +319,41 @@ async def prepare_suite_contexts(
                 coins_for_exchange,
                 scenario.label,
             )
-            if shared_array_manager is not None:
-                hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
-                hlcvs_specs[exchange_key] = hlcvs_spec
-                btc_spec, _ = shared_array_manager.create_from(np.ascontiguousarray(btc_window))
-                btc_specs[exchange_key] = btc_spec
-            else:
-                hlcvs_specs[exchange_key] = None
-                preloaded_hlcvs[exchange_key] = hlcvs_slice
-                btc_specs[exchange_key] = None
-                preloaded_btc[exchange_key] = btc_window
-            coin_index_map[exchange_key] = None
+            # Store master specs and slice indices for lazy slicing
+            master_hlcvs_specs_map[exchange_key] = dataset.hlcvs_spec
+            master_btc_specs_map[exchange_key] = dataset.btc_spec
+            time_slice_map[exchange_key] = (start_idx, end_idx)
+            coin_slice_map[exchange_key] = coin_indices_list
 
             mss_slices[exchange_key] = mss_slice
-
             timestamps_map[exchange_key] = ts_window
 
         if not exchanges_for_scenario:
             logging.warning("Skipping scenario %s: no exchanges after filtering.", scenario.label)
             continue
 
+        # Use first exchange's time slice as the scenario time_slice
+        # (all exchanges should have same time range for a scenario)
+        first_ex = exchanges_for_scenario[0]
         contexts.append(
             ScenarioEvalContext(
                 label=scenario.label,
                 config=scenario_config,
                 exchanges=exchanges_for_scenario,
-                hlcvs_specs=hlcvs_specs,
-                btc_usd_specs=btc_specs,
+                hlcvs_specs={},  # Empty - use master specs + lazy slice
+                btc_usd_specs={},  # Empty - use master specs + lazy slice
                 msss=mss_slices,
                 timestamps=timestamps_map,
-                coin_indices=coin_index_map,
-                shared_hlcvs_np=dict(preloaded_hlcvs),
-                shared_btc_np=dict(preloaded_btc),
+                coin_indices={ex: None for ex in exchanges_for_scenario},  # None - array already sliced
+                shared_hlcvs_np={},  # Computed lazily in workers
+                shared_btc_np={},  # Computed lazily in workers
                 attachments={"hlcvs": {}, "btc": {}},
                 overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
+                # Lazy slicing metadata
+                master_hlcvs_specs=master_hlcvs_specs_map,
+                master_btc_specs=master_btc_specs_map,
+                time_slice=time_slice_map.get(first_ex),
+                coin_slice_indices=coin_slice_map,
             )
         )
 

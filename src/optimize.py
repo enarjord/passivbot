@@ -85,6 +85,7 @@ from pure_funcs import (
 from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_approved_ignored_coins
 from logging_setup import configure_logging, resolve_log_level
 from copy import deepcopy
+import gc
 import numpy as np
 from uuid import uuid4
 import logging
@@ -976,16 +977,80 @@ class SuiteEvaluator:
         self.base = base_evaluator
         self.contexts = scenario_contexts
         self.aggregate_cfg = aggregate_cfg
+        # Cache for master dataset attachments (shared across scenarios)
+        self._master_attachments: Dict[str, Dict[str, Any]] = {"hlcvs": {}, "btc": {}}
+        self._master_arrays: Dict[str, Dict[str, np.ndarray]] = {"hlcvs": {}, "btc": {}}
+
+    def _ensure_master_attachment(self, spec, cache_key: str, array_type: str) -> np.ndarray:
+        """Attach to master SharedMemory if not already attached."""
+        if cache_key not in self._master_arrays[array_type]:
+            attachment = attach_shared_array(spec)
+            self._master_attachments[array_type][cache_key] = attachment
+            self._master_arrays[array_type][cache_key] = attachment.array
+        return self._master_arrays[array_type][cache_key]
+
+    def _get_lazy_slice_data(
+        self, ctx: ScenarioEvalContext, exchange: str
+    ) -> tuple[np.ndarray, np.ndarray | None, list[int] | None]:
+        """
+        Get data for lazy slicing mode.
+        Returns (hlcvs_view, btc_view, coin_indices).
+
+        Only applies TIME slicing here (creates views, O(1) memory).
+        Coin subsetting is deferred to build_backtest_payload which does it efficiently.
+        """
+        master_spec = ctx.master_hlcvs_specs[exchange]
+        master_array = self._ensure_master_attachment(master_spec, master_spec.name, "hlcvs")
+
+        time_slice = ctx.time_slice
+        coin_indices = ctx.coin_slice_indices.get(exchange) if ctx.coin_slice_indices else None
+
+        # Time slicing creates a VIEW (no copy, O(1) memory)
+        if time_slice is not None:
+            start_idx, end_idx = time_slice
+            hlcvs_view = master_array[start_idx:end_idx]
+        else:
+            hlcvs_view = master_array
+
+        # BTC slice (time-only slicing creates a view)
+        btc_view = None
+        master_btc_spec = ctx.master_btc_specs.get(exchange) if ctx.master_btc_specs else None
+        if master_btc_spec is not None:
+            master_btc = self._ensure_master_attachment(master_btc_spec, master_btc_spec.name, "btc")
+            if time_slice is not None:
+                start_idx, end_idx = time_slice
+                btc_view = master_btc[start_idx:end_idx]
+            else:
+                btc_view = master_btc
+
+        # Return coin_indices to let build_backtest_payload handle subsetting in one step
+        return hlcvs_view, btc_view, coin_indices
+
+    def _uses_lazy_slicing(self, ctx: ScenarioEvalContext, exchange: str) -> bool:
+        """Check if context uses lazy slicing for the given exchange."""
+        return (
+            ctx.master_hlcvs_specs is not None
+            and exchange in ctx.master_hlcvs_specs
+            and ctx.master_hlcvs_specs[exchange] is not None
+        )
 
     def _ensure_context_attachment(self, ctx: ScenarioEvalContext, exchange: str) -> None:
+        """Attach to SharedMemory for non-lazy-slicing contexts only."""
+        # Skip if using lazy slicing - slices are computed on-demand in evaluate()
+        if self._uses_lazy_slicing(ctx, exchange):
+            return
+
+        # Original flow: per-scenario SharedMemory
         if exchange not in ctx.shared_hlcvs_np:
-            attachment = attach_shared_array(ctx.hlcvs_specs[exchange])
-            ctx.attachments["hlcvs"][exchange] = attachment
-            ctx.shared_hlcvs_np[exchange] = attachment.array
+            if exchange in ctx.hlcvs_specs and ctx.hlcvs_specs[exchange] is not None:
+                attachment = attach_shared_array(ctx.hlcvs_specs[exchange])
+                ctx.attachments["hlcvs"][exchange] = attachment
+                ctx.shared_hlcvs_np[exchange] = attachment.array
         if exchange not in ctx.shared_btc_np and exchange in ctx.btc_usd_specs:
-            attachment = attach_shared_array(ctx.btc_usd_specs[exchange])
-            ctx.attachments["btc"][exchange] = attachment
-            ctx.shared_btc_np[exchange] = attachment.array
+            if ctx.btc_usd_specs[exchange] is not None:
+                attachment = attach_shared_array(ctx.btc_usd_specs[exchange])
+                ctx.attachments["btc"][exchange] = attachment
+                ctx.shared_btc_np[exchange] = attachment.array
 
     def evaluate(self, individual, overrides_list):
         individual[:] = enforce_bounds(individual, self.base.bounds, self.base.sig_digits)
@@ -1062,21 +1127,33 @@ class SuiteEvaluator:
 
             analyses = {}
             for exchange in ctx.exchanges:
-                self._ensure_context_attachment(ctx, exchange)
-                coin_indices = ctx.coin_indices.get(exchange)
+                # Get data arrays - either from lazy slicing or cached SharedMemory
+                if self._uses_lazy_slicing(ctx, exchange):
+                    # Get time-sliced VIEW (O(1) memory) + coin indices
+                    # Coin subsetting happens inside build_backtest_payload (single copy)
+                    hlcvs_data, btc_data, coin_indices = self._get_lazy_slice_data(ctx, exchange)
+                else:
+                    self._ensure_context_attachment(ctx, exchange)
+                    hlcvs_data = ctx.shared_hlcvs_np[exchange]
+                    btc_data = ctx.shared_btc_np.get(exchange)
+                    coin_indices = ctx.coin_indices.get(exchange)
+
                 payload = build_backtest_payload(
-                    ctx.shared_hlcvs_np[exchange],
+                    hlcvs_data,
                     ctx.msss[exchange],
                     scenario_config,
                     exchange,
-                    ctx.shared_btc_np.get(exchange),
+                    btc_data,
                     ctx.timestamps.get(exchange),
                     coin_indices=coin_indices,
                 )
                 fills, equities_array, analysis = execute_backtest(payload, scenario_config)
                 analyses[exchange] = analysis
+
+                # Free backtest results to allow memory reuse
                 del fills
                 del equities_array
+                del payload
 
             combined_metrics = combine(analyses)
             stats = combined_metrics.get("stats", {})

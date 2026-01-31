@@ -999,6 +999,50 @@ def _normalize_date_to_ts(value: Any) -> int:
     return int(date_to_ts(trimmed))
 
 
+def _compute_slice_indices(
+    dataset: ExchangeDataset,
+    scenario_config: Dict[str, Any],
+    selected_coins: Sequence[str],
+    scenario_label: str,
+) -> Tuple[int, int, List[int]]:
+    """
+    Compute slice indices for lazy slicing from master dataset.
+    Returns (start_idx, end_idx, coin_indices) without creating actual array slices.
+    """
+    start_value = require_config_value(scenario_config, "backtest.start_date")
+    end_value = require_config_value(scenario_config, "backtest.end_date")
+    start_ts = _normalize_date_to_ts(str(start_value))
+    end_ts = _normalize_date_to_ts(str(end_value))
+    if end_ts <= start_ts:
+        raise ValueError(
+            f"Scenario {scenario_label} end_date must be after start_date (got {start_value} -> {end_value})"
+        )
+
+    warmup_minutes = max(0, int(compute_backtest_warmup_minutes(scenario_config)))
+    warmup_ms = warmup_minutes * 60_000
+    slice_start_ts = start_ts - warmup_ms
+    timestamps_arr = None
+    if dataset.timestamps is not None and len(dataset.timestamps) > 0:
+        timestamps_arr = np.asarray(dataset.timestamps, dtype=np.int64)
+    total_steps = dataset.hlcvs.shape[0]
+
+    if timestamps_arr is None:
+        start_idx = 0
+        end_idx = total_steps
+    else:
+        start_idx = int(np.searchsorted(timestamps_arr, slice_start_ts, side="left"))
+        end_idx = int(np.searchsorted(timestamps_arr, end_ts, side="right"))
+        start_idx = max(0, min(start_idx, total_steps))
+        end_idx = max(start_idx + 1, min(end_idx, total_steps))
+    if start_idx >= total_steps or end_idx <= start_idx:
+        raise ValueError(
+            f"Scenario {scenario_label} timeframe [{start_value}, {end_value}] is outside available data"
+        )
+
+    coin_indices = [dataset.coin_index[coin] for coin in selected_coins]
+    return start_idx, end_idx, coin_indices
+
+
 def _prepare_dataset_subset(
     dataset: ExchangeDataset,
     scenario_config: Dict[str, Any],
