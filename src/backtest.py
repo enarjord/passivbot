@@ -247,7 +247,8 @@ def _build_hlcvs_bundle(
             return None
 
     rss_before = _rss_mb()
-    logging.debug(
+    logger = logging.getLogger(__name__)
+    logger.trace(
         "Build bundle | pid=%s hlcvs_shape=%s coins=%d subset=%s rss_mb=%s",
         os.getpid(),
         getattr(hlcvs, "shape", None),
@@ -291,7 +292,7 @@ def _build_hlcvs_bundle(
         "coins": coin_meta_entries,
     }
     rss_after = _rss_mb()
-    logging.debug(
+    logger.trace(
         "Build bundle done | pid=%s rss_mb=%s",
         os.getpid(),
         f"{rss_after:.1f}" if rss_after is not None else "na",
