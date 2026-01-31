@@ -22,19 +22,19 @@
             },
             {
                 "coins": ["ADA", "BCH", "BTC", "CRO", "DOT", "HBAR", "LINK", "MNT", "SOL", "TON", "UNI", "XLM", "XRP"],
-                "label": "subset1"
+                "label": "subset1_mix"
             },
             {
                 "coins": ["AVAX", "BNB", "CC", "DOGE", "ETH", "HYPE", "LTC", "SHIB", "SUI", "TRX", "XAUT", "XMR", "ZEC"],
-                "label": "subset2"
+                "label": "subset2_mix"
             },
             {
                 "coins": ["BTC", "ETH", "BNB", "XRP", "SOL", "TRX", "DOGE", "ADA", "BCH", "XMR", "LINK", "HYPE", "CC"],
-                "label": "subset3"
+                "label": "subset3_top13"
             },
             {
                 "coins": ["XLM", "ZEC", "LTC", "SUI", "AVAX", "SHIB", "HBAR", "TON", "CRO", "DOT", "UNI", "XAUT", "MNT"],
-                "label": "subset4"
+                "label": "subset4_bottom13"
             },
             {
                 "label": "pure_trailing",
@@ -59,6 +59,13 @@
                 "overrides": {
                     "bot.long.n_positions": 3,
                     "bot.short.n_positions": 3
+                }
+            },
+            {
+                "label": "n_positions=14",
+                "overrides": {
+                    "bot.long.n_positions": 14,
+                    "bot.short.n_positions": 14
                 }
             },
             {
