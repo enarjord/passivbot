@@ -107,6 +107,9 @@ Old configs are automatically migrated. Manual update recommended for clarity.
 - Old `{user}_pnls.json` cache files can be safely deleted after upgrading
 - If using custom exchange configurations, ensure the exchange's fill fetcher is supported (Binance, Bybit, Bitget, GateIO, Hyperliquid, KuCoin, OKX)
 
+#### Release Checklist
+- Set `GATEIO_CACHE_CUTOFF_DATE` in `src/candlestick_manager.py` to the merge date and remove the CLAUDE reminder before tagging the release.
+
 ## v7.6.2 - 2026-01-20
 
 ### Fixed
