@@ -95,6 +95,38 @@ if not hasattr(pbr, "HlcvsBundle"):  # pragma: no cover
 set_windows_event_loop_policy()
 
 
+def aggregate_candles(candles_1m: np.ndarray, interval: int) -> np.ndarray:
+    """
+    Aggregate 1m HLCV candles to coarser interval.
+
+    Args:
+        candles_1m: Array of shape (n_timesteps, n_coins, 4) for HLCV
+        interval: Number of 1m candles to combine (e.g., 5 for 5m candles)
+
+    Returns:
+        Aggregated array of shape (n_timesteps // interval, n_coins, 4)
+    """
+    if interval <= 1:
+        return candles_1m
+    n_timesteps = candles_1m.shape[0]
+    n_out = n_timesteps // interval
+    if n_out == 0:
+        raise ValueError(f"Not enough candles ({n_timesteps}) for interval {interval}")
+    truncated = candles_1m[: n_out * interval]
+    reshaped = truncated.reshape(n_out, interval, *candles_1m.shape[1:])
+    # HLCV indices: 0=high, 1=low, 2=close, 3=volume
+    aggregated = np.stack(
+        [
+            reshaped[:, :, :, 0].max(axis=1),  # high: max across interval
+            reshaped[:, :, :, 1].min(axis=1),  # low: min across interval
+            reshaped[:, -1, :, 2],             # close: last candle's close
+            reshaped[:, :, :, 3].sum(axis=1),  # volume: sum across interval
+        ],
+        axis=-1,
+    )
+    return aggregated
+
+
 def _looks_like_bool_token(value: str) -> bool:
     if value is None:
         return False
@@ -334,11 +366,32 @@ def build_backtest_payload(
     backtest_params = dict(backtest_params)
     coins_order = backtest_params.get("coins", [])
 
+    # Read candle interval from config (default to 1m)
+    candle_interval = config.get("backtest", {}).get("candle_interval_minutes", 1)
+    if candle_interval < 1:
+        raise ValueError(f"candle_interval_minutes must be >= 1, got {candle_interval}")
+    backtest_params["candle_interval_minutes"] = candle_interval
+
+    # Aggregate candles if using coarser interval
+    if candle_interval > 1:
+        hlcvs = aggregate_candles(hlcvs, candle_interval)
+        n_out = hlcvs.shape[0]
+        if timestamps is not None:
+            timestamps = timestamps[::candle_interval][:n_out]
+        if btc_usd_prices is not None:
+            # Use last price in each interval (matches close)
+            btc_usd_prices = btc_usd_prices[candle_interval - 1 :: candle_interval][:n_out]
+
     # Inject first timestamp (ms) into backtest params; default to 0 if unknown
     try:
         first_ts_ms = int(timestamps[0]) if (timestamps is not None and len(timestamps) > 0) else 0
     except Exception:
         first_ts_ms = 0
+
+    # Align first timestamp to interval boundary
+    if candle_interval > 1 and first_ts_ms > 0:
+        interval_ms = candle_interval * 60_000
+        first_ts_ms = (first_ts_ms // interval_ms) * interval_ms
     backtest_params["first_timestamp_ms"] = first_ts_ms
 
     warmup_map = compute_per_coin_warmup_minutes(config)
@@ -350,26 +403,36 @@ def build_backtest_payload(
     total_steps = hlcvs.shape[0]
     for idx, coin in enumerate(coins_order):
         meta = mss.get(coin, {}) if isinstance(mss, dict) else {}
+        # Metadata indices are based on 1m candles; adjust for aggregated interval
         first_idx = int(meta.get("first_valid_index", 0))
-        last_idx = int(meta.get("last_valid_index", total_steps - 1))
+        last_idx = int(meta.get("last_valid_index", total_steps * candle_interval - 1))
+        if candle_interval > 1:
+            first_idx = first_idx // candle_interval
+            last_idx = last_idx // candle_interval
         if first_idx >= total_steps:
             first_idx = total_steps
         if last_idx >= total_steps:
             last_idx = total_steps - 1
         first_valid_indices.append(first_idx)
         last_valid_indices.append(last_idx)
+        # warmup_minutes stay in minutes (Rust adjusts based on interval)
         warm = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
         warmup_minutes.append(warm)
+        # trade_start_idx is in candle units, adjust warm from minutes to candle periods
+        warm_bars = warm // candle_interval if candle_interval > 1 else warm
         if first_idx > last_idx:
             trade_idx = first_idx
         else:
-            trade_idx = min(last_idx, first_idx + warm)
+            trade_idx = min(last_idx, first_idx + warm_bars)
         trade_start_indices.append(trade_idx)
     backtest_params["first_valid_indices"] = first_valid_indices
     backtest_params["last_valid_indices"] = last_valid_indices
     backtest_params["warmup_minutes"] = warmup_minutes
     backtest_params["trade_start_indices"] = trade_start_indices
-    backtest_params["global_warmup_bars"] = compute_backtest_warmup_minutes(config)
+    global_warmup_bars = compute_backtest_warmup_minutes(config)
+    if candle_interval > 1:
+        global_warmup_bars = global_warmup_bars // candle_interval
+    backtest_params["global_warmup_bars"] = global_warmup_bars
 
     meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
     candidate_start = meta.get(

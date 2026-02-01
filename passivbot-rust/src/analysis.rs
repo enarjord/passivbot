@@ -507,16 +507,19 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, exposures_series: &
         .sum::<f64>()
         / 10.0;
 
+    // Use absolute values for exposure metrics since short positions have negative twe_net.
+    // The metric represents "how much exposure" regardless of direction.
     let exposures: Vec<f64> = if !exposures_series.is_empty() {
         exposures_series
             .iter()
             .cloned()
             .filter(|value| value.is_finite())
+            .map(|v| v.abs())
             .collect()
     } else {
         fills
             .iter()
-            .map(|fill| fill.twe_net)
+            .map(|fill| fill.twe_net.abs())
             .filter(|value| value.is_finite())
             .collect()
     };
@@ -893,5 +896,76 @@ pub fn calc_avg_volume_pct_per_day(fills: &[Fill]) -> f64 {
         0.0
     } else {
         daily_totals.values().sum::<f64>() / total_days
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::OrderType;
+
+    fn make_fill(index: usize, twe_net: f64) -> Fill {
+        Fill {
+            index,
+            timestamp_ms: (index as u64) * 60_000,
+            coin: "TEST".to_string(),
+            pnl: 0.0,
+            fee_paid: 0.1,
+            usd_total_balance: 10000.0,
+            btc_cash_wallet: 0.0,
+            usd_cash_wallet: 10000.0,
+            btc_price: 50000.0,
+            fill_qty: -0.1,
+            fill_price: 50000.0,
+            position_size: -0.1,
+            position_price: 50000.0,
+            order_type: OrderType::EntryInitialNormalShort,
+            wallet_exposure: twe_net.abs(),
+            twe_long: 0.0,
+            twe_short: twe_net,
+            twe_net,
+        }
+    }
+
+    #[test]
+    fn test_total_wallet_exposure_max_short_only() {
+        // For short-only configs, twe_net is always negative.
+        // total_wallet_exposure_max should report the maximum absolute exposure.
+        let fills = vec![
+            make_fill(100, -0.5), // 50% short exposure
+            make_fill(200, -1.0), // 100% short exposure
+            make_fill(300, -0.3), // 30% short exposure
+        ];
+
+        let equities: Vec<f64> = vec![10000.0; 400];
+        // Empty exposures_series forces analysis to use fill.twe_net
+        let exposures_series: Vec<f64> = vec![];
+
+        let analysis = analyze_backtest(&fills, &equities, &exposures_series);
+
+        // With abs() fix: max(0.5, 1.0, 0.3) = 1.0
+        assert!(
+            (analysis.total_wallet_exposure_max - 1.0).abs() < 0.01,
+            "Expected total_wallet_exposure_max=1.0 for short-only, got {}",
+            analysis.total_wallet_exposure_max
+        );
+    }
+
+    #[test]
+    fn test_total_wallet_exposure_from_exposures_series() {
+        // When exposures_series is provided, it should use that instead of fill.twe_net
+        let fills = vec![make_fill(100, -0.5)];
+        let equities: Vec<f64> = vec![10000.0; 200];
+        // Provide negative exposure values (short-only pattern)
+        let exposures_series: Vec<f64> = vec![-0.2, -0.5, -0.8, -0.3];
+
+        let analysis = analyze_backtest(&fills, &equities, &exposures_series);
+
+        // With abs() fix: max(0.2, 0.5, 0.8, 0.3) = 0.8
+        assert!(
+            (analysis.total_wallet_exposure_max - 0.8).abs() < 0.01,
+            "Expected total_wallet_exposure_max=0.8, got {}",
+            analysis.total_wallet_exposure_max
+        );
     }
 }
