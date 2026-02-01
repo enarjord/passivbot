@@ -609,6 +609,25 @@ class TestLegacyMigration:
         assert len(formatted["backtest"]["scenarios"]) == 1
         assert formatted["backtest"]["scenarios"][0]["label"] == "custom"
 
+    def test_tc7_6_old_config_with_include_base_scenario_true_and_empty_scenarios(self):
+        """TC7.6: Old config with include_base_scenario=true but no explicit scenarios."""
+        cfg = get_template_config()
+        cfg["_raw"] = deepcopy(cfg)
+        cfg["backtest"]["suite"] = {
+            "enabled": True,
+            "include_base_scenario": True,
+            "base_label": "base_only",
+            "scenarios": [],
+        }
+        cfg["backtest"].pop("scenarios", None)
+        cfg["backtest"].pop("aggregate", None)
+
+        formatted = format_config(deepcopy(cfg), verbose=False)
+
+        assert "suite" not in formatted["backtest"]
+        assert len(formatted["backtest"]["scenarios"]) == 1
+        assert formatted["backtest"]["scenarios"][0]["label"] == "base_only"
+
     def test_tc7_4_old_config_with_combine_ohlcvs_true(self):
         """TC7.4: Old config with combine_ohlcvs=true."""
         cfg = get_template_config()

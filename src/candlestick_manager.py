@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     import aiohttp
 
 import warnings
+import time
 
 import numpy as np
 import portalocker  # type: ignore
@@ -61,6 +62,7 @@ from legacy_data_migrator import (
     standardize_cache_directories,
     migrate_legacy_data_on_init,
     merge_duplicate_symbol_directories,
+    normalize_ccxt_volume_to_base,
 )
 
 # Suppress portalocker's "timeout has no effect in blocking mode" warning
@@ -422,12 +424,27 @@ class CandlestickManager:
         # migrate any legacy data from historical_data/ to caches/ohlcv/,
         # and merge any duplicate symbol directories from inconsistent sanitization
         ohlcv_cache_base = os.path.join(self.cache_dir, "ohlcv")
-        standardize_cache_directories(ohlcv_cache_base)
+        os.makedirs(ohlcv_cache_base, exist_ok=True)
+        migration_lock = os.path.join(ohlcv_cache_base, ".migration.lock")
+        migration_done = os.path.join(ohlcv_cache_base, ".migration_done")
+        try:
+            with portalocker.Lock(migration_lock, timeout=0.1, fail_when_locked=True):
+                if not os.path.exists(migration_done):
+                    standardize_cache_directories(ohlcv_cache_base)
         migrate_legacy_data_on_init(
             exchange=self.exchange_name,
             cache_base=ohlcv_cache_base,
+            audit_gateio_volume=True,
         )
-        merge_duplicate_symbol_directories(ohlcv_cache_base)
+                    merge_duplicate_symbol_directories(ohlcv_cache_base)
+                    try:
+                        with open(migration_done, "w", encoding="utf-8") as handle:
+                            handle.write(str(int(time.time())))
+                    except Exception:
+                        pass
+        except portalocker.exceptions.LockException:
+            # Another process is handling migrations; skip.
+            pass
 
         self._setup_logging()
         self._cleanup_stale_locks()
@@ -2477,6 +2494,7 @@ class CandlestickManager:
                     ts = _floor_minute(ts)
                 o, h, l, c = map(float, (r[1], r[2], r[3], r[4]))
                 bv = float(r[5]) if len(r) > 5 else 0.0
+                bv = normalize_ccxt_volume_to_base(self._ex_id or "", c, bv)
                 out.append((ts, o, h, l, c, bv))
             except Exception:
                 continue

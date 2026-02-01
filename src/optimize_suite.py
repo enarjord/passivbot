@@ -184,6 +184,18 @@ async def prepare_suite_contexts(
                 first_idx = total_steps
             if last_idx >= total_steps:
                 last_idx = total_steps - 1
+            if "first_valid_index" not in meta or "last_valid_index" not in meta:
+                try:
+                    coin_idx = dataset.coin_index.get(coin)
+                    if coin_idx is not None:
+                        close_series = dataset.hlcvs[start_idx:end_idx, coin_idx, 2]
+                        finite = np.isfinite(close_series)
+                        if finite.any():
+                            valid_indices = np.where(finite)[0]
+                            first_idx = int(valid_indices[0])
+                            last_idx = int(valid_indices[-1])
+                except Exception:
+                    pass
             meta["first_valid_index"] = first_idx
             meta["last_valid_index"] = last_idx
             warm_minutes = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))

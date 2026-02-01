@@ -777,7 +777,8 @@ def _migrate_suite_to_scenarios(
             new_scenarios = list(old_scenarios)
 
             # If include_base_scenario was True, prepend implicit base scenario
-            if include_base and old_scenarios:
+            # even when no explicit scenarios were provided.
+            if include_base:
                 base_scenario = {"label": base_label}
                 new_scenarios = [base_scenario] + new_scenarios
                 _log_config(
