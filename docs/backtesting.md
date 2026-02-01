@@ -2,6 +2,8 @@
 
 Passivbot ships with a backtester that replays historical 1 minute candles. When a coin isn't cached locally, the backtester fetches data from the exchange archives and caches it under `caches/ohlcv/` for reuse.
 
+> **GateIO cache note:** If you have existing GateIO OHLCV data in `caches/ohlcv/gateio`, delete the folder after upgrading to the new data strategy so fresh data (normalized to base volume) is fetched.
+
 ## Usage
 
 ```shell

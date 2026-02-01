@@ -26,6 +26,7 @@ All notable user-facing changes will be documented in this file.
 
 ### Changed
 - **Exchange name functions renamed** - `normalize_exchange_name()` renamed to `to_ccxt_exchange_id()` and `denormalize_exchange_name()` renamed to `to_standard_exchange_name()`. Old names remain as deprecated aliases with warnings.
+- **GateIO cache migration disabled** - Legacy `historical_data/` migration is skipped for GateIO to avoid mixed quote/base volume data. If you have `caches/ohlcv/gateio` from older builds, delete it after upgrading so fresh data is fetched and normalized to base volume.
 - **BREAKING**: Flattened suite configuration structure for simpler data strategy
   - `backtest.suite.scenarios` → `backtest.scenarios`
   - `backtest.suite.aggregate` → `backtest.aggregate`

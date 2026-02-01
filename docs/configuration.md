@@ -7,7 +7,8 @@ This document provides an overview of the parameters found in `config/template.j
 - **base_dir**: Location to save backtest results.
 - **compress_cache**: Set to `true` to save disk space. Set to `false` for faster loading.
 - **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
-- **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. Supported exchanges: `binance`, `bybit`, `gateio`. The template ships with `['binance', 'bybit', 'gateio']`.
+- **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. Supported exchanges: `binance`, `bybit`, `gateio`. The template ships with `['binance', 'bybit', 'gateio']`.  
+  **GateIO note:** If you have existing `caches/ohlcv/gateio` data from older builds, delete it so fresh data (normalized to base volume) is fetched.
 - **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic exchange selection when multiple exchanges are configured. Scenarios may add more overrides; conflicting assignments raise an error.
 - **volume_normalization**: When `true` (default), normalize volume data across exchanges to make combined datasets comparable.
 - **start_date**: Start date of backtest.
