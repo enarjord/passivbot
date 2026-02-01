@@ -453,10 +453,9 @@ def filter_markets(markets: dict, exchange: str, quote=None, verbose=False) -> (
         elif not k.endswith(f"/{quote}:{quote}"):
             ineligible[k] = v
             reasons[k] = "wrong quote"
-        elif exchange == "hyperliquid" and (
-            v.get("info", {}).get("onlyIsolated")
-            or float(v.get("info", {}).get("openInterest")) == 0.0
-        ):
+        elif exchange == "hyperliquid" and float(v.get("info", {}).get("openInterest", 0)) == 0.0:
+            # Zero open interest means market is inactive
+            # Note: onlyIsolated=True is allowed for HIP-3 stock perps
             ineligible[k] = v
             reasons[k] = f"ineligible on {exchange}"
         else:
@@ -753,6 +752,16 @@ def _build_coin_symbol_maps(markets, quote):
                     variants.add(cleaned)
                     if not coin:
                         coin = cleaned
+                    # Handle HIP-3 stock perps: XYZ-TSLA -> TSLA
+                    # Also handle xyz:TSLA format from CCXT
+                    if base.startswith("XYZ-"):
+                        ticker = base[4:]  # Extract TSLA from XYZ-TSLA
+                        variants.add(ticker)
+                        variants.add(f"xyz:{ticker}")  # Also map xyz:TSLA
+                    elif base.startswith("xyz:"):
+                        ticker = base[4:]  # Extract TSLA from xyz:TSLA
+                        variants.add(ticker)
+                        variants.add(f"XYZ-{ticker}")  # Also map XYZ-TSLA
             for variant in variants:
                 symbol_to_coin_map[variant] = coin
                 symbol_to_coin_map[k] = coin

@@ -61,5 +61,11 @@
         "apiKey": "your_api_key",
         "secret": "your_api_secret",
         "password": "optional_passphrase"
+    },
+    "_comment_tradfi": "TradFi data provider for stock perp backtesting. Providers: alpaca (recommended, 5yr+ free), polygon (2yr free), yfinance (7 days, no key), finnhub, alphavantage",
+    "tradfi": {
+        "provider": "alpaca",
+        "api_key": "your_alpaca_api_key",
+        "api_secret": "your_alpaca_api_secret"
     }
 }

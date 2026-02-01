@@ -22,6 +22,11 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
 class HyperliquidBot(CCXTBot):
+    # HIP-3 stock perps have a max leverage of 10x
+    HIP3_MAX_LEVERAGE = 10
+    # HIP-3 symbols use "xyz:" prefix (TradeXYZ builder)
+    HIP3_PREFIX = "xyz:"
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.quote = "USDC"
@@ -40,22 +45,30 @@ class HyperliquidBot(CCXTBot):
             "walletAddress": self.user_info["wallet_address"],
             "privateKey": self.user_info["private_key"],
         }
+        # Configure fetchMarkets to include HIP-3 stock perps from TradeXYZ
+        fetch_markets_config = {
+            "types": ["swap", "hip3"],  # Include HIP-3 markets
+            "hip3": {
+                "dex": ["xyz"],  # TradeXYZ DEX for stock perps (TSLA, NVDA, etc.)
+            },
+        }
         if self.ws_enabled:
             self.ccp = getattr(ccxt_pro, self.exchange)(creds)
             self.ccp.options.update(self._build_ccxt_options())
             self.ccp.options["defaultType"] = "swap"
-            self.ccp.options["fetchMarkets"]["types"] = ["swap"]
+            self.ccp.options["fetchMarkets"] = fetch_markets_config
             self._apply_endpoint_override(self.ccp)
         elif self.endpoint_override:
             logging.info("Skipping Hyperliquid websocket session due to custom endpoint override.")
         self.cca = getattr(ccxt_async, self.exchange)(creds)
         self.cca.options.update(self._build_ccxt_options())
         self.cca.options["defaultType"] = "swap"
-        self.cca.options["fetchMarkets"]["types"] = ["swap"]
+        self.cca.options["fetchMarkets"] = fetch_markets_config
         self._apply_endpoint_override(self.cca)
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
+        isolated_count = 0
         for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
@@ -71,11 +84,45 @@ class HyperliquidBot(CCXTBot):
             )
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
-            self.max_leverage[symbol] = (
-                int(elm["info"]["maxLeverage"]) if "maxLeverage" in elm["info"] else 0
-            )
+
+            # For isolated-only markets (HIP-3), cap at 10x leverage
+            if self._requires_isolated_margin(symbol):
+                isolated_count += 1
+                self.max_leverage[symbol] = min(
+                    self.HIP3_MAX_LEVERAGE,
+                    int(elm["info"]["maxLeverage"]) if "maxLeverage" in elm["info"] else self.HIP3_MAX_LEVERAGE,
+                )
+            else:
+                self.max_leverage[symbol] = (
+                    int(elm["info"]["maxLeverage"]) if "maxLeverage" in elm["info"] else 0
+                )
         self.n_decimal_places = 6
         self.n_significant_figures = 5
+        if isolated_count:
+            logging.info(f"Detected {isolated_count} isolated-margin-only symbols (HIP-3/stock perps)")
+
+    def _requires_isolated_margin(self, symbol: str) -> bool:
+        """Check if a symbol requires isolated margin mode.
+
+        On Hyperliquid, this includes:
+        1. Symbols with xyz: prefix (HIP-3 stock perps from TradeXYZ)
+        2. Markets with onlyIsolated=True flag
+
+        Args:
+            symbol: CCXT-style symbol (e.g., "xyz:TSLA/USDC:USDC")
+
+        Returns:
+            True if this symbol requires isolated margin mode
+        """
+        # Check for xyz: prefix in symbol or base
+        if symbol.startswith(self.HIP3_PREFIX):
+            return True
+        base = symbol.split("/")[0] if "/" in symbol else symbol
+        if base.startswith(self.HIP3_PREFIX):
+            return True
+
+        # Fall back to base class check (onlyIsolated flag, etc.)
+        return super()._requires_isolated_margin(symbol)
 
     async def watch_orders(self):
         res = None
@@ -359,13 +406,16 @@ class HyperliquidBot(CCXTBot):
         return any_adjusted
 
     def symbol_is_eligible(self, symbol):
+        """Check if a symbol is eligible for trading.
+
+        HIP-3 stock perps (onlyIsolated=True) are eligible - they use isolated margin
+        automatically and have leverage capped at 10x.
+        """
         try:
-            if (
-                "onlyIsolated" in self.markets_dict[symbol]["info"]
-                and self.markets_dict[symbol]["info"]["onlyIsolated"]
-            ):
-                return False
-            if float(self.markets_dict[symbol]["info"]["openInterest"]) == 0.0:
+            market_info = self.markets_dict[symbol]["info"]
+
+            # Zero open interest means market is inactive
+            if float(market_info.get("openInterest", 0)) == 0.0:
                 return False
         except Exception as e:
             logging.error(f"error with symbol_is_eligible {e} {symbol}")
@@ -373,35 +423,39 @@ class HyperliquidBot(CCXTBot):
         return True
 
     async def update_exchange_config_by_symbols(self, symbols):
+        """Set leverage and margin mode for Hyperliquid symbols.
+
+        Uses base class methods for isolated margin detection and leverage calculation.
+        Adds Hyperliquid-specific vault address handling.
+        """
         coros_to_call_margin_mode = {}
         for symbol in symbols:
             try:
-                params = {
-                    "leverage": int(
-                        min(
-                            self.max_leverage[symbol],
-                            self.config_get(["live", "leverage"], symbol=symbol),
-                        )
-                    )
-                }
+                # Use base class method for leverage calculation (handles isolated margin)
+                leverage = self._calc_leverage_for_symbol(symbol)
+                margin_mode = self._get_margin_mode_for_symbol(symbol)
+
+                params = {"leverage": leverage}
                 if self.user_info["is_vault"]:
                     params["vaultAddress"] = self.user_info["wallet_address"]
+
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
-                    self.cca.set_margin_mode("cross", symbol=symbol, params=params)
+                    self.cca.set_margin_mode(margin_mode, symbol=symbol, params=params)
                 )
             except Exception as e:
-                logging.error(f"{symbol}: error setting cross mode and leverage {e}")
+                logging.error(f"{symbol}: error setting margin mode and leverage {e}")
         for symbol in symbols:
             res = None
             to_print = ""
+            margin_mode = self._get_margin_mode_for_symbol(symbol)
             try:
                 res = await coros_to_call_margin_mode[symbol]
-                to_print += f"margin={format_exchange_config_response(res)}"
+                to_print += f"margin={format_exchange_config_response(res)} ({margin_mode})"
             except Exception as e:
                 if '"code":"59107"' in str(e):
-                    to_print += "margin=ok (unchanged)"
+                    to_print += f"margin=ok (unchanged, {margin_mode})"
                 else:
-                    logging.error(f"{symbol} error setting cross mode {e}")
+                    logging.error(f"{symbol} error setting {margin_mode} mode {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 

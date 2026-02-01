@@ -32,6 +32,7 @@ To customize behavior for a new exchange:
 """
 
 import asyncio
+import math
 import time
 import traceback
 
@@ -474,8 +475,107 @@ class CCXTBot(Passivbot):
         """
         return self.cca.has.get("setMarginMode", False)
 
+    def _requires_isolated_margin(self, symbol: str) -> bool:
+        """Check if a symbol requires isolated margin mode.
+
+        Override in subclasses to detect exchange-specific isolated-only markets.
+        Examples: HIP-3 stock perps on Hyperliquid, certain leveraged tokens.
+
+        Args:
+            symbol: CCXT-style symbol
+
+        Returns:
+            True if this symbol requires isolated margin mode
+        """
+        # Default: check market info for common isolated-only flags
+        market = self.markets_dict.get(symbol, {})
+        info = market.get("info", {})
+
+        # Check common flags across exchanges
+        if info.get("onlyIsolated", False):
+            return True
+        if info.get("marginMode") == "isolated":
+            return True
+        if info.get("isolatedOnly", False):
+            return True
+
+        return False
+
+    def _get_margin_mode_for_symbol(self, symbol: str) -> str:
+        """Get the appropriate margin mode for a symbol.
+
+        Args:
+            symbol: CCXT-style symbol
+
+        Returns:
+            "isolated" or "cross"
+        """
+        if self._requires_isolated_margin(symbol):
+            return "isolated"
+        return "cross"
+
+    def _calc_min_isolated_leverage(self) -> int:
+        """Calculate minimum leverage required for isolated margin positions.
+
+        For isolated margin, margin_required = exposure / leverage.
+        To ensure margin requirements never exceed balance:
+            margin_required <= balance
+            (TWEL * balance) / leverage <= balance
+            leverage >= TWEL
+
+        Returns:
+            Minimum leverage (ceiling of max TWEL across both sides)
+        """
+        long_twel = float(self.bot_value("long", "total_wallet_exposure_limit") or 0.0)
+        short_twel = float(self.bot_value("short", "total_wallet_exposure_limit") or 0.0)
+        max_twel = max(long_twel, short_twel)
+
+        if max_twel <= 0:
+            return 1
+
+        # Ceiling ensures we always have enough margin
+        return max(1, math.ceil(max_twel))
+
+    def _calc_leverage_for_symbol(self, symbol: str) -> int:
+        """Calculate the appropriate leverage for a symbol.
+
+        For isolated margin symbols, ensures leverage is high enough to meet
+        margin requirements given the configured TWEL.
+
+        Args:
+            symbol: CCXT-style symbol
+
+        Returns:
+            Leverage to use (capped by max_leverage for the symbol)
+        """
+        configured = int(self.config_get(["live", "leverage"], symbol=symbol))
+        max_lev = self.max_leverage.get(symbol, configured)
+
+        if self._requires_isolated_margin(symbol):
+            min_lev = self._calc_min_isolated_leverage()
+            leverage = max(configured, min_lev)
+
+            if min_lev > max_lev:
+                logging.warning(
+                    f"{symbol}: TWEL requires {min_lev}x leverage for isolated margin, "
+                    f"but max is {max_lev}x. Risk of insufficient margin errors."
+                )
+
+            leverage = min(leverage, max_lev)
+            if leverage != configured:
+                logging.info(
+                    f"{symbol}: isolated margin requires min {min_lev}x leverage "
+                    f"(configured: {configured}x, using: {leverage}x)"
+                )
+            return leverage
+
+        return min(configured, max_lev)
+
     async def update_exchange_config_by_symbols(self, symbols: list):
         """Set leverage and margin mode for each symbol.
+
+        For isolated margin symbols, leverage is automatically adjusted to ensure
+        margin requirements can be met given the configured TWEL.
 
         Args:
             symbols: List of symbols to configure.
@@ -487,7 +587,7 @@ class CCXTBot(Passivbot):
 
         for symbol in symbols:
             if can_set_leverage:
-                leverage = int(self.config_get(["live", "leverage"], symbol=symbol))
+                leverage = self._calc_leverage_for_symbol(symbol)
                 logging.debug(f"{self.exchange}: setting leverage for {symbol} to {leverage}x")
                 t0 = time.time()
                 await self.cca.set_leverage(leverage, symbol=symbol)
@@ -496,12 +596,13 @@ class CCXTBot(Passivbot):
                 logging.info(f"{symbol}: set leverage to {leverage}x")
 
             if self._should_set_margin_mode(symbol):
-                logging.debug(f"{self.exchange}: setting margin mode for {symbol} to cross")
+                margin_mode = self._get_margin_mode_for_symbol(symbol)
+                logging.debug(f"{self.exchange}: setting margin mode for {symbol} to {margin_mode}")
                 t0 = time.time()
-                await self.cca.set_margin_mode("cross", symbol=symbol)
+                await self.cca.set_margin_mode(margin_mode, symbol=symbol)
                 elapsed_ms = (time.time() - t0) * 1000
                 logging.debug(f"{self.exchange}: set_margin_mode completed in {elapsed_ms:.1f}ms")
-                logging.info(f"{symbol}: set cross margin mode")
+                logging.info(f"{symbol}: set {margin_mode} margin mode")
 
     def set_market_specific_settings(self):
         """Extract market-specific settings from CCXT market info.

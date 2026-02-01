@@ -2795,7 +2795,7 @@ class CandlestickManager:
             exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
         except Exception:
             exid = ""
-        return exid in {"binanceusdm", "bybit", "bitget", "kucoinfutures"}
+        return exid in {"binanceusdm", "bybit", "bitget", "kucoinfutures", "hyperliquid"}
 
     @staticmethod
     def _archive_symbol_code(symbol: str) -> str:
@@ -2824,7 +2824,7 @@ class CandlestickManager:
             exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
         except Exception:
             exid = ""
-        if exid not in {"binanceusdm", "bybit", "bitget", "kucoinfutures"}:
+        if exid not in {"binanceusdm", "bybit", "bitget", "kucoinfutures", "hyperliquid"}:
             return None
 
         symbol_code = self._archive_symbol_code(symbol)
@@ -2864,6 +2864,9 @@ class CandlestickManager:
                 f"{symbol_code}/1m/{symbol_code}-1m-{day_key}.zip"
             )
             return await self._archive_fetch_kucoin_zip(url, day_key)
+
+        if exid == "hyperliquid":
+            return await self._archive_fetch_hyperliquid(symbol, day_key)
 
         return None
 
@@ -3119,6 +3122,172 @@ class CandlestickManager:
         if ohlcvs.empty:
             return None
         return self._ohlcv_df_to_day_arr(ohlcvs, day_key)
+
+    async def _archive_fetch_hyperliquid(self, symbol: str, day_key: str) -> Optional[np.ndarray]:
+        """Fetch Hyperliquid archive data for backtesting.
+
+        Data sources tried in order:
+        1. Local pre-processed cache (caches/ohlcv/hyperliquid/{coin}/{day_key}.parquet)
+        2. For stock perps: TradFi API (if credentials available in api-keys.json)
+
+        For Hyperliquid's S3 raw trade data, users can pre-process it using:
+            python -m src.tools.hyperliquid_s3_fetcher --start YYYY-MM-DD --end YYYY-MM-DD
+            python -m src.tools.trades_to_ohlcv --input caches/hyperliquid_trades --output caches/ohlcv/hyperliquid
+
+        Args:
+            symbol: CCXT-style symbol (e.g., "BTC/USDC:USDC" or "xyz:TSLA/USDC:USDC")
+            day_key: Date string (YYYY-MM-DD)
+
+        Returns:
+            CANDLE_DTYPE array with 1440 candles, or None if not available
+        """
+        import pandas as pd
+        from pathlib import Path
+
+        # Derive coin name from symbol for cache path
+        base = symbol.split("/")[0] if "/" in symbol else symbol
+        # Handle xyz: prefix in path (replace : with _ for filesystem)
+        safe_coin = base.replace(":", "_")
+
+        # 1. Check local pre-processed cache first
+        cache_path = Path("caches/ohlcv/hyperliquid") / safe_coin / f"{day_key}.parquet"
+
+        if cache_path.exists():
+            try:
+                import pyarrow.parquet as pq
+
+                table = pq.read_table(cache_path)
+                df = table.to_pandas()
+
+                # Rename columns to match expected format
+                col_map = {"ts": "timestamp", "o": "open", "h": "high", "l": "low", "c": "close", "bv": "volume"}
+                df = df.rename(columns=col_map)
+
+                self._log("debug", "hyperliquid_archive_hit", symbol=symbol, day_key=day_key, path=str(cache_path))
+                return self._ohlcv_df_to_day_arr(df, day_key)
+            except Exception as e:
+                self._log("debug", "hyperliquid_archive_error", symbol=symbol, day_key=day_key, error=str(e))
+
+        # 2. For stock perps, try TradFi data fetch
+        try:
+            from tradfi_data import is_stock_ticker, hip3_to_tradfi_symbol
+        except ImportError:
+            self._log("debug", "hyperliquid_archive_miss", symbol=symbol, day_key=day_key)
+            return None
+
+        if is_stock_ticker(base):
+            arr = await self._fetch_tradfi_day(base, day_key, cache_path)
+            if arr is not None and arr.size > 0:
+                return arr
+
+        self._log("debug", "hyperliquid_archive_miss", symbol=symbol, day_key=day_key)
+        return None
+
+    async def _fetch_tradfi_day(
+        self, coin: str, day_key: str, cache_path: "Path"
+    ) -> Optional[np.ndarray]:
+        """Fetch stock data from TradFi API and cache it.
+
+        Args:
+            coin: Stock ticker (e.g., "TSLA", "xyz:TSLA")
+            day_key: Date string (YYYY-MM-DD)
+            cache_path: Path to save cached data
+
+        Returns:
+            CANDLE_DTYPE array or None
+        """
+        from pathlib import Path
+
+        try:
+            from tradfi_data import (
+                get_provider,
+                hip3_to_tradfi_symbol,
+                TradFiDataFetcher,
+            )
+        except ImportError:
+            return None
+
+        # Load TradFi credentials from api-keys.json
+        # Default to yfinance (free, no API key required)
+        tradfi_config = self._load_tradfi_config()
+        if tradfi_config:
+            provider_name = tradfi_config.get("provider", "yfinance")
+            api_key = tradfi_config.get("api_key")
+            api_secret = tradfi_config.get("api_secret")  # For Alpaca
+        else:
+            # Use yfinance as free default
+            provider_name = "yfinance"
+            api_key = None
+            api_secret = None
+
+        try:
+            provider = get_provider(provider_name, api_key=api_key, api_secret=api_secret)
+            ticker = hip3_to_tradfi_symbol(coin)
+
+            self._log("info", "tradfi_fetch", ticker=ticker, day_key=day_key, provider=provider_name)
+
+            async with TradFiDataFetcher(provider) as fetcher:
+                # Construct HIP-3 symbol for the fetcher
+                hip3_symbol = f"xyz:{ticker}/USDC:USDC" if not coin.startswith("xyz:") else coin
+                arr = await fetcher.fetch_day(hip3_symbol, day_key)
+
+            if arr is not None and arr.size > 0:
+                # Cache the result for future use
+                self._save_tradfi_cache(arr, cache_path)
+                # Convert to day array format
+                import pandas as pd
+
+                df = pd.DataFrame({
+                    "timestamp": arr["ts"],
+                    "open": arr["o"],
+                    "high": arr["h"],
+                    "low": arr["l"],
+                    "close": arr["c"],
+                    "volume": arr["bv"],
+                })
+                return self._ohlcv_df_to_day_arr(df, day_key)
+
+        except Exception as e:
+            self._log("debug", "tradfi_fetch_error", coin=coin, day_key=day_key, error=str(e))
+
+        return None
+
+    def _load_tradfi_config(self) -> Optional[dict]:
+        """Load TradFi API configuration from api-keys.json."""
+        from pathlib import Path
+        import json
+
+        api_keys_path = Path("api-keys.json")
+        if not api_keys_path.exists():
+            return None
+
+        try:
+            with open(api_keys_path) as f:
+                api_keys = json.load(f)
+            return api_keys.get("tradfi")
+        except Exception:
+            return None
+
+    def _save_tradfi_cache(self, arr: np.ndarray, cache_path: "Path") -> None:
+        """Save TradFi data to local cache."""
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+            table = pa.table({
+                "ts": pa.array(arr["ts"].astype("int64")),
+                "o": pa.array(arr["o"].astype("float32")),
+                "h": pa.array(arr["h"].astype("float32")),
+                "l": pa.array(arr["l"].astype("float32")),
+                "c": pa.array(arr["c"].astype("float32")),
+                "bv": pa.array(arr["bv"].astype("float32")),
+            })
+            pq.write_table(table, cache_path, compression="zstd")
+            self._log("debug", "tradfi_cache_saved", path=str(cache_path))
+        except Exception as e:
+            self._log("debug", "tradfi_cache_save_error", error=str(e))
 
     def _ohlcv_df_to_day_arr(self, df, day_key: str) -> np.ndarray:
         """Convert a dataframe with timestamp/open/high/low/close/volume to 1m day array."""
