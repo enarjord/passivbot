@@ -275,6 +275,7 @@ payload = build_payload(time_view, coin_indices=coin_indices)  # Copy #1 inside
 - **Effective min qty/cost:** Entries must observe effective min qty; closes observe effective min cost (unless pos size < min qty, then close qty = pos size)
 - **OHLCV volume is base volume:** CandlestickManager normalizes CCXT OHLCV volume to base units. Some exchanges (e.g., GateIO swap) return quote volume from CCXT; this is converted to base on ingest.
 - **CLI tools import path:** Tools under `src/tools/` should prepend the repo `src/` to `sys.path` (e.g., `sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), \"..\")))`) so they can import project modules when run as scripts.
+- **GateIO cache cutoff reminder:** When merging `feature/data-strategy-redesign` to master, set `GATEIO_CACHE_CUTOFF_DATE` in `src/candlestick_manager.py` to the merge date (YYYY-MM-DD) and remove this reminder.
 
 ### Stateless Design
 

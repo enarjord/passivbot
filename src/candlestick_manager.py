@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 
 import warnings
 import time
+from datetime import datetime
 
 import numpy as np
 import portalocker  # type: ignore
@@ -259,6 +260,52 @@ def _sanitize_symbol(symbol: str) -> str:
     return sanitized
 
 
+def _quarantine_gateio_cache_if_stale(cache_base: str, cutoff_date: str) -> None:
+    """
+    Move gateio cache to a timestamped backup if any shard predates cutoff_date.
+    """
+    try:
+        cutoff = datetime.strptime(cutoff_date, "%Y-%m-%d").date()
+    except Exception:
+        logging.warning("Invalid GATEIO_CACHE_CUTOFF_DATE=%r; skipping gateio cache check", cutoff_date)
+        return
+
+    gateio_root = os.path.join(cache_base, "gateio")
+    if not os.path.isdir(gateio_root):
+        return
+
+    tf_root = os.path.join(gateio_root, "1m")
+    if not os.path.isdir(tf_root):
+        return
+
+    for sym in os.listdir(tf_root):
+        sym_dir = os.path.join(tf_root, sym)
+        if not os.path.isdir(sym_dir):
+            continue
+        for fname in os.listdir(sym_dir):
+            if not fname.endswith(".npy"):
+                continue
+            try:
+                day = datetime.strptime(fname[:10], "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if day < cutoff:
+                stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+                backup = f"{gateio_root}_backup_{stamp}"
+                logging.warning(
+                    "GateIO cache has shards before %s; moving %s -> %s. "
+                    "Delete backup after confirming volumes are correct.",
+                    cutoff_date,
+                    gateio_root,
+                    backup,
+                )
+                try:
+                    os.rename(gateio_root, backup)
+                except Exception as exc:
+                    logging.error("Failed to move gateio cache to backup: %s", exc)
+                return
+
+
 # Parse timeframe string like '1m','5m','1h','1d' to milliseconds.
 # Falls back to ONE_MIN_MS on invalid input. Seconds are rounded down to minutes.
 def _tf_to_ms(s: Optional[str]) -> int:
@@ -425,17 +472,24 @@ class CandlestickManager:
         # and merge any duplicate symbol directories from inconsistent sanitization
         ohlcv_cache_base = os.path.join(self.cache_dir, "ohlcv")
         os.makedirs(ohlcv_cache_base, exist_ok=True)
+        # TODO: Set GATEIO_CACHE_CUTOFF_DATE on merge to master and remove this reminder in CLAUDE.md.
+        GATEIO_CACHE_CUTOFF_DATE = None  # e.g. "2026-02-15"
+        if self.exchange_name == "gateio" and GATEIO_CACHE_CUTOFF_DATE:
+            _quarantine_gateio_cache_if_stale(
+                ohlcv_cache_base,
+                GATEIO_CACHE_CUTOFF_DATE,
+            )
         migration_lock = os.path.join(ohlcv_cache_base, ".migration.lock")
         migration_done = os.path.join(ohlcv_cache_base, ".migration_done")
         try:
             with portalocker.Lock(migration_lock, timeout=0.1, fail_when_locked=True):
                 if not os.path.exists(migration_done):
                     standardize_cache_directories(ohlcv_cache_base)
-        if self.exchange_name != "gateio":
-            migrate_legacy_data_on_init(
-                exchange=self.exchange_name,
-                cache_base=ohlcv_cache_base,
-            )
+                    if self.exchange_name != "gateio":
+                        migrate_legacy_data_on_init(
+                            exchange=self.exchange_name,
+                            cache_base=ohlcv_cache_base,
+                        )
                     merge_duplicate_symbol_directories(ohlcv_cache_base)
                     try:
                         with open(migration_done, "w", encoding="utf-8") as handle:
