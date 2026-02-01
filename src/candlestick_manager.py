@@ -431,11 +431,11 @@ class CandlestickManager:
             with portalocker.Lock(migration_lock, timeout=0.1, fail_when_locked=True):
                 if not os.path.exists(migration_done):
                     standardize_cache_directories(ohlcv_cache_base)
-        migrate_legacy_data_on_init(
-            exchange=self.exchange_name,
-            cache_base=ohlcv_cache_base,
-            audit_gateio_volume=True,
-        )
+        if self.exchange_name != "gateio":
+            migrate_legacy_data_on_init(
+                exchange=self.exchange_name,
+                cache_base=ohlcv_cache_base,
+            )
                     merge_duplicate_symbol_directories(ohlcv_cache_base)
                     try:
                         with open(migration_done, "w", encoding="utf-8") as handle:

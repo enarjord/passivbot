@@ -23,7 +23,6 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 import sys
 
-VOLUME_AUDIT_REFERENCE_EXCHANGES = ("binance", "bybit")
 
 # Windows compatibility check (same logic as candlestick_manager.py)
 # See: https://github.com/enarjord/passivbot/issues/547
@@ -310,163 +309,6 @@ def merge_duplicate_symbol_directories(
                     merged_count += 1
 
     return merged_count
-
-
-def _load_day_array(path: Path) -> Optional[np.ndarray]:
-    try:
-        return np.load(path)
-    except Exception:
-        return None
-
-
-def _summarize_day_volume(arr: np.ndarray) -> Tuple[float, float]:
-    """
-    Return (base_volume_sum, quote_to_base_sum) for a day array.
-    """
-    try:
-        vol = arr["bv"].astype(np.float64, copy=False)
-        close = arr["c"].astype(np.float64, copy=False)
-    except Exception:
-        return 0.0, 0.0
-    base_sum = float(np.nansum(vol))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        base_from_quote = np.where(close > 0, vol / close, np.nan)
-    quote_to_base_sum = float(np.nansum(base_from_quote[np.isfinite(base_from_quote)]))
-    return base_sum, quote_to_base_sum
-
-
-def _choose_volume_mode(
-    base_sum: float,
-    quote_to_base_sum: float,
-    ref_sum: Optional[float],
-    *,
-    ratio_threshold: float = 3.0,
-) -> Optional[str]:
-    """
-    Decide whether a day's volume appears to be base or quote.
-
-    Returns:
-        "base", "quote", or None if uncertain.
-    """
-    if ref_sum is None or ref_sum <= 0.0:
-        return None
-    if base_sum <= 0.0 and quote_to_base_sum <= 0.0:
-        return None
-    # Compare log-distance to reference to reduce scale bias.
-    def log_dist(a: float, b: float) -> float:
-        if a <= 0 or b <= 0:
-            return float("inf")
-        return abs(np.log10(a / b))
-
-    base_dist = log_dist(base_sum, ref_sum)
-    quote_dist = log_dist(quote_to_base_sum, ref_sum)
-
-    if base_dist < quote_dist:
-        # Only accept if reasonably close to reference.
-        if base_sum / ref_sum < ratio_threshold and ref_sum / base_sum < ratio_threshold:
-            return "base"
-        return None
-    if quote_dist < base_dist:
-        if quote_to_base_sum / ref_sum < ratio_threshold and ref_sum / quote_to_base_sum < ratio_threshold:
-            return "quote"
-        return None
-    return None
-
-
-def audit_and_fix_gateio_volume(
-    cache_base: str = "caches/ohlcv",
-    *,
-    dry_run: bool = True,
-    reference_exchanges: Tuple[str, ...] = VOLUME_AUDIT_REFERENCE_EXCHANGES,
-    max_files: Optional[int] = None,
-    log_interval: int = 200,
-) -> Dict[str, int]:
-    """
-    Audit GateIO cache for quote/base volume mix and optionally fix to base volume.
-
-    Uses reference exchanges (binance/bybit by default) to infer whether a day
-    file is base or quote volume. Only fixes when inference is confident.
-    """
-    stats = {
-        "scanned": 0,
-        "converted": 0,
-        "already_base": 0,
-        "skipped_no_reference": 0,
-        "skipped_uncertain": 0,
-        "errors": 0,
-    }
-    gateio_root = Path(cache_base) / "gateio" / "1m"
-    if not gateio_root.exists():
-        return stats
-
-    files_processed = 0
-    for sym_dir in sorted(gateio_root.iterdir()):
-        if not sym_dir.is_dir():
-            continue
-        # Try to find a reference exchange that has the same symbol directory.
-        ref_dirs = []
-        for ex in reference_exchanges:
-            ref_path = Path(cache_base) / ex / "1m" / sym_dir.name
-            if ref_path.exists():
-                ref_dirs.append(ref_path)
-        for day_path in sorted(sym_dir.glob("*.npy")):
-            if max_files is not None and files_processed >= max_files:
-                return stats
-            files_processed += 1
-            stats["scanned"] += 1
-            arr = _load_day_array(day_path)
-            if arr is None:
-                stats["errors"] += 1
-                continue
-            base_sum, quote_to_base_sum = _summarize_day_volume(arr)
-            ref_sum = None
-            for ref_dir in ref_dirs:
-                ref_day = ref_dir / day_path.name
-                if ref_day.exists():
-                    ref_arr = _load_day_array(ref_day)
-                    if ref_arr is None:
-                        continue
-                    ref_sum, _ = _summarize_day_volume(ref_arr)
-                    if ref_sum > 0:
-                        break
-            mode = _choose_volume_mode(base_sum, quote_to_base_sum, ref_sum)
-            if mode is None:
-                if ref_sum is None:
-                    stats["skipped_no_reference"] += 1
-                else:
-                    stats["skipped_uncertain"] += 1
-                continue
-            if mode == "base":
-                stats["already_base"] += 1
-                continue
-
-            # mode == "quote": convert to base
-            if dry_run:
-                stats["converted"] += 1
-            else:
-                try:
-                    close = arr["c"].astype(np.float64, copy=False)
-                    with np.errstate(divide="ignore", invalid="ignore"):
-                        arr["bv"] = np.where(close > 0, arr["bv"] / close, arr["bv"])
-                    tmp_path = day_path.with_suffix(day_path.suffix + ".tmp")
-                    with open(tmp_path, "wb") as handle:
-                        np.save(handle, arr)
-                    tmp_path.replace(day_path)
-                    stats["converted"] += 1
-                except Exception:
-                    stats["errors"] += 1
-            if log_interval and stats["scanned"] % log_interval == 0:
-                logging.info(
-                    "gateio volume audit progress | scanned=%d converted=%d base=%d no_ref=%d uncertain=%d errors=%d",
-                    stats["scanned"],
-                    stats["converted"],
-                    stats["already_base"],
-                    stats["skipped_no_reference"],
-                    stats["skipped_uncertain"],
-                    stats["errors"],
-                )
-
-    return stats
 
 
 def normalize_ccxt_volume_to_base(
@@ -839,15 +681,7 @@ def migrate_legacy_data_on_init(
         )
 
     if audit_gateio_volume and exchange == "gateio":
-        stats = audit_and_fix_gateio_volume(cache_base=cache_base, dry_run=True)
-        if stats["scanned"] > 0:
-            logging.info(
-                "[boot] gateio volume audit (dry-run) | scanned=%d converted=%d base=%d no_ref=%d uncertain=%d errors=%d",
-                stats["scanned"],
-                stats["converted"],
-                stats["already_base"],
-                stats["skipped_no_reference"],
-                stats["skipped_uncertain"],
-                stats["errors"],
-            )
+        logging.info(
+            "[boot] skipping gateio legacy migration audit; gateio cache should be refreshed from remote data"
+        )
     return migrated

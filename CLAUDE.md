@@ -273,7 +273,7 @@ payload = build_payload(time_view, coin_indices=coin_indices)  # Copy #1 inside
 - **Signed quantities:** `buy qty` and `long pos_size` are positive; `sell qty` and `short pos_size` are negative (exception: final exchange payload may need `abs(qty)`)
 - **EMA spans are floats:** Do not round derived spans (e.g., `span2 = sqrt(span0 * span1)`)
 - **Effective min qty/cost:** Entries must observe effective min qty; closes observe effective min cost (unless pos size < min qty, then close qty = pos size)
-- **OHLCV volume is base volume:** CandlestickManager normalizes CCXT OHLCV volume to base units. Some exchanges (e.g., GateIO swap) return quote volume from CCXT; this is converted to base on ingest. If GateIO cache has mixed base/quote data, use `src/tools/audit_ohlcv_volume.py` (dry-run by default) to audit and optionally fix.
+- **OHLCV volume is base volume:** CandlestickManager normalizes CCXT OHLCV volume to base units. Some exchanges (e.g., GateIO swap) return quote volume from CCXT; this is converted to base on ingest.
 - **CLI tools import path:** Tools under `src/tools/` should prepend the repo `src/` to `sys.path` (e.g., `sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), \"..\")))`) so they can import project modules when run as scripts.
 
 ### Stateless Design
