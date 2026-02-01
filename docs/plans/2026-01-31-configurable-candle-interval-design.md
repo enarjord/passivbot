@@ -167,3 +167,15 @@ Update `python.rs` to accept `candle_interval_minutes` parameter and pass to `Ba
 2. Run backtest with `candle_interval_minutes: 5` — verify ~5x speedup, reasonable results
 3. Run optimizer with `candle_interval_minutes: 5` — verify full pipeline works
 4. Compare a few optimized configs between 1m and 5m validation runs to sanity-check correlation
+
+## Implementation Notes
+
+Completed 2026-02-01.
+
+Key files changed:
+- `passivbot-rust/src/types.rs` - Added `candle_interval_minutes` field to `BacktestParams`
+- `passivbot-rust/src/python.rs` - Parse `candle_interval_minutes` from Python dict (default 1)
+- `passivbot-rust/src/backtest.rs` - Store `interval_ms`, replace 10 hardcoded `60_000` values, adjust EMA alphas
+- `src/backtest.py` - Added `aggregate_candles()` function, integrated into `build_backtest_payload()`
+- `configs/template.json` - Document new `candle_interval_minutes` config field
+- `tests/test_candle_interval.py` - Unit tests for candle aggregation

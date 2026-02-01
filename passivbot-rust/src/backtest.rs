@@ -261,6 +261,7 @@ pub struct Backtest<'a> {
     hlcvs: ArrayView3<'a, f64>,
     btc_usd_prices: ArrayView1<'a, f64>, // Change to ArrayView1 (1D view)
     active_coin_indices: Vec<usize>,
+    interval_ms: u64,
     bot_params_master: BotParamsPair,
     bot_params: Vec<BotParamsPair>,
     bot_params_original: Vec<BotParamsPair>,
@@ -732,7 +733,7 @@ impl<'a> Backtest<'a> {
             return;
         };
 
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let record = DebugBalanceTraceRecord {
             step: k,
             timestamp_ms,
@@ -1383,8 +1384,9 @@ impl<'a> Backtest<'a> {
             short: bot_params_master.short.n_positions,
         };
 
-        // Calculate EMA alphas for each coin
-        let ema_alphas: Vec<EmaAlphas> = bot_params.iter().map(|bp| calc_ema_alphas(bp)).collect();
+        // Calculate EMA alphas for each coin, adjusted for candle interval
+        let interval = backtest_params.candle_interval_minutes;
+        let ema_alphas: Vec<EmaAlphas> = bot_params.iter().map(|bp| calc_ema_alphas(bp, interval)).collect();
         let mut warmup_bars = backtest_params.global_warmup_bars;
         if warmup_bars == 0 {
             warmup_bars = calc_warmup_bars(&bot_params);
@@ -1406,6 +1408,7 @@ impl<'a> Backtest<'a> {
             hlcvs,
             btc_usd_prices,
             active_coin_indices,
+            interval_ms: backtest_params.candle_interval_minutes * 60_000,
             bot_params_master: bot_params_master.clone(),
             bot_params: bot_params.clone(),
             bot_params_original,
@@ -1546,7 +1549,7 @@ impl<'a> Backtest<'a> {
             self.update_emas(k);
             self.update_rounded_balance(k);
             self.update_trailing_prices(k);
-            let current_ts = self.first_timestamp_ms + (k as u64) * 60_000u64;
+            let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;
             if k > warmup_bars && current_ts >= guard_timestamp_ms {
                 if self.update_n_positions_and_wallet_exposure_limits(k) {
                     self.equity_tracking_active = true;
@@ -1830,7 +1833,7 @@ impl<'a> Backtest<'a> {
         }
 
         // Finally push the results into the Equities struct
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         self.equities.usd_total_equity.push(equity_usd);
         self.equities.btc_total_equity.push(equity_btc);
         self.equities.timestamps_ms.push(timestamp_ms);
@@ -2010,7 +2013,7 @@ impl<'a> Backtest<'a> {
         } else {
             self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         }
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -2093,7 +2096,7 @@ impl<'a> Backtest<'a> {
         } else {
             self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         }
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -2164,7 +2167,7 @@ impl<'a> Backtest<'a> {
         );
         self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -2247,7 +2250,7 @@ impl<'a> Backtest<'a> {
         let (twe_long, twe_short, twe_net) = self.compute_twe_components();
         self.fills.push(Fill {
             index: k,
-            timestamp_ms: self.first_timestamp_ms + (k as u64) * 60_000,
+            timestamp_ms: self.first_timestamp_ms + (k as u64) * self.interval_ms,
             coin: self.backtest_params.coins[idx].clone(),
             pnl: 0.0,
             fee_paid,
@@ -2548,13 +2551,13 @@ impl<'a> Backtest<'a> {
     #[inline]
     fn update_emas(&mut self, k: usize) {
         // Compute/refresh latest 1h bucket on whole-hour boundaries
-        let current_ts = self.first_timestamp_ms + (k as u64) * 60_000u64;
+        let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let hour_boundary = (current_ts / 3_600_000u64) * 3_600_000u64;
         if hour_boundary > self.last_hour_boundary_ms {
             // window is from max(first_ts, last_boundary) to previous minute
             let window_start_ms = self.first_timestamp_ms.max(self.last_hour_boundary_ms);
-            if current_ts > window_start_ms + 60_000 {
-                let start_idx = ((window_start_ms - self.first_timestamp_ms) / 60_000u64) as usize;
+            if current_ts > window_start_ms + self.interval_ms {
+                let start_idx = ((window_start_ms - self.first_timestamp_ms) / self.interval_ms) as usize;
                 let end_idx = if k == 0 { 0usize } else { k - 1 };
                 if end_idx >= start_idx {
                     for i in 0..self.n_coins {
@@ -2738,7 +2741,10 @@ impl<'a> Backtest<'a> {
     }
 }
 
-fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
+fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas {
+    let interval_f = interval as f64;
+
+    // EMA spans are in minutes. Divide by interval to get number of candle periods.
     let mut ema_spans_long = [
         bot_params_pair.long.ema_span_0,
         bot_params_pair.long.ema_span_1,
@@ -2753,9 +2759,9 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
     ];
     ema_spans_short.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-    let ema_alphas_long = ema_spans_long.map(|x| 2.0 / (x + 1.0));
-
-    let ema_alphas_short = ema_spans_short.map(|x| 2.0 / (x + 1.0));
+    // Price EMAs - spans are in minutes, convert to candle periods
+    let ema_alphas_long = ema_spans_long.map(|x| 2.0 / (x / interval_f + 1.0));
+    let ema_alphas_short = ema_spans_short.map(|x| 2.0 / (x / interval_f + 1.0));
 
     EmaAlphas {
         long: Alphas {
@@ -2765,11 +2771,13 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
             alphas: ema_alphas_short,
         },
         // EMA spans for the volume/log range filters (alphas precomputed from spans)
-        vol_alpha_long: 2.0 / (bot_params_pair.long.filter_volume_ema_span as f64 + 1.0),
-        vol_alpha_short: 2.0 / (bot_params_pair.short.filter_volume_ema_span as f64 + 1.0),
-        log_range_alpha_long: 2.0 / (bot_params_pair.long.filter_volatility_ema_span as f64 + 1.0),
+        vol_alpha_long: 2.0 / (bot_params_pair.long.filter_volume_ema_span as f64 / interval_f + 1.0),
+        vol_alpha_short: 2.0 / (bot_params_pair.short.filter_volume_ema_span as f64 / interval_f + 1.0),
+        log_range_alpha_long: 2.0 / (bot_params_pair.long.filter_volatility_ema_span as f64 / interval_f + 1.0),
         log_range_alpha_short: 2.0
-            / (bot_params_pair.short.filter_volatility_ema_span as f64 + 1.0),
+            / (bot_params_pair.short.filter_volatility_ema_span as f64 / interval_f + 1.0),
+        // Note: entry_volatility spans are in HOURS and computed from hourly buckets,
+        // so they do NOT need interval adjustment (hourly buckets are calendar-based)
         entry_volatility_logrange_ema_1h_alpha_long: {
             let span = bot_params_pair.long.entry_volatility_ema_span_hours;
             if span > 0.0 {
@@ -2824,6 +2832,7 @@ mod tests {
             metrics_only: true,
             filter_by_min_effective_cost: false,
             hedge_mode: true,
+            candle_interval_minutes: 1,
         };
 
         let mut bt = Backtest::new(
