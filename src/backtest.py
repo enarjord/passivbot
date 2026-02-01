@@ -248,14 +248,15 @@ def _build_hlcvs_bundle(
 
     rss_before = _rss_mb()
     logger = logging.getLogger(__name__)
-    logger.trace(
-        "Build bundle | pid=%s hlcvs_shape=%s coins=%d subset=%s rss_mb=%s",
-        os.getpid(),
-        getattr(hlcvs, "shape", None),
-        len(coins_order),
-        subset_positions is not None,
-        f"{rss_before:.1f}" if rss_before is not None else "na",
-    )
+    if hasattr(logger, "trace"):
+        logger.trace(
+            "Build bundle | pid=%s hlcvs_shape=%s coins=%d subset=%s rss_mb=%s",
+            os.getpid(),
+            getattr(hlcvs, "shape", None),
+            len(coins_order),
+            subset_positions is not None,
+            f"{rss_before:.1f}" if rss_before is not None else "na",
+        )
     if subset_positions is not None:
         hlcvs_view = hlcvs[:, subset_positions, :]
         hlcvs_arr = np.ascontiguousarray(hlcvs_view, dtype=np.float64)
@@ -292,11 +293,12 @@ def _build_hlcvs_bundle(
         "coins": coin_meta_entries,
     }
     rss_after = _rss_mb()
-    logger.trace(
-        "Build bundle done | pid=%s rss_mb=%s",
-        os.getpid(),
-        f"{rss_after:.1f}" if rss_after is not None else "na",
-    )
+    if hasattr(logger, "trace"):
+        logger.trace(
+            "Build bundle done | pid=%s rss_mb=%s",
+            os.getpid(),
+            f"{rss_after:.1f}" if rss_after is not None else "na",
+        )
     return pbr.HlcvsBundle(hlcvs_arr, btc_arr, timestamps_arr, bundle_meta)
 
 

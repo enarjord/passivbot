@@ -1002,7 +1002,7 @@ class SuiteEvaluator:
         master_spec = ctx.master_hlcvs_specs[exchange]
         master_array = self._ensure_master_attachment(master_spec, master_spec.name, "hlcvs")
 
-        time_slice = ctx.time_slice
+        time_slice = ctx.time_slice.get(exchange) if ctx.time_slice else None
         coin_indices = ctx.coin_slice_indices.get(exchange) if ctx.coin_slice_indices else None
 
         # Time slicing creates a VIEW (no copy, O(1) memory)

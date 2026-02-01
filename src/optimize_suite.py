@@ -55,7 +55,7 @@ class ScenarioEvalContext:
     # Slice metadata for lazy slicing from master dataset (memory optimization)
     master_hlcvs_specs: Optional[Dict[str, Any]] = None
     master_btc_specs: Optional[Dict[str, Any]] = None
-    time_slice: Optional[tuple] = None  # (start_idx, end_idx)
+    time_slice: Optional[Dict[str, tuple]] = None  # per-exchange (start_idx, end_idx)
     coin_slice_indices: Optional[Dict[str, List[int]]] = None  # per-exchange coin indices
 
 
@@ -332,7 +332,7 @@ async def prepare_suite_contexts(
                         overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
                         master_hlcvs_specs={dataset.exchange: dataset.hlcvs_spec},
                         master_btc_specs={dataset.exchange: dataset.btc_spec},
-                        time_slice=(start_idx, end_idx),
+                        time_slice={dataset.exchange: (start_idx, end_idx)},
                         coin_slice_indices={dataset.exchange: coin_indices},
                     )
                 )
@@ -460,7 +460,7 @@ async def prepare_suite_contexts(
         master_hlcvs_specs = {}
         master_btc_specs = {}
         coin_slice_indices = {}
-        time_slice = None
+        time_slice = {}
         for exchange_key, dataset in datasets.items():
             if exchange_key == "combined":
                 continue
@@ -474,8 +474,7 @@ async def prepare_suite_contexts(
                 scenario_config["backtest"]["coins"][exchange_key],
                 scenario.label,
             )
-            if time_slice is None:
-                time_slice = (start_idx, end_idx)
+            time_slice[exchange_key] = (start_idx, end_idx)
             master_hlcvs_specs[exchange_key] = dataset.hlcvs_spec
             master_btc_specs[exchange_key] = dataset.btc_spec
             coin_slice_indices[exchange_key] = coin_indices
@@ -496,7 +495,7 @@ async def prepare_suite_contexts(
                 overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
                 master_hlcvs_specs=master_hlcvs_specs or None,
                 master_btc_specs=master_btc_specs or None,
-                time_slice=time_slice,
+                time_slice=time_slice or None,
                 coin_slice_indices=coin_slice_indices or None,
             )
         )
