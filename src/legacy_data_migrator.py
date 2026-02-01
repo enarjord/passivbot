@@ -448,8 +448,9 @@ def audit_and_fix_gateio_volume(
                     close = arr["c"].astype(np.float64, copy=False)
                     with np.errstate(divide="ignore", invalid="ignore"):
                         arr["bv"] = np.where(close > 0, arr["bv"] / close, arr["bv"])
-                    tmp_path = day_path.with_suffix(".npy.tmp")
-                    np.save(tmp_path, arr)
+                    tmp_path = day_path.with_suffix(day_path.suffix + ".tmp")
+                    with open(tmp_path, "wb") as handle:
+                        np.save(handle, arr)
                     tmp_path.replace(day_path)
                     stats["converted"] += 1
                 except Exception:
