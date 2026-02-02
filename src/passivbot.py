@@ -29,7 +29,7 @@ from fill_events_manager import (
     _build_fetcher_for_bot,
     _extract_symbol_pool,
 )
-from typing import Dict, Iterable, Tuple, List, Optional, Any
+from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
 from logging_setup import configure_logging, resolve_log_level
 from utils import (
     load_markets,
@@ -326,6 +326,93 @@ def order_has_match(order, orders, tolerance_qty=0.01, tolerance_price=0.002):
         if orders_matching(order, elm, tolerance_qty, tolerance_price):
             return elm
     return False
+
+
+def compute_live_warmup_windows(
+    symbols_by_side: Dict[str, set],
+    bp_lookup: Callable[[str, str, str], float],
+    *,
+    forager_enabled: Optional[Dict[str, bool]] = None,
+    window_candles: Optional[int] = None,
+    span_buffer: float = 1.5,
+    large_span_threshold: int = 2 * 24 * 60,
+) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, bool]]:
+    """Return per-symbol warmup windows for 1m/1h candles."""
+    symbols: set = set()
+    for symset in symbols_by_side.values():
+        symbols.update(symset or set())
+
+    per_symbol_win: Dict[str, int] = {}
+    per_symbol_h1_hours: Dict[str, int] = {}
+    per_symbol_skip_historical: Dict[str, bool] = {}
+
+    if not symbols:
+        return per_symbol_win, per_symbol_h1_hours, per_symbol_skip_historical
+
+    if forager_enabled is None:
+        forager_enabled = {}
+    is_forager_long = bool(forager_enabled.get("long"))
+    is_forager_short = bool(forager_enabled.get("short"))
+
+    def _to_float(val) -> float:
+        try:
+            return float(val)
+        except Exception:
+            return 0.0
+
+    def _get_bp(pside: str, key: str, sym: str) -> float:
+        try:
+            return _to_float(bp_lookup(pside, key, sym))
+        except Exception:
+            return 0.0
+
+    if window_candles is not None:
+        win = max(1, int(window_candles))
+        h1_hours = max(1, int(math.ceil(win / 60.0)))
+        skip_historical = win <= large_span_threshold
+        for sym in sorted(symbols):
+            per_symbol_win[sym] = win
+            per_symbol_h1_hours[sym] = h1_hours
+            per_symbol_skip_historical[sym] = skip_historical
+        return per_symbol_win, per_symbol_h1_hours, per_symbol_skip_historical
+
+    for sym in sorted(symbols):
+        max_1m_span = 0.0
+        max_h1_span = 0.0
+        for pside in ("long", "short"):
+            if sym not in symbols_by_side.get(pside, set()):
+                continue
+            max_1m_span = max(
+                max_1m_span,
+                _get_bp(pside, "ema_span_0", sym),
+                _get_bp(pside, "ema_span_1", sym),
+            )
+            if (pside == "long" and is_forager_long) or (
+                pside == "short" and is_forager_short
+            ):
+                max_1m_span = max(
+                    max_1m_span,
+                    _get_bp(pside, "filter_volume_ema_span", sym),
+                    _get_bp(pside, "filter_volatility_ema_span", sym),
+                )
+            max_h1_span = max(
+                max_h1_span, _get_bp(pside, "entry_volatility_ema_span_hours", sym)
+            )
+
+        if max_1m_span > 0.0:
+            win = int(math.ceil(max_1m_span * span_buffer))
+        else:
+            win = 1
+        win = max(1, win)
+        per_symbol_win[sym] = win
+        per_symbol_skip_historical[sym] = win <= large_span_threshold
+
+        if max_h1_span > 0.0:
+            per_symbol_h1_hours[sym] = max(1, int(math.ceil(max_h1_span * span_buffer)))
+        else:
+            per_symbol_h1_hours[sym] = 0
+
+    return per_symbol_win, per_symbol_h1_hours, per_symbol_skip_historical
 
 
 class Passivbot:
@@ -1246,69 +1333,18 @@ class Passivbot:
         # Rule of thumb: fetch ~1.5x the max required span for better EMA stability.
         default_win = int(getattr(self.cm, "default_window_candles", 120))
         span_buffer = 1.5
-        is_forager_long = bool(forager_needed.get("long"))
-        is_forager_short = bool(forager_needed.get("short"))
-        per_symbol_win: Dict[str, int] = {}
-        per_symbol_h1_hours: Dict[str, int] = {}
-        per_symbol_skip_historical: Dict[str, bool] = {}
         large_span_threshold = 2 * 24 * 60  # minutes; match CandlestickManager large-span logic
 
-        def _to_float(val) -> float:
-            try:
-                return float(val)
-            except Exception:
-                return 0.0
-
-        def _get_bp(pside: str, key: str, sym: str) -> float:
-            try:
-                return _to_float(self.bp(pside, key, sym))
-            except Exception:
-                return 0.0
-        for sym in symbols:
-            if window_candles is not None:
-                win = int(max(1, int(window_candles)))
-                per_symbol_win[sym] = win
-                per_symbol_h1_hours[sym] = max(1, int(math.ceil(win / 60.0)))
-                per_symbol_skip_historical[sym] = win <= large_span_threshold
-                continue
-
-            max_1m_span = 0.0
-            max_h1_span = 0.0
-            for pside in ("long", "short"):
-                if sym not in symbols_by_side.get(pside, set()):
-                    continue
-                # 1m close EMA spans
-                max_1m_span = max(
-                    max_1m_span,
-                    _get_bp(pside, "ema_span_0", sym),
-                    _get_bp(pside, "ema_span_1", sym),
-                )
-                # 1m forager spans (volume + volatility) if forager is enabled for the side
-                if (pside == "long" and is_forager_long) or (
-                    pside == "short" and is_forager_short
-                ):
-                    max_1m_span = max(
-                        max_1m_span,
-                        _get_bp(pside, "filter_volume_ema_span", sym),
-                        _get_bp(pside, "filter_volatility_ema_span", sym),
-                    )
-                # 1h log-range span (volatility weights)
-                max_h1_span = max(
-                    max_h1_span, _get_bp(pside, "entry_volatility_ema_span_hours", sym)
-                )
-
-            if max_1m_span > 0.0:
-                win = int(math.ceil(max_1m_span * span_buffer))
-            else:
-                win = 1
-            win = max(1, win)
-            per_symbol_win[sym] = win
-            per_symbol_skip_historical[sym] = win <= large_span_threshold
-
-            if max_h1_span > 0.0:
-                per_symbol_h1_hours[sym] = max(1, int(math.ceil(max_h1_span * span_buffer)))
-            else:
-                per_symbol_h1_hours[sym] = 0
+        per_symbol_win, per_symbol_h1_hours, per_symbol_skip_historical = (
+            compute_live_warmup_windows(
+                symbols_by_side,
+                lambda pside, key, sym: self.bp(pside, key, sym),
+                forager_enabled=forager_needed,
+                window_candles=window_candles,
+                span_buffer=span_buffer,
+                large_span_threshold=large_span_threshold,
+            )
+        )
 
         sem = asyncio.Semaphore(max(1, int(concurrency)))
         completed = 0
