@@ -941,6 +941,44 @@ async def _prepare_hlcvs_combined_impl(
     # Preload markets
     await asyncio.gather(*[om.load_markets() for om in om_dict.values()])
 
+    # Normalize stock perp coins: convert plain tickers to xyz: prefixed for hyperliquid
+    def normalize_stock_perp_coin(coin: str, forced_exchange: Optional[str]) -> str:
+        """Convert plain ticker to xyz: prefix if it's a stock perp on hyperliquid."""
+        if forced_exchange != "hyperliquid":
+            return coin
+        if coin.startswith("xyz:"):
+            return coin  # Already prefixed
+        # Check if xyz:TICKER exists on hyperliquid
+        hl_om = om_dict.get("hyperliquid")
+        if hl_om and hl_om.markets:
+            xyz_coin = f"xyz:{coin}"
+            # Check if the xyz: prefixed version maps to a valid symbol
+            xyz_symbol = coin_to_symbol(xyz_coin, "hyperliquid")
+            if xyz_symbol and xyz_symbol in hl_om.markets:
+                logging.info(f"Normalizing stock perp coin: {coin} -> {xyz_coin}")
+                return xyz_coin
+        return coin
+
+    # Apply normalization to coins
+    normalized_coins = []
+    for coin in coins:
+        # Get the forced exchange for this coin (checking both with and without xyz: prefix)
+        forced_ex = forced_sources.get(coin)
+        if forced_ex is None and coin.startswith("xyz:"):
+            forced_ex = forced_sources.get(coin[4:])  # Check without prefix
+        elif forced_ex is None and not coin.startswith("xyz:"):
+            forced_ex = forced_sources.get(f"xyz:{coin}")  # Check with prefix
+        normalized_coin = normalize_stock_perp_coin(coin, forced_ex)
+        normalized_coins.append(normalized_coin)
+
+    # Deduplicate and update coins list
+    coins = sorted(set(normalized_coins))
+
+    # Update first_timestamps for normalized coins
+    for orig, norm in zip(list(first_timestamps_unified.keys()), normalized_coins):
+        if orig != norm and orig in first_timestamps_unified and norm not in first_timestamps_unified:
+            first_timestamps_unified[norm] = first_timestamps_unified[orig]
+
     progress = ProgressTracker(len(coins), "combined fetching candles")
     progress.maybe_log(force=True)
 
@@ -975,7 +1013,11 @@ async def _prepare_hlcvs_combined_impl(
                         int(minimum_coin_age_days),
                     )
 
+                # Try matching coin directly, then try base coin without xyz: prefix
                 forced_exchange = forced_sources.get(coin)
+                if forced_exchange is None and coin.startswith("xyz:"):
+                    base_coin = coin[4:]  # Remove "xyz:" prefix
+                    forced_exchange = forced_sources.get(base_coin)
                 candidate_exchanges = [forced_exchange] if forced_exchange else exchanges_to_consider
                 for ex in candidate_exchanges:
                     if ex not in om_dict:
@@ -1148,6 +1190,16 @@ async def fetch_data_for_coin_and_exchange(
     t0 = time.monotonic()
     # Calculate approximate number of days for better visibility
     days_approx = max(1, (end_ts - effective_start_ts) // (24 * 60 * 60 * 1000))
+
+    # Stock perps (xyz:*) are only available on Hyperliquid
+    if coin.startswith("xyz:") and ex != "hyperliquid":
+        logging.debug(
+            "%s candles fetch skip coin=%s reason=stock_perp_only_on_hyperliquid",
+            ex,
+            coin,
+        )
+        return None
+
     logging.info(
         "%s candles fetch start coin=%s range=%s..%s (~%d days)",
         ex,

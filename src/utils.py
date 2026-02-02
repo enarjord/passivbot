@@ -613,7 +613,13 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout
     try:
         cc.options["defaultType"] = "swap"
         if ex == "hyperliquid":
-            cc.options["fetchMarkets"]["types"] = ["swap"]
+            # Include HIP-3 stock perps from TradeXYZ
+            cc.options["fetchMarkets"] = {
+                "types": ["swap", "hip3"],
+                "hip3": {
+                    "dex": ["xyz"],  # TradeXYZ DEX for stock perps
+                },
+            }
     except Exception:
         pass
     try:
