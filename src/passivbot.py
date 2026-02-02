@@ -1231,9 +1231,13 @@ class Passivbot:
             default_warm_minutes = default_win
         is_forager = self.is_forager_mode()
         per_symbol_win: Dict[str, int] = {}
+        per_symbol_skip_historical: Dict[str, bool] = {}
+        large_span_threshold = 2 * 24 * 60  # minutes; match CandlestickManager large-span logic
         for sym in symbols:
             if window_candles is not None:
-                per_symbol_win[sym] = int(max(1, int(window_candles)))
+                win = int(max(1, int(window_candles)))
+                per_symbol_win[sym] = win
+                per_symbol_skip_historical[sym] = win <= large_span_threshold
                 continue
             warm_minutes_val = warmup_map.get(sym, default_warm_minutes)
             warm_minutes = int(math.ceil(float(warm_minutes_val)))
@@ -1257,9 +1261,13 @@ class Passivbot:
                     sn = int(round(self.bp("short", "filter_volatility_ema_span", sym)))
                 except Exception:
                     sn = default_win
-                per_symbol_win[sym] = max(1, lv, ln, sv, sn, warm_minutes)
+                win = max(1, lv, ln, sv, sn, warm_minutes)
+                per_symbol_win[sym] = win
+                per_symbol_skip_historical[sym] = win <= large_span_threshold
             else:
-                per_symbol_win[sym] = max(1, warm_minutes)
+                win = max(1, warm_minutes)
+                per_symbol_win[sym] = win
+                per_symbol_skip_historical[sym] = win <= large_span_threshold
 
         sem = asyncio.Semaphore(max(1, int(concurrency)))
         completed = 0
@@ -1283,6 +1291,7 @@ class Passivbot:
             async with sem:
                 try:
                     win = int(per_symbol_win.get(sym, default_win))
+                    skip_hist = bool(per_symbol_skip_historical.get(sym, True))
                     start_ts = int(end_final - ONE_MIN_MS * max(1, win))
                     await self.cm.get_candles(
                         sym,
@@ -1290,7 +1299,7 @@ class Passivbot:
                         end_ts=None,
                         max_age_ms=ttl_ms,
                         strict=False,
-                        skip_historical_gap_fill=True,  # Live warmup: don't waste time on old gaps
+                        skip_historical_gap_fill=skip_hist,  # allow gap fill on large warmup spans
                     )
                 except Exception:
                     pass
