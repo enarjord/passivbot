@@ -4926,6 +4926,27 @@ class Passivbot:
                             )
                     if parts:
                         logging.info("removed from ignored_coins | %s", " | ".join(parts))
+            try:
+                if not getattr(self, "_stock_perps_warning_logged", False):
+                    stock_syms = set()
+                    for syms in self.approved_coins_minus_ignored_coins.values():
+                        for sym in syms:
+                            base = sym.split("/")[0] if "/" in sym else sym
+                            if base.startswith(("xyz:", "XYZ-", "XYZ:")) or sym.startswith(
+                                ("xyz:", "XYZ-", "XYZ:")
+                            ):
+                                stock_syms.add(sym)
+                    if stock_syms:
+                        coins = sorted(
+                            {symbol_to_coin(s) or (s.split("/")[0] if "/" in s else s) for s in stock_syms}
+                        )
+                        logging.warning(
+                            "Stock perps detected in approved_coins (%s). HIP-3 stock perps support is experimental/WIP.",
+                            ",".join(coins),
+                        )
+                        self._stock_perps_warning_logged = True
+            except Exception:
+                pass
             self._log_coin_symbol_fallback_summary()
         except Exception as e:
             logging.error(f"error with refresh_approved_ignored_coins_lists {e}")

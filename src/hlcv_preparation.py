@@ -520,6 +520,8 @@ async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool
         set(symbol_to_coin(c) for c in approved["long"])
         | set(symbol_to_coin(c) for c in approved["short"])
     )
+    orig_coins = list(coins)
+    orig_coins = list(coins)
     exchange = normalize_exchange_name(exchange)
     requested_start_date = require_config_value(config, "backtest.start_date")
     requested_start_ts = int(date_to_ts(requested_start_date))
@@ -975,7 +977,7 @@ async def _prepare_hlcvs_combined_impl(
     coins = sorted(set(normalized_coins))
 
     # Update first_timestamps for normalized coins
-    for orig, norm in zip(list(first_timestamps_unified.keys()), normalized_coins):
+    for orig, norm in zip(orig_coins, normalized_coins):
         if orig != norm and orig in first_timestamps_unified and norm not in first_timestamps_unified:
             first_timestamps_unified[norm] = first_timestamps_unified[orig]
 

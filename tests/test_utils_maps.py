@@ -77,7 +77,7 @@ async def test_load_markets_fetch_and_cache_creates_maps(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_load_markets_uses_fresh_cache(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    ex = "binanceusdm"
+    ex = "binance"
 
     # Prepare a fresh cached markets file
     markets = {
@@ -107,7 +107,7 @@ async def test_load_markets_uses_fresh_cache(tmp_path, monkeypatch):
 
 def test_coin_to_symbol_in_memory_reload(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    ex = "binanceusdm"
+    ex = "binance"
     path = os.path.join("caches", ex, "coin_to_symbol_map.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
@@ -140,7 +140,7 @@ def test_coin_to_symbol_fallback_and_logging(tmp_path, monkeypatch, caplog):
 
 def test_coin_to_symbol_multiple_candidates(tmp_path, monkeypatch, caplog):
     monkeypatch.chdir(tmp_path)
-    ex = "binanceusdm"
+    ex = "binance"
     path = os.path.join("caches", ex, "coin_to_symbol_map.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     json.dump({"BTC": ["A", "B"]}, open(path, "w"))

@@ -488,7 +488,7 @@ class CCXTBot(Passivbot):
             True if this symbol requires isolated margin mode
         """
         # Default: check market info for common isolated-only flags
-        market = self.markets_dict.get(symbol, {})
+        market = getattr(self, "markets_dict", {}).get(symbol, {})
         info = market.get("info", {})
 
         # Check common flags across exchanges
@@ -549,7 +549,7 @@ class CCXTBot(Passivbot):
             Leverage to use (capped by max_leverage for the symbol)
         """
         configured = int(self.config_get(["live", "leverage"], symbol=symbol))
-        max_lev = self.max_leverage.get(symbol, configured)
+        max_lev = getattr(self, "max_leverage", {}).get(symbol, configured)
 
         if self._requires_isolated_margin(symbol):
             min_lev = self._calc_min_isolated_leverage()

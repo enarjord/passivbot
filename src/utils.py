@@ -768,9 +768,12 @@ def _build_coin_symbol_maps(markets, quote):
                         ticker = base[4:]  # Extract TSLA from xyz:TSLA
                         variants.add(ticker)
                         variants.add(f"XYZ-{ticker}")  # Also map XYZ-TSLA
+            symbol_to_coin_map[k] = coin
             for variant in variants:
+                existing = symbol_to_coin_map.get(variant)
+                if existing and existing != coin:
+                    continue
                 symbol_to_coin_map[variant] = coin
-                symbol_to_coin_map[k] = coin
                 coin_to_symbol_map[variant].add(k)
             if symbol_id := v.get("id"):
                 symbol_to_coin_map[symbol_id] = coin
