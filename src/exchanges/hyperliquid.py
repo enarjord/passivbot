@@ -273,7 +273,28 @@ class HyperliquidBot(CCXTBot):
         params = (
             {"vaultAddress": self.user_info["wallet_address"]} if self.user_info["is_vault"] else {}
         )
-        return await self.cca.cancel_order(order["id"], symbol=order["symbol"], params=params)
+        def _is_already_gone(payload) -> bool:
+            try:
+                text = str(payload)
+            except Exception:
+                text = ""
+            text_l = text.lower()
+            if "order was never placed" in text_l or "already canceled" in text_l or "already cancelled" in text_l:
+                return True
+            return False
+
+        try:
+            res = await self.cca.cancel_order(order["id"], symbol=order["symbol"], params=params)
+            # Sometimes hyperliquid returns an "ok" wrapper with an embedded error; treat as non-fatal.
+            if _is_already_gone(res):
+                logging.info("Order already canceled/filled on exchange; treating as success.")
+                return {"status": "success"}
+            return res
+        except Exception as e:
+            if _is_already_gone(e):
+                logging.info("Order already canceled/filled on exchange; treating as success.")
+                return {"status": "success"}
+            raise
 
     def did_cancel_order(self, executed, order=None) -> bool:
         if isinstance(executed, list) and len(executed) == 1:

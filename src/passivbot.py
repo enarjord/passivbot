@@ -1160,10 +1160,34 @@ class Passivbot:
 
         Logs a minimal countdown when warming >20 symbols.
         """
-        # Build symbol set: union of approved (minus ignored) across both sides
+        # Build symbol set: lazy warmup. If slots are open, warm eligible symbols for that side.
+        # If slots are full, warm only symbols with positions.
         if not hasattr(self, "approved_coins_minus_ignored_coins"):
             return
-        symbols = sorted(set().union(*self.approved_coins_minus_ignored_coins.values()))
+        symbols_by_side: Dict[str, set] = {}
+        forager_needed = {"long": False, "short": False}
+        slots_open_by_side: Dict[str, bool] = {}
+        pos_counts: Dict[str, int] = {}
+        max_counts: Dict[str, int] = {}
+        for pside in ("long", "short"):
+            try:
+                max_n = int(self.get_max_n_positions(pside))
+            except Exception:
+                max_n = 0
+            try:
+                current_n = int(self.get_current_n_positions(pside))
+            except Exception:
+                current_n = len(self.get_symbols_with_pos(pside))
+            max_counts[pside] = max_n
+            pos_counts[pside] = current_n
+            slots_open = max_n > current_n
+            slots_open_by_side[pside] = bool(slots_open)
+            forager_needed[pside] = bool(self.is_forager_mode(pside) and slots_open)
+            if slots_open:
+                symbols_by_side[pside] = set(self.get_symbols_approved_or_has_pos(pside))
+            else:
+                symbols_by_side[pside] = set(self.get_symbols_with_pos(pside))
+        symbols = sorted(set().union(*symbols_by_side.values()))
         if not symbols:
             return
 
@@ -1218,56 +1242,73 @@ class Passivbot:
         n = len(symbols)
         now = utc_ms()
         end_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
-        # Determine window per symbol. For forager mode, use max EMA spans required for
-        # volume/log-range across both sides; otherwise use provided/default window.
+        # Determine window per symbol based on actual EMA needs (lazy & frugal).
+        # Rule of thumb: fetch ~1.5x the max required span for better EMA stability.
         default_win = int(getattr(self.cm, "default_window_candles", 120))
-        warmup_map = {}
-        try:
-            warmup_map = compute_per_coin_warmup_minutes(self.config)
-        except Exception:
-            warmup_map = {}
-        default_warm_minutes = warmup_map.get("__default__", default_win)
-        if default_warm_minutes is None:
-            default_warm_minutes = default_win
-        is_forager = self.is_forager_mode()
+        span_buffer = 1.5
+        is_forager_long = bool(forager_needed.get("long"))
+        is_forager_short = bool(forager_needed.get("short"))
         per_symbol_win: Dict[str, int] = {}
+        per_symbol_h1_hours: Dict[str, int] = {}
         per_symbol_skip_historical: Dict[str, bool] = {}
         large_span_threshold = 2 * 24 * 60  # minutes; match CandlestickManager large-span logic
+
+        def _to_float(val) -> float:
+            try:
+                return float(val)
+            except Exception:
+                return 0.0
+
+        def _get_bp(pside: str, key: str, sym: str) -> float:
+            try:
+                return _to_float(self.bp(pside, key, sym))
+            except Exception:
+                return 0.0
         for sym in symbols:
             if window_candles is not None:
                 win = int(max(1, int(window_candles)))
                 per_symbol_win[sym] = win
+                per_symbol_h1_hours[sym] = max(1, int(math.ceil(win / 60.0)))
                 per_symbol_skip_historical[sym] = win <= large_span_threshold
                 continue
-            warm_minutes_val = warmup_map.get(sym, default_warm_minutes)
-            warm_minutes = int(math.ceil(float(warm_minutes_val)))
-            if warm_minutes <= 0:
-                warm_minutes = 1
-            if is_forager:
-                # Filtering uses 1m log-range EMA spans; keep notation distinct from grid log ranges.
-                try:
-                    lv = int(round(self.bp("long", "filter_volume_ema_span", sym)))
-                except Exception:
-                    lv = default_win
-                try:
-                    ln = int(round(self.bp("long", "filter_volatility_ema_span", sym)))
-                except Exception:
-                    ln = default_win
-                try:
-                    sv = int(round(self.bp("short", "filter_volume_ema_span", sym)))
-                except Exception:
-                    sv = default_win
-                try:
-                    sn = int(round(self.bp("short", "filter_volatility_ema_span", sym)))
-                except Exception:
-                    sn = default_win
-                win = max(1, lv, ln, sv, sn, warm_minutes)
-                per_symbol_win[sym] = win
-                per_symbol_skip_historical[sym] = win <= large_span_threshold
+
+            max_1m_span = 0.0
+            max_h1_span = 0.0
+            for pside in ("long", "short"):
+                if sym not in symbols_by_side.get(pside, set()):
+                    continue
+                # 1m close EMA spans
+                max_1m_span = max(
+                    max_1m_span,
+                    _get_bp(pside, "ema_span_0", sym),
+                    _get_bp(pside, "ema_span_1", sym),
+                )
+                # 1m forager spans (volume + volatility) if forager is enabled for the side
+                if (pside == "long" and is_forager_long) or (
+                    pside == "short" and is_forager_short
+                ):
+                    max_1m_span = max(
+                        max_1m_span,
+                        _get_bp(pside, "filter_volume_ema_span", sym),
+                        _get_bp(pside, "filter_volatility_ema_span", sym),
+                    )
+                # 1h log-range span (volatility weights)
+                max_h1_span = max(
+                    max_h1_span, _get_bp(pside, "entry_volatility_ema_span_hours", sym)
+                )
+
+            if max_1m_span > 0.0:
+                win = int(math.ceil(max_1m_span * span_buffer))
             else:
-                win = max(1, warm_minutes)
-                per_symbol_win[sym] = win
-                per_symbol_skip_historical[sym] = win <= large_span_threshold
+                win = 1
+            win = max(1, win)
+            per_symbol_win[sym] = win
+            per_symbol_skip_historical[sym] = win <= large_span_threshold
+
+            if max_h1_span > 0.0:
+                per_symbol_h1_hours[sym] = max(1, int(math.ceil(max_h1_span * span_buffer)))
+            else:
+                per_symbol_h1_hours[sym] = 0
 
         sem = asyncio.Semaphore(max(1, int(concurrency)))
         completed = 0
@@ -1281,6 +1322,40 @@ class Passivbot:
             logging.info(
                 f"[warmup] starting: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
             )
+            try:
+                logging.info(
+                    "[warmup] slot view | long: %d/%d open=%s forager=%s symbols=%d | short: %d/%d open=%s forager=%s symbols=%d",
+                    pos_counts.get("long", 0),
+                    max_counts.get("long", 0),
+                    "yes" if slots_open_by_side.get("long") else "no",
+                    "yes" if forager_needed.get("long") else "no",
+                    len(symbols_by_side.get("long", set())),
+                    pos_counts.get("short", 0),
+                    max_counts.get("short", 0),
+                    "yes" if slots_open_by_side.get("short") else "no",
+                    "yes" if forager_needed.get("short") else "no",
+                    len(symbols_by_side.get("short", set())),
+                )
+            except Exception:
+                pass
+            try:
+                long_syms = symbols_by_side.get("long", set())
+                short_syms = symbols_by_side.get("short", set())
+                long_wins = [per_symbol_win[s] for s in long_syms if s in per_symbol_win]
+                short_wins = [per_symbol_win[s] for s in short_syms if s in per_symbol_win]
+                long_min = min(long_wins) if long_wins else 0
+                long_max = max(long_wins) if long_wins else 0
+                short_min = min(short_wins) if short_wins else 0
+                short_max = max(short_wins) if short_wins else 0
+                logging.info(
+                    "[warmup] windows | long:[%d,%d]m short:[%d,%d]m",
+                    long_min,
+                    long_max,
+                    short_min,
+                    short_max,
+                )
+            except Exception:
+                pass
             # Enable batch mode for zero-candle synthesis warnings during warmup
             self.cm.start_synth_candle_batch()
             # Enable batch mode for candle replacement logs during warmup
@@ -1327,11 +1402,9 @@ class Passivbot:
 
         async def warm_hour(sym: str):
             async with hour_sem:
-                warm_minutes_val = warmup_map.get(sym, default_warm_minutes)
-                warm_minutes = int(math.ceil(float(warm_minutes_val)))
-                if warm_minutes <= 0:
+                warm_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
+                if warm_hours <= 0:
                     return
-                warm_hours = max(1, int(math.ceil(warm_minutes / 60.0)))
                 start_ts = int(end_final_hour - warm_hours * 60 * ONE_MIN_MS)
                 try:
                     await self.cm.get_candles(
