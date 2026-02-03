@@ -4267,16 +4267,29 @@ class CandlestickManager:
                 await self.refresh(symbol, through_ts=end_ts)
             elif max_age_ms is not None and max_age_ms > 0:
                 last_ref = self._get_last_refresh_ms(symbol)
+                last_final = 0
+                try:
+                    idx = self._ensure_symbol_index(symbol, tf="1m")
+                    last_final = int(idx.get("meta", {}).get("last_final_ts", 0) or 0)
+                except Exception:
+                    last_final = 0
                 self._log(
                     "debug",
                     "get_candles_check_refresh",
                     symbol=symbol,
                     end_ts=end_ts,
                     last_refresh_ms=last_ref,
+                    last_final_ts=last_final,
                     max_age_ms=max_age_ms,
                     now=now,
                 )
-                if last_ref == 0 or (now - last_ref) > int(max_age_ms):
+                need_refresh = last_ref == 0 or (now - last_ref) > int(max_age_ms)
+                if not need_refresh:
+                    # If our cached data doesn't reach the requested end_ts,
+                    # force a refresh even if the last refresh is recent.
+                    if last_final and last_final < int(end_ts):
+                        need_refresh = True
+                if need_refresh:
                     await self.refresh(symbol, through_ts=end_ts)
                 else:
                     allow_fetch_present = False
