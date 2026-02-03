@@ -2312,15 +2312,13 @@ class CandlestickManager:
             missing_candles = int(sum((e - s) // step_ms + 1 for s, e in missing))
             top_parts = []
             for s, e in missing[: max(1, int(max_span_log))]:
-                top_parts.append(
-                    f\"{self._fmt_ts(int(s))} to {self._fmt_ts(int(e))}\"
-                )
-            top_str = \", \".join(top_parts)
+                top_parts.append(f"{self._fmt_ts(int(s))} to {self._fmt_ts(int(e))}")
+            top_str = ", ".join(top_parts)
             if len(missing) > max_span_log:
-                top_str = f\"{top_str} (+{len(missing) - max_span_log} more)\"
+                top_str = f"{top_str} (+{len(missing) - max_span_log} more)"
             self._log(
                 log_level,
-                \"disk_coverage_missing\",
+                "disk_coverage_missing",
                 symbol=symbol,
                 timeframe=tf_norm,
                 start_ts=s_ts,
@@ -2330,11 +2328,11 @@ class CandlestickManager:
                 top=top_str,
             )
         return {
-            \"ok\": len(missing) == 0,
-            \"missing_spans\": missing,
-            \"missing_candles\": missing_candles,
-            \"loaded_rows\": loaded_rows,
-            \"timeframe\": tf_norm,
+            "ok": len(missing) == 0,
+            "missing_spans": missing,
+            "missing_candles": missing_candles,
+            "loaded_rows": loaded_rows,
+            "timeframe": tf_norm,
         }
 
     # ----- Refresh metadata helpers -----
