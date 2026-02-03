@@ -555,6 +555,23 @@ class Passivbot:
                     "Unable to parse live.max_concurrent_api_requests=%r; ignoring",
                     max_concurrent,
                 )
+        raw_page_debug = get_optional_config_value(
+            config, "logging.candle_page_debug_symbols", None
+        )
+        page_debug_symbols = []
+        if raw_page_debug not in (None, "", []):
+            if isinstance(raw_page_debug, str):
+                raw = raw_page_debug.strip()
+                if raw:
+                    if raw == "*":
+                        page_debug_symbols = ["*"]
+                    else:
+                        raw = raw.replace(",", " ").replace(";", " ")
+                        page_debug_symbols = [s for s in raw.split() if s]
+            elif isinstance(raw_page_debug, (list, tuple, set)):
+                page_debug_symbols = [str(s) for s in raw_page_debug if s]
+            if page_debug_symbols:
+                cm_kwargs["page_debug_symbols"] = page_debug_symbols
         # Archive fetching: disabled by default for live bots (avoids timeout issues)
         # Set live.enable_archive_candle_fetch=true to enable if needed
         archive_enabled = get_optional_live_value(config, "enable_archive_candle_fetch", False)
@@ -617,6 +634,34 @@ class Passivbot:
             )
             candle_check_minutes = 0.0
         self.candle_disk_check_interval_ms = int(candle_check_minutes * 60_000)
+        raw_tail_slack_min = get_optional_config_value(
+            config, "logging.candle_disk_check_tail_slack_minutes", 1.0
+        )
+        try:
+            tail_slack_min = float(raw_tail_slack_min)
+        except Exception:
+            logging.warning(
+                "Unable to parse logging.candle_disk_check_tail_slack_minutes=%r; using 1",
+                raw_tail_slack_min,
+            )
+            tail_slack_min = 1.0
+        if tail_slack_min < 0:
+            tail_slack_min = 0.0
+        self.candle_disk_check_tail_slack_ms = int(tail_slack_min * 60_000)
+        raw_tail_slack_hours = get_optional_config_value(
+            config, "logging.candle_disk_check_tail_slack_hours", 1.0
+        )
+        try:
+            tail_slack_hours = float(raw_tail_slack_hours)
+        except Exception:
+            logging.warning(
+                "Unable to parse logging.candle_disk_check_tail_slack_hours=%r; using 1",
+                raw_tail_slack_hours,
+            )
+            tail_slack_hours = 1.0
+        if tail_slack_hours < 0:
+            tail_slack_hours = 0.0
+        self.candle_disk_check_tail_slack_hour_ms = int(tail_slack_hours * 60 * 60_000)
         self._candle_disk_check_last_ms = 0
         auto_gs = bool(self.live_value("auto_gs"))
         self.PB_mode_stop = {
@@ -1513,9 +1558,23 @@ class Passivbot:
 
         symbol_filter = set(symbols) if symbols is not None else None
         symbols_by_side: Dict[str, set] = {}
+        forager_needed = {"long": False, "short": False}
         for pside in ("long", "short"):
             try:
-                syms = set(self.get_symbols_approved_or_has_pos(pside))
+                max_n = int(self.get_max_n_positions(pside))
+            except Exception:
+                max_n = 0
+            try:
+                current_n = int(self.get_current_n_positions(pside))
+            except Exception:
+                current_n = len(self.get_symbols_with_pos(pside))
+            slots_open = max_n > current_n
+            forager_needed[pside] = bool(self.is_forager_mode(pside) and slots_open)
+            try:
+                if slots_open:
+                    syms = set(self.get_symbols_approved_or_has_pos(pside))
+                else:
+                    syms = set(self.get_symbols_with_pos(pside))
             except Exception:
                 syms = set()
             if symbol_filter is not None:
@@ -1526,8 +1585,8 @@ class Passivbot:
             return
 
         forager_enabled = {
-            "long": bool(self.is_forager_mode("long")),
-            "short": bool(self.is_forager_mode("short")),
+            "long": bool(forager_needed.get("long")),
+            "short": bool(forager_needed.get("short")),
         }
 
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
@@ -1540,6 +1599,10 @@ class Passivbot:
         now = utc_ms()
         end_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
         end_final_hour = (now // (60 * ONE_MIN_MS)) * (60 * ONE_MIN_MS) - 60 * ONE_MIN_MS
+        tail_slack_ms = int(getattr(self, "candle_disk_check_tail_slack_ms", 0) or 0)
+        tail_slack_hour_ms = int(getattr(self, "candle_disk_check_tail_slack_hour_ms", 0) or 0)
+        end_final = max(0, int(end_final) - tail_slack_ms)
+        end_final_hour = max(0, int(end_final_hour) - tail_slack_hour_ms)
 
         for sym in symbol_list:
             win = int(per_symbol_win.get(sym, 0) or 0)

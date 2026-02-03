@@ -383,6 +383,8 @@ class CandlestickManager:
         # Archive fetching: if False, only use ccxt REST API even if archives are available.
         # Useful for live bots where archives may timeout; backtester enables by default.
         archive_enabled: bool = True,
+        # Optional list of symbols to log per-page OHLCV ranges (debugging pagination).
+        page_debug_symbols: Optional[Iterable[str]] = None,
     ) -> None:
         self.exchange = exchange
         # If no explicit exchange_name provided, infer from ccxt instance id
@@ -536,6 +538,24 @@ class CandlestickManager:
         if isinstance(self._ex_id, str) and "bitget" in self._ex_id.lower():
             # Bitget often serves 1m klines with 200 limit per page
             self._ccxt_limit_default = 200
+
+        # Optional per-page range logging for selected symbols (debug pagination)
+        self._page_debug_all = False
+        self._page_debug_symbols: set[str] = set()
+        if page_debug_symbols:
+            try:
+                for sym in page_debug_symbols:
+                    if sym is None:
+                        continue
+                    sym_str = str(sym).strip()
+                    if not sym_str:
+                        continue
+                    if sym_str == "*":
+                        self._page_debug_all = True
+                    else:
+                        self._page_debug_symbols.add(sym_str)
+            except Exception:
+                self._page_debug_symbols = set()
 
     # ----- Logging -----
 
@@ -2842,6 +2862,19 @@ class CandlestickManager:
                 first_ts = last_ts = 0
             all_rows.append(arr)
             pages += 1
+            if self._page_debug_all or symbol in self._page_debug_symbols:
+                self._log(
+                    "info",
+                    "ccxt_page_range",
+                    symbol=symbol,
+                    tf=tf_norm,
+                    page=pages,
+                    rows=int(arr.shape[0]),
+                    first_ts=first_ts,
+                    last_ts=last_ts,
+                    since_ts=int(since),
+                    end_exclusive_ts=int(end_excl),
+                )
             if on_batch is not None:
                 try:
                     on_batch(arr)
