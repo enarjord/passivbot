@@ -592,7 +592,7 @@ class CandlestickManager:
             count = int(meta.get("count", 0))
             rng = _fmt_range(meta.get("min_ts"), meta.get("max_ts"))
             log_fn(
-                "[candle] synthesized %d zero-candle%s for %s at %s (no trades from exchange)",
+                "[candle] synthesized %d zero-candle%s for %s at %s (no data for requested minutes)",
                 count,
                 "s" if count > 1 else "",
                 symbol,
@@ -616,7 +616,7 @@ class CandlestickManager:
             if extra > 0:
                 top_str = f"{top_str} (+{extra} more)"
             log_fn(
-                "[candle] synthesized %d zero-candle%s across %d symbols (no trades from exchange) top=%s",
+                "[candle] synthesized %d zero-candle%s across %d symbols (no data for requested minutes) top=%s",
                 total_candles,
                 "s" if total_candles > 1 else "",
                 total_symbols,
@@ -3010,7 +3010,7 @@ class CandlestickManager:
                     # Only use WARNING for truly exceptional situations (gaps > 100 candles during live operation)
                     log_fn = self.log.warning if synthesized_count > 100 else self.log.debug
                     log_fn(
-                        "[candle] %s: synthesized %d zero-candle%s at %s (no trades from exchange) using prev_close=%.6f",
+                        "[candle] %s: synthesized %d zero-candle%s at %s (no data for requested minutes) using prev_close=%.6f",
                         symbol,
                         synthesized_count,
                         "s" if synthesized_count > 1 else "",
