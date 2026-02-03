@@ -2236,6 +2236,107 @@ class CandlestickManager:
             spans.append((int(ts[-1] + ONE_MIN_MS), end_ts))
         return spans
 
+    @staticmethod
+    def _missing_spans_step(
+        arr: np.ndarray, start_ts: int, end_ts: int, step_ms: int
+    ) -> List[Tuple[int, int]]:
+        """Return list of inclusive [gap_start, gap_end] spans missing in arr at step_ms."""
+        spans: List[Tuple[int, int]] = []
+        if start_ts > end_ts or step_ms <= 0:
+            return spans
+        if arr.size == 0:
+            return [(start_ts, end_ts)]
+        ts = np.asarray(arr["ts"], dtype=np.int64)
+        ts = ts[(ts >= start_ts) & (ts <= end_ts)]
+        if ts.size == 0:
+            return [(start_ts, end_ts)]
+        ts = np.sort(ts)
+        # head gap
+        if ts[0] > start_ts:
+            spans.append((int(start_ts), int(ts[0] - step_ms)))
+        # middle gaps
+        for i in range(len(ts) - 1):
+            if ts[i + 1] - ts[i] > step_ms:
+                spans.append((int(ts[i] + step_ms), int(ts[i + 1] - step_ms)))
+        # tail gap
+        if ts[-1] < end_ts:
+            spans.append((int(ts[-1] + step_ms), int(end_ts)))
+        return spans
+
+    def check_disk_coverage(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+        log_level: str = "info",
+        max_span_log: int = 3,
+    ) -> Dict[str, Any]:
+        """Check whether disk cache fully covers [start_ts, end_ts] for a symbol.
+
+        Returns a dict with:
+            ok, missing_spans, missing_candles, loaded_rows, timeframe.
+        """
+        tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+        step_ms = _tf_to_ms(tf_norm)
+        if step_ms <= 0:
+            step_ms = ONE_MIN_MS
+        s_ts = (int(start_ts) // step_ms) * step_ms
+        e_ts = (int(end_ts) // step_ms) * step_ms
+        if s_ts > e_ts:
+            return {
+                "ok": True,
+                "missing_spans": [],
+                "missing_candles": 0,
+                "loaded_rows": 0,
+                "timeframe": tf_norm,
+            }
+
+        arr = self._load_from_disk(symbol, s_ts, e_ts, timeframe=tf_norm)
+        if arr is None or arr.size == 0:
+            missing = [(s_ts, e_ts)]
+            loaded_rows = 0
+        else:
+            sub = self._slice_ts_range(arr, s_ts, e_ts)
+            missing = (
+                self._missing_spans(sub, s_ts, e_ts)
+                if step_ms == ONE_MIN_MS
+                else self._missing_spans_step(sub, s_ts, e_ts, step_ms)
+            )
+            loaded_rows = int(sub.shape[0]) if sub is not None else 0
+
+        missing_candles = 0
+        if missing:
+            missing_candles = int(sum((e - s) // step_ms + 1 for s, e in missing))
+            top_parts = []
+            for s, e in missing[: max(1, int(max_span_log))]:
+                top_parts.append(
+                    f\"{self._fmt_ts(int(s))} to {self._fmt_ts(int(e))}\"
+                )
+            top_str = \", \".join(top_parts)
+            if len(missing) > max_span_log:
+                top_str = f\"{top_str} (+{len(missing) - max_span_log} more)\"
+            self._log(
+                log_level,
+                \"disk_coverage_missing\",
+                symbol=symbol,
+                timeframe=tf_norm,
+                start_ts=s_ts,
+                end_ts=e_ts,
+                missing_spans=len(missing),
+                missing_candles=missing_candles,
+                top=top_str,
+            )
+        return {
+            \"ok\": len(missing) == 0,
+            \"missing_spans\": missing,
+            \"missing_candles\": missing_candles,
+            \"loaded_rows\": loaded_rows,
+            \"timeframe\": tf_norm,
+        }
+
     # ----- Refresh metadata helpers -----
 
     def _get_last_refresh_ms(self, symbol: str) -> int:

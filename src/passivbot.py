@@ -599,6 +599,25 @@ class Passivbot:
             )
             volume_threshold = 0.0
         self.volume_refresh_info_threshold_seconds = float(volume_threshold)
+        raw_candle_check_interval = get_optional_config_value(
+            config, "logging.candle_disk_check_interval_minutes", 60.0
+        )
+        try:
+            candle_check_minutes = float(raw_candle_check_interval)
+        except Exception:
+            logging.warning(
+                "Unable to parse logging.candle_disk_check_interval_minutes=%r; using fallback 60",
+                raw_candle_check_interval,
+            )
+            candle_check_minutes = 60.0
+        if candle_check_minutes < 0:
+            logging.warning(
+                "logging.candle_disk_check_interval_minutes=%r is negative; disabling",
+                raw_candle_check_interval,
+            )
+            candle_check_minutes = 0.0
+        self.candle_disk_check_interval_ms = int(candle_check_minutes * 60_000)
+        self._candle_disk_check_last_ms = 0
         auto_gs = bool(self.live_value("auto_gs"))
         self.PB_mode_stop = {
             "long": "graceful_stop" if auto_gs else "manual",
@@ -1481,6 +1500,68 @@ class Passivbot:
             if symbol not in self.first_timestamps:
                 logging.info(f"warning: unable to get first timestamp for {symbol}. Setting to zero.")
                 self.first_timestamps[symbol] = 0.0
+
+    async def audit_required_candle_disk_coverage(
+        self, symbols: Optional[Iterable[str]] = None
+    ) -> None:
+        """Check disk coverage for required candle ranges and log missing spans."""
+        try:
+            if self.cm is None:
+                return
+        except Exception:
+            return
+
+        symbol_filter = set(symbols) if symbols is not None else None
+        symbols_by_side: Dict[str, set] = {}
+        for pside in ("long", "short"):
+            try:
+                syms = set(self.get_symbols_approved_or_has_pos(pside))
+            except Exception:
+                syms = set()
+            if symbol_filter is not None:
+                syms = syms & symbol_filter
+            symbols_by_side[pside] = syms
+        symbol_list = sorted(set().union(*symbols_by_side.values()))
+        if not symbol_list:
+            return
+
+        forager_enabled = {
+            "long": bool(self.is_forager_mode("long")),
+            "short": bool(self.is_forager_mode("short")),
+        }
+
+        per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
+            symbols_by_side,
+            lambda pside, key, sym: self.bp(pside, key, sym),
+            forager_enabled=forager_enabled,
+            span_buffer=1.5,
+        )
+
+        now = utc_ms()
+        end_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
+        end_final_hour = (now // (60 * ONE_MIN_MS)) * (60 * ONE_MIN_MS) - 60 * ONE_MIN_MS
+
+        for sym in symbol_list:
+            win = int(per_symbol_win.get(sym, 0) or 0)
+            if win > 0 and end_final > 0:
+                start_ts = max(0, int(end_final - win * ONE_MIN_MS))
+                self.cm.check_disk_coverage(
+                    sym,
+                    start_ts,
+                    int(end_final),
+                    timeframe="1m",
+                    log_level="info",
+                )
+            warm_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
+            if warm_hours > 0 and end_final_hour > 0:
+                start_ts = max(0, int(end_final_hour - warm_hours * 60 * ONE_MIN_MS))
+                self.cm.check_disk_coverage(
+                    sym,
+                    start_ts,
+                    int(end_final_hour),
+                    timeframe="1h",
+                    log_level="info",
+                )
 
     def get_first_timestamp(self, symbol):
         """Return the cached first tradable timestamp for `symbol`, populating defaults."""
@@ -4944,6 +5025,18 @@ class Passivbot:
                 interval = getattr(self, "memory_snapshot_interval_ms", 3_600_000)
                 if last_mem_log_ts is None or now - last_mem_log_ts >= interval:
                     self._log_memory_snapshot(now_ms=now)
+                candle_check_interval = int(getattr(self, "candle_disk_check_interval_ms", 0) or 0)
+                last_candle_check = int(getattr(self, "_candle_disk_check_last_ms", 0) or 0)
+                if candle_check_interval > 0 and (
+                    last_candle_check == 0 or now - last_candle_check >= candle_check_interval
+                ):
+                    self._candle_disk_check_last_ms = now
+                    try:
+                        await self.audit_required_candle_disk_coverage()
+                    except Exception as exc:
+                        logging.error(
+                            "error running candle disk coverage audit: %s", exc, exc_info=True
+                        )
                 # update markets dict once every hour
                 if now - self.init_markets_last_update_ms > 1000 * 60 * 60:
                     await self.init_markets(verbose=False)
