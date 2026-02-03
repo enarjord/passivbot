@@ -442,7 +442,8 @@ class CandlestickManager:
         self._synth_gap_warned: set[Tuple[str, int]] = set()
         # Batch mode for startup: when enabled, collect warnings and log summary later
         self._synth_candle_batch_mode: bool = False
-        self._synth_candle_batch: Dict[str, int] = {}  # symbol -> count during batch
+        # symbol -> {"count": int, "min_ts": int, "max_ts": int} during batch
+        self._synth_candle_batch: Dict[str, Dict[str, int]] = {}
         # Batch mode for candle replacement logs: collect replacements and log summary at INFO
         self._candle_replace_batch_mode: bool = False
         self._candle_replace_batch: Dict[str, int] = {}  # symbol -> count replaced during batch
@@ -565,24 +566,61 @@ class CandlestickManager:
         if not self._synth_candle_batch:
             return
         total_symbols = len(self._synth_candle_batch)
-        total_candles = sum(self._synth_candle_batch.values())
+        total_candles = sum(v.get("count", 0) for v in self._synth_candle_batch.values())
         # Use WARNING only for large amounts of synthesized candles (>1000), otherwise INFO
         # This is expected behavior on illiquid pairs during warmup
         log_fn = self.log.warning if total_candles > 1000 else self.log.info
+
+        def _fmt_range(min_ts: Optional[int], max_ts: Optional[int]) -> str:
+            try:
+                from datetime import datetime, timezone
+
+                if min_ts is None or max_ts is None:
+                    return "-"
+                start = datetime.fromtimestamp(int(min_ts) / 1000, tz=timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M"
+                )
+                end = datetime.fromtimestamp(int(max_ts) / 1000, tz=timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M"
+                )
+                return f"{start} to {end}" if start != end else start
+            except Exception:
+                return "-"
+
         if total_symbols == 1:
-            symbol, count = next(iter(self._synth_candle_batch.items()))
+            symbol, meta = next(iter(self._synth_candle_batch.items()))
+            count = int(meta.get("count", 0))
+            rng = _fmt_range(meta.get("min_ts"), meta.get("max_ts"))
             log_fn(
-                "[candle] synthesized %d zero-candle%s for %s (no trades from exchange)",
+                "[candle] synthesized %d zero-candle%s for %s at %s (no trades from exchange)",
                 count,
                 "s" if count > 1 else "",
                 symbol,
+                rng,
             )
         else:
+            # Log top symbols by synthesized count (limit to keep logs concise)
+            top_n = 5
+            sorted_syms = sorted(
+                self._synth_candle_batch.items(),
+                key=lambda kv: int(kv[1].get("count", 0)),
+                reverse=True,
+            )
+            top_parts = []
+            for sym, meta in sorted_syms[:top_n]:
+                count = int(meta.get("count", 0))
+                rng = _fmt_range(meta.get("min_ts"), meta.get("max_ts"))
+                top_parts.append(f"{sym}:{count}@{rng}")
+            extra = total_symbols - min(top_n, total_symbols)
+            top_str = ", ".join(top_parts)
+            if extra > 0:
+                top_str = f"{top_str} (+{extra} more)"
             log_fn(
-                "[candle] synthesized %d zero-candle%s across %d symbols (no trades from exchange)",
+                "[candle] synthesized %d zero-candle%s across %d symbols (no trades from exchange) top=%s",
                 total_candles,
                 "s" if total_candles > 1 else "",
                 total_symbols,
+                top_str,
             )
         self._synth_candle_batch.clear()
 
@@ -792,7 +830,7 @@ class CandlestickManager:
             ex = getattr(self, "_ex_id", self.exchange_name)
         except Exception:
             ex = self.exchange_name
-        base = [f"event={event}"]
+        base = [f"[candle] event={event}"]
         # In debug modes, include caller info for traceability
         if self.debug_level >= 1:
             try:
@@ -2911,9 +2949,35 @@ class CandlestickManager:
         if synthesized_count > 0 and symbol:
             # In batch mode, collect for later aggregated logging
             if self._synth_candle_batch_mode:
-                self._synth_candle_batch[symbol] = (
-                    self._synth_candle_batch.get(symbol, 0) + synthesized_count
-                )
+                try:
+                    first_ts = min(synthesized_timestamps)
+                    last_ts = max(synthesized_timestamps)
+                except Exception:
+                    first_ts = None
+                    last_ts = None
+                meta = self._synth_candle_batch.get(symbol)
+                if not isinstance(meta, dict):
+                    meta = {"count": 0, "min_ts": None, "max_ts": None}
+                meta["count"] = int(meta.get("count", 0)) + int(synthesized_count)
+                if first_ts is not None:
+                    try:
+                        meta["min_ts"] = (
+                            int(first_ts)
+                            if meta.get("min_ts") is None
+                            else min(int(meta["min_ts"]), int(first_ts))
+                        )
+                    except Exception:
+                        meta["min_ts"] = int(first_ts)
+                if last_ts is not None:
+                    try:
+                        meta["max_ts"] = (
+                            int(last_ts)
+                            if meta.get("max_ts") is None
+                            else max(int(meta["max_ts"]), int(last_ts))
+                        )
+                    except Exception:
+                        meta["max_ts"] = int(last_ts)
+                self._synth_candle_batch[symbol] = meta
             else:
                 # Normal mode: deduplicate by gap start (only warn once per unique gap origin)
                 # Round first_ts to nearest hour to reduce duplicate warnings when the same
