@@ -4255,6 +4255,7 @@ class CandlestickManager:
 
         # Optionally refresh if range touches the latest finalized minute
         allow_fetch_present = True
+        skip_present_fetch_due_to_ttl = False
         latest_finalized = _floor_minute(now) - ONE_MIN_MS
         if end_ts >= latest_finalized and self.exchange is not None:
             if max_age_ms == 0:
@@ -4293,6 +4294,7 @@ class CandlestickManager:
                     await self.refresh(symbol, through_ts=end_ts)
                 else:
                     allow_fetch_present = False
+                    skip_present_fetch_due_to_ttl = True
 
         # Try to load from disk shards for this range before slicing memory
         try:
@@ -4320,6 +4322,24 @@ class CandlestickManager:
             return True
 
         fully_covered = _is_fully_covered(sub, start_ts, end_ts)
+        if skip_present_fetch_due_to_ttl and not fully_covered:
+            # TTL says data is fresh, but coverage is incomplete for requested range.
+            # Allow present fetch/gap fill to try and repair missing spans.
+            allow_fetch_present = True
+            try:
+                missing_now = self._missing_spans(sub, start_ts, end_ts)
+                self._log(
+                    "info",
+                    "ttl_bypass_missing_coverage",
+                    symbol=symbol,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    max_age_ms=max_age_ms,
+                    last_refresh_ms=self._get_last_refresh_ms(symbol),
+                    missing_spans=len(missing_now),
+                )
+            except Exception:
+                pass
 
         # For historical ranges, if we don't have shards for all days yet, fetch
         # exactly the range and persist shards for future calls.
