@@ -521,7 +521,6 @@ async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool
         | set(symbol_to_coin(c) for c in approved["short"])
     )
     orig_coins = list(coins)
-    orig_coins = list(coins)
     exchange = normalize_exchange_name(exchange)
     requested_start_date = require_config_value(config, "backtest.start_date")
     requested_start_ts = int(date_to_ts(requested_start_date))
