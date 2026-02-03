@@ -988,6 +988,7 @@ async def _prepare_hlcvs_combined_impl(
         return coin
 
     # Apply normalization to coins
+    orig_coins = list(coins)
     normalized_coins = []
     for coin in coins:
         # Get the forced exchange for this coin (checking both with and without xyz: prefix)
