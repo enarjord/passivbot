@@ -3719,6 +3719,25 @@ class OkxFetcher(BaseFetcher):
                 if not event_id:
                     continue
 
+                # Ensure client_order_id/pb_order_type are populated before batch callbacks
+                cached = detail_cache.get(event_id)
+                if cached:
+                    cached_client, cached_pb = cached
+                    if cached_client:
+                        event["client_order_id"] = cached_client
+                    if cached_pb:
+                        event["pb_order_type"] = cached_pb
+                client_oid = str(event.get("client_order_id") or "")
+                pb_type = str(event.get("pb_order_type") or "")
+                if not pb_type and client_oid:
+                    pb_type = custom_id_to_snake(client_oid)
+                if not pb_type:
+                    pb_type = "unknown"
+                event["client_order_id"] = client_oid
+                event["pb_order_type"] = pb_type
+                if event_id and client_oid:
+                    detail_cache[event_id] = (client_oid, pb_type)
+
                 # Check time bounds
                 ts = event["timestamp"]
                 if since_ms is not None and ts < since_ms:
