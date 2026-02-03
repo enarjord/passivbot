@@ -2407,20 +2407,38 @@ class Passivbot:
             if self.live_value("filter_by_min_effective_cost"):
                 self.warn_on_high_effective_min_cost(pside)
             return []
+        try:
+            slots_open = self.get_max_n_positions(pside) > self.get_current_n_positions(pside)
+        except Exception:
+            slots_open = False
         if self.is_forager_mode(pside):
             # filter coins by relative volume and log range
             clip_pct = self.bot_value(pside, "filter_volume_drop_pct")
             volatility_drop = self.bot_value(pside, "filter_volatility_drop_pct")
             max_n_positions = self.get_max_n_positions(pside)
+            # Best-effort ranking when slots are full: use dynamic staleness budget.
+            if slots_open:
+                max_age_ms = 60_000
+            else:
+                max_calls = get_optional_live_value(
+                    self.config, "max_ohlcv_fetches_per_minute", 0
+                )
+                try:
+                    max_calls = int(max_calls) if max_calls is not None else 0
+                except Exception:
+                    max_calls = 0
+                max_age_ms = self._forager_target_staleness_ms(len(candidates), max_calls)
             if clip_pct > 0.0:
                 volumes, log_ranges = await self.calc_volumes_and_log_ranges(
-                    pside, symbols=candidates
+                    pside, symbols=candidates, max_age_ms=max_age_ms
                 )
             else:
                 volumes = {
                     symbol: float(len(candidates) - idx) for idx, symbol in enumerate(candidates)
                 }
-                log_ranges = await self.calc_log_range(pside, eligible_symbols=candidates)
+                log_ranges = await self.calc_log_range(
+                    pside, eligible_symbols=candidates, max_age_ms=max_age_ms
+                )
             features = [
                 {
                     "index": idx,
@@ -4642,6 +4660,232 @@ class Passivbot:
             await self.ccp.close()
         raise RestartBotException("Bot will restart.")
 
+    def _forager_refresh_budget(self, max_calls_per_minute: int) -> int:
+        """Token bucket budget for forager candle refreshes."""
+        try:
+            max_calls = int(max_calls_per_minute)
+        except Exception:
+            max_calls = 0
+        if max_calls <= 0:
+            return 0
+        now = utc_ms()
+        state = getattr(self, "_forager_refresh_state", None)
+        if not isinstance(state, dict):
+            state = {"tokens": float(max_calls), "last_ms": now}
+        last_ms = int(state.get("last_ms", now) or now)
+        tokens = float(state.get("tokens", max_calls))
+        elapsed = max(0.0, (now - last_ms) / 60_000.0)
+        tokens = min(float(max_calls), tokens + float(max_calls) * elapsed)
+        budget = int(tokens)
+        state["tokens"] = float(tokens - budget)
+        state["last_ms"] = int(now)
+        self._forager_refresh_state = state
+        return max(0, budget)
+
+    def _forager_target_staleness_ms(self, n_symbols: int, max_calls_per_minute: int) -> int:
+        """Compute max acceptable staleness for forager candidates based on refresh budget."""
+        try:
+            n_syms = int(n_symbols)
+        except Exception:
+            n_syms = 0
+        try:
+            max_calls = int(max_calls_per_minute)
+        except Exception:
+            max_calls = 0
+        if n_syms <= 0 or max_calls <= 0:
+            return int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
+        minutes = max(1.0, float(n_syms) / float(max_calls))
+        return int(minutes * 60_000)
+
+    def _maybe_log_candle_refresh(
+        self,
+        context: str,
+        symbols: Iterable[str],
+        *,
+        target_age_ms: Optional[int] = None,
+        refreshed: Optional[int] = None,
+        throttle_ms: int = 60_000,
+    ) -> None:
+        """Log a throttled summary of candle staleness for the given symbols."""
+        try:
+            now = utc_ms()
+            last = int(getattr(self, "_candle_refresh_log_last_ms", 0) or 0)
+            if (now - last) < int(throttle_ms):
+                return
+            sym_list = list(symbols)
+            if not sym_list:
+                return
+            ages = []
+            for sym in sym_list:
+                try:
+                    last_final = self.cm.get_last_final_ts(sym)
+                except Exception:
+                    last_final = 0
+                if last_final:
+                    ages.append(max(0, now - int(last_final)))
+            if not ages:
+                return
+            ages.sort()
+            median_ms = ages[len(ages) // 2]
+            max_ms = ages[-1]
+            target_s = f"{int(target_age_ms/1000)}s" if target_age_ms else "n/a"
+            refreshed_str = f", refreshed={refreshed}" if refreshed is not None else ""
+            logging.info(
+                "[candle] %s symbols=%d%s max_stale=%ds median_stale=%ds target=%s",
+                context,
+                len(sym_list),
+                refreshed_str,
+                int(max_ms / 1000),
+                int(median_ms / 1000),
+                target_s,
+            )
+            self._candle_refresh_log_last_ms = int(now)
+        except Exception:
+            return
+
+    async def _refresh_forager_candidate_candles(self) -> None:
+        """Best-effort refresh for forager candidate symbols to avoid large bursts."""
+        if not self.is_forager_mode():
+            return
+        max_calls = get_optional_live_value(self.config, "max_ohlcv_fetches_per_minute", 0)
+        try:
+            max_calls = int(max_calls) if max_calls is not None else 0
+        except Exception:
+            max_calls = 0
+
+        candidates_by_side: Dict[str, set] = {}
+        slots_open_any = False
+        for pside in ("long", "short"):
+            if not self.is_forager_mode(pside):
+                continue
+            syms = set(self.approved_coins_minus_ignored_coins.get(pside, set()))
+            if not syms:
+                continue
+            candidates_by_side[pside] = syms
+            try:
+                max_n = int(self.get_max_n_positions(pside))
+            except Exception:
+                max_n = 0
+            try:
+                current_n = int(self.get_current_n_positions(pside))
+            except Exception:
+                current_n = len(self.get_symbols_with_pos(pside))
+            if max_n > current_n:
+                slots_open_any = True
+
+        if not candidates_by_side:
+            return
+
+        all_candidates = set().union(*candidates_by_side.values())
+        if not all_candidates:
+            return
+
+        if slots_open_any:
+            budget = len(all_candidates)
+        else:
+            if max_calls <= 0:
+                return
+            budget = self._forager_refresh_budget(max_calls)
+            if budget <= 0:
+                return
+
+        # Skip actives; they are refreshed in update_ohlcvs_1m_for_actives
+        active = set(self.active_symbols) if hasattr(self, "active_symbols") else set()
+        candidates = sorted(all_candidates - active)
+        if not candidates:
+            return
+
+        target_age_ms = 60_000 if slots_open_any else self._forager_target_staleness_ms(
+            len(all_candidates), max_calls
+        )
+        now = utc_ms()
+        stale: List[Tuple[float, str]] = []
+        for sym in candidates:
+            try:
+                last_final = self.cm.get_last_final_ts(sym)
+            except Exception:
+                last_final = 0
+            age_ms = now - int(last_final) if last_final else float("inf")
+            if age_ms > target_age_ms:
+                stale.append((age_ms, sym))
+        if not stale:
+            return
+
+        stale.sort(reverse=True)
+        to_refresh = [sym for _, sym in stale[:budget]]
+        if not to_refresh:
+            return
+
+        # Throttled visibility into forager refresh behavior (info for now).
+        try:
+            now = utc_ms()
+            last_log = int(getattr(self, "_forager_refresh_log_last_ms", 0) or 0)
+            if (now - last_log) >= 90_000:
+                oldest_ms = int(stale[0][0]) if stale else 0
+                logging.info(
+                    "[candle] forager refresh slots_open=%s candidates=%d stale=%d budget=%d oldest=%ds target=%ds",
+                    "yes" if slots_open_any else "no",
+                    len(all_candidates),
+                    len(stale),
+                    len(to_refresh),
+                    int(oldest_ms / 1000),
+                    int(target_age_ms / 1000),
+                )
+                self._forager_refresh_log_last_ms = int(now)
+        except Exception:
+            pass
+
+        end_ts = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
+        try:
+            default_win = int(getattr(self.cm, "default_window_candles", 120) or 120)
+        except Exception:
+            default_win = 120
+        span_buffer = 1.5
+
+        for sym in to_refresh:
+            try:
+                max_span = 0.0
+                for pside, syms in candidates_by_side.items():
+                    if sym not in syms:
+                        continue
+                    try:
+                        span_v = self.bp(pside, "filter_volume_ema_span", sym)
+                    except Exception:
+                        span_v = None
+                    try:
+                        span_lr = self.bp(pside, "filter_volatility_ema_span", sym)
+                    except Exception:
+                        span_lr = None
+                    for span in (span_v, span_lr):
+                        if span is not None:
+                            try:
+                                max_span = max(max_span, float(span))
+                            except Exception:
+                                pass
+                win = (
+                    max(default_win, int(math.ceil(max_span * span_buffer)))
+                    if max_span > 0.0
+                    else default_win
+                )
+                start_ts = end_ts - ONE_MIN_MS * max(1, win)
+                await self.cm.get_candles(
+                    sym,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    max_age_ms=0,
+                    strict=False,
+                )
+            except TimeoutError as exc:
+                logging.warning(
+                    "Timed out acquiring candle lock for %s; forager refresh will retry (%s)",
+                    sym,
+                    exc,
+                )
+            except Exception as exc:
+                logging.error(
+                    "error refreshing forager candles for %s: %s", sym, exc, exc_info=True
+                )
+
     async def update_ohlcvs_1m_for_actives(self):
         """Ensure active symbols have fresh 1m candles in CandlestickManager (<=10s old).
 
@@ -4661,6 +4905,13 @@ class Passivbot:
             start_ts = end_ts - ONE_MIN_MS * window
 
             symbols = sorted(set(self.active_symbols))
+            self._maybe_log_candle_refresh(
+                "active refresh",
+                symbols,
+                target_age_ms=max_age_ms,
+                refreshed=len(symbols),
+                throttle_ms=60_000,
+            )
             for sym in symbols:
                 try:
                     await self.cm.get_candles(
@@ -4674,6 +4925,8 @@ class Passivbot:
                     )
                 except Exception as exc:
                     logging.error("error refreshing candles for %s: %s", sym, exc, exc_info=True)
+            # Best-effort refresh for forager candidates (lazy & budgeted)
+            await self._refresh_forager_candidate_candles()
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()

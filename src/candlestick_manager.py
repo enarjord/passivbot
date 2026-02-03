@@ -484,18 +484,24 @@ class CandlestickManager:
         try:
             with portalocker.Lock(migration_lock, timeout=0.1, fail_when_locked=True):
                 if not os.path.exists(migration_done):
-                    standardize_cache_directories(ohlcv_cache_base)
-                    if self.exchange_name != "gateio":
-                        migrate_legacy_data_on_init(
-                            exchange=self.exchange_name,
-                            cache_base=ohlcv_cache_base,
-                        )
-                    merge_duplicate_symbol_directories(ohlcv_cache_base)
                     try:
-                        with open(migration_done, "w", encoding="utf-8") as handle:
-                            handle.write(str(int(time.time())))
-                    except Exception:
-                        pass
+                        standardize_cache_directories(ohlcv_cache_base)
+                        if self.exchange_name != "gateio":
+                            migrate_legacy_data_on_init(
+                                exchange=self.exchange_name,
+                                cache_base=ohlcv_cache_base,
+                            )
+                        merge_duplicate_symbol_directories(ohlcv_cache_base)
+                        try:
+                            with open(migration_done, "w", encoding="utf-8") as handle:
+                                handle.write(str(int(time.time())))
+                        except Exception:
+                            pass
+                    except Exception as exc:
+                        logging.exception(
+                            "Cache migration failed (non-fatal). Continuing without migration: %s",
+                            exc,
+                        )
         except portalocker.exceptions.LockException:
             # Another process is handling migrations; skip.
             pass
@@ -1006,6 +1012,8 @@ class CandlestickManager:
             meta.setdefault("last_refresh_ms", 0)
             meta.setdefault("last_final_ts", 0)
             meta.setdefault("inception_ts", None)  # first known candle timestamp
+            meta.setdefault("inception_ts_probe_ms", 0)
+            meta.setdefault("inception_ts_probe_end_ts", 0)
 
             # Keep index consistent if shard files were deleted.
             removed = self._prune_missing_shards_from_index(idx)
@@ -2199,6 +2207,18 @@ class CandlestickManager:
         except Exception:
             return 0
 
+    def get_last_refresh_ms(self, symbol: str) -> int:
+        """Public helper to read last refresh timestamp (ms) from index metadata."""
+        return self._get_last_refresh_ms(symbol)
+
+    def get_last_final_ts(self, symbol: str) -> int:
+        """Return last finalized candle timestamp (ms) seen for this symbol, or 0 if unknown."""
+        idx = self._ensure_symbol_index(symbol)
+        try:
+            return int(idx.get("meta", {}).get("last_final_ts", 0))
+        except Exception:
+            return 0
+
     def _set_last_refresh_meta(
         self, symbol: str, last_refresh_ms: int, last_final_ts: Optional[int] = None
     ) -> None:
@@ -2291,6 +2311,63 @@ class CandlestickManager:
 
         if changed and save:
             self._save_known_gaps_enhanced(symbol, new_gaps)
+
+    def _get_min_shard_ts(self, symbol: str) -> Optional[int]:
+        """Return earliest shard timestamp (ms) from index or disk, if available."""
+        try:
+            idx = self._ensure_symbol_index(symbol, tf="1m")
+            shards = idx.get("shards") or {}
+            if isinstance(shards, dict):
+                min_ts: Optional[int] = None
+                for shard_meta in shards.values():
+                    if not isinstance(shard_meta, dict):
+                        continue
+                    mi = shard_meta.get("min_ts")
+                    if mi is None:
+                        continue
+                    ts = int(mi)
+                    min_ts = ts if min_ts is None else min(min_ts, ts)
+                if min_ts is not None:
+                    return min_ts
+        except Exception:
+            pass
+
+        # Fallback: infer earliest shard from filenames on disk.
+        try:
+            shard_dir = self._symbol_dir(symbol, tf="1m")
+            if not os.path.isdir(shard_dir):
+                return None
+            day_keys = [f[:-4] for f in os.listdir(shard_dir) if f.endswith(".npy")]
+            if not day_keys:
+                return None
+            day_keys.sort()
+            start_ts, _ = self._date_range_of_key(day_keys[0])
+            return int(start_ts)
+        except Exception:
+            return None
+
+    def _get_inception_probe_meta(self, symbol: str) -> Tuple[int, int]:
+        """Return (last_probe_ms, last_probe_end_ts) for inception probing."""
+        idx = self._ensure_symbol_index(symbol)
+        meta = idx.get("meta", {})
+        try:
+            last_probe_ms = int(meta.get("inception_ts_probe_ms", 0) or 0)
+            last_probe_end_ts = int(meta.get("inception_ts_probe_end_ts", 0) or 0)
+            return last_probe_ms, last_probe_end_ts
+        except Exception:
+            return 0, 0
+
+    def _set_inception_probe_meta(
+        self, symbol: str, probe_ms: int, probe_end_ts: int, *, save: bool = True
+    ) -> None:
+        """Persist inception probe metadata to avoid repeated probes."""
+        idx = self._ensure_symbol_index(symbol)
+        meta = idx.setdefault("meta", {})
+        meta["inception_ts_probe_ms"] = int(probe_ms)
+        meta["inception_ts_probe_end_ts"] = int(probe_end_ts)
+        self._index[f"{symbol}::1m"] = idx
+        if save:
+            self._save_index(symbol)
 
     def _maybe_update_inception_ts(self, symbol: str, arr: np.ndarray, *, save: bool = True) -> None:
         """Update inception_ts if arr contains an earlier timestamp than known."""
@@ -2891,8 +2968,10 @@ class CandlestickManager:
             exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
         except Exception:
             exid = ""
-        # Note: Bybit excluded - CCXT is faster and uses far less bandwidth
-        # (archive returns raw trades requiring bucketing; ~700x more data for BTC)
+        # Note: Bybit excluded - CCXT is faster and uses far less bandwidth.
+        # Bybit's archive endpoint provides raw trades (not bucketed OHLCVs), so fetching
+        # and bucketing trades costs ~700x more data for BTC. Keep the archive fetch logic
+        # below for reference/optional use, but avoid it by default.
         return exid in {"binanceusdm", "bitget", "kucoinfutures", "hyperliquid"}
 
     @staticmethod
@@ -2940,6 +3019,8 @@ class CandlestickManager:
             return await self._archive_fetch_binance_zip(url, day_key)
 
         if exid == "bybit":
+            # Note: Bybit archive provides raw trades, not bucketed OHLCVs.
+            # It's intentionally disabled by _archive_supported() by default due to bandwidth.
             url = f"https://public.bybit.com/trading/{symbol_code}/{symbol_code}{day_key}.csv.gz"
             return await self._archive_fetch_bybit_trades(url, day_key)
 
@@ -3432,42 +3513,113 @@ class CandlestickManager:
         if not self._archive_supported():
             return
 
-        # Skip fetches before known inception date - but DON'T trust inception_ts if it
-        # would skip the entire requested range (suggests stale/incorrect inception_ts).
+        # Skip fetches before known inception date - but don't trust inception_ts blindly.
+        # If inception_ts would skip the entire requested range, attempt a light probe
+        # before treating it as authoritative.
         inception_ts = self._get_inception_ts(symbol)
         if inception_ts is not None and start_ts < inception_ts:
-            # If inception_ts is AFTER the entire requested range, don't trust it -
-            # it was likely set incorrectly when only recent data was fetched.
-            # Clear it and let the archive fetch discover the real inception.
             if inception_ts > end_ts:
-                self._log(
-                    "info",
-                    "inception_ts_stale_cleared",
-                    symbol=symbol,
-                    cached_inception_ts=inception_ts,
-                    requested_end_ts=end_ts,
-                    reason="inception_ts after requested range suggests stale cache",
-                )
-                # Clear the stale inception_ts and any pre_inception gaps
-                idx = self._ensure_symbol_index(symbol)
-                if "meta" in idx:
-                    idx["meta"].pop("inception_ts", None)
-                    # Also clear pre_inception gaps since they're based on stale data
-                    gaps = idx["meta"].get("known_gaps", [])
-                    if gaps:
-                        new_gaps = [g for g in gaps if g.get("reason") != "pre_inception"]
-                        if len(new_gaps) != len(gaps):
-                            idx["meta"]["known_gaps"] = new_gaps
-                            self._log(
-                                "debug",
-                                "pre_inception_gaps_cleared",
-                                symbol=symbol,
-                                cleared=len(gaps) - len(new_gaps),
-                            )
-                    self._index[f"{symbol}::1m"] = idx
-                    self._save_index(symbol)
-                inception_ts = None
-            else:
+                updated = False
+                shard_min = self._get_min_shard_ts(symbol)
+                if shard_min is not None and shard_min < inception_ts:
+                    self._log(
+                        "info",
+                        "inception_ts_updated_from_shards",
+                        symbol=symbol,
+                        cached_inception_ts=inception_ts,
+                        shard_min_ts=shard_min,
+                    )
+                    self._set_inception_ts(symbol, shard_min, save=True)
+                    inception_ts = self._get_inception_ts(symbol)
+                    updated = True
+
+                # If no shard evidence, do a soft archive probe (throttled) for end_ts day.
+                probed = False
+                probe_hit = False
+                if not updated and self._archive_supported():
+                    now = _utc_now_ms()
+                    last_probe_ms, last_probe_end_ts = self._get_inception_probe_meta(symbol)
+                    probe_cooldown_ms = 6 * 60 * 60 * 1000  # 6 hours
+                    if (now - last_probe_ms) > probe_cooldown_ms or int(end_ts) > int(
+                        last_probe_end_ts
+                    ):
+                        day_key = self._date_key(end_ts)
+                        _, day_end = self._date_range_of_key(day_key)
+                        archive_freshness_hours = 72
+                        archive_cutoff_ms = _utc_now_ms() - (
+                            archive_freshness_hours * 3600 * 1000
+                        )
+                        if day_end <= archive_cutoff_ms:
+                            probed = True
+                            try:
+                                self._log(
+                                    "debug",
+                                    "inception_ts_probe_start",
+                                    symbol=symbol,
+                                    day=day_key,
+                                )
+                                arr = await self._archive_fetch_day(symbol, day_key)
+                            except Exception as exc:
+                                arr = None
+                                self._log(
+                                    "warning",
+                                    "inception_ts_probe_failed",
+                                    symbol=symbol,
+                                    day=day_key,
+                                    error=str(exc),
+                                )
+                            if isinstance(arr, np.ndarray) and arr.size:
+                                probe_hit = True
+                                try:
+                                    self._persist_batch(
+                                        symbol,
+                                        arr,
+                                        timeframe="1m",
+                                        merge_cache=True,
+                                        last_refresh_ms=now,
+                                        defer_index=True,
+                                        skip_memory_retention=True,
+                                    )
+                                    self.flush_deferred_index(symbol, tf="1m")
+                                except Exception as exc:
+                                    self._log(
+                                        "warning",
+                                        "inception_ts_probe_persist_failed",
+                                        symbol=symbol,
+                                        day=day_key,
+                                        error=str(exc),
+                                    )
+                                inception_ts = self._get_inception_ts(symbol)
+                                updated = inception_ts is not None
+                            # Record probe attempt regardless of outcome
+                            self._set_inception_probe_meta(symbol, now, int(end_ts), save=True)
+                # If inception_ts still excludes the whole range, mark pre_inception gaps and return
+                if inception_ts is not None and inception_ts > end_ts:
+                    pre_inception_end = min(inception_ts - ONE_MIN_MS, end_ts)
+                    if start_ts <= pre_inception_end:
+                        retry_count = (
+                            _GAP_MAX_RETRIES
+                            if probed and not probe_hit
+                            else max(0, _GAP_MAX_RETRIES - 1)
+                        )
+                        self._add_known_gap(
+                            symbol,
+                            start_ts,
+                            pre_inception_end,
+                            reason="pre_inception",
+                            retry_count=retry_count,
+                        )
+                        self._log(
+                            "debug",
+                            "skip_pre_inception_fetch",
+                            symbol=symbol,
+                            original_start=start_ts,
+                            inception_ts=inception_ts,
+                            clipped_start=inception_ts,
+                        )
+                    return  # Nothing left to fetch
+
+            if inception_ts is not None and start_ts < inception_ts:
                 # inception_ts is within the requested range - trust it and clip
                 pre_inception_end = min(inception_ts - ONE_MIN_MS, end_ts)
                 if start_ts <= pre_inception_end:
