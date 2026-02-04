@@ -2986,7 +2986,17 @@ class Passivbot:
         qty_sign = "+" if event.side.lower() == "buy" else "-"
         qty_str = f"{qty_sign}{abs(event.qty):.6g}"
 
-        msg = f"[fill] {coin} {pside} {order_type} {qty_str} @ {event.price:.2f}"
+        # Include timestamp to make historical fills obvious in logs
+        fill_ts = ""
+        if getattr(event, "timestamp", 0):
+            fill_ts = ts_to_date(event.timestamp)[:19]
+        elif getattr(event, "datetime", ""):
+            fill_ts = str(event.datetime)[:19]
+
+        if fill_ts:
+            msg = f"[fill] {fill_ts} {coin} {pside} {order_type} {qty_str} @ {event.price:.2f}"
+        else:
+            msg = f"[fill] {coin} {pside} {order_type} {qty_str} @ {event.price:.2f}"
 
         # Add pnl for close orders (always show, even if 0.0)
         # Close orders have "close" in their type (e.g., close_grid_long, close_unstuck_long)
