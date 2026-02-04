@@ -539,6 +539,7 @@ class CandlestickManager:
         self._ccxt_page_overlap_candles = 0
         self._record_payload_gaps_as_known = False
         self._ccxt_since_exclusive = False
+        self._ccxt_limit_probe_done = False
         if isinstance(self._ex_id, str) and "bitget" in self._ex_id.lower():
             # Bitget often serves 1m klines with 200 limit per page
             self._ccxt_limit_default = 200
@@ -546,6 +547,8 @@ class CandlestickManager:
             self._ccxt_page_overlap_candles = 1
             # Bitget since parameter behaves as exclusive for 1m OHLCV
             self._ccxt_since_exclusive = True
+            # Probe at runtime to see if Bitget now accepts >200 rows per page
+            self._ccxt_limit_probe_done = False
         if isinstance(self._ex_id, str) and "kucoin" in self._ex_id.lower():
             # KuCoin futures returns max 200 rows per OHLCV call and can be sparse (trade-only minutes).
             self._ccxt_limit_default = 200
@@ -2869,14 +2872,49 @@ class CandlestickManager:
         prev_last_ts: Optional[int] = None
         total_span = max(1, end_excl - since_start)
         while since < end_excl:
+            # Bitget auto-probe: try a larger limit once to see if the API supports it.
+            probe_limit = None
+            if (
+                not self._ccxt_limit_probe_done
+                and isinstance(self._ex_id, str)
+                and "bitget" in self._ex_id.lower()
+                and tf_norm == "1m"
+            ):
+                probe_limit = 1000
+            use_limit = probe_limit or limit
             page = await self._ccxt_fetch_ohlcv_once(
-                symbol, since, limit, end_exclusive_ms=end_excl, tf=tf_norm
+                symbol, since, use_limit, end_exclusive_ms=end_excl, tf=tf_norm
             )
             if not page:
                 break
             arr = self._normalize_ccxt_ohlcv(page)
             if arr.size == 0:
                 break
+            if probe_limit is not None and not self._ccxt_limit_probe_done:
+                # If Bitget returns >200 rows, we can safely use 1000 going forward.
+                if arr.shape[0] > 200:
+                    self._ccxt_limit_default = 1000
+                    limit = 1000
+                    self._log(
+                        "info",
+                        "bitget_ohlcv_limit_probe",
+                        symbol=symbol,
+                        tf=tf_norm,
+                        supported_limit=1000,
+                        rows=int(arr.shape[0]),
+                    )
+                else:
+                    self._ccxt_limit_default = 200
+                    limit = 200
+                    self._log(
+                        "info",
+                        "bitget_ohlcv_limit_probe",
+                        symbol=symbol,
+                        tf=tf_norm,
+                        supported_limit=200,
+                        rows=int(arr.shape[0]),
+                    )
+                self._ccxt_limit_probe_done = True
             # Exclude any candles >= end_exclusive
             arr = arr[arr["ts"] < end_excl]
             if arr.size == 0:
