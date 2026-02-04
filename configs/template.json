@@ -7,7 +7,7 @@
         "btc_collateral_ltv_cap": null,
         "compress_cache": true,
         "end_date": "now",
-        "exchanges": ["binance", "bybit", "gateio"],
+        "exchanges": ["binance", "bybit"],
         "filter_by_min_effective_cost": false,
         "gap_tolerance_ohlcvs_minutes": 120,
         "maker_fee_override": null,
