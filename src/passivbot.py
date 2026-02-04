@@ -540,6 +540,7 @@ class Passivbot:
         }
         self._last_plan_detail: dict[str, tuple[int, int, int]] = {}
         self._last_action_summary: dict[tuple[str, str], str] = {}
+        self.start_time_ms = utc_ms()
         # CandlestickManager settings from config.live
         # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
         cm_kwargs = {"exchange": self.cca, "exchange_name": self.exchange, "debug": self.logging_level}
@@ -1605,6 +1606,23 @@ class Passivbot:
         except Exception:
             return
 
+        # Only log for symbols that are actively relevant to the live bot.
+        def _should_log_symbol(sym: str) -> bool:
+            try:
+                if sym in getattr(self, "active_symbols", []):
+                    return True
+            except Exception:
+                pass
+            try:
+                if sym in getattr(self, "open_orders", {}) and self.open_orders.get(sym):
+                    return True
+            except Exception:
+                pass
+            try:
+                return bool(self.has_position(sym))
+            except Exception:
+                return False
+
         symbol_filter = set(symbols) if symbols is not None else None
         symbols_by_side: Dict[str, set] = {}
         forager_needed = {"long": False, "short": False}
@@ -1667,22 +1685,24 @@ class Passivbot:
             win = int(per_symbol_win.get(sym, 0) or 0)
             if win > 0 and end_final > 0:
                 start_ts = max(0, int(end_final - win * ONE_MIN_MS))
+                log_level = "info" if _should_log_symbol(sym) else "debug"
                 self.cm.check_disk_coverage(
                     sym,
                     start_ts,
                     int(end_final),
                     timeframe="1m",
-                    log_level="info",
+                    log_level=log_level,
                 )
             warm_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
             if warm_hours > 0 and end_final_hour > 0:
                 start_ts = max(0, int(end_final_hour - warm_hours * 60 * ONE_MIN_MS))
+                log_level = "info" if _should_log_symbol(sym) else "debug"
                 self.cm.check_disk_coverage(
                     sym,
                     start_ts,
                     int(end_final_hour),
                     timeframe="1h",
-                    log_level="info",
+                    log_level=log_level,
                 )
 
     def get_first_timestamp(self, symbol):
@@ -5213,7 +5233,9 @@ class Passivbot:
                     self._log_memory_snapshot(now_ms=now)
                 candle_check_interval = int(getattr(self, "candle_disk_check_interval_ms", 0) or 0)
                 last_candle_check = int(getattr(self, "_candle_disk_check_last_ms", 0) or 0)
-                if candle_check_interval > 0 and (
+                boot_delay_ms = int(getattr(self, "candle_disk_check_boot_delay_ms", 300_000) or 0)
+                boot_elapsed = int(now - getattr(self, "start_time_ms", now))
+                if candle_check_interval > 0 and boot_elapsed >= boot_delay_ms and (
                     last_candle_check == 0 or now - last_candle_check >= candle_check_interval
                 ):
                     self._candle_disk_check_last_ms = now

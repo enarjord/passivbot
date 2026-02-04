@@ -4535,7 +4535,7 @@ class CandlestickManager:
             try:
                 missing_now = self._missing_spans(sub, start_ts, end_ts)
                 self._log(
-                    "info",
+                    "debug",
                     "ttl_bypass_missing_coverage",
                     symbol=symbol,
                     start_ts=start_ts,
