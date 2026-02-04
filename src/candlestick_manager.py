@@ -538,11 +538,14 @@ class CandlestickManager:
         self._ccxt_limit_default = 1000
         self._ccxt_page_overlap_candles = 0
         self._record_payload_gaps_as_known = False
+        self._ccxt_since_exclusive = False
         if isinstance(self._ex_id, str) and "bitget" in self._ex_id.lower():
             # Bitget often serves 1m klines with 200 limit per page
             self._ccxt_limit_default = 200
             # Overlap page boundaries to avoid missing the boundary candle
             self._ccxt_page_overlap_candles = 1
+            # Bitget since parameter behaves as exclusive for 1m OHLCV
+            self._ccxt_since_exclusive = True
         if isinstance(self._ex_id, str) and "kucoin" in self._ex_id.lower():
             # KuCoin futures returns max 200 rows per OHLCV call and can be sparse (trade-only minutes).
             self._ccxt_limit_default = 200
@@ -550,6 +553,8 @@ class CandlestickManager:
             self._ccxt_page_overlap_candles = 1
             # Gaps inside a single payload are considered verified no-trade gaps.
             self._record_payload_gaps_as_known = True
+            # KuCoin since behaves as exclusive for 1m OHLCV.
+            self._ccxt_since_exclusive = True
 
         # Optional per-page range logging for selected symbols (debug pagination)
         self._page_debug_all = False
@@ -2855,6 +2860,10 @@ class CandlestickManager:
         tf_norm = self._normalize_timeframe_arg(timeframe, tf, default=self._ccxt_timeframe)
         # Derive pagination step from timeframe
         period_ms = _tf_to_ms(tf_norm)
+        # Some exchanges treat `since` as exclusive. Back up by overlap to avoid missing the first candle.
+        if self._ccxt_since_exclusive and self._ccxt_page_overlap_candles > 0 and since > 0:
+            overlap_ms = period_ms * int(self._ccxt_page_overlap_candles)
+            since = max(0, since - overlap_ms)
         all_rows = []
         pages = 0
         prev_last_ts: Optional[int] = None
@@ -5050,10 +5059,11 @@ class CandlestickManager:
 
                 # Attempt limited targeted fetches for unknown spans
                 attempts = 0
+                max_attempts = 10 if self._ccxt_since_exclusive else 3
                 attempted: List[Tuple[int, int]] = []
                 noresult: List[Tuple[int, int]] = []
                 for s, e in missing:
-                    if attempts >= 3:
+                    if attempts >= max_attempts:
                         break
                     if span_in_persistent_gap_present(s, e):
                         continue

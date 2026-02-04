@@ -957,14 +957,14 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
         return False
 
 
-def coin_to_symbol(coin, exchange, quote=None):
+def coin_to_symbol(coin, exchange, quote=None, verbose=True):
     # caches coin_to_symbol_map in memory and reloads if file changes
     if coin == "":
         return ""
     # Denormalize to use canonical form for cache paths (e.g., "binance" not "binanceusdm")
     ex = to_standard_exchange_name(exchange or "")
     quote = get_quote(ex, quote)
-    coin_sanitized = symbol_to_coin(coin)
+    coin_sanitized = symbol_to_coin(coin, verbose=verbose)
     fallback = f"{coin_sanitized}/{quote}:{quote}"
     try:
         loaded = _load_coin_to_symbol_map(ex)
@@ -972,40 +972,44 @@ def coin_to_symbol(coin, exchange, quote=None):
         if len(candidates) == 1:
             return candidates[0]
         if len(candidates) > 1:
-            logging.info(
-                "Multiple candidates for %s (raw=%s): %s",
-                coin_sanitized,
-                coin,
-                candidates,
-            )
+            if verbose:
+                logging.info(
+                    "Multiple candidates for %s (raw=%s): %s",
+                    coin_sanitized,
+                    coin,
+                    candidates,
+                )
             return candidates[0]
         if loaded:
             # map present but coin missing
             warn_key = (ex, coin_sanitized)
             if warn_key not in _COIN_TO_SYMBOL_FALLBACKS:
-                logging.warning(
-                    "No mapping for %s (raw=%s) on %s; using fallback %s",
-                    coin_sanitized,
-                    coin,
-                    ex,
-                    fallback,
-                )
+                if verbose:
+                    logging.warning(
+                        "No mapping for %s (raw=%s) on %s; using fallback %s",
+                        coin_sanitized,
+                        coin,
+                        ex,
+                        fallback,
+                    )
                 _COIN_TO_SYMBOL_FALLBACKS.add(warn_key)
         else:
             warn_key = (ex, coin_sanitized)
             if warn_key not in _COIN_TO_SYMBOL_FALLBACKS:
-                logging.warning(
-                    "coin_to_symbol map for %s missing; using fallback for %s (raw=%s) -> %s",
-                    ex,
-                    coin_sanitized,
-                    coin,
-                    fallback,
-                )
+                if verbose:
+                    logging.warning(
+                        "coin_to_symbol map for %s missing; using fallback for %s (raw=%s) -> %s",
+                        ex,
+                        coin_sanitized,
+                        coin,
+                        fallback,
+                    )
                 _COIN_TO_SYMBOL_FALLBACKS.add(warn_key)
     except Exception as e:
-        logging.error(
-            "error with coin_to_symbol %s (raw=%s) %s: %s", coin_sanitized, coin, exchange, e
-        )
+        if verbose:
+            logging.error(
+                "error with coin_to_symbol %s (raw=%s) %s: %s", coin_sanitized, coin, exchange, e
+            )
     return fallback
 
 
@@ -1165,6 +1169,38 @@ def normalize_coins_source(src):
                 out.append(str(item).strip())
         return out
 
+    def _parse_jsonish(raw: str):
+        raw = raw.strip()
+        if not raw:
+            return None
+        if raw[0] not in "[{" or raw[-1] not in "]}":
+            return None
+        parsed = None
+        try:
+            import hjson
+
+            parsed = hjson.loads(raw)
+        except Exception:
+            parsed = None
+        if parsed is None:
+            try:
+                import json
+
+                parsed = json.loads(raw)
+            except Exception:
+                parsed = None
+        return parsed
+
+    def _maybe_parse_jsonish(val):
+        if isinstance(val, str):
+            parsed = _parse_jsonish(val)
+            return parsed if parsed is not None else val
+        if isinstance(val, (list, tuple)) and val and all(isinstance(x, str) for x in val):
+            joined = ",".join(x.strip() for x in val if x.strip())
+            parsed = _parse_jsonish(joined)
+            return parsed if parsed is not None else val
+        return val
+
     def _load_if_file(x):
         """
         If *x* (or *x[0]* when x is a single-item list/tuple) is a
@@ -1196,6 +1232,7 @@ def normalize_coins_source(src):
         3. Flatten & split with _expand so we end up with a clean list.
         """
         value = _load_if_file(value)
+        value = _maybe_parse_jsonish(value)
 
         if isinstance(value, dict) and sorted(value.keys()) == ["long", "short"]:
             value = value.get(side, [])
@@ -1210,27 +1247,7 @@ def normalize_coins_source(src):
     #  Main logic                                                           #
     # --------------------------------------------------------------------- #
     src = _load_if_file(src)  # try to load *src* itself
-
-    # If src is a JSON/HJSON-like string, try to parse it into a list/dict.
-    if isinstance(src, str):
-        raw = src.strip()
-        if raw and raw[0] in "[{" and raw[-1] in "]}":
-            parsed = None
-            try:
-                import hjson
-
-                parsed = hjson.loads(raw)
-            except Exception:
-                parsed = None
-            if parsed is None:
-                try:
-                    import json
-
-                    parsed = json.loads(raw)
-                except Exception:
-                    parsed = None
-            if parsed is not None:
-                src = parsed
+    src = _maybe_parse_jsonish(src)
 
     # Case 1 – already a dict with 'long' & 'short' keys
     if isinstance(src, dict) and sorted(src.keys()) == ["long", "short"]:

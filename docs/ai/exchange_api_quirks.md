@@ -64,6 +64,24 @@ minutes only when trades occurred), which creates legitimate gaps.
 - Overlap page boundaries by 1 candle to validate gaps between fetches
 - Treat gaps **inside a single payload** as verified no-trade gaps (don’t retry)
 
+## Bitget Futures
+
+### OHLCV since parameter is exclusive
+
+**Discovered:** 2026-02-04
+
+**Problem:** Bitget `fetch_ohlcv` treats `since` as **exclusive**, which can skip the
+first candle in each paginated page if you advance `since` naively.
+
+**Symptoms:**
+- Regularly spaced 1‑minute gaps at ~200‑minute intervals (page boundaries)
+- Synthesized single‑minute candles even on liquid symbols
+
+**Mitigations in Passivbot:**
+- Use `limit=200` per page
+- Overlap page boundaries by 1 candle
+- Back up the initial `since` by 1 candle when paginating (exclusive semantics)
+
 ## General Patterns
 
 ### CCXT Wrapper Limitations

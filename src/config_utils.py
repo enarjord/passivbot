@@ -1704,7 +1704,12 @@ def comma_separated_values_float(x):
 
 
 def comma_separated_values(x):
-    return x.split(",")
+    # Preserve JSON/HJSON-like strings (used for approved/ignored coin dicts)
+    if isinstance(x, str):
+        raw = x.strip()
+        if raw and raw[0] in "[{" and raw[-1] in "]}":
+            return [x]
+    return [item.strip() for item in x.split(",")]
 
 
 def optional_float(x):

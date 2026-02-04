@@ -1720,11 +1720,11 @@ class Passivbot:
             self.coin_to_symbol_map = {}
         if coin in self.coin_to_symbol_map:
             return self.coin_to_symbol_map[coin]
-        coinf = symbol_to_coin(coin)
+        coinf = symbol_to_coin(coin, verbose=verbose)
         if coinf in self.coin_to_symbol_map:
             self.coin_to_symbol_map[coin] = self.coin_to_symbol_map[coinf]
             return self.coin_to_symbol_map[coinf]
-        result = coin_to_symbol(coin, self.exchange, quote=self.quote)
+        result = coin_to_symbol(coin, self.exchange, quote=self.quote, verbose=verbose)
         self.coin_to_symbol_map[coin] = result
         return result
 
@@ -5526,13 +5526,15 @@ class Passivbot:
                             expanded_coins.append(item)
                     coins = expanded_coins
 
-                symbols = [self.coin_to_symbol(coin) for coin in coins if coin]
+                symbols = [self.coin_to_symbol(coin, verbose=False) for coin in coins if coin]
                 symbols = {s for s in symbols if s}
                 eligible = getattr(self, "eligible_symbols", None)
                 if eligible:
                     skipped = [sym for sym in symbols if sym not in eligible]
                     if skipped:
-                        coin_list = ", ".join(sorted(symbol_to_coin(sym) or sym for sym in skipped))
+                        coin_list = ", ".join(
+                            sorted(symbol_to_coin(sym, verbose=False) or sym for sym in skipped)
+                        )
                         symbol_list = ", ".join(sorted(skipped))
                         warned = getattr(self, "_unsupported_coin_warnings", None)
                         if warned is None:
