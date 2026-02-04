@@ -20,7 +20,7 @@ import random
 import tempfile
 import time
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
 from pathlib import Path
@@ -491,6 +491,13 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
     """Group events sharing timestamp/symbol/pb_type/side/position."""
     aggregated: Dict[Tuple, Dict[str, object]] = {}
     order: List[Tuple] = []
+
+    def _event_source_ids(ev: Dict[str, object]) -> List[str]:
+        ids = ev.get("source_ids")
+        if ids:
+            return [str(x) for x in ids if x]
+        return []
+
     for ev in events:
         key = (
             ev.get("timestamp"),
@@ -502,9 +509,13 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
         if key not in aggregated:
             aggregated[key] = dict(ev)
             aggregated[key]["id"] = str(ev.get("id", ""))
+            src_ids = _event_source_ids(ev)
+            if src_ids:
+                aggregated[key]["source_ids"] = src_ids
             aggregated[key]["qty"] = float(ev.get("qty", 0.0))
             aggregated[key]["pnl"] = float(ev.get("pnl", 0.0))
             aggregated[key]["fees"] = _merge_fee_lists(ev.get("fees"), None)
+            aggregated[key]["raw"] = _normalize_raw_field(ev.get("raw"))
             aggregated[key]["_price_numerator"] = float(ev.get("price", 0.0)) * float(
                 ev.get("qty", 0.0)
             )
@@ -512,9 +523,15 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
         else:
             agg = aggregated[key]
             agg["id"] = f"{agg['id']}+{ev.get('id', '')}".strip("+")
+            src_ids = _event_source_ids(ev)
+            if src_ids:
+                merged_ids = set(agg.get("source_ids") or [])
+                merged_ids.update(src_ids)
+                agg["source_ids"] = sorted(merged_ids)
             agg["qty"] = float(agg.get("qty", 0.0)) + float(ev.get("qty", 0.0))
             agg["pnl"] = float(agg.get("pnl", 0.0)) + float(ev.get("pnl", 0.0))
             agg["fees"] = _merge_fee_lists(agg.get("fees"), ev.get("fees"))
+            agg["raw"] = _normalize_raw_field(agg.get("raw")) + _normalize_raw_field(ev.get("raw"))
             agg["_price_numerator"] = float(agg.get("_price_numerator", 0.0)) + float(
                 ev.get("price", 0.0)
             ) * float(ev.get("qty", 0.0))
@@ -576,6 +593,29 @@ def _normalize_raw_field(raw: object) -> List[Dict[str, object]]:
     return [{"source": "unknown", "data": str(raw)}]
 
 
+def _extract_source_ids(raw: object, fallback_id: Optional[object]) -> List[str]:
+    """Extract stable source IDs from raw payloads, with fallback to event id."""
+    ids: set[str] = set()
+    raw_items = _normalize_raw_field(raw)
+    for item in raw_items:
+        data = item.get("data") if isinstance(item, dict) else item
+        if isinstance(data, dict):
+            # Prefer canonical trade ids if present
+            for key in ("id", "tradeId", "trade_id", "execId"):
+                val = data.get(key)
+                if val:
+                    ids.add(str(val))
+            info = data.get("info")
+            if isinstance(info, dict):
+                for key in ("tid", "id", "tradeId", "trade_id", "execId"):
+                    val = info.get(key)
+                    if val:
+                        ids.add(str(val))
+    if not ids and fallback_id:
+        ids.add(str(fallback_id))
+    return sorted(ids)
+
+
 @dataclass(frozen=True)
 class FillEvent:
     """Canonical representation of a single fill event."""
@@ -592,6 +632,7 @@ class FillEvent:
     pb_order_type: str
     position_side: str
     client_order_id: str
+    source_ids: List[str] = field(default_factory=list)
     psize: float = 0.0
     pprice: float = 0.0
     raw: List[Dict[str, object]] = None  # List of raw payloads from multiple sources
@@ -603,6 +644,7 @@ class FillEvent:
     def to_dict(self) -> Dict[str, object]:
         return {
             "id": self.id,
+            "source_ids": list(self.source_ids) if self.source_ids is not None else [],
             "timestamp": self.timestamp,
             "datetime": self.datetime,
             "symbol": self.symbol,
@@ -638,6 +680,9 @@ class FillEvent:
             raise ValueError(f"Fill event missing required keys: {missing}")
         return cls(
             id=str(data["id"]),
+            source_ids=_extract_source_ids(data.get("raw"), data.get("id"))
+            if not data.get("source_ids")
+            else [str(x) for x in data.get("source_ids") if x],
             timestamp=int(data["timestamp"]),
             datetime=str(data.get("datetime") or ts_to_date(int(data["timestamp"]))),
             symbol=str(data["symbol"]),

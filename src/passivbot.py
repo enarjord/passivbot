@@ -2920,8 +2920,17 @@ class Passivbot:
                 self.live_value("pnls_max_lookback_days")
             )
 
-            # Get existing event IDs before refresh
-            existing_ids = set(ev.id for ev in self._pnls_manager.get_events())
+            # Get existing event IDs and source IDs before refresh
+            existing_ids: set[str] = set()
+            existing_source_ids: set[str] = set()
+            for ev in self._pnls_manager.get_events():
+                if getattr(ev, "id", None):
+                    existing_ids.add(ev.id)
+                src_ids = getattr(ev, "source_ids", None)
+                if src_ids:
+                    existing_source_ids.update(str(x) for x in src_ids if x)
+                elif getattr(ev, "id", None):
+                    existing_source_ids.add(ev.id)
 
             # Check if we need a full refresh (cache empty or too old)
             events = self._pnls_manager.get_events()
@@ -2951,7 +2960,22 @@ class Passivbot:
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
-            new_events = [ev for ev in all_events if ev.id not in existing_ids]
+            new_events = []
+            seen_new_source_ids: set[str] = set()
+            for ev in all_events:
+                src_ids = getattr(ev, "source_ids", None)
+                if src_ids:
+                    src_ids = [str(x) for x in src_ids if x]
+                else:
+                    src_ids = [ev.id] if getattr(ev, "id", None) else []
+                if not src_ids:
+                    continue
+                if any(src_id in existing_source_ids for src_id in src_ids):
+                    continue
+                if any(src_id in seen_new_source_ids for src_id in src_ids):
+                    continue
+                new_events.append(ev)
+                seen_new_source_ids.update(src_ids)
             if new_events:
                 self._log_new_fill_events(new_events)
 
