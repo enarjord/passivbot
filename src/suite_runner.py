@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import hashlib
 import logging
 from copy import deepcopy
 from dataclasses import dataclass
@@ -586,6 +587,8 @@ def apply_scenario(
     available_exchanges: Iterable[str],
     available_coins: set[str],
     base_coin_sources: Optional[Dict[str, str]] = None,
+    *,
+    quiet: bool = False,
 ) -> Tuple[Dict[str, Any], List[str]]:
     cfg = deepcopy(base_config)
     tracker = ConfigTransformTracker()
@@ -609,7 +612,7 @@ def apply_scenario(
 
     filtered_coins = [coin for coin in scenario_coins if coin in available_coins]
     missing = sorted(set(scenario_coins) - set(filtered_coins))
-    if missing:
+    if missing and not quiet:
         logging.warning(
             "Scenario %s: skipping %d coin(s) missing in dataset: %s",
             scenario.label,
@@ -694,11 +697,80 @@ def apply_scenario(
                 raise ValueError(f"Scenario '{scenario.label}' override keys must be dotted strings")
             _apply_override(cfg, dotted_path, value, tracker)
 
-    if tracker.summary():
+    if tracker.summary() and not quiet:
         details = tracker.merge_details({"scenario": scenario.label})
         record_transform(cfg, "apply_scenario", details)
 
     return cfg, filtered_coins
+
+
+def _normalize_coins_by_exchange(coin_exchange: Dict[str, str]) -> Dict[str, List[str]]:
+    grouped: Dict[str, List[str]] = {}
+    for coin, exchange in coin_exchange.items():
+        grouped.setdefault(str(exchange), []).append(str(coin))
+    return {ex: sorted(coins) for ex, coins in sorted(grouped.items())}
+
+
+def _compute_effective_coin_exchange(
+    scenario: SuiteScenario,
+    scenario_coins: List[str],
+    datasets: Dict[str, "ExchangeDataset"],
+    available_exchanges: List[str],
+) -> Dict[str, str]:
+    """Return effective coin->exchange assignment for a scenario."""
+    has_combined = "combined" in datasets
+    raw_scenario_exchanges = set(scenario.exchanges) if scenario.exchanges else None
+    actual_exchanges_set = {ex for ex in available_exchanges if ex != "combined"}
+
+    if raw_scenario_exchanges:
+        scenario_exchanges = raw_scenario_exchanges & actual_exchanges_set
+        if not scenario_exchanges:
+            scenario_exchanges = actual_exchanges_set
+    else:
+        scenario_exchanges = actual_exchanges_set
+
+    use_combined = has_combined and scenario_exchanges == actual_exchanges_set
+    coin_exchange: Dict[str, str] = {}
+
+    if use_combined:
+        dataset = datasets["combined"]
+        allowed_exchanges = (
+            list(scenario.exchanges) if scenario.exchanges else list(dataset.available_exchanges)
+        )
+        selected_coins, _ = filter_coins_by_exchange_assignment(
+            scenario_coins,
+            allowed_exchanges,
+            dataset.coin_exchange,
+            default_exchange=dataset.exchange,
+        )
+        for coin in selected_coins:
+            coin_exchange[coin] = dataset.coin_exchange.get(coin, dataset.exchange)
+    else:
+        for key, dataset in datasets.items():
+            if key == "combined":
+                continue
+            if dataset.exchange not in scenario_exchanges and key not in scenario_exchanges:
+                continue
+            coins_for_exchange = [coin for coin in scenario_coins if coin in dataset.coin_index]
+            for coin in coins_for_exchange:
+                coin_exchange[coin] = dataset.coin_exchange.get(coin, dataset.exchange)
+    return coin_exchange
+
+
+def _build_scenario_signature(
+    scenario_config: Dict[str, Any],
+    coin_exchange: Dict[str, str],
+) -> str:
+    """Build a stable signature for scenario deduplication."""
+    payload = deepcopy(scenario_config)
+    backtest_section = payload.setdefault("backtest", {})
+    coins_by_ex = _normalize_coins_by_exchange(coin_exchange)
+    backtest_section["coins"] = coins_by_ex
+    backtest_section["exchanges"] = sorted(coins_by_ex.keys())
+    # cache_dir paths are environment-specific and don't affect results
+    backtest_section["cache_dir"] = {}
+    serialized = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(serialized.encode()).hexdigest()
 
 
 def _apply_override(
@@ -1330,6 +1402,37 @@ async def run_backtest_suite_async(
         dataset_available_exchanges = datasets["combined"].available_exchanges
     else:
         dataset_available_exchanges = [ds.exchange for ds in datasets.values()]
+
+    # Deduplicate scenarios that resolve to identical effective inputs.
+    seen_signatures: Dict[str, str] = {}
+    deduped: List[SuiteScenario] = []
+    for scenario in scenarios:
+        scenario_config_tmp, scenario_coins = apply_scenario(
+            base_config,
+            scenario,
+            master_coins=master_coins,
+            master_ignored=master_ignored,
+            available_exchanges=dataset_available_exchanges,
+            available_coins=available_coins,
+            base_coin_sources=suite_coin_sources,
+            quiet=True,
+        )
+        coin_exchange = _compute_effective_coin_exchange(
+            scenario, scenario_coins, datasets, dataset_available_exchanges
+        )
+        signature = _build_scenario_signature(scenario_config_tmp, coin_exchange)
+        if signature in seen_signatures:
+            logging.info(
+                "Skipping scenario %s (duplicate of %s)",
+                scenario.label,
+                seen_signatures[signature],
+            )
+            continue
+        seen_signatures[signature] = scenario.label
+        deduped.append(scenario)
+    if len(deduped) != len(scenarios):
+        logging.info("Scenario dedup: %d -> %d", len(scenarios), len(deduped))
+    scenarios = deduped
 
     suite_timestamp = ts_to_date(utc_ms())[:19].replace(":", "_")
     suite_dir = (
