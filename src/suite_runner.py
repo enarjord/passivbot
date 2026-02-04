@@ -763,6 +763,8 @@ def _build_scenario_signature(
 ) -> str:
     """Build a stable signature for scenario deduplication."""
     payload = deepcopy(scenario_config)
+    # Ignore transform metadata; it differs per scenario but doesn't affect results.
+    payload.pop("_transform_log", None)
     backtest_section = payload.setdefault("backtest", {})
     coins_by_ex = _normalize_coins_by_exchange(coin_exchange)
     backtest_section["coins"] = coins_by_ex
