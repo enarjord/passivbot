@@ -541,6 +541,8 @@ class CandlestickManager:
         if isinstance(self._ex_id, str) and "bitget" in self._ex_id.lower():
             # Bitget often serves 1m klines with 200 limit per page
             self._ccxt_limit_default = 200
+            # Overlap page boundaries to avoid missing the boundary candle
+            self._ccxt_page_overlap_candles = 1
         if isinstance(self._ex_id, str) and "kucoin" in self._ex_id.lower():
             # KuCoin futures returns max 200 rows per OHLCV call and can be sparse (trade-only minutes).
             self._ccxt_limit_default = 200
