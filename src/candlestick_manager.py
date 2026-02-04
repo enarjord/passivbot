@@ -1451,7 +1451,7 @@ class CandlestickManager:
         self._legacy_shard_paths_cache[key] = mapping
         if mapping:
             self._log(
-                "info",
+                "debug",
                 "legacy_index_built",
                 symbol=symbol,
                 timeframe=tf,

@@ -1211,6 +1211,27 @@ def normalize_coins_source(src):
     # --------------------------------------------------------------------- #
     src = _load_if_file(src)  # try to load *src* itself
 
+    # If src is a JSON/HJSON-like string, try to parse it into a list/dict.
+    if isinstance(src, str):
+        raw = src.strip()
+        if raw and raw[0] in "[{" and raw[-1] in "]}":
+            parsed = None
+            try:
+                import hjson
+
+                parsed = hjson.loads(raw)
+            except Exception:
+                parsed = None
+            if parsed is None:
+                try:
+                    import json
+
+                    parsed = json.loads(raw)
+                except Exception:
+                    parsed = None
+            if parsed is not None:
+                src = parsed
+
     # Case 1 – already a dict with 'long' & 'short' keys
     if isinstance(src, dict) and sorted(src.keys()) == ["long", "short"]:
         return {
