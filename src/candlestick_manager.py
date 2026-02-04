@@ -4211,6 +4211,7 @@ class CandlestickManager:
         force_refetch_gaps: bool = False,
         fill_leading_gaps: bool = False,
         skip_historical_gap_fill: bool = False,
+        max_lookback_candles: Optional[int] = None,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
 
@@ -4227,6 +4228,8 @@ class CandlestickManager:
         - If `skip_historical_gap_fill` is True: do not attempt to fetch/fill gaps
           in historical data older than 1 day. Useful for live bot warmup where
           recent data is sufficient and filling old gaps wastes time.
+        - If `max_lookback_candles` is set: clamp start_ts so the request spans
+          at most that many candles ending at end_ts (per timeframe).
         """
         if max_age_ms is not None and max_age_ms < 0:
             raise ValueError("max_age_ms cannot be negative")
@@ -4270,6 +4273,15 @@ class CandlestickManager:
                     # default window expressed in number of requested-tf buckets
                     start_ts = int(end_ts) - self.default_window_candles * period_ms
                 start_ts = (int(start_ts) // period_ms) * period_ms
+
+                if max_lookback_candles is not None:
+                    try:
+                        lookback = max(1, int(max_lookback_candles))
+                        lookback_start = int(end_ts) - period_ms * (lookback - 1)
+                        if int(start_ts) < int(lookback_start):
+                            start_ts = int(lookback_start)
+                    except Exception:
+                        pass
 
                 if start_ts > end_ts:
                     return np.empty((0,), dtype=CANDLE_DTYPE)
@@ -4434,6 +4446,15 @@ class CandlestickManager:
             start_ts = int(end_ts) - ONE_MIN_MS * self.default_window_candles
         else:
             start_ts = _floor_minute(int(start_ts))
+
+        if max_lookback_candles is not None:
+            try:
+                lookback = max(1, int(max_lookback_candles))
+                lookback_start = int(end_ts) - ONE_MIN_MS * (lookback - 1)
+                if int(start_ts) < int(lookback_start):
+                    start_ts = int(lookback_start)
+            except Exception:
+                pass
 
         if start_ts > end_ts:
             return np.empty((0,), dtype=CANDLE_DTYPE)
@@ -5659,6 +5680,7 @@ class CandlestickManager:
         spans_by_metric: Dict[str, float],
         max_age_ms: Optional[int] = None,
         *,
+        window_candles: Optional[int] = None,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
     ) -> Dict[str, float]:
@@ -5680,6 +5702,12 @@ class CandlestickManager:
         max_span = max(float(s) for s in spans_by_metric.values())
         max_candles = max(1, int(math.ceil(max_span)))
         start_ts, end_ts = await self._latest_finalized_range(max_span, period_ms=period_ms)
+        if window_candles is not None:
+            try:
+                lookback = max(1, int(window_candles))
+                start_ts = int(end_ts - period_ms * (lookback - 1))
+            except Exception:
+                pass
         now = _utc_now_ms()
         tf_key = str(period_ms)
 
@@ -5706,6 +5734,7 @@ class CandlestickManager:
             max_age_ms=max_age_ms,
             strict=True if period_ms == ONE_MIN_MS else False,
             timeframe=out_tf,
+            max_lookback_candles=window_candles,
         )
         if raw.size == 0:
             for metric_key in missing:

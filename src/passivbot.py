@@ -1522,6 +1522,7 @@ class Passivbot:
                         max_age_ms=ttl_ms,
                         strict=False,
                         skip_historical_gap_fill=skip_hist,  # allow gap fill on large warmup spans
+                        max_lookback_candles=win,
                     )
                 except Exception:
                     pass
@@ -1562,6 +1563,7 @@ class Passivbot:
                         timeframe="1h",
                         strict=False,
                         skip_historical_gap_fill=True,  # Live warmup: don't waste time on old gaps
+                        max_lookback_candles=warm_hours,
                     )
                 except Exception:
                     pass
@@ -2684,6 +2686,19 @@ class Passivbot:
         """
         span_volume = int(round(self.bot_value(pside, "filter_volume_ema_span")))
         span_volatility = int(round(self.bot_value(pside, "filter_volatility_ema_span")))
+        try:
+            warmup_ratio = float(get_optional_live_value(self.config, "warmup_ratio", 0.0))
+        except Exception:
+            warmup_ratio = 0.0
+        try:
+            max_warmup_minutes = int(get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0)
+        except Exception:
+            max_warmup_minutes = 0
+        span_buffer = 1.0 + max(0.0, warmup_ratio)
+        max_span = max(span_volume, span_volatility)
+        window_candles = max(1, int(math.ceil(max_span * span_buffer))) if max_span > 0 else 1
+        if max_warmup_minutes > 0:
+            window_candles = min(int(window_candles), int(max_warmup_minutes))
         if symbols is None:
             symbols = self.get_symbols_approved_or_has_pos(pside)
 
@@ -2705,6 +2720,7 @@ class Passivbot:
                     symbol,
                     {"qv": span_volume, "log_range": span_volatility},
                     max_age_ms=ttl,
+                    window_candles=window_candles,
                     timeframe=None,
                 )
                 vol = float(res.get("qv", float("nan")))
@@ -5075,7 +5091,15 @@ class Passivbot:
             default_win = int(getattr(self.cm, "default_window_candles", 120) or 120)
         except Exception:
             default_win = 120
-        span_buffer = 1.5
+        try:
+            warmup_ratio = float(get_optional_live_value(self.config, "warmup_ratio", 0.0))
+        except Exception:
+            warmup_ratio = 0.0
+        try:
+            max_warmup_minutes = int(get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0)
+        except Exception:
+            max_warmup_minutes = 0
+        span_buffer = 1.0 + max(0.0, warmup_ratio)
 
         for sym in to_refresh:
             try:
@@ -5102,6 +5126,8 @@ class Passivbot:
                     if max_span > 0.0
                     else default_win
                 )
+                if max_warmup_minutes > 0:
+                    win = min(int(win), int(max_warmup_minutes))
                 start_ts = end_ts - ONE_MIN_MS * max(1, win)
                 await self.cm.get_candles(
                     sym,
@@ -5109,6 +5135,7 @@ class Passivbot:
                     end_ts=end_ts,
                     max_age_ms=0,
                     strict=False,
+                    max_lookback_candles=win,
                 )
             except TimeoutError as exc:
                 logging.warning(
@@ -5150,7 +5177,12 @@ class Passivbot:
             for sym in symbols:
                 try:
                     await self.cm.get_candles(
-                        sym, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, strict=False
+                        sym,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        max_age_ms=max_age_ms,
+                        strict=False,
+                        max_lookback_candles=window,
                     )
                 except TimeoutError as exc:
                     logging.warning(
@@ -5230,6 +5262,18 @@ class Passivbot:
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
         span = int(round(self.bot_value(pside, "filter_volatility_ema_span")))
+        try:
+            warmup_ratio = float(get_optional_live_value(self.config, "warmup_ratio", 0.0))
+        except Exception:
+            warmup_ratio = 0.0
+        try:
+            max_warmup_minutes = int(get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0)
+        except Exception:
+            max_warmup_minutes = 0
+        span_buffer = 1.0 + max(0.0, warmup_ratio)
+        window_candles = max(1, int(math.ceil(span * span_buffer))) if span > 0 else 1
+        if max_warmup_minutes > 0:
+            window_candles = min(int(window_candles), int(max_warmup_minutes))
 
         # Compute EMA of log range on 1m candles: ln(high/low)
         async def one(symbol: str):
@@ -5248,9 +5292,14 @@ class Passivbot:
                         if (has_pos or has_oo)
                         else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
                     )
-                val = await self.cm.get_latest_ema_log_range(
-                    symbol, span=span, timeframe=None, max_age_ms=ttl
+                res = await self.cm.get_latest_ema_metrics(
+                    symbol,
+                    {"log_range": span},
+                    max_age_ms=ttl,
+                    window_candles=window_candles,
+                    timeframe=None,
                 )
+                val = float(res.get("log_range", float("nan")))
                 return float(val) if np.isfinite(val) else 0.0
             except Exception:
                 return 0.0
@@ -5302,6 +5351,18 @@ class Passivbot:
         Returns mapping symbol -> ema_quote_volume; non-finite/failed computations yield 0.0.
         """
         span = int(round(self.bot_value(pside, "filter_volume_ema_span")))
+        try:
+            warmup_ratio = float(get_optional_live_value(self.config, "warmup_ratio", 0.0))
+        except Exception:
+            warmup_ratio = 0.0
+        try:
+            max_warmup_minutes = int(get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0)
+        except Exception:
+            max_warmup_minutes = 0
+        span_buffer = 1.0 + max(0.0, warmup_ratio)
+        window_candles = max(1, int(math.ceil(span * span_buffer))) if span > 0 else 1
+        if max_warmup_minutes > 0:
+            window_candles = min(int(window_candles), int(max_warmup_minutes))
         if symbols is None:
             symbols = self.get_symbols_approved_or_has_pos(pside)
 
@@ -5320,9 +5381,14 @@ class Passivbot:
                         if (has_pos or has_oo)
                         else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
                     )
-                val = await self.cm.get_latest_ema_quote_volume(
-                    symbol, span=span, timeframe=None, max_age_ms=ttl
+                res = await self.cm.get_latest_ema_metrics(
+                    symbol,
+                    {"qv": span},
+                    max_age_ms=ttl,
+                    window_candles=window_candles,
+                    timeframe=None,
                 )
+                val = float(res.get("qv", float("nan")))
                 return float(val) if np.isfinite(val) else 0.0
             except Exception:
                 return 0.0
