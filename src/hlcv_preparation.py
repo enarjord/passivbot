@@ -812,13 +812,25 @@ async def prepare_hlcvs_internal(
     return mss, timestamps, unified_array
 
 
-async def prepare_hlcvs_combined(config, forced_sources=None, *, force_refetch_gaps: bool = False):
+async def prepare_hlcvs_combined(
+    config,
+    forced_sources=None,
+    market_settings_sources=None,
+    *,
+    force_refetch_gaps: bool = False,
+):
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     exchanges_to_consider = [to_ccxt_exchange_id(e) for e in backtest_exchanges]
     forced_sources = forced_sources or {}
     normalized_forced_sources = {
         str(coin): to_ccxt_exchange_id(exchange)
         for coin, exchange in forced_sources.items()
+        if exchange
+    }
+    market_settings_sources = market_settings_sources or {}
+    normalized_mss_sources = {
+        str(coin): to_ccxt_exchange_id(exchange)
+        for coin, exchange in market_settings_sources.items()
         if exchange
     }
 
@@ -856,7 +868,8 @@ async def prepare_hlcvs_combined(config, forced_sources=None, *, force_refetch_g
             force_refetch_gaps=force_refetch_gaps,
         )
     extra_forced = set(normalized_forced_sources.values()) - set(exchanges_to_consider)
-    for ex in extra_forced:
+    extra_mss = set(normalized_mss_sources.values()) - set(exchanges_to_consider) - extra_forced
+    for ex in extra_forced | extra_mss:
         om_dict[ex] = HLCVManager(
             ex,
             effective_start_date,
@@ -880,6 +893,7 @@ async def prepare_hlcvs_combined(config, forced_sources=None, *, force_refetch_g
             requested_start_ts,
             end_ts,
             normalized_forced_sources,
+            normalized_mss_sources,
         )
 
         btc_exchange = exchanges_to_consider[0] if len(exchanges_to_consider) == 1 else "binanceusdm"
@@ -947,7 +961,9 @@ async def _prepare_hlcvs_combined_impl(
     _requested_start_ts: int,
     end_ts: int,
     forced_sources: Dict[str, str],
+    market_settings_sources: Optional[Dict[str, str]] = None,
 ):
+    market_settings_sources = market_settings_sources or {}
     approved = require_live_value(config, "approved_coins")
     coins = sorted(
         set(symbol_to_coin(c) for c in approved["long"])
@@ -1102,9 +1118,34 @@ async def _prepare_hlcvs_combined_impl(
 
                 logging.info(f"{coin} exchange preference: {[x[0] for x in exchange_candidates]}")
 
-                # Prepare market settings
-                mss = om_dict[best_exchange].get_market_specific_settings(coin)
-                mss["exchange"] = to_standard_exchange_name(best_exchange)
+                # Determine market settings source (may differ from OHLCV source)
+                settings_exchange = market_settings_sources.get(coin, best_exchange)
+                if settings_exchange != best_exchange:
+                    settings_om = om_dict.get(settings_exchange)
+                    if settings_om is None:
+                        logging.warning(
+                            f"{coin}: market_settings_sources exchange '{settings_exchange}' "
+                            f"not available, falling back to OHLCV source '{best_exchange}'"
+                        )
+                        settings_exchange = best_exchange
+                    else:
+                        try:
+                            settings_om.get_symbol(coin)
+                        except Exception:
+                            logging.warning(
+                                f"{coin}: not listed on market_settings_sources exchange "
+                                f"'{settings_exchange}', falling back to OHLCV source '{best_exchange}'"
+                            )
+                            settings_exchange = best_exchange
+
+                # Prepare market settings from (possibly overridden) exchange
+                mss = om_dict[settings_exchange].get_market_specific_settings(coin)
+                mss["exchange"] = to_standard_exchange_name(settings_exchange)
+                if settings_exchange != best_exchange:
+                    mss["ohlcv_source"] = to_standard_exchange_name(best_exchange)
+                    logging.info(
+                        f"{coin}: OHLCV from {best_exchange}, market settings from {settings_exchange}"
+                    )
                 warm_minutes = int(per_coin_warmups.get(coin, default_warm))
                 mss["warmup_minutes"] = warm_minutes
 
