@@ -334,7 +334,9 @@ def compute_live_warmup_windows(
     *,
     forager_enabled: Optional[Dict[str, bool]] = None,
     window_candles: Optional[int] = None,
-    span_buffer: float = 1.5,
+    warmup_ratio: float = 0.0,
+    max_warmup_minutes: Optional[int] = None,
+    span_buffer: Optional[float] = None,
     large_span_threshold: int = 2 * 24 * 60,
 ) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, bool]]:
     """Return per-symbol warmup windows for 1m/1h candles."""
@@ -354,6 +356,24 @@ def compute_live_warmup_windows(
     is_forager_long = bool(forager_enabled.get("long"))
     is_forager_short = bool(forager_enabled.get("short"))
 
+    if span_buffer is None:
+        try:
+            ratio = float(warmup_ratio)
+        except Exception:
+            ratio = 0.0
+        span_buffer = 1.0 + max(0.0, ratio)
+
+    cap_minutes = None
+    try:
+        cap_minutes = int(max_warmup_minutes) if max_warmup_minutes is not None else None
+    except Exception:
+        cap_minutes = None
+    if cap_minutes is not None and cap_minutes <= 0:
+        cap_minutes = None
+    cap_hours = None
+    if cap_minutes is not None:
+        cap_hours = max(1, int(math.ceil(cap_minutes / 60.0)))
+
     def _to_float(val) -> float:
         try:
             return float(val)
@@ -368,7 +388,11 @@ def compute_live_warmup_windows(
 
     if window_candles is not None:
         win = max(1, int(window_candles))
+        if cap_minutes is not None:
+            win = min(win, cap_minutes)
         h1_hours = max(1, int(math.ceil(win / 60.0)))
+        if cap_hours is not None:
+            h1_hours = min(h1_hours, cap_hours)
         skip_historical = win <= large_span_threshold
         for sym in sorted(symbols):
             per_symbol_win[sym] = win
@@ -404,11 +428,16 @@ def compute_live_warmup_windows(
         else:
             win = 1
         win = max(1, win)
+        if cap_minutes is not None:
+            win = min(win, cap_minutes)
         per_symbol_win[sym] = win
         per_symbol_skip_historical[sym] = win <= large_span_threshold
 
         if max_h1_span > 0.0:
-            per_symbol_h1_hours[sym] = max(1, int(math.ceil(max_h1_span * span_buffer)))
+            h1_hours = max(1, int(math.ceil(max_h1_span * span_buffer)))
+            if cap_hours is not None:
+                h1_hours = min(h1_hours, cap_hours)
+            per_symbol_h1_hours[sym] = h1_hours
         else:
             per_symbol_h1_hours[sym] = 0
 
@@ -1394,9 +1423,16 @@ class Passivbot:
         now = utc_ms()
         end_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
         # Determine window per symbol based on actual EMA needs (lazy & frugal).
-        # Rule of thumb: fetch ~1.5x the max required span for better EMA stability.
+        # Fetch max-span * (1 + warmup_ratio) to give EMAs enough runway without overfetching.
         default_win = int(getattr(self.cm, "default_window_candles", 120))
-        span_buffer = 1.5
+        try:
+            warmup_ratio = float(get_optional_live_value(self.config, "warmup_ratio", 0.0))
+        except Exception:
+            warmup_ratio = 0.0
+        try:
+            max_warmup_minutes = int(get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0)
+        except Exception:
+            max_warmup_minutes = 0
         large_span_threshold = 2 * 24 * 60  # minutes; match CandlestickManager large-span logic
 
         per_symbol_win, per_symbol_h1_hours, per_symbol_skip_historical = (
@@ -1405,7 +1441,8 @@ class Passivbot:
                 lambda pside, key, sym: self.bp(pside, key, sym),
                 forager_enabled=forager_needed,
                 window_candles=window_candles,
-                span_buffer=span_buffer,
+                warmup_ratio=warmup_ratio,
+                max_warmup_minutes=max_warmup_minutes,
                 large_span_threshold=large_span_threshold,
             )
         )
@@ -1421,6 +1458,16 @@ class Passivbot:
             wmin, wmax = (min(wmins), max(wmins)) if wmins else (default_win, default_win)
             logging.info(
                 f"[warmup] starting: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
+            )
+            try:
+                longest_span = int(math.ceil(wmax / max(1.0, (1.0 + warmup_ratio))))
+            except Exception:
+                longest_span = wmax
+            logging.info(
+                "[warmup] target | longest_span=%dm warmup_ratio=%.3g max_warmup_minutes=%s",
+                int(longest_span),
+                float(warmup_ratio),
+                "none" if not max_warmup_minutes else str(int(max_warmup_minutes)),
             )
             try:
                 logging.info(
@@ -1589,11 +1636,21 @@ class Passivbot:
             "short": bool(forager_needed.get("short")),
         }
 
+        try:
+            warmup_ratio = float(get_optional_live_value(self.config, "warmup_ratio", 0.0))
+        except Exception:
+            warmup_ratio = 0.0
+        try:
+            max_warmup_minutes = int(get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0)
+        except Exception:
+            max_warmup_minutes = 0
+
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             symbols_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
             forager_enabled=forager_enabled,
-            span_buffer=1.5,
+            warmup_ratio=warmup_ratio,
+            max_warmup_minutes=max_warmup_minutes,
         )
 
         now = utc_ms()
