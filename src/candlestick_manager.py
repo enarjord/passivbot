@@ -99,7 +99,7 @@ class GapEntry(TypedDict, total=False):
     start_ts: int  # Gap start timestamp (ms)
     end_ts: int  # Gap end timestamp (ms)
     retry_count: int  # Number of fetch attempts (max 3 before marking persistent)
-    reason: str  # "auto_detected", "exchange_downtime", "no_archive", "fetch_failed", "manual"
+    reason: str  # "auto_detected", "exchange_downtime", "no_archive", "fetch_failed", "manual", "no_trades"
     added_at: int  # Timestamp when gap was first detected (ms)
 
 
@@ -112,6 +112,7 @@ GAP_REASON_EXCHANGE_DOWNTIME = "exchange_downtime"
 GAP_REASON_NO_ARCHIVE = "no_archive"
 GAP_REASON_FETCH_FAILED = "fetch_failed"
 GAP_REASON_MANUAL = "manual"
+GAP_REASON_NO_TRADES = "no_trades"
 
 
 CANDLE_DTYPE = np.dtype(
@@ -535,9 +536,18 @@ class CandlestickManager:
         # Determine exchange id and adjust defaults per exchange quirks
         self._ex_id = getattr(self.exchange, "id", self.exchange_name) or self.exchange_name
         self._ccxt_limit_default = 1000
+        self._ccxt_page_overlap_candles = 0
+        self._record_payload_gaps_as_known = False
         if isinstance(self._ex_id, str) and "bitget" in self._ex_id.lower():
             # Bitget often serves 1m klines with 200 limit per page
             self._ccxt_limit_default = 200
+        if isinstance(self._ex_id, str) and "kucoin" in self._ex_id.lower():
+            # KuCoin futures returns max 200 rows per OHLCV call and can be sparse (trade-only minutes).
+            self._ccxt_limit_default = 200
+            # Overlap page boundaries to validate gaps between fetches.
+            self._ccxt_page_overlap_candles = 1
+            # Gaps inside a single payload are considered verified no-trade gaps.
+            self._record_payload_gaps_as_known = True
 
         # Optional per-page range logging for selected symbols (debug pagination)
         self._page_debug_all = False
@@ -2121,6 +2131,26 @@ class CandlestickManager:
 
         self._save_known_gaps_enhanced(symbol, gaps)
 
+    def _record_verified_gap(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        reason: str = GAP_REASON_NO_TRADES,
+    ) -> None:
+        """Record a gap as verified (no data on exchange), so we don't retry it."""
+        if start_ts > end_ts:
+            return
+        self._add_known_gap(
+            symbol,
+            int(start_ts),
+            int(end_ts),
+            reason=reason,
+            increment_retry=False,
+            retry_count=_GAP_MAX_RETRIES,
+        )
+
     def _should_retry_gap(self, gap: GapEntry) -> bool:
         """Check if a gap should be retried (retry_count < max)."""
         return gap.get("retry_count", 0) < _GAP_MAX_RETRIES
@@ -2825,6 +2855,7 @@ class CandlestickManager:
         period_ms = _tf_to_ms(tf_norm)
         all_rows = []
         pages = 0
+        prev_last_ts: Optional[int] = None
         total_span = max(1, end_excl - since_start)
         while since < end_excl:
             page = await self._ccxt_fetch_ohlcv_once(
@@ -2860,6 +2891,24 @@ class CandlestickManager:
                     max_step = ONE_MIN_MS
             except Exception:
                 first_ts = last_ts = 0
+            # Record gaps inside payload and between pages as verified no-trade gaps (exchange-provided).
+            if self._record_payload_gaps_as_known and tf_norm == "1m":
+                try:
+                    ts_arr = arr["ts"].astype(np.int64)
+                    if ts_arr.size > 1:
+                        diffs = np.diff(ts_arr)
+                        gap_idxs = np.where(diffs > period_ms)[0]
+                        for i in gap_idxs:
+                            gap_start = int(ts_arr[i] + period_ms)
+                            gap_end = int(ts_arr[i + 1] - period_ms)
+                            self._record_verified_gap(symbol, gap_start, gap_end)
+                    if prev_last_ts is not None and first_ts > prev_last_ts + period_ms:
+                        gap_start = int(prev_last_ts + period_ms)
+                        gap_end = int(first_ts - period_ms)
+                        self._record_verified_gap(symbol, gap_start, gap_end)
+                except Exception:
+                    pass
+
             all_rows.append(arr)
             pages += 1
             if self._page_debug_all or symbol in self._page_debug_symbols:
@@ -2909,6 +2958,9 @@ class CandlestickManager:
                 progress_pct=f"{progressed:.1f}",
             )
             new_since = last_ts + period_ms
+            if self._ccxt_page_overlap_candles > 0:
+                overlap_ms = period_ms * int(self._ccxt_page_overlap_candles)
+                new_since = max(last_ts - overlap_ms, since + period_ms)
             # Safety to avoid infinite loops if exchange returns overlapping data
             if new_since <= since:
                 self.log.debug(
@@ -2916,6 +2968,7 @@ class CandlestickManager:
                 )
                 break
             since = new_since
+            prev_last_ts = last_ts
         self.log.debug(
             f"paginated fetch done exchange={self._ex_id} symbol={symbol} tf={tf_norm} rows={sum(a.shape[0] for a in all_rows) if all_rows else 0}"
         )
