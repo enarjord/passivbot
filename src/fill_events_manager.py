@@ -1293,6 +1293,36 @@ class BinanceFetcher(BaseFetcher):
         self.income_limit = min(1000, max(1, income_limit))  # cap to max 1000
         self._now_func = now_func or (lambda: int(datetime.now(tz=timezone.utc).timestamp() * 1000))
         self.trade_limit = max(1, trade_limit)
+        self._unsupported_symbols: set[str] = set()
+        self._market_symbols: Optional[set[str]] = None
+        self._markets_loaded = False
+
+    async def _get_market_symbols(self) -> Optional[set[str]]:
+        if self._market_symbols is not None:
+            return self._market_symbols
+        symbols = getattr(self.api, "symbols", None)
+        markets = getattr(self.api, "markets", None)
+        if (not symbols and not markets) and not self._markets_loaded:
+            try:
+                await self.api.load_markets()
+                self._markets_loaded = True
+            except Exception:
+                return None
+            symbols = getattr(self.api, "symbols", None)
+            markets = getattr(self.api, "markets", None)
+        if symbols:
+            self._market_symbols = set(symbols)
+        elif markets:
+            self._market_symbols = set(markets.keys())
+        else:
+            self._market_symbols = None
+        return self._market_symbols
+
+    def _note_unsupported_symbol(self, symbol: str) -> None:
+        if symbol in self._unsupported_symbols:
+            return
+        self._unsupported_symbols.add(symbol)
+        logger.info("BinanceFetcher: skipping unsupported symbol %s", symbol)
 
     async def fetch(
         self,
@@ -1312,6 +1342,13 @@ class BinanceFetcher(BaseFetcher):
         symbol_pool.update(ev["symbol"] for ev in income_events if ev.get("symbol"))
         if detail_cache is None:
             detail_cache = {}
+
+        supported_symbols = await self._get_market_symbols()
+        if supported_symbols:
+            unsupported = [sym for sym in symbol_pool if sym not in supported_symbols]
+            for sym in unsupported:
+                self._note_unsupported_symbol(sym)
+            symbol_pool = {sym for sym in symbol_pool if sym in supported_symbols}
 
         trade_events: Dict[str, Dict[str, object]] = {}
         trade_tasks: Dict[str, asyncio.Task[List[Dict[str, object]]]] = {}
@@ -1638,6 +1675,10 @@ class BinanceFetcher(BaseFetcher):
             )
             return ordered
         except Exception as exc:  # pragma: no cover - depends on live API
+            msg = str(exc).lower() if exc else ""
+            if "does not have market symbol" in msg or "market symbol" in msg:
+                self._note_unsupported_symbol(ccxt_symbol)
+                return []
             logger.error("BinanceFetcher._fetch_symbol_trades: error %s (%s)", ccxt_symbol, exc)
             return []
 
