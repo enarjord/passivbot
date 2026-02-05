@@ -1685,7 +1685,7 @@ class Passivbot:
             win = int(per_symbol_win.get(sym, 0) or 0)
             if win > 0 and end_final > 0:
                 start_ts = max(0, int(end_final - win * ONE_MIN_MS))
-                log_level = "info" if _should_log_symbol(sym) else "debug"
+                log_level = "debug"
                 self.cm.check_disk_coverage(
                     sym,
                     start_ts,
@@ -1696,7 +1696,7 @@ class Passivbot:
             warm_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
             if warm_hours > 0 and end_final_hour > 0:
                 start_ts = max(0, int(end_final_hour - warm_hours * 60 * ONE_MIN_MS))
-                log_level = "info" if _should_log_symbol(sym) else "debug"
+                log_level = "debug"
                 self.cm.check_disk_coverage(
                     sym,
                     start_ts,
@@ -4980,6 +4980,10 @@ class Passivbot:
         """Log a throttled summary of candle staleness for the given symbols."""
         try:
             now = utc_ms()
+            boot_delay_ms = int(getattr(self, "candle_refresh_log_boot_delay_ms", 300_000) or 0)
+            boot_elapsed = int(now - getattr(self, "start_time_ms", now))
+            if boot_elapsed < boot_delay_ms:
+                return
             last = int(getattr(self, "_candle_refresh_log_last_ms", 0) or 0)
             if (now - last) < int(throttle_ms):
                 return
@@ -5001,7 +5005,7 @@ class Passivbot:
             max_ms = ages[-1]
             target_s = f"{int(target_age_ms/1000)}s" if target_age_ms else "n/a"
             refreshed_str = f", refreshed={refreshed}" if refreshed is not None else ""
-            logging.info(
+            logging.debug(
                 "[candle] %s symbols=%d%s max_stale=%ds median_stale=%ds target=%s",
                 context,
                 len(sym_list),
@@ -5087,22 +5091,25 @@ class Passivbot:
         if not to_refresh:
             return
 
-        # Throttled visibility into forager refresh behavior (info for now).
+        # Throttled visibility into forager refresh behavior (debug only).
         try:
             now = utc_ms()
-            last_log = int(getattr(self, "_forager_refresh_log_last_ms", 0) or 0)
-            if (now - last_log) >= 90_000:
-                oldest_ms = int(stale[0][0]) if stale else 0
-                logging.info(
-                    "[candle] forager refresh slots_open=%s candidates=%d stale=%d budget=%d oldest=%ds target=%ds",
-                    "yes" if slots_open_any else "no",
-                    len(all_candidates),
-                    len(stale),
-                    len(to_refresh),
-                    int(oldest_ms / 1000),
-                    int(target_age_ms / 1000),
-                )
-                self._forager_refresh_log_last_ms = int(now)
+            boot_delay_ms = int(getattr(self, "candle_refresh_log_boot_delay_ms", 300_000) or 0)
+            boot_elapsed = int(now - getattr(self, "start_time_ms", now))
+            if boot_elapsed >= boot_delay_ms:
+                last_log = int(getattr(self, "_forager_refresh_log_last_ms", 0) or 0)
+                if (now - last_log) >= 90_000:
+                    oldest_ms = int(stale[0][0]) if stale else 0
+                    logging.debug(
+                        "[candle] forager refresh slots_open=%s candidates=%d stale=%d budget=%d oldest=%ds target=%ds",
+                        "yes" if slots_open_any else "no",
+                        len(all_candidates),
+                        len(stale),
+                        len(to_refresh),
+                        int(oldest_ms / 1000),
+                        int(target_age_ms / 1000),
+                    )
+                    self._forager_refresh_log_last_ms = int(now)
         except Exception:
             pass
 

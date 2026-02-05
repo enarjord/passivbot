@@ -2599,7 +2599,7 @@ class CandlestickManager:
                 self._rate_limit_until = new_until
                 self._rate_limit_count += 1
                 self._log(
-                    "info",
+                    "debug",
                     "rate_limit_global_set",
                     backoff_seconds=backoff_seconds,
                     total_count=self._rate_limit_count,
@@ -4761,7 +4761,7 @@ class CandlestickManager:
                                     )
 
                                 self._log(
-                                    "info",
+                                    "debug",
                                     "historical_missing_spans",
                                     symbol=symbol,
                                     spans=len(unknown_after),
@@ -4799,7 +4799,7 @@ class CandlestickManager:
                                     ]
                                     if len(spans_to_fetch) != len(unknown_after):
                                         self._log(
-                                            "info",
+                                            "debug",
                                             "historical_missing_spans_coalesced",
                                             symbol=symbol,
                                             spans_before=len(unknown_after),
