@@ -2395,6 +2395,127 @@ class CandlestickManager:
             "timeframe": tf_norm,
         }
 
+    def rebuild_index_for_range(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+        log_level: str = "info",
+    ) -> Dict[str, Any]:
+        """Rebuild index.json metadata for shards intersecting [start_ts, end_ts]."""
+        tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+        step_ms = _tf_to_ms(tf_norm)
+        if step_ms <= 0:
+            step_ms = ONE_MIN_MS
+        s_ts = (int(start_ts) // step_ms) * step_ms
+        e_ts = (int(end_ts) // step_ms) * step_ms
+        if s_ts > e_ts:
+            return {
+                "updated": 0,
+                "removed": 0,
+                "scanned": 0,
+                "timeframe": tf_norm,
+                "start_ts": s_ts,
+                "end_ts": e_ts,
+            }
+
+        # Ensure shard path cache is fresh for this symbol/tf.
+        self._invalidate_shard_paths_cache(symbol, tf=tf_norm)
+        shard_paths = self._iter_shard_paths(symbol, tf=tf_norm)
+
+        idx = self._ensure_symbol_index(symbol, tf=tf_norm)
+        shards = idx.setdefault("shards", {})
+
+        updated = 0
+        removed = 0
+        scanned = 0
+
+        for day_key, (day_start, day_end) in self._date_keys_between(s_ts, e_ts).items():
+            if day_end < s_ts or day_start > e_ts:
+                continue
+            path = shard_paths.get(day_key)
+            if path is None or not os.path.exists(path):
+                if day_key in shards:
+                    shards.pop(day_key, None)
+                    removed += 1
+                continue
+            try:
+                arr = _ensure_dtype(self._load_shard(path))
+            except Exception:
+                arr = np.empty((0,), dtype=CANDLE_DTYPE)
+            if arr.size == 0:
+                if day_key in shards:
+                    shards.pop(day_key, None)
+                    removed += 1
+                continue
+            arr = np.sort(arr, order="ts")
+            crc = int(zlib.crc32(arr.tobytes()) & 0xFFFFFFFF)
+            shards[day_key] = {
+                "path": path,
+                "min_ts": int(arr[0]["ts"]),
+                "max_ts": int(arr[-1]["ts"]),
+                "count": int(arr.shape[0]),
+                "crc32": crc,
+            }
+            updated += 1
+            scanned += 1
+
+        idx["shards"] = shards
+        pruned = 0
+        try:
+            pruned = int(self._prune_missing_shards_from_index(idx) or 0)
+        except Exception:
+            pruned = 0
+        if pruned:
+            removed += pruned
+
+        # Guard against corrupted refresh timestamps that prevent updates.
+        meta = idx.setdefault("meta", {})
+        now = _utc_now_ms()
+        try:
+            last_refresh = int(meta.get("last_refresh_ms", 0) or 0)
+        except Exception:
+            last_refresh = 0
+        meta_changed = False
+        if last_refresh > (now + ONE_MIN_MS):
+            meta["last_refresh_ms"] = 0
+            meta_changed = True
+            self._log(
+                "warning",
+                "index_last_refresh_in_future",
+                symbol=symbol,
+                timeframe=tf_norm,
+                last_refresh_ms=last_refresh,
+                now=now,
+            )
+
+        if updated or removed or meta_changed:
+            self._save_index(symbol, tf=tf_norm)
+
+        self._log(
+            log_level,
+            "index_rebuild_range",
+            symbol=symbol,
+            timeframe=tf_norm,
+            start_ts=s_ts,
+            end_ts=e_ts,
+            scanned=scanned,
+            updated=updated,
+            removed=removed,
+        )
+
+        return {
+            "updated": updated,
+            "removed": removed,
+            "scanned": scanned,
+            "timeframe": tf_norm,
+            "start_ts": s_ts,
+            "end_ts": e_ts,
+        }
+
     # ----- Refresh metadata helpers -----
 
     def _get_last_refresh_ms(self, symbol: str) -> int:

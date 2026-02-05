@@ -1447,6 +1447,17 @@ class Passivbot:
                 large_span_threshold=large_span_threshold,
             )
         )
+        end_final_hour = (now // (60 * ONE_MIN_MS)) * (60 * ONE_MIN_MS) - 60 * ONE_MIN_MS
+        try:
+            await self.rebuild_required_candle_indices(
+                symbols,
+                per_symbol_win,
+                per_symbol_h1_hours,
+                end_final,
+                end_final_hour,
+            )
+        except Exception as e:
+            logging.info("[boot] candle index rebuild skipped due to: %s", e)
 
         sem = asyncio.Semaphore(max(1, int(concurrency)))
         completed = 0
@@ -1547,8 +1558,6 @@ class Passivbot:
 
         # Warm 1h candles for grid log-range EMAs
         hour_sem = asyncio.Semaphore(max(1, int(concurrency)))
-        end_final_hour = (now // (60 * ONE_MIN_MS)) * (60 * ONE_MIN_MS) - 60 * ONE_MIN_MS
-
         async def warm_hour(sym: str):
             async with hour_sem:
                 warm_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
@@ -1575,6 +1584,66 @@ class Passivbot:
         self.cm.flush_synth_candle_batch()
         # Flush batched candle replacement logs
         self.cm.flush_candle_replace_batch()
+
+    async def rebuild_required_candle_indices(
+        self,
+        symbols: Iterable[str],
+        per_symbol_win: Dict[str, int],
+        per_symbol_h1_hours: Dict[str, int],
+        end_final: int,
+        end_final_hour: int,
+    ) -> None:
+        """Rebuild candle index metadata for the required warmup ranges."""
+        if not getattr(self, "cm", None):
+            return
+
+        symbols = list(symbols or [])
+        if not symbols:
+            return
+
+        started = utc_ms()
+        logging.info(
+            "[boot] rebuilding candle index for %d symbols (recent ranges only)...", len(symbols)
+        )
+
+        def _rebuild_sync() -> Tuple[int, int]:
+            updated_total = 0
+            removed_total = 0
+            for sym in symbols:
+                win = int(per_symbol_win.get(sym, 0) or 0)
+                if win > 0 and end_final > 0:
+                    start_ts = max(0, int(end_final - win * ONE_MIN_MS))
+                    res = self.cm.rebuild_index_for_range(
+                        sym,
+                        start_ts,
+                        int(end_final),
+                        timeframe="1m",
+                        log_level="debug",
+                    )
+                    updated_total += int(res.get("updated", 0) or 0)
+                    removed_total += int(res.get("removed", 0) or 0)
+                warm_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
+                if warm_hours > 0 and end_final_hour > 0:
+                    start_ts = max(0, int(end_final_hour - warm_hours * 60 * ONE_MIN_MS))
+                    res = self.cm.rebuild_index_for_range(
+                        sym,
+                        start_ts,
+                        int(end_final_hour),
+                        timeframe="1h",
+                        log_level="debug",
+                    )
+                    updated_total += int(res.get("updated", 0) or 0)
+                    removed_total += int(res.get("removed", 0) or 0)
+            return updated_total, removed_total
+
+        updated_total, removed_total = await asyncio.to_thread(_rebuild_sync)
+        elapsed_s = max(0.0, (utc_ms() - started) / 1000.0)
+        logging.info(
+            "[boot] candle index rebuild complete: updated=%d removed=%d elapsed=%.2fs",
+            updated_total,
+            removed_total,
+            elapsed_s,
+        )
 
     async def update_first_timestamps(self, symbols=[]):
         """Fetch and cache first trade timestamps for the provided symbols."""

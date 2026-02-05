@@ -2,6 +2,11 @@
 
 All notable user-facing changes will be documented in this file.
 
+## Unreleased
+
+### Fixed
+- **Live bot candle cache** - Rebuilds candlestick index metadata for the required warmup ranges on startup, preventing stale `index.json` metadata from suppressing candle refreshes.
+
 ## v7.7.0 - 2026-01-26
 
 ### Fixed

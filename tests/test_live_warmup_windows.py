@@ -30,6 +30,7 @@ def test_compute_live_warmup_windows_forager_toggle():
         symbols_by_side,
         bp,
         forager_enabled={"long": True, "short": False},
+        warmup_ratio=0.5,
     )
 
     assert wins["BTC"] == 3000
