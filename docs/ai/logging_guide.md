@@ -111,6 +111,24 @@ These messages currently appear at INFO but should be DEBUG:
 *Solution: Aggregate into a single summary at INFO (e.g., "replaced synthetic candles for 22 symbols"). Individual messages at DEBUG.*
 *Status: Fixed in `candlestick_manager.py` - batch mode during warmup produces aggregated summary at INFO; individual messages at DEBUG.*
 
+**Candle refresh summaries (active/forager):** ✅ FIXED (Round 2)
+```
+2026-02-04T23:06:40 INFO     [binance] [candle] active refresh symbols=7, refreshed=7 max_stale=99s ...
+2026-02-04T23:06:06 INFO     [binance] [candle] forager refresh slots_open=yes candidates=23 stale=23 ...
+```
+*Problem: These log every ~1–2 minutes and drown INFO logs.*
+*Solution: Move to DEBUG and suppress during initial boot.*
+*Status: Fixed in `passivbot.py` - now DEBUG with a 5‑minute boot delay.*
+
+**Disk coverage / missing span diagnostics:** ✅ FIXED (Round 2)
+```
+2026-02-04T23:05:01 INFO     [bitget] [candle] event=disk_coverage_missing ...
+2026-02-04T23:06:00 INFO     [binance] [candle] event=historical_missing_spans ...
+```
+*Problem: Intended for debugging; too noisy at INFO.*
+*Solution: Move to DEBUG.*
+*Status: Fixed in `passivbot.py` and `candlestick_manager.py`.*
+
 **Volume/volatility EMA rankings (when unchanged):**
 ```
 2026-01-23T20:00:32 INFO     [hyperliquid] volume EMA span 1250: 22 coins elapsed=17s, top8: BTC=846390.13, ...
@@ -127,6 +145,14 @@ These messages currently appear at INFO but should be DEBUG:
 *Problem: Internal cache operations, not relevant to normal operation.*
 *Solution: Move to DEBUG.*
 *Status: Fixed in `utils.py` - now logs at DEBUG.*
+
+**Rate limit backoff notices:** ✅ FIXED (Round 2)
+```
+2026-02-04T23:02:38 INFO     [hyperliquid] [candle] event=rate_limit_global_set ...
+```
+*Problem: Backoff is expected behavior; INFO is too chatty.*
+*Solution: Move to DEBUG.*
+*Status: Fixed in `candlestick_manager.py`.*
 
 ### 2. Excessive WARNING for Expected Conditions
 
