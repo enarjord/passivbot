@@ -668,3 +668,22 @@ Phase 3 (Defer to Round 9):
    - Throttled to once per 5 minutes per symbol/pside to avoid spam
    - Log format: `[ema] COIN pside entry gated | price=X ema_thresh=Y (+Z% away)`
    - File: `src/passivbot.py` (added `_log_ema_gating` method, called in both orchestrator methods)
+
+### Round 11 (2026-02-04) ✅ COMPLETED
+
+**Issue addressed:**
+
+1. **Mode change logging redesign** - Separate DEBUG and INFO levels for mode changes.
+   - **Problem:** Mode change oscillation (normal↔graceful_stop) due to forager ranking fluctuations
+     was flooding INFO logs with 10-20+ messages per hour per exchange, making logs hard to tail.
+   - **Solution:** Refactored `_log_mode_changes()` method with two-tier logging:
+     - **DEBUG level:** All mode changes logged with full detail (no throttling) for debugging
+     - **INFO level:** Selective, user-relevant logging only:
+       - "added" with "normal" → forager selection (includes slot context like "forager slot 3/5")
+       - "added" with "graceful_stop" → only on startup/first run
+       - "removed" → always (coin exiting the system)
+       - "changed" normal↔graceful_stop → **suppressed** (oscillation noise, available at DEBUG)
+       - "changed" to/from tp_only/manual/panic → always (significant mode changes)
+   - INFO-level throttle increased from 2 minutes to 5 minutes for remaining logged changes
+   - Added slot context to forager selection logs: `[mode] added long.XRP/USDT:USDT: normal (forager slot 3/5)`
+   - File: `src/passivbot.py` (refactored mode change logging in `update_PB_modes_and_first_timestamps`)

@@ -2585,26 +2585,100 @@ class Passivbot:
         self.set_wallet_exposure_limits()
         await self.update_trailing_data()
         res = log_dict_changes(previous_PB_modes, self.PB_modes)
-        # Initialize mode change throttle cache if needed
+        self._log_mode_changes(res, previous_PB_modes)
+
+    def _log_mode_changes(self, res: dict, previous_PB_modes: dict) -> None:
+        """Log mode changes with DEBUG for all details and INFO for user-relevant events.
+
+        DEBUG: All mode changes (full detail, no throttling)
+        INFO: Selective logging:
+          - "added" with "normal" -> forager selection (with slot context)
+          - "added" with "graceful_stop" -> only on startup
+          - "removed" -> coin exiting (useful)
+          - "changed" normal<->graceful_stop -> suppress (oscillation noise)
+          - "changed" to/from tp_only/manual/panic -> significant, always log
+        """
+        is_first_run = previous_PB_modes is None
+
+        # Collect slot info for context
+        slot_info = {}
+        for pside in ["long", "short"]:
+            try:
+                max_n = self.get_max_n_positions(pside)
+                current_n = self.get_current_n_positions(pside)
+                slots_open = max_n > current_n
+                slot_info[pside] = {"max": max_n, "current": current_n, "open": slots_open}
+            except Exception:
+                slot_info[pside] = {"max": 0, "current": 0, "open": False}
+
+        # Initialize throttle cache if needed (for INFO level only)
         if not hasattr(self, "_mode_change_last_log_ms"):
             self._mode_change_last_log_ms = {}
-        mode_change_throttle_ms = 120_000  # 2 minutes between logs per symbol+type
+        mode_change_throttle_ms = 300_000  # 5 minutes for INFO-level throttle
         now_ms = utc_ms()
-        for k, v in res.items():
-            for elm in v:
-                # Throttle all mode changes (added/removed/changed) per symbol to reduce
-                # noise from forager mode oscillation where coins frequently enter/leave
+
+        for change_type, changes in res.items():
+            for elm in changes:
+                # Always log at DEBUG (full detail)
+                logging.debug("[mode] %s %s", change_type, elm)
+
+                # Determine if this should be logged at INFO
+                should_log_info = False
+                info_suffix = ""
+
                 try:
-                    # Extract symbol from the log entry (format: "pside.SYMBOL: ...")
-                    symbol_part = elm.split(":")[0]  # "long.XRP/USDT:USDT"
-                    throttle_key = f"{k}:{symbol_part}"  # Include event type in key
-                    last_log_ms = self._mode_change_last_log_ms.get(throttle_key, 0)
-                    if (now_ms - last_log_ms) < mode_change_throttle_ms:
-                        continue  # Throttle this log
-                    self._mode_change_last_log_ms[throttle_key] = now_ms
+                    # Parse element: "long.XRP/USDT:USDT: normal" or "long.XRP/USDT:USDT: old -> new"
+                    parts = elm.split(".")
+                    pside = parts[0] if parts else "long"
+                    pside_info = slot_info.get(pside, {"max": 0, "current": 0, "open": False})
+
+                    if change_type == "added":
+                        # New coin entering mode system
+                        if ": normal" in elm:
+                            # Forager selection - always useful
+                            should_log_info = True
+                            if pside_info["open"]:
+                                info_suffix = f" (forager slot {pside_info['current']+1}/{pside_info['max']})"
+                            else:
+                                info_suffix = f" (slot {pside_info['current']}/{pside_info['max']})"
+                        elif is_first_run:
+                            # First run - show all modes for visibility
+                            should_log_info = True
+                        # else: "added" with graceful_stop when not first run -> skip INFO
+
+                    elif change_type == "removed":
+                        # Coin exiting - always useful
+                        should_log_info = True
+
+                    elif change_type == "changed":
+                        # Mode changed - check if it's oscillation or significant
+                        is_oscillation = (
+                            "normal -> graceful_stop" in elm
+                            or "graceful_stop -> normal" in elm
+                        )
+                        if is_oscillation:
+                            # Oscillation - suppress at INFO (already logged at DEBUG)
+                            should_log_info = False
+                        else:
+                            # Significant mode change (tp_only, manual, panic, etc.)
+                            should_log_info = True
+
                 except Exception:
-                    pass  # On any parse error, just log normally
-                logging.info(f"[mode] {k:7s} {elm}")
+                    # On parse error, log at INFO to be safe
+                    should_log_info = True
+
+                if should_log_info:
+                    # Apply throttle for INFO level
+                    try:
+                        symbol_part = elm.split(":")[0]
+                        throttle_key = f"info:{change_type}:{symbol_part}"
+                        last_log_ms = self._mode_change_last_log_ms.get(throttle_key, 0)
+                        if (now_ms - last_log_ms) < mode_change_throttle_ms:
+                            continue
+                        self._mode_change_last_log_ms[throttle_key] = now_ms
+                    except Exception:
+                        pass
+                    logging.info("[mode] %s %s%s", change_type, elm, info_suffix)
 
     async def get_filtered_coins(self, pside: str) -> List[str]:
         """Select ideal coins for a side using EMA-based volume and log-range filters.
