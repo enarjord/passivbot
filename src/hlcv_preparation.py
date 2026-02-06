@@ -969,6 +969,7 @@ async def _prepare_hlcvs_combined_impl(
         set(symbol_to_coin(c) for c in approved["long"])
         | set(symbol_to_coin(c) for c in approved["short"])
     )
+    orig_coins = list(coins)
     exchanges_to_consider = sorted(list(om_dict.keys()))
     minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
     interval_ms = 60_000

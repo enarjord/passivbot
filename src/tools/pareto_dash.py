@@ -1,7 +1,7 @@
 """Pareto Dashboard - Interactive explorer for optimization results.
 
 Usage:
-    python src/tools/pareto_dash.py --data-root optimize_results --port 8050
+    python src/tools/pareto_dash.py --data-root optimize_results --host 127.0.0.1 --port 8050
 """
 
 import argparse
@@ -438,7 +438,7 @@ def get_history_dataframe(run_dir: str) -> pd.DataFrame:
     return HISTORY_CACHE[run_dir]
 
 
-def serve_dash(data_root: str, port: int = 8050):
+def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
     try:
         from dash import (
             Dash,
@@ -2031,8 +2031,8 @@ def serve_dash(data_root: str, port: int = 8050):
     # RUN SERVER
     # =========================================================================
 
-    print(f"Starting Pareto Explorer on http://localhost:{port}")
-    app.run(debug=False, port=port)
+    print(f"Starting Pareto Explorer on http://{host}:{port}")
+    app.run(debug=False, host=host, port=port)
 
 
 def main():
@@ -2047,8 +2047,13 @@ def main():
     parser.add_argument(
         "--port", type=int, default=8050, help="Port to run dashboard on (default: 8050)"
     )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host interface to bind (default: 127.0.0.1)",
+    )
     args = parser.parse_args()
-    serve_dash(args.data_root, port=args.port)
+    serve_dash(args.data_root, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
