@@ -713,3 +713,33 @@ Phase 3 (Defer to Round 9):
    - INFO-level throttle increased from 2 minutes to 5 minutes for remaining logged changes
    - Added slot context to forager selection logs: `[mode] added long.XRP/USDT:USDT: normal (forager slot 3/5)`
    - File: `src/passivbot.py` (refactored mode change logging in `update_PB_modes_and_first_timestamps`)
+
+### Round 12 (2026-02-06) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **Unsupported markets warning noise** - Demoted to INFO and tagged.
+   - Now logs as `[config] skipping unsupported markets...` at INFO (log_once).
+   - File: `src/passivbot.py`
+
+2. **Hedge mode success spam** - Moved successful set_position_mode logs to DEBUG with `[config]`.
+   - Keeps ERROR/WARNING paths unchanged; removes hourly INFO spam.
+   - Files: `src/exchanges/binance.py`, `src/exchanges/bybit.py`, `src/exchanges/bitget.py`, `src/exchanges/okx.py`, `src/exchanges/ccxt_bot.py`
+
+3. **BinanceFetcher unsupported symbols** - Moved to DEBUG with `[fills]` tag.
+   - File: `src/fill_events_manager.py`
+
+4. **Bitget OHLCV limit probe** - Moved to DEBUG.
+   - File: `src/candlestick_manager.py`
+
+5. **KuCoin PnL discrepancy spam** - Added minimum interval between logs even when delta changes.
+   - File: `src/fill_events_manager.py`
+
+6. **Zero-candle warning threshold** - WARNING now only for >1000 candles during live operation.
+   - File: `src/candlestick_manager.py`
+
+7. **Order plan tag + MissingEma context** - Added `[order]` tag to plan summaries and emit symbol context on MissingEma errors.
+   - File: `src/passivbot.py`
+
+8. **Symbol map lock noise** - Demoted lock acquisition warnings to INFO with `[mapping]`.
+   - File: `src/utils.py`

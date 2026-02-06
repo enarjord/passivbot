@@ -380,12 +380,12 @@ class BinanceBot(CCXTBot):
     async def update_exchange_config(self):
         try:
             res = await self.cca.set_position_mode(True)
-            logging.info(f"set hedge mode {res}")
+            logging.debug("[config] set hedge mode response: %s", res)
         except Exception as e:
             if '"code":-4059' in str(e):
-                logging.info(f"hedge mode: {e}")
+                logging.debug("[config] hedge mode unchanged: %s", e)
             else:
-                logging.error(f"error setting hedge mode {e}")
+                logging.error("[config] error setting hedge mode: %s", e)
 
     async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp

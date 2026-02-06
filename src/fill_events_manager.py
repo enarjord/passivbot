@@ -44,7 +44,8 @@ logger = logging.getLogger(__name__)
 _pnl_discrepancy_last_log: Dict[str, float] = {}  # exchange:user -> last log time
 _pnl_discrepancy_last_delta: Dict[str, float] = {}  # exchange:user -> last delta value
 _PNL_DISCREPANCY_THROTTLE_SECONDS = 3600.0  # Log at most once per hour if delta unchanged
-_PNL_DISCREPANCY_CHANGE_THRESHOLD = 0.10  # Log immediately if delta changes by >10%
+_PNL_DISCREPANCY_CHANGE_THRESHOLD = 0.10  # Consider delta "changed" if >10%
+_PNL_DISCREPANCY_MIN_SECONDS = 900.0  # Minimum seconds between logs even if delta changes
 
 
 # ---------------------------------------------------------------------------
@@ -1367,7 +1368,7 @@ class BinanceFetcher(BaseFetcher):
         if symbol in self._unsupported_symbols:
             return
         self._unsupported_symbols.add(symbol)
-        logger.info("BinanceFetcher: skipping unsupported symbol %s", symbol)
+        logger.debug("[fills] BinanceFetcher skipping unsupported symbol %s", symbol)
 
     async def fetch(
         self,
@@ -3385,7 +3386,11 @@ class KucoinFetcher(BaseFetcher):
                 last_delta is None
                 or abs(current_delta - last_delta) > _PNL_DISCREPANCY_CHANGE_THRESHOLD * (abs(last_delta) + 1.0)
             )
-            should_log = delta_changed or (now - last_log) >= _PNL_DISCREPANCY_THROTTLE_SECONDS
+            time_since_last = now - last_log
+            should_log = (
+                (delta_changed and time_since_last >= _PNL_DISCREPANCY_MIN_SECONDS)
+                or time_since_last >= _PNL_DISCREPANCY_THROTTLE_SECONDS
+            )
             if should_log:
                 _pnl_discrepancy_last_log[throttle_key] = now
                 _pnl_discrepancy_last_delta[throttle_key] = current_delta

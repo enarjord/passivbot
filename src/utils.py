@@ -943,12 +943,12 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
                     except Exception:
                         pass
             except portalocker.LockException:
-                logging.warning(
-                    "Could not acquire lock for %s, skipping write", coin_to_symbol_map_path
+                logging.info(
+                    "[mapping] could not acquire lock for %s, skipping write", coin_to_symbol_map_path
                 )
 
         except portalocker.LockException:
-            logging.warning("Could not acquire lock for symbol map cache update, skipping")
+            logging.info("[mapping] could not acquire lock for symbol map cache update, skipping")
             return False
 
         return True

@@ -238,20 +238,20 @@ class OKXBot(CCXTBot):
             return
         try:
             res = await self.cca.set_position_mode(True)
-            logging.info(f"set hedge mode {res}")
+            logging.debug("[config] set hedge mode response: %s", res)
         except Exception as e:
             err_str = str(e)
             if '"code":"59000"' in err_str:
-                logging.info(f"margin mode: {e}")
+                logging.info("[config] hedge mode update skipped: %s", e)
             elif '"code":"51039"' in err_str or '"code":"51000"' in err_str:
                 # Cannot switch to dual/hedge (often due to PM or open orders/positions).
                 self.okx_dual_side = False
                 self.hedge_mode = False
                 logging.warning(
-                    "OKX rejected hedge/dual-side switch (51039/51000). Continuing in net mode without posSide."
+                    "[config] OKX rejected hedge/dual-side switch (51039/51000). Continuing in net mode without posSide."
                 )
             else:
-                logging.error(f"error setting hedge mode {e}")
+                logging.error("[config] error setting hedge mode: %s", e)
 
     async def calc_ideal_orders(self):
         # okx has max 100 open orders. Drop orders whose pprice diff is greatest.

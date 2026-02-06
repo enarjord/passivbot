@@ -4176,7 +4176,18 @@ class Passivbot:
                 }
             )
 
-        out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
+        try:
+            out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
+        except Exception as e:
+            msg = str(e)
+            if "MissingEma" in msg:
+                match = re.search(r"symbol_idx\s*:\s*(\d+)", msg)
+                if match:
+                    idx = int(match.group(1))
+                    symbol = idx_to_symbol.get(idx)
+                    if symbol:
+                        logging.error("[ema] Missing EMA for %s (symbol_idx=%d)", symbol, idx)
+            raise
         out = json.loads(out_json)
         orders = out.get("orders", [])
 
@@ -4476,7 +4487,18 @@ class Passivbot:
                 }
             )
 
-        out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
+        try:
+            out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
+        except Exception as e:
+            msg = str(e)
+            if "MissingEma" in msg:
+                match = re.search(r"symbol_idx\s*:\s*(\d+)", msg)
+                if match:
+                    idx = int(match.group(1))
+                    symbol = idx_to_symbol.get(idx)
+                    if symbol:
+                        logging.error("[ema] Missing EMA for %s (symbol_idx=%d)", symbol, idx)
+            raise
         out = json.loads(out_json)
         orders = out.get("orders", [])
 
@@ -4741,7 +4763,7 @@ class Passivbot:
                     log_level = logging.INFO if (total_cancel or total_create) else logging.DEBUG
                     logging.log(
                         log_level,
-                        "order plan summary | cancel %d->%d | create %d->%d | skipped=%d%s%s",
+                        "[order] order plan summary | cancel %d->%d | create %d->%d | skipped=%d%s%s",
                         total_pre_cancel,
                         total_cancel,
                         total_pre_create,
@@ -5692,8 +5714,8 @@ class Passivbot:
                             setattr(self, "_unsupported_coin_warnings", warned)
                         warn_key = (self.exchange, coin_list, symbol_list, k_coins)
                         if warn_key not in warned:
-                            logging.warning(
-                                "Skipping unsupported markets for %s: coins=%s symbols=%s exchange=%s",
+                            logging.info(
+                                "[config] skipping unsupported markets for %s: coins=%s symbols=%s exchange=%s",
                                 k_coins,
                                 coin_list,
                                 symbol_list,

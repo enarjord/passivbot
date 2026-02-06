@@ -609,9 +609,9 @@ class BitgetBot(CCXTBot):
         res = None
         try:
             res = await self.cca.set_position_mode(True)
-            logging.info(f"set hedge mode {res}")
+            logging.debug("[config] set hedge mode response: %s", res)
         except Exception as e:
-            logging.error(f"error setting hedge mode {e} {res}")
+            logging.error("[config] error setting hedge mode: %s %s", e, res)
 
     def format_custom_id_single(self, order_type_id: int) -> str:
         formatted = super().format_custom_id_single(order_type_id)

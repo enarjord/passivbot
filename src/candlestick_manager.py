@@ -3017,7 +3017,7 @@ class CandlestickManager:
                     self._ccxt_limit_default = 1000
                     limit = 1000
                     self._log(
-                        "info",
+                        "debug",
                         "bitget_ohlcv_limit_probe",
                         symbol=symbol,
                         tf=tf_norm,
@@ -3028,7 +3028,7 @@ class CandlestickManager:
                     self._ccxt_limit_default = 200
                     limit = 200
                     self._log(
-                        "info",
+                        "debug",
                         "bitget_ohlcv_limit_probe",
                         symbol=symbol,
                         tf=tf_norm,
@@ -3362,8 +3362,8 @@ class CandlestickManager:
                         )
                         ts_info = f"{first_dt} to {last_dt}"
                     # Use DEBUG for individual gap warnings - the batch summary at startup is enough at WARNING
-                    # Only use WARNING for truly exceptional situations (gaps > 100 candles during live operation)
-                    log_fn = self.log.warning if synthesized_count > 100 else self.log.debug
+                    # Only use WARNING for truly exceptional situations (gaps > 1000 candles during live operation)
+                    log_fn = self.log.warning if synthesized_count > 1000 else self.log.debug
                     log_fn(
                         "[candle] %s: synthesized %d zero-candle%s at %s (no data for requested minutes) using prev_close=%.6f",
                         symbol,
