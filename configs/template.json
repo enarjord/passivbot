@@ -118,7 +118,7 @@
             "filter_volume_ema_span": 1250,
             "n_positions": 7,
             "risk_twel_enforcer_threshold": 0.99,
-            "risk_we_excess_allowance_pct": 1.21,
+            "risk_we_excess_allowance_pct": 1.1,
             "risk_wel_enforcer_threshold": 0.99,
             "total_wallet_exposure_limit": 1.25,
             "unstuck_close_pct": 0.0124,
