@@ -8,7 +8,7 @@ import traceback
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
 import numpy as np
@@ -833,6 +833,9 @@ async def prepare_hlcvs_combined(
         for coin, exchange in market_settings_sources.items()
         if exchange
     }
+    ohlcv_exchanges = sorted(
+        set(exchanges_to_consider) | set(normalized_forced_sources.values())
+    )
 
     requested_start_date = require_config_value(config, "backtest.start_date")
     requested_start_ts = int(date_to_ts(requested_start_date))
@@ -894,6 +897,7 @@ async def prepare_hlcvs_combined(
             end_ts,
             normalized_forced_sources,
             normalized_mss_sources,
+            ohlcv_exchanges=ohlcv_exchanges,
         )
 
         btc_exchange = exchanges_to_consider[0] if len(exchanges_to_consider) == 1 else "binanceusdm"
@@ -962,6 +966,8 @@ async def _prepare_hlcvs_combined_impl(
     end_ts: int,
     forced_sources: Dict[str, str],
     market_settings_sources: Optional[Dict[str, str]] = None,
+    *,
+    ohlcv_exchanges: Optional[Sequence[str]] = None,
 ):
     market_settings_sources = market_settings_sources or {}
     approved = require_live_value(config, "approved_coins")
@@ -970,7 +976,10 @@ async def _prepare_hlcvs_combined_impl(
         | set(symbol_to_coin(c) for c in approved["short"])
     )
     orig_coins = list(coins)
-    exchanges_to_consider = sorted(list(om_dict.keys()))
+    if ohlcv_exchanges is not None:
+        exchanges_to_consider = [ex for ex in ohlcv_exchanges if ex in om_dict]
+    else:
+        exchanges_to_consider = sorted(list(om_dict.keys()))
     minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
     interval_ms = 60_000
     min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days

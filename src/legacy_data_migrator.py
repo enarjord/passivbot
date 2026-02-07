@@ -596,7 +596,94 @@ def _load_and_convert_legacy_shard(path: str, candle_dtype) -> Optional[np.ndarr
 
 
 # Track whether migration message has been logged this session
-_MIGRATION_LOGGED: Set[str] = set()
+# Include cache_base/historical_data_path so isolated caches can migrate independently.
+_MIGRATION_LOGGED: Set[Tuple[str, str, str]] = set()
+
+
+def migrate_legacy_data_all_on_init(
+    cache_base: str = "caches/ohlcv",
+    historical_data_path: str = "historical_data",
+    quote: str = "USDT",
+    *,
+    audit_gateio_volume: bool = True,
+) -> int:
+    """
+    Migrate legacy data for all exchanges once per process.
+
+    This is intended to be called once globally (e.g., on first CandlestickManager init)
+    and will migrate all exchanges discovered under historical_data/.
+
+    Args:
+        cache_base: Base directory for OHLCV cache
+        historical_data_path: Path to legacy historical_data directory
+        quote: Quote currency for building symbol paths
+        audit_gateio_volume: If True, skip gateio migration due to volume differences
+
+    Returns:
+        Total number of files migrated across all exchanges
+    """
+    legacy_data = scan_legacy_data(historical_data_path)
+    if not legacy_data:
+        return 0
+
+    total_exchanges = len(legacy_data)
+    total_coins = sum(len(coins) for coins in legacy_data.values())
+    total_shards = sum(len(dates) for coins in legacy_data.values() for dates in coins.values())
+
+    logging.info(
+        "[boot] Legacy data found in %s/ (%d exchanges, %d coins, %d shards). "
+        "Migrating missing files to %s/",
+        historical_data_path,
+        total_exchanges,
+        total_coins,
+        total_shards,
+        cache_base,
+    )
+
+    migrated_total = 0
+
+    for exchange in sorted(legacy_data.keys()):
+        key = (exchange, cache_base, historical_data_path)
+        if key in _MIGRATION_LOGGED:
+            continue
+        _MIGRATION_LOGGED.add(key)
+
+        if audit_gateio_volume and exchange == "gateio":
+            logging.info(
+                "[boot] skipping gateio legacy migration audit; gateio cache should be refreshed from remote data"
+            )
+            continue
+
+        migrated, skipped = migrate_legacy_data_for_exchange(
+            exchange=exchange,
+            cache_base=cache_base,
+            historical_data_path=historical_data_path,
+            dry_run=False,
+            quote=quote,
+        )
+        migrated_total += migrated
+
+        if migrated > 0:
+            logging.info(
+                "[boot] Migrated %d legacy shards for %s (%d already existed). "
+                "You may safely delete %s/ohlcvs_%s/ to save disk space.",
+                migrated,
+                exchange,
+                skipped,
+                historical_data_path,
+                exchange,
+            )
+        elif skipped > 0:
+            logging.info(
+                "[boot] Legacy data for %s already migrated (%d shards). "
+                "You may safely delete %s/ohlcvs_%s/ to save disk space.",
+                exchange,
+                skipped,
+                historical_data_path,
+                exchange,
+            )
+
+    return migrated_total
 
 
 def migrate_legacy_data_on_init(
@@ -626,7 +713,8 @@ def migrate_legacy_data_on_init(
     """
     global _MIGRATION_LOGGED
 
-    if exchange in _MIGRATION_LOGGED:
+    key = (exchange, cache_base, historical_data_path)
+    if key in _MIGRATION_LOGGED:
         return 0
 
     legacy_data = scan_legacy_data(historical_data_path)
@@ -641,7 +729,7 @@ def migrate_legacy_data_on_init(
         return 0
 
     # Log once per session
-    _MIGRATION_LOGGED.add(exchange)
+    _MIGRATION_LOGGED.add(key)
     logging.info(
         "[boot] Legacy data found in %s/ohlcvs_%s/ (%d coins, %d shards). "
         "Migrating missing files to %s/",

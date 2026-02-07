@@ -6,10 +6,17 @@ in combined backtests.
 """
 
 import asyncio
+import os
 import logging
 import pytest
 
 logging.basicConfig(level=logging.INFO)
+
+LIVE = os.environ.get("LIVE_CANDLE_TESTS", "").lower() in {"1", "true", "yes"}
+pytestmark = pytest.mark.skipif(
+    not LIVE,
+    reason="Set LIVE_CANDLE_TESTS=1 to enable live market_settings_sources tests",
+)
 
 
 def _base_config():

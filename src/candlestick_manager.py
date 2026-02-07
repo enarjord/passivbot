@@ -61,7 +61,7 @@ import portalocker  # type: ignore
 
 from legacy_data_migrator import (
     standardize_cache_directories,
-    migrate_legacy_data_on_init,
+    migrate_legacy_data_all_on_init,
     merge_duplicate_symbol_directories,
     normalize_ccxt_volume_to_base,
 )
@@ -476,6 +476,10 @@ class CandlestickManager:
         # and merge any duplicate symbol directories from inconsistent sanitization
         ohlcv_cache_base = os.path.join(self.cache_dir, "ohlcv")
         os.makedirs(ohlcv_cache_base, exist_ok=True)
+        historical_data_path = os.path.join(
+            os.path.dirname(os.path.abspath(self.cache_dir)),
+            "historical_data",
+        )
         # TODO: Set GATEIO_CACHE_CUTOFF_DATE on merge to master and remove this reminder in CLAUDE.md.
         GATEIO_CACHE_CUTOFF_DATE = None  # e.g. "2026-02-15"
         if self.exchange_name == "gateio" and GATEIO_CACHE_CUTOFF_DATE:
@@ -490,11 +494,10 @@ class CandlestickManager:
                 if not os.path.exists(migration_done):
                     try:
                         standardize_cache_directories(ohlcv_cache_base)
-                        if self.exchange_name != "gateio":
-                            migrate_legacy_data_on_init(
-                                exchange=self.exchange_name,
-                                cache_base=ohlcv_cache_base,
-                            )
+                        migrate_legacy_data_all_on_init(
+                            cache_base=ohlcv_cache_base,
+                            historical_data_path=historical_data_path,
+                        )
                         merge_duplicate_symbol_directories(ohlcv_cache_base)
                         try:
                             with open(migration_done, "w", encoding="utf-8") as handle:

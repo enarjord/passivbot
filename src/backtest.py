@@ -75,7 +75,6 @@ from plotting import (
 )
 from collections import defaultdict
 import logging
-import resource
 import gzip
 import traceback
 from logging_setup import configure_logging, resolve_log_level
@@ -238,7 +237,11 @@ def _build_hlcvs_bundle(
 
     def _rss_mb() -> float | None:
         try:
-            rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            import resource as _resource
+        except Exception:
+            return None
+        try:
+            rss_kb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
             # Linux reports in KB, macOS in bytes.
             if sys.platform == "darwin":
                 return rss_kb / (1024**2)

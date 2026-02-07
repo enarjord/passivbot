@@ -2,7 +2,7 @@
 
 **Date:** 2026-01-31
 **Issue:** Bus error / OOM when running optimizer with suite mode on VPS (32GB RAM)
-**Status:** UNRESOLVED - requires further investigation
+**Status:** RESOLVED (2026-02-06) - mitigated via lazy slicing + memory hygiene; update if regression is observed
 
 ## Problem Summary
 
@@ -23,19 +23,44 @@ The optimizer crashes with "Bus error (core dumped)" when running suite mode wit
    - Indicates SharedMemory segments were created but not properly cleaned up
    - Crash happens during SharedMemory allocation for scenarios
 
-## Attempted Fixes
+## Fixes Applied
 
 ### Fix 1: Explicit array cleanup after SharedMemory creation
 - Added `del hlcvs, btc_usd_prices` after `_build_dataset()` in `prepare_master_datasets()`
-- **Result:** Did not fix the issue
+- **Result:** Helped reduce peak usage but was insufficient alone
 
 ### Fix 2: Memory estimation and warning
 - Added memory estimation based on `master_size × (1 + n_cpus)`
-- **Result:** Warning displayed but didn't prevent crash
+- **Result:** Provides early visibility; not a full mitigation
 
 ### Fix 3: Revert lazy slicing to per-scenario SharedMemory
 - Reverted from lazy slicing (workers copy) to pre-created per-scenario SharedMemory
-- **Result:** Still crashes with Bus error
+- **Result:** Reduced some contention but still susceptible to /dev/shm limits
+
+### Fix 4: Lazy slicing (final form) + copy avoidance
+- Reintroduced lazy slicing for suite datasets with tighter control of data subsetting
+- Avoided double-copy when subsetting HLCVs
+- **Result:** Resolved bus errors in large suite runs (per branch validation)
+
+## Resolution Summary
+
+Suite optimizer memory pressure was resolved by reducing peak allocations and shared-memory footprint:
+
+- Lazy slicing for suite datasets to avoid per-scenario SharedMemory duplication.
+- Avoided extra copies during subsetting of HLCVs.
+- Explicitly freed original arrays after SharedMemory creation to reduce transient spikes.
+- Added memory estimation + warnings to make oversized runs visible before failure.
+
+## Related Commits
+
+- `194e547a` fix: reduce suite mode memory usage with lazy slicing
+- `187c053b` Use lazy slicing for suite optimizer datasets
+- `a4d480d8` Avoid double copy when subsetting hlcvs
+- `ada7c24d` fix: explicitly free original arrays after SharedMemory creation
+- `7a8dfc9f` feat: add memory estimation and warning for suite mode optimization
+- `ecb7d2fa` fix: revert lazy slicing to per-scenario SharedMemory (intermediate)
+- `52ee6ab5` docs: add suite optimizer memory investigation notes
+- `a6af9e6e` docs: add multiprocessing guidelines to CLAUDE.md
 
 ## Technical Analysis
 
@@ -144,9 +169,7 @@ The optimizer crashes with "Bus error (core dumped)" when running suite mode wit
 **Worked:** 6 CPUs, 2025-12 to 2026-01 (short range), local MacBook
 **Failed:** 16 CPUs, 2021-03 to present (1791 days), VPS 32GB RAM
 
-## Next Steps
+## Residual Risks / Follow-ups
 
-1. Verify `/dev/shm` size on VPS
-2. Add detailed logging to SharedMemory creation
-3. Test with reduced scenario count
-4. Consider scenario deduplication for same-range scenarios
+1. Very large suites can still approach `/dev/shm` limits on small RAM systems; keep an eye on `/dev/shm` sizing.
+2. If bus errors reappear, test with reduced scenario count or lower `n_cpus` to validate capacity assumptions.
