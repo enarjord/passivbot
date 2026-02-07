@@ -121,9 +121,9 @@
             "risk_we_excess_allowance_pct": 1.1,
             "risk_wel_enforcer_threshold": 0.99,
             "total_wallet_exposure_limit": 1.25,
-            "unstuck_close_pct": 0.0124,
+            "unstuck_close_pct": 0.055,
             "unstuck_ema_dist": -0.0823,
-            "unstuck_loss_allowance_pct": 0.00106,
+            "unstuck_loss_allowance_pct": 0.01,
             "unstuck_threshold": 0.443
         },
         "short": {
