@@ -2743,6 +2743,17 @@ impl<'a> Backtest<'a> {
 
 fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas {
     let interval_f = interval as f64;
+    let clamp_alpha = |alpha: f64| {
+        if !alpha.is_finite() {
+            0.0
+        } else if alpha < 0.0 {
+            0.0
+        } else if alpha > 1.0 {
+            1.0
+        } else {
+            alpha
+        }
+    };
 
     // EMA spans are in minutes. Divide by interval to get number of candle periods.
     let mut ema_spans_long = [
@@ -2760,8 +2771,8 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas 
     ema_spans_short.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
     // Price EMAs - spans are in minutes, convert to candle periods
-    let ema_alphas_long = ema_spans_long.map(|x| 2.0 / (x / interval_f + 1.0));
-    let ema_alphas_short = ema_spans_short.map(|x| 2.0 / (x / interval_f + 1.0));
+    let ema_alphas_long = ema_spans_long.map(|x| clamp_alpha(2.0 / (x / interval_f + 1.0)));
+    let ema_alphas_short = ema_spans_short.map(|x| clamp_alpha(2.0 / (x / interval_f + 1.0)));
 
     EmaAlphas {
         long: Alphas {
@@ -2771,11 +2782,18 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas 
             alphas: ema_alphas_short,
         },
         // EMA spans for the volume/log range filters (alphas precomputed from spans)
-        vol_alpha_long: 2.0 / (bot_params_pair.long.filter_volume_ema_span as f64 / interval_f + 1.0),
-        vol_alpha_short: 2.0 / (bot_params_pair.short.filter_volume_ema_span as f64 / interval_f + 1.0),
-        log_range_alpha_long: 2.0 / (bot_params_pair.long.filter_volatility_ema_span as f64 / interval_f + 1.0),
-        log_range_alpha_short: 2.0
-            / (bot_params_pair.short.filter_volatility_ema_span as f64 / interval_f + 1.0),
+        vol_alpha_long: clamp_alpha(
+            2.0 / (bot_params_pair.long.filter_volume_ema_span as f64 / interval_f + 1.0),
+        ),
+        vol_alpha_short: clamp_alpha(
+            2.0 / (bot_params_pair.short.filter_volume_ema_span as f64 / interval_f + 1.0),
+        ),
+        log_range_alpha_long: clamp_alpha(
+            2.0 / (bot_params_pair.long.filter_volatility_ema_span as f64 / interval_f + 1.0),
+        ),
+        log_range_alpha_short: clamp_alpha(
+            2.0 / (bot_params_pair.short.filter_volatility_ema_span as f64 / interval_f + 1.0),
+        ),
         // Note: entry_volatility spans are in HOURS and computed from hourly buckets,
         // so they do NOT need interval adjustment (hourly buckets are calendar-based)
         entry_volatility_logrange_ema_1h_alpha_long: {
