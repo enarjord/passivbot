@@ -367,6 +367,13 @@ def build_backtest_payload(
             btc_usd_prices,
             candle_interval,
         )
+        if isinstance(mss, dict):
+            meta = mss.setdefault("__meta__", {})
+            meta["data_interval_minutes"] = int(candle_interval)
+            meta["candle_interval_offset_bars"] = int(offset_bars)
+            if timestamps is not None and len(timestamps) > 0:
+                meta["effective_start_ts"] = int(timestamps[0])
+                meta["effective_start_date"] = ts_to_date(int(timestamps[0]))
 
     # Inject first timestamp (ms) into backtest params; default to 0 if unknown
     try:
@@ -452,6 +459,13 @@ def build_backtest_payload(
     except Exception:
         requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
     backtest_params["requested_start_timestamp_ms"] = requested_start_ts
+    if isinstance(meta, dict) and timestamps is not None and len(timestamps) > 0:
+        meta["effective_start_ts"] = int(timestamps[0])
+        meta["effective_start_date"] = ts_to_date(int(timestamps[0]))
+        warmup_provided = max(
+            0, int(max(0, requested_start_ts - int(timestamps[0])) // 60_000)
+        )
+        meta["warmup_minutes_provided"] = warmup_provided
 
     bundle = _build_hlcvs_bundle(
         hlcvs,

@@ -1296,7 +1296,13 @@ impl<'a> Backtest<'a> {
             first_valid_idx[i] = first;
             last_valid_idx[i] = last;
             let warm = warmup_minutes.get(i).copied().unwrap_or(0);
-            let mut trade_idx = first.saturating_add(warm);
+            let interval = backtest_params.candle_interval_minutes.max(1) as usize;
+            let warm_bars = if interval > 1 {
+                (warm + interval - 1) / interval
+            } else {
+                warm
+            };
+            let mut trade_idx = first.saturating_add(warm_bars);
             if trade_idx > last {
                 trade_idx = last;
             }
