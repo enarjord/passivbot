@@ -243,7 +243,7 @@
             "long_total_wallet_exposure_limit": [1,1],
             "long_unstuck_close_pct": [0.001,0.05,0.001],
             "long_unstuck_ema_dist": [-0.1,0.01,0.0001],
-            "long_unstuck_loss_allowance_pct": [0.001,0.05,0.0001],
+            "long_unstuck_loss_allowance_pct": [0.01,0.05,0.0001],
             "long_unstuck_threshold": [0.4,0.99,0.001],
             "short_close_grid_markup_end": [0.001,0.025,0.0001],
             "short_close_grid_markup_start": [0.001,0.025,0.0001],
@@ -280,7 +280,7 @@
             "short_total_wallet_exposure_limit": [0,0],
             "short_unstuck_close_pct": [0.001,0.05,0.001],
             "short_unstuck_ema_dist": [-0.1,0.01,0.0001],
-            "short_unstuck_loss_allowance_pct": [0.001,0.05,0.0001],
+            "short_unstuck_loss_allowance_pct": [0.01,0.05,0.0001],
             "short_unstuck_threshold": [0.4,0.99,0.001]
         },
         "compress_results_file": true,
