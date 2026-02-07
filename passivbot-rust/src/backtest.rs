@@ -1308,7 +1308,7 @@ impl<'a> Backtest<'a> {
             }
             trade_start_idx[i] = trade_idx;
 
-            let expected_trade_idx = first.saturating_add(warm).min(last);
+            let expected_trade_idx = first.saturating_add(warm_bars).min(last);
             debug_assert_eq!(
                 trade_idx, expected_trade_idx,
                 "trade start index mismatch for coin {}: expected {} but got {}",

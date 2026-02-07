@@ -620,7 +620,12 @@ pub fn analyze_backtest(
         for (extract_twe, side) in &twe_extractors {
             let mut daily_twe: BTreeMap<usize, (f64, usize)> = BTreeMap::new();
             for fill in fills {
-                let day = fill.index / 1440;
+                let ts = if fill.timestamp_ms > 0 {
+                    fill.timestamp_ms
+                } else {
+                    fallback_timestamp_ms(fill.index)
+                };
+                let day = (ts / MS_PER_DAY) as usize;
                 let entry = daily_twe.entry(day).or_insert((0.0, 0));
                 entry.0 += extract_twe(fill);
                 entry.1 += 1;
@@ -640,33 +645,39 @@ pub fn analyze_backtest(
                 .sum();
             let daily_twe_mean = daily_means_sum / total_days as f64;
 
-            let mut start_idx: Option<usize> = None;
-            let mut durations_minutes: Vec<f64> = Vec::new();
+            let mut start_ts: Option<u64> = None;
+            let mut durations_ms: Vec<u64> = Vec::new();
 
             for fill in fills {
+                let ts = if fill.timestamp_ms > 0 {
+                    fill.timestamp_ms
+                } else {
+                    fallback_timestamp_ms(fill.index)
+                };
                 if extract_twe(fill) > daily_twe_mean {
-                    if start_idx.is_none() {
-                        start_idx = Some(fill.index);
+                    if start_ts.is_none() {
+                        start_ts = Some(ts);
                     }
-                } else if let Some(start) = start_idx {
-                    durations_minutes.push((fill.index - start) as f64);
-                    start_idx = None;
+                } else if let Some(start) = start_ts {
+                    durations_ms.push(ts.saturating_sub(start));
+                    start_ts = None;
                 }
             }
-            if let Some(start) = start_idx {
+            if let Some(start) = start_ts {
                 if let Some(last_fill) = fills.last() {
-                    durations_minutes.push((last_fill.index - start) as f64);
+                    let last_ts = if last_fill.timestamp_ms > 0 {
+                        last_fill.timestamp_ms
+                    } else {
+                        fallback_timestamp_ms(last_fill.index)
+                    };
+                    durations_ms.push(last_ts.saturating_sub(start));
                 }
             }
 
-            if !durations_minutes.is_empty() {
-                let hrs_mean =
-                    durations_minutes.iter().sum::<f64>() / durations_minutes.len() as f64 / 60.0;
-                let hrs_max = durations_minutes
-                    .iter()
-                    .cloned()
-                    .fold(f64::NEG_INFINITY, f64::max)
-                    / 60.0;
+            if !durations_ms.is_empty() {
+                let hrs_mean = durations_ms.iter().sum::<u64>() as f64
+                    / (durations_ms.len() as f64 * MS_PER_HOUR as f64);
+                let hrs_max = *durations_ms.iter().max().unwrap() as f64 / MS_PER_HOUR as f64;
 
                 match *side {
                     "long" => {

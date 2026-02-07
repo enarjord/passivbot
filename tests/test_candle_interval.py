@@ -1,6 +1,15 @@
 """Tests for configurable candle interval feature."""
+from pathlib import Path
+
 import numpy as np
 import pytest
+
+try:
+    import passivbot_rust as pbr
+except Exception:  # pragma: no cover - exercised when the extension is unavailable
+    pbr = None
+
+pbr_is_stub = bool(getattr(pbr, "__is_stub__", False)) if pbr is not None else False
 
 
 def test_aggregate_candles_basic():
@@ -60,3 +69,63 @@ def test_aggregate_candles_error_on_insufficient():
 
     with pytest.raises(ValueError, match="Not enough candles"):
         aggregate_candles(candles, 5)
+
+
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
+def test_backtest_with_candle_interval():
+    from backtest import build_backtest_payload, execute_backtest
+    from config_utils import load_config
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_config(str(root / "configs" / "template.json"), verbose=False)
+    config["backtest"]["exchanges"] = ["binance"]
+    config["backtest"]["coins"] = {"binance": ["BTC"]}
+    config["backtest"]["candle_interval_minutes"] = 5
+    config["backtest"]["filter_by_min_effective_cost"] = False
+    config["backtest"]["start_date"] = "2021-01-01"
+    config["backtest"]["end_date"] = "2021-01-02"
+    config["live"]["warmup_ratio"] = 0.0
+    config["live"]["max_warmup_minutes"] = 0
+    config["live"]["hedge_mode"] = False
+
+    n_minutes = 60
+    start_ts = 1609459200000  # 2021-01-01 00:00:00 UTC
+    timestamps = np.arange(start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64)
+    hlcvs = np.zeros((n_minutes, 1, 4), dtype=np.float64)
+    for i in range(n_minutes):
+        base = 100 + i * 0.1
+        hlcvs[i, 0, 0] = base + 0.5  # high
+        hlcvs[i, 0, 1] = base - 0.5  # low
+        hlcvs[i, 0, 2] = base  # close
+        hlcvs[i, 0, 3] = 1.0  # volume
+    btc_usd_prices = np.full(n_minutes, 20_000.0, dtype=np.float64)
+    mss = {
+        "BTC": {
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.0,
+            "min_cost": 0.0,
+            "c_mult": 1.0,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        },
+        "__meta__": {
+            "requested_start_ts": int(timestamps[0]),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+            "warmup_minutes_provided": 0,
+        },
+    }
+
+    payload = build_backtest_payload(
+        hlcvs,
+        mss,
+        config,
+        "binance",
+        btc_usd_prices,
+        timestamps,
+    )
+    fills, equities_array, analysis = execute_backtest(payload, config)
+    assert equities_array.shape[0] == n_minutes // 5
+    assert np.isfinite(analysis["positions_held_per_day"])
