@@ -2,6 +2,19 @@
 
 All notable user-facing changes will be documented in this file.
 
+## v7.7.1 - 2026-02-07
+
+### Added
+- **Stock perps (HIP-3) support** - Hyperliquid stock perpetuals are now supported, including symbol normalization and routing in combined mode.
+- **Pareto host** - Added a lightweight host mode for serving Pareto outputs.
+
+### Fixed
+- **Combined HLCV prep** - Fixed `orig_coins` NameError during combined data preparation.
+
+### Changed
+- **Logging refinements** - Further reduced INFO noise and improved context across rounds 8–10.
+- **Agent docs** - Updated guidance and pitfalls documentation for cross-platform portability.
+
 ## v7.7.0 - 2026-01-26
 
 ### Fixed
