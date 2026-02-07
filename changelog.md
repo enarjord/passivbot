@@ -7,47 +7,37 @@ All notable user-facing changes will be documented in this file.
 ### Fixed
 - **Live bot candle cache** - Rebuilds candlestick index metadata for the required warmup ranges on startup, preventing stale `index.json` metadata from suppressing candle refreshes.
 - **Windows backtest startup** - Avoids importing `resource` at module load, preventing crashes on Windows during backtest/optimizer startup.
-- **Legacy cache migration** - Migration now runs once globally and covers all exchanges on first init (not just the first exchange to start).
+- **Legacy cache migration** - Migration now runs once globally and covers all exchanges on first init (not just the first exchange to start), and legacy data is resolved relative to the cache root to avoid unintended copies.
 - **Combined OHLCV selection** - `market_settings_sources` no longer expands OHLCV candidates; combined data now uses `backtest.exchanges` plus forced coin sources only.
 
 ### Changed
 - **Logging** - Reduced INFO/WARNING noise (unsupported market notices now INFO with `[config]`, hedge-mode success logs moved to DEBUG, Bitget OHLCV limit probes moved to DEBUG, KuCoin PnL discrepancy warnings further throttled, large zero-candle warnings now only trigger above 1000). Added `[order]` tag to order plan summaries and extra context for MissingEma errors.
 
+## v7.7.1 - 2026-02-07
+
+### Added
+- **Stock perps (HIP-3) support** - Hyperliquid stock perpetuals are now supported, including symbol normalization and routing in combined mode.
+- **Pareto host** - Added a lightweight host mode for serving Pareto outputs.
+
+### Fixed
+- **Combined HLCV prep** - Fixed `orig_coins` NameError during combined data preparation.
+
+### Changed
+- **Logging refinements** - Further reduced INFO noise and improved context across rounds 8–10.
+- **Agent docs** - Updated guidance and pitfalls documentation for cross-platform portability.
+
 ## v7.7.0 - 2026-01-26
 
 ### Fixed
-- **Suite mode: "no exchanges after filtering" error** - Fixed bug where suite scenarios would fail with "no exchanges after filtering" when the config specified exchanges that had no data (e.g., bybit data missing due to fetch failures). Scenario exchanges are now filtered to only those actually available in the dataset, with a debug log when exchanges are unavailable.
 - **Bybit: Missing PnL on some close fills** - Fixed pagination bug in `BybitFetcher._fetch_positions_history()` that caused closed-pnl records to be skipped when >100 records existed in a time window. Now uses hybrid pagination: cursor-based for recent records (no gaps), time-based sliding window for older records.
-- **Exchange name standardization in cache paths** - Fixed inconsistent use of `binanceusdm` vs `binance` in OHLCV cache paths. All cache paths now consistently use standard names (`binance`, `bybit`, `kucoin`).
-- **Skip unsupported coins when fetching OHLCV data** - Fixed issue where CandlestickManager would attempt to download data for coins not supported by an exchange (e.g., CRO on Binance). Now properly checks if the symbol exists in the exchange's market info before attempting to fetch, eliminating spurious "No mapping for X on Y; using fallback" warnings.
 
 ### Added
-- **Gate.io backtest data support** - Gate.io is now a supported exchange for backtesting and optimization OHLCV data. The default template config includes all three exchanges: `["binance", "bybit", "gateio"]`.
-- **Suite examples documentation** - New `docs/suite_examples.md` with comprehensive examples covering exchange comparison, date range scenarios, long-only/short-only configurations, parameter sensitivity testing, and coin subset analysis.
-- **Legacy data auto-migration** - On startup, CandlestickManager automatically migrates OHLCV data from `historical_data/` to `caches/ohlcv/`. Migration is non-destructive (copies, not moves). Users may delete `historical_data/` after migration to save disk space.
-- **Cache directory standardization** - On startup, CandlestickManager automatically renames cache directories from ccxt IDs to standard names (e.g., `binanceusdm` -> `binance`, `kucoinfutures` -> `kucoin`, `gateio` stays as-is) and removes any symlinks.
 - **Fill events now include psize/pprice** - Each fill event is annotated with position size (`psize`) and VWAP entry price (`pprice`) after the fill. Values are computed using a two-phase algorithm and persisted to cache for all exchanges.
-- **`--scenarios` CLI filter** - Run specific scenarios by label with `--scenarios label1,label2,...` (implies `--suite y`).
-- **`suite_enabled` config param** - New `backtest.suite_enabled` (default: true) as master toggle for suite mode.
-- **Scenario `overrides`** - Scenarios can now include arbitrary config path overrides (e.g., `{"bot.long.total_wallet_exposure_limit": 2}`) to test parameter variations.
 - **Logging best practices documentation** - New `docs/ai/log_analysis_prompt.md` with comprehensive logging guidelines, level definitions, and improvement tracking.
 - **Exchange API quirks documentation** - New `docs/ai/exchange_api_quirks.md` documenting known exchange-specific limitations and workarounds.
 - **Debugging case studies** - New `docs/ai/debugging_case_studies.md` with detailed debugging sessions as reference.
-- **Combined mode exchange assignment log** - When using multi-exchange combined data (best-per-coin mode), a summary log now shows which exchange was chosen for each coin, e.g., `[combined] chose binance for 45 coins: BTC, ETH, ...`.
 
 ### Changed
-- **Exchange name functions renamed** - `normalize_exchange_name()` renamed to `to_ccxt_exchange_id()` and `denormalize_exchange_name()` renamed to `to_standard_exchange_name()`. Old names remain as deprecated aliases with warnings.
-- **GateIO cache migration disabled** - Legacy `historical_data/` migration is skipped for GateIO to avoid mixed quote/base volume data. If you have `caches/ohlcv/gateio` from older builds, delete it after upgrading so fresh data is fetched and normalized to base volume.
-- **BREAKING**: Flattened suite configuration structure for simpler data strategy
-  - `backtest.suite.scenarios` → `backtest.scenarios`
-  - `backtest.suite.aggregate` → `backtest.aggregate`
-  - Added `backtest.volume_normalization` (default: true)
-  - Removed `backtest.suite.enabled`, `backtest.suite.include_base_scenario`, `backtest.suite.base_label`
-  - Removed `backtest.combine_ohlcvs` (behavior now derived from scenario exchange count)
-- Each scenario can now override `exchanges` directly
-- Single exchange in scenario = use that exchange's data only
-- Multiple exchanges in scenario = best-per-coin combination with volume normalization
-- Data strategy is now derived from exchange count rather than explicit flags
 - **Logging improvements (7 rounds of refinement)**:
   - Standardized log tags: `[memory]`, `[warmup]`, `[hourly]`, `[fills]`, `[mapping]`, `[candle]`, `[ranking]`, `[mode]`
   - Moved routine API/cache messages from INFO to DEBUG level (CCXT fetch details, cache updates)
@@ -65,8 +55,6 @@ All notable user-facing changes will be documented in this file.
 - Trailing position change timestamps now derived from FillEventsManager events.
 
 ### Removed
-- `backtest.combine_ohlcvs` config key (behavior derived from exchange count)
-- `backtest.suite` wrapper (scenarios/aggregate now at top level of backtest section)
 - `--shadow-mode` CLI flag (no longer needed; FillEventsManager is production-ready)
 - `live.pnls_manager_shadow_mode` config option
 - Legacy `init_pnls`, `update_pnls`, `fetch_pnls` methods in passivbot.py
@@ -74,52 +62,9 @@ All notable user-facing changes will be documented in this file.
 - Shadow mode comparison logging (`_compare_pnls_shadow`, etc.)
 
 ### Migration Notes
-
-#### Suite Configuration Migration
-Old configs are automatically migrated. Manual update recommended for clarity.
-
-**Before (old config):**
-```json
-{
-  "backtest": {
-    "exchanges": ["binance", "bybit"],
-    "combine_ohlcvs": true,
-    "suite": {
-      "enabled": true,
-      "include_base_scenario": true,
-      "base_label": "combined",
-      "aggregate": {"default": "mean"},
-      "scenarios": [
-        {"label": "binance", "exchanges": ["binance"]},
-        {"label": "bybit", "exchanges": ["bybit"]}
-      ]
-    }
-  }
-}
-```
-
-**After (new config):**
-```json
-{
-  "backtest": {
-    "exchanges": ["binance", "bybit"],
-    "aggregate": {"default": "mean"},
-    "scenarios": [
-      {"label": "combined"},
-      {"label": "binance", "exchanges": ["binance"]},
-      {"label": "bybit", "exchanges": ["bybit"]}
-    ]
-  }
-}
-```
-
-#### PnL Manager Migration
 - **No action required** - FillEventsManager automatically fetches and caches fill data
 - Old `{user}_pnls.json` cache files can be safely deleted after upgrading
 - If using custom exchange configurations, ensure the exchange's fill fetcher is supported (Binance, Bybit, Bitget, GateIO, Hyperliquid, KuCoin, OKX)
-
-#### Release Checklist
-- Set `GATEIO_CACHE_CUTOFF_DATE` in `src/candlestick_manager.py` to the merge date and remove the CLAUDE reminder before tagging the release.
 
 ## v7.6.2 - 2026-01-20
 
