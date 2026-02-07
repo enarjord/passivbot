@@ -70,6 +70,10 @@ SHARED_METRIC_WEIGHTS = {
     "volume_pct_per_day_avg": -1.0,
     "volume_pct_per_day_avg_w": -1.0,
     "peak_recovery_hours_pnl": 1.0,
+    "high_exposure_hours_mean_long": 1.0,
+    "high_exposure_hours_max_long": 1.0,
+    "high_exposure_hours_mean_short": 1.0,
+    "high_exposure_hours_max_short": 1.0,
 }
 
 CURRENCY_METRIC_WEIGHTS = {

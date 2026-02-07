@@ -809,6 +809,65 @@ def create_forager_balance_figures(
     return figures if return_figures else {}
 
 
+def create_forager_twe_figure(
+    fdf: pd.DataFrame,
+    figsize=(21, 8),
+    *,
+    autoplot: bool | None = None,
+    return_figures: bool | None = None,
+) -> dict:
+    """Plot total wallet exposure for long (positive) and short (negative) on one axis."""
+    figures: dict = {}
+    if fdf.empty or "twe_long" not in fdf.columns:
+        return figures
+
+    autoplot = (_ipy_display is not None) if autoplot is None else autoplot
+    if return_figures is None:
+        return_figures = not autoplot
+
+    # Resample to reduce point density — take last value per time bucket
+    twe = fdf.set_index("timestamp")[["twe_long", "twe_short"]].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    # twe_short is stored as signed negative; ensure it plots below zero
+    twe["twe_short"] = -twe["twe_short"].abs()
+    twe = twe.resample("1h").mean().dropna(how="all").ffill()
+
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    x = twe.index.to_numpy()
+
+    ax.fill_between(x, 0, twe["twe_long"].to_numpy(), alpha=0.35, color="tab:blue", label="TWE Long")
+    ax.fill_between(
+        x, 0, twe["twe_short"].to_numpy(), alpha=0.35, color="tab:red", label="TWE Short"
+    )
+    ax.plot(x, twe["twe_long"].to_numpy(), linewidth=0.7, color="tab:blue")
+    ax.plot(x, twe["twe_short"].to_numpy(), linewidth=0.7, color="tab:red")
+
+    ax.axhline(0, color="grey", linewidth=0.5)
+    ax.set_title("Total Wallet Exposure")
+    ax.set_ylabel("TWE")
+    ax.set_xlabel("Time")
+    ax.grid(True, linestyle="--", alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+
+    key = "total_wallet_exposure"
+    if return_figures:
+        figures[key] = fig
+    if autoplot:
+        if _ipy_display is not None:
+            _ipy_display(fig)
+        else:  # pragma: no cover
+            try:
+                fig.show()
+            except Exception:
+                pass
+    if not return_figures:
+        plt.close(fig)
+
+    return figures if return_figures else {}
+
+
 def create_forager_coin_figures(
     coins: list,
     fdf: pd.DataFrame,

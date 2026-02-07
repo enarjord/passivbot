@@ -23,6 +23,10 @@ def _make_analysis_entry(value):
         "total_wallet_exposure_max",
         "total_wallet_exposure_mean",
         "total_wallet_exposure_median",
+        "high_exposure_hours_mean_long",
+        "high_exposure_hours_max_long",
+        "high_exposure_hours_mean_short",
+        "high_exposure_hours_max_short",
         "entry_initial_balance_pct_long",
         "entry_initial_balance_pct_short",
     ]
@@ -75,3 +79,26 @@ def test_expand_analysis_includes_entry_balance_pct():
     assert "entry_initial_balance_pct_short" in result
     assert result["entry_initial_balance_pct_long"] == 0.123
     assert result["entry_initial_balance_pct_short"] == 0.123
+
+
+def test_expand_analysis_includes_high_exposure_hours():
+    analysis_usd = _make_analysis_entry(0.5)
+    analysis_btc = _make_analysis_entry(0.5)
+    config = {
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 1.0},
+        }
+    }
+    result = expand_analysis(
+        analysis_usd,
+        analysis_btc,
+        fills=np.empty((0, 0)),
+        equities_array=np.empty((0, 3)),
+        config=config,
+    )
+    for side in ("long", "short"):
+        assert f"high_exposure_hours_mean_{side}" in result
+        assert f"high_exposure_hours_max_{side}" in result
+        assert result[f"high_exposure_hours_mean_{side}"] == 0.5
+        assert result[f"high_exposure_hours_max_{side}"] == 0.5

@@ -2,6 +2,12 @@
 
 All notable user-facing changes will be documented in this file.
 
+## Unreleased
+
+### Added
+- **High-exposure duration metrics** - New backtest metrics `high_exposure_hours_{mean,max}_{long,short}` measuring continuous durations where total wallet exposure exceeded its daily average. Available for optimization scoring and limit checks.
+- **Total wallet exposure plot** - Backtests now output `total_wallet_exposure.png` showing long TWE (positive, blue) and short TWE (negative, red) over time.
+
 ## v7.8.1 - 2026-02-07
 
 ### Fixed

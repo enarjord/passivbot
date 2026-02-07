@@ -71,6 +71,7 @@ from pathlib import Path
 from plotting import (
     create_forager_balance_figures,
     create_forager_coin_figures,
+    create_forager_twe_figure,
     save_figures,
 )
 from collections import defaultdict
@@ -1032,6 +1033,10 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
         "total_wallet_exposure_max",
         "total_wallet_exposure_mean",
         "total_wallet_exposure_median",
+        "high_exposure_hours_mean_long",
+        "high_exposure_hours_max_long",
+        "high_exposure_hours_mean_short",
+        "high_exposure_hours_max_short",
         "entry_initial_balance_pct_long",
         "entry_initial_balance_pct_short",
         "adg_pnl",
@@ -1139,6 +1144,8 @@ def post_process(
         return_figures=True,
     )
     save_figures(balance_figs, results_path)
+    twe_figs = create_forager_twe_figure(fdf, autoplot=False, return_figures=True)
+    save_figures(twe_figs, results_path)
 
     if not config["disable_plotting"]:
         try:

@@ -539,6 +539,85 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, exposures_series: &
             sorted[mid]
         };
     }
+
+    // Compute high-exposure duration metrics per side:
+    // Mean and max continuous duration (hours) where twe exceeded the
+    // mean of daily-resampled twe averages.
+    {
+        use std::collections::BTreeMap;
+
+        // twe_short is stored as signed negative; use abs for magnitude
+        let twe_extractors: [(fn(&Fill) -> f64, &str); 2] = [
+            (|f| f.twe_long, "long"),
+            (|f| f.twe_short.abs(), "short"),
+        ];
+
+        for (extract_twe, side) in &twe_extractors {
+            let mut daily_twe: BTreeMap<usize, (f64, usize)> = BTreeMap::new();
+            for fill in fills {
+                let day = fill.index / 1440;
+                let entry = daily_twe.entry(day).or_insert((0.0, 0));
+                entry.0 += extract_twe(fill);
+                entry.1 += 1;
+            }
+
+            if daily_twe.is_empty() {
+                continue;
+            }
+
+            let first_day = *daily_twe.keys().next().unwrap();
+            let last_day = *daily_twe.keys().next_back().unwrap();
+            let total_days = last_day - first_day + 1;
+
+            let daily_means_sum: f64 = daily_twe
+                .values()
+                .map(|(sum, count)| sum / *count as f64)
+                .sum();
+            let daily_twe_mean = daily_means_sum / total_days as f64;
+
+            let mut start_idx: Option<usize> = None;
+            let mut durations_minutes: Vec<f64> = Vec::new();
+
+            for fill in fills {
+                if extract_twe(fill) > daily_twe_mean {
+                    if start_idx.is_none() {
+                        start_idx = Some(fill.index);
+                    }
+                } else if let Some(start) = start_idx {
+                    durations_minutes.push((fill.index - start) as f64);
+                    start_idx = None;
+                }
+            }
+            if let Some(start) = start_idx {
+                if let Some(last_fill) = fills.last() {
+                    durations_minutes.push((last_fill.index - start) as f64);
+                }
+            }
+
+            if !durations_minutes.is_empty() {
+                let hrs_mean =
+                    durations_minutes.iter().sum::<f64>() / durations_minutes.len() as f64 / 60.0;
+                let hrs_max = durations_minutes
+                    .iter()
+                    .cloned()
+                    .fold(f64::NEG_INFINITY, f64::max)
+                    / 60.0;
+
+                match *side {
+                    "long" => {
+                        analysis.high_exposure_hours_mean_long = hrs_mean;
+                        analysis.high_exposure_hours_max_long = hrs_max;
+                    }
+                    "short" => {
+                        analysis.high_exposure_hours_mean_short = hrs_mean;
+                        analysis.high_exposure_hours_max_short = hrs_max;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     analysis
 }
 
