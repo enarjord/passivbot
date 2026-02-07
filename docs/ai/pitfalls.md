@@ -249,6 +249,27 @@ async def fetch_positions(self):
 
 ---
 
+### Using Raw CCXT Exchange IDs for Cache Paths
+
+**Don't**: Use `exchange.id` (the CCXT instance ID) directly in file paths or cache directories.
+
+**Because**: CCXT IDs like `"binanceusdm"` and `"kucoinfutures"` don't match the standard exchange names used throughout the codebase (`"binance"`, `"kucoin"`). This creates duplicate cache directories and breaks lookups.
+
+**Example**:
+```python
+# WRONG: Using ccxt ID directly
+cache_path = f"caches/ohlcv/{exchange.id}/"  # "caches/ohlcv/binanceusdm/"
+
+# CORRECT: Normalize to standard name first
+from utils import to_standard_exchange_name
+ex = to_standard_exchange_name(exchange.id)  # "binance"
+cache_path = f"caches/ohlcv/{ex}/"           # "caches/ohlcv/binance/"
+```
+
+**Instead**: Always call `to_standard_exchange_name()` (from `utils.py`) when deriving an exchange name from a CCXT instance. The standard names are: `binance`, `bybit`, `okx`, `gateio`, `bitget`, `kucoin`, `kraken`, `hyperliquid`.
+
+---
+
 ### Patching Order Logic in Python
 
 **Don't**: Fix order calculation bugs in Python code.
