@@ -1225,6 +1225,25 @@ def _prepare_dataset_subset(
     meta["warmup_minutes_provided"] = warmup_provided
     mss_slice["__meta__"] = meta
 
+    interval = int(meta.get("data_interval_minutes", 1) or 1)
+    offset_bars = int(meta.get("candle_interval_offset_bars", 0) or 0)
+    adjustment_1m = start_idx * interval + offset_bars
+    if adjustment_1m > 0:
+        for coin in selected_coins:
+            coin_meta = mss_slice.get(coin)
+            if not isinstance(coin_meta, dict):
+                continue
+            if "first_valid_index" in coin_meta:
+                coin_meta["first_valid_index"] = max(
+                    0, int(coin_meta.get("first_valid_index", 0)) - adjustment_1m
+                )
+            if "last_valid_index" in coin_meta:
+                coin_meta["last_valid_index"] = max(
+                    0, int(coin_meta.get("last_valid_index", 0)) - adjustment_1m
+                )
+        if offset_bars > 0:
+            meta["candle_interval_offset_bars"] = 0
+
     warmup_map = compute_per_coin_warmup_minutes(scenario_config)
     _recompute_index_metadata(mss_slice, hlcvs_slice, list(selected_coins), warmup_map)
     return hlcvs_slice, btc_window, ts_window, mss_slice
