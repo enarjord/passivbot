@@ -37,29 +37,28 @@ New field in `config.backtest`:
 ### Aggregation function
 
 ```python
-def aggregate_candles(candles_1m, interval):
-    """Aggregate 1m candles to coarser interval.
+    def aggregate_candles(candles_1m, interval):
+        """Aggregate 1m candles to coarser interval.
 
-    Args:
-        candles_1m: Array of shape (n_timesteps, n_coins, 5) for OHLCV
-        interval: Number of 1m candles to combine
+        Args:
+            candles_1m: Array of shape (n_timesteps, n_coins, 4) for HLCV
+            interval: Number of 1m candles to combine
 
-    Returns:
-        Aggregated array of shape (n_timesteps // interval, n_coins, 5)
-    """
-    if interval == 1:
-        return candles_1m
-    n = len(candles_1m)
-    n_out = n // interval
-    truncated = candles_1m[:n_out * interval]
-    reshaped = truncated.reshape(n_out, interval, *candles_1m.shape[1:])
-    return np.stack([
-        reshaped[:, 0, ..., 0],           # open: first candle's open
-        reshaped[..., 1].max(axis=1),     # high: max of interval
-        reshaped[..., 2].min(axis=1),     # low: min of interval
-        reshaped[:, -1, ..., 3],          # close: last candle's close
-        reshaped[..., 4].sum(axis=1),     # volume: sum of interval
-    ], axis=-1)
+        Returns:
+            Aggregated array of shape (n_timesteps // interval, n_coins, 4)
+        """
+        if interval == 1:
+            return candles_1m
+        n = len(candles_1m)
+        n_out = n // interval
+        truncated = candles_1m[:n_out * interval]
+        reshaped = truncated.reshape(n_out, interval, *candles_1m.shape[1:])
+        return np.stack([
+            reshaped[..., 0].max(axis=1),     # high: max of interval
+            reshaped[..., 1].min(axis=1),     # low: min of interval
+            reshaped[:, -1, ..., 2],          # close: last candle's close
+            reshaped[..., 3].sum(axis=1),     # volume: sum of interval
+        ], axis=-1)
 ```
 
 ### Integration points

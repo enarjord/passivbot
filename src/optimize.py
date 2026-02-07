@@ -129,6 +129,7 @@ import msgpack
 from typing import Sequence, Tuple, List, Dict, Any, Optional
 from itertools import permutations
 from shared_arrays import SharedArrayManager, attach_shared_array
+from ohlcv_utils import align_and_aggregate_hlcvs
 from optimize_suite import (
     ScenarioEvalContext,
     prepare_suite_contexts,
@@ -1566,6 +1567,16 @@ async def main():
                 coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
                     await prepare_hlcvs_mss(config, exchange)
                 )
+                candle_interval = int(
+                    config.get("backtest", {}).get("candle_interval_minutes", 1) or 1
+                )
+                if candle_interval > 1:
+                    hlcvs, _timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
+                        hlcvs, _timestamps, btc_usd_prices, candle_interval
+                    )
+                    meta = mss.setdefault("__meta__", {})
+                    meta["data_interval_minutes"] = candle_interval
+                    meta["candle_interval_offset_bars"] = int(offset_bars)
                 timestamps_dict[exchange] = _timestamps
                 exchange_preference = defaultdict(list)
                 for coin in coins:
@@ -1592,6 +1603,18 @@ async def main():
                     coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
                         await tasks[exchange]
                     )
+                    candle_interval = int(
+                        config.get("backtest", {}).get("candle_interval_minutes", 1) or 1
+                    )
+                    if candle_interval > 1:
+                        hlcvs, _timestamps, btc_usd_prices, offset_bars = (
+                            align_and_aggregate_hlcvs(
+                                hlcvs, _timestamps, btc_usd_prices, candle_interval
+                            )
+                        )
+                        meta = mss.setdefault("__meta__", {})
+                        meta["data_interval_minutes"] = candle_interval
+                        meta["candle_interval_offset_bars"] = int(offset_bars)
                     timestamps_dict[exchange] = _timestamps
                     config["backtest"]["coins"][exchange] = coins
                     msss[exchange] = mss

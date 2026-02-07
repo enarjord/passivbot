@@ -258,14 +258,14 @@ After the imports section (around line 95), add:
 ```python
 def aggregate_candles(candles_1m: np.ndarray, interval: int) -> np.ndarray:
     """
-    Aggregate 1m OHLCV candles to coarser interval.
+    Aggregate 1m HLCV candles to coarser interval.
 
     Args:
-        candles_1m: Array of shape (n_timesteps, n_coins, 5) for OHLCV
+        candles_1m: Array of shape (n_timesteps, n_coins, 4) for HLCV
         interval: Number of 1m candles to combine (e.g., 5 for 5m candles)
 
     Returns:
-        Aggregated array of shape (n_timesteps // interval, n_coins, 5)
+        Aggregated array of shape (n_timesteps // interval, n_coins, 4)
     """
     if interval <= 1:
         return candles_1m
@@ -275,14 +275,13 @@ def aggregate_candles(candles_1m: np.ndarray, interval: int) -> np.ndarray:
         raise ValueError(f"Not enough candles ({n_timesteps}) for interval {interval}")
     truncated = candles_1m[: n_out * interval]
     reshaped = truncated.reshape(n_out, interval, *candles_1m.shape[1:])
-    # OHLCV indices: 0=open, 1=high, 2=low, 3=close, 4=volume
+    # HLCV indices: 0=high, 1=low, 2=close, 3=volume
     aggregated = np.stack(
         [
-            reshaped[:, 0, :, 0],           # open: first candle's open
-            reshaped[:, :, :, 1].max(axis=1),  # high: max across interval
-            reshaped[:, :, :, 2].min(axis=1),  # low: min across interval
-            reshaped[:, -1, :, 3],          # close: last candle's close
-            reshaped[:, :, :, 4].sum(axis=1),  # volume: sum across interval
+            reshaped[:, :, :, 0].max(axis=1),  # high: max across interval
+            reshaped[:, :, :, 1].min(axis=1),  # low: min across interval
+            reshaped[:, -1, :, 2],          # close: last candle's close
+            reshaped[:, :, :, 3].sum(axis=1),  # volume: sum across interval
         ],
         axis=-1,
     )
@@ -416,40 +415,39 @@ import pytest
 
 
 def test_aggregate_candles_basic():
-    """Test that aggregate_candles produces correct OHLCV values."""
+    """Test that aggregate_candles produces correct HLCV values."""
     from src.backtest import aggregate_candles
 
     # Create 10 1m candles for 2 coins
-    # Shape: (10, 2, 5) for OHLCV
-    candles = np.zeros((10, 2, 5), dtype=np.float64)
+    # Shape: (10, 2, 4) for HLCV
+    candles = np.zeros((10, 2, 4), dtype=np.float64)
 
     # Coin 0: prices 100-109, volume 1 each
     for i in range(10):
-        candles[i, 0, :] = [100 + i, 100 + i + 0.5, 100 + i - 0.5, 100 + i + 0.1, 1.0]
+        candles[i, 0, :] = [100 + i + 0.5, 100 + i - 0.5, 100 + i + 0.1, 1.0]
 
     # Coin 1: prices 200-209, volume 2 each
     for i in range(10):
-        candles[i, 1, :] = [200 + i, 200 + i + 1.0, 200 + i - 1.0, 200 + i + 0.2, 2.0]
+        candles[i, 1, :] = [200 + i + 1.0, 200 + i - 1.0, 200 + i + 0.2, 2.0]
 
     result = aggregate_candles(candles, 5)
 
-    assert result.shape == (2, 2, 5), f"Expected (2, 2, 5), got {result.shape}"
+    assert result.shape == (2, 2, 4), f"Expected (2, 2, 4), got {result.shape}"
 
     # First 5m candle for coin 0 (indices 0-4):
-    # open=100, high=max(100.5,101.5,102.5,103.5,104.5)=104.5, low=min(99.5,...,103.5)=99.5
+    # high=max(100.5,101.5,102.5,103.5,104.5)=104.5, low=min(99.5,...,103.5)=99.5
     # close=104.1, volume=5
-    assert result[0, 0, 0] == 100.0, "Open should be first candle's open"
-    assert result[0, 0, 1] == 104.5, "High should be max of interval"
-    assert result[0, 0, 2] == 99.5, "Low should be min of interval"
-    assert abs(result[0, 0, 3] - 104.1) < 0.01, "Close should be last candle's close"
-    assert result[0, 0, 4] == 5.0, "Volume should be sum"
+    assert result[0, 0, 0] == 104.5, "High should be max of interval"
+    assert result[0, 0, 1] == 99.5, "Low should be min of interval"
+    assert abs(result[0, 0, 2] - 104.1) < 0.01, "Close should be last candle's close"
+    assert result[0, 0, 3] == 5.0, "Volume should be sum"
 
 
 def test_aggregate_candles_interval_1():
     """Test that interval=1 returns unchanged array."""
     from src.backtest import aggregate_candles
 
-    candles = np.random.rand(100, 3, 5)
+    candles = np.random.rand(100, 3, 4)
     result = aggregate_candles(candles, 1)
 
     assert result is candles, "interval=1 should return same array"
@@ -459,7 +457,7 @@ def test_aggregate_candles_truncates():
     """Test that incomplete final interval is dropped."""
     from src.backtest import aggregate_candles
 
-    candles = np.random.rand(17, 2, 5)  # 17 candles, interval 5 -> 3 complete intervals
+    candles = np.random.rand(17, 2, 4)  # 17 candles, interval 5 -> 3 complete intervals
     result = aggregate_candles(candles, 5)
 
     assert result.shape[0] == 3, f"Expected 3 intervals, got {result.shape[0]}"
@@ -469,7 +467,7 @@ def test_aggregate_candles_error_on_insufficient():
     """Test that error is raised when not enough candles."""
     from src.backtest import aggregate_candles
 
-    candles = np.random.rand(3, 2, 5)  # Only 3 candles
+    candles = np.random.rand(3, 2, 4)  # Only 3 candles
 
     with pytest.raises(ValueError, match="Not enough candles"):
         aggregate_candles(candles, 5)
