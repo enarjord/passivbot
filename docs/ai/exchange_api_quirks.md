@@ -44,6 +44,44 @@ Each close fill on Bybit immediately generates a closed-pnl record with `avgEntr
 
 (Add Binance-specific quirks here as discovered)
 
+## KuCoin Futures
+
+### OHLCV Pagination Limits + Sparse Minutes
+
+**Discovered:** 2026-02-04
+
+**Problem:** KuCoin futures `fetch_ohlcv` returns at most **200 rows per call**, regardless of `limit`.
+In addition, 1m OHLCV appears to be **trade-only** for many symbols (illiquid contracts return
+minutes only when trades occurred), which creates legitimate gaps.
+
+**Symptoms:**
+- Large synthesized zero-candle counts for illiquid symbols (TRX/CRO/XLM/DOT/AVAX, etc.)
+- Pagination with limit=1000 still yields 200 rows/page
+- Small internal gaps even for higher volume symbols (e.g. ZEC/XMR)
+
+**Mitigations in Passivbot:**
+- Use `limit=200` for KuCoin futures OHLCV pagination
+- Overlap page boundaries by 1 candle to validate gaps between fetches
+- Treat gaps **inside a single payload** as verified no-trade gaps (don’t retry)
+
+## Bitget Futures
+
+### OHLCV since parameter is exclusive
+
+**Discovered:** 2026-02-04
+
+**Problem:** Bitget `fetch_ohlcv` treats `since` as **exclusive**, which can skip the
+first candle in each paginated page if you advance `since` naively.
+
+**Symptoms:**
+- Regularly spaced 1‑minute gaps at ~200‑minute intervals (page boundaries)
+- Synthesized single‑minute candles even on liquid symbols
+
+**Mitigations in Passivbot:**
+- Use `limit=200` per page
+- Overlap page boundaries by 1 candle
+- Back up the initial `since` by 1 candle when paginating (exclusive semantics)
+
 ## General Patterns
 
 ### CCXT Wrapper Limitations
@@ -61,5 +99,12 @@ When data appears incomplete:
 3. **Check time windows** - does the time range include the missing data?
 4. **Check data retention** - how long does the exchange keep this data?
 5. **Compare endpoints** - does another endpoint have the data?
+
+### Principle: Overlap Page Boundaries to Validate Gaps
+
+When paging by time:
+- **Gaps inside a single payload** can be treated as legitimate (exchange returned no data).
+- **Gaps between pages** are ambiguous unless you overlap requests. Start the next request
+  at the last known valid candle (or slightly before) to confirm whether the gap is real.
 
 See `docs/ai/debugging_case_studies.md` for detailed examples.

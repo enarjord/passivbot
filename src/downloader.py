@@ -23,14 +23,13 @@ from urllib.request import urlopen
 from collections import defaultdict
 
 import aiohttp
-import pprint
 import ccxt.async_support as ccxt
 import numpy as np
 import pandas as pd
 from dateutil import parser
 from tqdm import tqdm
 from config_utils import (
-    add_arguments_recursively,
+    add_config_arguments,
     load_config,
     get_template_config,
     update_config_with_args,
@@ -47,8 +46,8 @@ from utils import (
     ts_to_date,
     date_to_ts,
     get_file_mod_ms,
-    normalize_exchange_name,
-    denormalize_exchange_name,
+    to_ccxt_exchange_id,
+    to_standard_exchange_name,
     get_quote,
     symbol_to_coin,
     coin_to_symbol,
@@ -513,15 +512,15 @@ class OHLCVManager:
         gap_tolerance_ohlcvs_minutes=120.0,
         verbose=True,
     ):
-        self.exchange = normalize_exchange_name(exchange)
+        self.exchange = to_ccxt_exchange_id(exchange)
         self.quote = get_quote(exchange)
         self.start_date = "2020-01-01" if start_date is None else format_end_date(start_date)
         self.end_date = format_end_date("now" if end_date is None else end_date)
         self.start_ts = date_to_ts(self.start_date)
         self.end_ts = date_to_ts(self.end_date)
         self.cc = cc
-        # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
-        cache_exchange = denormalize_exchange_name(self.exchange)
+        # Use standard exchange name for cache paths (e.g., "binance" not "binanceusdm")
+        cache_exchange = to_standard_exchange_name(self.exchange)
         self.cache_filepaths = {
             "markets": os.path.join("caches", cache_exchange, "markets.json"),
             "ohlcvs": os.path.join("historical_data", f"ohlcvs_{cache_exchange}"),
@@ -1368,7 +1367,7 @@ async def prepare_hlcvs(config: dict, exchange: str):
         set(symbol_to_coin(c) for c in approved["long"])
         | set(symbol_to_coin(c) for c in approved["short"])
     )
-    exchange = normalize_exchange_name(exchange)
+    exchange = to_ccxt_exchange_id(exchange)
     requested_start_date = require_config_value(config, "backtest.start_date")
     requested_start_ts = int(date_to_ts(requested_start_date))
     end_date = format_end_date(require_config_value(config, "backtest.end_date"))
@@ -1595,10 +1594,10 @@ async def prepare_hlcvs_internal(
 
 async def prepare_hlcvs_combined(config, forced_sources=None):
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
-    exchanges_to_consider = [normalize_exchange_name(e) for e in backtest_exchanges]
+    exchanges_to_consider = [to_ccxt_exchange_id(e) for e in backtest_exchanges]
     forced_sources = forced_sources or {}
     normalized_forced_sources = {
-        str(coin): normalize_exchange_name(exchange)
+        str(coin): to_ccxt_exchange_id(exchange)
         for coin, exchange in forced_sources.items()
         if exchange
     }
@@ -1818,7 +1817,7 @@ async def _prepare_hlcvs_combined_impl(
 
         chosen_data_per_coin[coin] = best_df
         chosen_mss_per_coin[coin] = om_dict[best_exchange].get_market_specific_settings(coin)
-        chosen_mss_per_coin[coin]["exchange"] = denormalize_exchange_name(best_exchange)
+        chosen_mss_per_coin[coin]["exchange"] = to_standard_exchange_name(best_exchange)
     # ---------------------------------------------------------------
     # If no coins survived, raise error
     # ---------------------------------------------------------------
@@ -1864,7 +1863,19 @@ async def _prepare_hlcvs_combined_impl(
             exchange_volume_ratios_mapped[ex1][ex1] = 1.0
             exchange_volume_ratios_mapped[ex0][ex0] = 1.0
 
-    pprint.pprint(dict(exchange_volume_ratios_mapped))
+    # Log volume normalization ratios (used to scale volumes when combining multi-exchange data)
+    if len(exchanges_counts) > 1:
+        ratio_summary = ", ".join(
+            f"{ex}={exchange_volume_ratios_mapped[ex][reference_exchange]:.3f}"
+            for ex in sorted(exchanges_counts.keys())
+            if ex != reference_exchange
+        )
+        logging.info(
+            "volume normalization: reference=%s ratios=[%s] (coins per exchange: %s)",
+            reference_exchange,
+            ratio_summary,
+            ", ".join(f"{ex}={cnt}" for ex, cnt in sorted(exchanges_counts.items())),
+        )
 
     # We'll store [high, low, close, volume] in the last dimension
     unified_array = np.full((n_timesteps, n_coins, 4), np.nan, dtype=np.float64)
@@ -2125,7 +2136,7 @@ async def main():
             "exchanges",
         }
     }
-    add_arguments_recursively(parser, template_config)
+    add_config_arguments(parser, template_config)
     args = parser.parse_args()
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")

@@ -29,7 +29,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from candlestick_manager import CANDLE_DTYPE, ONE_MIN_MS
-from utils import get_quote, normalize_exchange_name
+from utils import get_quote, to_ccxt_exchange_id
 
 logging.basicConfig(
     level=logging.INFO,
@@ -287,7 +287,7 @@ Examples:
     if args.delete_legacy and not args.execute:
         parser.error("--delete-legacy requires --execute")
 
-    exchange = normalize_exchange_name(args.exchange)
+    exchange = to_ccxt_exchange_id(args.exchange)
     logging.info(f"Scanning legacy data for {exchange}...")
 
     legacy_data = scan_legacy_data(exchange)

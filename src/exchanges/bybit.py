@@ -484,4 +484,4 @@ class BybitBot(CCXTBot):
 
     async def update_exchange_config(self):
         res = await self.cca.set_position_mode(True)
-        logging.info(f"set hedge mode {res}")
+        logging.debug("[config] set hedge mode response: %s", res)

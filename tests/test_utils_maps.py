@@ -7,6 +7,26 @@ import pytest
 import utils
 
 
+@pytest.fixture(autouse=True)
+def clear_utils_caches():
+    """Clear global in-memory caches before each test to ensure isolation."""
+    utils._COIN_TO_SYMBOL_CACHE.clear()
+    utils._SYMBOL_TO_COIN_CACHE.clear()
+    utils._SYMBOL_TO_COIN_CACHE["map"] = None
+    utils._SYMBOL_TO_COIN_CACHE["mtime_ns"] = None
+    utils._SYMBOL_TO_COIN_CACHE["size"] = None
+    utils._SYMBOL_TO_COIN_WARNINGS.clear()
+    utils._COIN_TO_SYMBOL_FALLBACKS.clear()
+    utils._SYMBOL_MAP_STALE_CLEANUP_DONE = False
+    yield
+    # Cleanup after test as well
+    utils._COIN_TO_SYMBOL_CACHE.clear()
+    utils._SYMBOL_TO_COIN_CACHE.clear()
+    utils._SYMBOL_TO_COIN_CACHE["map"] = None
+    utils._SYMBOL_TO_COIN_CACHE["mtime_ns"] = None
+    utils._SYMBOL_TO_COIN_CACHE["size"] = None
+
+
 def make_dummy_exchange_class(markets):
     class DummyCCXT:
         def __init__(self, config=None):

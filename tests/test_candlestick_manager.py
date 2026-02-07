@@ -140,6 +140,68 @@ def test_save_shard_writes_index_and_shard(tmp_path):
     assert date_key in idx_1h["shards"]
 
 
+def test_rebuild_index_for_range_updates_and_prunes(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "REBUILD/USDT"
+    base = 1725590400000  # 2024-09-06 00:00:00 UTC
+    date_key0 = cm._date_key(base)
+    date_key1 = cm._date_key(base + 24 * 60 * 60 * 1000)
+    day0_start, day0_end = cm._date_range_of_key(date_key0)
+    day1_start, day1_end = cm._date_range_of_key(date_key1)
+
+    # Create a real shard for day0 with minimal data
+    arr = np.array(
+        [
+            (day0_start, 1.0, 2.0, 0.5, 1.5, 0.1),
+            (day0_start + ONE_MIN_MS, 1.1, 2.1, 0.6, 1.6, 0.2),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    shard_path0 = cm._shard_path(symbol, date_key0)
+    os.makedirs(os.path.dirname(shard_path0), exist_ok=True)
+    np.save(shard_path0, arr)
+
+    # Write a corrupted index: wrong metadata + a missing shard entry + future last_refresh
+    idx_path = cm._index_path(symbol, timeframe="1m")
+    os.makedirs(os.path.dirname(idx_path), exist_ok=True)
+    future_refresh = int(time.time() * 1000) + 10 * ONE_MIN_MS
+    bad_idx = {
+        "shards": {
+            date_key0: {
+                "path": shard_path0,
+                "min_ts": 0,
+                "max_ts": 0,
+                "count": 0,
+                "crc32": 0,
+            },
+            date_key1: {
+                "path": cm._shard_path(symbol, date_key1),
+                "min_ts": 0,
+                "max_ts": 0,
+                "count": 0,
+                "crc32": 0,
+            },
+        },
+        "meta": {"last_refresh_ms": future_refresh},
+    }
+    with open(idx_path, "w", encoding="utf-8") as f:
+        json.dump(bad_idx, f)
+
+    res = cm.rebuild_index_for_range(
+        symbol, day0_start, day1_end, timeframe="1m", log_level="debug"
+    )
+    idx = cm._ensure_symbol_index(symbol, tf="1m")
+
+    assert date_key0 in idx["shards"]
+    assert date_key1 not in idx["shards"]
+    info = idx["shards"][date_key0]
+    assert info["count"] == int(arr.shape[0])
+    assert info["min_ts"] == int(arr[0]["ts"])
+    assert info["max_ts"] == int(arr[-1]["ts"])
+    assert idx["meta"]["last_refresh_ms"] == 0
+    assert res["updated"] >= 1
+
+
 @pytest.mark.asyncio
 async def test_zero_candles_not_persisted(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
@@ -238,6 +300,7 @@ async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypa
         timeframe=None,
         tf=None,
         fill_leading_gaps=False,
+        max_lookback_candles=None,
     ):
         calls["n"] += 1
         return arr
@@ -500,8 +563,12 @@ async def test_get_current_close_primes_ttl_for_candles(monkeypatch, tmp_path):
 
     # Return a single current-minute candle via low-level OHLCV fetch used by get_current_close
     async def fake_once(symbol_, since_ms, limit, end_exclusive_ms=None, timeframe=None):
-        ts = int((fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS)
-        return [[ts, 1.0, 1.0, 1.0, 1.23, 1.0]]
+        end_current = int((fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS)
+        start = end_current - ONE_MIN_MS * 11
+        rows = []
+        for ts in range(start, end_current, ONE_MIN_MS):
+            rows.append([ts, 1.0, 1.0, 1.0, 1.23, 1.0])
+        return rows
 
     monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_paginated)
     monkeypatch.setattr(cm, "_ccxt_fetch_ohlcv_once", fake_once)
@@ -509,13 +576,14 @@ async def test_get_current_close_primes_ttl_for_candles(monkeypatch, tmp_path):
     # 1) Call get_current_close: this should fetch/merge current-minute candle and update last_refresh_ms
     p = await cm.get_current_close(symbol, max_age_ms=60_000)
     assert p == pytest.approx(1.23)
+    baseline_calls = calls["paginated"]
 
     # 2) Call get_candles ending at latest finalized minute with TTL: should NOT call _fetch_ohlcv_paginated
     end_finalized = (fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
     start_ts = end_finalized - ONE_MIN_MS * 10
     out = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_finalized, max_age_ms=60_000)
     assert isinstance(out, np.ndarray)
-    assert calls["paginated"] == 0
+    assert calls["paginated"] == baseline_calls
 
     # No additional network calls expected here; TTL should prevent refresh
 

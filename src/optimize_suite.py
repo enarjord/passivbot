@@ -19,6 +19,7 @@ from config_utils import (
     require_live_value,
     format_config,
 )
+from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from shared_arrays import attach_shared_array
 from suite_runner import (
     SuiteScenario,
@@ -26,10 +27,15 @@ from suite_runner import (
     aggregate_metrics,
     apply_scenario,
     build_scenarios,
+    _compute_effective_coin_exchange,
+    _build_scenario_signature,
     collect_suite_coin_sources,
     filter_coins_by_exchange_assignment,
     prepare_master_datasets,
     _prepare_dataset_subset,
+    _compute_slice_indices,
+    _normalize_date_to_ts,
+    _determine_needed_individual_exchanges,
 )
 from utils import format_approved_ignored_coins, load_markets, ts_to_date, utc_ms
 
@@ -48,6 +54,11 @@ class ScenarioEvalContext:
     attachments: Dict[str, Dict[str, Any]]
     coin_indices: Dict[str, Optional[List[int]]]
     overrides: Dict[str, Any]
+    # Slice metadata for lazy slicing from master dataset (memory optimization)
+    master_hlcvs_specs: Optional[Dict[str, Any]] = None
+    master_btc_specs: Optional[Dict[str, Any]] = None
+    time_slice: Optional[Dict[str, tuple]] = None  # per-exchange (start_idx, end_idx)
+    coin_slice_indices: Optional[Dict[str, List[int]]] = None  # per-exchange coin indices
 
 
 async def prepare_suite_contexts(
@@ -83,21 +94,16 @@ async def prepare_suite_contexts(
     else:
         base_ignored_list = []
 
-    scenarios, aggregate_cfg, include_base, base_label = build_scenarios(suite_cfg)
-    if include_base:
-        base_scenario = SuiteScenario(
-            label=base_label,
-            start_date=base_start,
-            end_date=base_end,
-            coins=list(base_coins_list),
-            ignored_coins=list(base_ignored_list),
-        )
-        scenarios = [base_scenario] + list(scenarios)
+    scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
+
+    # Determine which individual exchange datasets are needed for single-exchange scenarios
+    needed_individual = _determine_needed_individual_exchanges(scenarios, base_exchanges)
 
     suite_coin_sources = collect_suite_coin_sources(config, scenarios)
 
-    master_coins = set(base_coins_list) if include_base else set()
-    master_ignored = set(base_ignored_list) if include_base else set()
+    # Collect all coins from scenarios (or use base if no scenario-specific coins)
+    master_coins = set()
+    master_ignored = set()
     for scenario in scenarios:
         if scenario.coins:
             master_coins.update(scenario.coins)
@@ -105,14 +111,15 @@ async def prepare_suite_contexts(
             master_ignored.update(scenario.ignored_coins)
     master_coins.update(suite_coin_sources.keys())
 
-    # If no scenarios define explicit coins and include_base=False,
-    # fall back to base_coins_list to avoid empty coin set
+    # If no scenarios define explicit coins, fall back to base_coins_list
     if not master_coins and base_coins_list:
         logging.info(
             "No scenario-specific coins found; using base approved_coins: %s",
             base_coins_list,
         )
         master_coins = set(base_coins_list)
+    if not master_ignored and base_ignored_list:
+        master_ignored = set(base_ignored_list)
 
     master_coins_list = sorted(master_coins)
     master_ignored_list = sorted(master_ignored)
@@ -132,7 +139,10 @@ async def prepare_suite_contexts(
     base_config["backtest"]["coin_sources"] = suite_coin_sources
 
     datasets = await prepare_master_datasets(
-        base_config, base_exchanges, shared_array_manager=shared_array_manager
+        base_config,
+        base_exchanges,
+        shared_array_manager=shared_array_manager,
+        needed_individual_exchanges=needed_individual,
     )
     available_coins = set()
     for dataset in datasets.values():
@@ -140,13 +150,87 @@ async def prepare_suite_contexts(
     if not available_coins:
         raise ValueError("No coins available after preparing master datasets.")
 
-    has_master_dataset = len(datasets) == 1 and "combined" in datasets
-    if has_master_dataset:
-        dataset_available_exchanges = datasets["combined"].available_exchanges
-    else:
-        dataset_available_exchanges = [ds.exchange for ds in datasets.values()]
+    has_combined = "combined" in datasets
+    # Available exchanges exclude "combined" pseudo-exchange
+    dataset_available_exchanges = sorted(
+        set(ds.exchange for ds in datasets.values() if ds.exchange != "combined")
+    ) or (datasets["combined"].available_exchanges if has_combined else [])
 
+    seen_signatures: Dict[str, str] = {}
     contexts: List[ScenarioEvalContext] = []
+
+    def _build_lazy_mss_slice(
+        dataset,
+        scenario_config,
+        selected_coins,
+        start_idx: int,
+        end_idx: int,
+        ts_window: Optional[np.ndarray],
+    ) -> Dict[str, Any]:
+        total_steps = max(1, int(end_idx - start_idx))
+        mss_slice: Dict[str, Any] = {
+            coin: deepcopy(dataset.mss.get(coin, {})) for coin in selected_coins
+        }
+        # Adjust per-coin indices relative to the time slice to avoid full hlcvs copies.
+        warmup_map = compute_per_coin_warmup_minutes(scenario_config)
+        default_warm = int(warmup_map.get("__default__", 0))
+        for coin, meta in mss_slice.items():
+            first_idx = int(meta.get("first_valid_index", 0))
+            last_idx = int(meta.get("last_valid_index", total_steps - 1))
+            first_idx = first_idx - start_idx
+            last_idx = last_idx - start_idx
+            if first_idx < 0:
+                first_idx = 0
+            if last_idx < 0:
+                last_idx = 0
+            if first_idx >= total_steps:
+                first_idx = total_steps
+            if last_idx >= total_steps:
+                last_idx = total_steps - 1
+            if "first_valid_index" not in meta or "last_valid_index" not in meta:
+                try:
+                    coin_idx = dataset.coin_index.get(coin)
+                    if coin_idx is not None:
+                        close_series = dataset.hlcvs[start_idx:end_idx, coin_idx, 2]
+                        finite = np.isfinite(close_series)
+                        if finite.any():
+                            valid_indices = np.where(finite)[0]
+                            first_idx = int(valid_indices[0])
+                            last_idx = int(valid_indices[-1])
+                except Exception:
+                    pass
+            meta["first_valid_index"] = first_idx
+            meta["last_valid_index"] = last_idx
+            warm_minutes = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+            meta["warmup_minutes"] = warm_minutes
+            if first_idx > last_idx:
+                trade_start_idx = first_idx
+            else:
+                trade_start_idx = min(last_idx, first_idx + warm_minutes)
+            meta["trade_start_index"] = trade_start_idx
+
+        # Meta window details (matches _prepare_dataset_subset semantics without hlcvs copies).
+        start_value = require_config_value(scenario_config, "backtest.start_date")
+        end_value = require_config_value(scenario_config, "backtest.end_date")
+        start_ts = _normalize_date_to_ts(str(start_value))
+        end_ts = _normalize_date_to_ts(str(end_value))
+        meta = deepcopy(dataset.mss.get("__meta__", {}))
+        meta["requested_start_ts"] = int(start_ts)
+        meta["requested_start_date"] = ts_to_date(int(start_ts))
+        meta["requested_end_ts"] = int(end_ts)
+        meta["requested_end_date"] = ts_to_date(int(end_ts))
+        if ts_window is not None and len(ts_window):
+            meta["effective_start_ts"] = int(ts_window[0])
+            meta["effective_start_date"] = ts_to_date(int(ts_window[0]))
+            meta["effective_end_ts"] = int(ts_window[-1])
+            meta["effective_end_date"] = ts_to_date(int(ts_window[-1]))
+            warmup_provided = max(0, int(max(0, start_ts - int(ts_window[0])) // 60_000))
+        else:
+            warmup_provided = int(compute_backtest_warmup_minutes(scenario_config))
+        meta["warmup_minutes_requested"] = int(compute_backtest_warmup_minutes(scenario_config))
+        meta["warmup_minutes_provided"] = warmup_provided
+        mss_slice["__meta__"] = meta
+        return mss_slice
 
     for scenario in scenarios:
         try:
@@ -166,6 +250,19 @@ async def prepare_suite_contexts(
         scenario_config = parse_overrides(scenario_config, verbose=False)
         scenario_config.setdefault("backtest", {})
         scenario_config["backtest"]["coins"] = {}
+
+        coin_exchange = _compute_effective_coin_exchange(
+            scenario, scenario_coins, datasets, dataset_available_exchanges
+        )
+        signature = _build_scenario_signature(scenario_config, coin_exchange)
+        if signature in seen_signatures:
+            logging.info(
+                "Skipping scenario %s (duplicate of %s)",
+                scenario.label,
+                seen_signatures[signature],
+            )
+            continue
+        seen_signatures[signature] = scenario.label
         # Debug visibility to ensure scenario-specific windows/overrides are honored
         logging.debug(
             "Suite scenario %s | start=%s end=%s coins=%s overrides=%s",
@@ -177,11 +274,35 @@ async def prepare_suite_contexts(
             bool(scenario.overrides),
         )
 
-        if has_master_dataset:
+        # Determine which dataset(s) to use based on scenario's exchange restriction
+        raw_scenario_exchanges = set(scenario.exchanges) if scenario.exchanges else None
+        all_exchanges_set = set(dataset_available_exchanges)
+
+        # Filter scenario exchanges to only those actually available in the dataset
+        if raw_scenario_exchanges:
+            unavailable = raw_scenario_exchanges - all_exchanges_set
+            if unavailable:
+                logging.debug(
+                    "Scenario %s: exchanges %s not available in dataset, using %s",
+                    scenario.label,
+                    sorted(unavailable),
+                    sorted(raw_scenario_exchanges & all_exchanges_set) or "all available",
+                )
+            scenario_exchanges = raw_scenario_exchanges & all_exchanges_set
+            if not scenario_exchanges:
+                # If no overlap, fall back to all available exchanges
+                scenario_exchanges = all_exchanges_set
+        else:
+            scenario_exchanges = all_exchanges_set
+
+        # Use combined dataset when:
+        # 1. It exists, AND
+        # 2. Scenario uses all available exchanges (or doesn't restrict)
+        use_combined = has_combined and scenario_exchanges == all_exchanges_set
+
+        if use_combined:
             dataset = datasets["combined"]
-            allowed_exchanges = (
-                list(scenario.exchanges) if scenario.exchanges else list(dataset.available_exchanges)
-            )
+            allowed_exchanges = list(dataset.available_exchanges)
             selected_coins, skipped_coins = filter_coins_by_exchange_assignment(
                 scenario_coins,
                 allowed_exchanges,
@@ -202,56 +323,105 @@ async def prepare_suite_contexts(
                     scenario.label,
                 )
                 continue
-            (
-                hlcvs_slice,
-                btc_window,
-                ts_window,
-                mss_slice,
-            ) = _prepare_dataset_subset(
-                dataset,
-                scenario_config,
-                selected_coins,
-                scenario.label,
-            )
             scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
-            if shared_array_manager is not None:
-                hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
-                btc_spec, _ = shared_array_manager.create_from(np.ascontiguousarray(btc_window))
-            else:
-                hlcvs_spec = None
-                btc_spec = None
-
-            shared_hlcvs = {} if hlcvs_spec else {dataset.exchange: hlcvs_slice}
-            shared_btc = {} if btc_spec else {dataset.exchange: btc_window}
-            contexts.append(
-                ScenarioEvalContext(
-                    label=scenario.label,
-                    config=scenario_config,
-                    exchanges=[dataset.exchange],
-                    hlcvs_specs={dataset.exchange: hlcvs_spec},
-                    btc_usd_specs={dataset.exchange: btc_spec} if btc_spec is not None else {},
-                    msss={dataset.exchange: mss_slice},
-                    timestamps={dataset.exchange: ts_window},
-                    shared_hlcvs_np=shared_hlcvs,
-                    shared_btc_np=shared_btc,
-                    attachments={"hlcvs": {}, "btc": {}},
-                    coin_indices={dataset.exchange: None},
-                    overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
+            if dataset.hlcvs_spec is not None:
+                start_idx, end_idx, coin_indices = _compute_slice_indices(
+                    dataset,
+                    scenario_config,
+                    selected_coins,
+                    scenario.label,
                 )
-            )
+                ts_window = (
+                    None
+                    if dataset.timestamps is None
+                    else np.asarray(dataset.timestamps[start_idx:end_idx], dtype=np.int64)
+                )
+                mss_slice = _build_lazy_mss_slice(
+                    dataset,
+                    scenario_config,
+                    selected_coins,
+                    start_idx,
+                    end_idx,
+                    ts_window,
+                )
+                contexts.append(
+                    ScenarioEvalContext(
+                        label=scenario.label,
+                        config=scenario_config,
+                        exchanges=[dataset.exchange],
+                        hlcvs_specs={dataset.exchange: dataset.hlcvs_spec},
+                        btc_usd_specs={dataset.exchange: dataset.btc_spec},
+                        msss={dataset.exchange: mss_slice},
+                        timestamps={dataset.exchange: ts_window},
+                        shared_hlcvs_np={},
+                        shared_btc_np={},
+                        attachments={"hlcvs": {}, "btc": {}},
+                        coin_indices={dataset.exchange: coin_indices},
+                        overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
+                        master_hlcvs_specs={dataset.exchange: dataset.hlcvs_spec},
+                        master_btc_specs={dataset.exchange: dataset.btc_spec},
+                        time_slice={dataset.exchange: (start_idx, end_idx)},
+                        coin_slice_indices={dataset.exchange: coin_indices},
+                    )
+                )
+            else:
+                # Fallback: per-scenario SharedMemory when master specs are unavailable.
+                (
+                    hlcvs_slice,
+                    btc_window,
+                    ts_window,
+                    mss_slice,
+                ) = _prepare_dataset_subset(
+                    dataset,
+                    scenario_config,
+                    selected_coins,
+                    scenario.label,
+                )
+                hlcvs_spec, _ = shared_array_manager.create_from(
+                    np.ascontiguousarray(hlcvs_slice, dtype=np.float64)
+                )
+                btc_spec = None
+                if btc_window is not None:
+                    btc_spec, _ = shared_array_manager.create_from(
+                        np.ascontiguousarray(btc_window, dtype=np.float64)
+                    )
+                del hlcvs_slice, btc_window
+
+                contexts.append(
+                    ScenarioEvalContext(
+                        label=scenario.label,
+                        config=scenario_config,
+                        exchanges=[dataset.exchange],
+                        hlcvs_specs={dataset.exchange: hlcvs_spec},
+                        btc_usd_specs={dataset.exchange: btc_spec},
+                        msss={dataset.exchange: mss_slice},
+                        timestamps={dataset.exchange: ts_window},
+                        shared_hlcvs_np={},
+                        shared_btc_np={},
+                        attachments={"hlcvs": {}, "btc": {}},
+                        coin_indices={dataset.exchange: None},  # Already sliced
+                        overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
+                        master_hlcvs_specs=None,
+                        master_btc_specs=None,
+                        time_slice=None,
+                        coin_slice_indices=None,
+                    )
+                )
+
             continue
 
-        hlcvs_specs: Dict[str, Any] = {}
-        btc_specs: Dict[str, Any] = {}
-        preloaded_hlcvs: Dict[str, np.ndarray] = {}
-        preloaded_btc: Dict[str, np.ndarray] = {}
         mss_slices: Dict[str, Any] = {}
         timestamps_map: Dict[str, Any] = {}
-        coin_index_map: Dict[str, Optional[List[int]]] = {}
+        hlcvs_specs_map: Dict[str, Any] = {}
+        btc_specs_map: Dict[str, Any] = {}
         exchanges_for_scenario: List[str] = []
 
+        # Use per-exchange datasets for scenarios with exchange restrictions
         allowed_exchange_names = set(scenario.exchanges or dataset_available_exchanges)
         for exchange_key, dataset in datasets.items():
+            # Skip "combined" pseudo-dataset; use actual exchange datasets
+            if exchange_key == "combined":
+                continue
             if allowed_exchange_names and dataset.exchange not in allowed_exchange_names:
                 continue
             coins_for_exchange = [coin for coin in scenario_coins if coin in dataset.coin_index]
@@ -259,51 +429,102 @@ async def prepare_suite_contexts(
                 continue
             exchanges_for_scenario.append(exchange_key)
             scenario_config["backtest"]["coins"][exchange_key] = list(coins_for_exchange)
-            (
-                hlcvs_slice,
-                btc_window,
-                ts_window,
-                mss_slice,
-            ) = _prepare_dataset_subset(
-                dataset,
-                scenario_config,
-                coins_for_exchange,
-                scenario.label,
-            )
-            if shared_array_manager is not None:
-                hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
-                hlcvs_specs[exchange_key] = hlcvs_spec
-                btc_spec, _ = shared_array_manager.create_from(np.ascontiguousarray(btc_window))
-                btc_specs[exchange_key] = btc_spec
+            if dataset.hlcvs_spec is not None:
+                start_idx, end_idx, coin_indices = _compute_slice_indices(
+                    dataset,
+                    scenario_config,
+                    coins_for_exchange,
+                    scenario.label,
+                )
+                ts_window = (
+                    None
+                    if dataset.timestamps is None
+                    else np.asarray(dataset.timestamps[start_idx:end_idx], dtype=np.int64)
+                )
+                mss_slice = _build_lazy_mss_slice(
+                    dataset,
+                    scenario_config,
+                    coins_for_exchange,
+                    start_idx,
+                    end_idx,
+                    ts_window,
+                )
+                hlcvs_specs_map[exchange_key] = dataset.hlcvs_spec
+                btc_specs_map[exchange_key] = dataset.btc_spec
+                mss_slices[exchange_key] = mss_slice
+                timestamps_map[exchange_key] = ts_window
             else:
-                hlcvs_specs[exchange_key] = None
-                preloaded_hlcvs[exchange_key] = hlcvs_slice
-                btc_specs[exchange_key] = None
-                preloaded_btc[exchange_key] = btc_window
-            coin_index_map[exchange_key] = None
+                (
+                    hlcvs_slice,
+                    btc_window,
+                    ts_window,
+                    mss_slice,
+                ) = _prepare_dataset_subset(
+                    dataset,
+                    scenario_config,
+                    coins_for_exchange,
+                    scenario.label,
+                )
+                hlcvs_spec, _ = shared_array_manager.create_from(
+                    np.ascontiguousarray(hlcvs_slice, dtype=np.float64)
+                )
+                btc_spec = None
+                if btc_window is not None:
+                    btc_spec, _ = shared_array_manager.create_from(
+                        np.ascontiguousarray(btc_window, dtype=np.float64)
+                    )
+                del hlcvs_slice, btc_window
 
-            mss_slices[exchange_key] = mss_slice
-
-            timestamps_map[exchange_key] = ts_window
+                hlcvs_specs_map[exchange_key] = hlcvs_spec
+                btc_specs_map[exchange_key] = btc_spec
+                mss_slices[exchange_key] = mss_slice
+                timestamps_map[exchange_key] = ts_window
 
         if not exchanges_for_scenario:
             logging.warning("Skipping scenario %s: no exchanges after filtering.", scenario.label)
             continue
+
+        # When using lazy slicing, populate master specs and coin indices per exchange.
+        master_hlcvs_specs = {}
+        master_btc_specs = {}
+        coin_slice_indices = {}
+        time_slice = {}
+        for exchange_key, dataset in datasets.items():
+            if exchange_key == "combined":
+                continue
+            if exchange_key not in exchanges_for_scenario:
+                continue
+            if dataset.hlcvs_spec is None:
+                continue
+            start_idx, end_idx, coin_indices = _compute_slice_indices(
+                dataset,
+                scenario_config,
+                scenario_config["backtest"]["coins"][exchange_key],
+                scenario.label,
+            )
+            time_slice[exchange_key] = (start_idx, end_idx)
+            master_hlcvs_specs[exchange_key] = dataset.hlcvs_spec
+            master_btc_specs[exchange_key] = dataset.btc_spec
+            coin_slice_indices[exchange_key] = coin_indices
 
         contexts.append(
             ScenarioEvalContext(
                 label=scenario.label,
                 config=scenario_config,
                 exchanges=exchanges_for_scenario,
-                hlcvs_specs=hlcvs_specs,
-                btc_usd_specs=btc_specs,
+                hlcvs_specs=hlcvs_specs_map,
+                btc_usd_specs=btc_specs_map,
                 msss=mss_slices,
                 timestamps=timestamps_map,
-                coin_indices=coin_index_map,
-                shared_hlcvs_np=dict(preloaded_hlcvs),
-                shared_btc_np=dict(preloaded_btc),
+                coin_indices={ex: None for ex in exchanges_for_scenario},  # Already sliced
+                shared_hlcvs_np={},
+                shared_btc_np={},
                 attachments={"hlcvs": {}, "btc": {}},
                 overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
+                master_hlcvs_specs=master_hlcvs_specs or None,
+                master_btc_specs=master_btc_specs or None,
+                time_slice=time_slice or None,
+                coin_slice_indices=coin_slice_indices or None,
             )
         )
 
@@ -318,9 +539,19 @@ def ensure_suite_config(config_path: Path, suite_path: Optional[Path]) -> Dict[s
     config = parse_overrides(config, verbose=False)
     suite_override = None
     if suite_path:
-        suite_override = load_config(str(suite_path), verbose=False).get("backtest", {}).get("suite")
-        if suite_override is None:
-            raise ValueError(f"Suite config {suite_path} must provide backtest.suite definition.")
+        override_config = load_config(str(suite_path), verbose=False)
+        override_backtest = override_config.get("backtest", {})
+        # Support both new (scenarios at top level) and legacy (suite wrapper) formats
+        if "scenarios" in override_backtest:
+            suite_override = {
+                "scenarios": override_backtest.get("scenarios", []),
+                "aggregate": override_backtest.get("aggregate", {"default": "mean"}),
+            }
+        elif "suite" in override_backtest:
+            # Legacy format - extract from suite wrapper
+            suite_override = override_backtest["suite"]
+        else:
+            raise ValueError(f"Suite config {suite_path} must provide backtest.scenarios definition.")
     return extract_suite_config(config, suite_override)
 
 
@@ -335,6 +566,6 @@ def summarized_metrics(
 
 
 #
-# Suite configuration is canonical under backtest.suite.
+# Suite configuration is now canonical under backtest.scenarios.
 # Optimizer suite uses the same schema and reads it via suite_runner.extract_suite_config().
 #

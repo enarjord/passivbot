@@ -67,8 +67,9 @@ from config_utils import (
     load_hjson_config,
     load_config,
     format_config,
-    add_arguments_recursively,
+    add_config_arguments,
     update_config_with_args,
+    recursive_config_update,
     require_config_value,
     merge_negative_cli_values,
     strip_config_metadata,
@@ -84,6 +85,7 @@ from pure_funcs import (
 from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_approved_ignored_coins
 from logging_setup import configure_logging, resolve_log_level
 from copy import deepcopy
+import gc
 import numpy as np
 from uuid import uuid4
 import logging
@@ -135,6 +137,7 @@ from suite_runner import (
     SuiteScenario,
     ScenarioResult,
     extract_suite_config,
+    filter_scenarios_by_label,
     aggregate_metrics,
     build_suite_metrics_payload,
 )
@@ -974,16 +977,80 @@ class SuiteEvaluator:
         self.base = base_evaluator
         self.contexts = scenario_contexts
         self.aggregate_cfg = aggregate_cfg
+        # Cache for master dataset attachments (shared across scenarios)
+        self._master_attachments: Dict[str, Dict[str, Any]] = {"hlcvs": {}, "btc": {}}
+        self._master_arrays: Dict[str, Dict[str, np.ndarray]] = {"hlcvs": {}, "btc": {}}
+
+    def _ensure_master_attachment(self, spec, cache_key: str, array_type: str) -> np.ndarray:
+        """Attach to master SharedMemory if not already attached."""
+        if cache_key not in self._master_arrays[array_type]:
+            attachment = attach_shared_array(spec)
+            self._master_attachments[array_type][cache_key] = attachment
+            self._master_arrays[array_type][cache_key] = attachment.array
+        return self._master_arrays[array_type][cache_key]
+
+    def _get_lazy_slice_data(
+        self, ctx: ScenarioEvalContext, exchange: str
+    ) -> tuple[np.ndarray, np.ndarray | None, list[int] | None]:
+        """
+        Get data for lazy slicing mode.
+        Returns (hlcvs_view, btc_view, coin_indices).
+
+        Only applies TIME slicing here (creates views, O(1) memory).
+        Coin subsetting is deferred to build_backtest_payload which does it efficiently.
+        """
+        master_spec = ctx.master_hlcvs_specs[exchange]
+        master_array = self._ensure_master_attachment(master_spec, master_spec.name, "hlcvs")
+
+        time_slice = ctx.time_slice.get(exchange) if ctx.time_slice else None
+        coin_indices = ctx.coin_slice_indices.get(exchange) if ctx.coin_slice_indices else None
+
+        # Time slicing creates a VIEW (no copy, O(1) memory)
+        if time_slice is not None:
+            start_idx, end_idx = time_slice
+            hlcvs_view = master_array[start_idx:end_idx]
+        else:
+            hlcvs_view = master_array
+
+        # BTC slice (time-only slicing creates a view)
+        btc_view = None
+        master_btc_spec = ctx.master_btc_specs.get(exchange) if ctx.master_btc_specs else None
+        if master_btc_spec is not None:
+            master_btc = self._ensure_master_attachment(master_btc_spec, master_btc_spec.name, "btc")
+            if time_slice is not None:
+                start_idx, end_idx = time_slice
+                btc_view = master_btc[start_idx:end_idx]
+            else:
+                btc_view = master_btc
+
+        # Return coin_indices to let build_backtest_payload handle subsetting in one step
+        return hlcvs_view, btc_view, coin_indices
+
+    def _uses_lazy_slicing(self, ctx: ScenarioEvalContext, exchange: str) -> bool:
+        """Check if context uses lazy slicing for the given exchange."""
+        return (
+            ctx.master_hlcvs_specs is not None
+            and exchange in ctx.master_hlcvs_specs
+            and ctx.master_hlcvs_specs[exchange] is not None
+        )
 
     def _ensure_context_attachment(self, ctx: ScenarioEvalContext, exchange: str) -> None:
+        """Attach to SharedMemory for non-lazy-slicing contexts only."""
+        # Skip if using lazy slicing - slices are computed on-demand in evaluate()
+        if self._uses_lazy_slicing(ctx, exchange):
+            return
+
+        # Original flow: per-scenario SharedMemory
         if exchange not in ctx.shared_hlcvs_np:
-            attachment = attach_shared_array(ctx.hlcvs_specs[exchange])
-            ctx.attachments["hlcvs"][exchange] = attachment
-            ctx.shared_hlcvs_np[exchange] = attachment.array
+            if exchange in ctx.hlcvs_specs and ctx.hlcvs_specs[exchange] is not None:
+                attachment = attach_shared_array(ctx.hlcvs_specs[exchange])
+                ctx.attachments["hlcvs"][exchange] = attachment
+                ctx.shared_hlcvs_np[exchange] = attachment.array
         if exchange not in ctx.shared_btc_np and exchange in ctx.btc_usd_specs:
-            attachment = attach_shared_array(ctx.btc_usd_specs[exchange])
-            ctx.attachments["btc"][exchange] = attachment
-            ctx.shared_btc_np[exchange] = attachment.array
+            if ctx.btc_usd_specs[exchange] is not None:
+                attachment = attach_shared_array(ctx.btc_usd_specs[exchange])
+                ctx.attachments["btc"][exchange] = attachment
+                ctx.shared_btc_np[exchange] = attachment.array
 
     def evaluate(self, individual, overrides_list):
         individual[:] = enforce_bounds(individual, self.base.bounds, self.base.sig_digits)
@@ -1060,21 +1127,33 @@ class SuiteEvaluator:
 
             analyses = {}
             for exchange in ctx.exchanges:
-                self._ensure_context_attachment(ctx, exchange)
-                coin_indices = ctx.coin_indices.get(exchange)
+                # Get data arrays - either from lazy slicing or cached SharedMemory
+                if self._uses_lazy_slicing(ctx, exchange):
+                    # Get time-sliced VIEW (O(1) memory) + coin indices
+                    # Coin subsetting happens inside build_backtest_payload (single copy)
+                    hlcvs_data, btc_data, coin_indices = self._get_lazy_slice_data(ctx, exchange)
+                else:
+                    self._ensure_context_attachment(ctx, exchange)
+                    hlcvs_data = ctx.shared_hlcvs_np[exchange]
+                    btc_data = ctx.shared_btc_np.get(exchange)
+                    coin_indices = ctx.coin_indices.get(exchange)
+
                 payload = build_backtest_payload(
-                    ctx.shared_hlcvs_np[exchange],
+                    hlcvs_data,
                     ctx.msss[exchange],
                     scenario_config,
                     exchange,
-                    ctx.shared_btc_np.get(exchange),
+                    btc_data,
                     ctx.timestamps.get(exchange),
                     coin_indices=coin_indices,
                 )
                 fills, equities_array, analysis = execute_backtest(payload, scenario_config)
                 analyses[exchange] = analysis
+
+                # Free backtest results to allow memory reuse
                 del fills
                 del equities_array
+                del payload
 
             combined_metrics = combine(analyses)
             stats = combined_metrics.get("stats", {})
@@ -1287,13 +1366,22 @@ async def main():
         default=None,
         type=str2bool,
         metavar="y/n",
-        help="Enable or disable backtest.suite for optimizer run (omit to follow config).",
+        help="Enable or disable suite mode for optimizer run (omit to use config's suite_enabled setting).",
+    )
+    parser.add_argument(
+        "--scenarios",
+        "-sc",
+        type=str,
+        default=None,
+        metavar="LABELS",
+        help="Comma-separated list of scenario labels to run (implies --suite y). "
+        "Example: --scenarios base,binance_only",
     )
     parser.add_argument(
         "--suite-config",
         type=str,
         default=None,
-        help="Optional config file providing backtest.suite overrides.",
+        help="Optional config file providing backtest.scenarios overrides.",
     )
     parser.add_argument(
         "--log-level",
@@ -1310,7 +1398,7 @@ async def main():
     for key in sorted(template_config["live"]):
         if key not in keep_live_keys:
             del template_config["live"][key]
-    add_arguments_recursively(parser, template_config)
+    add_config_arguments(parser, template_config)
     add_extra_options(parser)
     raw_args = merge_negative_cli_values(sys.argv[1:])
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
@@ -1353,16 +1441,33 @@ async def main():
     suite_override = None
     if args.suite_config:
         logging.info("loading suite config %s", args.suite_config)
-        suite_override = (
-            load_config(args.suite_config, verbose=False).get("backtest", {}).get("suite")
-        )
-        if suite_override is None:
-            raise ValueError(f"Suite config {args.suite_config} must define backtest.suite.")
+        override_cfg = load_config(args.suite_config, verbose=False)
+        override_backtest = override_cfg.get("backtest", {})
+        # Support both new (scenarios at top level) and legacy (suite wrapper) formats
+        if "scenarios" in override_backtest:
+            suite_override = {
+                "scenarios": override_backtest.get("scenarios", []),
+                "aggregate": override_backtest.get("aggregate", {"default": "mean"}),
+            }
+        elif "suite" in override_backtest:
+            # Legacy format - extract from suite wrapper
+            suite_override = override_backtest["suite"]
+        else:
+            raise ValueError(f"Suite config {args.suite_config} must define backtest.scenarios.")
     suite_cfg = extract_suite_config(config, suite_override)
+
+    # Handle --scenarios filter (implies --suite y)
+    scenario_filter = getattr(args, "scenarios", None)
+    if scenario_filter:
+        labels = [label.strip() for label in scenario_filter.split(",") if label.strip()]
+        suite_cfg["scenarios"] = filter_scenarios_by_label(suite_cfg.get("scenarios", []), labels)
+        suite_cfg["enabled"] = True  # --scenarios implies suite mode
+        logging.info("Filtered to %d scenario(s): %s", len(labels), ", ".join(labels))
+
+    # --suite CLI arg overrides config (applied after --scenarios so explicit --suite n wins)
     if args.suite is not None:
-        enabled = bool(args.suite)
-        suite_cfg["enabled"] = enabled
-        config.setdefault("backtest", {}).setdefault("suite", {})["enabled"] = enabled
+        recursive_config_update(config, "backtest.suite_enabled", bool(args.suite), verbose=True)
+        suite_cfg["enabled"] = bool(args.suite)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
@@ -1395,8 +1500,64 @@ async def main():
             timestamps_dict = first_ctx.timestamps
             config["backtest"]["coins"] = deepcopy(first_ctx.config["backtest"]["coins"])
             backtest_exchanges = sorted({ex for ctx in scenario_contexts for ex in ctx.exchanges})
+
+            # Estimate memory usage (per-scenario SharedMemory, shared by all workers)
+            total_shm_bytes = 0
+            seen_specs = set()
+            for ctx in scenario_contexts:
+                for spec_map in (
+                    ctx.hlcvs_specs,
+                    ctx.btc_usd_specs,
+                    ctx.master_hlcvs_specs or {},
+                    ctx.master_btc_specs or {},
+                ):
+                    for spec in spec_map.values():
+                        if spec is None:
+                            continue
+                        if spec.name in seen_specs:
+                            continue
+                        seen_specs.add(spec.name)
+                        total_shm_bytes += np.prod(spec.shape) * np.dtype(spec.dtype).itemsize
+            if total_shm_bytes > 0:
+                total_shm_gb = total_shm_bytes / (1024**3)
+                try:
+                    import os
+                    import shutil
+                    if hasattr(os, "sysconf"):
+                        pages = os.sysconf("SC_PHYS_PAGES")
+                        page_size = os.sysconf("SC_PAGE_SIZE")
+                        available_gb = (pages * page_size) / (1024**3)
+                    else:
+                        available_gb = None
+                    shm_gb = None
+                    if os.path.exists("/dev/shm"):
+                        usage = shutil.disk_usage("/dev/shm")
+                        shm_gb = usage.total / (1024**3)
+                except Exception:
+                    available_gb = None
+                    shm_gb = None
+                logging.info(
+                    "Memory estimate | scenarios=%d | shared_memory=%.1fGB%s",
+                    len(scenario_contexts),
+                    total_shm_gb,
+                    f" | system={available_gb:.1f}GB" if available_gb else "",
+                )
+                if shm_gb is not None:
+                    logging.info("Shared memory filesystem size | /dev/shm=%.1fGB", shm_gb)
+                if available_gb and total_shm_gb > available_gb * 0.7:
+                    logging.warning(
+                        "Shared memory for scenarios (%.1fGB) is high relative to RAM (%.1fGB). "
+                        "Consider using fewer/smaller scenarios.",
+                        total_shm_gb,
+                        available_gb,
+                    )
         else:
-            if bool(require_config_value(config, "backtest.combine_ohlcvs")):
+            # New behavior: derive data strategy from exchange count
+            # - Single exchange = use that exchange's data only
+            # - Multiple exchanges = best-per-coin combination (combined)
+            use_combined = len(backtest_exchanges) > 1
+
+            if use_combined:
                 exchange = "combined"
                 coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
                     await prepare_hlcvs_mss(config, exchange)
@@ -1441,16 +1602,10 @@ async def main():
                     btc_usd_specs[exchange] = btc_usd_spec
                     del hlcvs, hlcvs_array, btc_usd_prices, btc_usd_array
         exchanges = backtest_exchanges
-        exchanges_fname = (
-            "combined"
-            if bool(require_config_value(config, "backtest.combine_ohlcvs"))
-            else "_".join(exchanges)
-        )
+        exchanges_fname = "combined" if len(backtest_exchanges) > 1 else "_".join(exchanges)
         date_fname = ts_to_date(utc_ms())[:19].replace(":", "_")
         coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
-        suite_flag = bool(config.get("optimize", {}).get("suite", {}).get("enabled"))
-        if args.suite:
-            suite_flag = True
+        suite_flag = suite_enabled or bool(args.suite)
         if suite_flag:
             coins_fname = f"suite_{len(coins)}_coins"
         else:

@@ -455,17 +455,20 @@ class CCXTBot(Passivbot):
             Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
         """
         if not self.cca.has.get("setPositionMode"):
-            logging.info(f"{self.exchange} does not support setPositionMode, skipping")
+            logging.debug("[config] %s does not support setPositionMode, skipping", self.exchange)
             return
 
         logging.debug(
-            f"{self.exchange}: setting position mode to hedge via CCXT set_position_mode(True)"
+            "[config] %s: setting position mode to hedge via CCXT set_position_mode(True)",
+            self.exchange,
         )
         t0 = time.time()
         res = await self.cca.set_position_mode(True)
         elapsed_ms = (time.time() - t0) * 1000
-        logging.debug(f"{self.exchange}: set_position_mode completed in {elapsed_ms:.1f}ms")
-        logging.info(f"Set hedge mode: {res}")
+        logging.debug(
+            "[config] %s: set_position_mode completed in %.1fms", self.exchange, elapsed_ms
+        )
+        logging.debug("[config] set hedge mode response: %s", res)
 
     def _should_set_margin_mode(self, symbol: str) -> bool:
         """Hook: Should we call set_margin_mode for this symbol?

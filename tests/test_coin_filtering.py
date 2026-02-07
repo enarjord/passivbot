@@ -30,6 +30,8 @@ class CoinFilterHarness(Passivbot):
         self._age_ok = age_ok or {}
         self._live_flags = {"filter_by_min_effective_cost": filter_min_cost_flag}
         self.warn_triggered = False
+        self.positions = {}
+        self.config = {"live": {}}
 
     # ---- overrides for get_filtered_coins dependencies ----
 
@@ -66,7 +68,7 @@ class CoinFilterHarness(Passivbot):
     async def calc_volumes(self, _pside, symbols):
         return {sym: self._volumes[sym] for sym in symbols}
 
-    async def calc_log_range(self, _pside, eligible_symbols):
+    async def calc_log_range(self, _pside, eligible_symbols, max_age_ms=None):
         return {sym: self._log_ranges[sym] for sym in eligible_symbols}
 
     def is_pside_enabled(self, _pside):

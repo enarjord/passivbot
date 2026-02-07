@@ -1,5 +1,6 @@
 import glob
 import json
+import logging
 import os
 import traceback
 import asyncio
@@ -52,9 +53,9 @@ def get_all_eligible_symbols(exchange="binance"):
     exchange_map = {
         "bybit": "bybit",
         "binance": "binanceusdm",
+        "gateio": "gateio",
         # "bitget": "bitget", TODO
         # "hyperliquid": "hyperliquid", TODO
-        # "gateio": "gateio", TODO
     }
     quote_map = {k: "USDT" for k in exchange_map}
     quote_map["hyperliquid"] = "USDC"
@@ -307,18 +308,22 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
         try:
             with open(cache_fpath, "r") as f:
                 ftss = json.load(f)
-            print(f"Loaded from main cache: {cache_fpath}")
+            logging.debug("loaded first_ohlcv_timestamps from %s (%d coins)", cache_fpath, len(ftss))
         except Exception as e:
-            print(f"Error reading {cache_fpath}: {e}")
+            logging.warning("error reading %s: %s", cache_fpath, e)
 
     # Load exchange-specific cache if it exists
     if os.path.exists(cache_fpath_exchange_specific):
         try:
             with open(cache_fpath_exchange_specific, "r") as f:
                 ftss_exchange_specific = json.load(f)
-            print(f"Loaded from exchange-specific cache: {cache_fpath_exchange_specific}")
+            logging.debug(
+                "loaded first_ohlcv_timestamps (exchange-specific) from %s (%d coins)",
+                cache_fpath_exchange_specific,
+                len(ftss_exchange_specific),
+            )
         except Exception as e:
-            print(f"Error reading {cache_fpath_exchange_specific}: {e}")
+            logging.warning("error reading %s: %s", cache_fpath_exchange_specific, e)
 
     # If an exchange is specified, handle "binance" alias
     if exchange == "binance":

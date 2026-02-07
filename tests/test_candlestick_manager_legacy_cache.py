@@ -2,7 +2,7 @@ import os
 import numpy as np
 import pytest
 
-from candlestick_manager import CandlestickManager, ONE_MIN_MS, CANDLE_DTYPE
+from candlestick_manager import CandlestickManager, ONE_MIN_MS, CANDLE_DTYPE, _sanitize_symbol
 
 
 @pytest.mark.asyncio
@@ -170,3 +170,40 @@ def test_partial_but_continuous_legacy_day_does_not_block_primary_overlay_write(
 
     # With strict legacy completeness, this MUST be written.
     assert os.path.exists(cm._shard_path(symbol, day, tf="1m"))
+
+
+def test_global_legacy_migration_covers_all_exchanges(tmp_path, monkeypatch):
+    """Global migration should migrate legacy shards for all exchanges on first init."""
+    monkeypatch.chdir(tmp_path)
+
+    day = "2021-03-01"
+    start_ts = 1614556800000  # 2021-03-01 00:00:00 UTC
+
+    legacy_binance = tmp_path / "historical_data" / "ohlcvs_binanceusdm" / "BTC"
+    legacy_binance.mkdir(parents=True, exist_ok=True)
+    legacy_bybit = tmp_path / "historical_data" / "ohlcvs_bybit" / "ETH"
+    legacy_bybit.mkdir(parents=True, exist_ok=True)
+
+    legacy = np.array(
+        [
+            [start_ts, 1.0, 2.0, 0.5, 1.5, 10.0],
+            [start_ts + ONE_MIN_MS, 1.5, 2.5, 1.0, 2.0, 12.0],
+        ],
+        dtype=np.float64,
+    )
+    np.save(legacy_binance / f"{day}.npy", legacy)
+    np.save(legacy_bybit / f"{day}.npy", legacy)
+
+    CandlestickManager(
+        exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches")
+    )
+
+    binance_symbol = _sanitize_symbol("BTC/USDT:USDT")
+    bybit_symbol = _sanitize_symbol("ETH/USDT:USDT")
+    binance_target = (
+        tmp_path / "caches" / "ohlcv" / "binance" / "1m" / binance_symbol / f"{day}.npy"
+    )
+    bybit_target = tmp_path / "caches" / "ohlcv" / "bybit" / "1m" / bybit_symbol / f"{day}.npy"
+
+    assert binance_target.exists()
+    assert bybit_target.exists()

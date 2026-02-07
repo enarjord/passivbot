@@ -55,3 +55,35 @@ def test_cache_hash_includes_coin_sources():
     cfg["backtest"]["coin_sources"] = {"BTC": "binance"}
     hash_with = get_cache_hash(cfg, "combined")
     assert hash_with != hash_without
+
+
+def test_cache_hash_includes_market_settings_sources():
+    """Verify market_settings_sources affects the cache hash."""
+    cfg = _base_config()
+    cfg["live"]["approved_coins"]["long"] = ["BTC/USDT:USDT"]
+    cfg["live"]["approved_coins"]["short"] = []
+    cfg["live"]["ignored_coins"]["long"] = []
+    cfg["live"]["ignored_coins"]["short"] = []
+    hash_without = get_cache_hash(cfg, "combined")
+    cfg["backtest"]["market_settings_sources"] = {"BTC": "hyperliquid"}
+    hash_with = get_cache_hash(cfg, "combined")
+    assert hash_with != hash_without
+
+
+def test_cache_hash_differs_coin_sources_vs_market_settings_sources():
+    """Verify coin_sources and market_settings_sources produce different hashes."""
+    cfg = _base_config()
+    cfg["live"]["approved_coins"]["long"] = ["BTC/USDT:USDT"]
+    cfg["live"]["approved_coins"]["short"] = []
+    cfg["live"]["ignored_coins"]["long"] = []
+    cfg["live"]["ignored_coins"]["short"] = []
+
+    cfg1 = copy.deepcopy(cfg)
+    cfg1["backtest"]["coin_sources"] = {"BTC": "binance"}
+
+    cfg2 = copy.deepcopy(cfg)
+    cfg2["backtest"]["market_settings_sources"] = {"BTC": "binance"}
+
+    hash1 = get_cache_hash(cfg1, "combined")
+    hash2 = get_cache_hash(cfg2, "combined")
+    assert hash1 != hash2

@@ -20,7 +20,7 @@ import random
 import tempfile
 import time
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
 from pathlib import Path
@@ -44,7 +44,8 @@ logger = logging.getLogger(__name__)
 _pnl_discrepancy_last_log: Dict[str, float] = {}  # exchange:user -> last log time
 _pnl_discrepancy_last_delta: Dict[str, float] = {}  # exchange:user -> last delta value
 _PNL_DISCREPANCY_THROTTLE_SECONDS = 3600.0  # Log at most once per hour if delta unchanged
-_PNL_DISCREPANCY_CHANGE_THRESHOLD = 0.10  # Log immediately if delta changes by >10%
+_PNL_DISCREPANCY_CHANGE_THRESHOLD = 0.10  # Consider delta "changed" if >10%
+_PNL_DISCREPANCY_MIN_SECONDS = 900.0  # Minimum seconds between logs even if delta changes
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +492,13 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
     """Group events sharing timestamp/symbol/pb_type/side/position."""
     aggregated: Dict[Tuple, Dict[str, object]] = {}
     order: List[Tuple] = []
+
+    def _event_source_ids(ev: Dict[str, object]) -> List[str]:
+        ids = ev.get("source_ids")
+        if ids:
+            return [str(x) for x in ids if x]
+        return []
+
     for ev in events:
         key = (
             ev.get("timestamp"),
@@ -502,9 +510,13 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
         if key not in aggregated:
             aggregated[key] = dict(ev)
             aggregated[key]["id"] = str(ev.get("id", ""))
+            src_ids = _event_source_ids(ev)
+            if src_ids:
+                aggregated[key]["source_ids"] = src_ids
             aggregated[key]["qty"] = float(ev.get("qty", 0.0))
             aggregated[key]["pnl"] = float(ev.get("pnl", 0.0))
             aggregated[key]["fees"] = _merge_fee_lists(ev.get("fees"), None)
+            aggregated[key]["raw"] = _normalize_raw_field(ev.get("raw"))
             aggregated[key]["_price_numerator"] = float(ev.get("price", 0.0)) * float(
                 ev.get("qty", 0.0)
             )
@@ -512,9 +524,15 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
         else:
             agg = aggregated[key]
             agg["id"] = f"{agg['id']}+{ev.get('id', '')}".strip("+")
+            src_ids = _event_source_ids(ev)
+            if src_ids:
+                merged_ids = set(agg.get("source_ids") or [])
+                merged_ids.update(src_ids)
+                agg["source_ids"] = sorted(merged_ids)
             agg["qty"] = float(agg.get("qty", 0.0)) + float(ev.get("qty", 0.0))
             agg["pnl"] = float(agg.get("pnl", 0.0)) + float(ev.get("pnl", 0.0))
             agg["fees"] = _merge_fee_lists(agg.get("fees"), ev.get("fees"))
+            agg["raw"] = _normalize_raw_field(agg.get("raw")) + _normalize_raw_field(ev.get("raw"))
             agg["_price_numerator"] = float(agg.get("_price_numerator", 0.0)) + float(
                 ev.get("price", 0.0)
             ) * float(ev.get("qty", 0.0))
@@ -576,6 +594,29 @@ def _normalize_raw_field(raw: object) -> List[Dict[str, object]]:
     return [{"source": "unknown", "data": str(raw)}]
 
 
+def _extract_source_ids(raw: object, fallback_id: Optional[object]) -> List[str]:
+    """Extract stable source IDs from raw payloads, with fallback to event id."""
+    ids: set[str] = set()
+    raw_items = _normalize_raw_field(raw)
+    for item in raw_items:
+        data = item.get("data") if isinstance(item, dict) else item
+        if isinstance(data, dict):
+            # Prefer canonical trade ids if present
+            for key in ("id", "tradeId", "trade_id", "execId"):
+                val = data.get(key)
+                if val:
+                    ids.add(str(val))
+            info = data.get("info")
+            if isinstance(info, dict):
+                for key in ("tid", "id", "tradeId", "trade_id", "execId"):
+                    val = info.get(key)
+                    if val:
+                        ids.add(str(val))
+    if not ids and fallback_id:
+        ids.add(str(fallback_id))
+    return sorted(ids)
+
+
 @dataclass(frozen=True)
 class FillEvent:
     """Canonical representation of a single fill event."""
@@ -592,6 +633,7 @@ class FillEvent:
     pb_order_type: str
     position_side: str
     client_order_id: str
+    source_ids: List[str] = field(default_factory=list)
     psize: float = 0.0
     pprice: float = 0.0
     raw: List[Dict[str, object]] = None  # List of raw payloads from multiple sources
@@ -603,6 +645,7 @@ class FillEvent:
     def to_dict(self) -> Dict[str, object]:
         return {
             "id": self.id,
+            "source_ids": list(self.source_ids) if self.source_ids is not None else [],
             "timestamp": self.timestamp,
             "datetime": self.datetime,
             "symbol": self.symbol,
@@ -638,6 +681,9 @@ class FillEvent:
             raise ValueError(f"Fill event missing required keys: {missing}")
         return cls(
             id=str(data["id"]),
+            source_ids=_extract_source_ids(data.get("raw"), data.get("id"))
+            if not data.get("source_ids")
+            else [str(x) for x in data.get("source_ids") if x],
             timestamp=int(data["timestamp"]),
             datetime=str(data.get("datetime") or ts_to_date(int(data["timestamp"]))),
             symbol=str(data["symbol"]),
@@ -1293,6 +1339,36 @@ class BinanceFetcher(BaseFetcher):
         self.income_limit = min(1000, max(1, income_limit))  # cap to max 1000
         self._now_func = now_func or (lambda: int(datetime.now(tz=timezone.utc).timestamp() * 1000))
         self.trade_limit = max(1, trade_limit)
+        self._unsupported_symbols: set[str] = set()
+        self._market_symbols: Optional[set[str]] = None
+        self._markets_loaded = False
+
+    async def _get_market_symbols(self) -> Optional[set[str]]:
+        if self._market_symbols is not None:
+            return self._market_symbols
+        symbols = getattr(self.api, "symbols", None)
+        markets = getattr(self.api, "markets", None)
+        if (not symbols and not markets) and not self._markets_loaded:
+            try:
+                await self.api.load_markets()
+                self._markets_loaded = True
+            except Exception:
+                return None
+            symbols = getattr(self.api, "symbols", None)
+            markets = getattr(self.api, "markets", None)
+        if symbols:
+            self._market_symbols = set(symbols)
+        elif markets:
+            self._market_symbols = set(markets.keys())
+        else:
+            self._market_symbols = None
+        return self._market_symbols
+
+    def _note_unsupported_symbol(self, symbol: str) -> None:
+        if symbol in self._unsupported_symbols:
+            return
+        self._unsupported_symbols.add(symbol)
+        logger.debug("[fills] BinanceFetcher skipping unsupported symbol %s", symbol)
 
     async def fetch(
         self,
@@ -1312,6 +1388,13 @@ class BinanceFetcher(BaseFetcher):
         symbol_pool.update(ev["symbol"] for ev in income_events if ev.get("symbol"))
         if detail_cache is None:
             detail_cache = {}
+
+        supported_symbols = await self._get_market_symbols()
+        if supported_symbols:
+            unsupported = [sym for sym in symbol_pool if sym not in supported_symbols]
+            for sym in unsupported:
+                self._note_unsupported_symbol(sym)
+            symbol_pool = {sym for sym in symbol_pool if sym in supported_symbols}
 
         trade_events: Dict[str, Dict[str, object]] = {}
         trade_tasks: Dict[str, asyncio.Task[List[Dict[str, object]]]] = {}
@@ -1638,6 +1721,10 @@ class BinanceFetcher(BaseFetcher):
             )
             return ordered
         except Exception as exc:  # pragma: no cover - depends on live API
+            msg = str(exc).lower() if exc else ""
+            if "does not have market symbol" in msg or "market symbol" in msg:
+                self._note_unsupported_symbol(ccxt_symbol)
+                return []
             logger.error("BinanceFetcher._fetch_symbol_trades: error %s (%s)", ccxt_symbol, exc)
             return []
 
@@ -3299,7 +3386,11 @@ class KucoinFetcher(BaseFetcher):
                 last_delta is None
                 or abs(current_delta - last_delta) > _PNL_DISCREPANCY_CHANGE_THRESHOLD * (abs(last_delta) + 1.0)
             )
-            should_log = delta_changed or (now - last_log) >= _PNL_DISCREPANCY_THROTTLE_SECONDS
+            time_since_last = now - last_log
+            should_log = (
+                (delta_changed and time_since_last >= _PNL_DISCREPANCY_MIN_SECONDS)
+                or time_since_last >= _PNL_DISCREPANCY_THROTTLE_SECONDS
+            )
             if should_log:
                 _pnl_discrepancy_last_log[throttle_key] = now
                 _pnl_discrepancy_last_delta[throttle_key] = current_delta
@@ -3718,6 +3809,25 @@ class OkxFetcher(BaseFetcher):
                 event_id = event["id"]
                 if not event_id:
                     continue
+
+                # Ensure client_order_id/pb_order_type are populated before batch callbacks
+                cached = detail_cache.get(event_id)
+                if cached:
+                    cached_client, cached_pb = cached
+                    if cached_client:
+                        event["client_order_id"] = cached_client
+                    if cached_pb:
+                        event["pb_order_type"] = cached_pb
+                client_oid = str(event.get("client_order_id") or "")
+                pb_type = str(event.get("pb_order_type") or "")
+                if not pb_type and client_oid:
+                    pb_type = custom_id_to_snake(client_oid)
+                if not pb_type:
+                    pb_type = "unknown"
+                event["client_order_id"] = client_oid
+                event["pb_order_type"] = pb_type
+                if event_id and client_oid:
+                    detail_cache[event_id] = (client_oid, pb_type)
 
                 # Check time bounds
                 ts = event["timestamp"]

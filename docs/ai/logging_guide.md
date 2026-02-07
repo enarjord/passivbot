@@ -111,6 +111,24 @@ These messages currently appear at INFO but should be DEBUG:
 *Solution: Aggregate into a single summary at INFO (e.g., "replaced synthetic candles for 22 symbols"). Individual messages at DEBUG.*
 *Status: Fixed in `candlestick_manager.py` - batch mode during warmup produces aggregated summary at INFO; individual messages at DEBUG.*
 
+**Candle refresh summaries (active/forager):** ✅ FIXED (Round 2)
+```
+2026-02-04T23:06:40 INFO     [binance] [candle] active refresh symbols=7, refreshed=7 max_stale=99s ...
+2026-02-04T23:06:06 INFO     [binance] [candle] forager refresh slots_open=yes candidates=23 stale=23 ...
+```
+*Problem: These log every ~1–2 minutes and drown INFO logs.*
+*Solution: Move to DEBUG and suppress during initial boot.*
+*Status: Fixed in `passivbot.py` - now DEBUG with a 5‑minute boot delay.*
+
+**Disk coverage / missing span diagnostics:** ✅ FIXED (Round 2)
+```
+2026-02-04T23:05:01 INFO     [bitget] [candle] event=disk_coverage_missing ...
+2026-02-04T23:06:00 INFO     [binance] [candle] event=historical_missing_spans ...
+```
+*Problem: Intended for debugging; too noisy at INFO.*
+*Solution: Move to DEBUG.*
+*Status: Fixed in `passivbot.py` and `candlestick_manager.py`.*
+
 **Volume/volatility EMA rankings (when unchanged):**
 ```
 2026-01-23T20:00:32 INFO     [hyperliquid] volume EMA span 1250: 22 coins elapsed=17s, top8: BTC=846390.13, ...
@@ -127,6 +145,14 @@ These messages currently appear at INFO but should be DEBUG:
 *Problem: Internal cache operations, not relevant to normal operation.*
 *Solution: Move to DEBUG.*
 *Status: Fixed in `utils.py` - now logs at DEBUG.*
+
+**Rate limit backoff notices:** ✅ FIXED (Round 2)
+```
+2026-02-04T23:02:38 INFO     [hyperliquid] [candle] event=rate_limit_global_set ...
+```
+*Problem: Backoff is expected behavior; INFO is too chatty.*
+*Solution: Move to DEBUG.*
+*Status: Fixed in `candlestick_manager.py`.*
 
 ### 2. Excessive WARNING for Expected Conditions
 
@@ -668,3 +694,52 @@ Phase 3 (Defer to Round 9):
    - Throttled to once per 5 minutes per symbol/pside to avoid spam
    - Log format: `[ema] COIN pside entry gated | price=X ema_thresh=Y (+Z% away)`
    - File: `src/passivbot.py` (added `_log_ema_gating` method, called in both orchestrator methods)
+
+### Round 11 (2026-02-04) ✅ COMPLETED
+
+**Issue addressed:**
+
+1. **Mode change logging redesign** - Separate DEBUG and INFO levels for mode changes.
+   - **Problem:** Mode change oscillation (normal↔graceful_stop) due to forager ranking fluctuations
+     was flooding INFO logs with 10-20+ messages per hour per exchange, making logs hard to tail.
+   - **Solution:** Refactored `_log_mode_changes()` method with two-tier logging:
+     - **DEBUG level:** All mode changes logged with full detail (no throttling) for debugging
+     - **INFO level:** Selective, user-relevant logging only:
+       - "added" with "normal" → forager selection (includes slot context like "forager slot 3/5")
+       - "added" with "graceful_stop" → only on startup/first run
+       - "removed" → always (coin exiting the system)
+       - "changed" normal↔graceful_stop → **suppressed** (oscillation noise, available at DEBUG)
+       - "changed" to/from tp_only/manual/panic → always (significant mode changes)
+   - INFO-level throttle increased from 2 minutes to 5 minutes for remaining logged changes
+   - Added slot context to forager selection logs: `[mode] added long.XRP/USDT:USDT: normal (forager slot 3/5)`
+   - File: `src/passivbot.py` (refactored mode change logging in `update_PB_modes_and_first_timestamps`)
+
+### Round 12 (2026-02-06) ✅ COMPLETED
+
+**Issues addressed:**
+
+1. **Unsupported markets warning noise** - Demoted to INFO and tagged.
+   - Now logs as `[config] skipping unsupported markets...` at INFO (log_once).
+   - File: `src/passivbot.py`
+
+2. **Hedge mode success spam** - Moved successful set_position_mode logs to DEBUG with `[config]`.
+   - Keeps ERROR/WARNING paths unchanged; removes hourly INFO spam.
+   - Files: `src/exchanges/binance.py`, `src/exchanges/bybit.py`, `src/exchanges/bitget.py`, `src/exchanges/okx.py`, `src/exchanges/ccxt_bot.py`
+
+3. **BinanceFetcher unsupported symbols** - Moved to DEBUG with `[fills]` tag.
+   - File: `src/fill_events_manager.py`
+
+4. **Bitget OHLCV limit probe** - Moved to DEBUG.
+   - File: `src/candlestick_manager.py`
+
+5. **KuCoin PnL discrepancy spam** - Added minimum interval between logs even when delta changes.
+   - File: `src/fill_events_manager.py`
+
+6. **Zero-candle warning threshold** - WARNING now only for >1000 candles during live operation.
+   - File: `src/candlestick_manager.py`
+
+7. **Order plan tag + MissingEma context** - Added `[order]` tag to plan summaries and emit symbol context on MissingEma errors.
+   - File: `src/passivbot.py`
+
+8. **Symbol map lock noise** - Demoted lock acquisition warnings to INFO with `[mapping]`.
+   - File: `src/utils.py`

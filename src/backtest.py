@@ -37,8 +37,9 @@ from typing import Any, Iterable, Sequence
 from config_utils import (
     load_config,
     dump_config,
-    add_arguments_recursively,
+    add_config_arguments,
     update_config_with_args,
+    recursive_config_update,
     format_config,
     get_template_config,
     parse_overrides,
@@ -77,7 +78,7 @@ import logging
 import gzip
 import traceback
 from logging_setup import configure_logging, resolve_log_level
-from suite_runner import extract_suite_config, run_backtest_suite_async
+from suite_runner import extract_suite_config, filter_scenarios_by_label, run_backtest_suite_async
 import passivbot_rust as pbr  # noqa: E402
 from tools.event_loop_policy import set_windows_event_loop_policy
 
@@ -230,9 +231,40 @@ def _build_hlcvs_bundle(
                 f"coin_indices length ({len(coin_indices)}) does not match coins ({len(coins_order)})"
             )
         subset_positions = [int(idx) for idx in coin_indices]
-    hlcvs_arr = np.ascontiguousarray(hlcvs, dtype=np.float64)
+        n_coins = int(hlcvs.shape[1])
+        if len(subset_positions) == n_coins and subset_positions == list(range(n_coins)):
+            subset_positions = None
+
+    def _rss_mb() -> float | None:
+        try:
+            import resource as _resource
+        except Exception:
+            return None
+        try:
+            rss_kb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
+            # Linux reports in KB, macOS in bytes.
+            if sys.platform == "darwin":
+                return rss_kb / (1024**2)
+            return rss_kb / 1024
+        except Exception:
+            return None
+
+    rss_before = _rss_mb()
+    logger = logging.getLogger(__name__)
+    if hasattr(logger, "trace"):
+        logger.trace(
+            "Build bundle | pid=%s hlcvs_shape=%s coins=%d subset=%s rss_mb=%s",
+            os.getpid(),
+            getattr(hlcvs, "shape", None),
+            len(coins_order),
+            subset_positions is not None,
+            f"{rss_before:.1f}" if rss_before is not None else "na",
+        )
     if subset_positions is not None:
-        hlcvs_arr = np.ascontiguousarray(hlcvs_arr[:, subset_positions, :], dtype=np.float64)
+        hlcvs_view = hlcvs[:, subset_positions, :]
+        hlcvs_arr = np.ascontiguousarray(hlcvs_view, dtype=np.float64)
+    else:
+        hlcvs_arr = np.ascontiguousarray(hlcvs, dtype=np.float64)
     btc_arr = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
     if timestamps is None:
         timestamps_arr = np.arange(hlcvs_arr.shape[0], dtype=np.int64)
@@ -263,6 +295,13 @@ def _build_hlcvs_bundle(
         "warmup_minutes_provided": warmup_provided,
         "coins": coin_meta_entries,
     }
+    rss_after = _rss_mb()
+    if hasattr(logger, "trace"):
+        logger.trace(
+            "Build bundle done | pid=%s rss_mb=%s",
+            os.getpid(),
+            f"{rss_after:.1f}" if rss_after is not None else "na",
+        )
     return pbr.HlcvsBundle(hlcvs_arr, btc_arr, timestamps_arr, bundle_meta)
 
 
@@ -673,6 +712,10 @@ def get_cache_hash(config, exchange):
     minimum_coin_age = require_live_value(config, "minimum_coin_age_days")
     coin_sources = config.get("backtest", {}).get("coin_sources") or {}
     coin_sources_sorted = sorted((str(k), str(v)) for k, v in coin_sources.items())
+    market_settings_sources = config.get("backtest", {}).get("market_settings_sources") or {}
+    market_settings_sources_sorted = sorted(
+        (str(k), str(v)) for k, v in market_settings_sources.items()
+    )
     to_hash = {
         "coins": approved_coins,
         "end_date": format_end_date(require_config_value(config, "backtest.end_date")),
@@ -684,6 +727,7 @@ def get_cache_hash(config, exchange):
         ),
         "warmup_minutes": compute_backtest_warmup_minutes(config),
         "coin_sources": coin_sources_sorted,
+        "market_settings_sources": market_settings_sources_sorted,
     }
     return calc_hash(to_hash)
 
@@ -866,8 +910,12 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
     if exchange == "combined":
         forced_sources = config.get("backtest", {}).get("coin_sources")
+        market_settings_sources = config.get("backtest", {}).get("market_settings_sources")
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs_combined(
-            config, forced_sources=forced_sources, force_refetch_gaps=force_refetch_gaps
+            config,
+            forced_sources=forced_sources,
+            market_settings_sources=market_settings_sources,
+            force_refetch_gaps=force_refetch_gaps,
         )
     else:
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(
@@ -1051,6 +1099,7 @@ def post_process(
     analysis,
     results_path,
     exchange,
+    label=None,
 ):
     sts = utc_ms()
     equities_array = np.asarray(equities_array)
@@ -1071,13 +1120,14 @@ def post_process(
         if k not in analysis:
             analysis[k] = analysis_py[k]
     logging.info(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
-    pprint.pprint(trim_analysis_aliases(analysis))
+    label_prefix = f"[{label}] " if label else ""
+    print(f"{label_prefix}{pprint.pformat(trim_analysis_aliases(analysis))}")
     results_path = make_get_filepath(
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
     config["analysis"] = analysis
-    formatted_config = format_config(config)
+    formatted_config = format_config(config, verbose=False)
     sanitized_config = strip_config_metadata(formatted_config)
     dump_config(sanitized_config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
@@ -1157,7 +1207,16 @@ async def main():
         default=None,
         type=str2bool,
         metavar="y/n",
-        help="Enable or disable suite mode (omit to use config).",
+        help="Enable or disable suite mode (omit to use config's suite_enabled setting).",
+    )
+    parser.add_argument(
+        "--scenarios",
+        "-sc",
+        type=str,
+        default=None,
+        metavar="LABELS",
+        help="Comma-separated list of scenario labels to run (implies --suite y). "
+        "Example: --scenarios base,binance_only",
     )
     parser.add_argument(
         "--suite-config",
@@ -1184,7 +1243,7 @@ async def main():
             del template_config["live"][key]
     if "logging" in template_config and isinstance(template_config["logging"], dict):
         template_config["logging"].pop("level", None)
-    add_arguments_recursively(parser, template_config)
+    add_config_arguments(parser, template_config)
     raw_args = _normalize_optional_bool_flag(sys.argv[1:], "--suite")
     args = parser.parse_args(raw_args)
     cli_log_level = args.log_level
@@ -1224,13 +1283,37 @@ async def main():
     if args.suite_config:
         logging.info("loading suite config %s", args.suite_config)
         override_cfg = load_config(args.suite_config, verbose=False)
-        suite_override = override_cfg.get("backtest", {}).get("suite")
-        if suite_override is None:
-            raise ValueError(f"Suite config {args.suite_config} does not define backtest.suite.")
+        override_backtest = override_cfg.get("backtest", {})
+        # Support both new (scenarios at top level) and legacy (suite wrapper) formats
+        if "scenarios" in override_backtest:
+            suite_override = {
+                "scenarios": override_backtest.get("scenarios", []),
+                "aggregate": override_backtest.get("aggregate", {"default": "mean"}),
+            }
+        elif "suite" in override_backtest:
+            # Legacy format - extract from suite wrapper
+            suite_override = override_backtest["suite"]
+        else:
+            raise ValueError(f"Suite config {args.suite_config} does not define backtest.scenarios.")
 
     suite_cfg = extract_suite_config(config, suite_override)
+
+    # Handle --scenarios filter (implies --suite y)
+    scenario_filter = getattr(args, "scenarios", None)
+    if scenario_filter:
+        labels = [label.strip() for label in scenario_filter.split(",") if label.strip()]
+        suite_cfg["scenarios"] = filter_scenarios_by_label(suite_cfg.get("scenarios", []), labels)
+        suite_cfg["enabled"] = True  # --scenarios implies suite mode
+        logging.info("Filtered to %d scenario(s): %s", len(labels), ", ".join(labels))
+
+    # --suite CLI arg overrides config (applied after --scenarios so explicit --suite n wins)
     if args.suite is not None:
+        recursive_config_update(config, "backtest.suite_enabled", bool(args.suite), verbose=True)
         suite_cfg["enabled"] = bool(args.suite)
+
+    # Log disable_plotting if set (not a config key, just a runtime flag)
+    if args.disable_plotting:
+        logging.info("changed disable_plotting False -> True")
 
     if suite_cfg.get("enabled"):
         logging.info("Running backtest suite (%d scenarios)...", len(suite_cfg.get("scenarios", [])))
@@ -1254,7 +1337,13 @@ async def main():
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
     force_refetch_gaps = getattr(args, "force_refetch_gaps", False)
-    if bool(require_config_value(config, "backtest.combine_ohlcvs")):
+
+    # New behavior: derive data strategy from exchange count
+    # - Single exchange = use that exchange's data only
+    # - Multiple exchanges = best-per-coin combination (combined)
+    use_combined = len(backtest_exchanges) > 1
+
+    if use_combined:
         exchange = "combined"
         coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = (
             await prepare_hlcvs_mss(config, exchange, force_refetch_gaps=force_refetch_gaps)
@@ -1281,7 +1370,7 @@ async def main():
             exchange,
         )
     else:
-        print("combined false")
+        # Single exchange mode
         configs = {exchange: deepcopy(config) for exchange in backtest_exchanges}
         tasks = {}
         for exchange in backtest_exchanges:
