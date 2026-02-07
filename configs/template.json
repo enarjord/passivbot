@@ -339,6 +339,8 @@
             "adg_pnl_w",
             "mdg_pnl_w",
             "loss_profit_ratio",
+            "high_exposure_hours_max_long",
+            "high_exposure_hours_mean_long",
             "peak_recovery_hours_pnl",
             "position_held_hours_max",
             "position_unchanged_hours_max",
