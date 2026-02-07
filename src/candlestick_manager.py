@@ -480,8 +480,7 @@ class CandlestickManager:
             os.path.dirname(os.path.abspath(self.cache_dir)),
             "historical_data",
         )
-        # TODO: Set GATEIO_CACHE_CUTOFF_DATE on merge to master and remove this reminder in CLAUDE.md.
-        GATEIO_CACHE_CUTOFF_DATE = None  # e.g. "2026-02-15"
+        GATEIO_CACHE_CUTOFF_DATE = "2026-02-07"
         if self.exchange_name == "gateio" and GATEIO_CACHE_CUTOFF_DATE:
             _quarantine_gateio_cache_if_stale(
                 ohlcv_cache_base,

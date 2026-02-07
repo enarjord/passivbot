@@ -2,6 +2,11 @@
 
 All notable user-facing changes will be documented in this file.
 
+## v7.8.1 - 2026-02-07
+
+### Fixed
+- **Gate.io cache cutoff** - Set `GATEIO_CACHE_CUTOFF_DATE` to 2026-02-07 so stale Gate.io caches are quarantined on startup.
+
 ## v7.8.0 - 2026-02-07
 
 ### Fixed
