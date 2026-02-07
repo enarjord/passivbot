@@ -393,6 +393,12 @@ class CandlestickManager:
             self.exchange_name = str(getattr(exchange, "id"))
         else:
             self.exchange_name = exchange_name
+        # Normalize ccxt IDs to standard cache names (e.g. "binanceusdm" -> "binance")
+        _en = self.exchange_name.lower()
+        for _suffix in ("usdm", "futures"):
+            if _en.endswith(_suffix):
+                self.exchange_name = _en[: -len(_suffix)]
+                break
         self.cache_dir = cache_dir
         self.default_window_candles = int(default_window_candles)
         self.overlap_candles = int(overlap_candles)
