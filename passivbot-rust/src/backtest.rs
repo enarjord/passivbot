@@ -2883,6 +2883,90 @@ mod tests {
         );
         bt.orchestrator_input_cache = Some(input);
     }
+
+    #[test]
+    fn test_ema_alpha_interval_1_matches_original_formula() {
+        // With interval=1, alpha should equal 2/(span+1) (the original formula)
+        let mut bp = BotParamsPair::default();
+        bp.long.ema_span_0 = 100.0;
+        bp.long.ema_span_1 = 200.0;
+        bp.short.ema_span_0 = 50.0;
+        bp.short.ema_span_1 = 150.0;
+        bp.long.filter_volume_ema_span = 300.0;
+        bp.short.filter_volume_ema_span = 400.0;
+        bp.long.filter_volatility_ema_span = 500.0;
+        bp.short.filter_volatility_ema_span = 600.0;
+
+        let alphas = calc_ema_alphas(&bp, 1);
+
+        // span2 = sqrt(100*200) = 141.42..., sorted: [100, 141.42, 200]
+        let span2_long = (100.0f64 * 200.0).sqrt();
+        let expected_long = [
+            2.0 / (100.0 + 1.0),
+            2.0 / (span2_long + 1.0),
+            2.0 / (200.0 + 1.0),
+        ];
+        for (i, &expected) in expected_long.iter().enumerate() {
+            assert!(
+                (alphas.long.alphas[i] - expected).abs() < 1e-12,
+                "long alpha[{}]: expected {}, got {}",
+                i, expected, alphas.long.alphas[i]
+            );
+        }
+
+        assert!((alphas.vol_alpha_long - 2.0 / 301.0).abs() < 1e-12);
+        assert!((alphas.vol_alpha_short - 2.0 / 401.0).abs() < 1e-12);
+        assert!((alphas.log_range_alpha_long - 2.0 / 501.0).abs() < 1e-12);
+        assert!((alphas.log_range_alpha_short - 2.0 / 601.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_ema_alpha_interval_5_adjusts_correctly() {
+        // With interval=5, a 60-minute span becomes 12 candle periods
+        // alpha = 2 / (60/5 + 1) = 2/13
+        let mut bp = BotParamsPair::default();
+        bp.long.ema_span_0 = 60.0;
+        bp.long.ema_span_1 = 60.0; // same so span2=60 too
+        bp.short.ema_span_0 = 60.0;
+        bp.short.ema_span_1 = 60.0;
+
+        let alphas = calc_ema_alphas(&bp, 5);
+
+        let expected = 2.0 / (60.0 / 5.0 + 1.0); // 2/13
+        for i in 0..3 {
+            assert!(
+                (alphas.long.alphas[i] - expected).abs() < 1e-12,
+                "long alpha[{}]: expected {}, got {}",
+                i, expected, alphas.long.alphas[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_ema_alpha_hourly_volatility_not_adjusted() {
+        // entry_volatility spans are in hours and calendar-based; should NOT change with interval
+        let mut bp = BotParamsPair::default();
+        bp.long.entry_volatility_ema_span_hours = 24.0;
+        bp.short.entry_volatility_ema_span_hours = 48.0;
+
+        let alphas_1 = calc_ema_alphas(&bp, 1);
+        let alphas_5 = calc_ema_alphas(&bp, 5);
+
+        assert!(
+            (alphas_1.entry_volatility_logrange_ema_1h_alpha_long
+                - alphas_5.entry_volatility_logrange_ema_1h_alpha_long)
+                .abs()
+                < 1e-12,
+            "hourly volatility alpha should not change with interval"
+        );
+        assert!(
+            (alphas_1.entry_volatility_logrange_ema_1h_alpha_short
+                - alphas_5.entry_volatility_logrange_ema_1h_alpha_short)
+                .abs()
+                < 1e-12,
+            "hourly volatility alpha should not change with interval"
+        );
+    }
 }
 
 fn calc_warmup_bars(bot_params: &[BotParamsPair]) -> usize {

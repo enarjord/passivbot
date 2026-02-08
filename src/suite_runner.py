@@ -435,6 +435,22 @@ def _determine_needed_individual_exchanges(
     return needed
 
 
+def _apply_candle_aggregation(hlcvs, timestamps, btc_usd_prices, mss, interval):
+    """Aggregate candles and update mss metadata. Returns (hlcvs, timestamps, btc_usd_prices)."""
+    n_before = hlcvs.shape[0]
+    hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
+        hlcvs, timestamps, btc_usd_prices, int(interval)
+    )
+    logging.debug(
+        "[suite] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
+        interval, n_before, hlcvs.shape[0], offset_bars,
+    )
+    meta = mss.setdefault("__meta__", {})
+    meta["data_interval_minutes"] = int(interval)
+    meta["candle_interval_offset_bars"] = int(offset_bars)
+    return hlcvs, timestamps, btc_usd_prices
+
+
 async def prepare_master_datasets(
     base_config: Dict[str, Any],
     exchanges: List[str],
@@ -508,12 +524,9 @@ async def prepare_master_datasets(
             timestamps,
         ) = await prepare_hlcvs_mss(base_config, "combined")
         if candle_interval_minutes > 1:
-            hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
-                hlcvs, timestamps, btc_usd_prices, int(candle_interval_minutes)
+            hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
+                hlcvs, timestamps, btc_usd_prices, mss, candle_interval_minutes
             )
-            meta = mss.setdefault("__meta__", {})
-            meta["data_interval_minutes"] = int(candle_interval_minutes)
-            meta["candle_interval_offset_bars"] = int(offset_bars)
         datasets["combined"] = _build_dataset(
             "combined",
             "combined",
@@ -546,20 +559,9 @@ async def prepare_master_datasets(
                     ex_timestamps,
                 ) = await prepare_hlcvs_mss(base_config, exchange)
                 if candle_interval_minutes > 1:
-                    (
-                        ex_hlcvs,
-                        ex_timestamps,
-                        ex_btc_usd_prices,
-                        offset_bars,
-                    ) = align_and_aggregate_hlcvs(
-                        ex_hlcvs,
-                        ex_timestamps,
-                        ex_btc_usd_prices,
-                        int(candle_interval_minutes),
+                    ex_hlcvs, ex_timestamps, ex_btc_usd_prices = _apply_candle_aggregation(
+                        ex_hlcvs, ex_timestamps, ex_btc_usd_prices, ex_mss, candle_interval_minutes
                     )
-                    meta = ex_mss.setdefault("__meta__", {})
-                    meta["data_interval_minutes"] = int(candle_interval_minutes)
-                    meta["candle_interval_offset_bars"] = int(offset_bars)
                 datasets[exchange] = _build_dataset(
                     exchange,
                     exchange,
@@ -584,12 +586,9 @@ async def prepare_master_datasets(
                 timestamps,
             ) = await prepare_hlcvs_mss(base_config, exchange)
             if candle_interval_minutes > 1:
-                hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
-                    hlcvs, timestamps, btc_usd_prices, int(candle_interval_minutes)
+                hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
+                    hlcvs, timestamps, btc_usd_prices, mss, candle_interval_minutes
                 )
-                meta = mss.setdefault("__meta__", {})
-                meta["data_interval_minutes"] = int(candle_interval_minutes)
-                meta["candle_interval_offset_bars"] = int(offset_bars)
             datasets[exchange] = _build_dataset(
                 exchange,
                 exchange,

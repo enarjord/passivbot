@@ -221,8 +221,13 @@ def _maybe_aggregate_backtest_data(hlcvs, timestamps, btc_usd_prices, mss, confi
     candle_interval = int(config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
     if candle_interval <= 1:
         return hlcvs, timestamps, btc_usd_prices
+    n_before = hlcvs.shape[0]
     hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
         hlcvs, timestamps, btc_usd_prices, candle_interval
+    )
+    logging.debug(
+        "[optimize] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
+        candle_interval, n_before, hlcvs.shape[0], offset_bars,
     )
     meta = mss.setdefault("__meta__", {})
     meta["data_interval_minutes"] = candle_interval

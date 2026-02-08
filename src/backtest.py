@@ -361,11 +361,16 @@ def build_backtest_payload(
 
     # Aggregate candles if using coarser interval and data is still 1m
     if candle_interval > 1 and data_interval == 1:
+        n_before = hlcvs.shape[0]
         hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
             hlcvs,
             timestamps,
             btc_usd_prices,
             candle_interval,
+        )
+        logging.debug(
+            "[backtest] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
+            candle_interval, n_before, hlcvs.shape[0], offset_bars,
         )
         if isinstance(mss, dict):
             meta = mss.setdefault("__meta__", {})
