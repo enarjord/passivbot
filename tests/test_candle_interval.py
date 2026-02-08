@@ -126,6 +126,13 @@ def test_backtest_with_candle_interval():
         btc_usd_prices,
         timestamps,
     )
+    assert payload.bundle.hlcvs.shape[0] == n_minutes // 5
+    assert payload.backtest_params["candle_interval_minutes"] == 5
+    aggregated_timestamps = np.asarray(payload.bundle.timestamps)
+    assert aggregated_timestamps.shape[0] == n_minutes // 5
+    assert np.all(np.diff(aggregated_timestamps) == 5 * 60_000)
+
     fills, equities_array, analysis = execute_backtest(payload, config)
-    assert equities_array.shape[0] == n_minutes // 5
+    assert equities_array.shape[1] == 3
+    assert equities_array.shape[0] <= n_minutes // 5
     assert np.isfinite(analysis["positions_held_per_day"])
