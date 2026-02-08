@@ -129,6 +129,7 @@ import msgpack
 from typing import Sequence, Tuple, List, Dict, Any, Optional
 from itertools import permutations
 from shared_arrays import SharedArrayManager, attach_shared_array
+from ohlcv_utils import align_and_aggregate_hlcvs
 from optimize_suite import (
     ScenarioEvalContext,
     prepare_suite_contexts,
@@ -214,6 +215,27 @@ def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
         result.append(token)
         i += 1
     return result
+
+
+def _maybe_aggregate_backtest_data(hlcvs, timestamps, btc_usd_prices, mss, config):
+    candle_interval = int(config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
+    if candle_interval <= 1:
+        return hlcvs, timestamps, btc_usd_prices
+    n_before = hlcvs.shape[0]
+    hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
+        hlcvs, timestamps, btc_usd_prices, candle_interval
+    )
+    logging.debug(
+        "[optimize] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
+        candle_interval, n_before, hlcvs.shape[0], offset_bars,
+    )
+    meta = mss.setdefault("__meta__", {})
+    meta["data_interval_minutes"] = candle_interval
+    meta["candle_interval_offset_bars"] = int(offset_bars)
+    if timestamps is not None and len(timestamps) > 0:
+        meta["effective_start_ts"] = int(timestamps[0])
+        meta["effective_start_date"] = ts_to_date(int(timestamps[0]))
+    return hlcvs, timestamps, btc_usd_prices
 
 
 class ResultRecorder:
@@ -1566,6 +1588,9 @@ async def main():
                 coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
                     await prepare_hlcvs_mss(config, exchange)
                 )
+                hlcvs, _timestamps, btc_usd_prices = _maybe_aggregate_backtest_data(
+                    hlcvs, _timestamps, btc_usd_prices, mss, config
+                )
                 timestamps_dict[exchange] = _timestamps
                 exchange_preference = defaultdict(list)
                 for coin in coins:
@@ -1591,6 +1616,9 @@ async def main():
                 for exchange in backtest_exchanges:
                     coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
                         await tasks[exchange]
+                    )
+                    hlcvs, _timestamps, btc_usd_prices = _maybe_aggregate_backtest_data(
+                        hlcvs, _timestamps, btc_usd_prices, mss, config
                     )
                     timestamps_dict[exchange] = _timestamps
                     config["backtest"]["coins"][exchange] = coins

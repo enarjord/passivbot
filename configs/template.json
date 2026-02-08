@@ -9,6 +9,7 @@
         "end_date": "now",
         "exchanges": ["binance", "bybit"],
         "filter_by_min_effective_cost": false,
+        "candle_interval_minutes": 1,
         "gap_tolerance_ohlcvs_minutes": 120,
         "maker_fee_override": null,
         "max_warmup_minutes": 0,

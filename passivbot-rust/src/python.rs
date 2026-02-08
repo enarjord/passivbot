@@ -842,6 +842,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(true),
+        candle_interval_minutes: dict
+            .get_item("candle_interval_minutes")?
+            .map(|item| item.extract::<u64>())
+            .transpose()?
+            .unwrap_or(1), // default to 1m candles
     })
 }
 

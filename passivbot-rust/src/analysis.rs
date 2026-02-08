@@ -2,7 +2,14 @@ use crate::types::{Analysis, Equities, Fill};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
+const MS_PER_DAY: u64 = 86_400_000;
+const MS_PER_HOUR: u64 = 3_600_000;
+
+fn fallback_timestamp_ms(index: usize) -> u64 {
+    (index as u64) * 60_000
+}
+
+fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[u64]) -> Analysis {
     if fills.len() <= 1 {
         return Analysis::default();
     }
@@ -10,12 +17,20 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     let mut daily_eqs = Vec::new(); // stores last equity of each day
     let mut daily_eqs_mins = Vec::new(); // stores min equity of each day
 
-    let mut current_day = 0;
+    let use_timestamps = !timestamps_ms.is_empty() && timestamps_ms.len() == equities.len();
+    let mut current_day = if use_timestamps {
+        (timestamps_ms[0] / MS_PER_DAY) as usize
+    } else {
+        0
+    };
     let mut current_min = equities[0];
     let mut last_equity = equities[0];
-
     for (i, &equity) in equities.iter().enumerate() {
-        let day = i / 1440;
+        let day = if use_timestamps {
+            (timestamps_ms[i] / MS_PER_DAY) as usize
+        } else {
+            i / 1440
+        };
         if day > current_day {
             if daily_eqs.is_empty() {
                 daily_eqs.push(last_equity);
@@ -269,10 +284,10 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     };
 
     // Calculate position durations and position_unchanged_hours_max
-    let mut positions_opened: HashMap<String, usize> = HashMap::new(); // Tracks position open time
-    let mut durations: Vec<usize> = Vec::new(); // Total position durations
-    let mut last_fill_time: HashMap<String, usize> = HashMap::new(); // Last fill time per position
-    let mut unchanged_durations: Vec<usize> = Vec::new(); // Durations of unchanged periods
+    let mut positions_opened: HashMap<String, u64> = HashMap::new(); // Tracks position open time
+    let mut durations_ms: Vec<u64> = Vec::new(); // Total position durations (ms)
+    let mut last_fill_time: HashMap<String, u64> = HashMap::new(); // Last fill time per position (ms)
+    let mut unchanged_durations_ms: Vec<u64> = Vec::new(); // Durations of unchanged periods (ms)
 
     for fill in fills {
         let side = if fill.order_type.is_long() {
@@ -281,25 +296,30 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
             "short"
         };
         let key = format!("{}_{}", fill.coin, side);
+        let fill_ts = if fill.timestamp_ms > 0 {
+            fill.timestamp_ms
+        } else {
+            fallback_timestamp_ms(fill.index)
+        };
 
         // Record the opening time if the position is new
         if !positions_opened.contains_key(&key) {
-            positions_opened.insert(key.clone(), fill.index);
-            last_fill_time.insert(key.clone(), fill.index); // Initialize last fill time
+            positions_opened.insert(key.clone(), fill_ts);
+            last_fill_time.insert(key.clone(), fill_ts); // Initialize last fill time
         }
 
         // Calculate unchanged duration since the last fill
         if let Some(&last_time) = last_fill_time.get(&key) {
-            let unchanged_duration = fill.index - last_time;
-            unchanged_durations.push(unchanged_duration);
+            let unchanged_duration = fill_ts.saturating_sub(last_time);
+            unchanged_durations_ms.push(unchanged_duration);
         }
         // Update the last fill time
-        last_fill_time.insert(key.clone(), fill.index);
+        last_fill_time.insert(key.clone(), fill_ts);
 
         // If the position is fully closed, calculate total duration and reset
         if fill.position_size == 0.0 {
             if let Some(&start_idx) = positions_opened.get(&key) {
-                durations.push(fill.index - start_idx);
+                durations_ms.push(fill_ts.saturating_sub(start_idx));
                 positions_opened.remove(&key);
                 last_fill_time.remove(&key); // Reset tracking
             }
@@ -307,45 +327,65 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     }
 
     // Add unchanged durations and total durations for remaining open positions
-    let last_index = fills.last().map_or(0, |f| f.index);
+    let last_ts = fills.last().map_or(0u64, |f| {
+        if f.timestamp_ms > 0 {
+            f.timestamp_ms
+        } else {
+            fallback_timestamp_ms(f.index)
+        }
+    });
     for (key, &start_idx) in positions_opened.iter() {
-        durations.push(last_index - start_idx); // Total duration for open positions
+        durations_ms.push(last_ts.saturating_sub(start_idx)); // Total duration for open positions
         if let Some(&last_time) = last_fill_time.get(key) {
-            unchanged_durations.push(last_index - last_time); // Unchanged duration till end
+            unchanged_durations_ms.push(last_ts.saturating_sub(last_time)); // Unchanged duration till end
         }
     }
 
     // Calculate duration statistics
-    let n_days = (equities.len() as f64) / 1440.0; // Convert minutes to days
-    let positions_held_per_day = durations.len() as f64 / n_days;
+    let n_days = if use_timestamps && timestamps_ms.len() >= 2 {
+        let start_ts = timestamps_ms[0];
+        let end_ts = *timestamps_ms.last().unwrap_or(&start_ts);
+        let range_ms = end_ts.saturating_sub(start_ts) as f64;
+        if range_ms > 0.0 {
+            range_ms / MS_PER_DAY as f64
+        } else {
+            (equities.len() as f64) / 1440.0
+        }
+    } else {
+        (equities.len() as f64) / 1440.0
+    };
+    let n_days = if n_days <= 0.0 { 1e-9 } else { n_days };
+    let positions_held_per_day = durations_ms.len() as f64 / n_days;
 
-    let position_held_hours_mean = if !durations.is_empty() {
-        durations.iter().sum::<usize>() as f64 / (durations.len() as f64 * 60.0)
+    let position_held_hours_mean = if !durations_ms.is_empty() {
+        durations_ms.iter().sum::<u64>() as f64
+            / (durations_ms.len() as f64 * MS_PER_HOUR as f64)
     } else {
         0.0
     };
 
-    let position_held_hours_max = if !durations.is_empty() {
-        *durations.iter().max().unwrap() as f64 / 60.0
+    let position_held_hours_max = if !durations_ms.is_empty() {
+        *durations_ms.iter().max().unwrap() as f64 / MS_PER_HOUR as f64
     } else {
         0.0
     };
 
-    let position_held_hours_median = if !durations.is_empty() {
-        let mut sorted_durations = durations.clone();
+    let position_held_hours_median = if !durations_ms.is_empty() {
+        let mut sorted_durations = durations_ms.clone();
         sorted_durations.sort_unstable();
         let mid = sorted_durations.len() / 2;
         if sorted_durations.len() % 2 == 0 {
-            (sorted_durations[mid - 1] + sorted_durations[mid]) as f64 / (2.0 * 60.0)
+            (sorted_durations[mid - 1] + sorted_durations[mid]) as f64
+                / (2.0 * MS_PER_HOUR as f64)
         } else {
-            sorted_durations[mid] as f64 / 60.0
+            sorted_durations[mid] as f64 / MS_PER_HOUR as f64
         }
     } else {
         0.0
     };
 
-    let position_unchanged_hours_max = if !unchanged_durations.is_empty() {
-        *unchanged_durations.iter().max().unwrap() as f64 / 60.0
+    let position_unchanged_hours_max = if !unchanged_durations_ms.is_empty() {
+        *unchanged_durations_ms.iter().max().unwrap() as f64 / MS_PER_HOUR as f64
     } else {
         0.0
     };
@@ -354,7 +394,10 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     let exponential_fit_error = calc_exponential_fit_error(&daily_eqs);
 
     let volume_pct_per_day_avg = calc_avg_volume_pct_per_day(fills);
-    let peak_recovery_hours_equity = calc_peak_recovery_hours(equities);
+    let peak_recovery_hours_equity = calc_peak_recovery_hours(
+        equities,
+        if use_timestamps { Some(timestamps_ms) } else { None },
+    );
     let peak_recovery_hours_pnl = if equities.is_empty() {
         0.0
     } else {
@@ -369,7 +412,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
             running += *value;
             *value = running;
         }
-        calc_peak_recovery_hours(&deltas)
+        calc_peak_recovery_hours(&deltas, if use_timestamps { Some(timestamps_ms) } else { None })
     };
 
     let mut analysis = Analysis::default();
@@ -409,8 +452,13 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis
 }
 
-pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, exposures_series: &[f64]) -> Analysis {
-    let mut analysis = analyze_backtest_basic(fills, equities);
+pub fn analyze_backtest(
+    fills: &[Fill],
+    equities: &Vec<f64>,
+    timestamps_ms: &[u64],
+    exposures_series: &[f64],
+) -> Analysis {
+    let mut analysis = analyze_backtest_basic(fills, equities, timestamps_ms);
 
     if fills.len() <= 1 {
         return analysis;
@@ -438,16 +486,33 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, exposures_series: &
         }
 
         // filter fills that happened after or at start_idx
+        let subset_start_ts = if timestamps_ms.len() == equities.len() && !timestamps_ms.is_empty() {
+            timestamps_ms[start_idx]
+        } else {
+            fallback_timestamp_ms(start_idx)
+        };
         let subset_fills: Vec<Fill> = fills
             .iter()
-            .filter(|fill| fill.index >= start_idx)
+            .filter(|fill| {
+                if fill.timestamp_ms > 0 {
+                    fill.timestamp_ms >= subset_start_ts
+                } else {
+                    fill.index >= start_idx
+                }
+            })
             .cloned()
             .collect();
         if subset_fills.len() == 0 {
             break;
         }
 
-        let subset_analysis = analyze_backtest_basic(&subset_fills, &subset_equities.to_vec());
+        let subset_timestamps = if timestamps_ms.len() == equities.len() {
+            &timestamps_ms[start_idx..]
+        } else {
+            &[]
+        };
+        let subset_analysis =
+            analyze_backtest_basic(&subset_fills, &subset_equities.to_vec(), subset_timestamps);
         subset_analyses.push(subset_analysis);
     }
 
@@ -507,16 +572,19 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, exposures_series: &
         .sum::<f64>()
         / 10.0;
 
+    // Use absolute values for exposure metrics since short positions have negative twe_net.
+    // The metric represents "how much exposure" regardless of direction.
     let exposures: Vec<f64> = if !exposures_series.is_empty() {
         exposures_series
             .iter()
             .cloned()
             .filter(|value| value.is_finite())
+            .map(|v| v.abs())
             .collect()
     } else {
         fills
             .iter()
-            .map(|fill| fill.twe_net)
+            .map(|fill| fill.twe_net.abs())
             .filter(|value| value.is_finite())
             .collect()
     };
@@ -555,7 +623,12 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, exposures_series: &
         for (extract_twe, side) in &twe_extractors {
             let mut daily_twe: BTreeMap<usize, (f64, usize)> = BTreeMap::new();
             for fill in fills {
-                let day = fill.index / 1440;
+                let ts = if fill.timestamp_ms > 0 {
+                    fill.timestamp_ms
+                } else {
+                    fallback_timestamp_ms(fill.index)
+                };
+                let day = (ts / MS_PER_DAY) as usize;
                 let entry = daily_twe.entry(day).or_insert((0.0, 0));
                 entry.0 += extract_twe(fill);
                 entry.1 += 1;
@@ -575,33 +648,39 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, exposures_series: &
                 .sum();
             let daily_twe_mean = daily_means_sum / total_days as f64;
 
-            let mut start_idx: Option<usize> = None;
-            let mut durations_minutes: Vec<f64> = Vec::new();
+            let mut start_ts: Option<u64> = None;
+            let mut durations_ms: Vec<u64> = Vec::new();
 
             for fill in fills {
+                let ts = if fill.timestamp_ms > 0 {
+                    fill.timestamp_ms
+                } else {
+                    fallback_timestamp_ms(fill.index)
+                };
                 if extract_twe(fill) > daily_twe_mean {
-                    if start_idx.is_none() {
-                        start_idx = Some(fill.index);
+                    if start_ts.is_none() {
+                        start_ts = Some(ts);
                     }
-                } else if let Some(start) = start_idx {
-                    durations_minutes.push((fill.index - start) as f64);
-                    start_idx = None;
+                } else if let Some(start) = start_ts {
+                    durations_ms.push(ts.saturating_sub(start));
+                    start_ts = None;
                 }
             }
-            if let Some(start) = start_idx {
+            if let Some(start) = start_ts {
                 if let Some(last_fill) = fills.last() {
-                    durations_minutes.push((last_fill.index - start) as f64);
+                    let last_ts = if last_fill.timestamp_ms > 0 {
+                        last_fill.timestamp_ms
+                    } else {
+                        fallback_timestamp_ms(last_fill.index)
+                    };
+                    durations_ms.push(last_ts.saturating_sub(start));
                 }
             }
 
-            if !durations_minutes.is_empty() {
-                let hrs_mean =
-                    durations_minutes.iter().sum::<f64>() / durations_minutes.len() as f64 / 60.0;
-                let hrs_max = durations_minutes
-                    .iter()
-                    .cloned()
-                    .fold(f64::NEG_INFINITY, f64::max)
-                    / 60.0;
+            if !durations_ms.is_empty() {
+                let hrs_mean = durations_ms.iter().sum::<u64>() as f64
+                    / (durations_ms.len() as f64 * MS_PER_HOUR as f64);
+                let hrs_max = *durations_ms.iter().max().unwrap() as f64 / MS_PER_HOUR as f64;
 
                 match *side {
                     "long" => {
@@ -629,7 +708,12 @@ pub fn analyze_backtest_pair(
     use_btc_collateral: bool,
     total_wallet_exposures: &[f64],
 ) -> (Analysis, Analysis) {
-    let analysis_usd = analyze_backtest(fills, &equities.usd_total_equity, total_wallet_exposures);
+    let analysis_usd = analyze_backtest(
+        fills,
+        &equities.usd_total_equity,
+        &equities.timestamps_ms,
+        total_wallet_exposures,
+    );
     if !use_btc_collateral {
         return (analysis_usd.clone(), analysis_usd);
     }
@@ -649,6 +733,7 @@ pub fn analyze_backtest_pair(
     let analysis_btc = analyze_backtest(
         &btc_fills,
         &equities.btc_total_equity,
+        &equities.timestamps_ms,
         total_wallet_exposures,
     );
     (analysis_usd, analysis_btc)
@@ -662,7 +747,11 @@ fn calc_daily_pnl_ratios(fills: &[Fill]) -> Vec<f64> {
     let mut daily_totals: BTreeMap<usize, (f64, f64)> = BTreeMap::new(); // day -> (pnl_sum_with_fees, last_balance)
 
     for fill in fills {
-        let day = fill.index / 1440;
+        let day = if fill.timestamp_ms > 0 {
+            (fill.timestamp_ms / MS_PER_DAY) as usize
+        } else {
+            fill.index / 1440
+        };
         let entry = daily_totals
             .entry(day)
             .or_insert((0.0, fill.usd_total_balance));
@@ -767,24 +856,37 @@ pub fn calc_equity_choppiness(equity: &[f64]) -> f64 {
     variation / net_gain.abs()
 }
 
-fn calc_peak_recovery_hours(series: &[f64]) -> f64 {
+fn calc_peak_recovery_hours(series: &[f64], timestamps_ms: Option<&[u64]>) -> f64 {
     if series.is_empty() {
         return 0.0;
     }
+    let use_timestamps = match timestamps_ms {
+        Some(ts) => !ts.is_empty() && ts.len() == series.len(),
+        None => false,
+    };
     let mut peak = f64::NEG_INFINITY;
-    let mut peak_index: isize = 0;
-    let mut max_duration: isize = 0;
+    let mut peak_ts: u64 = if use_timestamps {
+        timestamps_ms.unwrap()[0]
+    } else {
+        0
+    };
+    let mut max_duration_ms: u64 = 0;
     for (i, &value) in series.iter().enumerate() {
+        let ts = if use_timestamps {
+            timestamps_ms.unwrap()[i]
+        } else {
+            fallback_timestamp_ms(i)
+        };
         if value >= peak {
-            let duration = i as isize - peak_index;
-            if duration > max_duration {
-                max_duration = duration;
+            let duration_ms = ts.saturating_sub(peak_ts);
+            if duration_ms > max_duration_ms {
+                max_duration_ms = duration_ms;
             }
             peak = value;
-            peak_index = i as isize;
+            peak_ts = ts;
         }
     }
-    (max_duration as f64) / 60.0
+    (max_duration_ms as f64) / MS_PER_HOUR as f64
 }
 
 /// Calculates the normalized mean absolute second derivative
@@ -883,7 +985,11 @@ pub fn calc_avg_volume_pct_per_day(fills: &[Fill]) -> f64 {
     let mut daily_totals: BTreeMap<usize, f64> = BTreeMap::new();
 
     for fill in fills {
-        let day = fill.index / 1440;
+        let day = if fill.timestamp_ms > 0 {
+            (fill.timestamp_ms / MS_PER_DAY) as usize
+        } else {
+            fill.index / 1440
+        };
         let cost_pct = (fill.fill_qty.abs() * fill.fill_price) / fill.usd_total_balance;
         *daily_totals.entry(day).or_insert(0.0) += cost_pct;
     }
@@ -893,5 +999,78 @@ pub fn calc_avg_volume_pct_per_day(fills: &[Fill]) -> f64 {
         0.0
     } else {
         daily_totals.values().sum::<f64>() / total_days
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::OrderType;
+
+    fn make_fill(index: usize, twe_net: f64) -> Fill {
+        Fill {
+            index,
+            timestamp_ms: (index as u64) * 60_000,
+            coin: "TEST".to_string(),
+            pnl: 0.0,
+            fee_paid: 0.1,
+            usd_total_balance: 10000.0,
+            btc_cash_wallet: 0.0,
+            usd_cash_wallet: 10000.0,
+            btc_price: 50000.0,
+            fill_qty: -0.1,
+            fill_price: 50000.0,
+            position_size: -0.1,
+            position_price: 50000.0,
+            order_type: OrderType::EntryInitialNormalShort,
+            wallet_exposure: twe_net.abs(),
+            twe_long: 0.0,
+            twe_short: twe_net,
+            twe_net,
+        }
+    }
+
+    #[test]
+    fn test_total_wallet_exposure_max_short_only() {
+        // For short-only configs, twe_net is always negative.
+        // total_wallet_exposure_max should report the maximum absolute exposure.
+        let fills = vec![
+            make_fill(100, -0.5), // 50% short exposure
+            make_fill(200, -1.0), // 100% short exposure
+            make_fill(300, -0.3), // 30% short exposure
+        ];
+
+        let equities: Vec<f64> = vec![10000.0; 400];
+        let timestamps: Vec<u64> = (0..equities.len()).map(|i| (i as u64) * 60_000).collect();
+        // Empty exposures_series forces analysis to use fill.twe_net
+        let exposures_series: Vec<f64> = vec![];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures_series);
+
+        // With abs() fix: max(0.5, 1.0, 0.3) = 1.0
+        assert!(
+            (analysis.total_wallet_exposure_max - 1.0).abs() < 0.01,
+            "Expected total_wallet_exposure_max=1.0 for short-only, got {}",
+            analysis.total_wallet_exposure_max
+        );
+    }
+
+    #[test]
+    fn test_total_wallet_exposure_from_exposures_series() {
+        // When exposures_series is provided, it should use that instead of fill.twe_net
+        let fills = vec![make_fill(100, -0.5)];
+        let equities: Vec<f64> = vec![10000.0; 200];
+        let timestamps: Vec<u64> = (0..equities.len()).map(|i| (i as u64) * 60_000).collect();
+        // Provide negative exposure values (short-only pattern)
+        let exposures_series: Vec<f64> = vec![-0.2, -0.5, -0.8, -0.3];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures_series);
+
+        // With abs() fix: max(0.2, 0.5, 0.8, 0.3) = 0.8
+        assert!(
+            (analysis.total_wallet_exposure_max - 0.8).abs() < 0.01,
+            "Expected total_wallet_exposure_max=0.8, got {}",
+            analysis.total_wallet_exposure_max
+        );
     }
 }

@@ -20,6 +20,26 @@ python3 src/optimize.py configs/template.json --start configs/starting_pool/
 
 Most config parameters can be modified via CLI. `python3 src/optimize.py -h` for more info.
 
+### Candle Interval
+
+For faster optimization runs, you can aggregate 1-minute data into coarser candles before the
+backtest loop runs. This reduces the number of bars processed per iteration.
+
+Set `backtest.candle_interval_minutes` to a value greater than 1:
+
+```json
+{
+  "backtest": {
+    "candle_interval_minutes": 5
+  }
+}
+```
+
+Trade-offs:
+
+- Intra-interval fill ordering is lost (fills occur only at the aggregated bar boundaries).
+- Metrics are still time-correct because analysis uses timestamps rather than bar indices.
+
 ### Fine-Tuning Specific Parameters
 
 When you only want to adjust a handful of parameters and keep everything else fixed, use
