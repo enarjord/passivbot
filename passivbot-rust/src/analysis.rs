@@ -17,11 +17,14 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
     let mut daily_eqs = Vec::new(); // stores last equity of each day
     let mut daily_eqs_mins = Vec::new(); // stores min equity of each day
 
-    let mut current_day = 0;
+    let use_timestamps = !timestamps_ms.is_empty() && timestamps_ms.len() == equities.len();
+    let mut current_day = if use_timestamps {
+        (timestamps_ms[0] / MS_PER_DAY) as usize
+    } else {
+        0
+    };
     let mut current_min = equities[0];
     let mut last_equity = equities[0];
-
-    let use_timestamps = !timestamps_ms.is_empty() && timestamps_ms.len() == equities.len();
     for (i, &equity) in equities.iter().enumerate() {
         let day = if use_timestamps {
             (timestamps_ms[i] / MS_PER_DAY) as usize
