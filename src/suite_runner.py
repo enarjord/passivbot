@@ -38,6 +38,7 @@ from utils import (
     date_to_ts,
 )
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+from ohlcv_utils import align_and_aggregate_hlcvs
 from shared_arrays import SharedArraySpec
 from metrics_schema import flatten_metric_stats, merge_suite_payload
 
@@ -434,12 +435,29 @@ def _determine_needed_individual_exchanges(
     return needed
 
 
+def _apply_candle_aggregation(hlcvs, timestamps, btc_usd_prices, mss, interval):
+    """Aggregate candles and update mss metadata. Returns (hlcvs, timestamps, btc_usd_prices)."""
+    n_before = hlcvs.shape[0]
+    hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
+        hlcvs, timestamps, btc_usd_prices, int(interval)
+    )
+    logging.debug(
+        "[suite] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
+        interval, n_before, hlcvs.shape[0], offset_bars,
+    )
+    meta = mss.setdefault("__meta__", {})
+    meta["data_interval_minutes"] = int(interval)
+    meta["candle_interval_offset_bars"] = int(offset_bars)
+    return hlcvs, timestamps, btc_usd_prices
+
+
 async def prepare_master_datasets(
     base_config: Dict[str, Any],
     exchanges: List[str],
     shared_array_manager=None,
     *,
     needed_individual_exchanges: Optional[Set[str]] = None,
+    candle_interval_minutes: int = 1,
 ) -> Dict[str, ExchangeDataset]:
     from backtest import prepare_hlcvs_mss
 
@@ -505,6 +523,10 @@ async def prepare_master_datasets(
             btc_usd_prices,
             timestamps,
         ) = await prepare_hlcvs_mss(base_config, "combined")
+        if candle_interval_minutes > 1:
+            hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
+                hlcvs, timestamps, btc_usd_prices, mss, candle_interval_minutes
+            )
         datasets["combined"] = _build_dataset(
             "combined",
             "combined",
@@ -536,6 +558,10 @@ async def prepare_master_datasets(
                     ex_btc_usd_prices,
                     ex_timestamps,
                 ) = await prepare_hlcvs_mss(base_config, exchange)
+                if candle_interval_minutes > 1:
+                    ex_hlcvs, ex_timestamps, ex_btc_usd_prices = _apply_candle_aggregation(
+                        ex_hlcvs, ex_timestamps, ex_btc_usd_prices, ex_mss, candle_interval_minutes
+                    )
                 datasets[exchange] = _build_dataset(
                     exchange,
                     exchange,
@@ -559,6 +585,10 @@ async def prepare_master_datasets(
                 btc_usd_prices,
                 timestamps,
             ) = await prepare_hlcvs_mss(base_config, exchange)
+            if candle_interval_minutes > 1:
+                hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
+                    hlcvs, timestamps, btc_usd_prices, mss, candle_interval_minutes
+                )
             datasets[exchange] = _build_dataset(
                 exchange,
                 exchange,
@@ -1194,6 +1224,25 @@ def _prepare_dataset_subset(
     meta["warmup_minutes_provided"] = warmup_provided
     mss_slice["__meta__"] = meta
 
+    interval = int(meta.get("data_interval_minutes", 1) or 1)
+    offset_bars = int(meta.get("candle_interval_offset_bars", 0) or 0)
+    adjustment_1m = start_idx * interval + offset_bars
+    if adjustment_1m > 0:
+        for coin in selected_coins:
+            coin_meta = mss_slice.get(coin)
+            if not isinstance(coin_meta, dict):
+                continue
+            if "first_valid_index" in coin_meta:
+                coin_meta["first_valid_index"] = max(
+                    0, int(coin_meta.get("first_valid_index", 0)) - adjustment_1m
+                )
+            if "last_valid_index" in coin_meta:
+                coin_meta["last_valid_index"] = max(
+                    0, int(coin_meta.get("last_valid_index", 0)) - adjustment_1m
+                )
+        if offset_bars > 0:
+            meta["candle_interval_offset_bars"] = 0
+
     warmup_map = compute_per_coin_warmup_minutes(scenario_config)
     _recompute_index_metadata(mss_slice, hlcvs_slice, list(selected_coins), warmup_map)
     return hlcvs_slice, btc_window, ts_window, mss_slice
@@ -1203,16 +1252,18 @@ def _recompute_index_metadata(
     mss: Dict[str, Any], hlcvs: np.ndarray, coins: Sequence[str], warmup_map: Optional[Dict[str, int]]
 ) -> None:
     total_steps = hlcvs.shape[0]
+    interval = int(mss.get("__meta__", {}).get("data_interval_minutes", 1) or 1)
+    total_steps_1m = total_steps * interval
     warmup_map = warmup_map or {}
     default_warm = int(warmup_map.get("__default__", 0))
     for idx, coin in enumerate(coins):
         meta = mss.setdefault(coin, {})
         first_idx = int(meta.get("first_valid_index", 0))
-        last_idx = int(meta.get("last_valid_index", total_steps - 1))
-        first_idx = max(0, min(first_idx, total_steps))
-        last_idx = max(0, min(last_idx, total_steps - 1))
-        if first_idx >= total_steps:
-            first_idx = total_steps - 1
+        last_idx = int(meta.get("last_valid_index", total_steps_1m - 1))
+        first_idx = max(0, min(first_idx, total_steps_1m))
+        last_idx = max(0, min(last_idx, total_steps_1m - 1))
+        if first_idx >= total_steps_1m:
+            first_idx = total_steps_1m - 1
         if last_idx < first_idx:
             last_idx = first_idx
         if "first_valid_index" not in meta or "last_valid_index" not in meta:
@@ -1220,8 +1271,8 @@ def _recompute_index_metadata(
             finite = np.isfinite(close_series)
             if finite.any():
                 valid_indices = np.where(finite)[0]
-                first_idx = int(valid_indices[0])
-                last_idx = int(valid_indices[-1])
+                first_idx = int(valid_indices[0]) * interval
+                last_idx = int(valid_indices[-1]) * interval + (interval - 1)
         meta["first_valid_index"] = first_idx
         meta["last_valid_index"] = last_idx
         warm_minutes = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
@@ -1391,8 +1442,14 @@ async def run_backtest_suite_async(
     else:
         base_config["live"]["ignored_coins"] = list(master_ignored)
 
+    candle_interval = int(
+        base_config.get("backtest", {}).get("candle_interval_minutes", 1) or 1
+    )
     datasets = await prepare_master_datasets(
-        base_config, exchanges_list, needed_individual_exchanges=needed_individual
+        base_config,
+        exchanges_list,
+        needed_individual_exchanges=needed_individual,
+        candle_interval_minutes=candle_interval,
     )
     available_coins: set[str] = set()
     for dataset in datasets.values():

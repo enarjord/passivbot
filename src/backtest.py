@@ -29,6 +29,7 @@ except Exception as exc:
 sys.argv = [sys.argv[0]] + _rust_remaining
 
 import numpy as np
+import math
 import pandas as pd
 import json
 import asyncio
@@ -66,6 +67,7 @@ from pure_funcs import (
 import pprint
 from copy import deepcopy
 from hlcv_preparation import prepare_hlcvs, prepare_hlcvs_combined
+from ohlcv_utils import aggregate_hlcvs, align_and_aggregate_hlcvs
 from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from pathlib import Path
 from plotting import (
@@ -93,6 +95,10 @@ if not hasattr(pbr, "HlcvsBundle"):  # pragma: no cover
 
 # on Windows this will pick the SelectorEventLoopPolicy
 set_windows_event_loop_policy()
+
+
+def aggregate_candles(candles_1m: np.ndarray, interval: int) -> np.ndarray:
+    return aggregate_hlcvs(candles_1m, interval)
 
 
 def _looks_like_bool_token(value: str) -> bool:
@@ -334,11 +340,60 @@ def build_backtest_payload(
     backtest_params = dict(backtest_params)
     coins_order = backtest_params.get("coins", [])
 
+    # Read candle interval from config (default to 1m)
+    candle_interval = config.get("backtest", {}).get("candle_interval_minutes", 1)
+    if candle_interval < 1:
+        raise ValueError(f"candle_interval_minutes must be >= 1, got {candle_interval}")
+    backtest_params["candle_interval_minutes"] = candle_interval
+    meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
+    data_interval = int(meta.get("data_interval_minutes", 1) or 1)
+    offset_bars = int(meta.get("candle_interval_offset_bars", 0) or 0)
+    if data_interval < 1:
+        data_interval = 1
+    if candle_interval == 1 and data_interval != 1:
+        raise ValueError(
+            f"Input data is already aggregated at {data_interval}m but candle_interval_minutes=1"
+        )
+    if data_interval != 1 and data_interval != candle_interval:
+        raise ValueError(
+            f"Input data interval {data_interval} does not match candle_interval_minutes={candle_interval}"
+        )
+
+    # Aggregate candles if using coarser interval and data is still 1m
+    if candle_interval > 1 and data_interval == 1:
+        n_before = hlcvs.shape[0]
+        hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
+            hlcvs,
+            timestamps,
+            btc_usd_prices,
+            candle_interval,
+        )
+        logging.debug(
+            "[backtest] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
+            candle_interval, n_before, hlcvs.shape[0], offset_bars,
+        )
+        if isinstance(mss, dict):
+            meta = mss.setdefault("__meta__", {})
+            meta["data_interval_minutes"] = int(candle_interval)
+            meta["candle_interval_offset_bars"] = int(offset_bars)
+            if timestamps is not None and len(timestamps) > 0:
+                meta["effective_start_ts"] = int(timestamps[0])
+                meta["effective_start_date"] = ts_to_date(int(timestamps[0]))
+
     # Inject first timestamp (ms) into backtest params; default to 0 if unknown
     try:
         first_ts_ms = int(timestamps[0]) if (timestamps is not None and len(timestamps) > 0) else 0
     except Exception:
         first_ts_ms = 0
+
+    # Ensure timestamp alignment for aggregated data
+    if candle_interval > 1 and first_ts_ms > 0:
+        interval_ms = candle_interval * 60_000
+        remainder = first_ts_ms % interval_ms
+        if remainder != 0:
+            raise ValueError(
+                f"First timestamp {first_ts_ms} is not aligned to {candle_interval}m interval"
+            )
     backtest_params["first_timestamp_ms"] = first_ts_ms
 
     warmup_map = compute_per_coin_warmup_minutes(config)
@@ -348,28 +403,54 @@ def build_backtest_payload(
     warmup_minutes = []
     trade_start_indices = []
     total_steps = hlcvs.shape[0]
+    source_steps_1m = total_steps * (candle_interval if candle_interval > 1 else 1)
     for idx, coin in enumerate(coins_order):
         meta = mss.get(coin, {}) if isinstance(mss, dict) else {}
-        first_idx = int(meta.get("first_valid_index", 0))
-        last_idx = int(meta.get("last_valid_index", total_steps - 1))
+        # Metadata indices are based on 1m candles; adjust for aggregated interval
+        first_idx_1m = int(meta.get("first_valid_index", 0)) - offset_bars
+        last_idx_1m = int(meta.get("last_valid_index", source_steps_1m - 1)) - offset_bars
+        if first_idx_1m < 0:
+            first_idx_1m = 0
+        if last_idx_1m < 0:
+            last_idx_1m = 0
+        if first_idx_1m >= source_steps_1m:
+            first_idx_1m = source_steps_1m
+        if last_idx_1m >= source_steps_1m:
+            last_idx_1m = source_steps_1m - 1
+        if candle_interval > 1:
+            first_idx = int(math.ceil(first_idx_1m / candle_interval))
+            last_idx = int(last_idx_1m // candle_interval)
+        else:
+            first_idx = int(first_idx_1m)
+            last_idx = int(last_idx_1m)
         if first_idx >= total_steps:
             first_idx = total_steps
         if last_idx >= total_steps:
             last_idx = total_steps - 1
         first_valid_indices.append(first_idx)
         last_valid_indices.append(last_idx)
+        # warmup_minutes stay in minutes (Rust adjusts based on interval)
         warm = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
         warmup_minutes.append(warm)
+        # trade_start_idx is in candle units, adjust warm from minutes to candle periods
+        warm_bars = (
+            int(math.ceil(warm / candle_interval)) if candle_interval > 1 else int(warm)
+        )
         if first_idx > last_idx:
             trade_idx = first_idx
         else:
-            trade_idx = min(last_idx, first_idx + warm)
+            trade_idx = min(last_idx, first_idx + warm_bars)
         trade_start_indices.append(trade_idx)
     backtest_params["first_valid_indices"] = first_valid_indices
     backtest_params["last_valid_indices"] = last_valid_indices
     backtest_params["warmup_minutes"] = warmup_minutes
     backtest_params["trade_start_indices"] = trade_start_indices
-    backtest_params["global_warmup_bars"] = compute_backtest_warmup_minutes(config)
+    global_warmup_minutes = compute_backtest_warmup_minutes(config)
+    if candle_interval > 1:
+        global_warmup_bars = int(math.ceil(global_warmup_minutes / candle_interval))
+    else:
+        global_warmup_bars = int(global_warmup_minutes)
+    backtest_params["global_warmup_bars"] = global_warmup_bars
 
     meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
     candidate_start = meta.get(
@@ -383,6 +464,13 @@ def build_backtest_payload(
     except Exception:
         requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
     backtest_params["requested_start_timestamp_ms"] = requested_start_ts
+    if isinstance(meta, dict) and timestamps is not None and len(timestamps) > 0:
+        meta["effective_start_ts"] = int(timestamps[0])
+        meta["effective_start_date"] = ts_to_date(int(timestamps[0]))
+        warmup_provided = max(
+            0, int(max(0, requested_start_ts - int(timestamps[0])) // 60_000)
+        )
+        meta["warmup_minutes_provided"] = warmup_provided
 
     bundle = _build_hlcvs_bundle(
         hlcvs,
@@ -1082,7 +1170,16 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     return result
 
 
-def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timestamps=None):
+def run_backtest(
+    hlcvs,
+    mss,
+    config: dict,
+    exchange: str,
+    btc_usd_prices,
+    timestamps=None,
+    *,
+    return_payload: bool = False,
+):
     """
     Backwards-compatible entry point that builds a payload and executes it immediately.
     """
@@ -1092,6 +1189,8 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
     payload = build_backtest_payload(hlcvs, mss, config, exchange, btc_usd_prices, timestamps)
     fills, equities_array, analysis = execute_backtest(payload, config)
     logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
+    if return_payload:
+        return fills, equities_array, analysis, payload
     return fills, equities_array, analysis
 
 
@@ -1105,6 +1204,7 @@ def post_process(
     results_path,
     exchange,
     label=None,
+    plot_hlcvs=None,
 ):
     sts = utc_ms()
     equities_array = np.asarray(equities_array)
@@ -1151,6 +1251,7 @@ def post_process(
         try:
             coins = require_config_value(config, f"backtest.coins.{exchange}")
             fills_plot_dir = oj(results_path, "fills_plots")
+            hlcvs_for_plot = plot_hlcvs if plot_hlcvs is not None else hlcvs
 
             def _save_coin_figure(name, fig):
                 save_figures({name: fig}, fills_plot_dir, close=True)
@@ -1158,7 +1259,7 @@ def post_process(
             create_forager_coin_figures(
                 coins,
                 fdf,
-                hlcvs,
+                hlcvs_for_plot,
                 on_figure=_save_coin_figure,
                 close_after_callback=False,
             )
@@ -1363,8 +1464,8 @@ async def main():
         config["backtest"]["coins"][exchange] = coins
         config["backtest"]["cache_dir"][exchange] = str(cache_dir)
 
-        fills, equities_array, analysis = run_backtest(
-            hlcvs, mss, config, exchange, btc_usd_prices, timestamps
+        fills, equities_array, analysis, payload = run_backtest(
+            hlcvs, mss, config, exchange, btc_usd_prices, timestamps, return_payload=True
         )
         post_process(
             config,
@@ -1375,6 +1476,7 @@ async def main():
             analysis,
             results_path,
             exchange,
+            plot_hlcvs=np.asarray(payload.bundle.hlcvs),
         )
     else:
         # Single exchange mode
@@ -1390,8 +1492,14 @@ async def main():
             ]
             configs[exchange]["backtest"]["coins"][exchange] = coins
             configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
-            fills, equities_array, analysis = run_backtest(
-                hlcvs, mss, configs[exchange], exchange, btc_usd_prices, timestamps
+            fills, equities_array, analysis, payload = run_backtest(
+                hlcvs,
+                mss,
+                configs[exchange],
+                exchange,
+                btc_usd_prices,
+                timestamps,
+                return_payload=True,
             )
             post_process(
                 configs[exchange],
@@ -1402,6 +1510,7 @@ async def main():
                 analysis,
                 results_path,
                 exchange,
+                plot_hlcvs=np.asarray(payload.bundle.hlcvs),
             )
 
 

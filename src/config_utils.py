@@ -2088,6 +2088,7 @@ def get_template_config():
             "end_date": "now",
             "exchanges": ["binance", "bybit", "gateio", "bitget"],
             "filter_by_min_effective_cost": None,
+            "candle_interval_minutes": 1,
             "gap_tolerance_ohlcvs_minutes": 120.0,
             "maker_fee_override": None,
             "max_warmup_minutes": 0.0,

@@ -261,6 +261,7 @@ pub struct Backtest<'a> {
     hlcvs: ArrayView3<'a, f64>,
     btc_usd_prices: ArrayView1<'a, f64>, // Change to ArrayView1 (1D view)
     active_coin_indices: Vec<usize>,
+    interval_ms: u64,
     bot_params_master: BotParamsPair,
     bot_params: Vec<BotParamsPair>,
     bot_params_original: Vec<BotParamsPair>,
@@ -732,7 +733,7 @@ impl<'a> Backtest<'a> {
             return;
         };
 
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let record = DebugBalanceTraceRecord {
             step: k,
             timestamp_ms,
@@ -1295,13 +1296,19 @@ impl<'a> Backtest<'a> {
             first_valid_idx[i] = first;
             last_valid_idx[i] = last;
             let warm = warmup_minutes.get(i).copied().unwrap_or(0);
-            let mut trade_idx = first.saturating_add(warm);
+            let interval = backtest_params.candle_interval_minutes.max(1) as usize;
+            let warm_bars = if interval > 1 {
+                (warm + interval - 1) / interval
+            } else {
+                warm
+            };
+            let mut trade_idx = first.saturating_add(warm_bars);
             if trade_idx > last {
                 trade_idx = last;
             }
             trade_start_idx[i] = trade_idx;
 
-            let expected_trade_idx = first.saturating_add(warm).min(last);
+            let expected_trade_idx = first.saturating_add(warm_bars).min(last);
             debug_assert_eq!(
                 trade_idx, expected_trade_idx,
                 "trade start index mismatch for coin {}: expected {} but got {}",
@@ -1383,8 +1390,9 @@ impl<'a> Backtest<'a> {
             short: bot_params_master.short.n_positions,
         };
 
-        // Calculate EMA alphas for each coin
-        let ema_alphas: Vec<EmaAlphas> = bot_params.iter().map(|bp| calc_ema_alphas(bp)).collect();
+        // Calculate EMA alphas for each coin, adjusted for candle interval
+        let interval = backtest_params.candle_interval_minutes;
+        let ema_alphas: Vec<EmaAlphas> = bot_params.iter().map(|bp| calc_ema_alphas(bp, interval)).collect();
         let mut warmup_bars = backtest_params.global_warmup_bars;
         if warmup_bars == 0 {
             warmup_bars = calc_warmup_bars(&bot_params);
@@ -1406,6 +1414,7 @@ impl<'a> Backtest<'a> {
             hlcvs,
             btc_usd_prices,
             active_coin_indices,
+            interval_ms: backtest_params.candle_interval_minutes * 60_000,
             bot_params_master: bot_params_master.clone(),
             bot_params: bot_params.clone(),
             bot_params_original,
@@ -1546,7 +1555,7 @@ impl<'a> Backtest<'a> {
             self.update_emas(k);
             self.update_rounded_balance(k);
             self.update_trailing_prices(k);
-            let current_ts = self.first_timestamp_ms + (k as u64) * 60_000u64;
+            let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;
             if k > warmup_bars && current_ts >= guard_timestamp_ms {
                 if self.update_n_positions_and_wallet_exposure_limits(k) {
                     self.equity_tracking_active = true;
@@ -1830,7 +1839,7 @@ impl<'a> Backtest<'a> {
         }
 
         // Finally push the results into the Equities struct
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         self.equities.usd_total_equity.push(equity_usd);
         self.equities.btc_total_equity.push(equity_btc);
         self.equities.timestamps_ms.push(timestamp_ms);
@@ -2010,7 +2019,7 @@ impl<'a> Backtest<'a> {
         } else {
             self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         }
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -2093,7 +2102,7 @@ impl<'a> Backtest<'a> {
         } else {
             self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         }
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -2164,7 +2173,7 @@ impl<'a> Backtest<'a> {
         );
         self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -2247,7 +2256,7 @@ impl<'a> Backtest<'a> {
         let (twe_long, twe_short, twe_net) = self.compute_twe_components();
         self.fills.push(Fill {
             index: k,
-            timestamp_ms: self.first_timestamp_ms + (k as u64) * 60_000,
+            timestamp_ms: self.first_timestamp_ms + (k as u64) * self.interval_ms,
             coin: self.backtest_params.coins[idx].clone(),
             pnl: 0.0,
             fee_paid,
@@ -2548,13 +2557,13 @@ impl<'a> Backtest<'a> {
     #[inline]
     fn update_emas(&mut self, k: usize) {
         // Compute/refresh latest 1h bucket on whole-hour boundaries
-        let current_ts = self.first_timestamp_ms + (k as u64) * 60_000u64;
+        let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let hour_boundary = (current_ts / 3_600_000u64) * 3_600_000u64;
         if hour_boundary > self.last_hour_boundary_ms {
             // window is from max(first_ts, last_boundary) to previous minute
             let window_start_ms = self.first_timestamp_ms.max(self.last_hour_boundary_ms);
-            if current_ts > window_start_ms + 60_000 {
-                let start_idx = ((window_start_ms - self.first_timestamp_ms) / 60_000u64) as usize;
+            if current_ts > window_start_ms + self.interval_ms {
+                let start_idx = ((window_start_ms - self.first_timestamp_ms) / self.interval_ms) as usize;
                 let end_idx = if k == 0 { 0usize } else { k - 1 };
                 if end_idx >= start_idx {
                     for i in 0..self.n_coins {
@@ -2738,7 +2747,21 @@ impl<'a> Backtest<'a> {
     }
 }
 
-fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
+fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas {
+    let interval_f = interval as f64;
+    let clamp_alpha = |alpha: f64| {
+        if !alpha.is_finite() {
+            0.0
+        } else if alpha < 0.0 {
+            0.0
+        } else if alpha > 1.0 {
+            1.0
+        } else {
+            alpha
+        }
+    };
+
+    // EMA spans are in minutes. Divide by interval to get number of candle periods.
     let mut ema_spans_long = [
         bot_params_pair.long.ema_span_0,
         bot_params_pair.long.ema_span_1,
@@ -2753,9 +2776,9 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
     ];
     ema_spans_short.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-    let ema_alphas_long = ema_spans_long.map(|x| 2.0 / (x + 1.0));
-
-    let ema_alphas_short = ema_spans_short.map(|x| 2.0 / (x + 1.0));
+    // Price EMAs - spans are in minutes, convert to candle periods
+    let ema_alphas_long = ema_spans_long.map(|x| clamp_alpha(2.0 / (x / interval_f + 1.0)));
+    let ema_alphas_short = ema_spans_short.map(|x| clamp_alpha(2.0 / (x / interval_f + 1.0)));
 
     EmaAlphas {
         long: Alphas {
@@ -2765,11 +2788,20 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
             alphas: ema_alphas_short,
         },
         // EMA spans for the volume/log range filters (alphas precomputed from spans)
-        vol_alpha_long: 2.0 / (bot_params_pair.long.filter_volume_ema_span as f64 + 1.0),
-        vol_alpha_short: 2.0 / (bot_params_pair.short.filter_volume_ema_span as f64 + 1.0),
-        log_range_alpha_long: 2.0 / (bot_params_pair.long.filter_volatility_ema_span as f64 + 1.0),
-        log_range_alpha_short: 2.0
-            / (bot_params_pair.short.filter_volatility_ema_span as f64 + 1.0),
+        vol_alpha_long: clamp_alpha(
+            2.0 / (bot_params_pair.long.filter_volume_ema_span as f64 / interval_f + 1.0),
+        ),
+        vol_alpha_short: clamp_alpha(
+            2.0 / (bot_params_pair.short.filter_volume_ema_span as f64 / interval_f + 1.0),
+        ),
+        log_range_alpha_long: clamp_alpha(
+            2.0 / (bot_params_pair.long.filter_volatility_ema_span as f64 / interval_f + 1.0),
+        ),
+        log_range_alpha_short: clamp_alpha(
+            2.0 / (bot_params_pair.short.filter_volatility_ema_span as f64 / interval_f + 1.0),
+        ),
+        // Note: entry_volatility spans are in HOURS and computed from hourly buckets,
+        // so they do NOT need interval adjustment (hourly buckets are calendar-based)
         entry_volatility_logrange_ema_1h_alpha_long: {
             let span = bot_params_pair.long.entry_volatility_ema_span_hours;
             if span > 0.0 {
@@ -2824,6 +2856,7 @@ mod tests {
             metrics_only: true,
             filter_by_min_effective_cost: false,
             hedge_mode: true,
+            candle_interval_minutes: 1,
         };
 
         let mut bt = Backtest::new(
@@ -2849,6 +2882,90 @@ mod tests {
             "expected cached input WEL to update after bot_params change"
         );
         bt.orchestrator_input_cache = Some(input);
+    }
+
+    #[test]
+    fn test_ema_alpha_interval_1_matches_original_formula() {
+        // With interval=1, alpha should equal 2/(span+1) (the original formula)
+        let mut bp = BotParamsPair::default();
+        bp.long.ema_span_0 = 100.0;
+        bp.long.ema_span_1 = 200.0;
+        bp.short.ema_span_0 = 50.0;
+        bp.short.ema_span_1 = 150.0;
+        bp.long.filter_volume_ema_span = 300.0;
+        bp.short.filter_volume_ema_span = 400.0;
+        bp.long.filter_volatility_ema_span = 500.0;
+        bp.short.filter_volatility_ema_span = 600.0;
+
+        let alphas = calc_ema_alphas(&bp, 1);
+
+        // span2 = sqrt(100*200) = 141.42..., sorted: [100, 141.42, 200]
+        let span2_long = (100.0f64 * 200.0).sqrt();
+        let expected_long = [
+            2.0 / (100.0 + 1.0),
+            2.0 / (span2_long + 1.0),
+            2.0 / (200.0 + 1.0),
+        ];
+        for (i, &expected) in expected_long.iter().enumerate() {
+            assert!(
+                (alphas.long.alphas[i] - expected).abs() < 1e-12,
+                "long alpha[{}]: expected {}, got {}",
+                i, expected, alphas.long.alphas[i]
+            );
+        }
+
+        assert!((alphas.vol_alpha_long - 2.0 / 301.0).abs() < 1e-12);
+        assert!((alphas.vol_alpha_short - 2.0 / 401.0).abs() < 1e-12);
+        assert!((alphas.log_range_alpha_long - 2.0 / 501.0).abs() < 1e-12);
+        assert!((alphas.log_range_alpha_short - 2.0 / 601.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_ema_alpha_interval_5_adjusts_correctly() {
+        // With interval=5, a 60-minute span becomes 12 candle periods
+        // alpha = 2 / (60/5 + 1) = 2/13
+        let mut bp = BotParamsPair::default();
+        bp.long.ema_span_0 = 60.0;
+        bp.long.ema_span_1 = 60.0; // same so span2=60 too
+        bp.short.ema_span_0 = 60.0;
+        bp.short.ema_span_1 = 60.0;
+
+        let alphas = calc_ema_alphas(&bp, 5);
+
+        let expected = 2.0 / (60.0 / 5.0 + 1.0); // 2/13
+        for i in 0..3 {
+            assert!(
+                (alphas.long.alphas[i] - expected).abs() < 1e-12,
+                "long alpha[{}]: expected {}, got {}",
+                i, expected, alphas.long.alphas[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_ema_alpha_hourly_volatility_not_adjusted() {
+        // entry_volatility spans are in hours and calendar-based; should NOT change with interval
+        let mut bp = BotParamsPair::default();
+        bp.long.entry_volatility_ema_span_hours = 24.0;
+        bp.short.entry_volatility_ema_span_hours = 48.0;
+
+        let alphas_1 = calc_ema_alphas(&bp, 1);
+        let alphas_5 = calc_ema_alphas(&bp, 5);
+
+        assert!(
+            (alphas_1.entry_volatility_logrange_ema_1h_alpha_long
+                - alphas_5.entry_volatility_logrange_ema_1h_alpha_long)
+                .abs()
+                < 1e-12,
+            "hourly volatility alpha should not change with interval"
+        );
+        assert!(
+            (alphas_1.entry_volatility_logrange_ema_1h_alpha_short
+                - alphas_5.entry_volatility_logrange_ema_1h_alpha_short)
+                .abs()
+                < 1e-12,
+            "hourly volatility alpha should not change with interval"
+        );
     }
 }
 
