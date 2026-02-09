@@ -144,6 +144,30 @@ def dump_daily_ohlcv_data(data, filepath: str, start_ts: int, interval_ms: int =
 
 
 def load_ohlcv_data(filepath: str) -> pd.DataFrame:
+    path = str(filepath)
+    if path.lower().endswith(".npz"):
+        with np.load(path) as data:
+            if "candles" not in data:
+                raise ValueError(f"Missing 'candles' key in {filepath}")
+            arr = data["candles"]
+        if not isinstance(arr, np.ndarray) or arr.dtype.names is None:
+            raise ValueError(f"Expected structured dtype in {filepath}")
+        required = ("ts", "o", "h", "l", "c", "bv")
+        missing = [name for name in required if name not in arr.dtype.names]
+        if missing:
+            raise ValueError(f"Missing fields {missing} in {filepath}")
+        df = pd.DataFrame(
+            {
+                "timestamp": arr["ts"].astype(np.int64),
+                "open": arr["o"].astype(float),
+                "high": arr["h"].astype(float),
+                "low": arr["l"].astype(float),
+                "close": arr["c"].astype(float),
+                "volume": arr["bv"].astype(float),
+            }
+        )
+        return ensure_millis_df(df)
+
     arr = np.load(filepath, allow_pickle=True)
     columns = ["timestamp", "open", "high", "low", "close", "volume"]
     arr_deduplicated = deduplicate_rows(arr)

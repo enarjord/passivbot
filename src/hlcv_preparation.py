@@ -65,7 +65,7 @@ class ProgressTracker:
 
 
 from config_utils import require_config_value, require_live_value
-from ohlcv_utils import dump_ohlcv_data
+from ohlcv_utils import dump_ohlcv_data, get_days_in_between, load_ohlcv_data
 from procedures import get_first_timestamps_unified
 from utils import (
     coin_to_symbol,
@@ -98,6 +98,7 @@ class HLCVManager:
         cm_debug_level: int = 0,
         cm_progress_log_interval_seconds: float = 10.0,  # Log progress every 10s by default
         force_refetch_gaps: bool = False,
+        ohlcv_source_dir: Optional[str] = None,
     ):
         self.exchange = to_ccxt_exchange_id(exchange)
         self.quote = get_quote(self.exchange)
@@ -122,6 +123,7 @@ class HLCVManager:
             self.cm_progress_log_interval_seconds = 0.0
         self.force_refetch_gaps = bool(force_refetch_gaps)
         self.cm: Optional[CandlestickManager] = None
+        self.ohlcv_source_dir = str(ohlcv_source_dir) if ohlcv_source_dir else None
 
     def update_date_range(self, new_start_date=None, new_end_date=None):
         if new_start_date is not None:
@@ -403,6 +405,84 @@ class HLCVManager:
         self.dump_first_timestamp(coin, fts)
         return float(fts)
 
+    def _try_load_ohlcvs_from_source_dir(
+        self, coin: str, symbol: str, start_ts: int, end_ts: int
+    ) -> Optional[pd.DataFrame]:
+        if not self.ohlcv_source_dir:
+            return None
+        source_root = Path(self.ohlcv_source_dir)
+        if not source_root.exists():
+            return None
+
+        exchange_dir = to_standard_exchange_name(self.exchange)
+        exchange_root = source_root / exchange_dir / "1m"
+
+        start_day = ts_to_date(start_ts)
+        end_day = ts_to_date(end_ts)
+        days = get_days_in_between(start_day, end_day)
+
+        frames = []
+        candidates: list[str] = []
+        for name in (coin, symbol):
+            if name:
+                candidates.append(name)
+        if symbol and "/" in symbol:
+            candidates.append(symbol.replace("/", "_"))
+        # De-duplicate while preserving order
+        seen = set()
+        candidates = [c for c in candidates if not (c in seen or seen.add(c))]
+        for day in days:
+            loaded = False
+            for name in candidates:
+                base_dir = exchange_root / name
+                if not base_dir.exists():
+                    continue
+                for ext in (".npz", ".npy"):
+                    filepath = base_dir / f"{day}{ext}"
+                    if not filepath.exists():
+                        continue
+                    try:
+                        df = load_ohlcv_data(str(filepath))
+                    except Exception as exc:
+                        logging.warning(
+                            "[%s] source dir load failed for %s %s: %s",
+                            self.exchange,
+                            coin,
+                            filepath,
+                            exc,
+                        )
+                        continue
+                    if not df.empty:
+                        frames.append(df)
+                    loaded = True
+                    break
+                if loaded:
+                    break
+
+        if not frames:
+            return None
+
+        df = pd.concat(frames, ignore_index=True)
+        df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
+        df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] <= end_ts)]
+        if df.empty:
+            return None
+
+        ts = df["timestamp"].astype(np.int64, copy=False).values
+        if ts.size > 1:
+            intervals = np.diff(ts)
+            greatest_gap_ms = int(intervals.max(initial=60_000))
+            if greatest_gap_ms > int(self.gap_tolerance_ohlcvs_minutes * 60_000):
+                logging.warning(
+                    "[%s] source dir gaps detected for %s; greatest gap %.1f minutes. Falling back.",
+                    self.exchange,
+                    coin,
+                    greatest_gap_ms / 60_000.0,
+                )
+                return None
+
+        return df.reset_index(drop=True)
+
     async def get_ohlcvs(self, coin: str, start_date=None, end_date=None) -> pd.DataFrame:
         empty_df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
         if start_date is not None or end_date is not None:
@@ -412,8 +492,6 @@ class HLCVManager:
         if not self.has_coin(coin):
             logging.debug("[%s] get_ohlcvs: coin %s not found in markets", self.exchange, coin)
             return empty_df
-        self.load_cc()
-        assert self.cm is not None
         symbol = self.get_symbol(coin)
         start_ts = int(self.start_ts)
         end_ts = int(self.end_ts)
@@ -425,6 +503,24 @@ class HLCVManager:
                 end_ts,
             )
             return empty_df
+
+        if self.ohlcv_source_dir:
+            df = self._try_load_ohlcvs_from_source_dir(coin, symbol, start_ts, end_ts)
+            if df is not None and not df.empty:
+                logging.info(
+                    "[%s] get_ohlcvs: using source dir for %s",
+                    self.exchange,
+                    coin,
+                )
+                return df
+            logging.info(
+                "[%s] get_ohlcvs: source dir had no data for %s; falling back to candlestick manager",
+                self.exchange,
+                coin,
+            )
+
+        self.load_cc()
+        assert self.cm is not None
 
         # Fetch strict (real) candles first to detect large gaps.
         real = await self.cm.get_candles(
@@ -567,6 +663,7 @@ async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool
             config.get("backtest", {}).get("cm_progress_log_interval_seconds", 10.0) or 10.0
         ),
         force_refetch_gaps=force_refetch_gaps,
+        ohlcv_source_dir=config.get("backtest", {}).get("ohlcv_source_dir"),
     )
 
     try:
@@ -762,6 +859,13 @@ async def prepare_hlcvs_internal(
     progress.log_done()
 
     if not valid_coins:
+        logging.error(
+            "[%s] no valid coins found with data for %s -> %s (coins=%s)",
+            exchange,
+            ts_to_date(effective_start_ts),
+            ts_to_date(end_ts),
+            ",".join(coins),
+        )
         raise ValueError("No valid coins found with data")
 
     n_timesteps = int((global_end_time - global_start_time) / interval_ms) + 1
@@ -869,6 +973,7 @@ async def prepare_hlcvs_combined(
                 config.get("backtest", {}).get("cm_progress_log_interval_seconds", 10.0) or 10.0
             ),
             force_refetch_gaps=force_refetch_gaps,
+            ohlcv_source_dir=config.get("backtest", {}).get("ohlcv_source_dir"),
         )
     extra_forced = set(normalized_forced_sources.values()) - set(exchanges_to_consider)
     extra_mss = set(normalized_mss_sources.values()) - set(exchanges_to_consider) - extra_forced
@@ -885,6 +990,7 @@ async def prepare_hlcvs_combined(
                 config.get("backtest", {}).get("cm_progress_log_interval_seconds", 10.0) or 10.0
             ),
             force_refetch_gaps=force_refetch_gaps,
+            ohlcv_source_dir=config.get("backtest", {}).get("ohlcv_source_dir"),
         )
     btc_om: Optional[HLCVManager] = None
 
