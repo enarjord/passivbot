@@ -1170,7 +1170,16 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     return result
 
 
-def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timestamps=None):
+def run_backtest(
+    hlcvs,
+    mss,
+    config: dict,
+    exchange: str,
+    btc_usd_prices,
+    timestamps=None,
+    *,
+    return_payload: bool = False,
+):
     """
     Backwards-compatible entry point that builds a payload and executes it immediately.
     """
@@ -1180,6 +1189,8 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
     payload = build_backtest_payload(hlcvs, mss, config, exchange, btc_usd_prices, timestamps)
     fills, equities_array, analysis = execute_backtest(payload, config)
     logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
+    if return_payload:
+        return fills, equities_array, analysis, payload
     return fills, equities_array, analysis
 
 
@@ -1193,6 +1204,7 @@ def post_process(
     results_path,
     exchange,
     label=None,
+    plot_hlcvs=None,
 ):
     sts = utc_ms()
     equities_array = np.asarray(equities_array)
@@ -1239,6 +1251,7 @@ def post_process(
         try:
             coins = require_config_value(config, f"backtest.coins.{exchange}")
             fills_plot_dir = oj(results_path, "fills_plots")
+            hlcvs_for_plot = plot_hlcvs if plot_hlcvs is not None else hlcvs
 
             def _save_coin_figure(name, fig):
                 save_figures({name: fig}, fills_plot_dir, close=True)
@@ -1246,7 +1259,7 @@ def post_process(
             create_forager_coin_figures(
                 coins,
                 fdf,
-                hlcvs,
+                hlcvs_for_plot,
                 on_figure=_save_coin_figure,
                 close_after_callback=False,
             )
@@ -1451,8 +1464,8 @@ async def main():
         config["backtest"]["coins"][exchange] = coins
         config["backtest"]["cache_dir"][exchange] = str(cache_dir)
 
-        fills, equities_array, analysis = run_backtest(
-            hlcvs, mss, config, exchange, btc_usd_prices, timestamps
+        fills, equities_array, analysis, payload = run_backtest(
+            hlcvs, mss, config, exchange, btc_usd_prices, timestamps, return_payload=True
         )
         post_process(
             config,
@@ -1463,6 +1476,7 @@ async def main():
             analysis,
             results_path,
             exchange,
+            plot_hlcvs=np.asarray(payload.bundle.hlcvs),
         )
     else:
         # Single exchange mode
@@ -1478,8 +1492,14 @@ async def main():
             ]
             configs[exchange]["backtest"]["coins"][exchange] = coins
             configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
-            fills, equities_array, analysis = run_backtest(
-                hlcvs, mss, configs[exchange], exchange, btc_usd_prices, timestamps
+            fills, equities_array, analysis, payload = run_backtest(
+                hlcvs,
+                mss,
+                configs[exchange],
+                exchange,
+                btc_usd_prices,
+                timestamps,
+                return_payload=True,
             )
             post_process(
                 configs[exchange],
@@ -1490,6 +1510,7 @@ async def main():
                 analysis,
                 results_path,
                 exchange,
+                plot_hlcvs=np.asarray(payload.bundle.hlcvs),
             )
 
 
