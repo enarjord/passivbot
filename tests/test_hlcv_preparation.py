@@ -660,6 +660,301 @@ class TestPrepareHLCVSIntegration:
 
 
 # ============================================================================
+# Test Class: OHLCV Source Dir
+# ============================================================================
+
+
+class TestOHLCVSourceDir:
+    """Test external OHLCV source directory loading."""
+
+    @pytest.mark.asyncio
+    async def test_source_dir_load_npy_success(self, tmp_path):
+        """Test successful load from .npy source dir."""
+        from ohlcv_utils import dump_ohlcv_data
+        from utils import date_to_ts
+
+        # Setup source dir structure
+        source_dir = tmp_path / "ohlcv_source"
+        exchange_dir = source_dir / "binance" / "1m" / "BTC"
+        exchange_dir.mkdir(parents=True)
+
+        # Create synthetic daily .npy file
+        day = "2024-01-15"
+        day_ts = int(date_to_ts(day))
+        timestamps = np.arange(day_ts, day_ts + 24 * 60 * 60 * 1000, 60_000)
+        data = np.column_stack([
+            timestamps,
+            np.full(len(timestamps), 50000.0),  # open
+            np.full(len(timestamps), 50100.0),  # high
+            np.full(len(timestamps), 49900.0),  # low
+            np.full(len(timestamps), 50050.0),  # close
+            np.full(len(timestamps), 100.0),    # volume
+        ])
+        dump_ohlcv_data(data, str(exchange_dir / f"{day}.npy"))
+
+        # Create HLCVManager with source dir (end_date must be next day to include full day)
+        om = HLCVManager(
+            "binanceusdm",
+            start_date=day,
+            end_date="2024-01-16",
+            ohlcv_source_dir=str(source_dir),
+        )
+
+        # Mock markets
+        om.markets = {
+            "BTC/USDT:USDT": {
+                "symbol": "BTC/USDT:USDT",
+                "base": "BTC",
+                "quote": "USDT",
+                "maker": 0.0002,
+                "taker": 0.0004,
+                "contractSize": 1.0,
+                "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.001}},
+                "precision": {"price": 0.01, "amount": 0.001},
+            }
+        }
+
+        # Test load
+        df = await om.get_ohlcvs("BTC")
+        assert not df.empty
+        assert len(df) == 1440  # 24 hours * 60 minutes
+        assert df["close"].iloc[0] == 50050.0
+
+    @pytest.mark.asyncio
+    async def test_source_dir_load_npz_success(self, tmp_path):
+        """Test successful load from .npz source dir."""
+        from utils import date_to_ts
+
+        # Setup source dir structure
+        source_dir = tmp_path / "ohlcv_source"
+        exchange_dir = source_dir / "binance" / "1m" / "ETH"
+        exchange_dir.mkdir(parents=True)
+
+        # Create synthetic daily .npz file with structured array
+        day = "2024-01-15"
+        day_ts = int(date_to_ts(day))
+        timestamps = np.arange(day_ts, day_ts + 24 * 60 * 60 * 1000, 60_000, dtype=np.int64)
+
+        candles = np.zeros(len(timestamps), dtype=[
+            ('ts', 'i8'), ('o', 'f8'), ('h', 'f8'), ('l', 'f8'), ('c', 'f8'), ('bv', 'f8')
+        ])
+        candles['ts'] = timestamps
+        candles['o'] = 3000.0
+        candles['h'] = 3010.0
+        candles['l'] = 2990.0
+        candles['c'] = 3005.0
+        candles['bv'] = 50.0
+
+        np.savez_compressed(exchange_dir / f"{day}.npz", candles=candles)
+
+        # Create HLCVManager with source dir (end_date must be next day to include full day)
+        om = HLCVManager(
+            "binanceusdm",
+            start_date=day,
+            end_date="2024-01-16",
+            ohlcv_source_dir=str(source_dir),
+        )
+
+        # Mock markets
+        om.markets = {
+            "ETH/USDT:USDT": {
+                "symbol": "ETH/USDT:USDT",
+                "base": "ETH",
+                "quote": "USDT",
+                "maker": 0.0002,
+                "taker": 0.0004,
+                "contractSize": 1.0,
+                "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.01}},
+                "precision": {"price": 0.01, "amount": 0.01},
+            }
+        }
+
+        # Test load
+        df = await om.get_ohlcvs("ETH")
+        assert not df.empty
+        assert len(df) == 1440
+        assert df["close"].iloc[0] == 3005.0
+        assert df["volume"].iloc[0] == 50.0
+
+    @pytest.mark.asyncio
+    async def test_source_dir_fallback_missing_file(self, tmp_path, mock_exchange):
+        """Test fallback to CandlestickManager when source dir file is missing."""
+        from utils import date_to_ts
+
+        # Setup empty source dir
+        source_dir = tmp_path / "ohlcv_source"
+        source_dir.mkdir(parents=True)
+
+        day = "2024-01-15"
+        day_ts = int(date_to_ts(day))
+
+        # Create HLCVManager with source dir (end_date must be next day to include full day)
+        om = HLCVManager(
+            "binanceusdm",
+            start_date=day,
+            end_date="2024-01-16",
+            cc=mock_exchange,
+            ohlcv_source_dir=str(source_dir),
+        )
+
+        # Mock markets
+        om.markets = {
+            "BTC/USDT:USDT": {
+                "symbol": "BTC/USDT:USDT",
+                "base": "BTC",
+                "quote": "USDT",
+                "maker": 0.0002,
+                "taker": 0.0004,
+                "contractSize": 1.0,
+                "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.001}},
+                "precision": {"price": 0.01, "amount": 0.001},
+            }
+        }
+
+        # Mock CandlestickManager to return synthetic data
+        with patch.object(CandlestickManager, 'get_candles') as mock_get_candles:
+            timestamps = np.arange(day_ts, day_ts + 24 * 60 * 60 * 1000, 60_000, dtype=np.int64)
+            mock_candles = np.zeros(len(timestamps), dtype=CANDLE_DTYPE)
+            mock_candles['ts'] = timestamps
+            mock_candles['o'] = 50000.0
+            mock_candles['h'] = 50100.0
+            mock_candles['l'] = 49900.0
+            mock_candles['c'] = 50050.0
+            mock_candles['bv'] = 100.0
+            mock_get_candles.return_value = mock_candles
+
+            df = await om.get_ohlcvs("BTC")
+
+            # Verify fallback was triggered
+            mock_get_candles.assert_called_once()
+            assert not df.empty
+            assert len(df) == 1441  # end_ts is inclusive (00:00:00 on day 15 to 00:00:00 on day 16)
+
+    @pytest.mark.asyncio
+    async def test_source_dir_fallback_excessive_gaps(self, tmp_path, mock_exchange):
+        """Test fallback when gaps exceed tolerance."""
+        from ohlcv_utils import dump_ohlcv_data
+        from utils import date_to_ts
+
+        # Setup source dir with gappy data
+        source_dir = tmp_path / "ohlcv_source"
+        exchange_dir = source_dir / "binance" / "1m" / "BTC"
+        exchange_dir.mkdir(parents=True)
+
+        day = "2024-01-15"
+        day_ts = int(date_to_ts(day))
+
+        # Create data with 3-hour gap (exceeds default 2-hour tolerance)
+        timestamps_part1 = np.arange(day_ts, day_ts + 6 * 60 * 60 * 1000, 60_000)
+        timestamps_part2 = np.arange(day_ts + 9 * 60 * 60 * 1000, day_ts + 24 * 60 * 60 * 1000, 60_000)
+        timestamps = np.concatenate([timestamps_part1, timestamps_part2])
+
+        data = np.column_stack([
+            timestamps,
+            np.full(len(timestamps), 50000.0),
+            np.full(len(timestamps), 50100.0),
+            np.full(len(timestamps), 49900.0),
+            np.full(len(timestamps), 50050.0),
+            np.full(len(timestamps), 100.0),
+        ])
+        dump_ohlcv_data(data, str(exchange_dir / f"{day}.npy"))
+
+        # Create HLCVManager with source dir and default gap tolerance (120 minutes)
+        om = HLCVManager(
+            "binanceusdm",
+            start_date=day,
+            end_date="2024-01-16",
+            cc=mock_exchange,
+            ohlcv_source_dir=str(source_dir),
+            gap_tolerance_ohlcvs_minutes=120.0,
+        )
+
+        om.markets = {
+            "BTC/USDT:USDT": {
+                "symbol": "BTC/USDT:USDT",
+                "base": "BTC",
+                "quote": "USDT",
+                "maker": 0.0002,
+                "taker": 0.0004,
+                "contractSize": 1.0,
+                "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.001}},
+                "precision": {"price": 0.01, "amount": 0.001},
+            }
+        }
+
+        # Mock CandlestickManager fallback
+        with patch.object(CandlestickManager, 'get_candles') as mock_get_candles:
+            full_timestamps = np.arange(day_ts, day_ts + 24 * 60 * 60 * 1000, 60_000, dtype=np.int64)
+            mock_candles = np.zeros(len(full_timestamps), dtype=CANDLE_DTYPE)
+            mock_candles['ts'] = full_timestamps
+            mock_candles['o'] = 50000.0
+            mock_candles['h'] = 50100.0
+            mock_candles['l'] = 49900.0
+            mock_candles['c'] = 50050.0
+            mock_candles['bv'] = 100.0
+            mock_get_candles.return_value = mock_candles
+
+            df = await om.get_ohlcvs("BTC")
+
+            # Verify fallback was triggered due to gaps
+            mock_get_candles.assert_called_once()
+            assert not df.empty
+            assert len(df) == 1441  # end_ts is inclusive (00:00:00 on day 15 to 00:00:00 on day 16)
+
+    @pytest.mark.asyncio
+    async def test_source_dir_corrupt_npz_fallback(self, tmp_path, mock_exchange):
+        """Test fallback when .npz file is corrupt/malformed."""
+        from utils import date_to_ts
+
+        # Setup source dir with malformed .npz
+        source_dir = tmp_path / "ohlcv_source"
+        exchange_dir = source_dir / "binance" / "1m" / "BTC"
+        exchange_dir.mkdir(parents=True)
+
+        day = "2024-01-15"
+        day_ts = int(date_to_ts(day))
+
+        # Create invalid .npz (missing 'candles' key)
+        invalid_data = np.array([1, 2, 3])
+        np.savez(exchange_dir / f"{day}.npz", wrong_key=invalid_data)
+
+        om = HLCVManager(
+            "binanceusdm",
+            start_date=day,
+            end_date="2024-01-16",
+            cc=mock_exchange,
+            ohlcv_source_dir=str(source_dir),
+        )
+
+        om.markets = {
+            "BTC/USDT:USDT": {
+                "symbol": "BTC/USDT:USDT",
+                "base": "BTC",
+                "quote": "USDT",
+                "maker": 0.0002,
+                "taker": 0.0004,
+                "contractSize": 1.0,
+                "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.001}},
+                "precision": {"price": 0.01, "amount": 0.001},
+            }
+        }
+
+        # Mock CandlestickManager fallback
+        with patch.object(CandlestickManager, 'get_candles') as mock_get_candles:
+            timestamps = np.arange(day_ts, day_ts + 24 * 60 * 60 * 1000, 60_000, dtype=np.int64)
+            mock_candles = np.zeros(len(timestamps), dtype=CANDLE_DTYPE)
+            mock_candles['ts'] = timestamps
+            mock_candles['c'] = 50000.0
+            mock_get_candles.return_value = mock_candles
+
+            df = await om.get_ohlcvs("BTC")
+
+            # Verify fallback was triggered
+            mock_get_candles.assert_called_once()
+            assert not df.empty
+
+
+# ============================================================================
 # Test Class: Combined Multi-Exchange
 # ============================================================================
 
@@ -716,11 +1011,18 @@ Test Coverage Summary:
    - Fetch from exchange
    - Cache loading
 
+✅ OHLCV Source Dir (5 tests):
+   - Load from .npy files
+   - Load from .npz files
+   - Fallback on missing files
+   - Fallback on excessive gaps
+   - Fallback on corrupt/malformed .npz
+
 ✅ Integration (2 tests):
    - prepare_hlcvs structure
    - prepare_hlcvs_combined structure
 
-Total: 17 tests covering critical functionality
+Total: 22 tests covering critical functionality
 
 Note: Full integration tests for prepare_hlcvs and prepare_hlcvs_combined
 would require extensive mocking of CandlestickManager, async operations,
