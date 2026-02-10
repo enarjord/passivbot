@@ -524,7 +524,7 @@ class HLCVManager:
                     coin,
                 )
                 return df
-            logging.info(
+            logging.debug(
                 "[%s] get_ohlcvs: source dir had no data for %s; falling back to candlestick manager",
                 self.exchange,
                 coin,
