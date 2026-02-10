@@ -604,9 +604,8 @@ class HyperliquidBot(CCXTBot):
             return await super().execute_order(order)
         except Exception as e:
             if self._builder_pending_approval and self._is_builder_fee_error(e):
-                logging.warning(
-                    "[builder] order failed due to missing builder approval; temporarily disabling builder attribution"
-                )
+                logging.error("[builder] order failed due to missing builder approval: %s", e)
+                logging.warning("[builder] temporarily disabling builder attribution")
                 self._print_builder_nag_banner()
                 self._set_builder_approved(False)
                 self._builder_disabled_ts = utc_ms()
