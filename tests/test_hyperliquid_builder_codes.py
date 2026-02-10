@@ -65,6 +65,8 @@ def _make_bot(HLBot, broker_code=None):
     bot._builder_initialized = False
     bot._builder_pending_approval = False
     bot._builder_disabled_ts = None
+    bot._builder_thank_you_printed = False
+    bot._builder_settings = {}
     bot.cca = None
     bot.ccp = None
     return bot
@@ -197,7 +199,12 @@ def test_apply_builder_code_options_disabled(stubbed_modules):
     })
     bot.cca = DummyClient()
     bot._apply_builder_code_options()
-    assert "builder" not in bot.cca.options  # nothing applied
+    # Builder address is still set in options, but builderFee/approvedBuilderFee are False
+    assert bot.cca.options["builder"] == "0x123"
+    assert bot.cca.options["builderFee"] is False
+    assert bot.cca.options["approvedBuilderFee"] is False
+    # _has_builder_config should return False when disabled
+    assert bot._has_builder_config() is False
 
 
 def test_apply_builder_code_options_disabled_string(stubbed_modules):
@@ -208,7 +215,8 @@ def test_apply_builder_code_options_disabled_string(stubbed_modules):
     })
     bot.cca = DummyClient()
     bot._apply_builder_code_options()
-    assert "builder" not in bot.cca.options
+    assert bot.cca.options["builderFee"] is False
+    assert bot._has_builder_config() is False
 
 
 # ─── Async path tests ───
@@ -224,11 +232,13 @@ async def test_path_a_already_approved(stubbed_modules):
         "fee_int": 20,
     })
     bot.cca = DummyClient(fetch_response="0.02%")
+    bot._apply_builder_code_options()
     await bot._init_builder_codes()
 
     assert bot.cca.options.get("approvedBuilderFee") is True
     assert bot.cca._approve_called is False
     assert bot._builder_pending_approval is False
+    assert bot._builder_thank_you_printed is True
 
 
 @pytest.mark.asyncio
@@ -241,11 +251,13 @@ async def test_path_b_main_wallet_auto_approve(stubbed_modules):
         "fee_int": 20,
     })
     bot.cca = DummyClient(fetch_response="0")
+    bot._apply_builder_code_options()
     await bot._init_builder_codes()
 
     assert bot.cca.options.get("approvedBuilderFee") is True
     assert bot.cca._approve_called is True
     assert bot._builder_pending_approval is False
+    assert bot._builder_thank_you_printed is True
 
 
 @pytest.mark.asyncio
@@ -261,6 +273,7 @@ async def test_path_c_agent_wallet_pending(stubbed_modules):
         fetch_response="0",
         approve_raises=Exception("only main wallet can approve"),
     )
+    bot._apply_builder_code_options()
     await bot._init_builder_codes()
 
     assert bot.cca.options.get("approvedBuilderFee") is True  # force-enabled
@@ -274,6 +287,7 @@ async def test_check_builder_fee_approved_caching(stubbed_modules):
     HLBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_bot(HLBot, broker_code={"builder": "0x123", "fee_int": 20})
     bot.cca = DummyClient(fetch_response="0")
+    bot._apply_builder_code_options()
 
     # First check queries the endpoint
     result1 = await bot._check_builder_fee_approved()
@@ -291,12 +305,30 @@ async def test_no_builder_config_skips_init(stubbed_modules):
     HLBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_bot(HLBot, broker_code="PASSIVBOT")  # string, no builder key
     bot.cca = DummyClient()
+    bot._apply_builder_code_options()
     await bot._init_builder_codes()
     assert bot.cca._approve_called is False
     assert bot._builder_pending_approval is False
 
 
 # ─── camelCase alias tests ───
+
+
+def test_normalize_builder_settings_snake_case_aliases(stubbed_modules):
+    """_normalize_builder_settings supports snake_case key aliases."""
+    HLBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_bot(HLBot, broker_code={
+        "ref": "PASSIVBOT",
+        "builder": "0x123",
+        "fee_rate": "0.03%",
+        "fee_int": 30,
+        "builder_fee": "true",
+    })
+    settings = bot._normalize_builder_settings()
+    assert settings["feeRate"] == "0.03%"
+    assert settings["feeInt"] == 30
+    assert settings["builderFee"] is True
+    assert settings["ref"] == "PASSIVBOT"
 
 
 def test_apply_builder_code_options_camel_case_keys(stubbed_modules):
@@ -314,6 +346,25 @@ def test_apply_builder_code_options_camel_case_keys(stubbed_modules):
     assert bot.cca.options["feeInt"] == 30
 
 
+@pytest.mark.asyncio
+async def test_thank_you_banner_prints_only_once(stubbed_modules):
+    """_print_builder_thank_you_banner is idempotent (dedup flag)."""
+    HLBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_bot(HLBot, broker_code={
+        "builder": "0x123",
+        "fee_rate": "0.02%",
+        "fee_int": 20,
+    })
+    bot.cca = DummyClient(fetch_response="0.02%")
+    bot._apply_builder_code_options()
+    await bot._init_builder_codes()
+    assert bot._builder_thank_you_printed is True
+
+    # Calling again should not reset the flag
+    bot._print_builder_thank_you_banner()
+    assert bot._builder_thank_you_printed is True
+
+
 def test_has_builder_config_respects_disabled_toggle(stubbed_modules):
     """_has_builder_config returns False when builder_fee is explicitly disabled."""
     HLBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
@@ -321,18 +372,21 @@ def test_has_builder_config_respects_disabled_toggle(stubbed_modules):
         "builder": "0x123",
         "builder_fee": False,
     })
+    bot._normalize_builder_settings()
     assert bot._has_builder_config() is False
 
     bot2 = _make_bot(HLBot, broker_code={
         "builder": "0x123",
         "builderFee": "false",
     })
+    bot2._normalize_builder_settings()
     assert bot2._has_builder_config() is False
 
     bot3 = _make_bot(HLBot, broker_code={
         "builder": "0x123",
         "builder_fee": True,
     })
+    bot3._normalize_builder_settings()
     assert bot3._has_builder_config() is True
 
 
@@ -345,6 +399,7 @@ async def test_maybe_reenable_still_not_approved(stubbed_modules):
     HLBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_bot(HLBot, broker_code={"builder": "0x123", "fee_int": 20})
     bot.cca = DummyClient(fetch_response="0")
+    bot._apply_builder_code_options()
     bot._builder_pending_approval = True
     bot._builder_disabled_ts = 0  # long ago
     bot.BUILDER_NAG_INTERVAL_MS = 0  # force immediate re-check
@@ -361,6 +416,7 @@ async def test_maybe_reenable_now_approved(stubbed_modules):
     HLBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_bot(HLBot, broker_code={"builder": "0x123", "fee_int": 20})
     bot.cca = DummyClient(fetch_response="0.02%")
+    bot._apply_builder_code_options()
     bot._builder_pending_approval = True
     bot._builder_disabled_ts = 0
     bot.BUILDER_NAG_INTERVAL_MS = 0

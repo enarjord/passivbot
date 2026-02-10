@@ -46,6 +46,8 @@ class HyperliquidBot(CCXTBot):
         self._builder_initialized = False
         self._builder_pending_approval = False
         self._builder_disabled_ts = None
+        self._builder_thank_you_printed = False
+        self._builder_settings = {}
 
     def create_ccxt_sessions(self):
         creds = {
@@ -76,58 +78,73 @@ class HyperliquidBot(CCXTBot):
 
     # ═══════════════════ BUILDER CODE SUPPORT ═══════════════════
 
+    def _normalize_builder_settings(self) -> dict:
+        """Parse broker_code into normalized builder settings dict.
+
+        Supports both snake_case (fee_rate, fee_int, builder_fee) and
+        camelCase (feeRate, feeInt, builderFee) key names. Caches result
+        in self._builder_settings for consistent access by other methods.
+        """
+        settings = {}
+        if isinstance(self.broker_code, str):
+            if self.broker_code:
+                settings["ref"] = self.broker_code
+            self._builder_settings = settings
+            return settings
+        if not isinstance(self.broker_code, dict):
+            self._builder_settings = settings
+            return settings
+
+        ref = self.broker_code.get("ref")
+        if ref:
+            settings["ref"] = ref
+
+        builder = self.broker_code.get("builder")
+        if builder:
+            settings["builder"] = builder
+            settings["feeRate"] = self.broker_code.get(
+                "fee_rate", self.broker_code.get("feeRate", "0.02%")
+            )
+            try:
+                settings["feeInt"] = int(
+                    self.broker_code.get("fee_int", self.broker_code.get("feeInt", 20))
+                )
+            except (ValueError, TypeError):
+                logging.warning("[builder] invalid fee_int in broker_codes.hjson; using 20")
+                settings["feeInt"] = 20
+            builder_fee = self.broker_code.get(
+                "builder_fee", self.broker_code.get("builderFee", True)
+            )
+            if isinstance(builder_fee, str):
+                builder_fee = builder_fee.lower() not in ("0", "false", "no")
+            settings["builderFee"] = bool(builder_fee)
+        self._builder_settings = settings
+        return settings
+
     def _apply_builder_code_options(self):
         """Apply Hyperliquid builder code and referral options to CCXT sessions.
 
-        Normalizes broker_codes.hjson settings with validation, then sets CCXT
-        options on both clients. Suppresses CCXT's auto-approval so we control
-        the flow ourselves in _init_builder_codes.
+        Normalizes broker_codes.hjson settings, then sets CCXT options on both
+        clients. Suppresses CCXT's auto-approval so we control the flow in
+        _init_builder_codes. Ref is always applied (even when builder is disabled).
         """
-        if not self.broker_code:
+        settings = self._normalize_builder_settings()
+        if not settings:
             return
-        hl_opts = {}
-        if isinstance(self.broker_code, dict):
-            if "ref" in self.broker_code:
-                hl_opts["ref"] = self.broker_code["ref"]
-            if "builder" in self.broker_code:
-                # Check explicit disable toggle first (supports both key styles)
-                builder_fee_flag = self.broker_code.get(
-                    "builder_fee", self.broker_code.get("builderFee", True)
-                )
-                if isinstance(builder_fee_flag, str):
-                    builder_fee_flag = builder_fee_flag.lower() not in ("0", "false", "no")
-                if not builder_fee_flag:
-                    return  # Builder codes explicitly disabled
-                hl_opts["builder"] = self.broker_code["builder"]
-                hl_opts["feeRate"] = self.broker_code.get(
-                    "fee_rate", self.broker_code.get("feeRate", "0.02%")
-                )
-                try:
-                    hl_opts["feeInt"] = int(
-                        self.broker_code.get("fee_int", self.broker_code.get("feeInt", 20))
-                    )
-                except (ValueError, TypeError):
-                    logging.warning(
-                        "[builder] invalid fee_int in broker_codes.hjson; using 20",
-                    )
-                    hl_opts["feeInt"] = 20
-        else:
-            hl_opts["ref"] = str(self.broker_code)
-        # Suppress CCXT's auto-approval; we handle it in _init_builder_codes
-        hl_opts["builderFee"] = False
-        hl_opts["approvedBuilderFee"] = False
+        applied = dict(settings)
+        if applied.get("builder"):
+            # Suppress CCXT's auto-approval; we handle it in _init_builder_codes
+            applied["builderFee"] = False
+            applied["approvedBuilderFee"] = False
         for client in [self.cca, getattr(self, "ccp", None)]:
             if client is not None:
-                client.options.update(hl_opts)
+                client.options.update(applied)
 
     def _has_builder_config(self) -> bool:
-        if not isinstance(self.broker_code, dict) or "builder" not in self.broker_code:
-            return False
-        # Respect the builder_fee toggle
-        flag = self.broker_code.get("builder_fee", self.broker_code.get("builderFee", True))
-        if isinstance(flag, str):
-            flag = flag.lower() not in ("0", "false", "no")
-        return bool(flag)
+        return bool(
+            self._builder_settings.get("builder")
+            and self._builder_settings.get("builderFee", True)
+        )
 
     @staticmethod
     def _is_positive_fee_value(value) -> bool:
@@ -168,23 +185,21 @@ class HyperliquidBot(CCXTBot):
 
         Uses a short cache interval to avoid hammering the endpoint.
         """
-        if not self._has_builder_config():
+        if not self._has_builder_config() or self.cca is None:
             return False
         now_ms = utc_ms()
         if now_ms - self._builder_approval_last_check_ms < self.BUILDER_STATUS_CHECK_INTERVAL_MS:
             return self.cca.options.get("approvedBuilderFee", False)
         self._builder_approval_last_check_ms = now_ms
         try:
-            builder_addr = self.broker_code["builder"]
-            wallet_addr = self.user_info["wallet_address"]
             res = await self.cca.fetch(
                 "https://api.hyperliquid.xyz/info",
                 method="POST",
                 headers={"Content-Type": "application/json"},
                 body=json.dumps({
                     "type": "maxBuilderFee",
-                    "user": wallet_addr,
-                    "builder": builder_addr,
+                    "user": self.user_info["wallet_address"],
+                    "builder": self._builder_settings["builder"],
                 }),
             )
             max_fee = self._extract_max_builder_fee(res)
@@ -195,8 +210,9 @@ class HyperliquidBot(CCXTBot):
 
     def _set_builder_approved(self, approved: bool):
         """Set approvedBuilderFee on all CCXT clients."""
-        self.cca.options["approvedBuilderFee"] = approved
-        if hasattr(self, "ccp") and self.ccp is not None:
+        if self.cca is not None:
+            self.cca.options["approvedBuilderFee"] = approved
+        if getattr(self, "ccp", None) is not None:
             self.ccp.options["approvedBuilderFee"] = approved
 
     async def _init_builder_codes(self):
@@ -206,57 +222,68 @@ class HyperliquidBot(CCXTBot):
         Path B: Not approved + main wallet → auto-approve, notice + thank-you
         Path C: Not approved + agent wallet → force-enable, will nag on order failure
         """
-        if not self._has_builder_config():
+        if not self._has_builder_config() or self.cca is None:
             return
-
-        builder_addr = self.broker_code["builder"]
-        fee_rate = self.broker_code.get("fee_rate", "0.02%")
 
         # Path A: check if already approved
         if await self._check_builder_fee_approved():
             self._set_builder_approved(True)
-            logging.info(
-                "[builder] Builder code active. Thank you for supporting Passivbot development!"
-            )
+            self._builder_pending_approval = False
+            self._print_builder_thank_you_banner()
             return
 
         # Not yet approved - try to approve (succeeds only with main wallet key)
+        builder = self._builder_settings["builder"]
+        fee_rate = self._builder_settings.get("feeRate", "0.02%")
         try:
-            await self.cca.approve_builder_fee(builder_addr, fee_rate)
+            await self.cca.approve_builder_fee(builder, fee_rate)
             # Path B: approval succeeded (main wallet)
             self._set_builder_approved(True)
-            self._print_boxed_banner([
-                "NOTICE: Passivbot builder code approved",
-                " ",
-                f"Builder: {builder_addr}",
-                f"Fee: {fee_rate} per trade, to support Passivbot development.",
-                " ",
-                "You can revoke this at any time via the Hyperliquid web interface.",
-                "To adjust the fee, edit broker_codes.hjson.",
-            ])
-            logging.info(
-                "[builder] Builder code active. Thank you for supporting Passivbot development!"
-            )
+            self._builder_pending_approval = False
+            self._print_builder_approved_notice_banner()
+            self._print_builder_thank_you_banner()
             return
         except Exception as e:
             logging.debug(f"[builder] auto-approval failed (expected for agent wallets): {e}")
 
         # Path C: agent wallet, not approved - force-enable to trigger order failure nag
-        self._set_builder_approved(True)
         self._builder_pending_approval = True
-        logging.info(
-            "[builder] Builder code not yet approved. Will prompt on first order."
-        )
+        self._set_builder_approved(True)
+        logging.info("[builder] Builder code not yet approved. Will prompt on first order.")
 
     def _is_builder_fee_error(self, error) -> bool:
         """Check if an error is a Hyperliquid builder-fee-not-approved error."""
         err_str = str(error).lower()
         return "builder fee" in err_str and "not been approved" in err_str
 
+    def _print_builder_thank_you_banner(self):
+        """Print a small thank-you banner (once per session)."""
+        if self._builder_thank_you_printed:
+            return
+        self._builder_thank_you_printed = True
+        self._print_boxed_banner([
+            "Builder code active.",
+            "Thank you for supporting Passivbot development!",
+        ])
+
+    def _print_builder_approved_notice_banner(self):
+        """Print detailed notice when builder code was just auto-approved."""
+        builder = self._builder_settings["builder"]
+        fee_rate = self._builder_settings.get("feeRate", "0.02%")
+        self._print_boxed_banner([
+            "NOTICE: Passivbot builder code approved",
+            " ",
+            f"Builder: {builder}",
+            f"Fee: {fee_rate} per trade, to support Passivbot development.",
+            " ",
+            "You can revoke this at any time via the Hyperliquid web interface.",
+            "To adjust the fee, edit broker_codes.hjson.",
+        ])
+
     def _print_builder_nag_banner(self):
         """Print the nag banner for Path C users who haven't approved builder codes."""
-        builder_addr = self.broker_code["builder"]
-        fee_rate = self.broker_code.get("fee_rate", "0.02%")
+        builder = self._builder_settings["builder"]
+        fee_rate = self._builder_settings.get("feeRate", "0.02%")
         self._print_boxed_banner([
             "Passivbot builder code is NOT approved on your Hyperliquid account.",
             " ",
@@ -295,9 +322,7 @@ class HyperliquidBot(CCXTBot):
             self._set_builder_approved(True)
             self._builder_pending_approval = False
             self._builder_disabled_ts = None
-            logging.info(
-                "[builder] Builder code active. Thank you for supporting Passivbot development!"
-            )
+            self._print_builder_thank_you_banner()
             return
 
         # Not yet approved - re-enable to try again on next order
