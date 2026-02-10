@@ -7,8 +7,8 @@
 	hyperliquid: {
 		ref: "PASSIVBOT"
 		builder: "0x5e20A6D7e11366390Fde63EA3d0A026903359a74"
-		feeRate: "0.01%"
-		feeInt: 10
+		feeRate: "0.02%"
+		feeInt: 20
 		builderFee: true
 	}
 	okx: "0fe0667832d7BCDE"

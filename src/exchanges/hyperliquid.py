@@ -46,7 +46,7 @@ class HyperliquidBot(CCXTBot):
         self._builder_pending_approval = False
         self._builder_disabled_ts = None
         self._builder_thank_you_printed = False
-        self._builder_settings = {}
+        self._builder_settings = getattr(self, "_builder_settings", {})
 
     def create_ccxt_sessions(self):
         creds = {
@@ -103,15 +103,15 @@ class HyperliquidBot(CCXTBot):
                 )
                 try:
                     settings["feeInt"] = int(
-                        self.broker_code.get("feeInt", self.broker_code.get("fee_int", 10))
+                        self.broker_code.get("feeInt", self.broker_code.get("fee_int", 20))
                     )
                 except Exception:
                     logging.warning(
-                        "[builder] invalid feeInt/fee_int=%r/%r in broker_codes.hjson for hyperliquid; using 10",
+                        "[builder] invalid feeInt/fee_int=%r/%r in broker_codes.hjson for hyperliquid; using 20",
                         self.broker_code.get("feeInt"),
                         self.broker_code.get("fee_int"),
                     )
-                    settings["feeInt"] = 10
+                    settings["feeInt"] = 20
         self._builder_settings = settings
         return settings
 

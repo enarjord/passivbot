@@ -92,8 +92,8 @@ def test_apply_builder_code_options_dict(stubbed_modules):
         broker_code={
             "ref": "PASSIVBOT",
             "builder": "0x123",
-            "feeRate": "0.01%",
-            "feeInt": 10,
+            "feeRate": "0.02%",
+            "feeInt": 20,
             "builderFee": True,
         },
     )
@@ -103,8 +103,8 @@ def test_apply_builder_code_options_dict(stubbed_modules):
 
     assert bot.cca.options["ref"] == "PASSIVBOT"
     assert bot.cca.options["builder"] == "0x123"
-    assert bot.cca.options["feeRate"] == "0.01%"
-    assert bot.cca.options["feeInt"] == 10
+    assert bot.cca.options["feeRate"] == "0.02%"
+    assert bot.cca.options["feeInt"] == 20
     assert bot.cca.options["builderFee"] is False
     assert bot.cca.options["approvedBuilderFee"] is False
     assert bot.ccp.options["builder"] == "0x123"
@@ -133,7 +133,20 @@ def test_apply_builder_code_options_invalid_fee_int(stubbed_modules):
     )
     bot.cca = DummyCCA()
     bot._apply_builder_code_options()
-    assert bot.cca.options["feeInt"] == 10
+    assert bot.cca.options["feeInt"] == 20
+
+
+def test_apply_builder_code_options_default_fee_int(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_bot(
+        HyperliquidBot,
+        broker_code={
+            "builder": "0x123",
+        },
+    )
+    bot.cca = DummyCCA()
+    bot._apply_builder_code_options()
+    assert bot.cca.options["feeInt"] == 20
 
 
 def test_apply_builder_code_options_disabled_builder_fee(stubbed_modules):
@@ -221,8 +234,8 @@ async def test_path_a_already_approved(stubbed_modules):
         broker_code={
             "ref": "PASSIVBOT",
             "builder": "0x123",
-            "feeRate": "0.01%",
-            "feeInt": 10,
+            "feeRate": "0.02%",
+            "feeInt": 20,
             "builderFee": True,
         },
     )
@@ -244,8 +257,8 @@ async def test_path_b_main_wallet_auto_approve(stubbed_modules):
         broker_code={
             "ref": "PASSIVBOT",
             "builder": "0x123",
-            "feeRate": "0.01%",
-            "feeInt": 10,
+            "feeRate": "0.02%",
+            "feeInt": 20,
             "builderFee": True,
         },
     )
@@ -267,8 +280,8 @@ async def test_path_c_agent_wallet_pending(stubbed_modules):
         broker_code={
             "ref": "PASSIVBOT",
             "builder": "0x123",
-            "feeRate": "0.01%",
-            "feeInt": 10,
+            "feeRate": "0.02%",
+            "feeInt": 20,
             "builderFee": True,
         },
     )
@@ -289,8 +302,8 @@ async def test_maybe_reenable_builder_codes_not_approved(stubbed_modules):
         broker_code={
             "ref": "PASSIVBOT",
             "builder": "0x123",
-            "feeRate": "0.01%",
-            "feeInt": 10,
+            "feeRate": "0.02%",
+            "feeInt": 20,
             "builderFee": True,
         },
     )
@@ -314,8 +327,8 @@ async def test_maybe_reenable_builder_codes_approved(stubbed_modules):
         broker_code={
             "ref": "PASSIVBOT",
             "builder": "0x123",
-            "feeRate": "0.01%",
-            "feeInt": 10,
+            "feeRate": "0.02%",
+            "feeInt": 20,
             "builderFee": True,
         },
     )
@@ -359,3 +372,16 @@ async def test_no_builder_config_skips_init(stubbed_modules):
     await bot._init_builder_codes()
     assert bot.cca.approve_called is False
     assert bot._builder_pending_approval is False
+
+
+def test_init_preserves_builder_settings_from_super(stubbed_modules, monkeypatch):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    def fake_ccxtbot_init(self, config):
+        self.user = "u"
+        self.user_info = {"is_vault": False}
+        self._builder_settings = {"builder": "0x123", "builderFee": True}
+
+    monkeypatch.setattr(HyperliquidBot.__mro__[1], "__init__", fake_ccxtbot_init)
+    bot = HyperliquidBot({})
+    assert bot._builder_settings == {"builder": "0x123", "builderFee": True}
