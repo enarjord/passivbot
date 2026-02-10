@@ -9,8 +9,8 @@ Passivbot ships with a backtester that replays historical 1 minute candles. When
 You can point `backtest.ohlcv_source_dir` to a pre-populated OHLCV tree. The loader looks under:
 
 ```
-<ohlcv_source_dir>/<exchange>/1m/<coin_or_symbol>/YYYYMMDD.npz
-<ohlcv_source_dir>/<exchange>/1m/<coin_or_symbol>/YYYYMMDD.npy
+<ohlcv_source_dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz
+<ohlcv_source_dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npy
 ```
 
 `<coin_or_symbol>` accepts base coins (e.g., `ETH`) or CCXT-style symbol dirs (e.g., `ETH_USDC:USDC`).
