@@ -6,7 +6,7 @@
 	bitget: "Passivbot"
 	hyperliquid: {
 		ref: "PASSIVBOT"
-		builder: "0x490af7d4a048a81db0f677517ed6373565b42349"
+		builder: "0x5e20A6D7e11366390Fde63EA3d0A026903359a74"
 		feeRate: "0.01%"
 		feeInt: 10
 		builderFee: true

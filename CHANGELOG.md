@@ -5,10 +5,10 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 ### Added
-- **Hyperliquid builder-code defaults** - Added `broker_codes.hjson` Hyperliquid builder/ref defaults (`ref`, `builder`, `feeRate`, `feeInt`) so CCXT builder attribution is enabled by default.
+- **Hyperliquid builder-code defaults** - Added `broker_codes.hjson` Hyperliquid builder/ref defaults (`ref`, `builder`, `feeRate`, `feeInt`) so passivbot builder attribution is enabled by default.
 
 ### Changed
-- **Hyperliquid live reminders** - Live bot now prints a recurring banner when builder-fee approval is missing, while continuing to trade normally (non-blocking).
+- **Hyperliquid builder approval flow** - Startup now follows three paths: already-approved → thank-you banner, main-wallet key → auto-approve + notice, agent-wallet key without approval → one visible builder error then temporary fallback to non-builder orders, with periodic retry reminders.
 
 ## v7.8.2 - 2026-02-09
 

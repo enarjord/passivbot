@@ -26,7 +26,7 @@ class HyperliquidBot(CCXTBot):
     HIP3_MAX_LEVERAGE = 10
     # HIP-3 symbols use "xyz:" prefix (TradeXYZ builder)
     HIP3_PREFIX = "xyz:"
-    BUILDER_SUGGESTION_INTERVAL_MS = 60 * 60 * 1000
+    BUILDER_NAG_INTERVAL_MS = 30 * 60 * 1000
     BUILDER_STATUS_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
     def __init__(self, config: dict):
@@ -41,9 +41,11 @@ class HyperliquidBot(CCXTBot):
             self.user_info["is_vault"] = False
         self.max_n_concurrent_ohlcvs_1m_updates = 2
         self.custom_id_max_length = 34
-        self._builder_suggestion_last_print_ms = 0
         self._builder_approval_last_check_ms = 0
-        self._builder_approval_is_active = False
+        self._builder_initialized = False
+        self._builder_pending_approval = False
+        self._builder_disabled_ts = None
+        self._builder_thank_you_printed = False
         self._builder_settings = {}
 
     def create_ccxt_sessions(self):
@@ -63,7 +65,6 @@ class HyperliquidBot(CCXTBot):
             self.ccp.options.update(self._build_ccxt_options())
             self.ccp.options["defaultType"] = "swap"
             self.ccp.options["fetchMarkets"] = fetch_markets_config
-            self._apply_builder_code_options(self.ccp)
             self._apply_endpoint_override(self.ccp)
         elif self.endpoint_override:
             logging.info("Skipping Hyperliquid websocket session due to custom endpoint override.")
@@ -71,8 +72,8 @@ class HyperliquidBot(CCXTBot):
         self.cca.options.update(self._build_ccxt_options())
         self.cca.options["defaultType"] = "swap"
         self.cca.options["fetchMarkets"] = fetch_markets_config
-        self._apply_builder_code_options(self.cca)
         self._apply_endpoint_override(self.cca)
+        self._apply_builder_code_options()
 
     def _normalize_builder_settings(self) -> dict:
         settings = {}
@@ -92,31 +93,38 @@ class HyperliquidBot(CCXTBot):
         builder = self.broker_code.get("builder")
         if builder:
             settings["builder"] = builder
-            settings["feeRate"] = self.broker_code.get("feeRate", "0.01%")
+            settings["feeRate"] = self.broker_code.get(
+                "feeRate", self.broker_code.get("fee_rate", "0.01%")
+            )
             try:
-                settings["feeInt"] = int(self.broker_code.get("feeInt", 10))
+                settings["feeInt"] = int(self.broker_code.get("feeInt", self.broker_code.get("fee_int", 10)))
             except Exception:
                 logging.warning(
-                    "[builder] invalid feeInt=%r in broker_codes.hjson for hyperliquid; using 10",
+                    "[builder] invalid feeInt/fee_int=%r/%r in broker_codes.hjson for hyperliquid; using 10",
                     self.broker_code.get("feeInt"),
+                    self.broker_code.get("fee_int"),
                 )
                 settings["feeInt"] = 10
-            builder_fee = self.broker_code.get("builderFee", True)
+            builder_fee = self.broker_code.get("builderFee", self.broker_code.get("builder_fee", True))
             if isinstance(builder_fee, str):
                 builder_fee = builder_fee.lower() not in ["0", "false", "no"]
             settings["builderFee"] = bool(builder_fee)
         self._builder_settings = settings
         return settings
 
-    def _apply_builder_code_options(self, client):
-        if client is None:
-            return
+    def _apply_builder_code_options(self):
         settings = self._normalize_builder_settings()
         if not settings:
             return
-        client.options.update(settings)
+        applied = dict(settings)
+        if applied.get("builder"):
+            applied["builderFee"] = False
+            applied["approvedBuilderFee"] = False
+        for client in [self.cca, getattr(self, "ccp", None)]:
+            if client is not None:
+                client.options.update(applied)
 
-    def _builder_feature_enabled(self) -> bool:
+    def _has_builder_config(self) -> bool:
         return bool(
             self._builder_settings.get("builder")
             and self._builder_settings.get("builderFee", True)
@@ -129,45 +137,44 @@ class HyperliquidBot(CCXTBot):
         if isinstance(value, (int, float)):
             return float(value) > 0.0
         if isinstance(value, str):
-            text = value.strip()
-            if text.endswith("%"):
-                text = text[:-1]
+            text = value.strip().rstrip("%")
             try:
                 return float(text) > 0.0
             except ValueError:
                 return False
         return False
 
-    def _extract_max_builder_fee(self, payload):
+    @staticmethod
+    def _extract_max_builder_fee(payload):
         if isinstance(payload, dict):
             for key in ["maxBuilderFee", "maxFeeRate"]:
                 if key in payload:
-                    return self._extract_max_builder_fee(payload[key])
+                    return HyperliquidBot._extract_max_builder_fee(payload[key])
             for key in ["data", "response", "result"]:
                 if key in payload:
-                    return self._extract_max_builder_fee(payload[key])
+                    return HyperliquidBot._extract_max_builder_fee(payload[key])
             return None
         if isinstance(payload, list):
             for item in payload:
-                extracted = self._extract_max_builder_fee(item)
+                extracted = HyperliquidBot._extract_max_builder_fee(item)
                 if extracted is not None:
                     return extracted
             return None
         return payload
 
-    async def _is_builder_approval_active(self) -> bool:
-        if not self._builder_feature_enabled():
-            return False
-        if self.cca is None:
-            return False
+    def _set_builder_approved(self, approved: bool):
+        if self.cca is not None:
+            self.cca.options["approvedBuilderFee"] = approved
+        if getattr(self, "ccp", None) is not None:
+            self.ccp.options["approvedBuilderFee"] = approved
 
-        if self.cca and self.cca.options.get("approvedBuilderFee"):
-            self._builder_approval_is_active = True
-            return True
+    async def _check_builder_fee_approved(self) -> bool:
+        if not self._has_builder_config() or self.cca is None:
+            return False
 
         now_ms = utc_ms()
         if now_ms - self._builder_approval_last_check_ms < self.BUILDER_STATUS_CHECK_INTERVAL_MS:
-            return self._builder_approval_is_active
+            return self.cca.options.get("approvedBuilderFee", False)
         self._builder_approval_last_check_ms = now_ms
 
         try:
@@ -184,49 +191,115 @@ class HyperliquidBot(CCXTBot):
                 ),
             )
             max_builder_fee = self._extract_max_builder_fee(response)
-            self._builder_approval_is_active = self._is_positive_builder_fee_value(max_builder_fee)
-            if self._builder_approval_is_active:
-                self.cca.options["approvedBuilderFee"] = True
-                if self.ccp:
-                    self.ccp.options["approvedBuilderFee"] = True
+            return self._is_positive_builder_fee_value(max_builder_fee)
         except Exception as e:
             logging.debug("[builder] failed to fetch maxBuilderFee approval status: %s", e)
-        return self._builder_approval_is_active
+            return False
 
-    async def print_builder_code_suggestion(self):
-        if not self._builder_feature_enabled():
-            return
-        if await self._is_builder_approval_active():
-            return
+    def _is_builder_fee_error(self, error) -> bool:
+        err_str = str(error).lower()
+        return "builder fee" in err_str and "not been approved" in err_str
 
-        now_ms = utc_ms()
-        if now_ms - self._builder_suggestion_last_print_ms < self.BUILDER_SUGGESTION_INTERVAL_MS:
-            return
-        self._builder_suggestion_last_print_ms = now_ms
-
-        builder = self._builder_settings["builder"]
-        fee_rate = self._builder_settings.get("feeRate", "0.01%")
-        lines = [
-            "Passivbot Hyperliquid builder code is enabled by default.",
-            " ",
-            "To support continued Passivbot development, please approve builder fees once",
-            "from your main Hyperliquid wallet (not your API/agent wallet).",
-            " ",
-            f"Builder: {builder}",
-            f"Max fee to approve: {fee_rate}",
-            " ",
-            "Trading continues normally even if not approved.",
-            "Without approval, builder attribution remains inactive.",
-        ]
-        front_pad = " " * 6 + "##"
+    def _print_boxed_banner(self, lines):
+        front_pad = " " * 4 + "##"
         back_pad = "##"
-        max_len = max([len(line) for line in lines])
+        max_len = max(len(line) for line in lines)
         print("\n\n")
         print(front_pad + "#" * (max_len + 2) + back_pad)
         for line in lines:
             print(front_pad + " " + line + " " * (max_len - len(line) + 1) + back_pad)
         print(front_pad + "#" * (max_len + 2) + back_pad)
         print("\n\n")
+
+    def _print_builder_thank_you_banner(self):
+        if self._builder_thank_you_printed:
+            return
+        self._builder_thank_you_printed = True
+        self._print_boxed_banner(
+            [
+                "Builder code active.",
+                "Thank you for supporting Passivbot development!",
+            ]
+        )
+
+    def _print_builder_approved_notice_banner(self):
+        builder = self._builder_settings["builder"]
+        fee_rate = self._builder_settings.get("feeRate", "0.01%")
+        self._print_boxed_banner(
+            [
+                "NOTICE: Passivbot builder code approved",
+                " ",
+                f"Builder: {builder}",
+                f"Fee: {fee_rate} per trade, to support Passivbot development.",
+                " ",
+                "You can revoke this at any time via the Hyperliquid web interface.",
+                "To adjust the fee, edit broker_codes.hjson.",
+            ]
+        )
+
+    def _print_builder_nag_banner(self):
+        builder = self._builder_settings["builder"]
+        fee_rate = self._builder_settings.get("feeRate", "0.01%")
+        self._print_boxed_banner(
+            [
+                "Passivbot builder code is NOT approved on your Hyperliquid account.",
+                " ",
+                f"Builder codes help fund Passivbot development at a small fee ({fee_rate} per trade).",
+                " ",
+                f"Builder: {builder}",
+                " ",
+                "To approve (one-time), choose one of:",
+                " ",
+                "  1. Switch to main wallet key in api-keys.json (bot auto-approves on restart)",
+                "  2. Approve via the Hyperliquid web interface (Settings > Approvals)",
+                "  3. Use the planned CLI helper in src/tools/",
+                " ",
+                "To remove this message, approve the builder code.",
+                "Bot will keep trading without builder attribution in the meantime.",
+            ]
+        )
+
+    async def _init_builder_codes(self):
+        if not self._has_builder_config() or self.cca is None:
+            return
+
+        if await self._check_builder_fee_approved():
+            self._set_builder_approved(True)
+            self._builder_pending_approval = False
+            self._print_builder_thank_you_banner()
+            return
+
+        builder = self._builder_settings["builder"]
+        fee_rate = self._builder_settings.get("feeRate", "0.01%")
+        try:
+            await self.cca.approve_builder_fee(builder, fee_rate)
+            self._set_builder_approved(True)
+            self._builder_pending_approval = False
+            self._print_builder_approved_notice_banner()
+            self._print_builder_thank_you_banner()
+            return
+        except Exception as e:
+            logging.debug("[builder] auto-approval failed (likely agent wallet): %s", e)
+
+        self._builder_pending_approval = True
+        self._set_builder_approved(True)
+        logging.info("[builder] builder fee not approved yet; first order may fail before fallback")
+
+    async def _maybe_reenable_builder_codes(self):
+        if not self._builder_pending_approval or self._builder_disabled_ts is None:
+            return
+        if utc_ms() - self._builder_disabled_ts < self.BUILDER_NAG_INTERVAL_MS:
+            return
+
+        if await self._check_builder_fee_approved():
+            self._set_builder_approved(True)
+            self._builder_pending_approval = False
+            self._builder_disabled_ts = None
+            self._print_builder_thank_you_banner()
+            return
+
+        self._set_builder_approved(True)
+        self._builder_disabled_ts = None
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -526,10 +599,18 @@ class HyperliquidBot(CCXTBot):
         return params
 
     async def execute_order(self, order: dict) -> dict:
-        """Hyperliquid: Execute order with min_cost auto-adjustment on specific errors."""
+        """Hyperliquid: Execute order with builder-fee and min_cost error handling."""
         try:
             return await super().execute_order(order)
         except Exception as e:
+            if self._builder_pending_approval and self._is_builder_fee_error(e):
+                logging.warning(
+                    "[builder] order failed due to missing builder approval; temporarily disabling builder attribution"
+                )
+                self._print_builder_nag_banner()
+                self._set_builder_approved(False)
+                self._builder_disabled_ts = utc_ms()
+                return {}
             # Try to recover from Hyperliquid's "$10 minimum" errors by adjusting min_cost
             try:
                 if self.adjust_min_cost_on_error(e, order):
@@ -544,8 +625,15 @@ class HyperliquidBot(CCXTBot):
         return await self.execute_multiple(orders, "execute_order")
 
     async def execute_to_exchange(self):
+        if not self._builder_initialized:
+            await self._init_builder_codes()
+            self._builder_initialized = True
+
         res = await super().execute_to_exchange()
-        await self.print_builder_code_suggestion()
+
+        if self._builder_pending_approval:
+            await self._maybe_reenable_builder_codes()
+
         return res
 
     def did_create_order(self, executed) -> bool:
