@@ -92,23 +92,26 @@ class HyperliquidBot(CCXTBot):
 
         builder = self.broker_code.get("builder")
         if builder:
-            settings["builder"] = builder
-            settings["feeRate"] = self.broker_code.get(
-                "feeRate", self.broker_code.get("fee_rate", "0.01%")
-            )
-            try:
-                settings["feeInt"] = int(self.broker_code.get("feeInt", self.broker_code.get("fee_int", 10)))
-            except Exception:
-                logging.warning(
-                    "[builder] invalid feeInt/fee_int=%r/%r in broker_codes.hjson for hyperliquid; using 10",
-                    self.broker_code.get("feeInt"),
-                    self.broker_code.get("fee_int"),
-                )
-                settings["feeInt"] = 10
             builder_fee = self.broker_code.get("builderFee", self.broker_code.get("builder_fee", True))
             if isinstance(builder_fee, str):
                 builder_fee = builder_fee.lower() not in ["0", "false", "no"]
             settings["builderFee"] = bool(builder_fee)
+            if settings["builderFee"]:
+                settings["builder"] = builder
+                settings["feeRate"] = self.broker_code.get(
+                    "feeRate", self.broker_code.get("fee_rate", "0.01%")
+                )
+                try:
+                    settings["feeInt"] = int(
+                        self.broker_code.get("feeInt", self.broker_code.get("fee_int", 10))
+                    )
+                except Exception:
+                    logging.warning(
+                        "[builder] invalid feeInt/fee_int=%r/%r in broker_codes.hjson for hyperliquid; using 10",
+                        self.broker_code.get("feeInt"),
+                        self.broker_code.get("fee_int"),
+                    )
+                    settings["feeInt"] = 10
         self._builder_settings = settings
         return settings
 
@@ -120,6 +123,8 @@ class HyperliquidBot(CCXTBot):
         if applied.get("builder"):
             applied["builderFee"] = False
             applied["approvedBuilderFee"] = False
+        else:
+            applied.pop("builderFee", None)
         for client in [self.cca, getattr(self, "ccp", None)]:
             if client is not None:
                 client.options.update(applied)

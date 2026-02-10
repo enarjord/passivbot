@@ -136,6 +136,41 @@ def test_apply_builder_code_options_invalid_fee_int(stubbed_modules):
     assert bot.cca.options["feeInt"] == 10
 
 
+def test_apply_builder_code_options_disabled_builder_fee(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_bot(
+        HyperliquidBot,
+        broker_code={
+            "ref": "PASSIVBOT",
+            "builder": "0x123",
+            "builderFee": False,
+        },
+    )
+    bot.cca = DummyCCA()
+    bot._apply_builder_code_options()
+
+    assert bot.cca.options["ref"] == "PASSIVBOT"
+    assert "builder" not in bot.cca.options
+    assert "builderFee" not in bot.cca.options
+    assert bot._has_builder_config() is False
+
+
+def test_apply_builder_code_options_disabled_builder_fee_string(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_bot(
+        HyperliquidBot,
+        broker_code={
+            "builder": "0x123",
+            "builder_fee": "false",
+        },
+    )
+    bot.cca = DummyCCA()
+    bot._apply_builder_code_options()
+
+    assert "builder" not in bot.cca.options
+    assert bot._has_builder_config() is False
+
+
 def test_normalize_builder_settings_snake_case_aliases(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_bot(
