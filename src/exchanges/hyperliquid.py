@@ -67,12 +67,13 @@ class HyperliquidBot(CCXTBot):
         self._apply_endpoint_override(self.cca)
         self._apply_builder_code_options()
 
+    # ═══════════════════ BUILDER CODE SUPPORT ═══════════════════
+
     def _apply_builder_code_options(self):
         """Apply Hyperliquid builder code and referral options to CCXT sessions.
 
-        Reads from broker_codes.hjson (loaded as self.broker_code).
-        Supports dict format: {ref, builder, fee_rate, fee_int}
-        or simple string format (referral code only).
+        Sets builder/ref CCXT options from broker_codes.hjson, but suppresses
+        CCXT's auto-approval (we handle it ourselves in _init_builder_codes).
         """
         if not self.broker_code:
             return
@@ -86,13 +87,19 @@ class HyperliquidBot(CCXTBot):
                 hl_opts["feeInt"] = self.broker_code.get("fee_int", 20)
         else:
             hl_opts["ref"] = str(self.broker_code)
+        # Suppress CCXT's auto-approval; we handle it in _init_builder_codes
+        hl_opts["builderFee"] = False
+        hl_opts["approvedBuilderFee"] = False
         for client in [self.cca, getattr(self, "ccp", None)]:
             if client is not None:
                 client.options.update(hl_opts)
 
+    def _has_builder_config(self) -> bool:
+        return isinstance(self.broker_code, dict) and "builder" in self.broker_code
+
     async def _check_builder_fee_approved(self) -> bool:
         """Query Hyperliquid info endpoint to check if builder fee is approved."""
-        if not isinstance(self.broker_code, dict) or "builder" not in self.broker_code:
+        if not self._has_builder_config():
             return False
         try:
             builder_addr = self.broker_code["builder"]
@@ -107,7 +114,6 @@ class HyperliquidBot(CCXTBot):
                     "builder": builder_addr,
                 }),
             )
-            # Response is a string like "0" or "20" (fee in tenths of bps)
             max_fee = int(res) if res else 0
             required_fee = self.broker_code.get("fee_int", 20)
             return max_fee >= required_fee
@@ -115,47 +121,86 @@ class HyperliquidBot(CCXTBot):
             logging.debug(f"[builder] fee approval check failed: {e}")
             return False
 
-    async def print_builder_code_banner(self):
-        """Print periodic banner encouraging users to approve the Passivbot builder code."""
-        interval_ms = 1000 * 60 * 30  # every 30 minutes
-        if hasattr(self, "_builder_banner_ts"):
-            if utc_ms() - self._builder_banner_ts < interval_ms:
-                return
-        self._builder_banner_ts = utc_ms()
+    def _set_builder_approved(self, approved: bool):
+        """Set approvedBuilderFee on all CCXT clients."""
+        self.cca.options["approvedBuilderFee"] = approved
+        if hasattr(self, "ccp") and self.ccp is not None:
+            self.ccp.options["approvedBuilderFee"] = approved
 
-        if not isinstance(self.broker_code, dict) or "builder" not in self.broker_code:
-            return
+    async def _init_builder_codes(self):
+        """One-time async builder code initialization. Three paths:
 
-        # Check if already approved (via CCXT auto-approval or manual)
-        if self.cca.options.get("approvedBuilderFee", False):
-            return
-
-        # Query the info endpoint to check approval status
-        if await self._check_builder_fee_approved():
-            self.cca.options["approvedBuilderFee"] = True
-            if hasattr(self, "ccp") and self.ccp is not None:
-                self.ccp.options["approvedBuilderFee"] = True
-            logging.info("[builder] Passivbot builder fee is approved. Thank you for supporting development!")
+        Path A: Already approved → thank-you banner
+        Path B: Not approved + main wallet → auto-approve, notice + thank-you
+        Path C: Not approved + agent wallet → force-enable, will nag on order failure
+        """
+        if not self._has_builder_config():
             return
 
         builder_addr = self.broker_code["builder"]
         fee_rate = self.broker_code.get("fee_rate", "0.02%")
-        lines = [
-            "Passivbot builder code is NOT yet approved on your Hyperliquid account.",
+
+        # Path A: check if already approved
+        if await self._check_builder_fee_approved():
+            self._set_builder_approved(True)
+            logging.info(
+                "[builder] Builder code active. Thank you for supporting Passivbot development!"
+            )
+            return
+
+        # Not yet approved - try to approve (succeeds only with main wallet key)
+        try:
+            await self.cca.approve_builder_fee(builder_addr, fee_rate)
+            # Path B: approval succeeded (main wallet)
+            self._set_builder_approved(True)
+            self._print_boxed_banner([
+                "NOTICE: Passivbot builder code approved",
+                " ",
+                f"Builder: {builder_addr}",
+                f"Fee: {fee_rate} per trade, to support Passivbot development.",
+                " ",
+                "You can revoke this at any time via the Hyperliquid web interface.",
+                "To adjust the fee, edit broker_codes.hjson.",
+            ])
+            logging.info(
+                "[builder] Builder code active. Thank you for supporting Passivbot development!"
+            )
+            return
+        except Exception as e:
+            logging.debug(f"[builder] auto-approval failed (expected for agent wallets): {e}")
+
+        # Path C: agent wallet, not approved - force-enable to trigger order failure nag
+        self._set_builder_approved(True)
+        self._builder_pending_approval = True
+        logging.info(
+            "[builder] Builder code not yet approved. Will prompt on first order."
+        )
+
+    def _is_builder_fee_error(self, error) -> bool:
+        """Check if an error is a Hyperliquid builder-fee-not-approved error."""
+        err_str = str(error).lower()
+        return "builder fee" in err_str and "not been approved" in err_str
+
+    def _print_builder_nag_banner(self):
+        """Print the nag banner for Path C users who haven't approved builder codes."""
+        builder_addr = self.broker_code["builder"]
+        fee_rate = self.broker_code.get("fee_rate", "0.02%")
+        self._print_boxed_banner([
+            "Passivbot builder code is NOT approved on your Hyperliquid account.",
             " ",
-            f"Builder codes help fund Passivbot development at a small fee ({fee_rate}).",
-            "This is added on top of Hyperliquid's base trading fees.",
+            f"Builder codes help fund Passivbot development at a small fee ({fee_rate} per trade).",
             " ",
-            "To approve (one-time, requires MAIN wallet, not agent/API wallet):",
+            "To approve (one-time), choose one of:",
             " ",
-            "  Option A: Use the Hyperliquid Python SDK:",
-            f'    exchange.approve_builder_fee("{builder_addr}", "{fee_rate}")',
+            "  1. Switch to main wallet key in api-keys.json (bot will auto-approve on restart)",
+            "  2. Run: python3 src/tools/approve_builder_fee.py",
+            "  3. Approve via the Hyperliquid web interface (Settings > Approvals)",
             " ",
-            "  Option B: Approve via a Hyperliquid frontend that supports builder approval.",
-            " ",
-            "After approval, your agent wallet can trade normally with builder attribution.",
-            "To disable this message, remove the hyperliquid entry from broker_codes.hjson.",
-        ]
+            "To remove this message, approve the builder code.",
+            "To disable builder codes entirely, remove 'hyperliquid' from broker_codes.hjson.",
+        ])
+
+    def _print_boxed_banner(self, lines: list):
         front_pad = " " * 4 + "##"
         back_pad = "##"
         max_len = max(len(line) for line in lines)
@@ -166,9 +211,41 @@ class HyperliquidBot(CCXTBot):
         print(front_pad + "#" * (max_len + 2) + back_pad)
         print("\n\n")
 
+    async def _maybe_reenable_builder_codes(self):
+        """Periodically re-enable builder codes for Path C users (every ~30 min)."""
+        reenable_interval_ms = 1000 * 60 * 30
+        disabled_ts = getattr(self, "_builder_disabled_ts", None)
+        if disabled_ts is None:
+            return
+        if utc_ms() - disabled_ts < reenable_interval_ms:
+            return
+
+        # Check if user approved externally since last check
+        if await self._check_builder_fee_approved():
+            self._set_builder_approved(True)
+            self._builder_pending_approval = False
+            self._builder_disabled_ts = None
+            logging.info(
+                "[builder] Builder code active. Thank you for supporting Passivbot development!"
+            )
+            return
+
+        # Not yet approved - re-enable to try again on next order
+        self._set_builder_approved(True)
+        self._builder_disabled_ts = None
+
     async def execute_to_exchange(self):
+        # One-time builder code initialization
+        if not hasattr(self, "_builder_initialized"):
+            await self._init_builder_codes()
+            self._builder_initialized = True
+
         res = await super().execute_to_exchange()
-        await self.print_builder_code_banner()
+
+        # Periodic re-enable for Path C users
+        if getattr(self, "_builder_pending_approval", False):
+            await self._maybe_reenable_builder_codes()
+
         return res
 
     def set_market_specific_settings(self):
@@ -469,10 +546,20 @@ class HyperliquidBot(CCXTBot):
         return params
 
     async def execute_order(self, order: dict) -> dict:
-        """Hyperliquid: Execute order with min_cost auto-adjustment on specific errors."""
+        """Hyperliquid: Execute order with builder-fee and min_cost error handling."""
         try:
             return await super().execute_order(order)
         except Exception as e:
+            # Path C: catch builder-fee-not-approved errors
+            if getattr(self, "_builder_pending_approval", False) and self._is_builder_fee_error(e):
+                logging.warning(
+                    f"[builder] Order failed: builder fee not approved. "
+                    f"Temporarily disabling builder codes. Symbol: {order['symbol']}"
+                )
+                self._print_builder_nag_banner()
+                self._set_builder_approved(False)
+                self._builder_disabled_ts = utc_ms()
+                return {}
             # Try to recover from Hyperliquid's "$10 minimum" errors by adjusting min_cost
             try:
                 if self.adjust_min_cost_on_error(e, order):

@@ -24,7 +24,7 @@
 	// fee_int is in tenths of a basis point: 20 = 2 bps = 0.02%.
 	hyperliquid: {
 		ref: "PASSIVBOT"
-		builder: "0xTODO_PASSIVBOT_BUILDER_ADDRESS"
+		builder: "0x5e20A6D7e11366390Fde63EA3d0A026903359a74"
 		fee_rate: "0.02%"
 		fee_int: 20
 	}

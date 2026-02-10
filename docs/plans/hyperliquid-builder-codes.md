@@ -13,17 +13,22 @@ applications earn fees on orders they route for users. Key properties:
 - **Revenue**: 100% goes to the builder. Over $40M paid out ecosystem-wide to date
 - **Builder requirement**: Builder wallet must hold >= 100 USDC in perps account
 
+### Passivbot Builder Address
+
+```
+0x5e20A6D7e11366390Fde63EA3d0A026903359a74
+```
+
 ### Approval Flow
 
 Users must **one-time approve** a builder's maximum fee rate via the `ApproveBuilderFee` action.
 
 **Critical constraint**: This approval **must be signed with the main wallet**, not an agent/API wallet.
-This is the single most important implementation detail - most passivbot users run with agent wallets,
-so they cannot auto-approve from inside the bot. They must approve externally (e.g. via Hyperliquid
-web UI, SDK script, or a separate passivbot utility).
+Most passivbot users run with agent wallets. If the user configures their main wallet private key
+in api-keys.json, passivbot can auto-approve. Otherwise, the user must approve externally.
 
-Once approved, the user can revoke at any time. The bot (even with an agent wallet) can then
-attach builder info to every order - only the initial approval requires the main wallet.
+Once approved, the bot (even with an agent wallet) can attach builder info to every order.
+The user can revoke at any time.
 
 ### Querying Approval Status
 
@@ -36,15 +41,16 @@ Returns the maximum fee the user has approved for the builder. If 0 or absent, n
 
 ### CCXT Built-in Support
 
-CCXT (>= ~4.4.80, exact version unclear) has **full built-in builder code handling** in its
-Hyperliquid module. The installed passivbot version (CCXT 4.5.22) **fully supports this**.
+CCXT (>= ~4.4.94) has **full built-in builder code handling** in its Hyperliquid module.
+The installed passivbot version (CCXT 4.5.22) **fully supports this**.
 
 #### How It Works in CCXT
 
 On `initialize_client()` (called automatically on first `fetch_markets`, `create_order`, etc.):
 
 1. **`set_ref()`** - Sets referral code via `setReferrer` action. Default: `'CCXT1'`
-2. **`handle_builder_fee_approval()`** - Attempts to approve builder fee. Default builder: `0x6530512A6c89C7cfCEbC3BA7fcD9aDa5f30827a6` (CCXT's own address)
+2. **`handle_builder_fee_approval()`** - Attempts to approve builder fee. Default builder:
+   `0x6530512A6c89C7cfCEbC3BA7fcD9aDa5f30827a6` (CCXT's own address)
 
 On every subsequent order, if `approvedBuilderFee` is true in options, CCXT automatically
 attaches `builder: {"b": address, "f": feeInt}` to the order action.
@@ -59,7 +65,6 @@ attaches `builder: {"b": address, "f": feeInt}` to the order action.
 | `feeInt` | `10` (= 1 bps) | Fee in tenths of bps, attached to orders |
 | `builderFee` | `True` | Master enable/disable toggle |
 | `approvedBuilderFee` | `False` | Set to true after successful approval |
-| `refSet` | `False` | Set to true after referral is set |
 
 #### Current State: CCXT's Builder Code Is Already Active
 
@@ -84,8 +89,6 @@ did not have this behavior.
 
 ### Hyperliquid Base Fee Context
 
-To recommend a builder fee, context on Hyperliquid's base fees:
-
 | Tier | 14d Volume | Perp Taker | Perp Maker |
 |------|------------|------------|------------|
 | Base | $0 | 0.045% (4.5 bps) | 0.010% (1 bps) |
@@ -101,241 +104,266 @@ A builder fee adds on top of these exchange fees.
 **Recommended default: 2 bps (0.02%) = `feeInt: 20`**
 
 Rationale:
-- CCXT's own default is 1 bps (`feeInt: 10`). We should be at or above this since passivbot
-  provides significantly more value than a library wrapper.
+- CCXT's own default is 1 bps (`feeInt: 10`). Passivbot provides significantly more value
+  than a library wrapper.
 - Phantom wallet charges builder fees and earns ~$100k/day. PVP.trade has earned $7.2M lifetime.
-  These are consumer-facing UIs.
-- HeyAnon charges 10 bps (0.10%) on profitable position closes.
+  HeyAnon charges 10 bps (0.10%) on profitable position closes.
 - Passivbot is an open-source project; 2 bps is modest and fair.
 - For a typical passivbot user doing $1M monthly volume: 2 bps = ~$200/month to the project.
 - At base tier with maker orders (1 bps exchange fee), a 2 bps builder fee means the user
-  pays 3 bps total vs 1 bps without. This is still far below taker fees (4.5 bps).
+  pays 3 bps total vs 1 bps without. Still far below taker fees (4.5 bps).
 - Users can easily edit `broker_codes.hjson` to adjust if desired.
-
-Alternative considered: 1 bps (`feeInt: 10`) - matches CCXT default, but undersells passivbot's value.
 
 ### Differences from GPT's Research
 
-1. **GPT suggested off by default** (`hyperliquid_builder_enabled = false`). User requirement is
-   **on by default** with a nag banner for unapproved users.
+1. **GPT suggested off by default**. Our requirement is **on by default**, always-on, with
+   three behavior paths depending on approval status and wallet type.
 
-2. **GPT suggested a new config key** (`live.hyperliquid_builder_enabled`). This is unnecessary -
-   the existing `broker_codes.hjson` pattern handles this cleanly, and CCXT options control the behavior.
+2. **GPT suggested a new config key** (`live.hyperliquid_builder_enabled`). Unnecessary -
+   `broker_codes.hjson` handles this.
 
-3. **GPT suggested explicitly disabling CCXT's default behavior**. This is correct in spirit -
-   we should override CCXT's default builder address with passivbot's, not add on top.
+3. **GPT suggested explicitly disabling CCXT's default behavior**. Correct in spirit -
+   we override CCXT's default builder address with passivbot's. We also suppress CCXT's
+   auto-approval to control the flow ourselves.
 
-4. **GPT suggested approval-status check via raw HTTP**. We can use CCXT's built-in
-   `handle_builder_fee_approval()` which does this automatically, plus we can query
-   `maxBuilderFee` for the banner logic.
-
-5. **GPT's approval flow is mostly correct** but misses that CCXT handles the signing and
-   submission automatically via `initialize_client()` -> `approve_builder_fee()`.
+4. **GPT missed the order-failure-as-nag pattern** for agent wallet users who haven't approved.
 
 ---
 
 ## Implementation Plan
 
-### Overview
+### Design Philosophy: Builder Codes Are Always On
 
-Use CCXT's built-in builder code infrastructure. Override CCXT's default builder address with
-passivbot's in `create_ccxt_sessions()`. Add a periodic nag banner (like Binance's
-`print_new_user_suggestion`) that checks approval status and prints a large message encouraging
-users to approve the builder code.
+Builder codes are **on by default** and the bot actively nudges users toward approval.
+The behavior varies by three paths:
 
-### Prerequisites
+### Three Startup Paths
 
-- A Hyperliquid wallet address controlled by the passivbot project, funded with >= 100 USDC
-  in the perps subaccount. This becomes the builder address in `broker_codes.hjson`.
+#### Path A: Already Approved
 
-### File Changes
+At startup, query `maxBuilderFee` info endpoint.
+If user has already approved passivbot's builder with sufficient fee:
 
-#### 1. `broker_codes.hjson` - Add Hyperliquid builder config
+- Set `approvedBuilderFee = True` on CCXT clients
+- Print a **small, modest thank-you banner** at startup:
+  ```
+  [builder] Builder code active. Thank you for supporting Passivbot development!
+  ```
+- Builder info is attached to every order. No further banners.
 
-```hjson
-hyperliquid: {
-    ref: "PASSIVBOT"
-    builder: "0xYOUR_PASSIVBOT_BUILDER_ADDRESS"
-    feeRate: "0.02%"
-    feeInt: 20
+#### Path B: Not Approved + Main Wallet Key
+
+If not yet approved, attempt to call `cca.approve_builder_fee(builder, feeRate)`.
+If it succeeds (only possible with main wallet private key):
+
+- Set `approvedBuilderFee = True` on CCXT clients
+- Print a **notice banner** explaining what happened:
+  ```
+      ############################################################################
+      ## NOTICE: Passivbot builder code approved                               ##
+      ##                                                                       ##
+      ## Builder: 0x5e20A6D7e11366390Fde63EA3d0A026903359a74                   ##
+      ## Fee: 0.02% (2 bps) per trade, to support Passivbot development.       ##
+      ##                                                                       ##
+      ## You can revoke this at any time via the Hyperliquid web interface.     ##
+      ## To adjust the fee, edit broker_codes.hjson.                           ##
+      ############################################################################
+  ```
+- Then the thank-you banner from Path A.
+- Builder info is attached to every order. No further banners.
+
+#### Path C: Not Approved + Agent Wallet Key
+
+If approval attempt fails (agent wallets cannot sign `ApproveBuilderFee`):
+
+1. **Set `approvedBuilderFee = True` anyway** to force CCXT to attach builder info to orders.
+2. The **first order will fail** on Hyperliquid with a builder-approval error.
+3. Catch this specific error in `execute_order()`:
+   - Show the **nag banner** with approval instructions
+   - **Temporarily disable** builder codes (`approvedBuilderFee = False`)
+   - The order is not retried immediately - passivbot's normal loop will resubmit it
+     next cycle, now without builder codes
+4. Bot runs normally without builder attribution.
+5. **Every ~30 minutes**, re-enable `approvedBuilderFee = True`:
+   - First, check via `maxBuilderFee` info endpoint if user has approved in the meantime
+   - If approved: permanent enable, print thank-you, stop nagging
+   - If not approved: the next order will fail again, triggering another nag banner,
+     then temporary disable again
+
+This creates a "free version with ads" experience: the bot works, but the user sees
+periodic reminders to approve the builder code.
+
+### Nag Banner Content (Path C)
+
+```
+    ############################################################################################
+    ## Passivbot builder code is NOT approved on your Hyperliquid account.                    ##
+    ##                                                                                       ##
+    ## Builder codes help fund Passivbot development at a small fee (0.02% per trade).       ##
+    ##                                                                                       ##
+    ## To approve (one-time), choose one of:                                                 ##
+    ##                                                                                       ##
+    ##   1. Switch to main wallet key in api-keys.json (bot will auto-approve on restart)    ##
+    ##   2. Run: python3 src/tools/approve_builder_fee.py                                    ##
+    ##   3. Approve via the Hyperliquid web interface (Settings > Approvals)                  ##
+    ##                                                                                       ##
+    ## To remove this message, approve the builder code.                                     ##
+    ## To disable builder codes entirely, remove 'hyperliquid' from broker_codes.hjson.      ##
+    ############################################################################################
+```
+
+### Early Warning During Installation
+
+Users should be informed about builder codes **before** they hit their first bot startup,
+to avoid surprise. Multiple touchpoints:
+
+#### `api-keys.json.example` - Comment on the Hyperliquid entry
+
+```json
+"_comment_hyperliquid": "BUILDER CODES: Passivbot uses Hyperliquid builder codes (0.02% fee) to fund development. If using an agent/API wallet, approve the builder code first: python3 src/tools/approve_builder_fee.py. Or use your main wallet private_key here and the bot will auto-approve on first run.",
+"hyperliquid_01" : {
+    "exchange": "hyperliquid",
+    "wallet_address": "wallet_address",
+    "private_key": "private_key (main wallet key = auto-approve builder code; agent key = manual approval needed)",
+    "is_vault": false
 }
 ```
 
-- `ref`: Referral code (replaces CCXT's default `CCXT1`)
-- `builder`: Passivbot's builder wallet address (replaces CCXT's default address)
-- `feeRate`: Max fee rate string for the approval transaction
-- `feeInt`: 20 = 2 bps, attached to every order
+#### `docs/hyperliquid_guide.md` - Dedicated builder codes section
 
-#### 2. `src/exchanges/hyperliquid.py` - Wire builder codes + nag banner
+Add a prominent section after the setup instructions:
 
-**In `create_ccxt_sessions()`**, after existing options setup:
+```markdown
+### Builder Codes (Supporting Passivbot Development)
 
-```python
-# Configure builder code and referral
-if isinstance(self.broker_code, dict):
-    hl_opts = {}
-    if "ref" in self.broker_code:
-        hl_opts["ref"] = self.broker_code["ref"]
-    if "builder" in self.broker_code:
-        hl_opts["builder"] = self.broker_code["builder"]
-        hl_opts["feeRate"] = self.broker_code.get("feeRate", "0.02%")
-        hl_opts["feeInt"] = self.broker_code.get("feeInt", 20)
-    for client in [c for c in [self.cca, getattr(self, 'ccp', None)] if c]:
-        client.options.update(hl_opts)
-elif self.broker_code:
-    # Simple string = referral code only
-    for client in [c for c in [self.cca, getattr(self, 'ccp', None)] if c]:
-        client.options["ref"] = self.broker_code
+Passivbot includes a builder code that adds a small fee (0.02%) to each trade on Hyperliquid.
+This fee goes directly to funding Passivbot development.
+
+**If you use your main wallet private key** in api-keys.json, the bot will automatically
+approve the builder code on first startup. No action needed.
+
+**If you use an agent/API wallet** (recommended for security), you must approve the builder
+code separately. Choose one method:
+
+1. **CLI tool** (easiest):
+   ```bash
+   python3 src/tools/approve_builder_fee.py
+   ```
+   This will prompt for your main wallet private key (used once for approval, not stored).
+
+2. **Temporary key swap**: Temporarily put your main wallet private key in api-keys.json,
+   start the bot once (it will auto-approve), then switch back to your agent key.
+
+3. **Hyperliquid web UI**: Approve via Settings > Approvals on app.hyperliquid.xyz.
+
+The builder code can be revoked at any time. To adjust the fee or disable it entirely,
+edit `broker_codes.hjson`.
 ```
 
-This overrides CCXT's defaults. CCXT will automatically:
-- Call `set_ref("PASSIVBOT")` on init
-- Call `approve_builder_fee("0xPASSIVBOT_ADDR", "0.02%")` on init
-- Attach `builder: {"b": "0x...", "f": 20}` to every order (if approved)
+#### `src/tools/approve_builder_fee.py` - Standalone CLI tool
 
-**Add nag banner method** (modeled on `BinanceBot.print_new_user_suggestion`):
+Simple script that:
+1. Loads builder address and fee from `broker_codes.hjson`
+2. Prompts user for their main wallet address and private key
+3. Creates a CCXT Hyperliquid session with main wallet credentials
+4. Calls `approve_builder_fee(builder, feeRate)`
+5. Confirms success
+
+### File Changes Summary
+
+| File | Change |
+|------|--------|
+| `broker_codes.hjson` | Add `hyperliquid` entry with real builder address |
+| `src/exchanges/hyperliquid.py` | Builder code initialization, three-path logic, nag banner, order error handling |
+| `api-keys.json.example` | Add builder code comments to Hyperliquid entry |
+| `docs/hyperliquid_guide.md` | Add builder codes section |
+| `src/tools/approve_builder_fee.py` | New CLI tool for one-time approval |
+
+### Detailed Code Changes: `src/exchanges/hyperliquid.py`
+
+#### `create_ccxt_sessions()` - Apply builder options, suppress CCXT auto-handling
 
 ```python
-async def print_builder_code_banner(self):
-    """Print periodic banner encouraging builder code approval."""
-    interval_ms = 1000 * 60 * 30  # every 30 minutes
-    if hasattr(self, "_builder_banner_ts"):
-        if utc_ms() - self._builder_banner_ts < interval_ms:
-            return
-    self._builder_banner_ts = utc_ms()
-
-    # Skip if no builder configured or already approved
-    if not isinstance(self.broker_code, dict) or "builder" not in self.broker_code:
-        return
-    if self.cca.options.get("approvedBuilderFee", False):
-        return
-
-    # Check approval status via info endpoint
-    try:
-        builder_addr = self.broker_code["builder"]
-        wallet_addr = self.user_info["wallet_address"]
-        res = await self.cca.fetch(
-            "https://api.hyperliquid.xyz/info",
-            method="POST",
-            headers={"Content-Type": "application/json"},
-            body=json.dumps({
-                "type": "maxBuilderFee",
-                "user": wallet_addr,
-                "builder": builder_addr,
-            }),
-        )
-        # If user has approved a sufficient fee, mark as approved and skip banner
-        max_fee = int(res) if res else 0
-        if max_fee >= self.broker_code.get("feeInt", 20):
-            self.cca.options["approvedBuilderFee"] = True
-            return
-    except Exception as e:
-        logging.debug(f"builder fee check failed: {e}")
-
-    lines = [
-        "Passivbot builder code is NOT yet approved on your Hyperliquid account.",
-        " ",
-        "Builder codes help fund Passivbot development at a small fee (0.02%).",
-        "This is added on top of Hyperliquid's base trading fees.",
-        " ",
-        "To approve (one-time, requires main wallet - not agent wallet):",
-        " ",
-        "  Option A: Run the approval script:",
-        f"    python3 tools/approve_builder_fee.py --builder {self.broker_code['builder']}",
-        " ",
-        "  Option B: Use the Hyperliquid Python SDK directly:",
-        f'    exchange.approve_builder_fee("{self.broker_code["builder"]}", "{self.broker_code.get("feeRate", "0.02%")}")',
-        " ",
-        "  Option C: Approve via a third-party Hyperliquid frontend that supports builder approval.",
-        " ",
-        "To disable this message, set builderFee to false in your CCXT options",
-        "or remove the hyperliquid entry from broker_codes.hjson.",
-    ]
-    front_pad = " " * 4 + "##"
-    back_pad = "##"
-    max_len = max(len(line) for line in lines)
-    print("\n\n")
-    print(front_pad + "#" * (max_len + 2) + back_pad)
-    for line in lines:
-        print(front_pad + " " + line + " " * (max_len - len(line) + 1) + back_pad)
-    print(front_pad + "#" * (max_len + 2) + back_pad)
-    print("\n\n")
+self._apply_builder_code_options()
 ```
 
-**Override `execute_to_exchange()`** to trigger the banner (same pattern as Binance):
+#### `_apply_builder_code_options()` - Set CCXT options from broker_codes.hjson
+
+- Set `ref`, `builder`, `feeRate`, `feeInt` on both `cca` and `ccp`
+- Set `builderFee = False` to prevent CCXT from auto-handling (we do it ourselves)
+- Set `approvedBuilderFee = False` initially
+
+#### `_init_builder_codes()` - Async initialization, called once from first `execute_to_exchange()`
+
+1. Query `maxBuilderFee` info endpoint
+2. If approved → Path A: set `approvedBuilderFee = True`, log thank-you
+3. If not approved → try `cca.approve_builder_fee(builder, feeRate)`
+   - Success → Path B: log notice + thank-you, set `approvedBuilderFee = True`
+   - Failure → Path C: set `approvedBuilderFee = True` (force attachment),
+     set `self._builder_pending_approval = True`
+
+#### `execute_order()` - Catch builder-fee errors (Path C)
+
+Wrap the existing `execute_order()` to additionally catch builder-approval errors:
+- Detect error strings like "Builder fee has not been approved"
+- Show nag banner
+- Set `approvedBuilderFee = False` on clients
+- Set `self._builder_disabled_ts = utc_ms()`
+- Return `{}` (empty result - order will be retried next cycle without builder codes)
+
+#### `execute_to_exchange()` - Orchestrate init + periodic re-enable
 
 ```python
 async def execute_to_exchange(self):
+    # One-time builder code initialization
+    if not hasattr(self, "_builder_initialized"):
+        await self._init_builder_codes()
+        self._builder_initialized = True
+
     res = await super().execute_to_exchange()
-    await self.print_builder_code_banner()
+
+    # Periodic re-enable for Path C users
+    if getattr(self, "_builder_pending_approval", False):
+        await self._maybe_reenable_builder_codes()
+
     return res
 ```
 
-#### 3. (Optional) `tools/approve_builder_fee.py` - Standalone approval helper
+#### `_maybe_reenable_builder_codes()` - Periodic re-check (every 30 min)
 
-A small script that users can run with their **main wallet** private key to approve
-the builder fee one time. This is a convenience since the approval cannot happen
-from an agent wallet.
-
-```python
-"""One-time Hyperliquid builder fee approval for Passivbot.
-
-Usage:
-    python3 tools/approve_builder_fee.py \
-        --wallet-address 0xYOUR_MAIN_WALLET \
-        --private-key 0xYOUR_MAIN_WALLET_PRIVATE_KEY \
-        --builder 0xPASSIVBOT_BUILDER_ADDRESS \
-        --fee-rate "0.02%"
-"""
-```
-
-Uses CCXT directly: creates a session with the main wallet credentials and calls
-`exchange.approve_builder_fee(builder, feeRate)`.
-
-#### 4. `docs/hyperliquid_guide.md` - Add builder code section
-
-Short section explaining:
-- What builder codes are and why they exist
-- One-time approval instructions (main wallet required)
-- How to adjust or disable the fee
-- Link to the approval helper script
-
-### What We Do NOT Need
-
-- **No new config keys**: `broker_codes.hjson` already handles per-exchange broker config
-- **No changes to order placement code**: CCXT attaches builder info automatically via options
-- **No changes to `_build_order_params()`**: Builder attachment happens inside CCXT's `create_order`
-- **No manual HTTP calls for order attribution**: CCXT handles everything
-- **No `live.hyperliquid_builder_enabled` config**: Unnecessary complexity
+- If `_builder_disabled_ts` is set and >= 30 min ago:
+  - Query `maxBuilderFee` to check if user approved externally
+  - If approved: permanent enable, log thank-you, clear pending flag
+  - If not: re-set `approvedBuilderFee = True` to force attachment on next order
+    (will fail again → nag banner → temp disable → cycle continues)
 
 ### Execution Order
 
-1. Obtain/fund passivbot builder wallet on Hyperliquid (>= 100 USDC perps)
-2. Add builder config to `broker_codes.hjson`
-3. Modify `create_ccxt_sessions()` in `hyperliquid.py` to apply builder options
-4. Add `print_builder_code_banner()` and `execute_to_exchange()` override
-5. (Optional) Create `tools/approve_builder_fee.py` helper script
-6. Update `docs/hyperliquid_guide.md`
-7. Test with testnet first, then mainnet
+1. ~~Obtain/fund passivbot builder wallet~~ Done: `0x5e20A6D7e11366390Fde63EA3d0A026903359a74`
+2. Update `broker_codes.hjson` with real address
+3. Implement three-path logic in `hyperliquid.py`
+4. Update `api-keys.json.example` with builder code comments
+5. Update `docs/hyperliquid_guide.md` with builder codes section
+6. Create `src/tools/approve_builder_fee.py`
+7. Test all three paths (already approved, main wallet, agent wallet)
 8. Verify attribution via Hyperliquid builder fill stats:
-   `https://stats-data.hyperliquid.xyz/Mainnet/builder_fills/{address}/{YYYYMMDD}.csv.lz4`
+   `https://stats-data.hyperliquid.xyz/Mainnet/builder_fills/0x5e20a6d7e11366390fde63ea3d0a026903359a74/{YYYYMMDD}.csv.lz4`
 
 ### Testing
 
-- Verify CCXT options are correctly set in both `cca` and `ccp` sessions
-- Verify `set_ref("PASSIVBOT")` is called on first API interaction
-- Verify builder fee approval attempt happens on init (will fail with agent wallet - expected)
-- Verify banner prints every 30 minutes when builder fee is not approved
-- Verify banner stops printing once approved
-- Verify orders include builder attribution after approval
-- Verify bot continues to work normally when builder fee is not approved (no blocking)
+- **Path A**: Mock `maxBuilderFee` returning sufficient fee → verify thank-you log, `approvedBuilderFee = True`
+- **Path B**: Mock `maxBuilderFee` returning 0, mock `approve_builder_fee` succeeding → verify notice + thank-you
+- **Path C**: Mock `maxBuilderFee` returning 0, mock `approve_builder_fee` failing → verify `approvedBuilderFee = True` forced, then order error → verify nag banner + temp disable
+- **Path C re-enable**: Verify 30-min timer re-enables, and that external approval is detected
+- **Disable**: Remove `hyperliquid` from `broker_codes.hjson` → verify no builder behavior at all
+- **All paths**: Verify bot continues trading normally, no orders permanently blocked
 
 ### Risk Assessment
 
-- **Low risk**: CCXT's builder code support is mature and battle-tested
-- **No breaking changes**: Builder fee is purely additive; orders work with or without it
-- **Silent failure**: If approval fails (agent wallet), CCXT disables builder fee and bot continues
-- **User control**: Users can disable via `broker_codes.hjson` edit or CCXT options override
+- **Low risk**: Changes are additive; no existing behavior modified when builder codes are disabled
+- **One order loss per nag cycle (Path C)**: First order in each 30-min cycle fails and is
+  retried next loop iteration (~10-60s later). Acceptable cost for the nag mechanic.
+- **User control**: Users can disable entirely by removing `hyperliquid` from `broker_codes.hjson`
 
 ---
 
