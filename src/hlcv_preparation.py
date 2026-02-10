@@ -423,11 +423,22 @@ class HLCVManager:
 
         frames = []
         candidates: list[str] = []
+        
+        # Mirror CandlestickManager's symbol sanitization for Windows compatibility
+        windows_compat = os.name == "nt" or os.getenv("WINDOWS_COMPATIBILITY") == "1"
+        
         for name in (coin, symbol):
-            if name:
-                candidates.append(name)
-        if symbol and "/" in symbol:
-            candidates.append(symbol.replace("/", "_"))
+            if not name:
+                continue
+            # Original name
+            candidates.append(name)
+            # Variant with "/" replaced by "_"
+            if "/" in name:
+                candidates.append(name.replace("/", "_"))
+            # In Windows compatibility mode, also mirror CandlestickManager's ":" -> "_"
+            if windows_compat and ("/" in name or ":" in name):
+                candidates.append(name.replace("/", "_").replace(":", "_"))
+        
         # De-duplicate while preserving order
         seen = set()
         candidates = [c for c in candidates if not (c in seen or seen.add(c))]
