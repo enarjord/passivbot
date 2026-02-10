@@ -65,6 +65,111 @@ class HyperliquidBot(CCXTBot):
         self.cca.options["defaultType"] = "swap"
         self.cca.options["fetchMarkets"] = fetch_markets_config
         self._apply_endpoint_override(self.cca)
+        self._apply_builder_code_options()
+
+    def _apply_builder_code_options(self):
+        """Apply Hyperliquid builder code and referral options to CCXT sessions.
+
+        Reads from broker_codes.hjson (loaded as self.broker_code).
+        Supports dict format: {ref, builder, fee_rate, fee_int}
+        or simple string format (referral code only).
+        """
+        if not self.broker_code:
+            return
+        hl_opts = {}
+        if isinstance(self.broker_code, dict):
+            if "ref" in self.broker_code:
+                hl_opts["ref"] = self.broker_code["ref"]
+            if "builder" in self.broker_code:
+                hl_opts["builder"] = self.broker_code["builder"]
+                hl_opts["feeRate"] = self.broker_code.get("fee_rate", "0.02%")
+                hl_opts["feeInt"] = self.broker_code.get("fee_int", 20)
+        else:
+            hl_opts["ref"] = str(self.broker_code)
+        for client in [self.cca, getattr(self, "ccp", None)]:
+            if client is not None:
+                client.options.update(hl_opts)
+
+    async def _check_builder_fee_approved(self) -> bool:
+        """Query Hyperliquid info endpoint to check if builder fee is approved."""
+        if not isinstance(self.broker_code, dict) or "builder" not in self.broker_code:
+            return False
+        try:
+            builder_addr = self.broker_code["builder"]
+            wallet_addr = self.user_info["wallet_address"]
+            res = await self.cca.fetch(
+                "https://api.hyperliquid.xyz/info",
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                body=json.dumps({
+                    "type": "maxBuilderFee",
+                    "user": wallet_addr,
+                    "builder": builder_addr,
+                }),
+            )
+            # Response is a string like "0" or "20" (fee in tenths of bps)
+            max_fee = int(res) if res else 0
+            required_fee = self.broker_code.get("fee_int", 20)
+            return max_fee >= required_fee
+        except Exception as e:
+            logging.debug(f"[builder] fee approval check failed: {e}")
+            return False
+
+    async def print_builder_code_banner(self):
+        """Print periodic banner encouraging users to approve the Passivbot builder code."""
+        interval_ms = 1000 * 60 * 30  # every 30 minutes
+        if hasattr(self, "_builder_banner_ts"):
+            if utc_ms() - self._builder_banner_ts < interval_ms:
+                return
+        self._builder_banner_ts = utc_ms()
+
+        if not isinstance(self.broker_code, dict) or "builder" not in self.broker_code:
+            return
+
+        # Check if already approved (via CCXT auto-approval or manual)
+        if self.cca.options.get("approvedBuilderFee", False):
+            return
+
+        # Query the info endpoint to check approval status
+        if await self._check_builder_fee_approved():
+            self.cca.options["approvedBuilderFee"] = True
+            if hasattr(self, "ccp") and self.ccp is not None:
+                self.ccp.options["approvedBuilderFee"] = True
+            logging.info("[builder] Passivbot builder fee is approved. Thank you for supporting development!")
+            return
+
+        builder_addr = self.broker_code["builder"]
+        fee_rate = self.broker_code.get("fee_rate", "0.02%")
+        lines = [
+            "Passivbot builder code is NOT yet approved on your Hyperliquid account.",
+            " ",
+            f"Builder codes help fund Passivbot development at a small fee ({fee_rate}).",
+            "This is added on top of Hyperliquid's base trading fees.",
+            " ",
+            "To approve (one-time, requires MAIN wallet, not agent/API wallet):",
+            " ",
+            "  Option A: Use the Hyperliquid Python SDK:",
+            f'    exchange.approve_builder_fee("{builder_addr}", "{fee_rate}")',
+            " ",
+            "  Option B: Approve via a Hyperliquid frontend that supports builder approval.",
+            " ",
+            "After approval, your agent wallet can trade normally with builder attribution.",
+            "To disable this message, remove the hyperliquid entry from broker_codes.hjson.",
+        ]
+        front_pad = " " * 4 + "##"
+        back_pad = "##"
+        max_len = max(len(line) for line in lines)
+        print("\n\n")
+        print(front_pad + "#" * (max_len + 2) + back_pad)
+        for line in lines:
+            print(front_pad + " " + line + " " * (max_len - len(line) + 1) + back_pad)
+        print(front_pad + "#" * (max_len + 2) + back_pad)
+        print("\n\n")
+
+    async def execute_to_exchange(self):
+        res = await super().execute_to_exchange()
+        await self.print_builder_code_banner()
+        return res
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()

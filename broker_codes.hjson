@@ -18,4 +18,14 @@
 		}
 	}
 	gateio: "passivbot"
+	// Hyperliquid builder code: earns a small fee on each order to fund Passivbot development.
+	// CCXT attaches builder info to every order automatically when approved.
+	// Users must one-time approve via main wallet (not agent wallet).
+	// fee_int is in tenths of a basis point: 20 = 2 bps = 0.02%.
+	hyperliquid: {
+		ref: "PASSIVBOT"
+		builder: "0xTODO_PASSIVBOT_BUILDER_ADDRESS"
+		fee_rate: "0.02%"
+		fee_int: 20
+	}
 }
