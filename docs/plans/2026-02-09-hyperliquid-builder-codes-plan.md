@@ -13,6 +13,18 @@ Requested constraints:
 - Verify CCXT built-in support and whether current Passivbot version supports it.
 - Recommend a practical default fee level.
 
+Additional required behavior updates (2026-02-10):
+
+- Builder codes must be **on by default**.
+- If approval already exists: print a **small thank-you banner**.
+- If approval is missing and user runs with **main wallet key**: auto-approve builder fee at startup, print notice banner, then thank-you banner.
+- If approval is missing and user runs with **agent/API wallet**:
+  - allow first order attempt with builder enabled (may fail with missing approval error),
+  - then temporarily disable builder usage for that account,
+  - periodically (about every 30 minutes) re-enable and retry,
+  - on failure, print a large instruction banner with clear approval paths.
+- User should get clear approval guidance **well before first live run** (docs + config examples and optionally startup/install surfaces).
+
 ---
 
 ## Verified findings (official docs + code)
@@ -44,6 +56,7 @@ Requested constraints:
   - default `feeRate = "0.01%"`
   - default `feeInt = 10` (1 bps)
 - In current installed CCXT (`4.5.22`), client initialization also runs referral setup via `set_ref()`.
+- Practical implication: without explicit override, CCXT may attempt builder approval for its own default builder address.
 
 ---
 
@@ -99,6 +112,21 @@ Rationale:
 - Meaningful enough to avoid “too low” dust economics.
 - Matches current CCXT default semantics, reducing surprise.
 
+### Why 1 bps over 2 bps (for default)
+
+Both are technically viable. This plan recommends **1 bps default** for rollout safety:
+
+- **Lower friction at first-run**: builder codes are default-on and include nag/error UX for unapproved users; 1 bps reduces user resistance during adoption.
+- **Closer to existing CCXT expectations**: CCXT’s built-in defaults are already aligned with 1 bps, which minimizes surprise and “hidden fee jump” perception.
+- **Easier trust ramp for open-source users**: start conservative, then revisit after adoption/retention data.
+- **Simple upgrade path**: if community response is positive, moving default to 2 bps later is a one-line `broker_codes.hjson` change plus changelog note.
+
+Practical policy suggestion:
+
+- Start with `feeInt=10` (1 bps) for one release cycle.
+- Re-evaluate with observed approval rates / user feedback.
+- Consider `feeInt=20` (2 bps) only after communication + release-note notice.
+
 ---
 
 ## Implementation plan (simple, non-blocking, default-on)
@@ -112,7 +140,7 @@ Add:
 ```hjson
 hyperliquid: {
     ref: "PASSIVBOT"
-    builder: "0x<passivbot_builder_wallet>"
+    builder: "0x5e20A6D7e11366390Fde63EA3d0A026903359a74"
     feeRate: "0.01%"
     feeInt: 10
     builderFee: true
@@ -129,20 +157,22 @@ In `create_ccxt_sessions()`:
 - If it is a dict, map keys directly into `client.options` for `cca` and `ccp`.
 - Keep this override minimal and explicit to match existing broker-code pattern.
 - Continue non-blocking behavior if keys are missing/malformed (log warning, do not raise).
+- Set `builderFee=False` and `approvedBuilderFee=False` initially so passivbot controls approval flow explicitly (instead of relying on CCXT auto-approval timing/behavior).
 
 ### 3) Add recurring “approve builder code” banner (non-blocking)
 
 File: `src/exchanges/hyperliquid.py`
 
-Add a method similar to Binance’s suggestion printer:
+Add methods similar to Binance’s suggestion printer with two tiers:
 
-- Throttle with interval (`x` minutes; recommended 60 minutes).
-- Use a large boxed banner.
-- Message should clearly say:
-  - trading continues normally,
-  - builder attribution is currently inactive,
-  - one-time approval must be done from main wallet,
-  - then bot can continue using API wallet.
+- **Small thank-you banner** (only when active/approved): concise support acknowledgment.
+- **Large warning banner** (when approval missing and builder cannot currently be used):
+  - explain why it failed,
+  - keep bot running,
+  - list clear approval options:
+    1) approve in Hyperliquid web UI,
+    2) temporarily use main wallet key in `api-keys.json` so bot can auto-approve,
+    3) use planned CLI helper in `src/tools/`.
 
 ### 4) Detect whether builder attribution is active
 
@@ -155,35 +185,93 @@ Use lightweight checks to decide when to print banner:
 
 Implementation note (inference): this avoids silent failure UX when CCXT approval signing fails on agent wallets.
 
-### 5) Hook banner into runtime loop
+### 5) Startup behavior by wallet mode (required)
+
+At startup, when builder is enabled and not yet approved:
+
+- Run one explicit initializer (e.g. `_init_builder_codes()`) once from the first `execute_to_exchange()` cycle.
+
+- **Main wallet mode** (`exchange.account_address == exchange.wallet.address` equivalent):
+  - call approval automatically via CCXT/Hyperliquid API,
+  - print: “builder codes approved to <address>, fee <rate>”,
+  - print small thank-you banner.
+- **Agent/API wallet mode**:
+  - do not hard-stop startup,
+  - force one builder-attributed order attempt by temporarily setting `approvedBuilderFee=True`,
+  - allow first builder-attributed order attempt to fail naturally with Hyperliquid error,
+  - immediately switch account session to temporary builder-disabled mode.
+
+### 6) Temporary disable + scheduled re-enable loop (required)
+
+For agent/API wallet accounts with missing approval:
+
+- After first approval-related failure, set a per-account cooldown state.
+- During cooldown, place normal orders without builder params.
+- Every ~30 minutes:
+  - re-enable builder attempt,
+  - if still unapproved, allow visible error and print large instruction banner again,
+  - re-enter cooldown.
+- If approval later succeeds, keep builder enabled and switch to thank-you banner flow.
+- Suggested state variables:
+  - `_builder_initialized`
+  - `_builder_pending_approval`
+  - `_builder_disabled_ts`
+  - `_builder_next_retry_ts`
+
+### 7) Hook banner and recheck flow into runtime loop
 
 File: `src/exchanges/hyperliquid.py`
 
 - Override `execute_to_exchange()` in Hyperliquid bot (same pattern as Binance).
-- Call `await super().execute_to_exchange()` then banner check/print.
+- Call `await super().execute_to_exchange()` then:
+  - evaluate builder state transitions,
+  - print small/large banner as needed,
+  - run cooldown re-enable checks on schedule.
 
-### 6) Documentation updates
+### 8) Early user guidance in docs/setup surfaces (required)
 
-- Add short user-facing setup section to `docs/hyperliquid_guide.md`:
-  - one-time main wallet approval
-  - API/agent wallet can still trade if not approved (with periodic reminder)
+- Add explicit pre-live warning to `docs/hyperliquid_guide.md` near setup steps:
+  - approval must happen once,
+  - main wallet can auto-approve,
+  - agent wallet requires prior manual approval.
+- Add clear builder-approval note to `api-keys.json.example` around Hyperliquid credentials.
+- Add concise “before first live start” note in installation/onboarding docs where practical.
 - Update/replace `docs/hyperliquid_builder_codes.md` sections that currently suggest per-order param injection in `_build_order_params` (prefer CCXT option-based flow).
+- Add planned CLI approval helper docs for `src/tools/` once tool exists.
+- Add `src/tools/approve_builder_fee.py` plan details:
+  - load builder/fee from `broker_codes.hjson`,
+  - accept main wallet creds once,
+  - call `approve_builder_fee`,
+  - print success/failure guidance.
 
-### 7) Validation checklist
+### 9) Validation checklist
 
 - Unit test parsing of approval response (`"0"`, `"0.01%"`, etc.).
 - Mocked Hyperliquid exchange test:
   - approval missing -> orders still execute + banner throttles.
   - approval present -> no banner after activation.
+- Mocked main-wallet startup test:
+  - unapproved -> auto-approve called -> notice + thank-you.
+- Mocked agent-wallet flow test:
+  - first failure visible,
+  - builder temporarily disabled,
+  - 30-minute re-enable retry logic works.
 - Regression check: no behavior changes for non-Hyperliquid exchanges.
 
 ---
 
-## Open inputs needed before implementation
+## Risk notes
 
-1. Final Passivbot builder wallet address (`builder`).
-2. Confirm banner interval `x` minutes (recommended: 60).
-3. Confirm default fee stays at 1 bps (`feeInt=10`).
+- Expected tradeoff for agent-wallet nag path: one order attempt may fail each retry cycle before fallback disables builder again.
+- This is intentional for visibility and should be documented as part of the “free-with-ads” UX.
+
+---
+
+## Fixed implementation inputs
+
+1. Builder wallet address: `0x5e20A6D7e11366390Fde63EA3d0A026903359a74`
+2. Default fee: `feeRate="0.01%"`, `feeInt=10` (1 bps)
+3. Agent-wallet retry cadence target: ~30 minutes
 
 ---
 
@@ -196,3 +284,4 @@ File: `src/exchanges/hyperliquid.py`
 - CCXT Hyperliquid (v4.4.93): https://raw.githubusercontent.com/ccxt/ccxt/4.4.93/python/ccxt/async_support/hyperliquid.py
 - CCXT Hyperliquid (v4.4.94): https://raw.githubusercontent.com/ccxt/ccxt/4.4.94/python/ccxt/async_support/hyperliquid.py
 - CCXT Hyperliquid (v4.4.100): https://raw.githubusercontent.com/ccxt/ccxt/4.4.100/python/ccxt/async_support/hyperliquid.py
+- Supplemental implementation context: https://github.com/freqtrade/freqtrade/issues/11986
