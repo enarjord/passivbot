@@ -26,6 +26,8 @@ class HyperliquidBot(CCXTBot):
     HIP3_MAX_LEVERAGE = 10
     # HIP-3 symbols use "xyz:" prefix (TradeXYZ builder)
     HIP3_PREFIX = "xyz:"
+    BUILDER_SUGGESTION_INTERVAL_MS = 60 * 60 * 1000
+    BUILDER_STATUS_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -39,6 +41,10 @@ class HyperliquidBot(CCXTBot):
             self.user_info["is_vault"] = False
         self.max_n_concurrent_ohlcvs_1m_updates = 2
         self.custom_id_max_length = 34
+        self._builder_suggestion_last_print_ms = 0
+        self._builder_approval_last_check_ms = 0
+        self._builder_approval_is_active = False
+        self._builder_settings = {}
 
     def create_ccxt_sessions(self):
         creds = {
@@ -57,6 +63,7 @@ class HyperliquidBot(CCXTBot):
             self.ccp.options.update(self._build_ccxt_options())
             self.ccp.options["defaultType"] = "swap"
             self.ccp.options["fetchMarkets"] = fetch_markets_config
+            self._apply_builder_code_options(self.ccp)
             self._apply_endpoint_override(self.ccp)
         elif self.endpoint_override:
             logging.info("Skipping Hyperliquid websocket session due to custom endpoint override.")
@@ -64,7 +71,162 @@ class HyperliquidBot(CCXTBot):
         self.cca.options.update(self._build_ccxt_options())
         self.cca.options["defaultType"] = "swap"
         self.cca.options["fetchMarkets"] = fetch_markets_config
+        self._apply_builder_code_options(self.cca)
         self._apply_endpoint_override(self.cca)
+
+    def _normalize_builder_settings(self) -> dict:
+        settings = {}
+        if isinstance(self.broker_code, str):
+            if self.broker_code:
+                settings["ref"] = self.broker_code
+            self._builder_settings = settings
+            return settings
+        if not isinstance(self.broker_code, dict):
+            self._builder_settings = settings
+            return settings
+
+        ref = self.broker_code.get("ref")
+        if ref:
+            settings["ref"] = ref
+
+        builder = self.broker_code.get("builder")
+        if builder:
+            settings["builder"] = builder
+            settings["feeRate"] = self.broker_code.get("feeRate", "0.01%")
+            try:
+                settings["feeInt"] = int(self.broker_code.get("feeInt", 10))
+            except Exception:
+                logging.warning(
+                    "[builder] invalid feeInt=%r in broker_codes.hjson for hyperliquid; using 10",
+                    self.broker_code.get("feeInt"),
+                )
+                settings["feeInt"] = 10
+            builder_fee = self.broker_code.get("builderFee", True)
+            if isinstance(builder_fee, str):
+                builder_fee = builder_fee.lower() not in ["0", "false", "no"]
+            settings["builderFee"] = bool(builder_fee)
+        self._builder_settings = settings
+        return settings
+
+    def _apply_builder_code_options(self, client):
+        if client is None:
+            return
+        settings = self._normalize_builder_settings()
+        if not settings:
+            return
+        client.options.update(settings)
+
+    def _builder_feature_enabled(self) -> bool:
+        return bool(
+            self._builder_settings.get("builder")
+            and self._builder_settings.get("builderFee", True)
+        )
+
+    @staticmethod
+    def _is_positive_builder_fee_value(value) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return float(value) > 0.0
+        if isinstance(value, str):
+            text = value.strip()
+            if text.endswith("%"):
+                text = text[:-1]
+            try:
+                return float(text) > 0.0
+            except ValueError:
+                return False
+        return False
+
+    def _extract_max_builder_fee(self, payload):
+        if isinstance(payload, dict):
+            for key in ["maxBuilderFee", "maxFeeRate"]:
+                if key in payload:
+                    return self._extract_max_builder_fee(payload[key])
+            for key in ["data", "response", "result"]:
+                if key in payload:
+                    return self._extract_max_builder_fee(payload[key])
+            return None
+        if isinstance(payload, list):
+            for item in payload:
+                extracted = self._extract_max_builder_fee(item)
+                if extracted is not None:
+                    return extracted
+            return None
+        return payload
+
+    async def _is_builder_approval_active(self) -> bool:
+        if not self._builder_feature_enabled():
+            return False
+        if self.cca is None:
+            return False
+
+        if self.cca and self.cca.options.get("approvedBuilderFee"):
+            self._builder_approval_is_active = True
+            return True
+
+        now_ms = utc_ms()
+        if now_ms - self._builder_approval_last_check_ms < self.BUILDER_STATUS_CHECK_INTERVAL_MS:
+            return self._builder_approval_is_active
+        self._builder_approval_last_check_ms = now_ms
+
+        try:
+            response = await self.cca.fetch(
+                "https://api.hyperliquid.xyz/info",
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                body=json.dumps(
+                    {
+                        "type": "maxBuilderFee",
+                        "user": self.user_info["wallet_address"],
+                        "builder": self._builder_settings["builder"],
+                    }
+                ),
+            )
+            max_builder_fee = self._extract_max_builder_fee(response)
+            self._builder_approval_is_active = self._is_positive_builder_fee_value(max_builder_fee)
+            if self._builder_approval_is_active:
+                self.cca.options["approvedBuilderFee"] = True
+                if self.ccp:
+                    self.ccp.options["approvedBuilderFee"] = True
+        except Exception as e:
+            logging.debug("[builder] failed to fetch maxBuilderFee approval status: %s", e)
+        return self._builder_approval_is_active
+
+    async def print_builder_code_suggestion(self):
+        if not self._builder_feature_enabled():
+            return
+        if await self._is_builder_approval_active():
+            return
+
+        now_ms = utc_ms()
+        if now_ms - self._builder_suggestion_last_print_ms < self.BUILDER_SUGGESTION_INTERVAL_MS:
+            return
+        self._builder_suggestion_last_print_ms = now_ms
+
+        builder = self._builder_settings["builder"]
+        fee_rate = self._builder_settings.get("feeRate", "0.01%")
+        lines = [
+            "Passivbot Hyperliquid builder code is enabled by default.",
+            " ",
+            "To support continued Passivbot development, please approve builder fees once",
+            "from your main Hyperliquid wallet (not your API/agent wallet).",
+            " ",
+            f"Builder: {builder}",
+            f"Max fee to approve: {fee_rate}",
+            " ",
+            "Trading continues normally even if not approved.",
+            "Without approval, builder attribution remains inactive.",
+        ]
+        front_pad = " " * 6 + "##"
+        back_pad = "##"
+        max_len = max([len(line) for line in lines])
+        print("\n\n")
+        print(front_pad + "#" * (max_len + 2) + back_pad)
+        for line in lines:
+            print(front_pad + " " + line + " " * (max_len - len(line) + 1) + back_pad)
+        print(front_pad + "#" * (max_len + 2) + back_pad)
+        print("\n\n")
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -380,6 +542,11 @@ class HyperliquidBot(CCXTBot):
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(orders, "execute_order")
+
+    async def execute_to_exchange(self):
+        res = await super().execute_to_exchange()
+        await self.print_builder_code_suggestion()
+        return res
 
     def did_create_order(self, executed) -> bool:
         did_create = super().did_create_order(executed)

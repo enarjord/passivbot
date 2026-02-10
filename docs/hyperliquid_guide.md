@@ -27,6 +27,17 @@ For the `"private_key"`, use the API wallet created in the API section on Hyperl
 Now Passivbot may be run as normal. Note that Hyperliquid has a minimum $10 order size:  
 `initial_entry_cost = balance * (total_wallet_exposure_limit / n_positions) * entry_initial_qty_pct`
 
+### Builder code (enabled by default)
+
+Passivbot enables Hyperliquid builder attribution by default via CCXT options.
+
+- Default fee approval target is `0.01%` (1 bps).
+- If your account has not approved builder fees, trading still works.
+- Passivbot prints a recurring banner reminding you how to approve.
+
+Important: approval must be signed once by your **main wallet**, not the API/agent wallet.
+After approval, you may keep running Passivbot from your API/agent wallet as usual.
+
 #### HyperLiquid with a Vault (CopyTrading-like)
 1. In HyperLiquid, navigate to "Vaults" in the top menu and create a new vault.
 2. Set the name and description (limited to 250 characters).

@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+### Added
+- **Hyperliquid builder-code defaults** - Added `broker_codes.hjson` Hyperliquid builder/ref defaults (`ref`, `builder`, `feeRate`, `feeInt`) so CCXT builder attribution is enabled by default.
+
+### Changed
+- **Hyperliquid live reminders** - Live bot now prints a recurring banner when builder-fee approval is missing, while continuing to trade normally (non-blocking).
+
 ## v7.8.2 - 2026-02-09
 
 ### Added

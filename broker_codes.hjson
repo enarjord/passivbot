@@ -4,6 +4,13 @@
 	binance_spot: "URB6VTDQ"
 	bybit: "passivbotbybit"
 	bitget: "Passivbot"
+	hyperliquid: {
+		ref: "PASSIVBOT"
+		builder: "0x490af7d4a048a81db0f677517ed6373565b42349"
+		feeRate: "0.01%"
+		feeInt: 10
+		builderFee: true
+	}
 	okx: "0fe0667832d7BCDE"
 	kucoin: {
 		"spot": {
