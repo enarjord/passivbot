@@ -73,6 +73,7 @@ from pathlib import Path
 from plotting import (
     create_forager_balance_figures,
     create_forager_coin_figures,
+    create_forager_pnl_figure,
     create_forager_twe_figure,
     save_figures,
 )
@@ -1246,6 +1247,12 @@ def post_process(
     save_figures(balance_figs, results_path)
     twe_figs = create_forager_twe_figure(fdf, autoplot=False, return_figures=True)
     save_figures(twe_figs, results_path)
+    pnl_figs = create_forager_pnl_figure(
+        fdf, bal_eq,
+        balance_sample_divider=balance_sample_divider,
+        autoplot=False, return_figures=True,
+    )
+    save_figures(pnl_figs, results_path)
 
     if not config["disable_plotting"]:
         try:
