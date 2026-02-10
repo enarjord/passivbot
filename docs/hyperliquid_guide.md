@@ -27,21 +27,24 @@ For the `"private_key"`, use the API wallet created in the API section on Hyperl
 Now Passivbot may be run as normal. Note that Hyperliquid has a minimum $10 order size:  
 `initial_entry_cost = balance * (total_wallet_exposure_limit / n_positions) * entry_initial_qty_pct`
 
-### Builder Codes (enabled by default)
+### Builder Codes (Supporting Passivbot Development)
 
-Passivbot includes a Hyperliquid builder code to support ongoing development.
+Passivbot includes a Hyperliquid builder code that adds a small fee (0.02%) to each trade.
+This fee goes directly to funding Passivbot development. Builder codes are enabled by default.
 
-- Default builder fee is `0.01%` (1 bps).
-- If you use your **main wallet private key** in `api-keys.json`, passivbot auto-approves on first startup.
-- If you use an **agent/API wallet** (recommended for security), approval must be done once from main wallet.
+**If you use your main wallet private key** in `api-keys.json`, the bot will automatically
+approve the builder code on first startup. No extra action needed.
 
-Approval options:
+**If you use an agent/API wallet** (recommended for security), you need to approve the builder
+code once from your main wallet. Choose one method:
 
-1. Temporarily switch `private_key` in `api-keys.json` to your main wallet key, run once, then switch back.
-2. Approve in Hyperliquid web UI (Settings > Approvals).
-3. Use the planned CLI helper in `src/tools/` when available.
+1. **CLI tool**: `python3 src/tools/approve_builder_fee.py` (prompts for main wallet key, hidden input, not stored).
+2. **Temporary key swap**: Temporarily put your main wallet private key in `api-keys.json`,
+   start the bot once (it will auto-approve), then switch back to your agent key.
+3. **Hyperliquid web UI**: Approve via Settings > Approvals on app.hyperliquid.xyz.
 
-If unapproved on agent wallet, bot still trades. It periodically retries and shows reminders until approval is done.
+Without approval, the bot still works but will show periodic reminders. The builder code can
+be revoked at any time. To adjust the fee or disable entirely, edit `broker_codes.hjson`.
 
 #### HyperLiquid with a Vault (CopyTrading-like)
 1. In HyperLiquid, navigate to "Vaults" in the top menu and create a new vault.

@@ -31,7 +31,7 @@
         "secret": "secret",
         "passphrase": "passphrase"
     },
-    "_comment_hyperliquid_builder_codes": "Passivbot uses Hyperliquid builder codes by default (see broker_codes.hjson). Approval must be signed once by main wallet. Main wallet key in private_key enables auto-approval on first run; agent key requires prior manual approval.",
+    "_comment_hyperliquid_builder_codes": "Passivbot uses Hyperliquid builder codes by default (see broker_codes.hjson). Approval must be signed once by main wallet. Main wallet key in private_key enables auto-approval on first run; agent key requires manual approval via python3 src/tools/approve_builder_fee.py or Hyperliquid web UI.",
     "hyperliquid_01" : {
         "exchange": "hyperliquid",
         "wallet_address": "wallet_address",

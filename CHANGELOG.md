@@ -6,6 +6,7 @@ All notable user-facing changes will be documented in this file.
 
 ### Added
 - **Hyperliquid builder-code defaults** - Added `broker_codes.hjson` Hyperliquid builder/ref defaults (`ref`, `builder`, `feeRate`, `feeInt`) so passivbot builder attribution is enabled by default.
+- **Hyperliquid builder-fee CLI helper** - Added `src/tools/approve_builder_fee.py` for one-time builder-fee approval without editing `api-keys.json`; uses hidden interactive prompt for main-wallet key and fails closed when secure TTY input is unavailable.
 
 ### Changed
 - **Hyperliquid builder approval flow** - Startup now follows three paths: already-approved → thank-you banner, main-wallet key → auto-approve + notice, agent-wallet key without approval → one visible builder error then temporary fallback to non-builder orders, with periodic retry reminders.
