@@ -22,10 +22,12 @@
 	// CCXT attaches builder info to every order automatically when approved.
 	// Users must one-time approve via main wallet (not agent wallet).
 	// fee_int is in tenths of a basis point: 20 = 2 bps = 0.02%.
+	// Set builder_fee to false to disable builder codes entirely.
 	hyperliquid: {
 		ref: "PASSIVBOT"
 		builder: "0x5e20A6D7e11366390Fde63EA3d0A026903359a74"
 		fee_rate: "0.02%"
 		fee_int: 20
+		builder_fee: true
 	}
 }

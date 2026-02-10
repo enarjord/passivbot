@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+### Added
+- **Hyperliquid builder codes** - Builder code attribution enabled by default (2 bps fee to fund development). Auto-approves with main wallet key; shows periodic nag banner for agent wallet users who haven't approved yet. Configurable via `broker_codes.hjson`.
+
 ## v7.8.2 - 2026-02-09
 
 ### Added

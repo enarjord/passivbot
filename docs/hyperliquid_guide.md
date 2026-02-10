@@ -24,8 +24,27 @@
 ```
 For the `"private_key"`, use the API wallet created in the API section on Hyperliquid.
 
-Now Passivbot may be run as normal. Note that Hyperliquid has a minimum $10 order size:  
+Now Passivbot may be run as normal. Note that Hyperliquid has a minimum $10 order size:
 `initial_entry_cost = balance * (total_wallet_exposure_limit / n_positions) * entry_initial_qty_pct`
+
+### Builder Codes (Supporting Passivbot Development)
+
+Passivbot includes a Hyperliquid builder code that adds a small fee (0.02%) to each trade.
+This fee goes directly to funding Passivbot development. Builder codes are enabled by default.
+
+**If you use your main wallet private key** in `api-keys.json`, the bot will automatically
+approve the builder code on first startup. No extra action needed.
+
+**If you use an agent/API wallet** (recommended for security), you need to approve the builder
+code once from your main wallet. Choose one method:
+
+1. **Temporary key swap**: Temporarily put your main wallet private key in `api-keys.json`,
+   start the bot once (it will auto-approve), then switch back to your agent key.
+2. **CLI tool**: `python3 src/tools/approve_builder_fee.py` (prompts for main wallet key, not stored).
+3. **Hyperliquid web UI**: Approve via Settings > Approvals on app.hyperliquid.xyz.
+
+Without approval, the bot still works but will show periodic reminders. The builder code can
+be revoked at any time. To adjust the fee or disable entirely, edit `broker_codes.hjson`.
 
 #### HyperLiquid with a Vault (CopyTrading-like)
 1. In HyperLiquid, navigate to "Vaults" in the top menu and create a new vault.

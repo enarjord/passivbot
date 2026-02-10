@@ -26,6 +26,9 @@ class HyperliquidBot(CCXTBot):
     HIP3_MAX_LEVERAGE = 10
     # HIP-3 symbols use "xyz:" prefix (TradeXYZ builder)
     HIP3_PREFIX = "xyz:"
+    # Builder code timing constants
+    BUILDER_NAG_INTERVAL_MS = 30 * 60 * 1000  # 30 min between nag cycles
+    BUILDER_STATUS_CHECK_INTERVAL_MS = 5 * 60 * 1000  # 5 min cache for info endpoint
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -39,6 +42,7 @@ class HyperliquidBot(CCXTBot):
             self.user_info["is_vault"] = False
         self.max_n_concurrent_ohlcvs_1m_updates = 2
         self.custom_id_max_length = 34
+        self._builder_approval_last_check_ms = 0
 
     def create_ccxt_sessions(self):
         creds = {
@@ -72,8 +76,9 @@ class HyperliquidBot(CCXTBot):
     def _apply_builder_code_options(self):
         """Apply Hyperliquid builder code and referral options to CCXT sessions.
 
-        Sets builder/ref CCXT options from broker_codes.hjson, but suppresses
-        CCXT's auto-approval (we handle it ourselves in _init_builder_codes).
+        Normalizes broker_codes.hjson settings with validation, then sets CCXT
+        options on both clients. Suppresses CCXT's auto-approval so we control
+        the flow ourselves in _init_builder_codes.
         """
         if not self.broker_code:
             return
@@ -84,7 +89,20 @@ class HyperliquidBot(CCXTBot):
             if "builder" in self.broker_code:
                 hl_opts["builder"] = self.broker_code["builder"]
                 hl_opts["feeRate"] = self.broker_code.get("fee_rate", "0.02%")
-                hl_opts["feeInt"] = self.broker_code.get("fee_int", 20)
+                try:
+                    hl_opts["feeInt"] = int(self.broker_code.get("fee_int", 20))
+                except (ValueError, TypeError):
+                    logging.warning(
+                        "[builder] invalid fee_int=%r in broker_codes.hjson; using 20",
+                        self.broker_code.get("fee_int"),
+                    )
+                    hl_opts["feeInt"] = 20
+                # Check explicit disable toggle (builderFee: false in hjson)
+                builder_fee_flag = self.broker_code.get("builder_fee", True)
+                if isinstance(builder_fee_flag, str):
+                    builder_fee_flag = builder_fee_flag.lower() not in ("0", "false", "no")
+                if not builder_fee_flag:
+                    return  # Builder codes explicitly disabled
         else:
             hl_opts["ref"] = str(self.broker_code)
         # Suppress CCXT's auto-approval; we handle it in _init_builder_codes
@@ -97,10 +115,51 @@ class HyperliquidBot(CCXTBot):
     def _has_builder_config(self) -> bool:
         return isinstance(self.broker_code, dict) and "builder" in self.broker_code
 
+    @staticmethod
+    def _is_positive_fee_value(value) -> bool:
+        """Parse various fee value formats (int, float, "0.01%", etc.)."""
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return float(value) > 0.0
+        if isinstance(value, str):
+            text = value.strip().rstrip("%")
+            try:
+                return float(text) > 0.0
+            except ValueError:
+                return False
+        return False
+
+    @staticmethod
+    def _extract_max_builder_fee(payload):
+        """Recursively extract the max builder fee from various API response shapes."""
+        if isinstance(payload, dict):
+            for key in ("maxBuilderFee", "maxFeeRate"):
+                if key in payload:
+                    return HyperliquidBot._extract_max_builder_fee(payload[key])
+            for key in ("data", "response", "result"):
+                if key in payload:
+                    return HyperliquidBot._extract_max_builder_fee(payload[key])
+            return None
+        if isinstance(payload, list):
+            for item in payload:
+                extracted = HyperliquidBot._extract_max_builder_fee(item)
+                if extracted is not None:
+                    return extracted
+            return None
+        return payload
+
     async def _check_builder_fee_approved(self) -> bool:
-        """Query Hyperliquid info endpoint to check if builder fee is approved."""
+        """Query Hyperliquid info endpoint to check if builder fee is approved.
+
+        Uses a short cache interval to avoid hammering the endpoint.
+        """
         if not self._has_builder_config():
             return False
+        now_ms = utc_ms()
+        if now_ms - self._builder_approval_last_check_ms < self.BUILDER_STATUS_CHECK_INTERVAL_MS:
+            return self.cca.options.get("approvedBuilderFee", False)
+        self._builder_approval_last_check_ms = now_ms
         try:
             builder_addr = self.broker_code["builder"]
             wallet_addr = self.user_info["wallet_address"]
@@ -114,9 +173,8 @@ class HyperliquidBot(CCXTBot):
                     "builder": builder_addr,
                 }),
             )
-            max_fee = int(res) if res else 0
-            required_fee = self.broker_code.get("fee_int", 20)
-            return max_fee >= required_fee
+            max_fee = self._extract_max_builder_fee(res)
+            return self._is_positive_fee_value(max_fee)
         except Exception as e:
             logging.debug(f"[builder] fee approval check failed: {e}")
             return False
