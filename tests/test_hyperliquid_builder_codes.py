@@ -62,6 +62,9 @@ def _make_bot(HLBot, broker_code=None):
     bot.broker_code = broker_code or {}
     bot.user_info = {"wallet_address": "0xabc123", "is_vault": False}
     bot._builder_approval_last_check_ms = 0
+    bot._builder_initialized = False
+    bot._builder_pending_approval = False
+    bot._builder_disabled_ts = None
     bot.cca = None
     bot.ccp = None
     return bot
@@ -225,7 +228,7 @@ async def test_path_a_already_approved(stubbed_modules):
 
     assert bot.cca.options.get("approvedBuilderFee") is True
     assert bot.cca._approve_called is False
-    assert not getattr(bot, "_builder_pending_approval", False)
+    assert bot._builder_pending_approval is False
 
 
 @pytest.mark.asyncio
@@ -242,7 +245,7 @@ async def test_path_b_main_wallet_auto_approve(stubbed_modules):
 
     assert bot.cca.options.get("approvedBuilderFee") is True
     assert bot.cca._approve_called is True
-    assert not getattr(bot, "_builder_pending_approval", False)
+    assert bot._builder_pending_approval is False
 
 
 @pytest.mark.asyncio
@@ -290,4 +293,79 @@ async def test_no_builder_config_skips_init(stubbed_modules):
     bot.cca = DummyClient()
     await bot._init_builder_codes()
     assert bot.cca._approve_called is False
-    assert not getattr(bot, "_builder_pending_approval", False)
+    assert bot._builder_pending_approval is False
+
+
+# ─── camelCase alias tests ───
+
+
+def test_apply_builder_code_options_camel_case_keys(stubbed_modules):
+    """broker_codes.hjson can use camelCase keys (feeRate, feeInt, builderFee)."""
+    HLBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_bot(HLBot, broker_code={
+        "builder": "0x123",
+        "feeRate": "0.03%",
+        "feeInt": 30,
+        "builderFee": True,
+    })
+    bot.cca = DummyClient()
+    bot._apply_builder_code_options()
+    assert bot.cca.options["feeRate"] == "0.03%"
+    assert bot.cca.options["feeInt"] == 30
+
+
+def test_has_builder_config_respects_disabled_toggle(stubbed_modules):
+    """_has_builder_config returns False when builder_fee is explicitly disabled."""
+    HLBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_bot(HLBot, broker_code={
+        "builder": "0x123",
+        "builder_fee": False,
+    })
+    assert bot._has_builder_config() is False
+
+    bot2 = _make_bot(HLBot, broker_code={
+        "builder": "0x123",
+        "builderFee": "false",
+    })
+    assert bot2._has_builder_config() is False
+
+    bot3 = _make_bot(HLBot, broker_code={
+        "builder": "0x123",
+        "builder_fee": True,
+    })
+    assert bot3._has_builder_config() is True
+
+
+# ─── Re-enable cycle tests ───
+
+
+@pytest.mark.asyncio
+async def test_maybe_reenable_still_not_approved(stubbed_modules):
+    """Re-enable cycle: still not approved → re-enable builder for next order attempt."""
+    HLBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_bot(HLBot, broker_code={"builder": "0x123", "fee_int": 20})
+    bot.cca = DummyClient(fetch_response="0")
+    bot._builder_pending_approval = True
+    bot._builder_disabled_ts = 0  # long ago
+    bot.BUILDER_NAG_INTERVAL_MS = 0  # force immediate re-check
+    await bot._maybe_reenable_builder_codes()
+
+    assert bot.cca.options.get("approvedBuilderFee") is True  # re-enabled
+    assert bot._builder_pending_approval is True  # still pending
+    assert bot._builder_disabled_ts is None  # cleared for next cycle
+
+
+@pytest.mark.asyncio
+async def test_maybe_reenable_now_approved(stubbed_modules):
+    """Re-enable cycle: user approved externally → resolve pending state."""
+    HLBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_bot(HLBot, broker_code={"builder": "0x123", "fee_int": 20})
+    bot.cca = DummyClient(fetch_response="0.02%")
+    bot._builder_pending_approval = True
+    bot._builder_disabled_ts = 0
+    bot.BUILDER_NAG_INTERVAL_MS = 0
+    await bot._maybe_reenable_builder_codes()
+
+    assert bot.cca.options.get("approvedBuilderFee") is True
+    assert bot._builder_pending_approval is False  # resolved!
+    assert bot._builder_disabled_ts is None

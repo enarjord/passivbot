@@ -43,6 +43,9 @@ class HyperliquidBot(CCXTBot):
         self.max_n_concurrent_ohlcvs_1m_updates = 2
         self.custom_id_max_length = 34
         self._builder_approval_last_check_ms = 0
+        self._builder_initialized = False
+        self._builder_pending_approval = False
+        self._builder_disabled_ts = None
 
     def create_ccxt_sessions(self):
         creds = {
@@ -87,22 +90,27 @@ class HyperliquidBot(CCXTBot):
             if "ref" in self.broker_code:
                 hl_opts["ref"] = self.broker_code["ref"]
             if "builder" in self.broker_code:
-                hl_opts["builder"] = self.broker_code["builder"]
-                hl_opts["feeRate"] = self.broker_code.get("fee_rate", "0.02%")
-                try:
-                    hl_opts["feeInt"] = int(self.broker_code.get("fee_int", 20))
-                except (ValueError, TypeError):
-                    logging.warning(
-                        "[builder] invalid fee_int=%r in broker_codes.hjson; using 20",
-                        self.broker_code.get("fee_int"),
-                    )
-                    hl_opts["feeInt"] = 20
-                # Check explicit disable toggle (builderFee: false in hjson)
-                builder_fee_flag = self.broker_code.get("builder_fee", True)
+                # Check explicit disable toggle first (supports both key styles)
+                builder_fee_flag = self.broker_code.get(
+                    "builder_fee", self.broker_code.get("builderFee", True)
+                )
                 if isinstance(builder_fee_flag, str):
                     builder_fee_flag = builder_fee_flag.lower() not in ("0", "false", "no")
                 if not builder_fee_flag:
                     return  # Builder codes explicitly disabled
+                hl_opts["builder"] = self.broker_code["builder"]
+                hl_opts["feeRate"] = self.broker_code.get(
+                    "fee_rate", self.broker_code.get("feeRate", "0.02%")
+                )
+                try:
+                    hl_opts["feeInt"] = int(
+                        self.broker_code.get("fee_int", self.broker_code.get("feeInt", 20))
+                    )
+                except (ValueError, TypeError):
+                    logging.warning(
+                        "[builder] invalid fee_int in broker_codes.hjson; using 20",
+                    )
+                    hl_opts["feeInt"] = 20
         else:
             hl_opts["ref"] = str(self.broker_code)
         # Suppress CCXT's auto-approval; we handle it in _init_builder_codes
@@ -113,7 +121,13 @@ class HyperliquidBot(CCXTBot):
                 client.options.update(hl_opts)
 
     def _has_builder_config(self) -> bool:
-        return isinstance(self.broker_code, dict) and "builder" in self.broker_code
+        if not isinstance(self.broker_code, dict) or "builder" not in self.broker_code:
+            return False
+        # Respect the builder_fee toggle
+        flag = self.broker_code.get("builder_fee", self.broker_code.get("builderFee", True))
+        if isinstance(flag, str):
+            flag = flag.lower() not in ("0", "false", "no")
+        return bool(flag)
 
     @staticmethod
     def _is_positive_fee_value(value) -> bool:
@@ -271,11 +285,9 @@ class HyperliquidBot(CCXTBot):
 
     async def _maybe_reenable_builder_codes(self):
         """Periodically re-enable builder codes for Path C users (every ~30 min)."""
-        reenable_interval_ms = 1000 * 60 * 30
-        disabled_ts = getattr(self, "_builder_disabled_ts", None)
-        if disabled_ts is None:
+        if not self._builder_pending_approval or self._builder_disabled_ts is None:
             return
-        if utc_ms() - disabled_ts < reenable_interval_ms:
+        if utc_ms() - self._builder_disabled_ts < self.BUILDER_NAG_INTERVAL_MS:
             return
 
         # Check if user approved externally since last check
@@ -293,15 +305,13 @@ class HyperliquidBot(CCXTBot):
         self._builder_disabled_ts = None
 
     async def execute_to_exchange(self):
-        # One-time builder code initialization
-        if not hasattr(self, "_builder_initialized"):
+        if not self._builder_initialized:
             await self._init_builder_codes()
             self._builder_initialized = True
 
         res = await super().execute_to_exchange()
 
-        # Periodic re-enable for Path C users
-        if getattr(self, "_builder_pending_approval", False):
+        if self._builder_pending_approval:
             await self._maybe_reenable_builder_codes()
 
         return res
@@ -609,11 +619,9 @@ class HyperliquidBot(CCXTBot):
             return await super().execute_order(order)
         except Exception as e:
             # Path C: catch builder-fee-not-approved errors
-            if getattr(self, "_builder_pending_approval", False) and self._is_builder_fee_error(e):
-                logging.warning(
-                    f"[builder] Order failed: builder fee not approved. "
-                    f"Temporarily disabling builder codes. Symbol: {order['symbol']}"
-                )
+            if self._builder_pending_approval and self._is_builder_fee_error(e):
+                logging.error("[builder] order rejected: builder fee not approved (%s)", order["symbol"])
+                logging.warning("[builder] temporarily disabling builder attribution")
                 self._print_builder_nag_banner()
                 self._set_builder_approved(False)
                 self._builder_disabled_ts = utc_ms()
