@@ -465,8 +465,8 @@ class HLCVManager:
                         continue
                     if not df.empty:
                         frames.append(df)
-                    loaded = True
-                    break
+                        loaded = True
+                        break
                 if loaded:
                     break
 
