@@ -102,7 +102,7 @@ async def _check_approved(exchange, wallet_address: str, builder: str) -> bool:
         max_fee = _extract_max_builder_fee(res)
         return _is_positive_fee_value(max_fee)
     except Exception as e:
-        logging.debug(f"fee approval check failed: {e}")
+        logging.debug("fee approval check failed (%s)", type(e).__name__)
         return False
 
 
@@ -158,7 +158,7 @@ async def main_async(user: str, api_keys_path: str) -> int:
             print("Builder fee approved successfully!")
             return 0
         except Exception as e:
-            logging.debug(f"approval with api-keys.json key failed: {e}")
+            logging.debug("approval with api-keys.json key failed (%s)", type(e).__name__)
             print(
                 "Approval failed with the key in api-keys.json (likely an agent wallet)."
             )
@@ -170,6 +170,10 @@ async def main_async(user: str, api_keys_path: str) -> int:
     print("Builder fee approval requires a signature from the main wallet.")
     print("Your main wallet private key will NOT be stored anywhere.")
     print()
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        print("Cannot prompt securely for private key (stdin/stderr is not a TTY).")
+        print("Run this command in an interactive terminal.")
+        return 1
     main_key = getpass.getpass("Enter main wallet private key (hidden): ").strip()
     if not main_key:
         print("No key entered. Aborting.")
@@ -188,7 +192,8 @@ async def main_async(user: str, api_keys_path: str) -> int:
             print("It may take a moment to propagate. Try running this tool again.")
             return 0
     except Exception as e:
-        print(f"Approval failed: {e}")
+        logging.debug("approval with main wallet key failed (%s)", type(e).__name__)
+        print("Approval failed.")
         print()
         print("Possible causes:")
         print("  - Incorrect private key")
@@ -197,6 +202,7 @@ async def main_async(user: str, api_keys_path: str) -> int:
         return 1
     finally:
         await exchange.close()
+        main_key = ""
 
 
 def main() -> None:
@@ -219,8 +225,8 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nAborted.")
         sys.exit(1)
-    except Exception:
-        logging.exception("Unexpected error")
+    except Exception as e:
+        logging.error("Unexpected error (%s)", type(e).__name__)
         sys.exit(1)
 
 
