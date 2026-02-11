@@ -34,10 +34,9 @@ This ensures EMAs can be computed over contiguous data.
 
 ### Data Sources (Priority Order)
 
-1. External OHLCV source dir (`backtest.ohlcv_source_dir`, backtest only)
-2. Local Parquet cache
-3. Exchange API (Binance, Bybit, Bitget archives, CCXT fallback)
-4. TradFi providers (Yahoo Finance, Finnhub) for stock perps
+1. Local Parquet cache
+2. Exchange API (Binance, Bybit, Bitget archives, CCXT fallback)
+3. TradFi providers (Yahoo Finance, Finnhub) for stock perps
 
 **Code**: `src/candlestick_manager.py`
 
