@@ -166,6 +166,7 @@ def load_ohlcv_data(filepath: str) -> pd.DataFrame:
                 "volume": arr["bv"].astype(float),
             }
         )
+        df = df.drop_duplicates(subset=["timestamp"], keep="last")
         return ensure_millis_df(df)
 
     arr = np.load(filepath, allow_pickle=True)

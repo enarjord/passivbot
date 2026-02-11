@@ -15,6 +15,11 @@ You can point `backtest.ohlcv_source_dir` to a pre-populated OHLCV tree. The loa
 
 `<coin_or_symbol>` accepts base coins (e.g., `ETH`) or CCXT-style symbol dirs (e.g., `ETH_USDC:USDC`).
 
+For `.npz` files, the archive must contain a `candles` key with a structured NumPy array
+having fields `ts` (int64 timestamp), `o` (open), `h` (high), `l` (low), `c` (close), and
+`bv` (base volume). Timestamps should be in milliseconds. For `.npy` files, the array should
+have columns `[timestamp, open, high, low, close, volume]`.
+
 ## Usage
 
 ```shell
