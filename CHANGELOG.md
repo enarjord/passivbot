@@ -7,6 +7,10 @@ All notable user-facing changes will be documented in this file.
 ### Added
 - **High-exposure duration metrics** - New backtest metrics `high_exposure_hours_{mean,max}_{long,short}` measuring continuous durations where total wallet exposure exceeded its daily average. Available for optimization scoring and limit checks.
 - **Total wallet exposure plot** - Backtests now output `total_wallet_exposure.png` showing long TWE (positive, blue) and short TWE (negative, red) over time.
+- **External OHLCV source dir for backtests** - Added `backtest.ohlcv_source_dir` to prefer a pre-populated `<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.(npz|npy)` tree before archive fetches.
+
+### Fixed
+- **OHLCV source-dir fallback behavior** - Non-contiguous source-dir candle data now falls back to CandlestickManager instead of propagating gappy series into downstream strict continuity checks.
 
 ## v7.8.1 - 2026-02-07
 
