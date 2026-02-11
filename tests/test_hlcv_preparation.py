@@ -831,6 +831,72 @@ class TestOHLCVSourceDir:
             assert len(df) == 1441  # end_ts is inclusive (00:00:00 on day 15 to 00:00:00 on day 16)
 
     @pytest.mark.asyncio
+    async def test_source_dir_fallback_non_contiguous_small_gap(self, tmp_path, mock_exchange):
+        """Test fallback when source dir data has a small non-contiguous gap."""
+        from ohlcv_utils import dump_ohlcv_data
+        from utils import date_to_ts
+
+        source_dir = tmp_path / "ohlcv_source"
+        exchange_dir = source_dir / "binance" / "1m" / "BTC"
+        exchange_dir.mkdir(parents=True)
+
+        day = "2024-01-15"
+        day_ts = int(date_to_ts(day))
+
+        # Remove 5 candles to create a 6-minute gap (< default 120-minute tolerance).
+        timestamps_full = np.arange(day_ts, day_ts + 24 * 60 * 60 * 1000, 60_000)
+        timestamps = np.concatenate([timestamps_full[:100], timestamps_full[105:]])
+
+        data = np.column_stack([
+            timestamps,
+            np.full(len(timestamps), 50000.0),
+            np.full(len(timestamps), 50100.0),
+            np.full(len(timestamps), 49900.0),
+            np.full(len(timestamps), 50050.0),
+            np.full(len(timestamps), 100.0),
+        ])
+        dump_ohlcv_data(data, str(exchange_dir / f"{day}.npy"))
+
+        om = HLCVManager(
+            "binanceusdm",
+            start_date=day,
+            end_date="2024-01-16",
+            cc=mock_exchange,
+            ohlcv_source_dir=str(source_dir),
+            gap_tolerance_ohlcvs_minutes=120.0,
+        )
+
+        om.markets = {
+            "BTC/USDT:USDT": {
+                "symbol": "BTC/USDT:USDT",
+                "base": "BTC",
+                "quote": "USDT",
+                "maker": 0.0002,
+                "taker": 0.0004,
+                "contractSize": 1.0,
+                "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.001}},
+                "precision": {"price": 0.01, "amount": 0.001},
+            }
+        }
+
+        with patch.object(CandlestickManager, 'get_candles') as mock_get_candles:
+            full_timestamps = np.arange(day_ts, day_ts + 24 * 60 * 60 * 1000, 60_000, dtype=np.int64)
+            mock_candles = np.zeros(len(full_timestamps), dtype=CANDLE_DTYPE)
+            mock_candles['ts'] = full_timestamps
+            mock_candles['o'] = 50000.0
+            mock_candles['h'] = 50100.0
+            mock_candles['l'] = 49900.0
+            mock_candles['c'] = 50050.0
+            mock_candles['bv'] = 100.0
+            mock_get_candles.return_value = mock_candles
+
+            df = await om.get_ohlcvs("BTC")
+
+            mock_get_candles.assert_called_once()
+            assert not df.empty
+            assert len(df) == 1441  # end_ts is inclusive (00:00:00 on day 15 to 00:00:00 on day 16)
+
+    @pytest.mark.asyncio
     async def test_source_dir_fallback_excessive_gaps(self, tmp_path, mock_exchange):
         """Test fallback when gaps exceed tolerance."""
         from ohlcv_utils import dump_ohlcv_data
@@ -1011,10 +1077,11 @@ Test Coverage Summary:
    - Fetch from exchange
    - Cache loading
 
-✅ OHLCV Source Dir (5 tests):
+✅ OHLCV Source Dir (6 tests):
    - Load from .npy files
    - Load from .npz files
    - Fallback on missing files
+   - Fallback on non-contiguous small gaps
    - Fallback on excessive gaps
    - Fallback on corrupt/malformed .npz
 
@@ -1022,7 +1089,7 @@ Test Coverage Summary:
    - prepare_hlcvs structure
    - prepare_hlcvs_combined structure
 
-Total: 22 tests covering critical functionality
+Total: 23 tests covering critical functionality
 
 Note: Full integration tests for prepare_hlcvs and prepare_hlcvs_combined
 would require extensive mocking of CandlestickManager, async operations,

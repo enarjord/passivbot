@@ -482,10 +482,10 @@ class HLCVManager:
         ts = df["timestamp"].astype(np.int64, copy=False).values
         if ts.size > 1:
             intervals = np.diff(ts)
-            greatest_gap_ms = int(intervals.max(initial=60_000))
-            if greatest_gap_ms > int(self.gap_tolerance_ohlcvs_minutes * 60_000):
+            if not np.all(intervals == 60_000):
+                greatest_gap_ms = int(intervals.max(initial=60_000))
                 logging.warning(
-                    "[%s] source dir gaps detected for %s; greatest gap %.1f minutes. Falling back.",
+                    "[%s] source dir non-contiguous data for %s; greatest gap %.1f minutes. Falling back.",
                     self.exchange,
                     coin,
                     greatest_gap_ms / 60_000.0,
