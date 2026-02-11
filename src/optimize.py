@@ -1547,7 +1547,6 @@ async def main():
             if total_shm_bytes > 0:
                 total_shm_gb = total_shm_bytes / (1024**3)
                 try:
-                    import os
                     import shutil
                     if hasattr(os, "sysconf"):
                         pages = os.sysconf("SC_PHYS_PAGES")
