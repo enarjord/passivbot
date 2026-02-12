@@ -1522,4 +1522,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except ValueError as exc:
+        logging.error("Backtest failed: %s", exc, exc_info=True)
+        sys.exit(1)

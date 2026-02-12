@@ -2084,6 +2084,7 @@ def get_template_config():
             "btc_collateral_ltv_cap": None,
             "compress_cache": True,
             "coin_sources": {},
+            "ohlcv_source_dir": None,
             "market_settings_sources": {},
             "end_date": "now",
             "exchanges": ["binance", "bybit", "gateio", "bitget"],
