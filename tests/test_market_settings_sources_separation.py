@@ -2,6 +2,9 @@
 import sys
 import os
 
+import pandas as pd
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
@@ -129,3 +132,90 @@ def test_coins_by_exchange_grouping():
     # No coins should be grouped under bybit/hyperliquid for OHLCV
     assert "bybit" not in coins_by_exchange
     assert "hyperliquid" not in coins_by_exchange
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_volume_normalization(monkeypatch):
+    """Verify production combined flow uses ohlcv_source for volume normalization inputs."""
+    import hlcv_preparation as hp
+
+    start_ts = 1_704_067_200_000  # 2024-01-01 00:00:00 UTC
+    candle_df = pd.DataFrame(
+        {
+            "timestamp": [start_ts, start_ts + 60_000, start_ts + 120_000],
+            "open": [1.0, 1.0, 1.0],
+            "high": [2.0, 2.0, 2.0],
+            "low": [0.5, 0.5, 0.5],
+            "close": [1.5, 1.5, 1.5],
+            "volume": [10.0, 20.0, 30.0],
+        }
+    )
+
+    class DummyOM:
+        def __init__(self, exchange_id: str):
+            self.exchange_id = exchange_id
+
+        async def load_markets(self):
+            return None
+
+        def get_symbol(self, coin):
+            return coin
+
+        def get_market_specific_settings(self, _coin):
+            return {"exchange": self.exchange_id, "min_cost": 1.0}
+
+    om_dict = {"binanceusdm": DummyOM("binanceusdm"), "bybit": DummyOM("bybit")}
+
+    async def fake_get_first_timestamps_unified(_coins):
+        return {"BTC": start_ts}
+
+    async def fake_fetch_data_for_coin_and_exchange(coin, ex, *_args, **_kwargs):
+        if coin != "BTC":
+            return None
+        if ex == "binanceusdm":
+            return ex, candle_df.copy(), 3, 0, 1_000.0
+        if ex == "bybit":
+            return ex, candle_df.copy(), 2, 0, 500.0
+        return None
+
+    async def fake_compute_exchange_volume_ratios(
+        exchanges_with_data,
+        _valid_coins,
+        _start_date,
+        _end_date,
+        om_map,
+    ):
+        # This is the key behavior under test:
+        # market_settings_sources should not force bybit into normalization exchange set.
+        assert exchanges_with_data == ["binance"]
+        assert set(om_map.keys()) == {"binance"}
+        return {}
+
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", fake_get_first_timestamps_unified)
+    monkeypatch.setattr(hp, "fetch_data_for_coin_and_exchange", fake_fetch_data_for_coin_and_exchange)
+    monkeypatch.setattr(hp, "compute_exchange_volume_ratios", fake_compute_exchange_volume_ratios)
+
+    config = {
+        "backtest": {"gap_tolerance_ohlcvs_minutes": 120},
+        "bot": {"long": {}, "short": {}},
+        "live": {
+            "approved_coins": {"long": ["BTC/USDT:USDT"], "short": []},
+            "minimum_coin_age_days": 0,
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+    }
+
+    mss, _timestamps, unified_array = await hp._prepare_hlcvs_combined_impl(
+        config=config,
+        om_dict=om_dict,
+        base_start_ts=start_ts,
+        _requested_start_ts=start_ts,
+        end_ts=start_ts + 180_000,
+        forced_sources={},
+        market_settings_sources={"BTC": "bybit"},
+    )
+
+    assert mss["BTC"]["exchange"] == "bybit"
+    assert mss["BTC"]["ohlcv_source"] == "binance"
+    assert unified_array[:, 0, 3].sum() == pytest.approx(candle_df["volume"].sum())
