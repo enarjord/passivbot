@@ -7,6 +7,9 @@ All notable user-facing changes will be documented in this file.
 ### Added
 - **Hyperliquid builder codes** - Builder code attribution enabled by default (2 bps fee to fund development). Auto-approves with main wallet key; shows periodic nag banner for agent wallet users who haven't approved yet. Configurable via `broker_codes.hjson`.
 
+### Fixed
+- **Backtest HLCV cache reuse across configs** - Configs that differ only in trading parameters (EMA spans, warmup ratio) now share the same HLCV cache slot. Previously, different EMA spans produced different `warmup_minutes`, which was included in the cache hash, causing unnecessary re-downloads. The cache now uses a ratchet-up strategy: warmup sufficiency is checked at load time, and the cache is overwritten only when a larger warmup is needed.
+
 ## v7.8.2 - 2026-02-09
 
 ### Added
