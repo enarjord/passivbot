@@ -1322,7 +1322,11 @@ async def _prepare_hlcvs_combined_impl(
     )
     end_date_for_volume_ratios = ts_to_date(global_end_time)
 
-    exchanges_with_data = sorted(set([chosen_mss_per_coin[coin]["exchange"] for coin in valid_coins]))
+    # Use OHLCV sources for volume ratio calculation, not market settings sources
+    exchanges_with_data = sorted(set([
+        chosen_mss_per_coin[coin].get("ohlcv_source", chosen_mss_per_coin[coin]["exchange"]) 
+        for coin in valid_coins
+    ]))
     exchange_volume_ratios = await compute_exchange_volume_ratios(
         exchanges_with_data,
         valid_coins,
@@ -1333,7 +1337,9 @@ async def _prepare_hlcvs_combined_impl(
     )
     exchanges_counts = defaultdict(int)
     for coin in chosen_mss_per_coin:
-        exchanges_counts[chosen_mss_per_coin[coin]["exchange"]] += 1
+        # Use OHLCV source for volume normalization, not market settings source
+        ohlcv_exchange = chosen_mss_per_coin[coin].get("ohlcv_source", chosen_mss_per_coin[coin]["exchange"])
+        exchanges_counts[ohlcv_exchange] += 1
     reference_exchange = sorted(exchanges_counts.items(), key=lambda x: x[1])[-1][0]
     exchange_volume_ratios_mapped = defaultdict(dict)
     if len(exchanges_counts) == 1:
@@ -1350,7 +1356,7 @@ async def _prepare_hlcvs_combined_impl(
         ratio_summary = ", ".join(
             f"{ex}={exchange_volume_ratios_mapped[ex][reference_exchange]:.3f}"
             for ex in sorted(exchanges_counts.keys())
-            if ex != reference_exchange
+            if ex != reference_exchange and ex in exchange_volume_ratios_mapped
         )
         logging.info(
             "volume normalization: reference=%s ratios=[%s] (coins per exchange: %s)",
@@ -1363,7 +1369,9 @@ async def _prepare_hlcvs_combined_impl(
     if len(exchanges_counts) > 1:
         coins_by_exchange = defaultdict(list)
         for coin in valid_coins:
-            coins_by_exchange[chosen_mss_per_coin[coin]["exchange"]].append(symbol_to_coin(coin))
+            # Use OHLCV source for grouping, not market settings source
+            ohlcv_ex = chosen_mss_per_coin[coin].get("ohlcv_source", chosen_mss_per_coin[coin]["exchange"])
+            coins_by_exchange[ohlcv_ex].append(symbol_to_coin(coin))
         for ex in sorted(coins_by_exchange.keys()):
             coins_list = coins_by_exchange[ex]
             logging.info(
@@ -1378,7 +1386,8 @@ async def _prepare_hlcvs_combined_impl(
     for i, coin in enumerate(valid_coins):
         df = chosen_data_per_coin[coin].copy()
         df = df.set_index("timestamp").reindex(timestamps)
-        exchange_for_this_coin = chosen_mss_per_coin[coin]["exchange"]
+        # Use OHLCV source for volume normalization, not market settings source
+        exchange_for_this_coin = chosen_mss_per_coin[coin].get("ohlcv_source", chosen_mss_per_coin[coin]["exchange"])
         scaling_factor = exchange_volume_ratios_mapped[exchange_for_this_coin][reference_exchange]
         df["volume"] *= scaling_factor
 
