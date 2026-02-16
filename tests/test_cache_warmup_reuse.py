@@ -19,16 +19,15 @@ import copy
 import gzip
 import json
 import os
-import tempfile
 
 import numpy as np
-import pytest
 
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from backtest import (
+    ensure_valid_index_metadata,
     get_cache_hash,
     load_coins_hlcvs_from_cache,
     save_coins_hlcvs_to_cache,
@@ -428,3 +427,26 @@ class TestRatchetUpEndToEnd:
         # Step 6: Load with warmup=5000 → hit
         result = load_coins_hlcvs_from_cache(cfg, "binance", warmup_minutes=5000)
         assert result is not None
+
+    def test_cache_hit_uses_current_warmup_after_metadata_normalization(self, tmp_path, monkeypatch):
+        """Cache hit must apply current run warmup, not stale cached mss warmup."""
+        monkeypatch.chdir(tmp_path)
+        cfg = _base_config()
+
+        coins = ["BTC"]
+        hlcvs = np.zeros((10000, 1, 4), dtype=np.float64)
+        mss = {"BTC": {"first_valid_index": 0, "last_valid_index": 9999, "warmup_minutes": 5000}}
+        btc_usd = np.ones(10000, dtype=np.float64)
+        timestamps = np.arange(10000, dtype=np.int64) * 60_000
+
+        save_coins_hlcvs_to_cache(
+            cfg, coins, hlcvs, "binance", mss, btc_usd, timestamps,
+            warmup_minutes=5000,
+        )
+        result = load_coins_hlcvs_from_cache(cfg, "binance", warmup_minutes=3000)
+        assert result is not None
+
+        mss_loaded = result[3]
+        ensure_valid_index_metadata(mss_loaded, hlcvs, coins, {"__default__": 3000, "BTC": 3000})
+        assert mss_loaded["BTC"]["warmup_minutes"] == 3000
+        assert mss_loaded["BTC"]["trade_start_index"] == 3000
