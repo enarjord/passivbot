@@ -1087,6 +1087,7 @@ def _sync_with_template(
             ("backtest", "suite", "aggregate"),
             ("backtest", "suite", "scenarios"),
             ("backtest", "aggregate"),  # Preserve per-metric aggregation settings
+            ("backtest", "market_settings_sources"),  # Preserve per-coin market settings
         ],
         tracker=tracker,
     )
@@ -2084,6 +2085,7 @@ def get_template_config():
             "btc_collateral_ltv_cap": None,
             "compress_cache": True,
             "coin_sources": {},
+            "ohlcv_source_dir": None,
             "market_settings_sources": {},
             "end_date": "now",
             "exchanges": ["binance", "bybit", "gateio", "bitget"],
@@ -2186,6 +2188,7 @@ def get_template_config():
             "balance_override": None,
             "candle_lock_timeout_seconds": 10.0,
             "empty_means_all_approved": False,
+            "enable_archive_candle_fetch": False,
             "execution_delay_seconds": 2.0,
             "filter_by_min_effective_cost": True,
             "forced_mode_long": "",
