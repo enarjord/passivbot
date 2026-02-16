@@ -20,6 +20,11 @@ When exchange data has gaps (illiquid markets, exchange downtime), CandlestickMa
 
 This ensures EMAs can be computed over contiguous data.
 
+Runtime behavior:
+- For live/present ranges, finalized minutes with no fills are materialized as synthetic zero-candles in RAM.
+- These runtime synthetic candles are not persisted to disk shards.
+- If REST later returns a real candle for a synthetic timestamp, the real candle overwrites it and EMA cache is invalidated.
+
 ## Implementation Details
 
 ### Cache Location

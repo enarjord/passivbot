@@ -1903,6 +1903,96 @@ class CandlestickManager:
                     "s" if count > 1 else "",
                 )
 
+    def _track_synthetic_timestamps(self, symbol: str, timestamps: List[int]) -> None:
+        """Track runtime synthetic timestamps for replacement detection."""
+        if not symbol or not timestamps:
+            return
+        ts_set = {int(ts) for ts in timestamps if int(ts) > 0}
+        if not ts_set:
+            return
+        if symbol not in self._synthetic_timestamps:
+            self._synthetic_timestamps[symbol] = set()
+        self._synthetic_timestamps[symbol].update(ts_set)
+        # Keep only the most recent week to bound memory usage.
+        cutoff = _utc_now_ms() - 7 * 24 * 60 * ONE_MIN_MS
+        self._synthetic_timestamps[symbol] = {
+            ts for ts in self._synthetic_timestamps[symbol] if ts > cutoff
+        }
+
+    def _materialize_runtime_synthetic_gap(self, symbol: str, through_ts: int) -> int:
+        """Fill finalized-minute gaps in memory only (never persisted to disk).
+
+        Returns number of synthesized candles added to in-memory cache.
+        """
+        through_ts = _floor_minute(int(through_ts))
+        if through_ts <= 0:
+            return 0
+
+        arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+        if arr.size == 0:
+            # Try loading a broader historical slice so we can seed from last known close.
+            try:
+                seed_start = max(0, through_ts - 30 * 24 * 60 * ONE_MIN_MS)
+                loaded = self._load_from_disk(symbol, seed_start, through_ts, timeframe="1m")
+                if isinstance(loaded, np.ndarray) and loaded.size:
+                    arr = _ensure_dtype(loaded)
+            except Exception:
+                pass
+        if arr.size == 0:
+            return 0
+
+        arr = np.sort(arr, order="ts")
+        ts_arr = arr["ts"].astype(np.int64, copy=False)
+        idx = int(np.searchsorted(ts_arr, through_ts, side="right")) - 1
+        if idx < 0:
+            return 0
+
+        last_ts = int(ts_arr[idx])
+        if last_ts >= through_ts:
+            return 0
+
+        # Cap synthesis burst to avoid building enormous in-memory runs if a symbol has
+        # been inactive for a very long time.
+        max_synth = max(1, min(self.max_memory_candles_per_symbol, 24 * 60))
+        first_synth_ts = max(last_ts + ONE_MIN_MS, through_ts - (max_synth - 1) * ONE_MIN_MS)
+        if first_synth_ts > through_ts:
+            return 0
+
+        prev_close = float(arr[idx]["c"])
+        if not math.isfinite(prev_close):
+            return 0
+
+        synth_ts = np.arange(first_synth_ts, through_ts + ONE_MIN_MS, ONE_MIN_MS, dtype=np.int64)
+        if synth_ts.size == 0:
+            return 0
+
+        synth = np.empty((synth_ts.shape[0],), dtype=CANDLE_DTYPE)
+        synth["ts"] = synth_ts
+        synth["o"] = prev_close
+        synth["h"] = prev_close
+        synth["l"] = prev_close
+        synth["c"] = prev_close
+        synth["bv"] = 0.0
+
+        merged = self._merge_overwrite(arr, synth)
+        self._cache[symbol] = merged
+        try:
+            self._enforce_memory_retention(symbol)
+        except Exception:
+            pass
+        self._track_synthetic_timestamps(symbol, synth_ts.tolist())
+
+        self._log(
+            "debug",
+            "runtime_synthetic_gap_materialized",
+            symbol=symbol,
+            synthesized=int(synth_ts.shape[0]),
+            first_ts=int(synth_ts[0]),
+            last_ts=int(synth_ts[-1]),
+            seed_last_real_ts=last_ts,
+        )
+        return int(synth_ts.shape[0])
+
     def _invalidate_ema_cache(self, symbol: str) -> None:
         """Invalidate all cached EMA values for a symbol, forcing recomputation."""
         if symbol in self._ema_cache:
@@ -3299,14 +3389,7 @@ class CandlestickManager:
 
         # Track synthetic timestamps for EMA recomputation detection
         if symbol and synthesized_timestamps:
-            if symbol not in self._synthetic_timestamps:
-                self._synthetic_timestamps[symbol] = set()
-            self._synthetic_timestamps[symbol].update(synthesized_timestamps)
-            # Limit tracked timestamps to last 7 days to avoid unbounded growth
-            cutoff = _utc_now_ms() - 7 * 24 * 60 * ONE_MIN_MS
-            self._synthetic_timestamps[symbol] = {
-                ts for ts in self._synthetic_timestamps[symbol] if ts > cutoff
-            }
+            self._track_synthetic_timestamps(symbol, synthesized_timestamps)
 
         # Log when zero-candles were synthesized (rate-limited or batched)
         if synthesized_count > 0 and symbol:
@@ -5297,6 +5380,16 @@ class CandlestickManager:
                         if not (e < ms or s > me):
                             self._add_known_gap(symbol, max(s, ms), min(e, me))
 
+        # Present-touching runtime path: if there were no trades in completed minutes,
+        # materialize zero-volume candles in RAM (not persisted).
+        if self.exchange is not None and not strict and end_ts >= latest_finalized:
+            synth_through = min(int(end_ts), int(latest_finalized))
+            if synth_through >= int(start_ts):
+                synthesized = self._materialize_runtime_synthetic_gap(symbol, synth_through)
+                if synthesized > 0:
+                    arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                    sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
+
         # Standardize gaps: synthesize zero-candles where missing.
         # To help seed forward-fill, include one candle before start_ts if available.
         # This ensures standardize_gaps has a prev_close even if sub starts after start_ts.
@@ -6197,6 +6290,8 @@ class CandlestickManager:
             except TypeError:
                 new_arr = await self._fetch_ohlcv_paginated(symbol, since, end_exclusive)
             if new_arr.size == 0:
+                # Keep finalized runtime candles contiguous even if there were no fills.
+                self._materialize_runtime_synthetic_gap(symbol, end_exclusive - ONE_MIN_MS)
                 return None
             if not persisted_batches:
                 self._persist_batch(
