@@ -721,6 +721,37 @@ def test_real_batch_overrides_runtime_synthetic_and_invalidates_ema_cache(tmp_pa
     assert real_ts not in cm._synthetic_timestamps.get(symbol, set())
 
 
+def test_materialize_runtime_synthetic_gap_caps_at_max_synth(tmp_path):
+    """Gap larger than 24*60 minutes should only synthesize the most recent 1440 candles."""
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "DEAD/USDT:USDT"
+    # Place a seed candle 3 days (4320 minutes) before through_ts.
+    through_ts = _floor_minute(int(time.time() * 1000)) - 5 * ONE_MIN_MS
+    gap_minutes = 3 * 24 * 60  # 4320 minutes
+    seed_ts = through_ts - gap_minutes * ONE_MIN_MS
+    seed_close = 42.0
+
+    seed = np.array([(seed_ts, seed_close, seed_close, seed_close, seed_close, 1.0)], dtype=CANDLE_DTYPE)
+    cm._cache[symbol] = seed
+
+    synthesized = cm._materialize_runtime_synthetic_gap(symbol, through_ts)
+
+    # max_synth caps at min(max_memory_candles_per_symbol, 24*60) = 1440
+    max_synth = min(cm.max_memory_candles_per_symbol, 24 * 60)
+    assert synthesized == max_synth
+
+    arr = np.sort(cm._cache[symbol], order="ts")
+    synth_only = arr[arr["ts"] > seed_ts]
+    assert synth_only.shape[0] == max_synth
+    # First synthetic candle should start at through_ts - (max_synth - 1) * ONE_MIN_MS
+    expected_first = through_ts - (max_synth - 1) * ONE_MIN_MS
+    assert int(synth_only[0]["ts"]) == expected_first
+    assert int(synth_only[-1]["ts"]) == through_ts
+    # All synthetic candles carry the seed close and zero volume
+    assert np.allclose(np.asarray(synth_only["c"], dtype=np.float64), seed_close)
+    assert np.allclose(np.asarray(synth_only["bv"], dtype=np.float64), 0.0)
+
+
 @pytest.mark.asyncio
 async def test_refresh_bounds_disk_load_range(monkeypatch, tmp_path):
     fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC

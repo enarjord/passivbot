@@ -1936,8 +1936,13 @@ class CandlestickManager:
                 loaded = self._load_from_disk(symbol, seed_start, through_ts, timeframe="1m")
                 if isinstance(loaded, np.ndarray) and loaded.size:
                     arr = _ensure_dtype(loaded)
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log(
+                    "debug",
+                    "runtime_synthetic_seed_load_failed",
+                    symbol=symbol,
+                    error=str(exc),
+                )
         if arr.size == 0:
             return 0
 
@@ -1978,8 +1983,13 @@ class CandlestickManager:
         self._cache[symbol] = merged
         try:
             self._enforce_memory_retention(symbol)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log(
+                "debug",
+                "runtime_synthetic_retention_enforcement_failed",
+                symbol=symbol,
+                error=str(exc),
+            )
         self._track_synthetic_timestamps(symbol, synth_ts.tolist())
 
         self._log(
