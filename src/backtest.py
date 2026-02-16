@@ -980,7 +980,11 @@ def ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map=None):
                 last_idx = int(total_steps)
         meta["first_valid_index"] = first_idx
         meta["last_valid_index"] = last_idx
-        warm_minutes = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+        if warmup_map:
+            # Warmup from current config must override any historical cached metadata.
+            warm_minutes = int(warmup_map.get(coin, default_warm))
+        else:
+            warm_minutes = int(meta.get("warmup_minutes", 0))
         meta["warmup_minutes"] = warm_minutes
         if first_idx > last_idx:
             trade_start_idx = first_idx
