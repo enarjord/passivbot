@@ -85,6 +85,15 @@ def test_ensure_valid_index_metadata_default_warmup_fallback():
     assert mss["fallback"]["trade_start_index"] == 4
 
 
+def test_ensure_valid_index_metadata_warmup_map_overrides_cached_warmup():
+    hlcvs = np.zeros((12, 1, 4), dtype=np.float64)
+    coins = ["coinwarm"]
+    mss = {"coinwarm": {"first_valid_index": 2, "last_valid_index": 10, "warmup_minutes": 9}}
+    ensure_valid_index_metadata(mss, hlcvs, coins, {"coinwarm": 3})
+    assert mss["coinwarm"]["warmup_minutes"] == 3
+    assert mss["coinwarm"]["trade_start_index"] == 5
+
+
 def test_compute_per_coin_warmup_minutes_handles_overrides():
     config = {
         "live": {"warmup_ratio": 0.1, "max_warmup_minutes": 0.0},

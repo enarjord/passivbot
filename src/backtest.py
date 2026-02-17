@@ -815,18 +815,33 @@ def get_cache_hash(config, exchange):
         "gap_tolerance_ohlcvs_minutes": require_config_value(
             config, "backtest.gap_tolerance_ohlcvs_minutes"
         ),
-        "warmup_minutes": compute_backtest_warmup_minutes(config),
         "coin_sources": coin_sources_sorted,
         "market_settings_sources": market_settings_sources_sorted,
     }
     return calc_hash(to_hash)
 
 
-def load_coins_hlcvs_from_cache(config, exchange):
+def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
     compress_cache = bool(require_config_value(config, "backtest.compress_cache"))
     if os.path.exists(cache_dir):
+        # Check warmup sufficiency: cached data must cover at least the needed warmup
+        meta_path = cache_dir / "cache_meta.json"
+        if meta_path.exists():
+            try:
+                cache_meta = json.load(open(meta_path))
+                cached_warmup = int(cache_meta.get("warmup_minutes", 0))
+            except Exception:
+                cached_warmup = 0
+        else:
+            cached_warmup = 0
+        if cached_warmup < warmup_minutes:
+            logging.info(
+                f"{exchange} cache warmup insufficient: cached={cached_warmup} min, "
+                f"needed={warmup_minutes} min. Will re-fetch."
+            )
+            return None
         coins = json.load(open(cache_dir / "coins.json"))
         mss = json.load(open(cache_dir / "market_specific_settings.json"))
         if compress_cache:
@@ -890,20 +905,22 @@ def save_coins_hlcvs_to_cache(
     mss,
     btc_usd_prices,
     timestamps=None,
+    warmup_minutes=0,
 ):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
     cache_dir.mkdir(parents=True, exist_ok=True)
     is_compressed = bool(require_config_value(config, "backtest.compress_cache"))
-    expected_files = [
-        "coins.json",
-        "hlcvs.npy.gz" if is_compressed else "hlcvs.npy",
-        "btc_usd_prices.npy.gz" if is_compressed else "btc_usd_prices.npy",
-    ]
-    if timestamps is not None:
-        expected_files.append("timestamps.npy.gz" if is_compressed else "timestamps.npy")
-    if all((cache_dir / fname).exists() for fname in expected_files):
-        return
+    warmup_minutes = int(warmup_minutes)
+    meta_path = cache_dir / "cache_meta.json"
+    if meta_path.exists():
+        try:
+            existing_meta = json.load(open(meta_path))
+            existing_warmup = int(existing_meta.get("warmup_minutes", 0))
+            if existing_warmup >= warmup_minutes:
+                return cache_dir
+        except Exception:
+            pass
     logging.info(f"Dumping cache...")
     json.dump(coins, open(cache_dir / "coins.json", "w"))
     json.dump(mss, open(cache_dir / "market_specific_settings.json", "w"))
@@ -948,6 +965,7 @@ def save_coins_hlcvs_to_cache(
         f"{line}"
     )
     logging.info(f"Seconds to dump cache: {(utc_ms() - sts) / 1000:.4f}")
+    json.dump({"warmup_minutes": warmup_minutes}, open(meta_path, "w"))
     return cache_dir
 
 
@@ -972,7 +990,11 @@ def ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map=None):
                 last_idx = int(total_steps)
         meta["first_valid_index"] = first_idx
         meta["last_valid_index"] = last_idx
-        warm_minutes = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+        if warmup_map:
+            # Warmup from current config must override any historical cached metadata.
+            warm_minutes = int(warmup_map.get(coin, default_warm))
+        else:
+            warm_minutes = int(meta.get("warmup_minutes", 0))
         meta["warmup_minutes"] = warm_minutes
         if first_idx > last_idx:
             trade_start_idx = first_idx
@@ -986,9 +1008,10 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
     results_path = oj(base_dir, exchange, "")
     warmup_map = compute_per_coin_warmup_minutes(config)
     default_warm = int(warmup_map.get("__default__", 0))
+    backtest_warmup_minutes = compute_backtest_warmup_minutes(config)
     try:
         sts = utc_ms()
-        result = load_coins_hlcvs_from_cache(config, exchange)
+        result = load_coins_hlcvs_from_cache(config, exchange, backtest_warmup_minutes)
         if result:
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
             cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = result
@@ -1023,6 +1046,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             mss,
             btc_usd_prices,
             timestamps,
+            warmup_minutes=backtest_warmup_minutes,
         )
     except Exception as e:
         logging.error(f"Failed to save hlcvs to cache: {e}")
