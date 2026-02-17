@@ -911,6 +911,16 @@ def save_coins_hlcvs_to_cache(
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
     cache_dir.mkdir(parents=True, exist_ok=True)
     is_compressed = bool(require_config_value(config, "backtest.compress_cache"))
+    warmup_minutes = int(warmup_minutes)
+    meta_path = cache_dir / "cache_meta.json"
+    if meta_path.exists():
+        try:
+            existing_meta = json.load(open(meta_path))
+            existing_warmup = int(existing_meta.get("warmup_minutes", 0))
+            if existing_warmup >= warmup_minutes:
+                return cache_dir
+        except Exception:
+            pass
     logging.info(f"Dumping cache...")
     json.dump(coins, open(cache_dir / "coins.json", "w"))
     json.dump(mss, open(cache_dir / "market_specific_settings.json", "w"))
@@ -955,7 +965,7 @@ def save_coins_hlcvs_to_cache(
         f"{line}"
     )
     logging.info(f"Seconds to dump cache: {(utc_ms() - sts) / 1000:.4f}")
-    json.dump({"warmup_minutes": int(warmup_minutes)}, open(cache_dir / "cache_meta.json", "w"))
+    json.dump({"warmup_minutes": warmup_minutes}, open(meta_path, "w"))
     return cache_dir
 
 

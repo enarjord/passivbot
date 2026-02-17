@@ -347,6 +347,29 @@ class TestSavePersistsWarmupMetadata:
         meta = json.load(open(os.path.join(str(cache_dir2), "cache_meta.json")))
         assert meta["warmup_minutes"] == 5000
 
+    def test_save_does_not_downgrade_existing_warmup(self, tmp_path, monkeypatch):
+        """Saving with smaller warmup must not downgrade cache metadata."""
+        monkeypatch.chdir(tmp_path)
+        cfg = _base_config()
+
+        coins = ["BTC"]
+        hlcvs = np.zeros((10, 1, 4), dtype=np.float64)
+        mss = {"BTC": {}}
+        btc_usd = np.ones(10, dtype=np.float64)
+        timestamps = np.arange(10, dtype=np.int64) * 60_000
+
+        cache_dir = save_coins_hlcvs_to_cache(
+            cfg, coins, hlcvs, "binance", mss, btc_usd, timestamps,
+            warmup_minutes=5000,
+        )
+        save_coins_hlcvs_to_cache(
+            cfg, coins, hlcvs, "binance", mss, btc_usd, timestamps,
+            warmup_minutes=1000,
+        )
+
+        meta = json.load(open(os.path.join(str(cache_dir), "cache_meta.json")))
+        assert meta["warmup_minutes"] == 5000
+
     def test_save_with_compression(self, tmp_path, monkeypatch):
         """cache_meta.json is written even with compressed cache."""
         monkeypatch.chdir(tmp_path)
