@@ -1392,7 +1392,10 @@ impl<'a> Backtest<'a> {
 
         // Calculate EMA alphas for each coin, adjusted for candle interval
         let interval = backtest_params.candle_interval_minutes;
-        let ema_alphas: Vec<EmaAlphas> = bot_params.iter().map(|bp| calc_ema_alphas(bp, interval)).collect();
+        let ema_alphas: Vec<EmaAlphas> = bot_params
+            .iter()
+            .map(|bp| calc_ema_alphas(bp, interval))
+            .collect();
         let mut warmup_bars = backtest_params.global_warmup_bars;
         if warmup_bars == 0 {
             warmup_bars = calc_warmup_bars(&bot_params);
@@ -2563,7 +2566,8 @@ impl<'a> Backtest<'a> {
             // window is from max(first_ts, last_boundary) to previous minute
             let window_start_ms = self.first_timestamp_ms.max(self.last_hour_boundary_ms);
             if current_ts > window_start_ms + self.interval_ms {
-                let start_idx = ((window_start_ms - self.first_timestamp_ms) / self.interval_ms) as usize;
+                let start_idx =
+                    ((window_start_ms - self.first_timestamp_ms) / self.interval_ms) as usize;
                 let end_idx = if k == 0 { 0usize } else { k - 1 };
                 if end_idx >= start_idx {
                     for i in 0..self.n_coins {
@@ -2910,7 +2914,9 @@ mod tests {
             assert!(
                 (alphas.long.alphas[i] - expected).abs() < 1e-12,
                 "long alpha[{}]: expected {}, got {}",
-                i, expected, alphas.long.alphas[i]
+                i,
+                expected,
+                alphas.long.alphas[i]
             );
         }
 
@@ -2937,7 +2943,9 @@ mod tests {
             assert!(
                 (alphas.long.alphas[i] - expected).abs() < 1e-12,
                 "long alpha[{}]: expected {}, got {}",
-                i, expected, alphas.long.alphas[i]
+                i,
+                expected,
+                alphas.long.alphas[i]
             );
         }
     }
