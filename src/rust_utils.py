@@ -12,6 +12,7 @@ import subprocess
 import sys
 import sysconfig
 import time
+import hashlib
 from shutil import copy2
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
@@ -286,15 +287,35 @@ def sync_installed_extension_into_src() -> None:
         except OSError:
             pass
 
+    def _sha256(path: Path) -> str:
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
     # Copy only when needed.
     try:
         if dst.exists():
             src_stat = installed_path.stat()
             dst_stat = dst.stat()
-            if src_stat.st_size == dst_stat.st_size and src_stat.st_mtime <= dst_stat.st_mtime:
-                return
+            if src_stat.st_size == dst_stat.st_size:
+                # Avoid rewriting an identical dylib. Rewriting in-place can race with imports
+                # from concurrent processes on macOS and trigger "Code Signature Invalid" kills.
+                if _sha256(installed_path) == _sha256(dst):
+                    return
         dst.parent.mkdir(parents=True, exist_ok=True)
-        copy2(installed_path, dst)
+        tmp = dst.with_name(f".{dst.name}.tmp.{os.getpid()}")
+        copy2(installed_path, tmp)
+        if sys.platform == "darwin":
+            # Best-effort ad-hoc sign; keeps macOS happy when loading copied extension pages.
+            subprocess.run(  # noqa: S603,S607
+                ["codesign", "--force", "--sign", "-", str(tmp)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        os.replace(tmp, dst)
         print(f"Synced Rust extension into {dst}")
     except OSError:
         # Best-effort; if we can't sync, the build still exists in site-packages.
