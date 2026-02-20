@@ -124,6 +124,46 @@ class HyperliquidBot(CCXTBot):
         # Fall back to base class check (onlyIsolated flag, etc.)
         return super()._requires_isolated_margin(symbol)
 
+    def _normalize_symbol(self, symbol: str) -> str:
+        if not symbol:
+            return symbol
+        if symbol in self.markets_dict:
+            return symbol
+
+        lower_map = {k.lower(): k for k in self.markets_dict}
+        direct = lower_map.get(symbol.lower())
+        if direct:
+            return direct
+
+        base = symbol.split("/")[0] if "/" in symbol else symbol
+        ticker = base
+        if base.startswith("xyz:"):
+            ticker = base[4:]
+        elif base.startswith("XYZ-"):
+            ticker = base[4:]
+        elif base.startswith("XYZ:"):
+            ticker = base[4:]
+
+        variants = [
+            f"XYZ-{ticker}/USDC:USDC",
+            f"xyz:{ticker}/USDC:USDC",
+            f"XYZ:{ticker}/USDC:USDC",
+            f"xyz:{ticker}",
+            f"XYZ:{ticker}",
+            ticker,
+        ]
+        for candidate in variants:
+            if candidate in self.markets_dict:
+                return candidate
+            low = lower_map.get(candidate.lower())
+            if low:
+                return low
+        return symbol
+
+    def coin_to_symbol(self, coin, verbose=True):
+        symbol = super().coin_to_symbol(coin, verbose=verbose)
+        return self._normalize_symbol(symbol)
+
     async def watch_orders(self):
         res = None
         while True:
@@ -177,18 +217,39 @@ class HyperliquidBot(CCXTBot):
         return sorted(fetched, key=lambda x: x["timestamp"])
 
     async def _fetch_positions_and_balance(self):
-        info = await self.cca.fetch_balance()
+        payload = {
+            "type": "clearinghouseState",
+            "user": self.user_info["wallet_address"],
+        }
+        info = await self.cca.fetch(
+            "https://api.hyperliquid.xyz/info",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps(payload),
+        )
+        info_xyz = await self.cca.fetch(
+            "https://api.hyperliquid.xyz/info",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({**payload, "dex": "xyz"}),
+        )
+        merged_positions = []
+        if "assetPositions" in info:
+            merged_positions.extend(info["assetPositions"])
+        if "assetPositions" in info_xyz:
+            merged_positions.extend(info_xyz["assetPositions"])
+        margin_summary = info_xyz.get("marginSummary") or info.get("marginSummary") or {}
         positions = [
             {
-                "symbol": self.coin_to_symbol(x["position"]["coin"]),
+                "symbol": self._normalize_symbol(self.coin_to_symbol(x["position"]["coin"])),
                 "position_side": ("long" if (size := float(x["position"]["szi"])) > 0.0 else "short"),
                 "size": size,
                 "price": float(x["position"]["entryPx"]),
             }
-            for x in info["info"]["assetPositions"]
+            for x in merged_positions
         ]
-        balance = float(info["info"]["marginSummary"]["accountValue"]) - sum(
-            [float(x["position"]["unrealizedPnl"]) for x in info["info"]["assetPositions"]]
+        balance = float(margin_summary["accountValue"]) - sum(
+            [float(x["position"]["unrealizedPnl"]) for x in merged_positions]
         )
         return positions, balance
 

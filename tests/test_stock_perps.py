@@ -12,6 +12,7 @@ Tests cover:
 import importlib
 import sys
 import types
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -170,6 +171,68 @@ class TestHyperliquidBotHIP3:
 
         # Market with onlyIsolated=False should not require isolated margin
         assert bot._requires_isolated_margin("BTC/USDC:USDC") is False
+
+    def test_normalize_symbol_prefers_markets_dict_canonical(self, bot_class):
+        bot = object.__new__(bot_class)
+        bot.markets_dict = {"XYZ-NVDA/USDC:USDC": {}, "BTC/USDC:USDC": {}}
+
+        assert bot._normalize_symbol("XYZ-NVDA/USDC:USDC") == "XYZ-NVDA/USDC:USDC"
+        assert bot._normalize_symbol("xyz:NVDA/USDC:USDC") == "XYZ-NVDA/USDC:USDC"
+        assert bot._normalize_symbol("xyz:NVDA") == "XYZ-NVDA/USDC:USDC"
+        assert bot._normalize_symbol("BTC/USDC:USDC") == "BTC/USDC:USDC"
+
+    def test_fetch_positions_and_balance_merges_base_and_xyz(self, bot_class):
+        bot = object.__new__(bot_class)
+        bot.user_info = {"wallet_address": "0xabc"}
+        bot.markets_dict = {
+            "BTC/USDC:USDC": {},
+            "XYZ-NVDA/USDC:USDC": {},
+        }
+        bot.coin_to_symbol = lambda coin, verbose=True: {
+            "BTC": "BTC/USDC:USDC",
+            "NVDA": "xyz:NVDA/USDC:USDC",
+        }.get(coin, coin)
+        bot.cca = types.SimpleNamespace(
+            fetch=AsyncMock(
+                side_effect=[
+                    {
+                        "marginSummary": {"accountValue": "1000"},
+                        "assetPositions": [
+                            {
+                                "position": {
+                                    "coin": "BTC",
+                                    "szi": "0.1",
+                                    "entryPx": "50000",
+                                    "unrealizedPnl": "10",
+                                }
+                            }
+                        ],
+                    },
+                    {
+                        "marginSummary": {"accountValue": "1200"},
+                        "assetPositions": [
+                            {
+                                "position": {
+                                    "coin": "NVDA",
+                                    "szi": "-2",
+                                    "entryPx": "900",
+                                    "unrealizedPnl": "-5",
+                                }
+                            }
+                        ],
+                    },
+                ]
+            )
+        )
+
+        import asyncio
+
+        positions, balance = asyncio.run(bot._fetch_positions_and_balance())
+
+        assert len(positions) == 2
+        assert {p["symbol"] for p in positions} == {"BTC/USDC:USDC", "XYZ-NVDA/USDC:USDC"}
+        assert [p["position_side"] for p in positions] == ["long", "short"]
+        assert balance == 1195.0
 
 
 class TestIsolatedMarginLeverageCapping:
