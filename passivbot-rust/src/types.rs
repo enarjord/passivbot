@@ -171,6 +171,7 @@ pub struct BacktestParams {
     pub metrics_only: bool,
     pub filter_by_min_effective_cost: bool,
     pub hedge_mode: bool,
+    pub max_realized_loss_pct: f64,
     pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
 }
 

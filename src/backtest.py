@@ -1109,6 +1109,9 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                 require_config_value(config, "backtest.filter_by_min_effective_cost")
             ),
             "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
+            "max_realized_loss_pct": float(
+                get_optional_config_value(config, "live.max_realized_loss_pct", 1.0)
+            ),
         }
     return bot_params_list, exchange_params, backtest_params
 

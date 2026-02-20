@@ -358,8 +358,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
     let positions_held_per_day = durations_ms.len() as f64 / n_days;
 
     let position_held_hours_mean = if !durations_ms.is_empty() {
-        durations_ms.iter().sum::<u64>() as f64
-            / (durations_ms.len() as f64 * MS_PER_HOUR as f64)
+        durations_ms.iter().sum::<u64>() as f64 / (durations_ms.len() as f64 * MS_PER_HOUR as f64)
     } else {
         0.0
     };
@@ -375,8 +374,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
         sorted_durations.sort_unstable();
         let mid = sorted_durations.len() / 2;
         if sorted_durations.len() % 2 == 0 {
-            (sorted_durations[mid - 1] + sorted_durations[mid]) as f64
-                / (2.0 * MS_PER_HOUR as f64)
+            (sorted_durations[mid - 1] + sorted_durations[mid]) as f64 / (2.0 * MS_PER_HOUR as f64)
         } else {
             sorted_durations[mid] as f64 / MS_PER_HOUR as f64
         }
@@ -396,24 +394,14 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
     let volume_pct_per_day_avg = calc_avg_volume_pct_per_day(fills);
     let peak_recovery_hours_equity = calc_peak_recovery_hours(
         equities,
-        if use_timestamps { Some(timestamps_ms) } else { None },
+        if use_timestamps {
+            Some(timestamps_ms)
+        } else {
+            None
+        },
+        false,
     );
-    let peak_recovery_hours_pnl = if equities.is_empty() {
-        0.0
-    } else {
-        let mut deltas = vec![0.0f64; equities.len()];
-        for fill in fills {
-            if fill.index < deltas.len() {
-                deltas[fill.index] += fill.pnl + fill.fee_paid;
-            }
-        }
-        let mut running = 0.0;
-        for value in deltas.iter_mut() {
-            running += *value;
-            *value = running;
-        }
-        calc_peak_recovery_hours(&deltas, if use_timestamps { Some(timestamps_ms) } else { None })
-    };
+    let peak_recovery_hours_pnl = calc_peak_recovery_hours_pnl(fills);
 
     let mut analysis = Analysis::default();
     analysis.adg = adg;
@@ -486,7 +474,8 @@ pub fn analyze_backtest(
         }
 
         // filter fills that happened after or at start_idx
-        let subset_start_ts = if timestamps_ms.len() == equities.len() && !timestamps_ms.is_empty() {
+        let subset_start_ts = if timestamps_ms.len() == equities.len() && !timestamps_ms.is_empty()
+        {
             timestamps_ms[start_idx]
         } else {
             fallback_timestamp_ms(start_idx)
@@ -615,10 +604,8 @@ pub fn analyze_backtest(
         use std::collections::BTreeMap;
 
         // twe_short is stored as signed negative; use abs for magnitude
-        let twe_extractors: [(fn(&Fill) -> f64, &str); 2] = [
-            (|f| f.twe_long, "long"),
-            (|f| f.twe_short.abs(), "short"),
-        ];
+        let twe_extractors: [(fn(&Fill) -> f64, &str); 2] =
+            [(|f| f.twe_long, "long"), (|f| f.twe_short.abs(), "short")];
 
         for (extract_twe, side) in &twe_extractors {
             let mut daily_twe: BTreeMap<usize, (f64, usize)> = BTreeMap::new();
@@ -856,7 +843,11 @@ pub fn calc_equity_choppiness(equity: &[f64]) -> f64 {
     variation / net_gain.abs()
 }
 
-fn calc_peak_recovery_hours(series: &[f64], timestamps_ms: Option<&[u64]>) -> f64 {
+fn calc_peak_recovery_hours(
+    series: &[f64],
+    timestamps_ms: Option<&[u64]>,
+    strict_new_peak: bool,
+) -> f64 {
     if series.is_empty() {
         return 0.0;
     }
@@ -877,7 +868,12 @@ fn calc_peak_recovery_hours(series: &[f64], timestamps_ms: Option<&[u64]>) -> f6
         } else {
             fallback_timestamp_ms(i)
         };
-        if value >= peak {
+        let is_new_peak = if strict_new_peak {
+            value > peak
+        } else {
+            value >= peak
+        };
+        if is_new_peak {
             let duration_ms = ts.saturating_sub(peak_ts);
             if duration_ms > max_duration_ms {
                 max_duration_ms = duration_ms;
@@ -886,6 +882,43 @@ fn calc_peak_recovery_hours(series: &[f64], timestamps_ms: Option<&[u64]>) -> f6
             peak_ts = ts;
         }
     }
+    (max_duration_ms as f64) / MS_PER_HOUR as f64
+}
+
+fn calc_peak_recovery_hours_pnl(fills: &[Fill]) -> f64 {
+    if fills.is_empty() {
+        return 0.0;
+    }
+
+    let mut cumulative = 0.0;
+    let mut peak = f64::NEG_INFINITY;
+    let mut peak_ts = {
+        let first = &fills[0];
+        if first.timestamp_ms > 0 {
+            first.timestamp_ms
+        } else {
+            fallback_timestamp_ms(first.index)
+        }
+    };
+    let mut max_duration_ms: u64 = 0;
+
+    for fill in fills {
+        let ts = if fill.timestamp_ms > 0 {
+            fill.timestamp_ms
+        } else {
+            fallback_timestamp_ms(fill.index)
+        };
+        cumulative += fill.pnl;
+        if cumulative > peak {
+            let duration_ms = ts.saturating_sub(peak_ts);
+            if duration_ms > max_duration_ms {
+                max_duration_ms = duration_ms;
+            }
+            peak = cumulative;
+            peak_ts = ts;
+        }
+    }
+
     (max_duration_ms as f64) / MS_PER_HOUR as f64
 }
 
@@ -1058,7 +1091,8 @@ mod tests {
     #[test]
     fn test_total_wallet_exposure_from_exposures_series() {
         // When exposures_series is provided, it should use that instead of fill.twe_net
-        let fills = vec![make_fill(100, -0.5)];
+        // Need >=2 fills so analyze_backtest doesn't early-return before exposure processing.
+        let fills = vec![make_fill(50, -0.3), make_fill(100, -0.5)];
         let equities: Vec<f64> = vec![10000.0; 200];
         let timestamps: Vec<u64> = (0..equities.len()).map(|i| (i as u64) * 60_000).collect();
         // Provide negative exposure values (short-only pattern)
@@ -1071,6 +1105,77 @@ mod tests {
             (analysis.total_wallet_exposure_max - 0.8).abs() < 0.01,
             "Expected total_wallet_exposure_max=0.8, got {}",
             analysis.total_wallet_exposure_max
+        );
+    }
+
+    #[test]
+    fn test_peak_recovery_hours_pnl_tracks_fill_event_peaks() {
+        let interval_ms: u64 = 300_000;
+        let start_ts: u64 = 1_700_000_000_000;
+        let equities: Vec<f64> = vec![10000.0; 121];
+        let timestamps: Vec<u64> = (0..equities.len())
+            .map(|i| start_ts + (i as u64) * interval_ms)
+            .collect();
+        let exposures_series: Vec<f64> = vec![];
+
+        let mut fill_peak = make_fill(0, -0.1);
+        fill_peak.timestamp_ms = timestamps[0];
+        fill_peak.pnl = 100.0;
+        fill_peak.fee_paid = 0.0;
+
+        let mut fill_drawdown = make_fill(50, -0.1);
+        fill_drawdown.timestamp_ms = timestamps[50];
+        fill_drawdown.pnl = -100.0;
+        fill_drawdown.fee_paid = 0.0;
+
+        let mut fill_recovery = make_fill(100, -0.1);
+        fill_recovery.timestamp_ms = timestamps[100];
+        fill_recovery.pnl = 101.0;
+        fill_recovery.fee_paid = 0.0;
+
+        let fills = vec![fill_peak, fill_drawdown, fill_recovery];
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures_series);
+        let expected_hours = ((timestamps[100] - timestamps[0]) as f64) / MS_PER_HOUR as f64;
+
+        assert!(
+            (analysis.peak_recovery_hours_pnl - expected_hours).abs() < 1e-9,
+            "Expected peak_recovery_hours_pnl={}, got {}",
+            expected_hours,
+            analysis.peak_recovery_hours_pnl
+        );
+    }
+
+    #[test]
+    fn test_peak_recovery_hours_pnl_uses_gross_pnl_not_fees() {
+        let interval_ms: u64 = 3_600_000;
+        let start_ts: u64 = 1_700_000_000_000;
+        let equities: Vec<f64> = vec![10000.0; 3];
+        let timestamps: Vec<u64> = (0..equities.len())
+            .map(|i| start_ts + (i as u64) * interval_ms)
+            .collect();
+        let exposures_series: Vec<f64> = vec![];
+
+        let mut f0 = make_fill(0, -0.1);
+        f0.timestamp_ms = timestamps[0];
+        f0.pnl = 10.0;
+        f0.fee_paid = -100.0;
+
+        let mut f1 = make_fill(1, -0.1);
+        f1.timestamp_ms = timestamps[1];
+        f1.pnl = -10.0;
+        f1.fee_paid = -100.0;
+
+        let mut f2 = make_fill(2, -0.1);
+        f2.timestamp_ms = timestamps[2];
+        f2.pnl = 11.0;
+        f2.fee_paid = -100.0;
+
+        let analysis =
+            analyze_backtest(&vec![f0, f1, f2], &equities, &timestamps, &exposures_series);
+        assert!(
+            (analysis.peak_recovery_hours_pnl - 2.0).abs() < 1e-9,
+            "Expected gross pnl recovery of 2.0h, got {}",
+            analysis.peak_recovery_hours_pnl
         );
     }
 }

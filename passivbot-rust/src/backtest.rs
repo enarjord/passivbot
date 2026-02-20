@@ -1001,6 +1001,9 @@ impl<'a> Backtest<'a> {
                 filter_by_min_effective_cost: self.backtest_params.filter_by_min_effective_cost,
                 unstuck_allowance_long: long_allowance,
                 unstuck_allowance_short: short_allowance,
+                max_realized_loss_pct: self.backtest_params.max_realized_loss_pct,
+                realized_pnl_cumsum_max: self.pnl_cumsum_max,
+                realized_pnl_cumsum_last: self.pnl_cumsum_running,
                 sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
                 hedge_mode: self.backtest_params.hedge_mode,
@@ -1048,6 +1051,9 @@ impl<'a> Backtest<'a> {
             } else {
                 0.0
             };
+        input.global.max_realized_loss_pct = self.backtest_params.max_realized_loss_pct;
+        input.global.realized_pnl_cumsum_max = self.pnl_cumsum_max;
+        input.global.realized_pnl_cumsum_last = self.pnl_cumsum_running;
 
         input.peek_hints = peek_hints;
 
@@ -1392,7 +1398,10 @@ impl<'a> Backtest<'a> {
 
         // Calculate EMA alphas for each coin, adjusted for candle interval
         let interval = backtest_params.candle_interval_minutes;
-        let ema_alphas: Vec<EmaAlphas> = bot_params.iter().map(|bp| calc_ema_alphas(bp, interval)).collect();
+        let ema_alphas: Vec<EmaAlphas> = bot_params
+            .iter()
+            .map(|bp| calc_ema_alphas(bp, interval))
+            .collect();
         let mut warmup_bars = backtest_params.global_warmup_bars;
         if warmup_bars == 0 {
             warmup_bars = calc_warmup_bars(&bot_params);
@@ -2563,7 +2572,8 @@ impl<'a> Backtest<'a> {
             // window is from max(first_ts, last_boundary) to previous minute
             let window_start_ms = self.first_timestamp_ms.max(self.last_hour_boundary_ms);
             if current_ts > window_start_ms + self.interval_ms {
-                let start_idx = ((window_start_ms - self.first_timestamp_ms) / self.interval_ms) as usize;
+                let start_idx =
+                    ((window_start_ms - self.first_timestamp_ms) / self.interval_ms) as usize;
                 let end_idx = if k == 0 { 0usize } else { k - 1 };
                 if end_idx >= start_idx {
                     for i in 0..self.n_coins {
@@ -2856,6 +2866,7 @@ mod tests {
             metrics_only: true,
             filter_by_min_effective_cost: false,
             hedge_mode: true,
+            max_realized_loss_pct: 1.0,
             candle_interval_minutes: 1,
         };
 
@@ -2910,7 +2921,9 @@ mod tests {
             assert!(
                 (alphas.long.alphas[i] - expected).abs() < 1e-12,
                 "long alpha[{}]: expected {}, got {}",
-                i, expected, alphas.long.alphas[i]
+                i,
+                expected,
+                alphas.long.alphas[i]
             );
         }
 
@@ -2937,7 +2950,9 @@ mod tests {
             assert!(
                 (alphas.long.alphas[i] - expected).abs() < 1e-12,
                 "long alpha[{}]: expected {}, got {}",
-                i, expected, alphas.long.alphas[i]
+                i,
+                expected,
+                alphas.long.alphas[i]
             );
         }
     }
