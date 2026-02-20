@@ -1001,6 +1001,9 @@ impl<'a> Backtest<'a> {
                 filter_by_min_effective_cost: self.backtest_params.filter_by_min_effective_cost,
                 unstuck_allowance_long: long_allowance,
                 unstuck_allowance_short: short_allowance,
+                max_realized_loss_pct: self.backtest_params.max_realized_loss_pct,
+                realized_pnl_cumsum_max: self.pnl_cumsum_max,
+                realized_pnl_cumsum_last: self.pnl_cumsum_running,
                 sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
                 hedge_mode: self.backtest_params.hedge_mode,
@@ -1048,6 +1051,9 @@ impl<'a> Backtest<'a> {
             } else {
                 0.0
             };
+        input.global.max_realized_loss_pct = self.backtest_params.max_realized_loss_pct;
+        input.global.realized_pnl_cumsum_max = self.pnl_cumsum_max;
+        input.global.realized_pnl_cumsum_last = self.pnl_cumsum_running;
 
         input.peek_hints = peek_hints;
 
@@ -2860,6 +2866,7 @@ mod tests {
             metrics_only: true,
             filter_by_min_effective_cost: false,
             hedge_mode: true,
+            max_realized_loss_pct: 1.0,
             candle_interval_minutes: 1,
         };
 

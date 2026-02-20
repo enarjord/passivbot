@@ -3311,7 +3311,7 @@ class Passivbot:
         if not events:
             return {"long": 0.0, "short": 0.0}
 
-        pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
+        pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
         out = {}
         for pside in ["long", "short"]:
@@ -3335,6 +3335,49 @@ class Passivbot:
             else:
                 out[pside] = 0.0
         return out
+
+    def _get_realized_pnl_cumsum_stats(self) -> dict[str, float]:
+        """Return gross realized pnl cumsum peak/current from FillEventsManager history."""
+        if self._pnls_manager is None:
+            return {"max": 0.0, "last": 0.0}
+        events = self._pnls_manager.get_events()
+        if not events:
+            return {"max": 0.0, "last": 0.0}
+        pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
+        return {"max": float(pnls_cumsum.max()), "last": float(pnls_cumsum[-1])}
+
+    def _log_realized_loss_gate_blocks(self, out: dict, idx_to_symbol: dict[int, str]) -> None:
+        """Emit visible warnings for close orders blocked by realized-loss gate."""
+        diagnostics = out.get("diagnostics", {}) if isinstance(out, dict) else {}
+        blocks = diagnostics.get("loss_gate_blocks", [])
+        if not isinstance(blocks, list) or not blocks:
+            return
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            symbol = idx_to_symbol.get(int(block.get("symbol_idx", -1)), "unknown")
+            pside = str(block.get("pside", "unknown"))
+            order_type = str(block.get("order_type", "unknown"))
+            qty = float(block.get("qty", 0.0) or 0.0)
+            price = float(block.get("price", 0.0) or 0.0)
+            projected_pnl = float(block.get("projected_pnl", 0.0) or 0.0)
+            projected_balance = float(block.get("projected_balance_after", 0.0) or 0.0)
+            balance_floor = float(block.get("balance_floor", 0.0) or 0.0)
+            max_loss_pct = float(block.get("max_realized_loss_pct", 1.0) or 1.0)
+            logging.warning(
+                "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
+                "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
+                "adjust live.max_realized_loss_pct to change behavior",
+                symbol,
+                pside,
+                order_type,
+                qty,
+                price,
+                projected_pnl,
+                projected_balance,
+                balance_floor,
+                max_loss_pct,
+            )
 
     # Legacy init_fill_events, update_fill_events, etc. removed - using FillEventsManager
 
@@ -4077,6 +4120,8 @@ class Passivbot:
         h1_log_range_emas = snapshot["h1_log_range_emas"]
 
         unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
+        realized_pnl_cumsum = snapshot.get("realized_pnl_cumsum", {"max": 0.0, "last": 0.0})
+        max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
 
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
@@ -4091,6 +4136,9 @@ class Passivbot:
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
+                "max_realized_loss_pct": max_realized_loss_pct,
+                "realized_pnl_cumsum_max": float(realized_pnl_cumsum.get("max", 0.0) or 0.0),
+                "realized_pnl_cumsum_last": float(realized_pnl_cumsum.get("last", 0.0) or 0.0),
                 "sort_global": True,
                 "global_bot_params": global_bp,
                 "hedge_mode": effective_hedge_mode,
@@ -4189,6 +4237,7 @@ class Passivbot:
                         logging.error("[ema] Missing EMA for %s (symbol_idx=%d)", symbol, idx)
             raise
         out = json.loads(out_json)
+        self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         orders = out.get("orders", [])
 
         ideal_orders: dict[str, list] = {}
@@ -4389,6 +4438,8 @@ class Passivbot:
         unstuck_allowances = self._calc_unstuck_allowances_live(
             allow_new_unstuck=not self.has_open_unstuck_order()
         )
+        realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
+        max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
 
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
@@ -4403,6 +4454,9 @@ class Passivbot:
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
+                "max_realized_loss_pct": max_realized_loss_pct,
+                "realized_pnl_cumsum_max": float(realized_pnl_cumsum.get("max", 0.0) or 0.0),
+                "realized_pnl_cumsum_last": float(realized_pnl_cumsum.get("last", 0.0) or 0.0),
                 "sort_global": True,
                 "global_bot_params": global_bp,
                 "hedge_mode": effective_hedge_mode,
@@ -4500,6 +4554,7 @@ class Passivbot:
                         logging.error("[ema] Missing EMA for %s (symbol_idx=%d)", symbol, idx)
             raise
         out = json.loads(out_json)
+        self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         orders = out.get("orders", [])
 
         ideal_orders: dict[str, list] = {}
@@ -4548,6 +4603,7 @@ class Passivbot:
                 "exchange": str(getattr(self, "exchange", "")),
                 "user": str(self.config_get(["live", "user"]) or ""),
                 "active_symbols": list(symbols),
+                "realized_pnl_cumsum": realized_pnl_cumsum,
                 "orchestrator_input": input_dict,
                 "orchestrator_output": out,
             }

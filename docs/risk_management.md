@@ -140,6 +140,29 @@ The bot reduces positions, starting with the **least underwater** ones first (fo
 
 This portfolio trimming mechanism pairs well with the excess allowance. When TWE hits TWEL and new orders are blocked, the TWEL enforcer will start chipping away at the least underwater positions to free up margin, even if those positions are technically within their per-position effective exposure limit.
 
+### C. Realized-Loss Gate (`live.max_realized_loss_pct`)
+This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.
+
+The gate is anchored to the realized PnL peak reconstructed from fill history:
+
+`balance_peak = current_balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)`
+
+`balance_floor = balance_peak * (1 - max_realized_loss_pct)`
+
+For each candidate close order, the bot projects realized PnL if filled and blocks the order when:
+
+`projected_balance_after_fill < balance_floor`
+
+Behavior by value:
+* `max_realized_loss_pct <= 0.0`: block all lossy closes.
+* `0.0 < max_realized_loss_pct < 1.0`: allow losses only down to the configured fraction below peak balance.
+* `max_realized_loss_pct >= 1.0`: disabled (legacy behavior).
+
+Operational notes:
+* Live bot logs visible warnings whenever an order is blocked by this gate.
+* This can intentionally block automatic reducers if they would realize too much loss.
+* If you need immediate forced reduction regardless of realized loss, use panic mode.
+
 ---
 
 ## 4. Bankruptcy & Liquidation Technicals

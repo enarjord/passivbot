@@ -2204,6 +2204,7 @@ def get_template_config():
             "max_n_creations_per_batch": 3,
             "max_n_restarts_per_day": 10,
             "max_ohlcv_fetches_per_minute": 30,
+            "max_realized_loss_pct": 1.0,
             "max_warmup_minutes": 0.0,
             "minimum_coin_age_days": 7.0,
             "order_match_tolerance_pct": 0.0002,
