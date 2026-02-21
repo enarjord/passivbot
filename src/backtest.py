@@ -1378,6 +1378,7 @@ async def main():
         "approved_coins",
         "hedge_mode",
         "ignored_coins",
+        "max_realized_loss_pct",
         "minimum_coin_age_days",
     }
     for key in sorted(template_config["live"]):
