@@ -670,8 +670,11 @@ def process_forager_fills(
             analysis_appendix[f"loss_profit_ratio_{pside}"] = 1.0
             continue
         pnls[pside] = profit + loss
-        analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
-    analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
+        analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit) if profit != 0.0 else 1.0
+    pnl_sum = pnls["long"] + pnls["short"]
+    analysis_appendix["pnl_ratio_long_short"] = (
+        pnls["long"] / pnl_sum if pnl_sum != 0.0 else 0.5
+    )
     sample_divider = max(1, int(balance_sample_divider))
     if not fdf.empty:
         timestamps_ns = fdf["timestamp"].astype("int64")

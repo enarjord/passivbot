@@ -83,6 +83,15 @@ from utils import (
 )
 from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 
+def _has_tradfi_provider_config() -> bool:
+    try:
+        with open("api-keys.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        tradfi = data.get("tradfi") if isinstance(data, dict) else None
+        return isinstance(tradfi, dict) and bool(tradfi.get("provider"))
+    except Exception:
+        return False
+
 
 class HLCVManager:
     """Backtest-oriented OHLCV manager using CandlestickManager for fetching/caching."""
@@ -124,6 +133,7 @@ class HLCVManager:
         self.force_refetch_gaps = bool(force_refetch_gaps)
         self.cm: Optional[CandlestickManager] = None
         self.ohlcv_source_dir = str(ohlcv_source_dir) if ohlcv_source_dir else None
+        self.tradfi_for_stock_perps = _has_tradfi_provider_config()
 
     def update_date_range(self, new_start_date=None, new_end_date=None):
         if new_start_date is not None:
@@ -555,9 +565,16 @@ class HLCVManager:
 
         ts = real["ts"].astype(np.int64, copy=False)
         if ts.size > 1:
+            is_tradfi_stock_perp = coin.startswith("xyz:") and self.tradfi_for_stock_perps
+            gap_tolerance_ms = int(self.gap_tolerance_ohlcvs_minutes * 60_000)
+            if is_tradfi_stock_perp:
+                # Allow expected stock-market closures (weekends/holidays) for TradFi-backed data.
+                # Keep configured tolerance when it's already stricter.
+                gap_tolerance_ms = max(gap_tolerance_ms, 4 * 24 * 60 * 60_000)
+
             intervals = np.diff(ts)
             greatest_gap_ms = int(intervals.max(initial=60_000))
-            if greatest_gap_ms > int(self.gap_tolerance_ohlcvs_minutes * 60_000):
+            if greatest_gap_ms > gap_tolerance_ms:
                 # Helpful diagnostics: locate the exact gap boundaries
                 gap_start_ts = None
                 gap_end_ts = None
@@ -592,7 +609,7 @@ class HLCVManager:
                         # Single or zero timestamp implies no measurable gaps;
                         # don't reuse stale greatest_gap_ms from the initial fetch.
                         greatest_gap_ms = 0
-                if greatest_gap_ms > int(self.gap_tolerance_ohlcvs_minutes * 60_000):
+                if greatest_gap_ms > gap_tolerance_ms:
                     if self.verbose:
                         logging.warning(
                             "[%s] gaps detected in %s OHLCV data; greatest gap: %.1f minutes. Returning empty.",
@@ -690,8 +707,35 @@ async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool
 
         om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
         btc_df = await om.get_ohlcvs("BTC")
+        btc_source_exchange = exchange
+
+        if btc_df.empty and exchange != "binanceusdm":
+            logging.warning(
+                "BTC/USD fetch returned empty on %s, retrying with binanceusdm",
+                exchange,
+            )
+            btc_fallback_om = HLCVManager(
+                "binanceusdm",
+                effective_start_date,
+                end_date,
+                gap_tolerance_ohlcvs_minutes=require_config_value(
+                    config, "backtest.gap_tolerance_ohlcvs_minutes"
+                ),
+            )
+            try:
+                btc_fallback_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
+                btc_df = await btc_fallback_om.get_ohlcvs("BTC")
+                if not btc_df.empty:
+                    btc_source_exchange = "binanceusdm"
+            finally:
+                await btc_fallback_om.aclose()
+                if btc_fallback_om.cc:
+                    await btc_fallback_om.cc.close()
+
         if btc_df.empty:
-            raise ValueError(f"Failed to fetch BTC/USD prices from {exchange}")
+            raise ValueError(
+                f"Failed to fetch BTC/USD prices from {exchange} (and binanceusdm fallback)"
+            )
 
         btc_df = (
             btc_df.set_index("timestamp")
@@ -744,6 +788,7 @@ async def prepare_hlcvs_internal(
     global_end_time = float("-inf")
     await om.load_markets()
     min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
+    tradfi_for_stock_perps = _has_tradfi_provider_config()
 
     progress = ProgressTracker(len(coins), f"{exchange} fetching candles")
     progress.maybe_log(force=True)
@@ -754,13 +799,16 @@ async def prepare_hlcvs_internal(
         async with sem:  # Rate limiting
             try:
                 adjusted_start_ts = int(effective_start_ts)
+                is_stock_perp_coin = coin.startswith("xyz:")
 
                 # Validation: check if coin exists
                 if not om.has_coin(coin):
                     _pct_log("info", progress.pct(), f"{exchange} coin {coin} missing, skipping")
                     return None
 
-                if coin not in first_timestamps_unified:
+                if coin not in first_timestamps_unified and not (
+                    is_stock_perp_coin and tradfi_for_stock_perps
+                ):
                     _pct_log(
                         "info",
                         progress.pct(),
@@ -769,7 +817,9 @@ async def prepare_hlcvs_internal(
                     return None
 
                 # Minimum coin age validation
-                if minimum_coin_age_days > 0.0:
+                if minimum_coin_age_days > 0.0 and not (
+                    is_stock_perp_coin and tradfi_for_stock_perps
+                ):
                     try:
                         first_ts = await om.get_first_timestamp(coin)
                     except Exception as e:
@@ -1017,32 +1067,50 @@ async def prepare_hlcvs_combined(
             ohlcv_exchanges=ohlcv_exchanges,
         )
 
-        btc_exchange = exchanges_to_consider[0] if len(exchanges_to_consider) == 1 else "binanceusdm"
-        btc_om = HLCVManager(
-            btc_exchange,
-            effective_start_date,
-            end_date,
-            gap_tolerance_ohlcvs_minutes=require_config_value(
-                config, "backtest.gap_tolerance_ohlcvs_minutes"
-            ),
-        )
-        # Align BTC date range to actual timestamps (mirrors single-exchange case)
-        btc_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
-        logging.info(
-            "fetching BTC/USD prices from %s for range %s to %s",
-            btc_exchange,
-            ts_to_date(int(timestamps[0])),
-            ts_to_date(int(timestamps[-1])),
-        )
-        btc_df = await btc_om.get_ohlcvs("BTC")
-        if btc_df.empty:
-            logging.error(
+        btc_candidates = [
+            exchanges_to_consider[0] if len(exchanges_to_consider) == 1 else "binanceusdm"
+        ]
+        if "binanceusdm" not in btc_candidates:
+            btc_candidates.append("binanceusdm")
+
+        btc_df = pd.DataFrame()
+        btc_source_exchange = None
+        for btc_exchange in btc_candidates:
+            btc_om = HLCVManager(
+                btc_exchange,
+                effective_start_date,
+                end_date,
+                gap_tolerance_ohlcvs_minutes=require_config_value(
+                    config, "backtest.gap_tolerance_ohlcvs_minutes"
+                ),
+            )
+            # Align BTC date range to actual timestamps (mirrors single-exchange case)
+            btc_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
+            logging.info(
+                "fetching BTC/USD prices from %s for range %s to %s",
+                btc_exchange,
+                ts_to_date(int(timestamps[0])),
+                ts_to_date(int(timestamps[-1])),
+            )
+            btc_df = await btc_om.get_ohlcvs("BTC")
+            if not btc_df.empty:
+                btc_source_exchange = btc_exchange
+                break
+            logging.warning(
                 "BTC/USD fetch returned empty for %s (start=%s end=%s)",
                 btc_exchange,
                 btc_om.start_date,
                 btc_om.end_date,
             )
-            raise ValueError(f"Failed to fetch BTC/USD prices from {btc_exchange}")
+            await btc_om.aclose()
+            if btc_om.cc:
+                await btc_om.cc.close()
+            btc_om = None
+
+        if btc_df.empty:
+            raise ValueError(
+                f"Failed to fetch BTC/USD prices from {btc_candidates[0]} (and binanceusdm fallback)"
+            )
 
         btc_df = (
             btc_df.set_index("timestamp")
@@ -1100,6 +1168,7 @@ async def _prepare_hlcvs_combined_impl(
     minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
     interval_ms = 60_000
     min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
+    tradfi_for_stock_perps = _has_tradfi_provider_config()
 
     first_timestamps_unified = await get_first_timestamps_unified(coins)
 
@@ -1159,11 +1228,18 @@ async def _prepare_hlcvs_combined_impl(
         """Fetch coin data from all candidate exchanges and select the best one."""
         async with sem:  # Rate limiting
             try:
-                if coin not in first_timestamps_unified:
+                is_stock_perp_coin = coin.startswith("xyz:")
+                if coin not in first_timestamps_unified and not (
+                    is_stock_perp_coin and tradfi_for_stock_perps
+                ):
                     return None
 
-                coin_fts = int(first_timestamps_unified[coin])
-                effective_start_ts = max(int(base_start_ts), coin_fts + int(min_coin_age_ms))
+                if is_stock_perp_coin and tradfi_for_stock_perps:
+                    effective_start_ts = int(base_start_ts)
+                    coin_fts = None
+                else:
+                    coin_fts = int(first_timestamps_unified[coin])
+                    effective_start_ts = max(int(base_start_ts), coin_fts + int(min_coin_age_ms))
                 if effective_start_ts >= end_ts:
                     logging.info(
                         "%s: skipping - effective start %s >= end %s "
@@ -1171,7 +1247,7 @@ async def _prepare_hlcvs_combined_impl(
                         coin,
                         ts_to_date(effective_start_ts),
                         ts_to_date(end_ts),
-                        ts_to_date(coin_fts),
+                        ts_to_date(coin_fts) if coin_fts is not None else "tradfi",
                         int(minimum_coin_age_days),
                     )
                     return None
@@ -1181,7 +1257,7 @@ async def _prepare_hlcvs_combined_impl(
                         coin,
                         ts_to_date(base_start_ts),
                         ts_to_date(effective_start_ts),
-                        ts_to_date(coin_fts),
+                        ts_to_date(coin_fts) if coin_fts is not None else "tradfi",
                         int(minimum_coin_age_days),
                     )
 

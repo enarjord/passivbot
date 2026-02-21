@@ -416,6 +416,77 @@ class TestHLCVManagerGapHandling:
                 # Should accept with small gap at boundary
                 assert not df.empty
 
+    @pytest.mark.asyncio
+    async def test_tradfi_stock_perp_large_weekend_gap_accepted(self, tmp_path):
+        """TradFi-backed stock perps should tolerate market-closure sized gaps."""
+        start_ts = 1704067200000
+
+        # ~3-day gap (4321 minutes): should be accepted for TradFi stock perps.
+        candles1 = create_numpy_candles(start_ts, 10, base_price=180.0)
+        gap_end = start_ts + (10 + 4321) * 60_000
+        candles2 = create_numpy_candles(gap_end, 10, base_price=181.0)
+        combined = np.concatenate([candles1, candles2])
+
+        om = HLCVManager(
+            exchange="hyperliquid",
+            start_date="2024-01-01",
+            end_date="2024-01-10",
+            gap_tolerance_ohlcvs_minutes=120.0,
+            verbose=False,
+        )
+        om.tradfi_for_stock_perps = True
+        om.load_cc = lambda: None
+        om.has_coin = lambda coin: True
+        om.get_symbol = lambda coin: "XYZ-AAPL/USDC:USDC"
+        om.cm = MagicMock()
+
+        async def mock_get_candles(*args, **kwargs):
+            return combined
+
+        om.cm.get_candles = mock_get_candles
+        om.cm.standardize_gaps = lambda arr, **kwargs: arr
+
+        df = await om.get_ohlcvs("xyz:AAPL")
+        assert not df.empty
+
+
+class TestPrepareHLCVSBtcFallback:
+    """Regression tests for BTC benchmark fallback behavior."""
+
+    @pytest.mark.asyncio
+    async def test_prepare_hlcvs_uses_binance_fallback_for_btc(self, sample_config):
+        timestamps = np.array([1704067200000, 1704067260000], dtype=np.int64)
+        hlcvs = np.zeros((2, 1, 6), dtype=np.float32)
+        calls = []
+
+        async def mock_prepare_internal(*args, **kwargs):
+            return ({"BTC": {}}, timestamps, hlcvs)
+
+        async def mock_get_ohlcvs(self, coin, *args, **kwargs):
+            if coin != "BTC":
+                return pd.DataFrame(columns=["timestamp", "close"])
+            calls.append(self.exchange)
+            if self.exchange == "hyperliquid":
+                return pd.DataFrame(columns=["timestamp", "close"])
+            return pd.DataFrame(
+                {
+                    "timestamp": timestamps,
+                    "close": [50000.0, 50010.0],
+                }
+            )
+
+        config = dict(sample_config)
+        config["backtest"] = dict(sample_config["backtest"])
+        config["backtest"]["exchanges"] = ["hyperliquid"]
+
+        with patch("hlcv_preparation.prepare_hlcvs_internal", new=mock_prepare_internal):
+            with patch.object(HLCVManager, "get_ohlcvs", new=mock_get_ohlcvs):
+                _mss, _ts, _hlcvs, btc_usd_prices = await prepare_hlcvs(config, "hyperliquid")
+
+        assert calls[:2] == ["hyperliquid", "binanceusdm"]
+        assert len(btc_usd_prices) == len(timestamps)
+        assert float(btc_usd_prices[0]) == 50000.0
+
 
 # ============================================================================
 # Test Class: Error Handling
