@@ -493,14 +493,20 @@ class HLCVManager:
         if ts.size > 1:
             intervals = np.diff(ts)
             if not np.all(intervals == 60_000):
+                is_tradfi_stock_perp = coin.startswith("xyz:") and self.tradfi_for_stock_perps
+                gap_tolerance_ms = int(self.gap_tolerance_ohlcvs_minutes * 60_000)
+                if is_tradfi_stock_perp:
+                    gap_tolerance_ms = max(gap_tolerance_ms, 4 * 24 * 60 * 60_000)
+
                 greatest_gap_ms = int(intervals.max(initial=60_000))
-                logging.warning(
-                    "[%s] source dir non-contiguous data for %s; greatest gap %.1f minutes. Falling back.",
-                    self.exchange,
-                    coin,
-                    greatest_gap_ms / 60_000.0,
-                )
-                return None
+                if greatest_gap_ms > gap_tolerance_ms:
+                    logging.warning(
+                        "[%s] source dir non-contiguous data for %s; greatest gap %.1f minutes. Falling back.",
+                        self.exchange,
+                        coin,
+                        greatest_gap_ms / 60_000.0,
+                    )
+                    return None
 
         return df.reset_index(drop=True)
 
@@ -528,12 +534,46 @@ class HLCVManager:
         if self.ohlcv_source_dir:
             df = self._try_load_ohlcvs_from_source_dir(coin, symbol, start_ts, end_ts)
             if df is not None and not df.empty:
+                self.load_cc()
+                assert self.cm is not None
+
+                src = np.zeros(len(df), dtype=[
+                    ("ts", "i8"),
+                    ("o", "f8"),
+                    ("h", "f8"),
+                    ("l", "f8"),
+                    ("c", "f8"),
+                    ("bv", "f8"),
+                ])
+                src["ts"] = df["timestamp"].astype(np.int64, copy=False).values
+                src["o"] = df["open"].astype(float, copy=False).values
+                src["h"] = df["high"].astype(float, copy=False).values
+                src["l"] = df["low"].astype(float, copy=False).values
+                src["c"] = df["close"].astype(float, copy=False).values
+                src["bv"] = df["volume"].astype(float, copy=False).values
+
+                filled = self.cm.standardize_gaps(
+                    src, start_ts=start_ts, end_ts=end_ts, strict=False, assume_sorted=True
+                )
+                if filled.size == 0:
+                    return empty_df
+
+                df = pd.DataFrame(
+                    {
+                        "timestamp": filled["ts"].astype(np.int64),
+                        "open": filled["o"].astype(float),
+                        "high": filled["h"].astype(float),
+                        "low": filled["l"].astype(float),
+                        "close": filled["c"].astype(float),
+                        "volume": filled["bv"].astype(float),
+                    }
+                )
                 logging.info(
                     "[%s] get_ohlcvs: using source dir for %s",
                     self.exchange,
                     coin,
                 )
-                return df
+                return df.reset_index(drop=True)
             logging.debug(
                 "[%s] get_ohlcvs: source dir had no data for %s; falling back to candlestick manager",
                 self.exchange,
