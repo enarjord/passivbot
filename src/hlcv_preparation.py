@@ -737,6 +737,8 @@ async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool
                 f"Failed to fetch BTC/USD prices from {exchange} (and binanceusdm fallback)"
             )
 
+        logging.info("using BTC/USD benchmark source: %s", btc_source_exchange)
+
         btc_df = (
             btc_df.set_index("timestamp")
             .reindex(timestamps, method="ffill")
@@ -754,6 +756,7 @@ async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool
             "effective_start_date": ts_to_date(int(timestamps[0])),
             "warmup_minutes_requested": int(warmup_minutes),
             "warmup_minutes_provided": int(warmup_provided),
+            "btc_source_exchange": btc_source_exchange,
         }
 
         return mss, timestamps, hlcvs, btc_usd_prices
@@ -1112,6 +1115,8 @@ async def prepare_hlcvs_combined(
                 f"Failed to fetch BTC/USD prices from {btc_candidates[0]} (and binanceusdm fallback)"
             )
 
+        logging.info("using BTC/USD benchmark source: %s", btc_source_exchange)
+
         btc_df = (
             btc_df.set_index("timestamp")
             .reindex(timestamps, method="ffill")
@@ -1129,6 +1134,7 @@ async def prepare_hlcvs_combined(
             "effective_start_date": ts_to_date(int(timestamps[0])),
             "warmup_minutes_requested": int(warmup_minutes),
             "warmup_minutes_provided": int(warmup_provided),
+            "btc_source_exchange": btc_source_exchange,
         }
 
         return mss, timestamps, unified_array, btc_usd_prices
