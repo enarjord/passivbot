@@ -190,6 +190,7 @@
         "max_n_cancellations_per_batch": 5,
         "max_n_creations_per_batch": 3,
         "max_n_restarts_per_day": 10,
+        "max_realized_loss_pct": 1.0,
         "max_warmup_minutes": 0,
         "minimum_coin_age_days": 90,
         "order_match_tolerance_pct": 0.0002,
