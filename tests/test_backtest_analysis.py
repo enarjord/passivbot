@@ -1,6 +1,6 @@
 import numpy as np
 
-from backtest import expand_analysis
+from backtest import expand_analysis, process_forager_fills
 
 
 def _make_analysis_entry(value):
@@ -102,3 +102,20 @@ def test_expand_analysis_includes_high_exposure_hours():
         assert f"high_exposure_hours_max_{side}" in result
         assert result[f"high_exposure_hours_mean_{side}"] == 0.5
         assert result[f"high_exposure_hours_max_{side}"] == 0.5
+
+
+def test_process_forager_fills_handles_zero_pnl_division():
+    """Zero-PnL inputs should not raise and should return stable neutral ratios."""
+    equities_array = np.array([[1704067200000, 1000.0, 0.02]], dtype=np.float64)
+
+    _fdf, analysis_appendix, _bal_eq = process_forager_fills(
+        fills=[],
+        coins=[],
+        hlcvs=np.empty((0, 0), dtype=np.float64),
+        equities_array=equities_array,
+        balance_sample_divider=1,
+    )
+
+    assert analysis_appendix["loss_profit_ratio_long"] == 1.0
+    assert analysis_appendix["loss_profit_ratio_short"] == 1.0
+    assert analysis_appendix["pnl_ratio_long_short"] == 0.5

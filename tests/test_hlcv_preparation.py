@@ -416,6 +416,77 @@ class TestHLCVManagerGapHandling:
                 # Should accept with small gap at boundary
                 assert not df.empty
 
+    @pytest.mark.asyncio
+    async def test_tradfi_stock_perp_large_weekend_gap_accepted(self, tmp_path):
+        """TradFi-backed stock perps should tolerate market-closure sized gaps."""
+        start_ts = 1704067200000
+
+        # ~3-day gap (4321 minutes): should be accepted for TradFi stock perps.
+        candles1 = create_numpy_candles(start_ts, 10, base_price=180.0)
+        gap_end = start_ts + (10 + 4321) * 60_000
+        candles2 = create_numpy_candles(gap_end, 10, base_price=181.0)
+        combined = np.concatenate([candles1, candles2])
+
+        om = HLCVManager(
+            exchange="hyperliquid",
+            start_date="2024-01-01",
+            end_date="2024-01-10",
+            gap_tolerance_ohlcvs_minutes=120.0,
+            verbose=False,
+        )
+        om.tradfi_for_stock_perps = True
+        om.load_cc = lambda: None
+        om.has_coin = lambda coin: True
+        om.get_symbol = lambda coin: "XYZ-AAPL/USDC:USDC"
+        om.cm = MagicMock()
+
+        async def mock_get_candles(*args, **kwargs):
+            return combined
+
+        om.cm.get_candles = mock_get_candles
+        om.cm.standardize_gaps = lambda arr, **kwargs: arr
+
+        df = await om.get_ohlcvs("xyz:AAPL")
+        assert not df.empty
+
+
+class TestPrepareHLCVSBtcFallback:
+    """Regression tests for BTC benchmark fallback behavior."""
+
+    @pytest.mark.asyncio
+    async def test_prepare_hlcvs_uses_binance_fallback_for_btc(self, sample_config):
+        timestamps = np.array([1704067200000, 1704067260000], dtype=np.int64)
+        hlcvs = np.zeros((2, 1, 6), dtype=np.float32)
+        calls = []
+
+        async def mock_prepare_internal(*args, **kwargs):
+            return ({"BTC": {}}, timestamps, hlcvs)
+
+        async def mock_get_ohlcvs(self, coin, *args, **kwargs):
+            if coin != "BTC":
+                return pd.DataFrame(columns=["timestamp", "close"])
+            calls.append(self.exchange)
+            if self.exchange == "hyperliquid":
+                return pd.DataFrame(columns=["timestamp", "close"])
+            return pd.DataFrame(
+                {
+                    "timestamp": timestamps,
+                    "close": [50000.0, 50010.0],
+                }
+            )
+
+        config = dict(sample_config)
+        config["backtest"] = dict(sample_config["backtest"])
+        config["backtest"]["exchanges"] = ["hyperliquid"]
+
+        with patch("hlcv_preparation.prepare_hlcvs_internal", new=mock_prepare_internal):
+            with patch.object(HLCVManager, "get_ohlcvs", new=mock_get_ohlcvs):
+                _mss, _ts, _hlcvs, btc_usd_prices = await prepare_hlcvs(config, "hyperliquid")
+
+        assert calls[:2] == ["hyperliquid", "binanceusdm"]
+        assert len(btc_usd_prices) == len(timestamps)
+        assert float(btc_usd_prices[0]) == 50000.0
+
 
 # ============================================================================
 # Test Class: Error Handling
@@ -717,7 +788,7 @@ class TestOHLCVSourceDir:
         # Test load
         df = await om.get_ohlcvs("BTC")
         assert not df.empty
-        assert len(df) == 1440  # 24 hours * 60 minutes
+        assert len(df) == 1441  # standardized to full inclusive window
         assert df["close"].iloc[0] == 50050.0
 
     @pytest.mark.asyncio
@@ -772,7 +843,7 @@ class TestOHLCVSourceDir:
         # Test load
         df = await om.get_ohlcvs("ETH")
         assert not df.empty
-        assert len(df) == 1440
+        assert len(df) == 1441  # standardized to full inclusive window
         assert df["close"].iloc[0] == 3005.0
         assert df["volume"].iloc[0] == 50.0
 
@@ -832,7 +903,7 @@ class TestOHLCVSourceDir:
 
     @pytest.mark.asyncio
     async def test_source_dir_fallback_non_contiguous_small_gap(self, tmp_path, mock_exchange):
-        """Test fallback when source dir data has a small non-contiguous gap."""
+        """Test source-dir usage when gaps are within configured tolerance."""
         from ohlcv_utils import dump_ohlcv_data
         from utils import date_to_ts
 
@@ -892,9 +963,9 @@ class TestOHLCVSourceDir:
 
             df = await om.get_ohlcvs("BTC")
 
-            mock_get_candles.assert_called_once()
+            mock_get_candles.assert_not_called()
             assert not df.empty
-            assert len(df) == 1441  # end_ts is inclusive (00:00:00 on day 15 to 00:00:00 on day 16)
+            assert len(df) == 1441  # standardized to full inclusive window
 
     @pytest.mark.asyncio
     async def test_source_dir_fallback_excessive_gaps(self, tmp_path, mock_exchange):
@@ -966,6 +1037,66 @@ class TestOHLCVSourceDir:
             mock_get_candles.assert_called_once()
             assert not df.empty
             assert len(df) == 1441  # end_ts is inclusive (00:00:00 on day 15 to 00:00:00 on day 16)
+
+    @pytest.mark.asyncio
+    async def test_source_dir_stock_perp_weekend_like_gap_uses_source_dir(self, tmp_path, mock_exchange):
+        """Stock-perp source-dir gaps below 4d floor should not force fallback."""
+        from ohlcv_utils import dump_ohlcv_data
+        from utils import date_to_ts
+
+        source_dir = tmp_path / "ohlcv_source"
+        exchange_dir = source_dir / "hyperliquid" / "1m" / "xyz:AAPL"
+        exchange_dir.mkdir(parents=True)
+
+        day = "2024-01-15"
+        day_ts = int(date_to_ts(day))
+
+        # Two candles with a large intra-day gap (~1439 min), above default 120
+        # but below stock-perp tolerance floor (4 days = 5760 min).
+        timestamps = np.array([
+            day_ts,
+            day_ts + (23 * 60 + 59) * 60_000,
+        ])
+        data = np.column_stack([
+            timestamps,
+            np.full(len(timestamps), 180.0),
+            np.full(len(timestamps), 181.0),
+            np.full(len(timestamps), 179.0),
+            np.full(len(timestamps), 180.5),
+            np.full(len(timestamps), 10.0),
+        ])
+        dump_ohlcv_data(data, str(exchange_dir / f"{day}.npy"))
+
+        om = HLCVManager(
+            "hyperliquid",
+            start_date=day,
+            end_date="2024-01-16",
+            cc=mock_exchange,
+            ohlcv_source_dir=str(source_dir),
+            gap_tolerance_ohlcvs_minutes=120.0,
+        )
+        om.tradfi_for_stock_perps = True
+
+        om.markets = {
+            "XYZ-AAPL/USDC:USDC": {
+                "symbol": "XYZ-AAPL/USDC:USDC",
+                "base": "XYZ-AAPL",
+                "quote": "USDC",
+                "maker": 0.0002,
+                "taker": 0.0004,
+                "contractSize": 1.0,
+                "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.001}},
+                "precision": {"price": 0.01, "amount": 0.001},
+            }
+        }
+
+        with patch.object(CandlestickManager, 'get_candles') as mock_get_candles:
+            mock_get_candles.return_value = np.zeros(0, dtype=CANDLE_DTYPE)
+            df = await om.get_ohlcvs("xyz:AAPL")
+
+            mock_get_candles.assert_not_called()
+            assert not df.empty
+            assert len(df) == 1441  # standardized to full inclusive window
 
     @pytest.mark.asyncio
     async def test_source_dir_corrupt_npz_fallback(self, tmp_path, mock_exchange):

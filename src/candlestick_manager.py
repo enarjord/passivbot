@@ -4033,11 +4033,27 @@ class CandlestickManager:
         if not self._archive_supported():
             return
 
+        # For stock-perps with TradFi configured, allow fetches before exchange inception
+        # so historical data can be backfilled from TradFi providers (alpaca/polygon/etc.).
+        allow_pre_inception_for_stock_perp = False
+        try:
+            from tradfi_data import is_stock_ticker
+
+            base = symbol.split("/")[0].strip()
+            tradfi_cfg = self._load_tradfi_config()
+            allow_pre_inception_for_stock_perp = bool(tradfi_cfg) and is_stock_ticker(base)
+        except Exception:
+            allow_pre_inception_for_stock_perp = False
+
         # Skip fetches before known inception date - but don't trust inception_ts blindly.
         # If inception_ts would skip the entire requested range, attempt a light probe
         # before treating it as authoritative.
         inception_ts = self._get_inception_ts(symbol)
-        if inception_ts is not None and start_ts < inception_ts:
+        if (
+            inception_ts is not None
+            and start_ts < inception_ts
+            and not allow_pre_inception_for_stock_perp
+        ):
             if inception_ts > end_ts:
                 updated = False
                 shard_min = self._get_min_shard_ts(symbol)
