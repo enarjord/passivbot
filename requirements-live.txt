@@ -1,6 +1,5 @@
 -r requirements-rust.txt
 python-dateutil==2.9.0.post0
-numba==0.59.1
 pandas==2.2.2
 numpy==1.26.4
 ccxt==4.5.22

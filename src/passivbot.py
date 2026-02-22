@@ -81,7 +81,7 @@ from procedures import (
     print_async_exception,
 )
 from utils import get_file_mod_ms
-from downloader import compute_per_coin_warmup_minutes
+from warmup_utils import compute_per_coin_warmup_minutes
 import re
 
 # Orchestrator-only: ideal orders are computed via Rust orchestrator (JSON API).

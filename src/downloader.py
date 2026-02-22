@@ -5,7 +5,6 @@ import gzip
 import json
 import logging
 import inspect
-import math
 import os
 import shutil
 import sys
@@ -57,14 +56,23 @@ from utils import (
 from procedures import (
     get_first_timestamps_unified,
 )
+from warmup_utils import (
+    compute_backtest_warmup_minutes,
+    compute_per_coin_warmup_minutes,
+)
+from ohlcv_utils import (
+    canonicalize_daily_ohlcvs,
+    deduplicate_rows,
+    dump_daily_ohlcv_data,
+    dump_ohlcv_data,
+    ensure_millis_df,
+    fill_gaps_in_ohlcvs,
+    attempt_gap_fix_ohlcvs,
+    get_days_in_between,
+    load_ohlcv_data,
+)
 
 # ========================= CONFIGURABLES & GLOBALS =========================
-
-logging.basicConfig(
-    format="%(asctime)s %(levelname)-8s %(message)s",
-    level=logging.INFO,
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
 
 MAX_REQUESTS_PER_MINUTE = 120
 REQUEST_TIMESTAMPS = deque(maxlen=1000)  # for rate-limiting checks
@@ -82,283 +90,6 @@ def is_valid_date(date):
 
 def get_function_name():
     return inspect.currentframe().f_back.f_code.co_name
-
-
-def _to_float(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _require_max_warmup_minutes(config: dict) -> float:
-    """Return the warmup ceiling from the live config."""
-    return _to_float(require_live_value(config, "max_warmup_minutes"))
-
-
-def _iter_param_sets(config: dict):
-    bot_cfg = config.get("bot", {})
-    base_long = dict(bot_cfg.get("long", {}) or {})
-    base_short = dict(bot_cfg.get("short", {}) or {})
-    yield "__default__", base_long, base_short
-
-    coin_overrides = config.get("coin_overrides", {})
-    for coin, overrides in coin_overrides.items():
-        bot_overrides = overrides.get("bot", {})
-        long_params = dict(base_long)
-        short_params = dict(base_short)
-        long_params.update(bot_overrides.get("long", {}))
-        short_params.update(bot_overrides.get("short", {}))
-        yield coin, long_params, short_params
-
-
-def compute_backtest_warmup_minutes(config: dict) -> int:
-    """Mirror Rust warmup span calculation (see calc_warmup_bars)."""
-
-    def _extract_bound_max(bounds: dict, key: str) -> float:
-        if key not in bounds:
-            return 0.0
-        entry = bounds[key]
-        candidates = []
-        if isinstance(entry, (list, tuple)):
-            candidates = [entry]
-        else:
-            candidates = [[entry]]
-        max_val = 0.0
-        for candidate in candidates:
-            for val in candidate:
-                max_val = max(max_val, _to_float(val))
-        return max_val
-
-    max_minutes = 0.0
-    minute_fields = [
-        "ema_span_0",
-        "ema_span_1",
-        "filter_volume_ema_span",
-        "filter_volatility_ema_span",
-    ]
-
-    for _, long_params, short_params in _iter_param_sets(config):
-        for params in (long_params, short_params):
-            for field in minute_fields:
-                max_minutes = max(max_minutes, _to_float(params.get(field)))
-            log_span_minutes = _to_float(params.get("entry_volatility_ema_span_hours")) * 60.0
-            max_minutes = max(max_minutes, log_span_minutes)
-
-    bounds = config.get("optimize", {}).get("bounds", {})
-    bound_keys_minutes = [
-        "long_ema_span_0",
-        "long_ema_span_1",
-        "long_filter_volume_ema_span",
-        "long_filter_volatility_ema_span",
-        "short_ema_span_0",
-        "short_ema_span_1",
-        "short_filter_volume_ema_span",
-        "short_filter_volatility_ema_span",
-    ]
-    bound_keys_hours = [
-        "long_entry_volatility_ema_span_hours",
-        "short_entry_volatility_ema_span_hours",
-    ]
-
-    for key in bound_keys_minutes:
-        max_minutes = max(max_minutes, _extract_bound_max(bounds, key))
-    for key in bound_keys_hours:
-        max_minutes = max(max_minutes, _extract_bound_max(bounds, key) * 60.0)
-
-    warmup_ratio = float(require_config_value(config, "live.warmup_ratio"))
-    limit = _require_max_warmup_minutes(config)
-
-    if not math.isfinite(max_minutes):
-        return 0
-    warmup_minutes = max_minutes * max(0.0, warmup_ratio)
-    if limit > 0:
-        warmup_minutes = min(warmup_minutes, limit)
-    return int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
-
-
-def compute_per_coin_warmup_minutes(config: dict) -> dict:
-    warmup_ratio = float(require_config_value(config, "live.warmup_ratio"))
-    limit = _require_max_warmup_minutes(config)
-    per_coin = {}
-    minute_fields = [
-        "ema_span_0",
-        "ema_span_1",
-        "filter_volume_ema_span",
-        "filter_volatility_ema_span",
-    ]
-    for coin, long_params, short_params in _iter_param_sets(config):
-        max_minutes = 0.0
-        for params in (long_params, short_params):
-            for field in minute_fields:
-                max_minutes = max(max_minutes, _to_float(params.get(field)))
-            max_minutes = max(
-                max_minutes,
-                _to_float(params.get("entry_volatility_ema_span_hours")) * 60.0,
-            )
-        if not math.isfinite(max_minutes):
-            per_coin[coin] = 0
-            continue
-        warmup_minutes = max_minutes * max(0.0, warmup_ratio)
-        if limit > 0:
-            warmup_minutes = min(warmup_minutes, limit)
-        per_coin[coin] = int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
-    return per_coin
-
-
-def dump_ohlcv_data(data, filepath):
-    columns = ["timestamp", "open", "high", "low", "close", "volume"]
-    if isinstance(data, pd.DataFrame):
-        data = ensure_millis_df(data[columns]).astype(float).values
-    elif isinstance(data, np.ndarray):
-        pass
-    else:
-        raise Exception(f"Unknown data format for {filepath}")
-    np.save(filepath, deduplicate_rows(data))
-
-
-def canonicalize_daily_ohlcvs(data, start_ts: int, interval_ms: int = 60_000) -> pd.DataFrame:
-    """
-    Return a 1-minute canonical OHLCV DataFrame for the given day.
-
-    Missing minutes are forward/back filled for price columns and zero-filled for volume.
-    Duplicate timestamps keep the last observation.
-    """
-    columns = ["timestamp", "open", "high", "low", "close", "volume"]
-    if isinstance(data, np.ndarray):
-        df = pd.DataFrame(data, columns=columns)
-    elif isinstance(data, pd.DataFrame):
-        df = data[columns].copy()
-    else:
-        raise TypeError("data must be a pandas DataFrame or numpy array")
-
-    df = df.reset_index(drop=True)
-    df = ensure_millis_df(df)
-    for col in columns:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    end_ts = start_ts + 24 * 60 * 60 * 1000
-    df = df.dropna(subset=["timestamp"])
-    df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] < end_ts)]
-    df = df.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
-
-    if df.empty:
-        raise ValueError("No data available for canonicalization")
-
-    expected_ts = np.arange(start_ts, end_ts, interval_ms)
-    reindexed = df.set_index("timestamp").reindex(expected_ts)
-    missing_mask = reindexed[["open", "high", "low", "close", "volume"]].isna().all(axis=1)
-
-    close = reindexed["close"].astype(float)
-    close = close.ffill().bfill()
-    if close.isna().any():
-        raise ValueError("Unable to fill close prices while canonicalizing daily OHLCV data")
-    reindexed["close"] = close
-
-    for col in ["open", "high", "low"]:
-        series = reindexed[col].astype(float)
-        series = series.ffill().bfill()
-        series = series.fillna(reindexed["close"])
-        series = pd.Series(
-            np.where(missing_mask, reindexed["close"], series),
-            index=reindexed.index,
-            dtype=float,
-        )
-        reindexed[col] = series
-
-    volume = reindexed["volume"].astype(float)
-    volume = volume.fillna(0.0)
-    reindexed["volume"] = volume
-
-    result = reindexed.reset_index().rename(columns={"index": "timestamp"})
-    return result[columns]
-
-
-def dump_daily_ohlcv_data(data, filepath, start_ts: int, interval_ms: int = 60_000):
-    canonical = canonicalize_daily_ohlcvs(data, start_ts, interval_ms=interval_ms)
-    dump_ohlcv_data(canonical, filepath)
-
-
-def deduplicate_rows(arr):
-    """
-    Remove duplicate rows from a 2D NumPy array while preserving order.
-
-    Parameters:
-    arr (numpy.ndarray): Input 2D array of shape (x, y)
-
-    Returns:
-    numpy.ndarray: Array with duplicate rows removed, maintaining original order
-    """
-    # Convert rows to tuples for hashing
-    rows_as_tuples = map(tuple, arr)
-
-    # Keep track of seen rows while preserving order
-    seen = set()
-    unique_indices = [
-        i
-        for i, row_tuple in enumerate(rows_as_tuples)
-        if not (row_tuple in seen or seen.add(row_tuple))
-    ]
-
-    # Return array with only unique rows
-    return arr[unique_indices]
-
-
-def load_ohlcv_data(filepath: str) -> pd.DataFrame:
-    arr = np.load(filepath, allow_pickle=True)
-    columns = ["timestamp", "open", "high", "low", "close", "volume"]
-    arr_deduplicated = deduplicate_rows(arr)
-    if len(arr) != len(arr_deduplicated):
-        dump_ohlcv_data(arr_deduplicated, filepath)
-        print(
-            f"Caught .npy file with duplicate rows: {filepath} Overwrote with deduplicated version."
-        )
-    return ensure_millis_df(pd.DataFrame(arr_deduplicated, columns=columns))
-
-
-def get_days_in_between(start_day, end_day):
-    date_format = "%Y-%m-%d"
-    start_date = datetime.datetime.strptime(format_end_date(start_day), date_format)
-    end_date = datetime.datetime.strptime(format_end_date(end_day), date_format)
-    days = []
-    current_date = start_date
-    while current_date <= end_date:
-        days.append(current_date.strftime(date_format))
-        current_date += datetime.timedelta(days=1)
-    return days
-
-
-def fill_gaps_in_ohlcvs(df):
-    interval = 60000
-    new_timestamps = np.arange(df["timestamp"].iloc[0], df["timestamp"].iloc[-1] + interval, interval)
-    new_df = df.set_index("timestamp").reindex(new_timestamps)
-    new_df.close = new_df.close.ffill()
-    for col in ["open", "high", "low"]:
-        new_df[col] = new_df[col].fillna(new_df.close)
-    new_df["volume"] = new_df["volume"].fillna(0.0)
-    return new_df.reset_index().rename(columns={"index": "timestamp"})
-
-
-def attempt_gap_fix_ohlcvs(df, symbol=None, verbose=True):
-    interval = 60_000
-    max_hours = 12
-    max_gap = interval * 60 * max_hours
-    greatest_gap = df.timestamp.diff().max()
-    if pd.isna(greatest_gap) or greatest_gap == interval:
-        return df
-    if greatest_gap > max_gap:
-        raise Exception(f"Huge gap in data for {symbol}: {greatest_gap/(1000*60*60)} hours.")
-    if verbose:
-        logging.info(
-            f"Filling small gaps in {symbol}. Largest gap: {greatest_gap/(1000*60*60):.3f} hours."
-        )
-    new_timestamps = np.arange(df["timestamp"].iloc[0], df["timestamp"].iloc[-1] + interval, interval)
-    new_df = df.set_index("timestamp").reindex(new_timestamps)
-    new_df.close = new_df.close.ffill()
-    for col in ["open", "high", "low"]:
-        new_df[col] = new_df[col].fillna(new_df.close)
-    new_df["volume"] = new_df["volume"].fillna(0.0)
-    return new_df.reset_index().rename(columns={"index": "timestamp"})
 
 
 async def fetch_url(session, url, retries=5, backoff=1.5):
@@ -424,78 +155,6 @@ async def get_zip_bitget(url):
         dfs.append(df[col_names])
     dfc = pd.concat(dfs).sort_values("timestamp").reset_index(drop=True)
     return dfc[dfc.timestamp != "open_time"]
-
-
-def ensure_millis_df(df):
-    """
-    Normalize a DataFrame's 'timestamp' column to milliseconds.
-
-    Heuristic:
-    - If no valid (non-zero, finite) timestamps exist, assume timestamps are already ms.
-    - If there are multiple unique timestamps, use the median difference between unique timestamps:
-      if the median difference is a multiple of 1000 (within a small tolerance), treat timestamps as ms.
-      Otherwise treat them as seconds and multiply by 1000.
-    - If only one non-zero timestamp exists, fall back to magnitude-based detection using epoch-scale
-      thresholds:
-        - >= 1e15 -> microseconds
-        - >= 1e12 -> milliseconds
-        - >= 1e9  -> seconds
-        - <  1e9  -> assume milliseconds (likely small ms values)
-    This avoids mis-detecting when the first timestamp is 0 (which previously caused incorrect scaling).
-    """
-    if "timestamp" not in df.columns:
-        return df
-
-    # Work with a float copy for robust numeric checks
-    try:
-        ts = df["timestamp"].astype("float64").values
-    except Exception:
-        # If casting fails, leave unchanged
-        return df
-
-    # Identify finite, non-zero timestamps to base heuristics on
-    finite_mask = np.isfinite(ts) & (ts != 0)
-    if not finite_mask.any():
-        # All timestamps are zero or invalid — assume already in milliseconds
-        return df
-
-    non_zero_ts = ts[finite_mask]
-    uniq = np.unique(non_zero_ts)
-
-    if uniq.size > 1:
-        # Use median diff between unique timestamps to determine units.
-        diffs = np.diff(uniq)
-        median_diff = float(np.median(diffs))
-
-        # If median_diff is a clean multiple of 1000, it's likely millisecond data (1 minute = 60000, etc).
-        if abs(median_diff - round(median_diff / 1000.0) * 1000.0) < 1e-6:
-            return df  # already milliseconds
-        else:
-            # Likely seconds -> convert to milliseconds
-            df["timestamp"] = df["timestamp"] * 1000.0
-            return df
-
-    # Fallback: single representative timestamp -> magnitude-based detection
-    rep = float(np.abs(non_zero_ts).max())
-
-    # Epoch magnitude thresholds (approx):
-    # - seconds:      ~1e9
-    # - milliseconds: ~1e12
-    # - microseconds: ~1e15
-    if rep >= 1e15:
-        # microseconds -> convert to milliseconds
-        df["timestamp"] = df["timestamp"] / 1000.0
-    elif rep >= 1e12:
-        # already milliseconds
-        pass
-    elif rep >= 1e9:
-        # seconds -> convert to milliseconds
-        df["timestamp"] = df["timestamp"] * 1000.0
-    else:
-        # small magnitudes (< 1e9) are assumed to already be milliseconds (e.g., 60000)
-        pass
-
-    return df
 
 
 class OHLCVManager:

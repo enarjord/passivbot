@@ -19,7 +19,7 @@ from config_utils import (
     require_live_value,
     format_config,
 )
-from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from shared_arrays import attach_shared_array
 from suite_runner import (
     SuiteScenario,

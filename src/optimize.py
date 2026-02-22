@@ -61,7 +61,7 @@ import multiprocessing
 import signal
 import time
 from collections import defaultdict
-from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from config_utils import (
     get_template_config,
     load_hjson_config,
@@ -321,13 +321,6 @@ class ResultRecorder:
     def close(self) -> None:
         if self.results_file:
             self.results_file.close()
-
-
-logging.basicConfig(
-    format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
-    level=logging.INFO,
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
 
 
 TEMPLATE_CONFIG_MODE = "v7"
@@ -1928,4 +1921,9 @@ async def main():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
+        level=logging.INFO,
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
     asyncio.run(main())
