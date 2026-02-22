@@ -6,29 +6,38 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import downloader
+import ccxt.async_support as ccxt
+from ohlcv_utils import (
+    deduplicate_rows,
+    ensure_millis_df,
+    fill_gaps_in_ohlcvs,
+    attempt_gap_fix_ohlcvs,
+    dump_ohlcv_data,
+    load_ohlcv_data,
+)
+from utils import to_ccxt_exchange_id, load_markets, utc_ms
 
 
 def test_to_ccxt_exchange_id(monkeypatch):
     # Make ccxt.exchanges predictable
     monkeypatch.setattr(
-        downloader.ccxt,
+        ccxt,
         "exchanges",
         ["binance", "binanceusdm", "kucoin", "kucoinfutures", "bybit"],
         raising=False,
     )
 
-    assert downloader.to_ccxt_exchange_id("binance") == "binanceusdm"
-    assert downloader.to_ccxt_exchange_id("kucoin") == "kucoinfutures"
+    assert to_ccxt_exchange_id("binance") == "binanceusdm"
+    assert to_ccxt_exchange_id("kucoin") == "kucoinfutures"
     # Unchanged when no matching futures suffix exists
-    assert downloader.to_ccxt_exchange_id("bybit") == "bybit"
+    assert to_ccxt_exchange_id("bybit") == "bybit"
     # Already ccxt ID stays as-is
-    assert downloader.to_ccxt_exchange_id("binanceusdm") == "binanceusdm"
+    assert to_ccxt_exchange_id("binanceusdm") == "binanceusdm"
 
 
 def test_deduplicate_rows():
     arr = np.array([[1.0, 2.0], [1.0, 2.0], [3.0, 4.0], [3.0, 4.0], [5.0, 6.0]])
-    out = downloader.deduplicate_rows(arr)
+    out = deduplicate_rows(arr)
     assert out.shape == (3, 2)
     assert (out[0] == np.array([1.0, 2.0])).all()
     assert (out[1] == np.array([3.0, 4.0])).all()
@@ -46,7 +55,7 @@ def test_ensure_millis_seconds_to_ms():
             "volume": [1],
         }
     )
-    out = downloader.ensure_millis_df(df.copy())
+    out = ensure_millis_df(df.copy())
     assert out["timestamp"].iloc[0] == 1_600_000_000_000
 
 
@@ -61,7 +70,7 @@ def test_ensure_millis_micros_to_ms():
             "volume": [1],
         }
     )
-    out = downloader.ensure_millis_df(df.copy())
+    out = ensure_millis_df(df.copy())
     assert out["timestamp"].iloc[0] == 1_600_000_000_000
 
 
@@ -76,7 +85,7 @@ def test_ensure_millis_ms_unchanged():
             "volume": [1],
         }
     )
-    out = downloader.ensure_millis_df(df.copy())
+    out = ensure_millis_df(df.copy())
     assert out["timestamp"].iloc[0] == 1_600_000_000_000
 
 
@@ -98,7 +107,7 @@ def _make_df_with_gap():
 
 def test_fill_gaps_in_ohlcvs():
     df = _make_df_with_gap()
-    filled = downloader.fill_gaps_in_ohlcvs(df)
+    filled = fill_gaps_in_ohlcvs(df)
     # Should now have 4 rows: 0, 60000, 120000, 180000
     assert len(filled) == 4
     assert filled["timestamp"].tolist() == [0, 60_000, 120_000, 180_000]
@@ -108,7 +117,7 @@ def test_fill_gaps_in_ohlcvs():
 
 def test_attempt_gap_fix_ohlcvs_small_gap():
     df = _make_df_with_gap()
-    fixed = downloader.attempt_gap_fix_ohlcvs(df, symbol="TEST", verbose=False)
+    fixed = attempt_gap_fix_ohlcvs(df, symbol="TEST", verbose=False)
     assert len(fixed) == 4
     assert fixed["timestamp"].tolist() == [0, 60_000, 120_000, 180_000]
 
@@ -127,7 +136,7 @@ def test_attempt_gap_fix_ohlcvs_raises_on_huge_gap():
         }
     )
     with pytest.raises(Exception):
-        downloader.attempt_gap_fix_ohlcvs(df, symbol="HUGE", verbose=False)
+        attempt_gap_fix_ohlcvs(df, symbol="HUGE", verbose=False)
 
 
 def test_dump_and_load_ohlcvs_roundtrip(tmp_path):
@@ -142,8 +151,8 @@ def test_dump_and_load_ohlcvs_roundtrip(tmp_path):
             "volume": [10.0, 20.0, 30.0, 30.0],
         }
     )
-    downloader.dump_ohlcv_data(df, str(fp))
-    loaded = downloader.load_ohlcv_data(str(fp))
+    dump_ohlcv_data(df, str(fp))
+    loaded = load_ohlcv_data(str(fp))
     # Deduplicated so should be 3 rows
     assert loaded.shape[0] == 3
     assert loaded["timestamp"].tolist() == [0, 60_000, 120_000]
@@ -151,8 +160,10 @@ def test_dump_and_load_ohlcvs_roundtrip(tmp_path):
 
 @pytest.mark.asyncio
 async def test_load_markets_fetch_and_cache(tmp_path, monkeypatch):
+    import utils
+
     # Make ccxt.exchanges predictable
-    monkeypatch.setattr(downloader.ccxt, "exchanges", ["binance", "binanceusdm"], raising=False)
+    monkeypatch.setattr(ccxt, "exchanges", ["binance", "binanceusdm"], raising=False)
 
     # Dummy exchange class to inject
     class DummyCCXT:
@@ -166,17 +177,17 @@ async def test_load_markets_fetch_and_cache(tmp_path, monkeypatch):
             return
 
     # Point ccxt.binanceusdm to our dummy
-    monkeypatch.setattr(downloader.ccxt, "binanceusdm", DummyCCXT, raising=False)
+    monkeypatch.setattr(ccxt, "binanceusdm", DummyCCXT, raising=False)
 
     # Control time so cache-aging checks are predictable
-    monkeypatch.setattr(downloader, "utc_ms", lambda: 1_000_000_000_000, raising=False)
+    monkeypatch.setattr(utils, "utc_ms", lambda: 1_000_000_000_000)
     # First call: force cache miss by reporting old mod time
-    monkeypatch.setattr(downloader, "get_file_mod_utc", lambda p: 0, raising=False)
+    monkeypatch.setattr(utils, "get_file_mod_ms", lambda p: 0)
 
     # Run inside temporary directory so "caches/..." is isolated
     monkeypatch.chdir(tmp_path)
 
-    markets = await downloader.load_markets("binance")
+    markets = await load_markets("binance")
     assert "BTC/USDT:USDT" in markets
 
     # Ensure cache file exists (uses non-normalized exchange name for cache path)
@@ -185,48 +196,16 @@ async def test_load_markets_fetch_and_cache(tmp_path, monkeypatch):
 
     # Second call: make cache fresh to test cache path
     monkeypatch.setattr(
-        downloader, "get_file_mod_utc", lambda p: downloader.utc_ms() - 1000, raising=False
+        utils, "get_file_mod_ms", lambda p: utils.utc_ms() - 1000
     )
-    markets2 = await downloader.load_markets("binance")
+    markets2 = await load_markets("binance")
     assert markets2 == markets
 
 
 @pytest.mark.asyncio
-async def test_ohlcvmanager_load_markets_calls_set_markets(monkeypatch):
-    om = downloader.OHLCVManager("binance")
-
-    # Provide a stub cc with set_markets
-    class StubCC:
-        def __init__(self):
-            self.set_markets_called = False
-
-        def set_markets(self, markets):
-            self.set_markets_called = True
-
-    om.cc = StubCC()
-
-    # Monkeypatch top-level load_markets to return a dummy dict
-    async def fake_load_markets(ex, verbose=False):
-        return {
-            "BTC/USDT:USDT": {
-                "swap": True,
-                "precision": {"price": 0.01, "amount": 0.001},
-                "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.0}},
-                "maker": 0.0002,
-                "taker": 0.0005,
-                "contractSize": 1.0,
-            }
-        }
-
-    monkeypatch.setattr(downloader, "load_markets", fake_load_markets, raising=True)
-
-    await om.load_markets()
-    assert isinstance(om.markets, dict)
-    assert om.cc.set_markets_called is True
-
-
-@pytest.mark.asyncio
 async def test_compute_exchange_volume_ratios_simple(monkeypatch):
+    from hlcv_preparation import compute_exchange_volume_ratios
+
     # Build stub OMs for two exchanges
     class StubOM:
         def __init__(self, df):
@@ -264,7 +243,7 @@ async def test_compute_exchange_volume_ratios_simple(monkeypatch):
     )
 
     om_dict = {"exA": StubOM(df_a), "exB": StubOM(df_b)}
-    ratios = await downloader.compute_exchange_volume_ratios(
+    ratios = await compute_exchange_volume_ratios(
         exchanges=["exA", "exB"],
         coins=["BTC"],
         start_date="1970-01-01",

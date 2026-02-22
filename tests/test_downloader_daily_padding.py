@@ -5,11 +5,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from src import downloader as dl
+from ohlcv_utils import (
+    canonicalize_daily_ohlcvs,
+    dump_daily_ohlcv_data,
+    ensure_millis_df,
+)
+from utils import date_to_ts
 
 
 def _build_df(start_ts, rows):
@@ -30,7 +31,7 @@ def _build_df(start_ts, rows):
 
 def test_canonicalize_daily_ohlcvs_inserts_missing_minutes():
     day = "2024-01-01"
-    start_ts = dl.date_to_ts(day)
+    start_ts = date_to_ts(day)
     df = _build_df(
         start_ts,
         [
@@ -39,7 +40,7 @@ def test_canonicalize_daily_ohlcvs_inserts_missing_minutes():
         ],
     )
 
-    canonical = dl.canonicalize_daily_ohlcvs(dl.ensure_millis_df(df), start_ts)
+    canonical = canonicalize_daily_ohlcvs(ensure_millis_df(df), start_ts)
 
     assert len(canonical) == 1440
     ts_missing = start_ts + 60_000
@@ -61,7 +62,7 @@ def test_canonicalize_daily_ohlcvs_inserts_missing_minutes():
 
 def test_dump_daily_ohlcv_data_writes_canonical(tmp_path):
     day = "2024-02-02"
-    start_ts = dl.date_to_ts(day)
+    start_ts = date_to_ts(day)
     df = _build_df(
         start_ts,
         [
@@ -73,7 +74,7 @@ def test_dump_daily_ohlcv_data_writes_canonical(tmp_path):
     )
     out_path = tmp_path / "2024-02-02.npy"
 
-    dl.dump_daily_ohlcv_data(dl.ensure_millis_df(df), out_path, start_ts)
+    dump_daily_ohlcv_data(ensure_millis_df(df), out_path, start_ts)
 
     arr = np.load(out_path)
     assert arr.shape == (1440, 6)
@@ -93,7 +94,7 @@ def test_dump_daily_ohlcv_data_writes_canonical(tmp_path):
 
 def test_canonicalize_handles_timestamp_index():
     day = "2024-03-01"
-    start_ts = dl.date_to_ts(day)
+    start_ts = date_to_ts(day)
     df = _build_df(
         start_ts,
         [
@@ -104,5 +105,5 @@ def test_canonicalize_handles_timestamp_index():
     indexed = df.set_index("timestamp")
     indexed["timestamp"] = indexed.index
 
-    canonical = dl.canonicalize_daily_ohlcvs(indexed, start_ts)
+    canonical = canonicalize_daily_ohlcvs(indexed, start_ts)
     assert len(canonical) == 1440

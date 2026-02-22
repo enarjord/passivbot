@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 from datetime import date
 from pathlib import Path
-from typing import Iterable, List
+from typing import List
 
 import numpy as np
 
@@ -25,10 +25,11 @@ SRC_DIR = ROOT / "src"
 if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from src import downloader as dl
+from ohlcv_utils import dump_daily_ohlcv_data
+from utils import date_to_ts
 
 
-def _iter_daily_files(root: Path) -> Iterable[Path]:
+def _iter_daily_files(root: Path):
     for path in sorted(root.rglob("*.npy")):
         try:
             date.fromisoformat(path.stem)
@@ -47,7 +48,7 @@ def _process_file(path: Path, dry_run: bool) -> str | None:
         return None
 
     try:
-        start_ts = dl.date_to_ts(path.stem)
+        start_ts = date_to_ts(path.stem)
     except Exception as exc:
         return f"SKIP {path}: cannot parse date ({exc})"
 
@@ -55,7 +56,7 @@ def _process_file(path: Path, dry_run: bool) -> str | None:
         return f"DRYRUN {path}: would pad from {rows} to 1440 rows"
 
     try:
-        dl.dump_daily_ohlcv_data(arr, str(path), start_ts)
+        dump_daily_ohlcv_data(arr, str(path), start_ts)
     except ValueError as exc:
         return f"SKIP {path}: {exc}"
     return f"FIXED {path}: padded from {rows} to 1440 rows"
