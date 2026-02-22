@@ -30,6 +30,14 @@ def _make_bot_with_events(events, balance=10000.0):
     return bot
 
 
+def _make_bot_for_logging():
+    """Return a Passivbot instance with throttle state initialized."""
+    bot = object.__new__(Passivbot)
+    bot._loss_gate_last_log_ms = {}
+    bot._loss_gate_log_interval_ms = 5 * 60 * 1000
+    return bot
+
+
 # ---------------------------------------------------------------------------
 # _get_realized_pnl_cumsum_stats
 # ---------------------------------------------------------------------------
@@ -81,20 +89,20 @@ class TestGetRealizedPnlCumsumStats:
 
 class TestLogRealizedLossGateBlocks:
     def test_no_diagnostics_is_silent(self, caplog):
-        bot = object.__new__(Passivbot)
+        bot = _make_bot_for_logging()
         with caplog.at_level(logging.WARNING):
             bot._log_realized_loss_gate_blocks({}, {})
         assert caplog.text == ""
 
     def test_empty_blocks_is_silent(self, caplog):
-        bot = object.__new__(Passivbot)
+        bot = _make_bot_for_logging()
         out = {"diagnostics": {"loss_gate_blocks": []}}
         with caplog.at_level(logging.WARNING):
             bot._log_realized_loss_gate_blocks(out, {})
         assert caplog.text == ""
 
     def test_block_emits_risk_warning(self, caplog):
-        bot = object.__new__(Passivbot)
+        bot = _make_bot_for_logging()
         block = {
             "symbol_idx": 0,
             "pside": "long",
@@ -115,7 +123,7 @@ class TestLogRealizedLossGateBlocks:
         assert "close_auto_reduce_wel_long" in caplog.text
 
     def test_unknown_symbol_idx_logs_unknown(self, caplog):
-        bot = object.__new__(Passivbot)
+        bot = _make_bot_for_logging()
         block = {
             "symbol_idx": 99,
             "pside": "short",
@@ -133,17 +141,69 @@ class TestLogRealizedLossGateBlocks:
         assert "unknown" in caplog.text
 
     def test_non_dict_blocks_skipped(self, caplog):
-        bot = object.__new__(Passivbot)
+        bot = _make_bot_for_logging()
         out = {"diagnostics": {"loss_gate_blocks": ["not_a_dict"]}}
         with caplog.at_level(logging.WARNING):
             bot._log_realized_loss_gate_blocks(out, {})
         assert "[risk]" not in caplog.text
 
     def test_non_dict_output_is_silent(self, caplog):
-        bot = object.__new__(Passivbot)
+        bot = _make_bot_for_logging()
         with caplog.at_level(logging.WARNING):
             bot._log_realized_loss_gate_blocks("not_a_dict", {})
         assert caplog.text == ""
+
+    def test_throttle_suppresses_repeated_logs(self, caplog):
+        bot = _make_bot_for_logging()
+        block = {
+            "symbol_idx": 0,
+            "pside": "long",
+            "order_type": "close_auto_reduce_wel_long",
+            "qty": -1.0,
+            "price": 80.0,
+            "projected_pnl": -100.0,
+            "projected_balance_after": 9900.0,
+            "balance_floor": 9950.0,
+            "max_realized_loss_pct": 0.01,
+        }
+        out = {"diagnostics": {"loss_gate_blocks": [block]}}
+        idx_to_symbol = {0: "BTCUSDT"}
+        with caplog.at_level(logging.WARNING):
+            bot._log_realized_loss_gate_blocks(out, idx_to_symbol)
+            bot._log_realized_loss_gate_blocks(out, idx_to_symbol)
+            bot._log_realized_loss_gate_blocks(out, idx_to_symbol)
+        assert caplog.text.count("[risk] order blocked by realized-loss gate") == 1
+
+    def test_throttle_allows_different_symbols(self, caplog):
+        bot = _make_bot_for_logging()
+        block_btc = {
+            "symbol_idx": 0,
+            "pside": "long",
+            "order_type": "close_auto_reduce_wel_long",
+            "qty": -1.0,
+            "price": 80.0,
+            "projected_pnl": -100.0,
+            "projected_balance_after": 9900.0,
+            "balance_floor": 9950.0,
+            "max_realized_loss_pct": 0.01,
+        }
+        block_sui = {
+            "symbol_idx": 1,
+            "pside": "long",
+            "order_type": "close_auto_reduce_wel_long",
+            "qty": -100.0,
+            "price": 0.9,
+            "projected_pnl": -50.0,
+            "projected_balance_after": 9950.0,
+            "balance_floor": 9950.0,
+            "max_realized_loss_pct": 0.01,
+        }
+        out = {"diagnostics": {"loss_gate_blocks": [block_btc, block_sui]}}
+        idx_to_symbol = {0: "BTCUSDT", 1: "SUIUSDT"}
+        with caplog.at_level(logging.WARNING):
+            bot._log_realized_loss_gate_blocks(out, idx_to_symbol)
+        assert "BTCUSDT" in caplog.text
+        assert "SUIUSDT" in caplog.text
 
 
 # ---------------------------------------------------------------------------

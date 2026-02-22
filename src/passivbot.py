@@ -719,6 +719,10 @@ class Passivbot:
         self._unstuck_last_log_ms = 0
         self._unstuck_log_interval_ms = 5 * 60 * 1000  # 5 minutes
 
+        # Realized-loss gate logging throttle
+        self._loss_gate_last_log_ms = {}
+        self._loss_gate_log_interval_ms = 5 * 60 * 1000  # 5 minutes
+
     def live_value(self, key: str):
         return require_live_value(self.config, key)
 
@@ -3352,12 +3356,18 @@ class Passivbot:
         blocks = diagnostics.get("loss_gate_blocks", [])
         if not isinstance(blocks, list) or not blocks:
             return
+        now_ms = utc_ms()
         for block in blocks:
             if not isinstance(block, dict):
                 continue
             symbol = idx_to_symbol.get(int(block.get("symbol_idx", -1)), "unknown")
             pside = str(block.get("pside", "unknown"))
             order_type = str(block.get("order_type", "unknown"))
+            throttle_key = f"{symbol}:{pside}:{order_type}"
+            last_log_ms = self._loss_gate_last_log_ms.get(throttle_key, 0)
+            if (now_ms - last_log_ms) < self._loss_gate_log_interval_ms:
+                continue
+            self._loss_gate_last_log_ms[throttle_key] = now_ms
             qty = float(block.get("qty", 0.0) or 0.0)
             price = float(block.get("price", 0.0) or 0.0)
             projected_pnl = float(block.get("projected_pnl", 0.0) or 0.0)
