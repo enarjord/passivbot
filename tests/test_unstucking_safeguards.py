@@ -148,6 +148,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.c_mults = {}
             self.max_leverage = {}
             self.pside_int_map = {"long": 0, "short": 1}
+            self._pnls_manager = None
             self.pnls_cache_filepath = ""
             self.state_change_detected_by_symbol = set()
             self.recent_order_executions = []
