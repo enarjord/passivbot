@@ -1138,6 +1138,9 @@ async def prepare_hlcvs_combined(
             btc_df = await btc_om.get_ohlcvs("BTC")
             if not btc_df.empty:
                 btc_source_exchange = btc_exchange
+                await btc_om.aclose()
+                if btc_om.cc:
+                    await btc_om.cc.close()
                 break
             logging.warning(
                 "BTC/USD fetch returned empty for %s (start=%s end=%s)",

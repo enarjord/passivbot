@@ -788,7 +788,7 @@ class TestOHLCVSourceDir:
         # Test load
         df = await om.get_ohlcvs("BTC")
         assert not df.empty
-        assert len(df) == 1440  # 24 hours * 60 minutes
+        assert len(df) == 1441  # standardized to full inclusive window
         assert df["close"].iloc[0] == 50050.0
 
     @pytest.mark.asyncio
@@ -843,7 +843,7 @@ class TestOHLCVSourceDir:
         # Test load
         df = await om.get_ohlcvs("ETH")
         assert not df.empty
-        assert len(df) == 1440
+        assert len(df) == 1441  # standardized to full inclusive window
         assert df["close"].iloc[0] == 3005.0
         assert df["volume"].iloc[0] == 50.0
 
