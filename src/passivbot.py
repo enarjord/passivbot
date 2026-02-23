@@ -296,7 +296,7 @@ def or_default(f, *args, default=None, **kwargs):
     """Execute `f` safely, returning `default` if an exception is raised."""
     try:
         return f(*args, **kwargs)
-    except:
+    except Exception:
         return default
 
 
@@ -2290,7 +2290,7 @@ class Passivbot:
         """Return True if the exchange acknowledged order creation."""
         try:
             return "id" in executed and executed["id"] is not None
-        except:
+        except TypeError:
             return False
         # further tests defined in child class
 
@@ -2300,7 +2300,7 @@ class Passivbot:
             return self.did_cancel_order(executed[0], order)
         try:
             return "id" in executed and executed["id"] is not None
-        except:
+        except TypeError:
             return False
         # further tests defined in child class
 
@@ -2478,7 +2478,7 @@ class Passivbot:
         """Return the exchange-native identifier for `symbol`, caching defaults."""
         try:
             return self.symbol_ids[symbol]
-        except:
+        except KeyError:
             logging.debug("symbol %s missing from self.symbol_ids. Using raw symbol.", symbol)
             self.symbol_ids[symbol] = symbol
             return symbol
@@ -2488,11 +2488,11 @@ class Passivbot:
         candidates = []
         try:
             candidates.append(self.get_symbol_id_inv(symbol))
-        except:
+        except Exception:
             pass
         try:
             candidates.append(self.coin_to_symbol(symbol))
-        except:
+        except Exception:
             pass
         if candidates:
             return candidates[0]
@@ -2506,7 +2506,7 @@ class Passivbot:
                 return self.symbol_ids_inv[symbol]
             else:
                 return self.coin_to_symbol(symbol)
-        except:
+        except Exception:
             logging.info(f"failed to convert {symbol} to ccxt symbol. Using {symbol} as is.")
             self.symbol_ids_inv[symbol] = symbol
             return symbol
@@ -2983,15 +2983,11 @@ class Passivbot:
         return max(0, int(round(max_n_positions)))
 
     def get_current_n_positions(self, pside):
-        """Count open positions for the side, excluding inactive forced modes."""
+        """Count open positions for the side."""
         n_positions = 0
         for symbol in self.positions:
             if self.positions[symbol][pside]["size"] != 0.0:
-                forced_mode = self.get_forced_PB_mode(pside, symbol)
-                if forced_mode in ["normal", "graceful_stop"]:
-                    n_positions += 1
-                else:
-                    n_positions += 1
+                n_positions += 1
         return n_positions
 
     def get_forced_PB_mode(self, pside, symbol=None):
@@ -3853,7 +3849,7 @@ class Passivbot:
                     if last_price
                     else 0.0
                 )
-            except:
+            except Exception:
                 pprice_diff = 0.0
 
             try:
@@ -3869,7 +3865,7 @@ class Passivbot:
                     if last_price
                     else 0.0
                 )
-            except:
+            except Exception:
                 upnl = 0.0
 
             coin = symbol_to_coin(symbol, verbose=False) or symbol
@@ -6180,7 +6176,7 @@ async def main():
                     await bot.ccp.close()
                 if bot.cca is not None:
                     await bot.cca.close()
-            except:
+            except Exception:
                 pass
         if bot.stop_signal_received:
             logging.info("Bot stopped via signal; exiting main loop.")

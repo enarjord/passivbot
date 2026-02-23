@@ -31,12 +31,12 @@ import ccxt.async_support as ccxta
 
 try:
     import hjson
-except:
+except ImportError:
     print("hjson not found, trying without...")
     pass
 try:
     import pandas as pd
-except:
+except ImportError:
     print("pandas not found, trying without...")
     pass
 
@@ -236,15 +236,15 @@ def print_async_exception(coro):
             print_async_exception(elm)
     try:
         print(f"result: {coro.result()}")
-    except:
+    except Exception:
         pass
     try:
         print(f"exception: {coro.exception()}")
-    except:
+    except Exception:
         pass
     try:
         print(f"returned: {coro}")
-    except:
+    except Exception:
         pass
 
 

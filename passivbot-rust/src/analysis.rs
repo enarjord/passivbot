@@ -581,14 +581,14 @@ pub fn analyze_backtest(
         if let Some(max_val) = exposures
             .iter()
             .copied()
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .max_by(|a, b| a.total_cmp(b))
         {
             analysis.total_wallet_exposure_max = max_val;
         }
         analysis.total_wallet_exposure_mean =
             exposures.iter().sum::<f64>() / exposures.len() as f64;
         let mut sorted = exposures.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(|a, b| a.total_cmp(b));
         let mid = sorted.len() / 2;
         analysis.total_wallet_exposure_median = if sorted.len() % 2 == 0 {
             (sorted[mid - 1] + sorted[mid]) / 2.0

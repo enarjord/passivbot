@@ -1328,7 +1328,7 @@ def extract_configs(path):
             try:
                 cfgs.append(load_config(path, verbose=False))
                 return cfgs
-            except:
+            except Exception:
                 return []
         if path.endswith("_pareto.txt"):
             with open(path) as f:

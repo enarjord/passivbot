@@ -954,7 +954,7 @@ pub fn calc_closes_long(
         }
         closes.push(close);
     }
-    closes.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
+    closes.sort_by(|a, b| a.price.total_cmp(&b.price));
     closes
 }
 
@@ -1028,6 +1028,6 @@ pub fn calc_closes_short(
         }
         closes.push(close);
     }
-    closes.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
+    closes.sort_by(|a, b| b.price.total_cmp(&a.price));
     closes
 }

@@ -168,7 +168,7 @@ def acquire_lock(lock_file: Path = LOCK_FILE) -> bool:
                             lock_file.unlink()
                         except OSError:
                             pass
-                        return True
+                        return False
                     time.sleep(LOCK_CHECK_INTERVAL)
                     continue
             lock_file.parent.mkdir(parents=True, exist_ok=True)

@@ -636,7 +636,7 @@ class FillEvent:
     source_ids: List[str] = field(default_factory=list)
     psize: float = 0.0
     pprice: float = 0.0
-    raw: List[Dict[str, object]] = None  # List of raw payloads from multiple sources
+    raw: Optional[List[Dict[str, object]]] = None  # List of raw payloads from multiple sources
 
     @property
     def key(self) -> str:

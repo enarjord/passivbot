@@ -171,24 +171,24 @@ impl EMAs {
                 *self
                     .long
                     .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .max_by(|a, b| a.total_cmp(b))
                     .unwrap_or(&f64::MIN),
                 *self
                     .long
                     .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .min_by(|a, b| a.total_cmp(b))
                     .unwrap_or(&f64::MAX),
             ),
             SHORT => (
                 *self
                     .short
                     .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .max_by(|a, b| a.total_cmp(b))
                     .unwrap_or(&f64::MIN),
                 *self
                     .short
                     .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .min_by(|a, b| a.total_cmp(b))
                     .unwrap_or(&f64::MAX),
             ),
             _ => panic!("Invalid pside"),
@@ -887,7 +887,7 @@ impl<'a> Backtest<'a> {
                         bp.ema_span_1,
                         (bp.ema_span_0 * bp.ema_span_1).sqrt(),
                     ];
-                    spans.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    spans.sort_by(|a, b| a.total_cmp(b));
                     for (span, value) in spans.into_iter().zip(self.emas[idx].long.into_iter()) {
                         m1.close.push((span, value));
                     }
@@ -899,7 +899,7 @@ impl<'a> Backtest<'a> {
                         bp.ema_span_1,
                         (bp.ema_span_0 * bp.ema_span_1).sqrt(),
                     ];
-                    spans.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    spans.sort_by(|a, b| a.total_cmp(b));
                     for (span, value) in spans.into_iter().zip(self.emas[idx].short.into_iter()) {
                         m1.close.push((span, value));
                     }
@@ -2777,14 +2777,14 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas 
         bot_params_pair.long.ema_span_1,
         (bot_params_pair.long.ema_span_0 * bot_params_pair.long.ema_span_1).sqrt(),
     ];
-    ema_spans_long.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    ema_spans_long.sort_by(|a, b| a.total_cmp(b));
 
     let mut ema_spans_short = [
         bot_params_pair.short.ema_span_0,
         bot_params_pair.short.ema_span_1,
         (bot_params_pair.short.ema_span_0 * bot_params_pair.short.ema_span_1).sqrt(),
     ];
-    ema_spans_short.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    ema_spans_short.sort_by(|a, b| a.total_cmp(b));
 
     // Price EMAs - spans are in minutes, convert to candle periods
     let ema_alphas_long = ema_spans_long.map(|x| clamp_alpha(2.0 / (x / interval_f + 1.0)));
