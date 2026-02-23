@@ -4115,20 +4115,22 @@ class Passivbot:
         """Calculate unstuck allowances using FillEventsManager."""
         return self._calc_unstuck_allowances(allow_new_unstuck)
 
-    async def calc_ideal_orders_orchestrator_from_snapshot(
-        self, snapshot: dict, *, return_snapshot: bool
-    ):
-        symbols = snapshot["symbols"]
-        last_prices = snapshot["last_prices"]
-        m1_close_emas = snapshot["m1_close_emas"]
-        m1_volume_emas = snapshot["m1_volume_emas"]
-        m1_log_range_emas = snapshot["m1_log_range_emas"]
-        h1_log_range_emas = snapshot["h1_log_range_emas"]
+    def _run_orchestrator_core(
+        self,
+        symbols: list[str],
+        last_prices: dict[str, float],
+        m1_close_emas: dict,
+        m1_volume_emas: dict,
+        m1_log_range_emas: dict,
+        h1_log_range_emas: dict,
+        unstuck_allowances: dict,
+        realized_pnl_cumsum: dict,
+    ) -> tuple[dict[str, list], dict, dict]:
+        """Build orchestrator input, call Rust, parse and post-process output.
 
-        unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
-        realized_pnl_cumsum = snapshot.get("realized_pnl_cumsum", {"max": 0.0, "last": 0.0})
+        Returns (ideal_orders_f, orchestrator_input, orchestrator_output).
+        """
         max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
-
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
             "short": self._bot_params_to_rust_dict("short", None),
@@ -4155,6 +4157,7 @@ class Passivbot:
 
         symbol_to_idx: dict[str, int] = {s: i for i, s in enumerate(symbols)}
         idx_to_symbol: dict[int, str] = {i: s for s, i in symbol_to_idx.items()}
+        effective_min_cost_map = getattr(self, "effective_min_cost", {}) or {}
 
         for symbol in symbols:
             idx = symbol_to_idx[symbol]
@@ -4163,9 +4166,7 @@ class Passivbot:
                 raise Exception(f"invalid market price for {symbol}: {mprice}")
 
             active = bool(self.markets_dict.get(symbol, {}).get("active", True))
-            effective_min_cost = float(
-                getattr(self, "effective_min_cost", {}).get(symbol, 0.0) or 0.0
-            )
+            effective_min_cost = float(effective_min_cost_map.get(symbol, 0.0) or 0.0)
             if effective_min_cost <= 0.0:
                 effective_min_cost = float(
                     max(
@@ -4285,6 +4286,25 @@ class Passivbot:
 
         ideal_orders_f, _wel_blocked = self._to_executable_orders(ideal_orders, last_prices)
         ideal_orders_f = self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
+
+        return ideal_orders_f, input_dict, out
+
+    async def calc_ideal_orders_orchestrator_from_snapshot(
+        self, snapshot: dict, *, return_snapshot: bool
+    ):
+        symbols = snapshot["symbols"]
+        last_prices = snapshot["last_prices"]
+        m1_close_emas = snapshot["m1_close_emas"]
+        m1_volume_emas = snapshot["m1_volume_emas"]
+        m1_log_range_emas = snapshot["m1_log_range_emas"]
+        h1_log_range_emas = snapshot["h1_log_range_emas"]
+        unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
+        realized_pnl_cumsum = snapshot.get("realized_pnl_cumsum", {"max": 0.0, "last": 0.0})
+
+        ideal_orders_f, input_dict, out = self._run_orchestrator_core(
+            symbols, last_prices, m1_close_emas, m1_volume_emas,
+            m1_log_range_emas, h1_log_range_emas, unstuck_allowances, realized_pnl_cumsum,
+        )
 
         if return_snapshot:
             snapshot_out = {
@@ -4445,163 +4465,11 @@ class Passivbot:
             allow_new_unstuck=not self.has_open_unstuck_order()
         )
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
-        max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
 
-        global_bp = {
-            "long": self._bot_params_to_rust_dict("long", None),
-            "short": self._bot_params_to_rust_dict("short", None),
-        }
-        # Effective hedge_mode = config setting AND exchange capability.
-        # If either is False, we block same-coin hedging in the orchestrator.
-        effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
-        input_dict = {
-            "balance": float(self.balance),
-            "global": {
-                "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
-                "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
-                "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
-                "max_realized_loss_pct": max_realized_loss_pct,
-                "realized_pnl_cumsum_max": float(realized_pnl_cumsum.get("max", 0.0) or 0.0),
-                "realized_pnl_cumsum_last": float(realized_pnl_cumsum.get("last", 0.0) or 0.0),
-                "sort_global": True,
-                "global_bot_params": global_bp,
-                "hedge_mode": effective_hedge_mode,
-            },
-            "symbols": [],
-            "peek_hints": None,
-        }
-
-        symbol_to_idx: dict[str, int] = {s: i for i, s in enumerate(symbols)}
-        idx_to_symbol: dict[int, str] = {i: s for s, i in symbol_to_idx.items()}
-
-        for symbol in symbols:
-            idx = symbol_to_idx[symbol]
-            mprice = float(last_prices.get(symbol, 0.0))
-            if not math.isfinite(mprice) or mprice <= 0.0:
-                raise Exception(f"invalid market price for {symbol}: {mprice}")
-
-            active = bool(self.markets_dict.get(symbol, {}).get("active", True))
-            effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
-            if effective_min_cost <= 0.0:
-                effective_min_cost = float(
-                    max(
-                        pbr.qty_to_cost(self.min_qtys[symbol], mprice, self.c_mults[symbol]),
-                        self.min_costs[symbol],
-                    )
-                )
-
-            def side_input(pside: str) -> dict:
-                mode = self._pb_mode_to_orchestrator_mode(
-                    self.PB_modes.get(pside, {}).get(symbol, "manual")
-                )
-                pos = self.positions.get(symbol, {}).get(pside, {"size": 0.0, "price": 0.0})
-                trailing = self.trailing_prices.get(symbol, {}).get(pside)
-                if not trailing:
-                    trailing = _trailing_bundle_default_dict()
-                else:
-                    trailing = dict(trailing)
-                return {
-                    "mode": mode,
-                    "position": {"size": float(pos["size"]), "price": float(pos["price"])},
-                    "trailing": {
-                        "min_since_open": float(trailing.get("min_since_open", 0.0)),
-                        "max_since_min": float(trailing.get("max_since_min", 0.0)),
-                        "max_since_open": float(trailing.get("max_since_open", 0.0)),
-                        "min_since_max": float(trailing.get("min_since_max", 0.0)),
-                    },
-                    "bot_params": self._bot_params_to_rust_dict(pside, symbol),
-                }
-
-            # Build EMA bundle for this symbol.
-            m1_close_pairs = [[float(k), float(v)] for k, v in sorted(m1_close_emas[symbol].items())]
-            m1_volume_pairs = [
-                [float(k), float(v)] for k, v in sorted(m1_volume_emas[symbol].items())
-            ]
-            m1_lr_pairs = [[float(k), float(v)] for k, v in sorted(m1_log_range_emas[symbol].items())]
-            h1_lr_pairs = [[float(k), float(v)] for k, v in sorted(h1_log_range_emas[symbol].items())]
-
-            input_dict["symbols"].append(
-                {
-                    "symbol_idx": int(idx),
-                    "order_book": {"bid": mprice, "ask": mprice},
-                    "exchange": {
-                        "qty_step": float(self.qty_steps[symbol]),
-                        "price_step": float(self.price_steps[symbol]),
-                        "min_qty": float(self.min_qtys[symbol]),
-                        "min_cost": float(self.min_costs[symbol]),
-                        "c_mult": float(self.c_mults[symbol]),
-                    },
-                    "tradable": bool(active),
-                    "next_candle": None,
-                    "effective_min_cost": float(effective_min_cost),
-                    "emas": {
-                        "m1": {
-                            "close": m1_close_pairs,
-                            "log_range": m1_lr_pairs,
-                            "volume": m1_volume_pairs,
-                        },
-                        "h1": {"close": [], "log_range": h1_lr_pairs, "volume": []},
-                    },
-                    "long": side_input("long"),
-                    "short": side_input("short"),
-                }
-            )
-
-        try:
-            out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
-        except Exception as e:
-            msg = str(e)
-            if "MissingEma" in msg:
-                match = re.search(r"symbol_idx\s*:\s*(\d+)", msg)
-                if match:
-                    idx = int(match.group(1))
-                    symbol = idx_to_symbol.get(idx)
-                    if symbol:
-                        logging.error("[ema] Missing EMA for %s (symbol_idx=%d)", symbol, idx)
-            raise
-        out = json.loads(out_json)
-        self._log_realized_loss_gate_blocks(out, idx_to_symbol)
-        orders = out.get("orders", [])
-
-        ideal_orders: dict[str, list] = {}
-        for o in orders:
-            symbol = idx_to_symbol.get(int(o["symbol_idx"]))
-            if symbol is None:
-                continue
-            order_type = str(o["order_type"])
-            order_type_id = int(pbr.order_type_snake_to_id(order_type))
-            tup = (float(o["qty"]), float(o["price"]), order_type, order_type_id)
-            ideal_orders.setdefault(symbol, []).append(tup)
-
-        # Log unstuck coin selection
-        for o in orders:
-            order_type_str = o.get("order_type", "")
-            if "close_unstuck" in order_type_str:
-                symbol = idx_to_symbol.get(int(o.get("symbol_idx", -1)))
-                if symbol:
-                    pside = "long" if "long" in order_type_str else "short"
-                    pos = self.positions.get(symbol, {}).get(pside, {})
-                    entry_price = pos.get("price", 0.0)
-                    current_price = last_prices.get(symbol, 0.0)
-                    if entry_price > 0 and current_price > 0:
-                        price_diff_pct = (current_price / entry_price - 1.0) * 100
-                        sign = "+" if price_diff_pct >= 0 else ""
-                    else:
-                        price_diff_pct = 0.0
-                        sign = ""
-                    coin = symbol.split("/")[0] if "/" in symbol else symbol
-                    allowance = unstuck_allowances.get(pside, 0.0)
-                    logging.info(
-                        "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
-                        coin, pside, entry_price, current_price, sign, price_diff_pct, allowance
-                    )
-                break  # Only one unstuck order per cycle
-
-        # Log EMA gating for symbols in normal mode with no position and no initial entry
-        self._log_ema_gating(ideal_orders, m1_close_emas, last_prices, symbols)
-
-        ideal_orders_f, _wel_blocked = self._to_executable_orders(ideal_orders, last_prices)
-        ideal_orders_f = self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
+        ideal_orders_f, input_dict, out = self._run_orchestrator_core(
+            symbols, last_prices, m1_close_emas, m1_volume_emas,
+            m1_log_range_emas, h1_log_range_emas, unstuck_allowances, realized_pnl_cumsum,
+        )
 
         if return_snapshot:
             snapshot = {

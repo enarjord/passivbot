@@ -83,6 +83,7 @@ async def test_missing_ema_raises_from_snapshot(monkeypatch):
         effective_min_cost = {}
         _config_hedge_mode = False
         hedge_mode = False
+        _run_orchestrator_core = pb_mod.Passivbot._run_orchestrator_core
 
         def config_get(self, keys):
             return None
@@ -129,6 +130,7 @@ async def test_missing_ema_raises_from_snapshot_with_return(monkeypatch):
         effective_min_cost = {}
         _config_hedge_mode = False
         hedge_mode = False
+        _run_orchestrator_core = pb_mod.Passivbot._run_orchestrator_core
 
         def config_get(self, keys):
             return None
