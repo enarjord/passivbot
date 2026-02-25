@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **Balance peak drifting in wrong direction due to hysteresis** - The `balance_peak` calculation (used for unstuck allowance budgeting and the realized-loss gate) was using the hysteresis-snapped balance, which stays stale while `pnl_cumsum_last` updates with every fill. This caused the peak to drop after profits and rise after losses. A new `balance_raw` (true exchange balance) is now tracked separately and used for all peak/PnL-accuracy-sensitive paths, while the hysteresis-snapped balance continues to be used for order sizing and wallet exposure where stability matters.
+
 ## v7.8.3 - 2026-02-24
 
 ### Added
