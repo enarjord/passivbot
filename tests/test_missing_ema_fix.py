@@ -79,7 +79,6 @@ async def test_missing_ema_raises_from_snapshot(monkeypatch):
     class FakeBot:
         positions = {}
         balance = 1000.0
-        balance_raw = 1000.0
         PB_modes = {}
         effective_min_cost = {}
         _config_hedge_mode = False
@@ -93,6 +92,12 @@ async def test_missing_ema_raises_from_snapshot(monkeypatch):
 
         def live_value(self, key):
             return False
+
+        def get_raw_balance(self):
+            return float(getattr(self, "balance_raw", 0.0) or 0.0) if hasattr(self, "balance_raw") else self.get_hysteresis_snapped_balance()
+
+        def get_hysteresis_snapped_balance(self):
+            return float(getattr(self, "balance", 0.0) or 0.0)
 
     snapshot = {
         "symbols": [],
@@ -126,7 +131,6 @@ async def test_missing_ema_raises_from_snapshot_with_return(monkeypatch):
     class FakeBot:
         positions = {}
         balance = 1000.0
-        balance_raw = 1000.0
         PB_modes = {}
         effective_min_cost = {}
         _config_hedge_mode = False
@@ -140,6 +144,12 @@ async def test_missing_ema_raises_from_snapshot_with_return(monkeypatch):
 
         def live_value(self, key):
             return False
+
+        def get_raw_balance(self):
+            return float(getattr(self, "balance_raw", 0.0) or 0.0) if hasattr(self, "balance_raw") else self.get_hysteresis_snapped_balance()
+
+        def get_hysteresis_snapped_balance(self):
+            return float(getattr(self, "balance", 0.0) or 0.0)
 
     snapshot = {
         "symbols": [],

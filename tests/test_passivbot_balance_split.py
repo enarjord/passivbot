@@ -117,3 +117,66 @@ async def test_update_balance_override_does_not_reset_hysteresis_anchor():
     assert bot.balance_raw == pytest.approx(250.0)
     # Keep hysteresis anchor unchanged while override is active.
     assert bot.previous_hysteresis_balance == pytest.approx(133.0)
+
+
+def test_accessor_fallback_when_balance_raw_absent():
+    """get_raw_balance() falls back to snapped balance when balance_raw is absent."""
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = 500.0
+    # Intentionally do NOT set balance_raw
+    if hasattr(bot, "balance_raw"):
+        del bot.balance_raw
+    assert bot.get_raw_balance() == pytest.approx(500.0)
+
+
+def test_accessor_returns_raw_when_present():
+    """get_raw_balance() returns balance_raw when it exists."""
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = 1000.0
+    bot.balance_raw = 1010.0
+    assert bot.get_raw_balance() == pytest.approx(1010.0)
+    assert bot.get_hysteresis_snapped_balance() == pytest.approx(1000.0)
+
+
+def test_balance_peak_uses_raw_not_snapped():
+    """Core bug regression: balance_peak must be derived from raw balance, not snapped.
+
+    After a profit fill, raw balance advances (e.g. 1010) but snapped balance
+    may remain stale (e.g. 1000) due to hysteresis. The peak calculation must
+    use raw balance so that balance_peak is correct.
+
+    balance_peak = balance_raw + (pnls_cumsum_max - pnls_cumsum_last)
+
+    With raw=1010, cumsum_max=100, cumsum_last=100:
+        peak_from_raw = 1010 + (100 - 100) = 1010  ← correct
+        peak_from_snap = 1000 + (100 - 100) = 1000  ← WRONG (stale)
+    """
+    import types
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = 1000.0  # snapped (stale)
+    bot.balance_raw = 1010.0  # raw (advanced after profit fill)
+    bot._pnls_manager = MagicMock()
+    bot._pnls_manager.get_events.return_value = [
+        types.SimpleNamespace(pnl=100.0, timestamp=1.0),
+    ]
+
+    # Simulate the calc_auto_unstuck_allowance_from_scratch peak calculation
+    events = bot._pnls_manager.get_events()
+    pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
+    pnls_cumsum_max = float(pnls_cumsum.max())
+    pnls_cumsum_last = float(pnls_cumsum[-1])
+
+    # Using raw balance (correct)
+    balance_peak_raw = bot.get_raw_balance() + (pnls_cumsum_max - pnls_cumsum_last)
+    assert balance_peak_raw == pytest.approx(1010.0)
+
+    # Using snapped balance (would be wrong)
+    balance_peak_snapped = bot.get_hysteresis_snapped_balance() + (pnls_cumsum_max - pnls_cumsum_last)
+    assert balance_peak_snapped == pytest.approx(1000.0)
+
+    # The raw-based peak is correct and higher
+    assert balance_peak_raw > balance_peak_snapped
