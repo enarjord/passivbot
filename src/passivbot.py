@@ -3989,35 +3989,36 @@ class Passivbot:
             self.balance_hysteresis_snap_pct = 0.02
 
         if self.balance_override is not None:
-            balance = float(self.balance_override)
+            balance_raw = float(self.balance_override)
             if not self._balance_override_logged:
-                logging.info("Using balance override: %.6f", balance)
+                logging.info("Using balance override: %.6f", balance_raw)
                 self._balance_override_logged = True
         else:
             if not hasattr(self, "fetch_balance"):
                 logging.debug("update_balance: no fetch_balance implemented")
                 return False
-            balance = await self.fetch_balance()
+            balance_raw = await self.fetch_balance()
 
         # Only accept numeric balances; keep previous value on failure
-        if balance is None:
+        if balance_raw is None:
             logging.warning("balance fetch returned None; keeping previous balance")
             return False
         try:
-            balance = float(balance)
+            balance_raw = float(balance_raw)
         except (TypeError, ValueError):
             logging.warning("non-numeric balance fetch result; keeping previous balance")
             return False
 
-        self.balance_raw = float(balance)
+        balance_effective = balance_raw
         if self.balance_override is None:
             if self.previous_hysteresis_balance is None:
-                self.previous_hysteresis_balance = balance
-            balance = pbr.hysteresis(
-                balance, self.previous_hysteresis_balance, self.balance_hysteresis_snap_pct
+                self.previous_hysteresis_balance = balance_raw
+            balance_effective = pbr.hysteresis(
+                balance_raw, self.previous_hysteresis_balance, self.balance_hysteresis_snap_pct
             )
-            self.previous_hysteresis_balance = balance
-        self.balance = balance
+            self.previous_hysteresis_balance = balance_effective
+        self.balance_raw = balance_raw
+        self.balance = balance_effective
         return True
 
     async def update_positions_and_balance(self):

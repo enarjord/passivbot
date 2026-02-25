@@ -238,13 +238,28 @@ mod core {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct OrchestratorInput {
+        /// Hysteresis-snapped balance used for sizing/order-shaping logic.
         pub balance: f64,
-        #[serde(default)]
+        /// True/raw balance used for risk/accounting gates.
+        /// Accept legacy `balance_true` from older Python/test callers.
+        #[serde(default = "default_balance_raw", alias = "balance_true")]
         pub balance_raw: f64,
         pub global: OrchestratorGlobal,
         pub symbols: Vec<SymbolInput>,
         /// Backtest-only performance hint: allow next-only vs full-grid expansion.
         pub peek_hints: Option<super::EntryPeekHints>,
+    }
+
+    fn default_balance_raw() -> f64 {
+        f64::NAN
+    }
+
+    fn input_balance_raw(input: &OrchestratorInput) -> f64 {
+        if input.balance_raw.is_finite() {
+            input.balance_raw
+        } else {
+            input.balance
+        }
     }
 
     pub fn is_close_order_type(order_type: OrderType) -> bool {
@@ -695,11 +710,7 @@ mod core {
             return;
         }
         let pct = max_loss_pct.max(0.0);
-        let balance_raw = if input.balance_raw.is_finite() && input.balance_raw > 0.0 {
-            input.balance_raw
-        } else {
-            input.balance
-        };
+        let balance_raw = input_balance_raw(input);
         if !balance_raw.is_finite() || balance_raw <= 0.0 {
             return;
         }
@@ -1248,6 +1259,12 @@ mod core {
         if !input.balance.is_finite() {
             return Err(OrchestratorError::NonFiniteInput {
                 field: "balance",
+                symbol_idx: None,
+            });
+        }
+        if input.balance_raw.is_infinite() {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "balance_raw",
                 symbol_idx: None,
             });
         }
@@ -2139,13 +2156,8 @@ mod core {
                 c_mult: sym.exchange.c_mult,
             });
         }
-        let balance_raw_for_unstuck = if input.balance_raw.is_finite() && input.balance_raw > 0.0 {
-            input.balance_raw
-        } else {
-            input.balance
-        };
         if let Some((idx, side, order)) = calc_unstucking_action(
-            balance_raw_for_unstuck,
+            input.balance,
             input.global.unstuck_allowance_long,
             input.global.unstuck_allowance_short,
             &workspace.unstuck_inputs,
