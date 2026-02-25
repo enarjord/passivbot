@@ -255,7 +255,7 @@ mod core {
     }
 
     fn input_balance_raw(input: &OrchestratorInput) -> f64 {
-        if input.balance_raw.is_finite() && input.balance_raw > 0.0 {
+        if input.balance_raw.is_finite() {
             input.balance_raw
         } else {
             input.balance
@@ -3148,6 +3148,115 @@ mod core {
                     .any(|b| b.order_type == OrderType::CloseAutoReduceWelLong),
                 "expected loss-gate diagnostic for blocked auto-reduce order"
             );
+        }
+
+        #[test]
+        fn realized_loss_gate_missing_balance_raw_falls_back_to_balance() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.position = Position {
+                size: 10.0,
+                price: 100.0,
+            };
+            sym.order_book = OrderBook {
+                bid: 80.0,
+                ask: 80.0,
+            };
+            sym.long.bot_params.wallet_exposure_limit = 0.5;
+            sym.long.bot_params.risk_wel_enforcer_threshold = 1.0;
+            sym.long.bot_params.total_wallet_exposure_limit = 1.0;
+            sym.long.bot_params.n_positions = 1;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 1.0;
+            global_bp.long.n_positions = 1;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                // Missing from JSON deserialization path defaults to NaN.
+                balance_raw: f64::NAN,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 0.01,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+            let out = compute_ideal_orders(&input).unwrap();
+            assert!(
+                out.orders
+                    .iter()
+                    .all(|o| o.order_type != OrderType::CloseAutoReduceWelLong),
+                "expected missing balance_raw to fall back to snapped balance and gate closes"
+            );
+            assert!(
+                out.diagnostics
+                    .loss_gate_blocks
+                    .iter()
+                    .any(|b| b.order_type == OrderType::CloseAutoReduceWelLong
+                        && (b.balance_before - 1000.0).abs() < 1e-9),
+                "expected diagnostics to reflect snapped-balance fallback as balance_before"
+            );
+        }
+
+        #[test]
+        fn realized_loss_gate_non_positive_balance_raw_returns_early() {
+            for raw_balance in [0.0, -1.0] {
+                let mut sym = make_basic_symbol(0);
+                sym.long.position = Position {
+                    size: 10.0,
+                    price: 100.0,
+                };
+                sym.order_book = OrderBook {
+                    bid: 80.0,
+                    ask: 80.0,
+                };
+                sym.long.bot_params.wallet_exposure_limit = 0.5;
+                sym.long.bot_params.risk_wel_enforcer_threshold = 1.0;
+                sym.long.bot_params.total_wallet_exposure_limit = 1.0;
+                sym.long.bot_params.n_positions = 1;
+
+                let mut global_bp = BotParamsPair::default();
+                global_bp.long.total_wallet_exposure_limit = 1.0;
+                global_bp.long.n_positions = 1;
+
+                let input = OrchestratorInput {
+                    balance: 1000.0,
+                    balance_raw: raw_balance,
+                    global: OrchestratorGlobal {
+                        filter_by_min_effective_cost: false,
+                        unstuck_allowance_long: 0.0,
+                        unstuck_allowance_short: 0.0,
+                        max_realized_loss_pct: 0.01,
+                        realized_pnl_cumsum_max: 0.0,
+                        realized_pnl_cumsum_last: 0.0,
+                        sort_global: true,
+                        global_bot_params: global_bp,
+                        hedge_mode: true,
+                    },
+                    symbols: vec![sym],
+                    peek_hints: None,
+                };
+                let out = compute_ideal_orders(&input).unwrap();
+                assert!(
+                    out.orders
+                        .iter()
+                        .any(|o| o.order_type == OrderType::CloseAutoReduceWelLong),
+                    "expected non-positive balance_raw={} to early-return and keep close order",
+                    raw_balance
+                );
+                assert!(
+                    out.diagnostics.loss_gate_blocks.is_empty(),
+                    "expected non-positive balance_raw={} to skip loss-gate diagnostics",
+                    raw_balance
+                );
+            }
         }
 
         #[test]

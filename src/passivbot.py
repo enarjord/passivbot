@@ -835,7 +835,7 @@ class Passivbot:
                 n_short += 1
 
         balance_raw = self.get_raw_balance()
-        balance_snapped = self.get_snapped_balance()
+        balance_snapped = self.get_hysteresis_snapped_balance()
         balance_str = f"{balance_raw:.2f} {self.quote}"
         if abs(balance_raw - balance_snapped) > 1e-9:
             balance_str += f" (snap {balance_snapped:.2f})"
@@ -3059,11 +3059,13 @@ class Passivbot:
         allowance_multiplier = 1.0 + max(0.0, allowance_pct)
         effective_limit = base_limit * allowance_multiplier
         return (
-            self.get_snapped_balance() * effective_limit * self.bp(pside, "entry_initial_qty_pct", symbol)
+            self.get_hysteresis_snapped_balance()
+            * effective_limit
+            * self.bp(pside, "entry_initial_qty_pct", symbol)
             >= self.effective_min_cost[symbol]
         )
 
-    def get_snapped_balance(self) -> float:
+    def get_hysteresis_snapped_balance(self) -> float:
         """Return hysteresis-snapped balance used for sizing."""
         return float(getattr(self, "balance", 0.0) or 0.0)
 
@@ -3073,7 +3075,7 @@ class Passivbot:
             return float(getattr(self, "balance_raw", 0.0) or 0.0)
         if hasattr(self, "balance_true"):
             return float(getattr(self, "balance_true", 0.0) or 0.0)
-        return self.get_snapped_balance()
+        return self.get_hysteresis_snapped_balance()
 
     def add_new_order(self, order, source="WS"):
         """No-op placeholder; subclasses update open orders through REST synchronisation."""
@@ -3097,7 +3099,7 @@ class Passivbot:
                 getattr(self, "_previous_balance_effective", 0.0) or 0.0
             )
         balance_raw = self.get_raw_balance()
-        balance_snapped = self.get_snapped_balance()
+        balance_snapped = self.get_hysteresis_snapped_balance()
         if (
             balance_raw != self._previous_balance_raw
             or balance_snapped != self._previous_balance_snapped
@@ -4178,8 +4180,8 @@ class Passivbot:
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
         balance_snapped = (
-            self.get_snapped_balance()
-            if hasattr(self, "get_snapped_balance")
+            self.get_hysteresis_snapped_balance()
+            if hasattr(self, "get_hysteresis_snapped_balance")
             else float(getattr(self, "balance", 0.0) or 0.0)
         )
         balance_raw = (
@@ -4507,8 +4509,8 @@ class Passivbot:
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
         balance_snapped = (
-            self.get_snapped_balance()
-            if hasattr(self, "get_snapped_balance")
+            self.get_hysteresis_snapped_balance()
+            if hasattr(self, "get_hysteresis_snapped_balance")
             else float(getattr(self, "balance", 0.0) or 0.0)
         )
         balance_raw = (

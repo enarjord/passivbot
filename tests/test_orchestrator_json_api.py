@@ -5,6 +5,16 @@ import math
 import pytest
 
 
+@pytest.fixture(scope="module", autouse=True)
+def require_real_passivbot_rust_module():
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.fail(
+            "tests/test_orchestrator_json_api.py requires the real passivbot_rust extension; stub detected"
+        )
+
+
 def bot_params(**overrides):
     base = {
         "close_grid_markup_end": 0.01,
@@ -240,7 +250,7 @@ def test_loss_gate_uses_balance_raw_when_snapped_and_raw_diverge():
     assert not out_allowed.get("diagnostics", {}).get("loss_gate_blocks")
 
 
-def test_loss_gate_falls_back_to_snapped_balance_when_raw_is_non_positive():
+def test_loss_gate_returns_early_when_raw_is_non_positive():
     import passivbot_rust as pbr
 
     global_bp = bot_params_pair(
@@ -263,15 +273,16 @@ def test_loss_gate_falls_back_to_snapped_balance_when_raw_is_non_positive():
         },
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
-    inp["balance_raw"] = 0.0
     inp["global"]["max_realized_loss_pct"] = 0.01
 
-    out = compute(pbr, inp)
-    order_types = [o["order_type"] for o in out["orders"]]
-    assert "close_auto_reduce_wel_long" not in order_types
-    blocks = out.get("diagnostics", {}).get("loss_gate_blocks", [])
-    assert any(b.get("order_type") == "close_auto_reduce_wel_long" for b in blocks)
-    assert any(abs(float(b.get("balance_before", 0.0)) - 1_000.0) < 1e-9 for b in blocks)
+    for raw_balance in [0.0, -1.0]:
+        inp_case = copy.deepcopy(inp)
+        inp_case["balance_raw"] = raw_balance
+        out = compute(pbr, inp_case)
+        order_types = [o["order_type"] for o in out["orders"]]
+        assert "close_auto_reduce_wel_long" in order_types
+        blocks = out.get("diagnostics", {}).get("loss_gate_blocks", [])
+        assert not blocks
 
 
 def test_json_rejects_invalid_order_book():
