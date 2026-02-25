@@ -166,6 +166,7 @@ def make_symbol(
 def make_input(*, balance: float, global_bp=None, symbols):
     return {
         "balance": balance,
+        "balance_true": balance,
         "global": {
             "filter_by_min_effective_cost": False,
             "unstuck_allowance_long": 0.0,

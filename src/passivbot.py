@@ -490,6 +490,7 @@ class Passivbot:
         )
         self._balance_override_logged = False
         self.balance = 1e-12
+        self.balance_true = 1e-12
         self.previous_hysteresis_balance = None
         self.balance_hysteresis_snap_pct = float(
             get_optional_live_value(self.config, "balance_hysteresis_snap_pct", 0.02)
@@ -833,7 +834,11 @@ class Passivbot:
             if pos_data.get("short", {}).get("size", 0.0) != 0.0:
                 n_short += 1
 
-        balance_str = f"{self.balance:.2f} {self.quote}"
+        balance_true = self.get_true_balance()
+        balance_effective = self.get_effective_balance()
+        balance_str = f"{balance_true:.2f} {self.quote}"
+        if abs(balance_true - balance_effective) > 1e-9:
+            balance_str += f" (snap {balance_effective:.2f})"
 
         # Build fills string with PnL if fills > 0
         if self._health_fills > 0:
@@ -899,8 +904,9 @@ class Passivbot:
         pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = float(pnls_cumsum.max()), float(pnls_cumsum[-1])
 
-        balance_peak = float(self.balance) + (pnls_cumsum_max - pnls_cumsum_last)
-        pct_from_peak = (float(self.balance) / balance_peak - 1.0) * 100.0
+        balance_true = self.get_true_balance()
+        balance_peak = balance_true + (pnls_cumsum_max - pnls_cumsum_last)
+        pct_from_peak = (balance_true / balance_peak - 1.0) * 100.0
         # Raw allowance WITHOUT .max(0.0) - can be negative
         allowance_raw = balance_peak * (pct * twel + pct_from_peak / 100.0)
 
@@ -1979,8 +1985,12 @@ class Passivbot:
         if self.debug_mode:
             if to_create:
                 print(f"would create {len(to_create)} order{'s' if len(to_create) > 1 else ''}")
-        elif self.balance < self.balance_threshold:
-            logging.info("[balance] too low: %.2f %s; not creating orders", self.balance, self.quote)
+        elif self.get_true_balance() < self.balance_threshold:
+            logging.info(
+                "[balance] too low: %.2f %s; not creating orders",
+                self.get_true_balance(),
+                self.quote,
+            )
         else:
             # to_create_mod = [x for x in to_create if not order_has_match(x, to_cancel)]
             to_create_mod = []
@@ -3049,9 +3059,19 @@ class Passivbot:
         allowance_multiplier = 1.0 + max(0.0, allowance_pct)
         effective_limit = base_limit * allowance_multiplier
         return (
-            self.balance * effective_limit * self.bp(pside, "entry_initial_qty_pct", symbol)
+            self.get_effective_balance() * effective_limit * self.bp(pside, "entry_initial_qty_pct", symbol)
             >= self.effective_min_cost[symbol]
         )
+
+    def get_effective_balance(self) -> float:
+        """Return hysteresis-snapped effective balance used for sizing."""
+        return float(getattr(self, "balance", 0.0) or 0.0)
+
+    def get_true_balance(self) -> float:
+        """Return raw true balance (fallback to effective for legacy test stubs)."""
+        if hasattr(self, "balance_true"):
+            return float(getattr(self, "balance_true", 0.0) or 0.0)
+        return self.get_effective_balance()
 
     def add_new_order(self, order, source="WS"):
         """No-op placeholder; subclasses update open orders through REST synchronisation."""
@@ -3068,19 +3088,33 @@ class Passivbot:
         return
 
     async def handle_balance_update(self, source="REST"):
-        if not hasattr(self, "_previous_balance"):
-            self._previous_balance = 0.0
-        if self.balance != self._previous_balance:
+        if not hasattr(self, "_previous_balance_true"):
+            self._previous_balance_true = 0.0
+        if not hasattr(self, "_previous_balance_effective"):
+            self._previous_balance_effective = 0.0
+        balance_true = self.get_true_balance()
+        balance_effective = self.get_effective_balance()
+        if (
+            balance_true != self._previous_balance_true
+            or balance_effective != self._previous_balance_effective
+        ):
             try:
-                equity = self.balance + (await self.calc_upnl_sum())
+                equity = balance_true + (await self.calc_upnl_sum())
                 logging.info(
-                    f"[balance] {self._previous_balance} -> {self.balance} equity: {equity:.4f} source: {source}"
+                    "[balance] true %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
+                    self._previous_balance_true,
+                    balance_true,
+                    self._previous_balance_effective,
+                    balance_effective,
+                    equity,
+                    source,
                 )
             except Exception as e:
                 logging.error(f"error with handle_balance_update {e}")
                 traceback.print_exc()
             finally:
-                self._previous_balance = self.balance
+                self._previous_balance_true = balance_true
+                self._previous_balance_effective = balance_effective
                 self.execution_scheduled = True
 
     async def calc_upnl_sum(self):
@@ -3318,19 +3352,13 @@ class Passivbot:
         pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
         out = {}
+        balance_true = self.get_true_balance()
         for pside in ["long", "short"]:
             pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
             if pct > 0.0:
-                balance_peak = self.balance + (pnls_cumsum_max - pnls_cumsum_last)
-                drop_since_peak_pct = self.balance / balance_peak - 1.0
-                allowance_raw = balance_peak * (pct + drop_since_peak_pct)
-                allowance_mod = balance_peak * (
-                    pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-                    + drop_since_peak_pct
-                )
                 out[pside] = float(
                     pbr.calc_auto_unstuck_allowance(
-                        float(self.balance),
+                        balance_true,
                         pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0),
                         float(pnls_cumsum_max),
                         float(pnls_cumsum_last),
@@ -3522,7 +3550,7 @@ class Passivbot:
         if not events:
             ts_now = self.get_exchange_time()
             balance_now = (
-                float(current_balance) if current_balance is not None else float(self.balance)
+                float(current_balance) if current_balance is not None else self.get_true_balance()
             )
             point = {
                 "timestamp": ts_now,
@@ -3551,7 +3579,7 @@ class Passivbot:
         lookback_ms = max(lookback_days, 0.0) * 24 * 60 * 60 * 1000
         lookback_start = ts_now - lookback_ms
 
-        balance_now = float(current_balance) if current_balance is not None else float(self.balance)
+        balance_now = float(current_balance) if current_balance is not None else self.get_true_balance()
         balance_now = max(balance_now, 0.0)
         total_realised = sum(
             evt["pnl"] + evt.get("fee", 0.0) for evt in events if evt["timestamp"] <= ts_now
@@ -3803,13 +3831,14 @@ class Passivbot:
 
         # Pre-calculate total WE per side for TWEL% display
         total_we_by_pside = {"long": 0.0, "short": 0.0}
+        balance_true = self.get_true_balance()
         for pos in positions_new:
             sym = pos["symbol"]
             ps = pos["position_side"]
             sz = pos.get("size", 0.0)
             px = pos.get("price", 0.0)
-            if sz != 0 and self.balance > 0 and sym in self.c_mults:
-                total_we_by_pside[ps] += pbr.qty_to_cost(sz, px, self.c_mults[sym]) / self.balance
+            if sz != 0 and balance_true > 0 and sym in self.c_mults:
+                total_we_by_pside[ps] += pbr.qty_to_cost(sz, px, self.c_mults[sym]) / balance_true
 
         # Create PrettyTable for aligned output
         table = PrettyTable()
@@ -3835,8 +3864,8 @@ class Passivbot:
 
             # Compute metrics for new pos
             wallet_exposure = (
-                pbr.qty_to_cost(new["size"], new["price"], self.c_mults[symbol]) / self.balance
-                if new["size"] != 0 and self.balance > 0
+                pbr.qty_to_cost(new["size"], new["price"], self.c_mults[symbol]) / balance_true
+                if new["size"] != 0 and balance_true > 0
                 else 0.0
             )
             wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
@@ -3972,36 +4001,40 @@ class Passivbot:
             self.previous_hysteresis_balance = None
         if not hasattr(self, "balance_hysteresis_snap_pct"):
             self.balance_hysteresis_snap_pct = 0.02
+        if not hasattr(self, "balance_true"):
+            self.balance_true = self.get_effective_balance()
 
         if self.balance_override is not None:
-            balance = float(self.balance_override)
+            balance_true = float(self.balance_override)
             if not self._balance_override_logged:
-                logging.info("Using balance override: %.6f", balance)
+                logging.info("Using balance override: %.6f", balance_true)
                 self._balance_override_logged = True
         else:
             if not hasattr(self, "fetch_balance"):
                 logging.debug("update_balance: no fetch_balance implemented")
                 return False
-            balance = await self.fetch_balance()
+            balance_true = await self.fetch_balance()
 
         # Only accept numeric balances; keep previous value on failure
-        if balance is None:
+        if balance_true is None:
             logging.warning("balance fetch returned None; keeping previous balance")
             return False
         try:
-            balance = float(balance)
+            balance_true = float(balance_true)
         except (TypeError, ValueError):
             logging.warning("non-numeric balance fetch result; keeping previous balance")
             return False
 
+        balance_effective = balance_true
         if self.balance_override is None:
             if self.previous_hysteresis_balance is None:
-                self.previous_hysteresis_balance = balance
-            balance = pbr.hysteresis(
-                balance, self.previous_hysteresis_balance, self.balance_hysteresis_snap_pct
+                self.previous_hysteresis_balance = balance_true
+            balance_effective = pbr.hysteresis(
+                balance_true, self.previous_hysteresis_balance, self.balance_hysteresis_snap_pct
             )
-            self.previous_hysteresis_balance = balance
-        self.balance = balance
+        self.previous_hysteresis_balance = balance_effective
+        self.balance_true = balance_true
+        self.balance = balance_effective
         return True
 
     async def update_positions_and_balance(self):
@@ -4140,8 +4173,19 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
+        balance_effective = (
+            self.get_effective_balance()
+            if hasattr(self, "get_effective_balance")
+            else float(getattr(self, "balance", 0.0) or 0.0)
+        )
+        balance_true = (
+            self.get_true_balance()
+            if hasattr(self, "get_true_balance")
+            else float(getattr(self, "balance_true", getattr(self, "balance", 0.0)) or 0.0)
+        )
         input_dict = {
-            "balance": float(self.balance),
+            "balance": balance_effective,
+            "balance_true": balance_true,
             "global": {
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
@@ -4458,8 +4502,19 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
+        balance_effective = (
+            self.get_effective_balance()
+            if hasattr(self, "get_effective_balance")
+            else float(getattr(self, "balance", 0.0) or 0.0)
+        )
+        balance_true = (
+            self.get_true_balance()
+            if hasattr(self, "get_true_balance")
+            else float(getattr(self, "balance_true", getattr(self, "balance", 0.0)) or 0.0)
+        )
         input_dict = {
-            "balance": float(self.balance),
+            "balance": balance_effective,
+            "balance_true": balance_true,
             "global": {
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),

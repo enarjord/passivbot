@@ -238,7 +238,10 @@ mod core {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct OrchestratorInput {
+        /// Hysteresis-snapped balance used for sizing/order-shaping logic.
         pub balance: f64,
+        /// True/raw balance used for risk/accounting gates.
+        pub balance_true: f64,
         pub global: OrchestratorGlobal,
         pub symbols: Vec<SymbolInput>,
         /// Backtest-only performance hint: allow next-only vs full-grid expansion.
@@ -693,7 +696,7 @@ mod core {
             return;
         }
         let pct = max_loss_pct.max(0.0);
-        let balance = input.balance;
+        let balance = input.balance_true;
         if !balance.is_finite() || balance <= 0.0 {
             return;
         }
@@ -1242,6 +1245,12 @@ mod core {
         if !input.balance.is_finite() {
             return Err(OrchestratorError::NonFiniteInput {
                 field: "balance",
+                symbol_idx: None,
+            });
+        }
+        if !input.balance_true.is_finite() {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "balance_true",
                 symbol_idx: None,
             });
         }
@@ -2134,7 +2143,7 @@ mod core {
             });
         }
         if let Some((idx, side, order)) = calc_unstucking_action(
-            input.balance,
+            input.balance_true,
             input.global.unstuck_allowance_long,
             input.global.unstuck_allowance_short,
             &workspace.unstuck_inputs,
@@ -2206,7 +2215,7 @@ mod core {
                     .long
                     .total_wallet_exposure_limit,
                 enp_long,
-                input.balance,
+                input.balance_true,
                 &workspace.twel_positions,
                 None,
             );
@@ -2262,7 +2271,7 @@ mod core {
                     .short
                     .total_wallet_exposure_limit,
                 enp_short,
-                input.balance,
+                input.balance_true,
                 &workspace.twel_positions,
                 None,
             );
@@ -2333,7 +2342,7 @@ mod core {
             }
             gate_entries_by_twel_deterministic(
                 PositionSide::Long,
-                input.balance,
+                input.balance_true,
                 input
                     .global
                     .global_bot_params
@@ -2367,7 +2376,7 @@ mod core {
             }
             gate_entries_by_twel_deterministic(
                 PositionSide::Short,
-                input.balance,
+                input.balance_true,
                 input
                     .global
                     .global_bot_params
@@ -2556,6 +2565,7 @@ mod core {
 
             let input = OrchestratorInput {
                 balance: 1000.0,
+                balance_true: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
@@ -2645,6 +2655,7 @@ mod core {
 
             let input = OrchestratorInput {
                 balance: 1000.0,
+                balance_true: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
@@ -2676,6 +2687,7 @@ mod core {
 
             let input = OrchestratorInput {
                 balance: 1000.0,
+                balance_true: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
@@ -2716,6 +2728,7 @@ mod core {
 
             let input = OrchestratorInput {
                 balance: 1000.0,
+                balance_true: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
@@ -2761,6 +2774,7 @@ mod core {
 
             let input = OrchestratorInput {
                 balance: 1000.0,
+                balance_true: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
@@ -2868,6 +2882,7 @@ mod core {
 
             let input = OrchestratorInput {
                 balance: 1_000_000.0,
+                balance_true: 1_000_000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
@@ -3077,6 +3092,7 @@ mod core {
 
             let input_open = OrchestratorInput {
                 balance: 1000.0,
+                balance_true: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
@@ -3139,6 +3155,7 @@ mod core {
 
             let input = OrchestratorInput {
                 balance: 1000.0,
+                balance_true: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
@@ -3181,6 +3198,7 @@ mod core {
 
             let input = OrchestratorInput {
                 balance: 1000.0,
+                balance_true: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 1000.0,
