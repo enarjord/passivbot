@@ -834,7 +834,9 @@ class Passivbot:
             if pos_data.get("short", {}).get("size", 0.0) != 0.0:
                 n_short += 1
 
-        balance_str = f"{self.balance:.2f} {self.quote}"
+        balance_str = f"{self.balance_raw:.2f} {self.quote}"
+        if abs(self.balance_raw - self.balance) > 1e-9:
+            balance_str += f" (snap {self.balance:.2f})"
 
         # Build fills string with PnL if fills > 0
         if self._health_fills > 0:
@@ -1980,8 +1982,8 @@ class Passivbot:
         if self.debug_mode:
             if to_create:
                 print(f"would create {len(to_create)} order{'s' if len(to_create) > 1 else ''}")
-        elif self.balance < self.balance_threshold:
-            logging.info("[balance] too low: %.2f %s; not creating orders", self.balance, self.quote)
+        elif self.balance_raw < self.balance_threshold:
+            logging.info("[balance] too low: %.2f %s; not creating orders", self.balance_raw, self.quote)
         else:
             # to_create_mod = [x for x in to_create if not order_has_match(x, to_cancel)]
             to_create_mod = []
@@ -3069,19 +3071,31 @@ class Passivbot:
         return
 
     async def handle_balance_update(self, source="REST"):
-        if not hasattr(self, "_previous_balance"):
-            self._previous_balance = 0.0
-        if self.balance != self._previous_balance:
+        if not hasattr(self, "_previous_balance_raw"):
+            self._previous_balance_raw = 0.0
+        if not hasattr(self, "_previous_balance_snap"):
+            self._previous_balance_snap = 0.0
+        if (
+            self.balance_raw != self._previous_balance_raw
+            or self.balance != self._previous_balance_snap
+        ):
             try:
                 equity = self.balance_raw + (await self.calc_upnl_sum())
                 logging.info(
-                    f"[balance] {self._previous_balance} -> {self.balance} equity: {equity:.4f} source: {source}"
+                    "[balance] raw %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
+                    self._previous_balance_raw,
+                    self.balance_raw,
+                    self._previous_balance_snap,
+                    self.balance,
+                    equity,
+                    source,
                 )
             except Exception as e:
                 logging.error(f"error with handle_balance_update {e}")
                 traceback.print_exc()
             finally:
-                self._previous_balance = self.balance
+                self._previous_balance_raw = self.balance_raw
+                self._previous_balance_snap = self.balance
                 self.execution_scheduled = True
 
     async def calc_upnl_sum(self):
@@ -3809,8 +3823,8 @@ class Passivbot:
             ps = pos["position_side"]
             sz = pos.get("size", 0.0)
             px = pos.get("price", 0.0)
-            if sz != 0 and self.balance > 0 and sym in self.c_mults:
-                total_we_by_pside[ps] += pbr.qty_to_cost(sz, px, self.c_mults[sym]) / self.balance
+            if sz != 0 and self.balance_raw > 0 and sym in self.c_mults:
+                total_we_by_pside[ps] += pbr.qty_to_cost(sz, px, self.c_mults[sym]) / self.balance_raw
 
         # Create PrettyTable for aligned output
         table = PrettyTable()
@@ -3836,8 +3850,8 @@ class Passivbot:
 
             # Compute metrics for new pos
             wallet_exposure = (
-                pbr.qty_to_cost(new["size"], new["price"], self.c_mults[symbol]) / self.balance
-                if new["size"] != 0 and self.balance > 0
+                pbr.qty_to_cost(new["size"], new["price"], self.c_mults[symbol]) / self.balance_raw
+                if new["size"] != 0 and self.balance_raw > 0
                 else 0.0
             )
             wel = float(self.bp(pside, "wallet_exposure_limit", symbol))

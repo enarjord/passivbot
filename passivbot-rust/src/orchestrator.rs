@@ -2139,8 +2139,13 @@ mod core {
                 c_mult: sym.exchange.c_mult,
             });
         }
+        let balance_raw_for_unstuck = if input.balance_raw.is_finite() && input.balance_raw > 0.0 {
+            input.balance_raw
+        } else {
+            input.balance
+        };
         if let Some((idx, side, order)) = calc_unstucking_action(
-            input.balance,
+            balance_raw_for_unstuck,
             input.global.unstuck_allowance_long,
             input.global.unstuck_allowance_short,
             &workspace.unstuck_inputs,
