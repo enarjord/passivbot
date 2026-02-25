@@ -490,7 +490,7 @@ class Passivbot:
         )
         self._balance_override_logged = False
         self.balance = 1e-12
-        self.balance_true = 1e-12
+        self.balance_raw = 1e-12
         self.previous_hysteresis_balance = None
         self.balance_hysteresis_snap_pct = float(
             get_optional_live_value(self.config, "balance_hysteresis_snap_pct", 0.02)
@@ -3069,6 +3069,8 @@ class Passivbot:
 
     def get_true_balance(self) -> float:
         """Return raw true balance (fallback to effective for legacy test stubs)."""
+        if hasattr(self, "balance_raw"):
+            return float(getattr(self, "balance_raw", 0.0) or 0.0)
         if hasattr(self, "balance_true"):
             return float(getattr(self, "balance_true", 0.0) or 0.0)
         return self.get_effective_balance()
@@ -4001,39 +4003,39 @@ class Passivbot:
             self.previous_hysteresis_balance = None
         if not hasattr(self, "balance_hysteresis_snap_pct"):
             self.balance_hysteresis_snap_pct = 0.02
-        if not hasattr(self, "balance_true"):
-            self.balance_true = self.get_effective_balance()
+        if not hasattr(self, "balance_raw"):
+            self.balance_raw = self.get_true_balance()
 
         if self.balance_override is not None:
-            balance_true = float(self.balance_override)
+            balance_raw = float(self.balance_override)
             if not self._balance_override_logged:
-                logging.info("Using balance override: %.6f", balance_true)
+                logging.info("Using balance override: %.6f", balance_raw)
                 self._balance_override_logged = True
         else:
             if not hasattr(self, "fetch_balance"):
                 logging.debug("update_balance: no fetch_balance implemented")
                 return False
-            balance_true = await self.fetch_balance()
+            balance_raw = await self.fetch_balance()
 
         # Only accept numeric balances; keep previous value on failure
-        if balance_true is None:
+        if balance_raw is None:
             logging.warning("balance fetch returned None; keeping previous balance")
             return False
         try:
-            balance_true = float(balance_true)
+            balance_raw = float(balance_raw)
         except (TypeError, ValueError):
             logging.warning("non-numeric balance fetch result; keeping previous balance")
             return False
 
-        balance_effective = balance_true
+        balance_effective = balance_raw
         if self.balance_override is None:
             if self.previous_hysteresis_balance is None:
-                self.previous_hysteresis_balance = balance_true
+                self.previous_hysteresis_balance = balance_raw
             balance_effective = pbr.hysteresis(
-                balance_true, self.previous_hysteresis_balance, self.balance_hysteresis_snap_pct
+                balance_raw, self.previous_hysteresis_balance, self.balance_hysteresis_snap_pct
             )
-        self.previous_hysteresis_balance = balance_effective
-        self.balance_true = balance_true
+            self.previous_hysteresis_balance = balance_effective
+        self.balance_raw = balance_raw
         self.balance = balance_effective
         return True
 
@@ -4178,14 +4180,14 @@ class Passivbot:
             if hasattr(self, "get_effective_balance")
             else float(getattr(self, "balance", 0.0) or 0.0)
         )
-        balance_true = (
+        balance_raw = (
             self.get_true_balance()
             if hasattr(self, "get_true_balance")
-            else float(getattr(self, "balance_true", getattr(self, "balance", 0.0)) or 0.0)
+            else float(getattr(self, "balance_raw", getattr(self, "balance", 0.0)) or 0.0)
         )
         input_dict = {
             "balance": balance_effective,
-            "balance_true": balance_true,
+            "balance_raw": balance_raw,
             "global": {
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
@@ -4507,14 +4509,14 @@ class Passivbot:
             if hasattr(self, "get_effective_balance")
             else float(getattr(self, "balance", 0.0) or 0.0)
         )
-        balance_true = (
+        balance_raw = (
             self.get_true_balance()
             if hasattr(self, "get_true_balance")
-            else float(getattr(self, "balance_true", getattr(self, "balance", 0.0)) or 0.0)
+            else float(getattr(self, "balance_raw", getattr(self, "balance", 0.0)) or 0.0)
         )
         input_dict = {
             "balance": balance_effective,
-            "balance_true": balance_true,
+            "balance_raw": balance_raw,
             "global": {
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),

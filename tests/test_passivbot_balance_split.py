@@ -98,3 +98,22 @@ async def test_update_balance_failure_keeps_previous():
     # Balance should remain unchanged because assignment was never reached
     assert bot.balance == pytest.approx(50.0)
     assert bot.previous_hysteresis_balance == pytest.approx(50.0)
+
+
+@pytest.mark.asyncio
+async def test_update_balance_override_does_not_reset_hysteresis_anchor():
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+    bot.balance = 100.0
+    bot.balance_raw = 100.0
+    bot.balance_override = 250.0
+    bot._balance_override_logged = False
+    bot.previous_hysteresis_balance = 133.0
+    bot.balance_hysteresis_snap_pct = 0.02
+
+    ok = await bot.update_balance()
+    assert ok is True
+    assert bot.balance == pytest.approx(250.0)
+    assert bot.balance_raw == pytest.approx(250.0)
+    # Keep hysteresis anchor unchanged while override is active.
+    assert bot.previous_hysteresis_balance == pytest.approx(133.0)

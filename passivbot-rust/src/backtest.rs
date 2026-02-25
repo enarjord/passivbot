@@ -534,12 +534,13 @@ impl<'a> Backtest<'a> {
             return;
         }
 
-        let balance = self.balance.usd_total_balance;
+        let balance = self.balance.usd_total_balance_rounded;
+        let balance_raw = self.balance.usd_total_balance;
         let allowance = match side {
             LONG => {
                 if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
                     calc_auto_unstuck_allowance(
-                        balance,
+                        balance_raw,
                         self.bot_params_master.long.unstuck_loss_allowance_pct
                             * self.bot_params_master.long.total_wallet_exposure_limit,
                         self.pnl_cumsum_max,
@@ -552,7 +553,7 @@ impl<'a> Backtest<'a> {
             SHORT => {
                 if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
                     calc_auto_unstuck_allowance(
-                        balance,
+                        balance_raw,
                         self.bot_params_master.short.unstuck_loss_allowance_pct
                             * self.bot_params_master.short.total_wallet_exposure_limit,
                         self.pnl_cumsum_max,
@@ -769,11 +770,11 @@ impl<'a> Backtest<'a> {
         I: IntoIterator<Item = usize>,
     {
         let balance = self.balance.usd_total_balance_rounded;
-        let balance_true = self.balance.usd_total_balance;
+        let balance_raw = self.balance.usd_total_balance;
 
         let long_allowance = if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
             calc_auto_unstuck_allowance(
-                balance_true,
+                balance_raw,
                 self.bot_params_master.long.unstuck_loss_allowance_pct
                     * self.bot_params_master.long.total_wallet_exposure_limit,
                 self.pnl_cumsum_max,
@@ -784,7 +785,7 @@ impl<'a> Backtest<'a> {
         };
         let short_allowance = if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
             calc_auto_unstuck_allowance(
-                balance_true,
+                balance_raw,
                 self.bot_params_master.short.unstuck_loss_allowance_pct
                     * self.bot_params_master.short.total_wallet_exposure_limit,
                 self.pnl_cumsum_max,
@@ -998,7 +999,7 @@ impl<'a> Backtest<'a> {
 
         orchestrator::OrchestratorInput {
             balance,
-            balance_true,
+            balance_raw,
             global: orchestrator::OrchestratorGlobal {
                 filter_by_min_effective_cost: self.backtest_params.filter_by_min_effective_cost,
                 unstuck_allowance_long: long_allowance,
@@ -1027,13 +1028,13 @@ impl<'a> Backtest<'a> {
             .unwrap_or_else(|| self.build_orchestrator_input_iter(k, None, 0..self.n_coins));
 
         input.balance = self.balance.usd_total_balance_rounded;
-        input.balance_true = self.balance.usd_total_balance;
+        input.balance_raw = self.balance.usd_total_balance;
 
-        let balance_true = input.balance_true;
+        let balance_raw = input.balance_raw;
         input.global.unstuck_allowance_long =
             if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
                 calc_auto_unstuck_allowance(
-                    balance_true,
+                    balance_raw,
                     self.bot_params_master.long.unstuck_loss_allowance_pct
                         * self.bot_params_master.long.total_wallet_exposure_limit,
                     self.pnl_cumsum_max,
@@ -1045,7 +1046,7 @@ impl<'a> Backtest<'a> {
         input.global.unstuck_allowance_short =
             if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
                 calc_auto_unstuck_allowance(
-                    balance_true,
+                    balance_raw,
                     self.bot_params_master.short.unstuck_loss_allowance_pct
                         * self.bot_params_master.short.total_wallet_exposure_limit,
                     self.pnl_cumsum_max,

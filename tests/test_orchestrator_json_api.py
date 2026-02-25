@@ -166,7 +166,7 @@ def make_symbol(
 def make_input(*, balance: float, global_bp=None, symbols):
     return {
         "balance": balance,
-        "balance_true": balance,
+        "balance_raw": balance,
         "global": {
             "filter_by_min_effective_cost": False,
             "unstuck_allowance_long": 0.0,
@@ -182,6 +182,20 @@ def make_input(*, balance: float, global_bp=None, symbols):
 def compute(pbr, inp: dict) -> dict:
     out_json = pbr.compute_ideal_orders_json(json.dumps(inp))
     return json.loads(out_json)
+
+
+def test_json_accepts_legacy_balance_true_alias():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[make_symbol(0, bid=100.0, ask=100.0)],
+    )
+    inp.pop("balance_raw")
+    inp["balance_true"] = 1_000.0
+
+    out = compute(pbr, inp)
+    assert isinstance(out.get("orders"), list)
 
 
 def test_json_rejects_invalid_order_book():
