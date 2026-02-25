@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+### Changed
+- **Dual balance routing (raw vs hysteresis-snapped)** - Live and orchestrator flows now carry both `balance_true` (raw wallet balance) and `balance` (hysteresis-snapped effective balance). Sizing/order-shaping paths use snapped balance, while risk/accounting paths use true balance (including realized-loss gate peak/floor checks, TWEL entry/auto-reduce gating, and auto-unstuck allowance calculations). This applies consistently across live and backtest via Rust orchestrator input.
+
+### Fixed
+- **Pytest Rust-module bootstrap fallback** - Test bootstrap now tries the project venv `passivbot_rust` package before falling back to the lightweight stub when tests are launched outside the venv, reducing false failures from missing/incorrect Rust module resolution.
+
 ## v7.8.3 - 2026-02-24
 
 ### Added
