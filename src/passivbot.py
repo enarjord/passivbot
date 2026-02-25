@@ -490,6 +490,7 @@ class Passivbot:
         )
         self._balance_override_logged = False
         self.balance = 1e-12
+        self.balance_raw = 1e-12
         self.previous_hysteresis_balance = None
         self.balance_hysteresis_snap_pct = float(
             get_optional_live_value(self.config, "balance_hysteresis_snap_pct", 0.02)
@@ -899,8 +900,8 @@ class Passivbot:
         pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = float(pnls_cumsum.max()), float(pnls_cumsum[-1])
 
-        balance_peak = float(self.balance) + (pnls_cumsum_max - pnls_cumsum_last)
-        pct_from_peak = (float(self.balance) / balance_peak - 1.0) * 100.0
+        balance_peak = float(self.balance_raw) + (pnls_cumsum_max - pnls_cumsum_last)
+        pct_from_peak = (float(self.balance_raw) / balance_peak - 1.0) * 100.0
         # Raw allowance WITHOUT .max(0.0) - can be negative
         allowance_raw = balance_peak * (pct * twel + pct_from_peak / 100.0)
 
@@ -3072,7 +3073,7 @@ class Passivbot:
             self._previous_balance = 0.0
         if self.balance != self._previous_balance:
             try:
-                equity = self.balance + (await self.calc_upnl_sum())
+                equity = self.balance_raw + (await self.calc_upnl_sum())
                 logging.info(
                     f"[balance] {self._previous_balance} -> {self.balance} equity: {equity:.4f} source: {source}"
                 )
@@ -3321,8 +3322,8 @@ class Passivbot:
         for pside in ["long", "short"]:
             pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
             if pct > 0.0:
-                balance_peak = self.balance + (pnls_cumsum_max - pnls_cumsum_last)
-                drop_since_peak_pct = self.balance / balance_peak - 1.0
+                balance_peak = self.balance_raw + (pnls_cumsum_max - pnls_cumsum_last)
+                drop_since_peak_pct = self.balance_raw / balance_peak - 1.0
                 allowance_raw = balance_peak * (pct + drop_since_peak_pct)
                 allowance_mod = balance_peak * (
                     pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
@@ -3330,7 +3331,7 @@ class Passivbot:
                 )
                 out[pside] = float(
                     pbr.calc_auto_unstuck_allowance(
-                        float(self.balance),
+                        float(self.balance_raw),
                         pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0),
                         float(pnls_cumsum_max),
                         float(pnls_cumsum_last),
@@ -3522,7 +3523,7 @@ class Passivbot:
         if not events:
             ts_now = self.get_exchange_time()
             balance_now = (
-                float(current_balance) if current_balance is not None else float(self.balance)
+                float(current_balance) if current_balance is not None else float(self.balance_raw)
             )
             point = {
                 "timestamp": ts_now,
@@ -3551,7 +3552,7 @@ class Passivbot:
         lookback_ms = max(lookback_days, 0.0) * 24 * 60 * 60 * 1000
         lookback_start = ts_now - lookback_ms
 
-        balance_now = float(current_balance) if current_balance is not None else float(self.balance)
+        balance_now = float(current_balance) if current_balance is not None else float(self.balance_raw)
         balance_now = max(balance_now, 0.0)
         total_realised = sum(
             evt["pnl"] + evt.get("fee", 0.0) for evt in events if evt["timestamp"] <= ts_now
@@ -3994,6 +3995,7 @@ class Passivbot:
             logging.warning("non-numeric balance fetch result; keeping previous balance")
             return False
 
+        self.balance_raw = float(balance)
         if self.balance_override is None:
             if self.previous_hysteresis_balance is None:
                 self.previous_hysteresis_balance = balance
@@ -4142,6 +4144,7 @@ class Passivbot:
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
         input_dict = {
             "balance": float(self.balance),
+            "balance_raw": float(self.balance_raw),
             "global": {
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
@@ -4460,6 +4463,7 @@ class Passivbot:
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
         input_dict = {
             "balance": float(self.balance),
+            "balance_raw": float(self.balance_raw),
             "global": {
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),

@@ -79,6 +79,7 @@ async def test_missing_ema_raises_from_snapshot(monkeypatch):
     class FakeBot:
         positions = {}
         balance = 1000.0
+        balance_raw = 1000.0
         PB_modes = {}
         effective_min_cost = {}
         _config_hedge_mode = False
@@ -125,6 +126,7 @@ async def test_missing_ema_raises_from_snapshot_with_return(monkeypatch):
     class FakeBot:
         positions = {}
         balance = 1000.0
+        balance_raw = 1000.0
         PB_modes = {}
         effective_min_cost = {}
         _config_hedge_mode = False
