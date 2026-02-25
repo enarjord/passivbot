@@ -1,3 +1,4 @@
+import copy
 import json
 import math
 
@@ -196,6 +197,81 @@ def test_json_accepts_legacy_balance_true_alias():
 
     out = compute(pbr, inp)
     assert isinstance(out.get("orders"), list)
+
+
+def test_loss_gate_uses_balance_raw_when_snapped_and_raw_diverge():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={
+            "n_positions": 1,
+            "total_wallet_exposure_limit": 1.0,
+        }
+    )
+    sym = make_symbol(
+        0,
+        bid=80.0,
+        ask=80.0,
+        long_pos_size=10.0,
+        long_pos_price=100.0,
+        long_bp={
+            "wallet_exposure_limit": 0.5,
+            "risk_wel_enforcer_threshold": 1.0,
+            "total_wallet_exposure_limit": 1.0,
+            "n_positions": 1,
+        },
+    )
+    inp_blocked = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp_blocked["global"]["max_realized_loss_pct"] = 0.01
+
+    out_blocked = compute(pbr, inp_blocked)
+    blocked_types = [o["order_type"] for o in out_blocked["orders"]]
+    assert "close_auto_reduce_wel_long" not in blocked_types
+    assert any(
+        b.get("order_type") == "close_auto_reduce_wel_long"
+        for b in out_blocked.get("diagnostics", {}).get("loss_gate_blocks", [])
+    )
+
+    inp_allowed = copy.deepcopy(inp_blocked)
+    inp_allowed["balance_raw"] = 1_000_000.0
+    out_allowed = compute(pbr, inp_allowed)
+    allowed_types = [o["order_type"] for o in out_allowed["orders"]]
+    assert "close_auto_reduce_wel_long" in allowed_types
+    assert not out_allowed.get("diagnostics", {}).get("loss_gate_blocks")
+
+
+def test_loss_gate_falls_back_to_snapped_balance_when_raw_is_non_positive():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={
+            "n_positions": 1,
+            "total_wallet_exposure_limit": 1.0,
+        }
+    )
+    sym = make_symbol(
+        0,
+        bid=80.0,
+        ask=80.0,
+        long_pos_size=10.0,
+        long_pos_price=100.0,
+        long_bp={
+            "wallet_exposure_limit": 0.5,
+            "risk_wel_enforcer_threshold": 1.0,
+            "total_wallet_exposure_limit": 1.0,
+            "n_positions": 1,
+        },
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["balance_raw"] = 0.0
+    inp["global"]["max_realized_loss_pct"] = 0.01
+
+    out = compute(pbr, inp)
+    order_types = [o["order_type"] for o in out["orders"]]
+    assert "close_auto_reduce_wel_long" not in order_types
+    blocks = out.get("diagnostics", {}).get("loss_gate_blocks", [])
+    assert any(b.get("order_type") == "close_auto_reduce_wel_long" for b in blocks)
+    assert any(abs(float(b.get("balance_before", 0.0)) - 1_000.0) < 1e-9 for b in blocks)
 
 
 def test_json_rejects_invalid_order_book():

@@ -255,7 +255,7 @@ mod core {
     }
 
     fn input_balance_raw(input: &OrchestratorInput) -> f64 {
-        if input.balance_raw.is_finite() {
+        if input.balance_raw.is_finite() && input.balance_raw > 0.0 {
             input.balance_raw
         } else {
             input.balance

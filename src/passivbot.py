@@ -834,11 +834,11 @@ class Passivbot:
             if pos_data.get("short", {}).get("size", 0.0) != 0.0:
                 n_short += 1
 
-        balance_true = self.get_true_balance()
-        balance_effective = self.get_effective_balance()
-        balance_str = f"{balance_true:.2f} {self.quote}"
-        if abs(balance_true - balance_effective) > 1e-9:
-            balance_str += f" (snap {balance_effective:.2f})"
+        balance_raw = self.get_raw_balance()
+        balance_snapped = self.get_snapped_balance()
+        balance_str = f"{balance_raw:.2f} {self.quote}"
+        if abs(balance_raw - balance_snapped) > 1e-9:
+            balance_str += f" (snap {balance_snapped:.2f})"
 
         # Build fills string with PnL if fills > 0
         if self._health_fills > 0:
@@ -904,9 +904,9 @@ class Passivbot:
         pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = float(pnls_cumsum.max()), float(pnls_cumsum[-1])
 
-        balance_true = self.get_true_balance()
-        balance_peak = balance_true + (pnls_cumsum_max - pnls_cumsum_last)
-        pct_from_peak = (balance_true / balance_peak - 1.0) * 100.0
+        balance_raw = self.get_raw_balance()
+        balance_peak = balance_raw + (pnls_cumsum_max - pnls_cumsum_last)
+        pct_from_peak = (balance_raw / balance_peak - 1.0) * 100.0
         # Raw allowance WITHOUT .max(0.0) - can be negative
         allowance_raw = balance_peak * (pct * twel + pct_from_peak / 100.0)
 
@@ -1985,10 +1985,10 @@ class Passivbot:
         if self.debug_mode:
             if to_create:
                 print(f"would create {len(to_create)} order{'s' if len(to_create) > 1 else ''}")
-        elif self.get_true_balance() < self.balance_threshold:
+        elif self.get_raw_balance() < self.balance_threshold:
             logging.info(
                 "[balance] too low: %.2f %s; not creating orders",
-                self.get_true_balance(),
+                self.get_raw_balance(),
                 self.quote,
             )
         else:
@@ -3059,21 +3059,21 @@ class Passivbot:
         allowance_multiplier = 1.0 + max(0.0, allowance_pct)
         effective_limit = base_limit * allowance_multiplier
         return (
-            self.get_effective_balance() * effective_limit * self.bp(pside, "entry_initial_qty_pct", symbol)
+            self.get_snapped_balance() * effective_limit * self.bp(pside, "entry_initial_qty_pct", symbol)
             >= self.effective_min_cost[symbol]
         )
 
-    def get_effective_balance(self) -> float:
-        """Return hysteresis-snapped effective balance used for sizing."""
+    def get_snapped_balance(self) -> float:
+        """Return hysteresis-snapped balance used for sizing."""
         return float(getattr(self, "balance", 0.0) or 0.0)
 
-    def get_true_balance(self) -> float:
-        """Return raw true balance (fallback to effective for legacy test stubs)."""
+    def get_raw_balance(self) -> float:
+        """Return raw wallet balance (fallback to snapped for legacy test stubs)."""
         if hasattr(self, "balance_raw"):
             return float(getattr(self, "balance_raw", 0.0) or 0.0)
         if hasattr(self, "balance_true"):
             return float(getattr(self, "balance_true", 0.0) or 0.0)
-        return self.get_effective_balance()
+        return self.get_snapped_balance()
 
     def add_new_order(self, order, source="WS"):
         """No-op placeholder; subclasses update open orders through REST synchronisation."""
@@ -3090,24 +3090,26 @@ class Passivbot:
         return
 
     async def handle_balance_update(self, source="REST"):
-        if not hasattr(self, "_previous_balance_true"):
-            self._previous_balance_true = 0.0
-        if not hasattr(self, "_previous_balance_effective"):
-            self._previous_balance_effective = 0.0
-        balance_true = self.get_true_balance()
-        balance_effective = self.get_effective_balance()
+        if not hasattr(self, "_previous_balance_raw"):
+            self._previous_balance_raw = float(getattr(self, "_previous_balance_true", 0.0) or 0.0)
+        if not hasattr(self, "_previous_balance_snapped"):
+            self._previous_balance_snapped = float(
+                getattr(self, "_previous_balance_effective", 0.0) or 0.0
+            )
+        balance_raw = self.get_raw_balance()
+        balance_snapped = self.get_snapped_balance()
         if (
-            balance_true != self._previous_balance_true
-            or balance_effective != self._previous_balance_effective
+            balance_raw != self._previous_balance_raw
+            or balance_snapped != self._previous_balance_snapped
         ):
             try:
-                equity = balance_true + (await self.calc_upnl_sum())
+                equity = balance_raw + (await self.calc_upnl_sum())
                 logging.info(
-                    "[balance] true %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
-                    self._previous_balance_true,
-                    balance_true,
-                    self._previous_balance_effective,
-                    balance_effective,
+                    "[balance] raw %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
+                    self._previous_balance_raw,
+                    balance_raw,
+                    self._previous_balance_snapped,
+                    balance_snapped,
                     equity,
                     source,
                 )
@@ -3115,8 +3117,8 @@ class Passivbot:
                 logging.error(f"error with handle_balance_update {e}")
                 traceback.print_exc()
             finally:
-                self._previous_balance_true = balance_true
-                self._previous_balance_effective = balance_effective
+                self._previous_balance_raw = balance_raw
+                self._previous_balance_snapped = balance_snapped
                 self.execution_scheduled = True
 
     async def calc_upnl_sum(self):
@@ -3354,13 +3356,13 @@ class Passivbot:
         pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
         out = {}
-        balance_true = self.get_true_balance()
+        balance_raw = self.get_raw_balance()
         for pside in ["long", "short"]:
             pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
             if pct > 0.0:
                 out[pside] = float(
                     pbr.calc_auto_unstuck_allowance(
-                        balance_true,
+                        balance_raw,
                         pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0),
                         float(pnls_cumsum_max),
                         float(pnls_cumsum_last),
@@ -3552,7 +3554,7 @@ class Passivbot:
         if not events:
             ts_now = self.get_exchange_time()
             balance_now = (
-                float(current_balance) if current_balance is not None else self.get_true_balance()
+                float(current_balance) if current_balance is not None else self.get_raw_balance()
             )
             point = {
                 "timestamp": ts_now,
@@ -3581,7 +3583,7 @@ class Passivbot:
         lookback_ms = max(lookback_days, 0.0) * 24 * 60 * 60 * 1000
         lookback_start = ts_now - lookback_ms
 
-        balance_now = float(current_balance) if current_balance is not None else self.get_true_balance()
+        balance_now = float(current_balance) if current_balance is not None else self.get_raw_balance()
         balance_now = max(balance_now, 0.0)
         total_realised = sum(
             evt["pnl"] + evt.get("fee", 0.0) for evt in events if evt["timestamp"] <= ts_now
@@ -3833,14 +3835,14 @@ class Passivbot:
 
         # Pre-calculate total WE per side for TWEL% display
         total_we_by_pside = {"long": 0.0, "short": 0.0}
-        balance_true = self.get_true_balance()
+        balance_raw = self.get_raw_balance()
         for pos in positions_new:
             sym = pos["symbol"]
             ps = pos["position_side"]
             sz = pos.get("size", 0.0)
             px = pos.get("price", 0.0)
-            if sz != 0 and balance_true > 0 and sym in self.c_mults:
-                total_we_by_pside[ps] += pbr.qty_to_cost(sz, px, self.c_mults[sym]) / balance_true
+            if sz != 0 and balance_raw > 0 and sym in self.c_mults:
+                total_we_by_pside[ps] += pbr.qty_to_cost(sz, px, self.c_mults[sym]) / balance_raw
 
         # Create PrettyTable for aligned output
         table = PrettyTable()
@@ -3866,8 +3868,8 @@ class Passivbot:
 
             # Compute metrics for new pos
             wallet_exposure = (
-                pbr.qty_to_cost(new["size"], new["price"], self.c_mults[symbol]) / balance_true
-                if new["size"] != 0 and balance_true > 0
+                pbr.qty_to_cost(new["size"], new["price"], self.c_mults[symbol]) / balance_raw
+                if new["size"] != 0 and balance_raw > 0
                 else 0.0
             )
             wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
@@ -4004,7 +4006,7 @@ class Passivbot:
         if not hasattr(self, "balance_hysteresis_snap_pct"):
             self.balance_hysteresis_snap_pct = 0.02
         if not hasattr(self, "balance_raw"):
-            self.balance_raw = self.get_true_balance()
+            self.balance_raw = self.get_raw_balance()
 
         if self.balance_override is not None:
             balance_raw = float(self.balance_override)
@@ -4027,16 +4029,16 @@ class Passivbot:
             logging.warning("non-numeric balance fetch result; keeping previous balance")
             return False
 
-        balance_effective = balance_raw
+        balance_snapped = balance_raw
         if self.balance_override is None:
             if self.previous_hysteresis_balance is None:
                 self.previous_hysteresis_balance = balance_raw
-            balance_effective = pbr.hysteresis(
+            balance_snapped = pbr.hysteresis(
                 balance_raw, self.previous_hysteresis_balance, self.balance_hysteresis_snap_pct
             )
-            self.previous_hysteresis_balance = balance_effective
+            self.previous_hysteresis_balance = balance_snapped
         self.balance_raw = balance_raw
-        self.balance = balance_effective
+        self.balance = balance_snapped
         return True
 
     async def update_positions_and_balance(self):
@@ -4175,18 +4177,18 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
-        balance_effective = (
-            self.get_effective_balance()
-            if hasattr(self, "get_effective_balance")
+        balance_snapped = (
+            self.get_snapped_balance()
+            if hasattr(self, "get_snapped_balance")
             else float(getattr(self, "balance", 0.0) or 0.0)
         )
         balance_raw = (
-            self.get_true_balance()
-            if hasattr(self, "get_true_balance")
+            self.get_raw_balance()
+            if hasattr(self, "get_raw_balance")
             else float(getattr(self, "balance_raw", getattr(self, "balance", 0.0)) or 0.0)
         )
         input_dict = {
-            "balance": balance_effective,
+            "balance": balance_snapped,
             "balance_raw": balance_raw,
             "global": {
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
@@ -4504,18 +4506,18 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
-        balance_effective = (
-            self.get_effective_balance()
-            if hasattr(self, "get_effective_balance")
+        balance_snapped = (
+            self.get_snapped_balance()
+            if hasattr(self, "get_snapped_balance")
             else float(getattr(self, "balance", 0.0) or 0.0)
         )
         balance_raw = (
-            self.get_true_balance()
-            if hasattr(self, "get_true_balance")
+            self.get_raw_balance()
+            if hasattr(self, "get_raw_balance")
             else float(getattr(self, "balance_raw", getattr(self, "balance", 0.0)) or 0.0)
         )
         input_dict = {
-            "balance": balance_effective,
+            "balance": balance_snapped,
             "balance_raw": balance_raw,
             "global": {
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),

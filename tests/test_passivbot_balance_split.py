@@ -129,12 +129,12 @@ def test_effective_min_cost_filter_uses_snapped_balance():
     bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
     bot.bp = lambda pside, key, symbol=None: 0.5 if key == "entry_initial_qty_pct" else 0.0
 
-    # Passes only when snapped/effective balance is used:
+    # Passes only when snapped balance is used:
     # 100 * 1.0 * 0.5 = 50 >= 40; raw path would fail (10 * 1.0 * 0.5 = 5).
     assert bot.effective_min_cost_is_low_enough("long", "BTC/USDT:USDT") is True
 
 
-def test_unstuck_allowance_routes_true_balance_to_rust(monkeypatch):
+def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     import passivbot as pb_mod
 
     bot = Passivbot.__new__(Passivbot)
@@ -166,7 +166,7 @@ def test_unstuck_allowance_routes_true_balance_to_rust(monkeypatch):
     assert out["long"] == pytest.approx(123.45)
     assert out["short"] == pytest.approx(0.0)
     assert len(calls) == 1
-    assert calls[0][0] == pytest.approx(200.0)  # true/raw balance
+    assert calls[0][0] == pytest.approx(200.0)  # raw balance
 
 
 @pytest.mark.asyncio
@@ -175,8 +175,8 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
 
     class FakeBot:
         positions = {}
-        balance = 120.0  # snapped/effective
-        balance_raw = 175.0  # true/raw
+        balance = 120.0  # snapped
+        balance_raw = 175.0  # raw
         PB_modes = {}
         effective_min_cost = {}
         _config_hedge_mode = False

@@ -2,7 +2,7 @@
 
 Passivbot carries two balance values with distinct responsibilities:
 
-- `balance`: hysteresis-snapped effective balance for sizing/order-shaping stability.
+- `balance`: hysteresis-snapped balance for sizing/order-shaping stability.
 - `balance_raw`: true/raw wallet balance for risk/accounting accuracy.
 
 ## API Contract
@@ -11,22 +11,23 @@ Passivbot carries two balance values with distinct responsibilities:
 
 - `balance` is required and used for sizing logic.
 - `balance_raw` is used for peak/PnL-sensitive risk gates.
+- If `balance_raw` is missing, non-finite, or non-positive, risk-gate paths fall back to `balance`.
 - Legacy alias `balance_true` is accepted by Rust JSON input for backward compatibility with older callers.
 
 ### Python runtime (`src/passivbot.py`)
 
-- `self.balance` stores the snapped/effective value.
+- `self.balance` stores the snapped value.
 - `self.balance_raw` stores the true/raw value.
 - Helper methods:
-  - `get_effective_balance()` -> snapped `balance`
-  - `get_true_balance()` -> raw `balance_raw` (fallback-compatible for older test stubs)
+  - `get_snapped_balance()` -> snapped `balance`
+  - `get_raw_balance()` -> raw `balance_raw` (fallback-compatible for older test stubs)
 
 ## Routing Rules
 
-- Use snapped/effective balance for sizing-like paths:
+- Use snapped balance for sizing-like paths:
   - min-effective-cost eligibility
   - order-shaping paths that are intentionally hysteresis-stabilized
-- Use raw/true balance for risk/accounting paths:
+- Use raw balance for risk/accounting paths:
   - peak reconstruction (`balance_peak`)
   - realized-loss gate floor checks
   - auto-unstuck allowance budget calculations
@@ -44,7 +45,7 @@ For any external caller or test fixture constructing orchestrator JSON:
 For lightweight Python test doubles:
 
 - Prefer defining both `balance` and `balance_raw`.
-- If a legacy stub only has `balance`, `get_true_balance()` fallback keeps tests functional, but this should be transitional.
+- If a legacy stub only has `balance`, `get_raw_balance()` fallback keeps tests functional, but this should be transitional.
 
 ## Regression Coverage
 
