@@ -9,6 +9,7 @@ This directory contains learnings and implementation details for specific Passiv
 | Stock Perpetuals | [stock_perps.md](stock_perps.md) | HIP-3 stock perps on Hyperliquid (symbol mapping, isolated margin, data sources) |
 | Candlestick Manager | [candlestick_manager.md](candlestick_manager.md) | OHLCV data fetching, caching, and synthetic candle handling |
 | Fill Events Manager | [fill_events_manager.md](fill_events_manager.md) | Fill tracking, PnL computation, exchange-specific pagination |
+| Balance Routing | [balance_routing.md](balance_routing.md) | Raw vs hysteresis-snapped balance semantics and migration guidance |
 
 ## When to Consult Feature Docs
 
