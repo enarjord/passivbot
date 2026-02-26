@@ -2971,6 +2971,93 @@ mod tests {
     }
 
     #[test]
+    fn backtest_balance_raw_refreshed_on_each_cached_call() {
+        // Verify that balance_raw is updated from self.balance.usd_total_balance
+        // on each call to get_orchestrator_input_cached, even when the cache is reused.
+        let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 0.5;
+        bp_pair.long.unstuck_loss_allowance_pct = 0.2;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        // Step 1: initial balance
+        bt.balance.usd_total_balance = 1000.0;
+        bt.balance.usd_total_balance_rounded = 1000.0;
+        bt.pnl_cumsum_max = 0.0;
+        bt.pnl_cumsum_running = 0.0;
+
+        let input1 = bt.get_orchestrator_input_cached(1, None);
+        assert!(
+            (input1.balance_raw - 1000.0).abs() < 1e-12,
+            "first call: balance_raw should be 1000"
+        );
+        assert!(
+            (input1.balance - 1000.0).abs() < 1e-12,
+            "first call: balance should be 1000"
+        );
+        // Return the input to the cache
+        bt.orchestrator_input_cache = Some(input1);
+
+        // Step 2: simulate a fill that changes raw balance but snapped stays
+        bt.balance.usd_total_balance = 1050.0; // raw changed (profit fill)
+        bt.balance.usd_total_balance_rounded = 1000.0; // snapped stays (hysteresis)
+        bt.pnl_cumsum_max = 50.0;
+        bt.pnl_cumsum_running = 50.0;
+
+        let input2 = bt.get_orchestrator_input_cached(1, None);
+        assert!(
+            (input2.balance_raw - 1050.0).abs() < 1e-12,
+            "second call: balance_raw should have updated to 1050"
+        );
+        assert!(
+            (input2.balance - 1000.0).abs() < 1e-12,
+            "second call: snapped balance should still be 1000"
+        );
+
+        // Verify the unstuck allowance used the new raw balance, not the old one
+        let allowance_pct = 0.2 * 0.5;
+        let expected_allowance = calc_auto_unstuck_allowance(1050.0, allowance_pct, 50.0, 50.0);
+        assert!(
+            (input2.global.unstuck_allowance_long - expected_allowance).abs() < 1e-12,
+            "unstuck allowance should use updated raw balance (1050), got {}",
+            input2.global.unstuck_allowance_long
+        );
+    }
+
+    #[test]
     fn test_ema_alpha_interval_1_matches_original_formula() {
         // With interval=1, alpha should equal 2/(span+1) (the original formula)
         let mut bp = BotParamsPair::default();

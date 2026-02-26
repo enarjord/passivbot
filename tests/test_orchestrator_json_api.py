@@ -285,6 +285,84 @@ def test_loss_gate_returns_early_when_raw_is_non_positive():
         assert not blocks
 
 
+def test_twel_enforcer_uses_balance_raw_when_snapped_and_raw_diverge():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={
+            "n_positions": 1,
+            "total_wallet_exposure_limit": 0.5,
+            "risk_twel_enforcer_threshold": 1.0,
+        }
+    )
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=10.0,
+        long_pos_price=100.0,
+        long_bp={
+            "wallet_exposure_limit": 0.1,
+            "risk_twel_enforcer_threshold": 1.0,
+            "risk_wel_enforcer_threshold": 1000.0,
+            "total_wallet_exposure_limit": 1.0,
+            "n_positions": 1,
+        },
+    )
+
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    out_snapped = compute(pbr, inp)
+    snapped_types = [o["order_type"] for o in out_snapped["orders"]]
+    assert "close_auto_reduce_twel_long" in snapped_types
+
+    inp_raw = copy.deepcopy(inp)
+    inp_raw["balance_raw"] = 1_000_000.0
+    out_raw = compute(pbr, inp_raw)
+    raw_types = [o["order_type"] for o in out_raw["orders"]]
+    assert "close_auto_reduce_twel_long" not in raw_types
+
+
+def test_unstuck_selection_uses_balance_raw_when_snapped_and_raw_diverge():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={
+            "n_positions": 1,
+            "total_wallet_exposure_limit": 1.0,
+            "risk_twel_enforcer_threshold": 1.0,
+        }
+    )
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=10.0,
+        long_pos_price=100.0,
+        long_bp={
+            "wallet_exposure_limit": 0.5,
+            "risk_wel_enforcer_threshold": 1000.0,
+            "total_wallet_exposure_limit": 1.0,
+            "n_positions": 1,
+            "unstuck_loss_allowance_pct": 0.1,
+            "unstuck_close_pct": 0.1,
+            "unstuck_threshold": 0.5,
+            "unstuck_ema_dist": 0.0,
+        },
+    )
+
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["global"]["unstuck_allowance_long"] = 1_000.0
+    out_snapped = compute(pbr, inp)
+    snapped_types = [o["order_type"] for o in out_snapped["orders"]]
+    assert "close_unstuck_long" in snapped_types
+
+    inp_raw = copy.deepcopy(inp)
+    inp_raw["balance_raw"] = 1_000_000.0
+    out_raw = compute(pbr, inp_raw)
+    raw_types = [o["order_type"] for o in out_raw["orders"]]
+    assert "close_unstuck_long" not in raw_types
+
+
 def test_json_rejects_invalid_order_book():
     import passivbot_rust as pbr
 

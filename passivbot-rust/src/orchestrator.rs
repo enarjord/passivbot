@@ -2088,6 +2088,9 @@ mod core {
             }
         }
 
+        // Risk/accounting gates should use raw balance when available.
+        let balance_risk = input_balance_raw(input);
+
         // Unstuck: select one global unstuck close and add it (do not replace).
         workspace.unstuck_inputs.clear();
         for s in per_long.iter().filter_map(|v| v.as_ref()) {
@@ -2157,7 +2160,7 @@ mod core {
             });
         }
         if let Some((idx, side, order)) = calc_unstucking_action(
-            input.balance,
+            balance_risk,
             input.global.unstuck_allowance_long,
             input.global.unstuck_allowance_short,
             &workspace.unstuck_inputs,
@@ -2229,7 +2232,7 @@ mod core {
                     .long
                     .total_wallet_exposure_limit,
                 enp_long,
-                input.balance,
+                balance_risk,
                 &workspace.twel_positions,
                 None,
             );
@@ -2285,7 +2288,7 @@ mod core {
                     .short
                     .total_wallet_exposure_limit,
                 enp_short,
-                input.balance,
+                balance_risk,
                 &workspace.twel_positions,
                 None,
             );
@@ -2356,7 +2359,7 @@ mod core {
             }
             gate_entries_by_twel_deterministic(
                 PositionSide::Long,
-                input.balance,
+                balance_risk,
                 input
                     .global
                     .global_bot_params
@@ -2390,7 +2393,7 @@ mod core {
             }
             gate_entries_by_twel_deterministic(
                 PositionSide::Short,
-                input.balance,
+                balance_risk,
                 input
                     .global
                     .global_bot_params
@@ -3257,6 +3260,138 @@ mod core {
                     raw_balance
                 );
             }
+        }
+
+        #[test]
+        fn twel_enforcer_uses_balance_raw_when_snapped_and_raw_diverge() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.position = Position {
+                size: 10.0,
+                price: 100.0,
+            };
+            sym.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym.long.bot_params.wallet_exposure_limit = 0.1;
+            sym.long.bot_params.total_wallet_exposure_limit = 1.0;
+            sym.long.bot_params.risk_twel_enforcer_threshold = 1.0;
+            // Keep WEL enforcer from masking TWEL behavior in this test.
+            sym.long.bot_params.risk_wel_enforcer_threshold = 1000.0;
+            sym.long.bot_params.n_positions = 1;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.5;
+            global_bp.long.risk_twel_enforcer_threshold = 1.0;
+            global_bp.long.n_positions = 1;
+            global_bp.short.total_wallet_exposure_limit = 0.0;
+            global_bp.short.n_positions = 0;
+
+            let mut input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+
+            let out_snapped = compute_ideal_orders(&input).unwrap();
+            assert!(
+                out_snapped
+                    .orders
+                    .iter()
+                    .any(|o| o.order_type == OrderType::CloseAutoReduceTwelLong),
+                "expected TWEL auto-reduce when raw == snapped (1000)"
+            );
+
+            // Keep snapped balance fixed but raise raw balance so TWEL risk is low.
+            input.balance_raw = 1_000_000.0;
+            let out_raw = compute_ideal_orders(&input).unwrap();
+            assert!(
+                out_raw
+                    .orders
+                    .iter()
+                    .all(|o| o.order_type != OrderType::CloseAutoReduceTwelLong),
+                "expected no TWEL auto-reduce when raw balance is high"
+            );
+        }
+
+        #[test]
+        fn unstuck_selection_uses_balance_raw_when_snapped_and_raw_diverge() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.position = Position {
+                size: 10.0,
+                price: 100.0,
+            };
+            sym.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym.long.bot_params.wallet_exposure_limit = 0.5;
+            sym.long.bot_params.total_wallet_exposure_limit = 1.0;
+            sym.long.bot_params.n_positions = 1;
+            sym.long.bot_params.unstuck_loss_allowance_pct = 0.1;
+            sym.long.bot_params.unstuck_close_pct = 0.1;
+            sym.long.bot_params.unstuck_threshold = 0.5;
+            sym.long.bot_params.unstuck_ema_dist = 0.0;
+            // Keep WEL enforcer from masking unstuck behavior in this test.
+            sym.long.bot_params.risk_wel_enforcer_threshold = 1000.0;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 1.0;
+            global_bp.long.n_positions = 1;
+            // Keep TWEL loose to isolate unstuck behavior.
+            global_bp.long.risk_twel_enforcer_threshold = 1.0;
+            global_bp.short.total_wallet_exposure_limit = 0.0;
+            global_bp.short.n_positions = 0;
+
+            let mut input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    unstuck_allowance_long: 1000.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+
+            let out_snapped = compute_ideal_orders(&input).unwrap();
+            assert!(
+                out_snapped
+                    .orders
+                    .iter()
+                    .any(|o| o.order_type == OrderType::CloseUnstuckLong),
+                "expected unstuck close when raw == snapped (1000)"
+            );
+
+            // Keep snapped balance fixed but raise raw balance so unstuck WE test no longer triggers.
+            input.balance_raw = 1_000_000.0;
+            let out_raw = compute_ideal_orders(&input).unwrap();
+            assert!(
+                out_raw
+                    .orders
+                    .iter()
+                    .all(|o| o.order_type != OrderType::CloseUnstuckLong),
+                "expected no unstuck close when raw balance is high"
+            );
         }
 
         #[test]

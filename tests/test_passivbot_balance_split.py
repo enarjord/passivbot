@@ -389,3 +389,44 @@ async def test_update_balance_divergence_routes_to_orchestrator_input(monkeypatc
     assert bot.balance == pytest.approx(1000.0)
     assert bot.get_raw_balance() == pytest.approx(1005.0)
     assert bot.get_hysteresis_snapped_balance() == pytest.approx(1000.0)
+
+
+@pytest.mark.asyncio
+async def test_ws_balance_update_sets_balance_raw_correctly():
+    """Simulate a WS-triggered balance update and verify balance_raw is set."""
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+
+    # First establish a baseline via REST update_balance
+    call_count = [0]
+
+    async def fake_fetch_balance():
+        call_count[0] += 1
+        return 1000.0
+
+    bot.fetch_balance = fake_fetch_balance
+    await bot.update_balance()
+
+    assert bot.balance_raw == pytest.approx(1000.0)
+    assert bot.balance == pytest.approx(1000.0)
+
+    # Now simulate a WS balance update: exchange pushes a new raw balance
+    # directly onto the bot attributes (as exchange-specific subclasses do).
+    bot.balance_raw = 1002.0
+    # Snapped balance stays at 1000.0 since WS doesn't re-run hysteresis
+
+    # Verify handle_balance_update sees the divergence and schedules execution
+    async def fake_calc_upnl_sum():
+        return 50.0
+
+    bot.calc_upnl_sum = fake_calc_upnl_sum
+    bot.execution_scheduled = False
+
+    await bot.handle_balance_update(source="WS")
+
+    # After WS update, the raw accessor should return the new value
+    assert bot.get_raw_balance() == pytest.approx(1002.0)
+    # Snapped balance hasn't changed (no hysteresis re-snap via WS path)
+    assert bot.get_hysteresis_snapped_balance() == pytest.approx(1000.0)
+    # Execution should have been scheduled due to balance_raw change
+    assert bot.execution_scheduled is True
