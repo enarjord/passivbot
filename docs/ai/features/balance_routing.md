@@ -11,7 +11,8 @@ Passivbot carries two balance values with distinct responsibilities:
 
 - `balance` is required and used for sizing logic.
 - `balance_raw` is used for peak/PnL-sensitive risk gates.
-- If `balance_raw` is missing, non-finite, or non-positive, risk-gate paths fall back to `balance`.
+- If `balance_raw` is missing/non-finite, risk-gate paths fall back to `balance`.
+- If `balance_raw` is explicitly `<= 0`, risk-gate paths treat it as non-actionable and early-return.
 - Legacy alias `balance_true` is accepted by Rust JSON input for backward compatibility with older callers.
 
 ### Python runtime (`src/passivbot.py`)

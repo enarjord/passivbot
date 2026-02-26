@@ -94,7 +94,7 @@ async def test_missing_ema_raises_from_snapshot(monkeypatch):
             return False
 
         def get_raw_balance(self):
-            return float(getattr(self, "balance_raw", 0.0) or 0.0) if hasattr(self, "balance_raw") else self.get_hysteresis_snapped_balance()
+            return float(getattr(self, "balance", 0.0) or 0.0)
 
         def get_hysteresis_snapped_balance(self):
             return float(getattr(self, "balance", 0.0) or 0.0)
@@ -146,7 +146,7 @@ async def test_missing_ema_raises_from_snapshot_with_return(monkeypatch):
             return False
 
         def get_raw_balance(self):
-            return float(getattr(self, "balance_raw", 0.0) or 0.0) if hasattr(self, "balance_raw") else self.get_hysteresis_snapped_balance()
+            return float(getattr(self, "balance", 0.0) or 0.0)
 
         def get_hysteresis_snapped_balance(self):
             return float(getattr(self, "balance", 0.0) or 0.0)

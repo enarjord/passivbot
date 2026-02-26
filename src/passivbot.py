@@ -838,7 +838,7 @@ class Passivbot:
         balance_snapped = self.get_hysteresis_snapped_balance()
         balance_str = f"{balance_raw:.2f} {self.quote}"
         if abs(balance_raw - balance_snapped) > 1e-9:
-            balance_str += f" (hsnap {balance_snapped:.2f})"
+            balance_str += f" (snap {balance_snapped:.2f})"
 
         # Build fills string with PnL if fills > 0
         if self._health_fills > 0:
@@ -3059,6 +3059,18 @@ class Passivbot:
             >= self.effective_min_cost[symbol]
         )
 
+    def get_hysteresis_snapped_balance(self) -> float:
+        """Return hysteresis-snapped balance used for sizing."""
+        return float(getattr(self, "balance", 0.0) or 0.0)
+
+    def get_raw_balance(self) -> float:
+        """Return raw wallet balance (fallback to snapped for legacy test stubs)."""
+        if hasattr(self, "balance_raw"):
+            return float(getattr(self, "balance_raw", 0.0) or 0.0)
+        if hasattr(self, "balance_true"):
+            return float(getattr(self, "balance_true", 0.0) or 0.0)
+        return self.get_hysteresis_snapped_balance()
+
     def add_new_order(self, order, source="WS"):
         """No-op placeholder; subclasses update open orders through REST synchronisation."""
         return  # only add new orders via REST in self.update_open_orders()
@@ -3076,23 +3088,23 @@ class Passivbot:
     async def handle_balance_update(self, source="REST"):
         if not hasattr(self, "_previous_balance_raw"):
             self._previous_balance_raw = float(getattr(self, "_previous_balance_true", 0.0) or 0.0)
-        if not hasattr(self, "_previous_balance_hysteresis_snapped"):
-            self._previous_balance_hysteresis_snapped = float(
+        if not hasattr(self, "_previous_balance_snapped"):
+            self._previous_balance_snapped = float(
                 getattr(self, "_previous_balance_effective", 0.0) or 0.0
             )
         balance_raw = self.get_raw_balance()
         balance_snapped = self.get_hysteresis_snapped_balance()
         if (
             balance_raw != self._previous_balance_raw
-            or balance_snapped != self._previous_balance_hysteresis_snapped
+            or balance_snapped != self._previous_balance_snapped
         ):
             try:
                 equity = balance_raw + (await self.calc_upnl_sum())
                 logging.info(
-                    "[balance] raw %.6f -> %.6f | hsnap %.6f -> %.6f | equity: %.4f source: %s",
+                    "[balance] raw %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
                     self._previous_balance_raw,
                     balance_raw,
-                    self._previous_balance_hysteresis_snapped,
+                    self._previous_balance_snapped,
                     balance_snapped,
                     equity,
                     source,
@@ -3102,7 +3114,7 @@ class Passivbot:
                 traceback.print_exc()
             finally:
                 self._previous_balance_raw = balance_raw
-                self._previous_balance_hysteresis_snapped = balance_snapped
+                self._previous_balance_snapped = balance_snapped
                 self.execution_scheduled = True
 
     async def calc_upnl_sum(self):
@@ -3972,18 +3984,6 @@ class Passivbot:
                 logging.error(f"error logging position changes {e}")
         return True
 
-    def get_raw_balance(self) -> float:
-        """Return raw exchange balance (fallback to snapped for legacy stubs)."""
-        if hasattr(self, "balance_raw"):
-            return float(getattr(self, "balance_raw", 0.0) or 0.0)
-        if hasattr(self, "balance_true"):
-            return float(getattr(self, "balance_true", 0.0) or 0.0)
-        return self.get_hysteresis_snapped_balance()
-
-    def get_hysteresis_snapped_balance(self) -> float:
-        """Return hysteresis-snapped balance used for order sizing."""
-        return float(getattr(self, "balance", 0.0) or 0.0)
-
     async def update_balance(self):
         """Fetch and apply the latest wallet balance.
 
@@ -4025,16 +4025,16 @@ class Passivbot:
             logging.warning("non-numeric balance fetch result; keeping previous balance")
             return False
 
-        balance_hysteresis_snapped = balance_raw
+        balance_snapped = balance_raw
         if self.balance_override is None:
             if self.previous_hysteresis_balance is None:
                 self.previous_hysteresis_balance = balance_raw
-            balance_hysteresis_snapped = pbr.hysteresis(
+            balance_snapped = pbr.hysteresis(
                 balance_raw, self.previous_hysteresis_balance, self.balance_hysteresis_snap_pct
             )
-            self.previous_hysteresis_balance = balance_hysteresis_snapped
+            self.previous_hysteresis_balance = balance_snapped
         self.balance_raw = balance_raw
-        self.balance = balance_hysteresis_snapped
+        self.balance = balance_snapped
         return True
 
     async def update_positions_and_balance(self):
