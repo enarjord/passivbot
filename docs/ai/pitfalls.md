@@ -280,6 +280,84 @@ cache_path = f"caches/ohlcv/{ex}/"           # "caches/ohlcv/binance/"
 
 ---
 
+## Rust/PyO3 Build Pitfalls
+
+### Stale .so in src/ vs venv (the #1 Rust pitfall)
+
+**Don't**: Assume `maturin develop` makes pytest use your new Rust code.
+
+**Because**: There are TWO copies of the compiled extension:
+1. `src/passivbot_rust.cpython-312-darwin.so` — in the source tree
+2. `venv/lib/python3.12/site-packages/passivbot_rust/` — installed by maturin
+
+`tests/conftest.py` inserts `src/` at the FRONT of `sys.path`, so **pytest always loads the `src/` copy**. `maturin develop` only updates the venv copy.
+
+**Example**:
+```bash
+# WRONG: Tests silently use old code
+cd passivbot-rust && maturin develop --release
+python -m pytest tests/test_orchestrator_json_api.py  # FAILS — stale .so in src/
+
+# CORRECT: Update both locations
+cd passivbot-rust
+cargo clean && maturin develop --release
+cp ../venv/lib/python3.12/site-packages/passivbot_rust/passivbot_rust.cpython-312-darwin.so ../src/
+python -m pytest tests/test_orchestrator_json_api.py  # Uses fresh code
+```
+
+**Instead**: Always copy the .so from venv to `src/` after `maturin develop`. If tests fail mysteriously after a Rust change, this is the first thing to check.
+
+---
+
+### Using cargo test --lib on PyO3 projects
+
+**Don't**: Run `cargo test --lib` to verify Rust changes.
+
+**Because**: PyO3 projects can't link test binaries without the Python runtime. You'll get hundreds of linker errors (`_PyObject_GetAttr`, `_Py_InitializeEx`, etc.). This is expected and NOT caused by your code.
+
+```bash
+# WRONG: Fails with linker errors
+cargo test --lib
+
+# CORRECT: Verifies compilation without linking
+cargo check --tests
+```
+
+**Instead**: Use `cargo check --tests` to catch all type/syntax errors. For actual test execution, build with maturin and run through pytest.
+
+---
+
+### Trusting maturin develop cache
+
+**Don't**: Assume `maturin develop --release` recompiled when it finishes in under 1 second.
+
+**Because**: If cargo's incremental cache thinks nothing changed, it returns "Finished in 0.04s" without recompiling — but the installed wheel may be stale from a previous build.
+
+```bash
+# WRONG: May silently skip recompilation
+maturin develop --release  # "Finished in 0.04s" — not rebuilt!
+
+# CORRECT: Force a clean build
+cargo clean && maturin develop --release  # Full rebuild guaranteed
+```
+
+**Instead**: Always `cargo clean` first when you need to be certain the build is fresh.
+
+---
+
+### conftest.py passivbot_rust stub ordering
+
+**Don't**: Assume all test files use the same `passivbot_rust` module.
+
+**Because**: `tests/conftest.py` tries the real module first and falls back to a lightweight stub (`__is_stub__ = True`). But `test_passivbot_balance_split.py` installs its own minimal stub via `sys.modules.setdefault()` at module level. Import order matters:
+- conftest.py runs first, tries real module
+- If real module loads, `setdefault()` in test files is a no-op
+- If real module fails, conftest's stub takes over
+
+**Instead**: If your test requires the real Rust extension, add the `require_real_passivbot_rust_module` fixture (see `test_orchestrator_json_api.py`). If your test should work with the stub, use `sys.modules.setdefault()` like `test_passivbot_balance_split.py`.
+
+---
+
 ## Template for New Pitfalls
 
 ```markdown
