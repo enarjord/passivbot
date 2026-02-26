@@ -2157,7 +2157,7 @@ mod core {
             });
         }
         if let Some((idx, side, order)) = calc_unstucking_action(
-            input.balance,
+            input_balance_raw(input),
             input.global.unstuck_allowance_long,
             input.global.unstuck_allowance_short,
             &workspace.unstuck_inputs,
@@ -2229,7 +2229,7 @@ mod core {
                     .long
                     .total_wallet_exposure_limit,
                 enp_long,
-                input.balance,
+                input_balance_raw(input),
                 &workspace.twel_positions,
                 None,
             );
@@ -2285,7 +2285,7 @@ mod core {
                     .short
                     .total_wallet_exposure_limit,
                 enp_short,
-                input.balance,
+                input_balance_raw(input),
                 &workspace.twel_positions,
                 None,
             );
@@ -2356,7 +2356,7 @@ mod core {
             }
             gate_entries_by_twel_deterministic(
                 PositionSide::Long,
-                input.balance,
+                input_balance_raw(input),
                 input
                     .global
                     .global_bot_params
@@ -2390,7 +2390,7 @@ mod core {
             }
             gate_entries_by_twel_deterministic(
                 PositionSide::Short,
-                input.balance,
+                input_balance_raw(input),
                 input
                     .global
                     .global_bot_params
@@ -3255,6 +3255,120 @@ mod core {
                     out.diagnostics.loss_gate_blocks.is_empty(),
                     "expected non-positive balance_raw={} to skip loss-gate diagnostics",
                     raw_balance
+                );
+            }
+        }
+
+        #[test]
+        fn twel_enforcer_uses_balance_raw_not_snapped() {
+            // Scenario: position has 500 cost, snapped balance = 1000 (WE = 0.5),
+            // raw balance = 800 (WE = 0.625). TWEL = 0.6, threshold = 1.0.
+            // With snapped: WE(0.5) < limit(0.6) → no auto-reduce.
+            // With raw:     WE(0.625) > limit(0.6) → triggers auto-reduce.
+            let mut sym = make_basic_symbol(0);
+            sym.long.position = Position {
+                size: 5.0,
+                price: 100.0,
+            };
+            sym.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym.long.bot_params.wallet_exposure_limit = 1.0;
+            sym.long.bot_params.risk_wel_enforcer_threshold = 1.0;
+            sym.long.bot_params.total_wallet_exposure_limit = 0.6;
+            sym.long.bot_params.n_positions = 1;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.6;
+            global_bp.long.risk_twel_enforcer_threshold = 1.0;
+            global_bp.long.n_positions = 1;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,      // snapped: WE = 500/1000 = 0.5 (under limit)
+                balance_raw: 800.0,   // raw: WE = 500/800 = 0.625 (over limit)
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+            let out = compute_ideal_orders(&input).unwrap();
+            assert!(
+                out.orders
+                    .iter()
+                    .any(|o| o.order_type == OrderType::CloseAutoReduceTwelLong),
+                "TWEL enforcer should trigger using raw balance (WE=0.625 > 0.6), \
+                 not snapped balance (WE=0.5 < 0.6). Orders: {:?}",
+                out.orders.iter().map(|o| &o.order_type).collect::<Vec<_>>()
+            );
+        }
+
+        #[test]
+        fn twel_entry_gate_uses_balance_raw_not_snapped() {
+            // Scenario: no position, TWEL = 0.01 ($10 budget), entry qty*price = $20.
+            // With snapped balance = 1000: budget = $10, entry $20 gets trimmed/gated.
+            // With raw balance = 500: budget = $5, entry $20 gets trimmed even more.
+            // Verify the gating uses raw by checking the resulting entry qty.
+            let mut sym = make_basic_symbol(0);
+            sym.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym.long.bot_params.wallet_exposure_limit = 1.0;
+            sym.long.bot_params.total_wallet_exposure_limit = 0.01;
+            sym.long.bot_params.n_positions = 1;
+            sym.long.bot_params.entry_initial_qty_pct = 1.0;
+            sym.exchange.qty_step = 0.001;
+            sym.exchange.min_qty = 0.001;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.01;
+            global_bp.long.n_positions = 1;
+
+            // With raw balance 500: TWEL budget = 500*0.01 = $5, so max qty = 5/100 = 0.05
+            // With snapped balance 1000: TWEL budget = 1000*0.01 = $10, so max qty = 10/100 = 0.1
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 500.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+            let out = compute_ideal_orders(&input).unwrap();
+            let entry_orders: Vec<_> = out.orders
+                .iter()
+                .filter(|o| matches!(o.order_type,
+                    OrderType::EntryGridNormalLong
+                    | OrderType::EntryInitialNormalLong
+                    | OrderType::EntryInitialPartialLong
+                ))
+                .collect();
+            if !entry_orders.is_empty() {
+                // If entries exist, their total cost must fit within raw balance budget ($5)
+                let total_cost: f64 = entry_orders.iter().map(|o| o.qty * o.price).sum();
+                assert!(
+                    total_cost <= 500.0 * 0.01 + 1e-6,
+                    "Entry cost {:.4} should be gated by raw balance budget (500*0.01=5), not snapped (1000*0.01=10)",
+                    total_cost
                 );
             }
         }

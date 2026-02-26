@@ -1,4 +1,5 @@
 import json
+import logging
 import sys
 import types
 
@@ -118,6 +119,50 @@ async def test_update_balance_override_does_not_reset_hysteresis_anchor():
     assert bot.balance_raw == pytest.approx(250.0)
     # Keep hysteresis anchor unchanged while override is active.
     assert bot.previous_hysteresis_balance == pytest.approx(133.0)
+
+
+@pytest.mark.asyncio
+async def test_update_balance_nan_keeps_previous_and_logs_warning(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+    bot.balance = 50.0
+    bot.balance_raw = 50.0
+    bot.previous_hysteresis_balance = 50.0
+
+    async def fake_fetch_balance():
+        return float("nan")
+
+    bot.fetch_balance = fake_fetch_balance
+
+    with caplog.at_level(logging.WARNING):
+        ok = await bot.update_balance()
+    assert ok is False
+    assert bot.balance == pytest.approx(50.0)
+    assert bot.balance_raw == pytest.approx(50.0)
+    assert bot.previous_hysteresis_balance == pytest.approx(50.0)
+    assert "non-finite balance fetch result; keeping previous balance" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_update_balance_inf_keeps_previous_and_logs_warning(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+    bot.balance = 50.0
+    bot.balance_raw = 50.0
+    bot.previous_hysteresis_balance = 50.0
+
+    async def fake_fetch_balance():
+        return float("inf")
+
+    bot.fetch_balance = fake_fetch_balance
+
+    with caplog.at_level(logging.WARNING):
+        ok = await bot.update_balance()
+    assert ok is False
+    assert bot.balance == pytest.approx(50.0)
+    assert bot.balance_raw == pytest.approx(50.0)
+    assert bot.previous_hysteresis_balance == pytest.approx(50.0)
+    assert "non-finite balance fetch result; keeping previous balance" in caplog.text
 
 
 def test_accessor_fallback_when_balance_raw_absent():

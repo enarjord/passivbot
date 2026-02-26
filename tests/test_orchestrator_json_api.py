@@ -5,6 +5,16 @@ import math
 import pytest
 
 
+@pytest.fixture(scope="module", autouse=True)
+def require_real_passivbot_rust_module():
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.fail(
+            "tests/test_orchestrator_json_api.py requires the real passivbot_rust extension; stub detected"
+        )
+
+
 def bot_params(**overrides):
     base = {
         "close_grid_markup_end": 0.01,
@@ -689,6 +699,33 @@ def test_loss_gate_uses_balance_raw_when_snapped_and_raw_diverge():
     allowed_types = [o["order_type"] for o in out_allowed["orders"]]
     assert "close_auto_reduce_wel_long" in allowed_types
     assert not out_allowed.get("diagnostics", {}).get("loss_gate_blocks")
+
+
+def test_twel_enforcer_uses_balance_raw_not_snapped():
+    """TWEL enforcer should use balance_raw for wallet exposure, not snapped balance."""
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.4,
+        "total_wallet_exposure_limit": 0.9,
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 2,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    # Two positions: cost = 8*50 + 12*50 = 400 + 600 = 1000.
+    # With snapped balance 2000: total WE = 1000/2000 = 0.5 (under 0.9, no trigger).
+    # With raw balance 1100: total WE = 1000/1100 ≈ 0.909 (over 0.9, triggers).
+    sym0 = make_symbol(0, bid=50.0, ask=50.0, long_pos_size=8.0, long_pos_price=50.0, long_bp=long_bp)
+    sym1 = make_symbol(1, bid=50.0, ask=50.0, long_pos_size=12.0, long_pos_price=50.0, long_bp=long_bp)
+    inp = make_input(balance=2_000.0, global_bp=global_bp, symbols=[sym0, sym1])
+    inp["balance_raw"] = 1_100.0
+
+    out = compute(pbr, inp)
+    order_types = [o["order_type"] for o in out["orders"]]
+    assert "close_auto_reduce_twel_long" in order_types, (
+        "TWEL enforcer should trigger with raw balance (WE=0.909>0.9), "
+        f"not snapped (WE=0.5<0.9). Got: {order_types}"
+    )
 
 
 def test_loss_gate_returns_early_when_raw_is_non_positive():

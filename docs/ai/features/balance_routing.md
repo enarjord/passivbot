@@ -32,6 +32,9 @@ Passivbot carries two balance values with distinct responsibilities:
   - peak reconstruction (`balance_peak`)
   - realized-loss gate floor checks
   - auto-unstuck allowance budget calculations
+  - TWEL enforcer auto-reduce (wallet exposure uses raw for conservative risk)
+  - TWEL entry gating (prevents new entries that would exceed TWEL at real balance)
+  - unstuck action selection (wallet exposure threshold uses raw)
   - equity/accounting displays
 
 ## Migration Guidance

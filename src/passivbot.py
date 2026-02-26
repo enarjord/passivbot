@@ -4024,6 +4024,9 @@ class Passivbot:
         except (TypeError, ValueError):
             logging.warning("non-numeric balance fetch result; keeping previous balance")
             return False
+        if not math.isfinite(balance_raw):
+            logging.warning("non-finite balance fetch result; keeping previous balance")
+            return False
 
         balance_snapped = balance_raw
         if self.balance_override is None:
