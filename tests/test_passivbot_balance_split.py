@@ -1,4 +1,5 @@
 import json
+import logging
 import sys
 import types
 
@@ -118,6 +119,58 @@ async def test_update_balance_override_does_not_reset_hysteresis_anchor():
     assert bot.balance_raw == pytest.approx(250.0)
     # Keep hysteresis anchor unchanged while override is active.
     assert bot.previous_hysteresis_balance == pytest.approx(133.0)
+
+
+def test_accessor_fallback_when_balance_raw_absent():
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = 500.0
+    if hasattr(bot, "balance_raw"):
+        del bot.balance_raw
+    assert bot.get_raw_balance() == pytest.approx(500.0)
+
+
+@pytest.mark.asyncio
+async def test_update_balance_nan_keeps_previous_and_logs_warning(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+    bot.balance = 50.0
+    bot.balance_raw = 50.0
+    bot.previous_hysteresis_balance = 50.0
+
+    async def fake_fetch_balance():
+        return float("nan")
+
+    bot.fetch_balance = fake_fetch_balance
+
+    with caplog.at_level(logging.WARNING):
+        ok = await bot.update_balance()
+    assert ok is False
+    assert bot.balance == pytest.approx(50.0)
+    assert bot.balance_raw == pytest.approx(50.0)
+    assert bot.previous_hysteresis_balance == pytest.approx(50.0)
+    assert "non-finite balance fetch result; keeping previous balance" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_update_balance_inf_keeps_previous_and_logs_warning(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+    bot.balance = 50.0
+    bot.balance_raw = 50.0
+    bot.previous_hysteresis_balance = 50.0
+
+    async def fake_fetch_balance():
+        return float("inf")
+
+    bot.fetch_balance = fake_fetch_balance
+
+    with caplog.at_level(logging.WARNING):
+        ok = await bot.update_balance()
+    assert ok is False
+    assert bot.balance == pytest.approx(50.0)
+    assert bot.balance_raw == pytest.approx(50.0)
+    assert bot.previous_hysteresis_balance == pytest.approx(50.0)
+    assert "non-finite balance fetch result; keeping previous balance" in caplog.text
 
 
 def test_effective_min_cost_filter_uses_snapped_balance():
@@ -263,3 +316,76 @@ def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_
     assert info_b["status"] == "ok"
     assert info_a["peak"] == pytest.approx(200.0)
     assert info_b["peak"] == pytest.approx(200.0)
+
+
+@pytest.mark.asyncio
+async def test_update_balance_hysteresis_divergence(monkeypatch):
+    import passivbot as pb_mod
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+    call_count = [0]
+
+    async def fake_fetch_balance():
+        call_count[0] += 1
+        return 100.0 if call_count[0] == 1 else 100.5
+
+    def fake_hysteresis(balance_raw, previous_hysteresis_balance, snap_pct):
+        if previous_hysteresis_balance == 0.0:
+            return balance_raw
+        if (
+            abs(balance_raw - previous_hysteresis_balance)
+            / abs(previous_hysteresis_balance)
+            <= snap_pct
+        ):
+            return previous_hysteresis_balance
+        return balance_raw
+
+    monkeypatch.setattr(pb_mod.pbr, "hysteresis", fake_hysteresis)
+    bot.fetch_balance = fake_fetch_balance
+
+    ok1 = await bot.update_balance()
+    assert ok1 is True
+    assert bot.balance_raw == pytest.approx(100.0)
+    assert bot.balance == pytest.approx(100.0)
+
+    ok2 = await bot.update_balance()
+    assert ok2 is True
+    assert bot.balance_raw == pytest.approx(100.5)
+    assert bot.balance == pytest.approx(100.0)
+    assert bot.balance_raw != bot.balance
+
+
+@pytest.mark.asyncio
+async def test_update_balance_divergence_routes_to_orchestrator_input(monkeypatch):
+    import passivbot as pb_mod
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+    call_count = [0]
+
+    async def fake_fetch_balance():
+        call_count[0] += 1
+        return 1000.0 if call_count[0] == 1 else 1005.0
+
+    def fake_hysteresis(balance_raw, previous_hysteresis_balance, snap_pct):
+        if previous_hysteresis_balance == 0.0:
+            return balance_raw
+        if (
+            abs(balance_raw - previous_hysteresis_balance)
+            / abs(previous_hysteresis_balance)
+            <= snap_pct
+        ):
+            return previous_hysteresis_balance
+        return balance_raw
+
+    monkeypatch.setattr(pb_mod.pbr, "hysteresis", fake_hysteresis)
+    bot.fetch_balance = fake_fetch_balance
+
+    await bot.update_balance()
+    await bot.update_balance()
+
+    assert bot.balance_raw == pytest.approx(1005.0)
+    assert bot.balance == pytest.approx(1000.0)
+    assert bot.get_raw_balance() == pytest.approx(1005.0)
+    assert bot.get_hysteresis_snapped_balance() == pytest.approx(1000.0)
