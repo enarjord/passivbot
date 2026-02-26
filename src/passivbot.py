@@ -834,9 +834,11 @@ class Passivbot:
             if pos_data.get("short", {}).get("size", 0.0) != 0.0:
                 n_short += 1
 
-        balance_str = f"{self.get_raw_balance():.2f} {self.quote}"
-        if abs(self.get_raw_balance() - self.get_hysteresis_snapped_balance()) > 1e-9:
-            balance_str += f" (hsnap {self.get_hysteresis_snapped_balance():.2f})"
+        balance_raw = self.get_raw_balance()
+        balance_snapped = self.get_hysteresis_snapped_balance()
+        balance_str = f"{balance_raw:.2f} {self.quote}"
+        if abs(balance_raw - balance_snapped) > 1e-9:
+            balance_str += f" (hsnap {balance_snapped:.2f})"
 
         # Build fills string with PnL if fills > 0
         if self._health_fills > 0:
@@ -902,8 +904,9 @@ class Passivbot:
         pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = float(pnls_cumsum.max()), float(pnls_cumsum[-1])
 
-        balance_peak = self.get_raw_balance() + (pnls_cumsum_max - pnls_cumsum_last)
-        pct_from_peak = (self.get_raw_balance() / balance_peak - 1.0) * 100.0
+        balance_raw = self.get_raw_balance()
+        balance_peak = balance_raw + (pnls_cumsum_max - pnls_cumsum_last)
+        pct_from_peak = (balance_raw / balance_peak - 1.0) * 100.0
         # Raw allowance WITHOUT .max(0.0) - can be negative
         allowance_raw = balance_peak * (pct * twel + pct_from_peak / 100.0)
 
@@ -3072,21 +3075,25 @@ class Passivbot:
 
     async def handle_balance_update(self, source="REST"):
         if not hasattr(self, "_previous_balance_raw"):
-            self._previous_balance_raw = 0.0
+            self._previous_balance_raw = float(getattr(self, "_previous_balance_true", 0.0) or 0.0)
         if not hasattr(self, "_previous_balance_hysteresis_snapped"):
-            self._previous_balance_hysteresis_snapped = 0.0
+            self._previous_balance_hysteresis_snapped = float(
+                getattr(self, "_previous_balance_effective", 0.0) or 0.0
+            )
+        balance_raw = self.get_raw_balance()
+        balance_snapped = self.get_hysteresis_snapped_balance()
         if (
-            self.get_raw_balance() != self._previous_balance_raw
-            or self.get_hysteresis_snapped_balance() != self._previous_balance_hysteresis_snapped
+            balance_raw != self._previous_balance_raw
+            or balance_snapped != self._previous_balance_hysteresis_snapped
         ):
             try:
-                equity = self.get_raw_balance() + (await self.calc_upnl_sum())
+                equity = balance_raw + (await self.calc_upnl_sum())
                 logging.info(
                     "[balance] raw %.6f -> %.6f | hsnap %.6f -> %.6f | equity: %.4f source: %s",
                     self._previous_balance_raw,
-                    self.get_raw_balance(),
+                    balance_raw,
                     self._previous_balance_hysteresis_snapped,
-                    self.get_hysteresis_snapped_balance(),
+                    balance_snapped,
                     equity,
                     source,
                 )
@@ -3094,8 +3101,8 @@ class Passivbot:
                 logging.error(f"error with handle_balance_update {e}")
                 traceback.print_exc()
             finally:
-                self._previous_balance_raw = self.get_raw_balance()
-                self._previous_balance_hysteresis_snapped = self.get_hysteresis_snapped_balance()
+                self._previous_balance_raw = balance_raw
+                self._previous_balance_hysteresis_snapped = balance_snapped
                 self.execution_scheduled = True
 
     async def calc_upnl_sum(self):
@@ -3333,19 +3340,13 @@ class Passivbot:
         pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
         out = {}
+        balance_raw = self.get_raw_balance()
         for pside in ["long", "short"]:
             pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
             if pct > 0.0:
-                balance_peak = self.get_raw_balance() + (pnls_cumsum_max - pnls_cumsum_last)
-                drop_since_peak_pct = self.get_raw_balance() / balance_peak - 1.0
-                allowance_raw = balance_peak * (pct + drop_since_peak_pct)
-                allowance_mod = balance_peak * (
-                    pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-                    + drop_since_peak_pct
-                )
                 out[pside] = float(
                     pbr.calc_auto_unstuck_allowance(
-                        self.get_raw_balance(),
+                        balance_raw,
                         pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0),
                         float(pnls_cumsum_max),
                         float(pnls_cumsum_last),
@@ -3818,13 +3819,14 @@ class Passivbot:
 
         # Pre-calculate total WE per side for TWEL% display
         total_we_by_pside = {"long": 0.0, "short": 0.0}
+        balance_raw = self.get_raw_balance()
         for pos in positions_new:
             sym = pos["symbol"]
             ps = pos["position_side"]
             sz = pos.get("size", 0.0)
             px = pos.get("price", 0.0)
-            if sz != 0 and self.get_raw_balance() > 0 and sym in self.c_mults:
-                total_we_by_pside[ps] += pbr.qty_to_cost(sz, px, self.c_mults[sym]) / self.get_raw_balance()
+            if sz != 0 and balance_raw > 0 and sym in self.c_mults:
+                total_we_by_pside[ps] += pbr.qty_to_cost(sz, px, self.c_mults[sym]) / balance_raw
 
         # Create PrettyTable for aligned output
         table = PrettyTable()
@@ -3850,8 +3852,8 @@ class Passivbot:
 
             # Compute metrics for new pos
             wallet_exposure = (
-                pbr.qty_to_cost(new["size"], new["price"], self.c_mults[symbol]) / self.get_raw_balance()
-                if new["size"] != 0 and self.get_raw_balance() > 0
+                pbr.qty_to_cost(new["size"], new["price"], self.c_mults[symbol]) / balance_raw
+                if new["size"] != 0 and balance_raw > 0
                 else 0.0
             )
             wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
@@ -3974,6 +3976,8 @@ class Passivbot:
         """Return raw exchange balance (fallback to snapped for legacy stubs)."""
         if hasattr(self, "balance_raw"):
             return float(getattr(self, "balance_raw", 0.0) or 0.0)
+        if hasattr(self, "balance_true"):
+            return float(getattr(self, "balance_true", 0.0) or 0.0)
         return self.get_hysteresis_snapped_balance()
 
     def get_hysteresis_snapped_balance(self) -> float:
@@ -3997,6 +4001,8 @@ class Passivbot:
             self.previous_hysteresis_balance = None
         if not hasattr(self, "balance_hysteresis_snap_pct"):
             self.balance_hysteresis_snap_pct = 0.02
+        if not hasattr(self, "balance_raw"):
+            self.balance_raw = self.get_raw_balance()
 
         if self.balance_override is not None:
             balance_raw = float(self.balance_override)

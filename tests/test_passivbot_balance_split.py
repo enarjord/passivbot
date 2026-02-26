@@ -1,3 +1,4 @@
+import json
 import sys
 import types
 
@@ -180,3 +181,212 @@ def test_balance_peak_uses_raw_not_snapped():
 
     # The raw-based peak is correct and higher
     assert balance_peak_raw > balance_peak_snapped
+
+
+def test_effective_min_cost_filter_uses_snapped_balance():
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
+    bot.balance_raw = 10.0
+    bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
+    bot.live_value = lambda key: key == "filter_by_min_effective_cost"
+    bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
+    bot.bp = lambda pside, key, symbol=None: 0.5 if key == "entry_initial_qty_pct" else 0.0
+
+    # Passes only when snapped balance is used:
+    # 100 * 1.0 * 0.5 = 50 >= 40; raw path would fail (10 * 1.0 * 0.5 = 5).
+    assert bot.effective_min_cost_is_low_enough("long", "BTC/USDT:USDT") is True
+
+
+def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
+    import passivbot as pb_mod
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
+    bot.balance_raw = 200.0
+    bot._pnls_manager = types.SimpleNamespace(
+        get_events=lambda: [types.SimpleNamespace(pnl=10.0), types.SimpleNamespace(pnl=-4.0)]
+    )
+
+    def bot_value(pside, key):
+        if key == "unstuck_loss_allowance_pct":
+            return 0.2 if pside == "long" else 0.0
+        if key == "total_wallet_exposure_limit":
+            return 0.5
+        return 0.0
+
+    bot.bot_value = bot_value
+
+    calls = []
+
+    def fake_calc_auto_unstuck_allowance(balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last):
+        calls.append((balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last))
+        return 123.45
+
+    monkeypatch.setattr(pb_mod.pbr, "calc_auto_unstuck_allowance", fake_calc_auto_unstuck_allowance)
+
+    out = bot._calc_unstuck_allowances(allow_new_unstuck=True)
+
+    assert out["long"] == pytest.approx(123.45)
+    assert out["short"] == pytest.approx(0.0)
+    assert len(calls) == 1
+    assert calls[0][0] == pytest.approx(200.0)  # raw balance
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        positions = {}
+        balance = 120.0  # snapped
+        balance_raw = 175.0  # raw
+        PB_modes = {}
+        effective_min_cost = {}
+        _config_hedge_mode = False
+        hedge_mode = False
+
+        def config_get(self, keys):
+            return None
+
+        def _bot_params_to_rust_dict(self, pside, symbol):
+            return {}
+
+        def live_value(self, key):
+            return False
+
+        def _log_realized_loss_gate_blocks(self, out, idx_to_symbol):
+            return None
+
+        def _log_ema_gating(self, ideal_orders, m1_close_emas, last_prices, symbols):
+            return None
+
+        def _to_executable_orders(self, ideal_orders, last_prices):
+            return ideal_orders, []
+
+        def _finalize_reduce_only_orders(self, ideal_orders_f, last_prices):
+            return ideal_orders_f
+
+        def get_raw_balance(self):
+            return float(self.balance_raw)
+
+        def get_hysteresis_snapped_balance(self):
+            return float(self.balance)
+
+    snapshot = {
+        "symbols": [],
+        "last_prices": {},
+        "m1_close_emas": {},
+        "m1_volume_emas": {},
+        "m1_log_range_emas": {},
+        "h1_log_range_emas": {},
+        "unstuck_allowances": {"long": 0.0, "short": 0.0},
+        "realized_pnl_cumsum": {"max": 0.0, "last": 0.0},
+    }
+
+    captured = {}
+
+    def fake_compute(json_str):
+        captured["input"] = json.loads(json_str)
+        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+
+    monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
+
+    bot = FakeBot()
+    method = pb_mod.Passivbot.calc_ideal_orders_orchestrator_from_snapshot
+    await method(bot, snapshot, return_snapshot=False)
+
+    assert captured["input"]["balance"] == pytest.approx(120.0)
+    assert captured["input"]["balance_raw"] == pytest.approx(175.0)
+
+
+def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_pnl():
+    """Regression for peak drift: peak must not decay when profits increase pnl_last and balance_raw."""
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0  # stale snapped value to simulate hysteresis lag
+
+    def bot_value(pside, key):
+        if key == "total_wallet_exposure_limit":
+            return 1.0
+        if key == "unstuck_loss_allowance_pct":
+            return 0.1
+        return 0.0
+
+    bot.bot_value = bot_value
+
+    # State A: peak = 100 + (100 - 0) = 200
+    bot.balance_raw = 100.0
+    bot._pnls_manager = types.SimpleNamespace(
+        get_events=lambda: [types.SimpleNamespace(pnl=100.0), types.SimpleNamespace(pnl=-100.0)]
+    )
+    info_a = bot._calc_unstuck_allowance_for_logging("long")
+
+    # State B (after net +50 realized since trough): peak should still be 200
+    # If snapped balance were incorrectly used here, peak would drift down to 150.
+    bot.balance_raw = 150.0
+    bot._pnls_manager = types.SimpleNamespace(
+        get_events=lambda: [types.SimpleNamespace(pnl=100.0), types.SimpleNamespace(pnl=-50.0)]
+    )
+    info_b = bot._calc_unstuck_allowance_for_logging("long")
+
+    assert info_a["status"] == "ok"
+    assert info_b["status"] == "ok"
+    assert info_a["peak"] == pytest.approx(200.0)
+    assert info_b["peak"] == pytest.approx(200.0)
+
+
+@pytest.mark.asyncio
+async def test_update_balance_hysteresis_divergence():
+    """Calls update_balance() twice with values within snap threshold, verifies balance_raw != balance."""
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+
+    call_count = [0]
+
+    async def fake_fetch_balance():
+        call_count[0] += 1
+        # First call: 100.0, second call: 100.5 (within 2% snap threshold)
+        return 100.0 if call_count[0] == 1 else 100.5
+
+    bot.fetch_balance = fake_fetch_balance
+
+    ok1 = await bot.update_balance()
+    assert ok1 is True
+    # After first call, both should be the same
+    assert bot.balance_raw == pytest.approx(100.0)
+    assert bot.balance == pytest.approx(100.0)
+
+    ok2 = await bot.update_balance()
+    assert ok2 is True
+    # Raw should update to 100.5, but snapped stays at 100.0 (within 2% threshold)
+    assert bot.balance_raw == pytest.approx(100.5)
+    assert bot.balance == pytest.approx(100.0)
+    # Verify divergence
+    assert bot.balance_raw != bot.balance
+
+
+@pytest.mark.asyncio
+async def test_update_balance_divergence_routes_to_orchestrator_input():
+    """After creating divergence, builds orchestrator input dict and asserts both values pass through."""
+    import passivbot as pb_mod
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+
+    call_count = [0]
+
+    async def fake_fetch_balance():
+        call_count[0] += 1
+        return 1000.0 if call_count[0] == 1 else 1005.0
+
+    bot.fetch_balance = fake_fetch_balance
+
+    await bot.update_balance()
+    await bot.update_balance()
+
+    # Verify divergence exists
+    assert bot.balance_raw == pytest.approx(1005.0)
+    assert bot.balance == pytest.approx(1000.0)
+
+    # Now verify get_raw_balance / get_hysteresis_snapped_balance route correctly
+    assert bot.get_raw_balance() == pytest.approx(1005.0)
+    assert bot.get_hysteresis_snapped_balance() == pytest.approx(1000.0)

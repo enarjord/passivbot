@@ -34,6 +34,7 @@ See [features/README.md](features/README.md) for feature-specific learnings.
 | [features/stock_perps.md](features/stock_perps.md) | HIP-3 stock perpetuals on Hyperliquid |
 | [features/candlestick_manager.md](features/candlestick_manager.md) | OHLCV data fetching and caching |
 | [features/fill_events_manager.md](features/fill_events_manager.md) | Fill tracking and PnL computation |
+| [features/balance_routing.md](features/balance_routing.md) | Raw vs snapped balance contract and migration rules |
 
 ## Adding New Documentation
 

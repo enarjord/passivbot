@@ -2900,6 +2900,77 @@ mod tests {
     }
 
     #[test]
+    fn orchestrator_input_routes_snapped_and_raw_balances_correctly() {
+        let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 0.5;
+        bp_pair.long.unstuck_loss_allowance_pct = 0.2;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.balance.usd_total_balance = 200.0;
+        bt.balance.usd_total_balance_rounded = 100.0;
+        bt.pnl_cumsum_max = 10.0;
+        bt.pnl_cumsum_running = 0.0;
+
+        let input = bt.get_orchestrator_input_cached(1, None);
+        assert!(
+            (input.balance - 100.0).abs() < 1e-12,
+            "expected snapped balance to route to input.balance"
+        );
+        assert!(
+            (input.balance_raw - 200.0).abs() < 1e-12,
+            "expected raw balance to route to input.balance_raw"
+        );
+
+        let allowance_pct = 0.2 * 0.5;
+        let expected_from_raw =
+            calc_auto_unstuck_allowance(200.0, allowance_pct, bt.pnl_cumsum_max, bt.pnl_cumsum_running);
+        let expected_from_snapped =
+            calc_auto_unstuck_allowance(100.0, allowance_pct, bt.pnl_cumsum_max, bt.pnl_cumsum_running);
+        assert!(
+            (input.global.unstuck_allowance_long - expected_from_raw).abs() < 1e-12,
+            "expected unstuck allowance to use raw balance"
+        );
+        assert!(
+            (input.global.unstuck_allowance_long - expected_from_snapped).abs() > 1e-9,
+            "allowance should differ from snapped-balance path in this scenario"
+        );
+    }
+
+    #[test]
     fn test_ema_alpha_interval_1_matches_original_formula() {
         // With interval=1, alpha should equal 2/(span+1) (the original formula)
         let mut bp = BotParamsPair::default();

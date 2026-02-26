@@ -4,8 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+### Changed
+- **Dual balance routing (raw vs hysteresis-snapped)** - Live and orchestrator flows now carry both `balance_raw` (raw wallet balance) and `balance` (hysteresis-snapped balance). Sizing/order-shaping paths use snapped balance, while risk/accounting paths use raw balance (including realized-loss gate peak/floor checks, TWEL entry/auto-reduce gating, and auto-unstuck allowance calculations). This applies consistently across live and backtest via Rust orchestrator input.
+
 ### Fixed
-- **Balance peak drifting in wrong direction due to hysteresis** - The `balance_peak` calculation (used for unstuck allowance budgeting and the realized-loss gate) was using the hysteresis-snapped balance, which stays stale while `pnl_cumsum_last` updates with every fill. This caused the peak to drop after profits and rise after losses. A new `balance_raw` (raw exchange balance) is now tracked separately and used for all peak/PnL-accuracy-sensitive paths via `get_raw_balance()`, while the hysteresis-snapped balance (via `get_hysteresis_snapped_balance()`) continues to be used for order sizing and wallet exposure where stability matters.
+- **Balance peak drift in wrong direction under hysteresis** - Peak reconstruction (`balance + (pnl_cumsum_max - pnl_cumsum_last)`) previously used hysteresis-snapped balance in some paths. Since snapped balance can stay stale while `pnl_cumsum_last` changes fill-by-fill, this made reconstructed peak drift down after profits and up after losses. Peak/PnL-accuracy-sensitive paths now use raw balance (`balance_raw` / legacy `balance_true`) consistently.
+- **Pytest Rust-module bootstrap fallback** - Test bootstrap now tries the project venv `passivbot_rust` package before falling back to the lightweight stub when tests are launched outside the venv, reducing false failures from missing/incorrect Rust module resolution.
 
 ## v7.8.3 - 2026-02-24
 
