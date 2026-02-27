@@ -4419,11 +4419,6 @@ class Passivbot:
         m1_lr_spans = sorted(
             {s for s in (lr_span_long, lr_span_short) if s > 0.0 and math.isfinite(s)}
         )
-        if not hasattr(self, "_orchestrator_prev_close_ema"):
-            self._orchestrator_prev_close_ema = {}
-        if not hasattr(self, "_orchestrator_close_ema_fallback_counts"):
-            self._orchestrator_close_ema_fallback_counts = {}
-
         async def fetch_map(symbol: str, spans: list[float], fn):
             out: dict[float, float] = {}
             if not spans:
@@ -4462,6 +4457,15 @@ class Passivbot:
                         if math.isfinite(val):
                             out[span] = val
                             prev_by_span[span] = (val, now_ms)
+                            prev_fallback_count = self._orchestrator_close_ema_fallback_counts.get(key, 0)
+                            if prev_fallback_count > 0:
+                                logging.info(
+                                    "[ema] close EMA recovered %s span=%.8g after"
+                                    " %d consecutive fallback(s)",
+                                    symbol,
+                                    span,
+                                    prev_fallback_count,
+                                )
                             self._orchestrator_close_ema_fallback_counts[key] = 0
                         else:
                             reason = f"non-finite close EMA value {val}"
