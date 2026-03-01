@@ -1920,7 +1920,19 @@ class FillEventsManager:
             self.cache.save_days(day_payload)
             all_days_persisted.update(days_touched)
 
-        await self.fetcher.fetch(start_ms, end_ms, detail_cache, on_batch=handle_batch)
+        try:
+            await self.fetcher.fetch(start_ms, end_ms, detail_cache, on_batch=handle_batch)
+        except RateLimitExceeded:
+            # Preserve bounded-range failures as known gaps so retry logic can
+            # revisit them. We still re-raise to fail loudly on critical input.
+            if start_ms is not None and end_ms is not None:
+                self.cache.add_known_gap(
+                    start_ms,
+                    end_ms,
+                    reason=GAP_REASON_FETCH_FAILED,
+                    confidence=GAP_CONFIDENCE_UNKNOWN,
+                )
+            raise
 
         self._events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
 
@@ -2643,12 +2655,13 @@ class HyperliquidFetcher(BaseFetcher):
                 trades = await self.api.fetch_my_trades(params=params)
             except RateLimitExceeded as exc:
                 rate_limit_retries += 1
-                if rate_limit_retries > max_rate_limit_retries:
-                    logger.warning(
-                        "HyperliquidFetcher.fetch: too many rate limit retries (%d), aborting",
-                        rate_limit_retries,
+                if rate_limit_retries >= max_rate_limit_retries:
+                    msg = (
+                        "HyperliquidFetcher.fetch: too many consecutive rate-limit retries "
+                        f"({rate_limit_retries}/{max_rate_limit_retries}); aborting fetch"
                     )
-                    break
+                    logger.warning("%s", msg)
+                    raise RateLimitExceeded(msg) from exc
                 logger.debug(
                     "HyperliquidFetcher.fetch: rate limit exceeded (retry %d/%d), sleeping (%s)",
                     rate_limit_retries,
