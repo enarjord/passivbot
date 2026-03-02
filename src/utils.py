@@ -1374,21 +1374,35 @@ async def get_first_ohlcv_iteratively(cc, symbol):
     return best_candle
 
 
-def deep_get(d, key_path, default=0.0):
+def deep_get(d, key_path, *args):
     """
-    Get value from nested dict using dot notation or simple key.
-    Examples:
-        deep_get(d, "aggregated")             → d["aggregated"]
-        deep_get(d, "scenarios.base")         → d["scenarios"]["base"]
-        deep_get(d, "scenarios.n_positions=3") → d["scenarios"]["n_positions=3"]
+    Retrieves a value from a nested dict using dot notation.
+    Handles keys that may contain dots via greedy matching.
     """
-    if "." not in key_path:
-        return d.get(key_path, default)
+    # Check if a default was provided via *args
+    has_default = len(args) > 0
+    default = args[0] if has_default else None
 
-    keys = key_path.split(".")
+    segments = key_path.split(".")
     current = d
-    for k in keys:
-        if not isinstance(current, dict):
-            return default
-        current = current.get(k, default)
+
+    i = 0
+    while i < len(segments):
+        found = False
+
+        # Greedy look-ahead: try to find the longest matching key
+        for j in range(i + 1, len(segments) + 1):
+            candidate_key = ".".join(segments[i:j])
+
+            if isinstance(current, dict) and candidate_key in current:
+                current = current[candidate_key]
+                i = j  # Jump the pointer forward
+                found = True
+                break
+
+        if not found:
+            if has_default:
+                return default
+            raise KeyError(f"Path segment '{segments[i]}' not found in '{key_path}'")
+
     return current
