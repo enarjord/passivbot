@@ -1,10 +1,12 @@
 import asyncio
 import json
+import random
 import traceback
 
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 import passivbot_rust as pbr
+from ccxt.base.errors import RateLimitExceeded
 
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
@@ -39,6 +41,14 @@ class HyperliquidBot(CCXTBot):
             self.user_info["is_vault"] = False
         self.max_n_concurrent_ohlcvs_1m_updates = 2
         self.custom_id_max_length = 34
+        self._hl_fetch_lock = asyncio.Lock()
+        self._hl_cache_generation = 0
+
+    def _hl_info_url(self) -> str:
+        """Derive the Hyperliquid /info endpoint from the CCXT session URL config."""
+        base = self.cca.urls.get("api", {}).get("public", "https://api.hyperliquid.xyz")
+        hostname = getattr(self.cca, "hostname", "hyperliquid.xyz")
+        return base.replace("{hostname}", hostname).rstrip("/") + "/info"
 
     def create_ccxt_sessions(self):
         creds = {
@@ -132,17 +142,33 @@ class HyperliquidBot(CCXTBot):
 
     async def watch_orders(self):
         res = None
+        _ws_consecutive_rate_limits = 0
         while True:
             try:
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_orders()
+                _ws_consecutive_rate_limits = 0  # reset on success
                 for i in range(len(res)):
                     res[i]["position_side"] = self.determine_pos_side(res[i])
                     res[i]["qty"] = res[i]["amount"]
                 self.handle_order_update(res)
+            except RateLimitExceeded:
+                self._health_ws_reconnects += 1
+                self._health_rate_limits += 1
+                _ws_consecutive_rate_limits += 1
+                backoff = min(30, 2 ** _ws_consecutive_rate_limits) + random.uniform(0, 1)
+                logging.warning(
+                    "[ws] %s: rate limited (reconnect #%d), backing off %.0fs...",
+                    self.exchange,
+                    self._health_ws_reconnects,
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
+                logging.info("[ws] %s: reconnecting after rate limit...", self.exchange)
             except Exception as e:
                 self._health_ws_reconnects += 1
+                _ws_consecutive_rate_limits = 0
                 logging.warning(
                     "[ws] %s: connection lost (reconnect #%d), retrying in 1s: %s",
                     self.exchange,
@@ -198,27 +224,53 @@ class HyperliquidBot(CCXTBot):
         )
         return positions, balance
 
+    async def _get_positions_and_balance_cached(self, my_gen: int = 0):
+        """Fetch positions+balance with dedup: concurrent callers share one API call.
+
+        my_gen is the caller's snapshot of _hl_cache_generation taken *before*
+        acquiring the lock.  If another caller completed a fetch in the
+        meantime (cache_generation advanced), we return the cached result
+        (or re-raise the cached exception if the fetch failed).
+        """
+        async with self._hl_fetch_lock:
+            cached_gen = self._hl_cache_generation
+            if cached_gen > my_gen and hasattr(self, "_hl_cached_result"):
+                if isinstance(self._hl_cached_result, Exception):
+                    raise self._hl_cached_result
+                return self._hl_cached_result
+            try:
+                result = await self._fetch_positions_and_balance()
+            except Exception as e:
+                self._hl_cached_result = e
+                self._hl_cache_generation = cached_gen + 1
+                raise
+            self._hl_cached_result = result
+            self._hl_cache_generation = cached_gen + 1
+            return result
+
     async def fetch_positions(self):
-        positions, balance = await self._fetch_positions_and_balance()
-        self._last_hl_positions_balance = (positions, balance)
-        self._hl_positions_balance_applied = False
+        # Snapshot generation *before* lock so each caller tracks its own view.
+        my_gen = self._hl_cache_generation
+        positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        self._last_hl_balance = balance
+        self._hl_balance_consumed = False
         return positions
 
     async def fetch_balance(self):
-        cached = getattr(self, "_last_hl_positions_balance", None)
-        applied = getattr(self, "_hl_positions_balance_applied", False)
-        if cached and not applied:
-            positions, balance = cached
-            self._hl_positions_balance_applied = True
-            return balance
-        positions, balance = await self._fetch_positions_and_balance()
-        self._last_hl_positions_balance = (positions, balance)
-        self._hl_positions_balance_applied = True
+        # Check if fetch_positions already got us a fresh balance
+        if getattr(self, "_last_hl_balance", None) is not None and not getattr(
+            self, "_hl_balance_consumed", True
+        ):
+            self._hl_balance_consumed = True
+            return self._last_hl_balance
+        # Snapshot generation *before* lock so each caller tracks its own view.
+        my_gen = self._hl_cache_generation
+        positions, balance = await self._get_positions_and_balance_cached(my_gen)
         return balance
 
     async def fetch_tickers(self):
         fetched = await self.cca.fetch(
-            "https://api.hyperliquid.xyz/info",
+            self._hl_info_url(),
             method="POST",
             headers={"Content-Type": "application/json"},
             body=json.dumps({"type": "allMids"}),
@@ -459,11 +511,11 @@ class HyperliquidBot(CCXTBot):
 
         Uses base class methods for isolated margin detection and leverage calculation.
         Adds Hyperliquid-specific vault address handling.
+        Calls are made sequentially with a small delay to avoid rate-limit bursts.
         """
-        coros_to_call_margin_mode = {}
         for symbol in symbols:
+            to_print = ""
             try:
-                # Use base class method for leverage calculation (handles isolated margin)
                 leverage = self._calc_leverage_for_symbol(symbol)
                 margin_mode = self._get_margin_mode_for_symbol(symbol)
 
@@ -471,25 +523,24 @@ class HyperliquidBot(CCXTBot):
                 if self.user_info["is_vault"]:
                     params["vaultAddress"] = self.user_info["wallet_address"]
 
-                coros_to_call_margin_mode[symbol] = asyncio.create_task(
-                    self.cca.set_margin_mode(margin_mode, symbol=symbol, params=params)
-                )
+                try:
+                    res = await self.cca.set_margin_mode(
+                        margin_mode, symbol=symbol, params=params
+                    )
+                    to_print = (
+                        f"margin={format_exchange_config_response(res)} ({margin_mode})"
+                    )
+                except Exception as e:
+                    if '"code":"59107"' in str(e):
+                        to_print = f"margin=ok (unchanged, {margin_mode})"
+                    else:
+                        logging.error(f"{symbol} error setting {margin_mode} mode {e}")
             except Exception as e:
                 logging.error(f"{symbol}: error setting margin mode and leverage {e}")
-        for symbol in symbols:
-            res = None
-            to_print = ""
-            margin_mode = self._get_margin_mode_for_symbol(symbol)
-            try:
-                res = await coros_to_call_margin_mode[symbol]
-                to_print += f"margin={format_exchange_config_response(res)} ({margin_mode})"
-            except Exception as e:
-                if '"code":"59107"' in str(e):
-                    to_print += f"margin=ok (unchanged, {margin_mode})"
-                else:
-                    logging.error(f"{symbol} error setting {margin_mode} mode {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
+            # Small delay between margin-mode API calls to avoid rate-limit bursts
+            await asyncio.sleep(0.2)
 
     async def update_exchange_config(self):
         pass

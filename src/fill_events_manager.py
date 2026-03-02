@@ -1920,7 +1920,19 @@ class FillEventsManager:
             self.cache.save_days(day_payload)
             all_days_persisted.update(days_touched)
 
-        await self.fetcher.fetch(start_ms, end_ms, detail_cache, on_batch=handle_batch)
+        try:
+            await self.fetcher.fetch(start_ms, end_ms, detail_cache, on_batch=handle_batch)
+        except RateLimitExceeded:
+            # Preserve bounded-range failures as known gaps so retry logic can
+            # revisit them.  We still re-raise to fail loudly on critical input.
+            if start_ms is not None and end_ms is not None:
+                self.cache.add_known_gap(
+                    start_ms,
+                    end_ms,
+                    reason=GAP_REASON_FETCH_FAILED,
+                    confidence=GAP_CONFIDENCE_UNKNOWN,
+                )
+            raise
 
         self._events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
 
@@ -2626,6 +2638,8 @@ class HyperliquidFetcher(BaseFetcher):
         fetch_count = 0
 
         prev_params = None
+        rate_limit_retries = 0
+        max_rate_limit_retries = 5
         while True:
             check_params = dict(params)
             check_params["_page"] = fetch_count
@@ -2640,12 +2654,25 @@ class HyperliquidFetcher(BaseFetcher):
             try:
                 trades = await self.api.fetch_my_trades(params=params)
             except RateLimitExceeded as exc:
+                rate_limit_retries += 1
+                if rate_limit_retries >= max_rate_limit_retries:
+                    msg = (
+                        "HyperliquidFetcher.fetch: too many consecutive rate-limit retries "
+                        f"({rate_limit_retries}/{max_rate_limit_retries}); aborting fetch"
+                    )
+                    logger.warning("%s", msg)
+                    raise RateLimitExceeded(msg) from exc
                 logger.debug(
-                    "HyperliquidFetcher.fetch: rate limit exceeded, sleeping briefly (%s)",
+                    "HyperliquidFetcher.fetch: rate limit exceeded (retry %d/%d), sleeping (%s)",
+                    rate_limit_retries,
+                    max_rate_limit_retries,
                     exc,
                 )
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(min(30.0, 2.0 ** rate_limit_retries))
+                # Reset prev_params so the retry is not flagged as repeated
+                prev_params = None
                 continue
+            rate_limit_retries = 0
             fetch_count += 1
             if fetch_count > 1:
                 logger.debug(

@@ -82,6 +82,8 @@ class DummyCCA:
 async def test_hyperliquid_combined_fetch_reused(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
 
+    import asyncio
+
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.quote = "USDT"
     bot.positions = {}
@@ -89,6 +91,8 @@ async def test_hyperliquid_combined_fetch_reused(stubbed_modules):
     bot.fetched_positions = []
     bot.coin_to_symbol = lambda c: "BTC/USDT:USDT" if c == "BTC" else c
     bot.cm = types.SimpleNamespace(get_current_close=lambda *args, **kwargs: 1.0)
+    bot._hl_fetch_lock = asyncio.Lock()
+    bot._hl_cache_generation = 0
     dummy = DummyCCA()
     bot.cca = dummy
 

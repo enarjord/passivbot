@@ -2911,6 +2911,11 @@ class CandlestickManager:
                 )
                 if getattr(self, "_net_sem", None) is not None:
                     async with self._net_sem:  # type: ignore[attr-defined]
+                        # Re-check rate limit after acquiring semaphore.
+                        # Tasks may have been queued before a 429 set the
+                        # global backoff; honour it now instead of firing
+                        # immediately after the semaphore unblocks.
+                        await self._apply_rate_limit_backoff()
                         res = await ex.fetch_ohlcv(
                             symbol,
                             timeframe=tf_norm,
@@ -4798,9 +4803,13 @@ class CandlestickManager:
                 )
                 need_refresh = last_ref == 0 or (now - last_ref) > int(max_age_ms)
                 if not need_refresh:
-                    # If our cached data doesn't reach the requested end_ts,
-                    # force a refresh even if the last refresh is recent.
-                    if last_final and last_final < int(end_ts):
+                    # Only force refresh if cached data lags by MORE than 1 candle
+                    # period.  Being exactly 1 minute behind is normal when a new
+                    # minute boundary crosses (e.g. right after warmup).  The TTL
+                    # alone governs refresh timing in that case — avoiding a
+                    # thundering-herd where all symbols refresh simultaneously on
+                    # minute transitions.
+                    if last_final and (int(end_ts) - int(last_final)) > ONE_MIN_MS:
                         need_refresh = True
                 if need_refresh:
                     await self.refresh(symbol, through_ts=end_ts)
@@ -5699,6 +5708,14 @@ class CandlestickManager:
 
         self._current_close_cache[symbol] = (float(price), int(now))
         return float(price)
+
+    def set_current_close(self, symbol: str, price: float, timestamp_ms: int) -> None:
+        """Inject a price into the current-close cache (e.g. from a bulk API call)."""
+        self._current_close_cache[symbol] = (float(price), int(timestamp_ms))
+
+    def is_rate_limited(self) -> bool:
+        """Return True if a global rate-limit backoff is active."""
+        return self._rate_limit_until > time.time()
 
     # ----- EMA helpers -----
 

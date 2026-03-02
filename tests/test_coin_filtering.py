@@ -68,7 +68,7 @@ class CoinFilterHarness(Passivbot):
     async def calc_volumes(self, _pside, symbols):
         return {sym: self._volumes[sym] for sym in symbols}
 
-    async def calc_log_range(self, _pside, eligible_symbols, max_age_ms=None):
+    async def calc_log_range(self, _pside, eligible_symbols, max_age_ms=None, max_network_fetches=None):
         return {sym: self._log_ranges[sym] for sym in eligible_symbols}
 
     def is_pside_enabled(self, _pside):
@@ -156,3 +156,71 @@ async def test_non_forager_returns_sorted_candidates():
     )
     coins = await bot.get_filtered_coins("long")
     assert coins == ["AAA", "BBB", "CCC"]
+
+
+def test_split_forager_budget_by_side_round_robins_remainder():
+    bot = Passivbot.__new__(Passivbot)
+    first = bot._split_forager_budget_by_side(1, ["long", "short"])
+    second = bot._split_forager_budget_by_side(1, ["long", "short"])
+    assert first in ({"long": 1, "short": 0}, {"long": 0, "short": 1})
+    assert second in ({"long": 1, "short": 0}, {"long": 0, "short": 1})
+    assert first != second
+
+
+class _CMColdCacheOnlyStub:
+    def __init__(self):
+        self.calls = 0
+
+    def get_last_refresh_ms(self, _symbol):
+        return 0
+
+    async def get_latest_ema_metrics(self, _symbol, spans_by_metric, **_kwargs):
+        self.calls += 1
+        return {k: 1.0 for k in spans_by_metric}
+
+
+@pytest.mark.asyncio
+async def test_calc_log_range_respects_cache_only_budget_for_cold_symbols():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.cm = _CMColdCacheOnlyStub()
+    bot.open_orders = {}
+    bot.positions = {}
+    bot.bot_value = (
+        lambda _pside, key: 12.0
+        if key in ("filter_volatility_ema_span", "filter_volume_ema_span")
+        else 0.0
+    )
+    bot.has_position = lambda *_args, **_kwargs: False
+    out = await bot.calc_log_range(
+        "long",
+        eligible_symbols=["AAA", "BBB", "CCC"],
+        max_age_ms=60_000,
+        max_network_fetches=0,
+    )
+    assert out == {"AAA": 0.0, "BBB": 0.0, "CCC": 0.0}
+    assert bot.cm.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_symbols():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.cm = _CMColdCacheOnlyStub()
+    bot.open_orders = {}
+    bot.positions = {}
+    bot.bot_value = (
+        lambda _pside, key: 12.0
+        if key in ("filter_volatility_ema_span", "filter_volume_ema_span")
+        else 0.0
+    )
+    bot.has_position = lambda *_args, **_kwargs: False
+    volumes, log_ranges = await bot.calc_volumes_and_log_ranges(
+        "long",
+        symbols=["AAA", "BBB", "CCC"],
+        max_age_ms=60_000,
+        max_network_fetches=0,
+    )
+    assert volumes == {"AAA": 0.0, "BBB": 0.0, "CCC": 0.0}
+    assert log_ranges == {"AAA": 0.0, "BBB": 0.0, "CCC": 0.0}
+    assert bot.cm.calls == 0

@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import pytest
+from ccxt.base.errors import RateLimitExceeded
 
 from src.fill_events_manager import (
     BaseFetcher,
@@ -23,6 +24,7 @@ from src.fill_events_manager import (
     FillEvent,
     FillEventCache,
     FillEventsManager,
+    GAP_REASON_FETCH_FAILED,
     compute_psize_pprice,
     custom_id_to_snake,
     ensure_qty_signage,
@@ -1917,6 +1919,55 @@ async def test_manager_persists_manual_fill(tmp_path: Path):
     assert len(events) == 1
     assert events[0].pb_order_type == "unknown"
     assert events[0].client_order_id == ""
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_fetcher_raises_after_max_rate_limit_retries(monkeypatch):
+    class _RateLimitedHyperliquidAPI:
+        def __init__(self):
+            self.calls = 0
+
+        async def fetch_my_trades(self, params: Dict[str, Any]):
+            self.calls += 1
+            raise RateLimitExceeded("429 too many requests")
+
+    async def _no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("src.fill_events_manager.asyncio.sleep", _no_sleep)
+
+    api = _RateLimitedHyperliquidAPI()
+    fetcher = HyperliquidFetcher(api, symbol_resolver=lambda s: s)
+    with pytest.raises(RateLimitExceeded, match="too many consecutive rate-limit retries"):
+        await fetcher.fetch(since_ms=None, until_ms=None, detail_cache={})
+    assert api.calls == 5
+
+
+@pytest.mark.asyncio
+async def test_manager_refresh_registers_gap_and_reraises_rate_limit(tmp_path: Path):
+    cache_dir = tmp_path / "fills_rate_limit_gap"
+
+    class _RateLimitedFetcher(BaseFetcher):
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            raise RateLimitExceeded("rate limited")
+
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=_RateLimitedFetcher(),
+        cache_path=cache_dir,
+    )
+
+    start_ms = 1_700_000_000_000
+    end_ms = start_ms + 60_000
+    with pytest.raises(RateLimitExceeded):
+        await manager.refresh(start_ms=start_ms, end_ms=end_ms)
+
+    gaps = manager.cache.get_known_gaps()
+    assert len(gaps) == 1
+    assert gaps[0]["start_ts"] == start_ms
+    assert gaps[0]["end_ts"] == end_ms
+    assert gaps[0]["reason"] == GAP_REASON_FETCH_FAILED
 
 
 # ---------------------------------------------------------------------------
