@@ -44,6 +44,12 @@ class HyperliquidBot(CCXTBot):
         self._hl_fetch_lock = asyncio.Lock()
         self._hl_cache_generation = 0
 
+    def _hl_info_url(self) -> str:
+        """Derive the Hyperliquid /info endpoint from the CCXT session URL config."""
+        base = self.cca.urls.get("api", {}).get("public", "https://api.hyperliquid.xyz")
+        hostname = getattr(self.cca, "hostname", "hyperliquid.xyz")
+        return base.replace("{hostname}", hostname).rstrip("/") + "/info"
+
     def create_ccxt_sessions(self):
         creds = {
             "walletAddress": self.user_info["wallet_address"],
@@ -223,13 +229,21 @@ class HyperliquidBot(CCXTBot):
 
         my_gen is the caller's snapshot of _hl_cache_generation taken *before*
         acquiring the lock.  If another caller completed a fetch in the
-        meantime (cache_generation advanced), we return the cached result.
+        meantime (cache_generation advanced), we return the cached result
+        (or re-raise the cached exception if the fetch failed).
         """
         async with self._hl_fetch_lock:
             cached_gen = self._hl_cache_generation
             if cached_gen > my_gen and hasattr(self, "_hl_cached_result"):
+                if isinstance(self._hl_cached_result, Exception):
+                    raise self._hl_cached_result
                 return self._hl_cached_result
-            result = await self._fetch_positions_and_balance()
+            try:
+                result = await self._fetch_positions_and_balance()
+            except Exception as e:
+                self._hl_cached_result = e
+                self._hl_cache_generation = cached_gen + 1
+                raise
             self._hl_cached_result = result
             self._hl_cache_generation = cached_gen + 1
             return result
@@ -256,7 +270,7 @@ class HyperliquidBot(CCXTBot):
 
     async def fetch_tickers(self):
         fetched = await self.cca.fetch(
-            "https://api.hyperliquid.xyz/info",
+            self._hl_info_url(),
             method="POST",
             headers={"Content-Type": "application/json"},
             body=json.dumps({"type": "allMids"}),

@@ -1555,17 +1555,7 @@ class Passivbot:
             # Enable batch mode for candle replacement logs during warmup
             self.cm.start_candle_replace_batch()
 
-        # Optional per-fetch delay to reduce API pressure during warmup.
-        # Configured via warmup_fetch_delay_ms; defaults to 200ms for Hyperliquid, 0 otherwise.
-        fetch_delay_ms = get_optional_live_value(self.config, "warmup_fetch_delay_ms", None)
-        try:
-            fetch_delay_ms = float(fetch_delay_ms) if fetch_delay_ms is not None else None
-        except Exception:
-            fetch_delay_ms = None
-        if fetch_delay_ms is None:
-            exchange_lower = self.exchange.lower() if self.exchange else ""
-            fetch_delay_ms = 200.0 if exchange_lower == "hyperliquid" else 0.0
-        fetch_delay_s = max(0.0, float(fetch_delay_ms) / 1000.0)
+        fetch_delay_s = self._get_fetch_delay_seconds()
 
         async def one(sym: str):
             nonlocal completed, last_log_ms
@@ -2388,6 +2378,58 @@ class Passivbot:
             return
         apply_rest_overrides_to_ccxt(client, self.endpoint_override)
 
+    def _compute_fetch_budget_ttls(
+        self, syms: list, max_age_ms: Optional[int], max_network_fetches: Optional[int]
+    ) -> Tuple[Dict[str, int], set]:
+        """Compute per-symbol TTLs with fetch budget, return (per_sym_ttl, cache_only_never_fetched).
+
+        Symbols within the fetch budget get the real max_age_ms; symbols over the
+        budget get a huge TTL so they only use cached data.  Symbols assigned
+        cache-only TTL that have never been fetched are collected into a skip set
+        (get_candles treats last_refresh_ms==0 as "needs refresh" regardless of TTL).
+        """
+        CACHE_ONLY_TTL = 365 * 24 * 3600 * 1000  # ~1 year – effectively cache-only
+        per_sym_ttl: Dict[str, int] = {}
+        if max_network_fetches is not None and max_network_fetches >= 0 and max_age_ms is not None:
+            now = utc_ms()
+            staleness = []
+            for s in syms:
+                try:
+                    last_ref = self.cm.get_last_refresh_ms(s)
+                except Exception:
+                    last_ref = 0
+                staleness.append((s, int(now - last_ref) if last_ref > 0 else now))
+            staleness.sort(key=lambda x: x[1], reverse=True)  # most stale first
+            fetch_set = set(s for s, _ in staleness[:max_network_fetches])
+            for s in syms:
+                per_sym_ttl[s] = int(max_age_ms) if s in fetch_set else CACHE_ONLY_TTL
+        else:
+            for s in syms:
+                per_sym_ttl[s] = int(max_age_ms) if max_age_ms is not None else 0
+
+        cache_only_never_fetched: set = set()
+        for s in syms:
+            if per_sym_ttl.get(s) == CACHE_ONLY_TTL:
+                try:
+                    if self.cm.get_last_refresh_ms(s) == 0:
+                        cache_only_never_fetched.add(s)
+                except Exception:
+                    cache_only_never_fetched.add(s)
+
+        return per_sym_ttl, cache_only_never_fetched
+
+    def _get_fetch_delay_seconds(self) -> float:
+        """Return configured per-fetch delay in seconds (default 0.2s for Hyperliquid)."""
+        fetch_delay_ms = get_optional_live_value(self.config, "warmup_fetch_delay_ms", None)
+        try:
+            fetch_delay_ms = float(fetch_delay_ms) if fetch_delay_ms is not None else None
+        except Exception:
+            fetch_delay_ms = None
+        if fetch_delay_ms is None:
+            exchange_lower = self.exchange.lower() if self.exchange else ""
+            fetch_delay_ms = 200.0 if exchange_lower == "hyperliquid" else 0.0
+        return max(0.0, float(fetch_delay_ms) / 1000.0)
+
     def stop_data_maintainers(self, verbose=True):
         """Cancel background candle/orderbook tasks and log the outcome."""
         if not hasattr(self, "maintainers"):
@@ -2973,40 +3015,9 @@ class Passivbot:
 
         syms = list(symbols)
 
-        # Determine per-symbol TTL: symbols allowed to fetch get the real max_age_ms,
-        # symbols over the budget get a huge TTL so they only use cached data.
-        CACHE_ONLY_TTL = 365 * 24 * 3600 * 1000  # ~1 year – effectively cache-only
-        per_sym_ttl: Dict[str, int] = {}
-        if max_network_fetches is not None and max_network_fetches >= 0 and max_age_ms is not None:
-            now = utc_ms()
-            # Sort symbols by staleness (oldest first) so the most stale get refreshed.
-            staleness = []
-            for s in syms:
-                try:
-                    last_ref = self.cm.get_last_refresh_ms(s)
-                except Exception:
-                    last_ref = 0
-                staleness.append((s, int(now - last_ref) if last_ref > 0 else now))
-            staleness.sort(key=lambda x: x[1], reverse=True)  # most stale first
-            fetch_set = set(s for s, _ in staleness[:max_network_fetches])
-            for s in syms:
-                per_sym_ttl[s] = int(max_age_ms) if s in fetch_set else CACHE_ONLY_TTL
-        else:
-            for s in syms:
-                per_sym_ttl[s] = int(max_age_ms) if max_age_ms is not None else 0
-
-        # Identify symbols with CACHE_ONLY_TTL that have never been fetched.
-        # get_candles treats last_refresh_ms==0 as "needs refresh" regardless of
-        # TTL, which would bypass the budget.  Skip them entirely; they will be
-        # picked up by the staleness-first rotation in subsequent cycles.
-        cache_only_never_fetched: set = set()
-        for s in syms:
-            if per_sym_ttl.get(s) == CACHE_ONLY_TTL:
-                try:
-                    if self.cm.get_last_refresh_ms(s) == 0:
-                        cache_only_never_fetched.add(s)
-                except Exception:
-                    cache_only_never_fetched.add(s)
+        per_sym_ttl, cache_only_never_fetched = self._compute_fetch_budget_ttls(
+            syms, max_age_ms, max_network_fetches
+        )
 
         async def one(symbol: str):
             try:
@@ -4768,7 +4779,7 @@ class Passivbot:
                 # Call allMids directly – much cheaper than fetch_tickers which tries
                 # to map ALL coins (including unmapped HIP-3 @NNN IDs → warning spam).
                 fetched = await self.cca.fetch(
-                    "https://api.hyperliquid.xyz/info",
+                    self._hl_info_url(),
                     method="POST",
                     headers={"Content-Type": "application/json"},
                     body=json.dumps({"type": "allMids"}),
@@ -5770,17 +5781,7 @@ class Passivbot:
             max_warmup_minutes = 0
         span_buffer = 1.0 + max(0.0, warmup_ratio)
 
-        # Delay between individual candle fetches to spread API load across time.
-        # Uses the same warmup_fetch_delay_ms config; defaults to 200ms for Hyperliquid.
-        fetch_delay_ms = get_optional_live_value(self.config, "warmup_fetch_delay_ms", None)
-        try:
-            fetch_delay_ms = float(fetch_delay_ms) if fetch_delay_ms is not None else None
-        except Exception:
-            fetch_delay_ms = None
-        if fetch_delay_ms is None:
-            exchange_lower = self.exchange.lower() if self.exchange else ""
-            fetch_delay_ms = 200.0 if exchange_lower == "hyperliquid" else 0.0
-        fetch_delay_s = max(0.0, float(fetch_delay_ms) / 1000.0)
+        fetch_delay_s = self._get_fetch_delay_seconds()
 
         for sym in to_refresh:
             try:
@@ -5830,9 +5831,9 @@ class Passivbot:
                 logging.error("error refreshing forager candles for %s: %s", sym, exc, exc_info=True)
 
     async def update_ohlcvs_1m_for_actives(self):
-        """Ensure active symbols have fresh 1m candles in CandlestickManager (<=10s old).
+        """Ensure active symbols have fresh 1m candles in CandlestickManager (<=60s old).
 
-        Uses CandlestickManager.get_candles with max_age_ms=10_000 so it refreshes
+        Uses CandlestickManager.get_candles with max_age_ms=60_000 so it refreshes
         only when its internal last refresh is older than the TTL. Fetches a small
         recent window ending at the latest finalized minute.
         """
@@ -5849,16 +5850,7 @@ class Passivbot:
                 window = 120
             start_ts = end_ts - ONE_MIN_MS * window
 
-            # Per-fetch delay to spread API load (same config as warmup/forager refresh).
-            fetch_delay_ms = get_optional_live_value(self.config, "warmup_fetch_delay_ms", None)
-            try:
-                fetch_delay_ms = float(fetch_delay_ms) if fetch_delay_ms is not None else None
-            except Exception:
-                fetch_delay_ms = None
-            if fetch_delay_ms is None:
-                exchange_lower = self.exchange.lower() if self.exchange else ""
-                fetch_delay_ms = 200.0 if exchange_lower == "hyperliquid" else 0.0
-            fetch_delay_s = max(0.0, float(fetch_delay_ms) / 1000.0)
+            fetch_delay_s = self._get_fetch_delay_seconds()
 
             symbols = sorted(set(self.active_symbols))
             # Prioritize symbols with open positions (need fresh candles for
@@ -5877,12 +5869,12 @@ class Passivbot:
             )
             for sym in ordered_symbols:
                 # If a 429 triggered a global backoff in the CandlestickManager,
-                # skip this symbol; CandlestickManager.get_candles would wait for
-                # the backoff anyway but there's no point spending the delay budget
-                # here.  Cached symbols still get through on next cycle; the
+                # stop the loop early; remaining symbols would all hit the same
+                # backoff.  They will be picked up on the next cycle; the
                 # position-first + shuffle ordering prevents systematic starvation.
                 if self.cm.is_rate_limited():
-                    continue
+                    logging.debug("[candle] active refresh breaking early: rate limit backoff active")
+                    break
                 try:
                     await self.cm.get_candles(
                         sym,
@@ -6004,38 +5996,9 @@ class Passivbot:
 
         syms = list(eligible_symbols)
 
-        # Determine per-symbol TTL with optional fetch budget.
-        CACHE_ONLY_TTL = 365 * 24 * 3600 * 1000  # ~1 year – effectively cache-only
-        per_sym_ttl: Dict[str, int] = {}
-        if max_network_fetches is not None and max_network_fetches >= 0 and max_age_ms is not None:
-            now = utc_ms()
-            staleness = []
-            for s in syms:
-                try:
-                    last_ref = self.cm.get_last_refresh_ms(s)
-                except Exception:
-                    last_ref = 0
-                staleness.append((s, int(now - last_ref) if last_ref > 0 else now))
-            staleness.sort(key=lambda x: x[1], reverse=True)
-            fetch_set = set(s for s, _ in staleness[:max_network_fetches])
-            for s in syms:
-                per_sym_ttl[s] = int(max_age_ms) if s in fetch_set else CACHE_ONLY_TTL
-        else:
-            for s in syms:
-                per_sym_ttl[s] = int(max_age_ms) if max_age_ms is not None else 0
-
-        # Guard: skip symbols with CACHE_ONLY_TTL that have never been fetched.
-        # get_candles treats last_refresh_ms==0 as "needs refresh" regardless
-        # of TTL, which would bypass the budget.  They will be fetched by the
-        # staleness-first rotation in subsequent cycles.
-        cache_only_never_fetched: set = set()
-        for s in syms:
-            if per_sym_ttl.get(s) == CACHE_ONLY_TTL:
-                try:
-                    if self.cm.get_last_refresh_ms(s) == 0:
-                        cache_only_never_fetched.add(s)
-                except Exception:
-                    cache_only_never_fetched.add(s)
+        per_sym_ttl, cache_only_never_fetched = self._compute_fetch_budget_ttls(
+            syms, max_age_ms, max_network_fetches
+        )
 
         # Compute EMA of log range on 1m candles: ln(high/low)
         async def one(symbol: str):
