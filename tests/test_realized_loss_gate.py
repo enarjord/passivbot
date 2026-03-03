@@ -258,13 +258,105 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
         config = self._make_config()
         _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["max_realized_loss_pct"] == pytest.approx(1.0)
+        assert bp["pnls_max_lookback_days"] == pytest.approx(30.0)
 
     def test_explicit_value_passthrough(self):
         config = self._make_config(max_realized_loss_pct=0.05)
+        config["live"]["pnls_max_lookback_days"] = 14
         _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["max_realized_loss_pct"] == pytest.approx(0.05)
+        assert bp["pnls_max_lookback_days"] == pytest.approx(14.0)
 
     def test_zero_disables_lossy_closes(self):
         config = self._make_config(max_realized_loss_pct=0.0)
         _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["max_realized_loss_pct"] == pytest.approx(0.0)
+
+
+class TestPrepBacktestArgsEquityHardStopLoss:
+    def _make_config(self, hard_stop_block=None):
+        config = {
+            "backtest": {
+                "coins": {"binance": ["BTC"]},
+                "starting_balance": 10000,
+                "btc_collateral_cap": 0.5,
+                "btc_collateral_ltv_cap": None,
+                "filter_by_min_effective_cost": False,
+            },
+            "bot": {
+                "long": {
+                    "n_positions": 1,
+                    "total_wallet_exposure_limit": 1.0,
+                    "wallet_exposure_limit": 0.5,
+                },
+                "short": {
+                    "n_positions": 1,
+                    "total_wallet_exposure_limit": 0.0,
+                    "wallet_exposure_limit": 0.0,
+                },
+            },
+            "live": {
+                "hedge_mode": True,
+            },
+            "coin_overrides": {},
+        }
+        if hard_stop_block is not None:
+            config["live"]["equity_hard_stop_loss"] = hard_stop_block
+        return config
+
+    def _make_mss(self):
+        return {
+            "BTC": {
+                "qty_step": 0.001,
+                "price_step": 0.01,
+                "min_qty": 0.001,
+                "min_cost": 10.0,
+                "c_mult": 1.0,
+                "maker": 0.0002,
+            }
+        }
+
+    def test_defaults_passthrough(self):
+        config = self._make_config()
+        _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
+        hs = bp["equity_hard_stop_loss"]
+        assert hs["enabled"] is False
+        assert hs["threshold"] == pytest.approx(0.25)
+        assert hs["ema_span_minutes"] == pytest.approx(60.0)
+        assert hs["tier_ratios"]["yellow"] == pytest.approx(0.5)
+        assert hs["tier_ratios"]["orange"] == pytest.approx(0.75)
+        assert hs["orange_tier_mode"] == "tp_only_with_active_entry_cancellation"
+        assert hs["panic_close_order_type"] == "market"
+
+    def test_custom_passthrough(self):
+        config = self._make_config(
+            {
+                "enabled": True,
+                "threshold": 0.3,
+                "ema_span_minutes": 45.0,
+                "tier_ratios": {"yellow": 0.55, "orange": 0.8},
+                "orange_tier_mode": "graceful_stop",
+                "panic_close_order_type": "limit_panic",
+            }
+        )
+        _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
+        hs = bp["equity_hard_stop_loss"]
+        assert hs["enabled"] is True
+        assert hs["threshold"] == pytest.approx(0.3)
+        assert hs["ema_span_minutes"] == pytest.approx(45.0)
+        assert hs["tier_ratios"]["yellow"] == pytest.approx(0.55)
+        assert hs["tier_ratios"]["orange"] == pytest.approx(0.8)
+        assert hs["orange_tier_mode"] == "graceful_stop"
+        assert hs["panic_close_order_type"] == "limit_panic"
+
+    def test_invalid_tier_ratios_raise(self):
+        config = self._make_config(
+            {
+                "enabled": True,
+                "threshold": 0.3,
+                "ema_span_minutes": 30.0,
+                "tier_ratios": {"yellow": 0.9, "orange": 0.8},
+            }
+        )
+        with pytest.raises(ValueError, match="tier_ratios"):
+            prep_backtest_args(config, self._make_mss(), "binance")

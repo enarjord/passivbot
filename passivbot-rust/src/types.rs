@@ -154,6 +154,44 @@ impl Default for ExchangeParams {
 }
 
 #[derive(Clone, Debug)]
+pub struct EquityHardStopLossTierRatios {
+    pub yellow: f64,
+    pub orange: f64,
+}
+
+impl Default for EquityHardStopLossTierRatios {
+    fn default() -> Self {
+        Self {
+            yellow: 0.5,
+            orange: 0.75,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EquityHardStopLossConfig {
+    pub enabled: bool,
+    pub threshold: f64,
+    pub ema_span_minutes: f64,
+    pub tier_ratios: EquityHardStopLossTierRatios,
+    pub orange_tier_mode: String,
+    pub panic_close_order_type: String,
+}
+
+impl Default for EquityHardStopLossConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold: 0.25,
+            ema_span_minutes: 60.0,
+            tier_ratios: EquityHardStopLossTierRatios::default(),
+            orange_tier_mode: "tp_only_with_active_entry_cancellation".to_string(),
+            panic_close_order_type: "market".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct BacktestParams {
     pub starting_balance: f64,
     pub maker_fee: f64,
@@ -172,6 +210,8 @@ pub struct BacktestParams {
     pub filter_by_min_effective_cost: bool,
     pub hedge_mode: bool,
     pub max_realized_loss_pct: f64,
+    pub pnls_max_lookback_days: f64,
+    pub equity_hard_stop_loss: EquityHardStopLossConfig,
     pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
 }
 

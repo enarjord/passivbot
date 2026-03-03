@@ -2205,6 +2205,17 @@ def get_template_config():
             "max_n_restarts_per_day": 10,
             "max_ohlcv_fetches_per_minute": 30,
             "max_realized_loss_pct": 1.0,
+            "equity_hard_stop_loss": {
+                "enabled": False,
+                "threshold": 0.25,
+                "ema_span_minutes": 60.0,
+                "tier_ratios": {
+                    "yellow": 0.5,
+                    "orange": 0.75,
+                },
+                "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                "panic_close_order_type": "market",
+            },
             "max_warmup_minutes": 0.0,
             "minimum_coin_age_days": 7.0,
             "order_match_tolerance_pct": 0.0002,
