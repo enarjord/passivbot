@@ -4,6 +4,7 @@ mod closes;
 mod coin_selection;
 mod constants;
 mod entries;
+mod equity_hard_stop_loss;
 mod orchestrator;
 mod python;
 mod risk;
@@ -21,6 +22,8 @@ use utils::*;
 #[pymodule]
 fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<HlcvsBundlePy>()?;
+    m.add_class::<EquityHardStopRollingPeakPy>()?;
+    m.add_class::<EquityHardStopRuntimePy>()?;
     m.add_function(wrap_pyfunction!(round_, m)?)?;
     m.add_function(wrap_pyfunction!(round_up, m)?)?;
     m.add_function(wrap_pyfunction!(round_dn, m)?)?;
@@ -61,6 +64,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_unstucking_close_py, m)?)?;
     m.add_function(wrap_pyfunction!(trailing_bundle_default_py, m)?)?;
     m.add_function(wrap_pyfunction!(update_trailing_bundle_py, m)?)?;
+    m.add_function(wrap_pyfunction!(equity_hard_stop_step_py, m)?)?;
     m.add_function(wrap_pyfunction!(select_coin_indices_py, m)?)?;
 
     Ok(())
