@@ -6,6 +6,18 @@
 2. Preserve source data needed for realized PnL reconstruction.
 3. Keep fetch behavior explicit and observable during investigations.
 
+## Exchange Endpoint Map (Quick Lookup)
+
+| Exchange | Primary Fills Source | PnL/Close Source |
+|----------|----------------------|------------------|
+| Binance | `fetch_my_trades` | income history |
+| Bybit | `fetch_my_trades` | closed-pnl (hybrid pagination) |
+| Bitget | `fetch_my_trades` | embedded in trade payload |
+| Hyperliquid | fill events | embedded |
+| OKX | `fetch_my_trades` | positions history |
+| KuCoin | trades + positions history | positions history |
+| Gate.io | `fetch_my_trades` | embedded |
+
 ## Non-Obvious Details
 
 1. Exchanges split fill/PnL data across different endpoints.

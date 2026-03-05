@@ -12,6 +12,16 @@ Read these files for every task:
 
 Then use `docs/ai/README.md` to load task-specific docs only when relevant.
 
+## Quick Start
+
+```bash
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cd passivbot-rust && maturin develop --release && cd ..
+pytest
+python3 src/main.py -u {account_name}
+```
+
 ## Non-Negotiables
 
 1. Rust is source of truth for order behavior.
@@ -20,7 +30,8 @@ Then use `docs/ai/README.md` to load task-specific docs only when relevant.
 - Bot behavior must be reproducible after restart from exchange state + config.
 3. Fail loudly in trading-critical paths.
 - Default is hard-fail for exchange data, EMA inputs, risk gates, and order construction.
-- Fallbacks are exceptions, not defaults, and must follow `docs/ai/error_contract.md`.
+- Fallbacks are exceptions, not defaults.
+- See `docs/ai/error_contract.md` for the full fallback matrix.
 4. Keep terminology and signed-qty conventions exact.
 - `position_side` = long/short.
 - `side` / `order_side` = buy/sell.
@@ -34,14 +45,22 @@ Then use `docs/ai/README.md` to load task-specific docs only when relevant.
 
 1. Read `docs/ai/README.md` and open only docs relevant to the task.
 2. If touching exchange code, read `docs/ai/exchange_api_quirks.md`.
-3. If touching a documented feature, read the corresponding file in `docs/ai/features/`.
-4. Run a silent-handling self-audit for touched areas:
+3. If touching Rust/PyO3 packaging or tests, read `docs/ai/build_pitfalls.md`.
+4. If touching a documented feature, read the corresponding file in `docs/ai/features/`.
+5. Check branch context before broad edits:
+
+```bash
+git branch --show-current
+git log --oneline -n 10
+```
+
+6. Run a silent-handling self-audit for touched areas:
 
 ```bash
 rg -n "except Exception|return_exceptions=True|\.get\([^\n]*,\s*(0|0\.0|None|False|\{\}|\[\])\)" src tests
 ```
 
-5. Remove unsafe patterns or document explicit, approved fallback behavior with tests.
+7. Remove unsafe patterns or document explicit, approved fallback behavior with tests.
 
 ## Testing Expectations
 

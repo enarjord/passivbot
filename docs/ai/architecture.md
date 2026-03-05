@@ -4,6 +4,18 @@
 
 Passivbot is split between Python orchestration and Rust trading logic.
 
+## High-Level Map
+
+```
+Python (src/)                          Rust (passivbot-rust/src/)
+├── passivbot.py (live loop)    ────►  ├── orchestrator.rs (order calc)
+├── backtest.py (coordinator)   ────►  ├── backtest.rs (simulation)
+├── optimize.py (optimizer)     ────►  └── analysis.rs (metrics)
+├── candlestick_manager.py (OHLCV)
+├── fill_events_manager.py (fills/PnL)
+└── exchanges/ (API wrappers)
+```
+
 ## Source-of-Truth Boundary
 
 1. Rust (`passivbot-rust/src/`) owns order behavior.

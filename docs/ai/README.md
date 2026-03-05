@@ -13,6 +13,7 @@ Use this file to decide what to read for a task.
 | Task | Read |
 |------|------|
 | Exchange/API integration, pagination, data fetch | `exchange_api_quirks.md` |
+| Rust/PyO3 build, extension loading, Rust test execution | `build_pitfalls.md` |
 | Logging behavior/levels/tags | `logging_guide.md` |
 | Order logic, risk, Python/Rust boundary | `architecture.md`, `decisions.md` |
 | Code review | `code_review_prompt.md` |

@@ -17,6 +17,10 @@ passivbot_agent_principles:
   indicators:
     - EMA spans are floats; do not round derived spans.
 
+  order_constraints:
+    - Entries must observe effective min qty.
+    - Closes should observe effective min cost; exception: if pos size is below effective min qty, close qty may equal pos size.
+
   config_hierarchy:
     rule: Parameters shared by live + backtest belong in config.live.
     sections:

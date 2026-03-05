@@ -18,6 +18,24 @@ Avoid:
 
 Do: follow `error_contract.md` and hard-fail by default.
 
+Example:
+
+```python
+# WRONG
+results = await asyncio.gather(*tasks, return_exceptions=True)
+for span, res in zip(spans, results):
+    if isinstance(res, Exception):
+        continue
+    out[span] = float(res)
+
+# CORRECT
+results = await asyncio.gather(*tasks, return_exceptions=True)
+for span, res in zip(spans, results):
+    if isinstance(res, Exception):
+        raise RuntimeError(f"missing required EMA {symbol} span={span}: {res}") from res
+    out[span] = float(res)
+```
+
 ## 3) Catching Exceptions In Exchange Fetch Methods
 
 Avoid: catching in `fetch_balance`, `fetch_positions`, `fetch_open_orders`, etc.
@@ -39,11 +57,31 @@ Avoid: treating `qty` and `pos_size` as unsigned internally.
 
 Do: keep signed convention; use `abs(qty)` only when exchange payload requires it.
 
+Example:
+
+```python
+# WRONG
+new_exposure = abs(position_size) + abs(entry_qty)
+
+# CORRECT
+new_exposure = position_size + entry_qty
+```
+
 ## 6) Rounded EMA Span Derivations
 
 Avoid: `int(sqrt(span0 * span1))`.
 
 Do: keep EMA spans as float throughout calculations.
+
+Example:
+
+```python
+# WRONG
+span2 = int(sqrt(span0 * span1))
+
+# CORRECT
+span2 = sqrt(span0 * span1)
+```
 
 ## 7) Restart-Dependent Runtime State
 
@@ -68,6 +106,12 @@ Do: read `exchange_api_quirks.md` and use overlap/cursor strategy where needed.
 Avoid: routing HIP-3 stock perps to non-Hyperliquid exchanges.
 
 Do: keep stock perp routing constrained to Hyperliquid.
+
+## 11) Rust/PyO3 Build Confusion
+
+Avoid: debugging behavior before validating which extension binary is loaded.
+
+Do: read `build_pitfalls.md` and verify module path + rebuild status first.
 
 ## Pre-PR Safety Scan
 
