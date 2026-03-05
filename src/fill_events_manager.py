@@ -615,6 +615,35 @@ def _extract_source_ids(raw: object, fallback_id: Optional[object]) -> List[str]
     return sorted(ids)
 
 
+def _bybit_trade_dedupe_key(trade: Dict[str, object]) -> Optional[Tuple[object, ...]]:
+    """Build a stable dedupe key for Bybit fetch_my_trades rows."""
+    info = trade.get("info")
+    info = info if isinstance(info, dict) else {}
+    exec_id = trade.get("id") or info.get("execId")
+    if exec_id:
+        return ("exec_id", str(exec_id))
+    # Fallback for malformed rows missing exec id.
+    timestamp = int(trade.get("timestamp") or info.get("execTime") or 0)
+    side = str(trade.get("side") or info.get("side") or "").lower()
+    order_id = str(trade.get("order") or info.get("orderId") or "")
+    amount = float(trade.get("amount") or info.get("execQty") or 0.0)
+    price = float(trade.get("price") or info.get("execPrice") or 0.0)
+    symbol = str(trade.get("symbol") or info.get("symbol") or "")
+    if timestamp <= 0 or not side or not order_id or amount <= 0.0 or price <= 0.0:
+        return None
+    return ("fallback", timestamp, symbol, order_id, side, amount, price)
+
+
+def _bybit_trade_signed_qty(trade: Dict[str, object]) -> float:
+    info = trade.get("info")
+    info = info if isinstance(info, dict) else {}
+    qty = float(trade.get("amount") or info.get("execQty") or 0.0)
+    side = str(trade.get("side") or info.get("side") or "").lower()
+    if side == "sell":
+        return -abs(qty)
+    return abs(qty)
+
+
 @dataclass(frozen=True)
 class FillEvent:
     """Canonical representation of a single fill event."""
@@ -1872,6 +1901,102 @@ class FillEventsManager:
             )
             self._loaded = True
 
+    @staticmethod
+    def _scan_bybit_qty_inflation(events: Sequence[FillEvent]) -> List[Dict[str, object]]:
+        anomalies: List[Dict[str, object]] = []
+        tolerance = 1e-12
+        for event in events:
+            raw_items = _normalize_raw_field(getattr(event, "raw", None))
+            trade_rows = []
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("source") != "fetch_my_trades":
+                    continue
+                data = item.get("data")
+                if isinstance(data, dict):
+                    trade_rows.append(data)
+            if not trade_rows:
+                continue
+
+            unique_signed_qty_sum = 0.0
+            seen_keys: set[Tuple[object, ...]] = set()
+            duplicate_rows = 0
+            for row in trade_rows:
+                key = _bybit_trade_dedupe_key(row)
+                if key is not None and key in seen_keys:
+                    duplicate_rows += 1
+                    continue
+                if key is not None:
+                    seen_keys.add(key)
+                unique_signed_qty_sum += _bybit_trade_signed_qty(row)
+
+            if duplicate_rows <= 0:
+                continue
+            if abs(float(event.qty) - unique_signed_qty_sum) <= tolerance:
+                continue
+
+            anomalies.append(
+                {
+                    "event_id": event.id,
+                    "timestamp": int(event.timestamp),
+                    "symbol": event.symbol,
+                    "event_qty": float(event.qty),
+                    "expected_qty": float(unique_signed_qty_sum),
+                    "trade_rows": len(trade_rows),
+                    "duplicate_rows": duplicate_rows,
+                }
+            )
+        return anomalies
+
+    async def run_doctor(
+        self,
+        *,
+        auto_repair: bool = False,
+        repair_start_ms: Optional[int] = None,
+    ) -> Dict[str, object]:
+        """Detect and optionally repair known fill-event cache anomalies."""
+        await self.ensure_loaded()
+        report: Dict[str, object] = {
+            "exchange": self.exchange,
+            "user": self.user,
+            "events_scanned": len(self._events),
+            "anomaly_events": 0,
+            "anomaly_examples": [],
+            "auto_repair": bool(auto_repair),
+            "repaired": False,
+        }
+        if self.exchange.lower() != "bybit":
+            return report
+
+        anomalies = self._scan_bybit_qty_inflation(self._events)
+        report["anomaly_events"] = len(anomalies)
+        report["anomaly_examples"] = anomalies[:5]
+        if not anomalies or not auto_repair:
+            return report
+
+        earliest = min(int(item["timestamp"]) for item in anomalies)
+        if repair_start_ms is None:
+            repair_start_ms = max(0, earliest - 24 * 60 * 60 * 1000)
+
+        logger.warning(
+            "[fills-doctor] detected %d Bybit qty-inflated events; rebuilding cache from %s",
+            len(anomalies),
+            _format_ms(repair_start_ms),
+        )
+        await self.refresh(start_ms=repair_start_ms, end_ms=None)
+
+        remaining = self._scan_bybit_qty_inflation(self._events)
+        report["anomaly_events_after"] = len(remaining)
+        report["repaired"] = len(remaining) == 0
+        report["anomaly_examples_after"] = remaining[:5]
+        if remaining:
+            raise RuntimeError(
+                f"fill-events doctor repair incomplete: {len(remaining)} Bybit anomaly events remain"
+            )
+        logger.info("[fills-doctor] repair complete; no remaining Bybit qty anomalies")
+        return report
+
     async def refresh(
         self,
         *,
@@ -1889,6 +2014,10 @@ class FillEventsManager:
             ev.id: (ev.client_order_id, ev.pb_order_type) for ev in self._events if ev.client_order_id
         }
         updated_map: Dict[str, FillEvent] = {ev.id: ev for ev in self._events}
+        source_ids_index: Dict[Tuple[str, ...], str] = {}
+        for ev in self._events:
+            if ev.source_ids:
+                source_ids_index[tuple(ev.source_ids)] = ev.id
         added_ids: set[str] = set()
         all_days_persisted: set[str] = set()
 
@@ -1906,11 +2035,19 @@ class FillEventsManager:
                         exc,
                     )
                     continue
+                replaced: Optional[FillEvent] = None
+                source_key = tuple(event.source_ids) if event.source_ids else tuple()
+                if source_key and source_key in source_ids_index:
+                    previous_id = source_ids_index[source_key]
+                    if previous_id != event.id:
+                        replaced = updated_map.pop(previous_id, None)
                 prev = updated_map.get(event.id)
                 if prev is not None and event.timestamp < prev.timestamp:
                     continue
                 updated_map[event.id] = event
-                if prev is None:
+                if source_key:
+                    source_ids_index[source_key] = event.id
+                if prev is None and replaced is None:
                     added_ids.add(event.id)
                 day = _day_key(event.timestamp)
                 days_touched.add(day)
@@ -2307,7 +2444,25 @@ class BybitFetcher(BaseFetcher):
             results,
             key=lambda x: int(x.get("info", {}).get("updatedTime") or x.get("timestamp") or 0),
         )
-        return ordered
+        deduped: List[Dict[str, object]] = []
+        seen_keys: set[Tuple[object, ...]] = set()
+        dropped = 0
+        for trade in ordered:
+            key = _bybit_trade_dedupe_key(trade)
+            if key is None:
+                deduped.append(trade)
+                continue
+            if key in seen_keys:
+                dropped += 1
+                continue
+            seen_keys.add(key)
+            deduped.append(trade)
+        if dropped:
+            logger.info(
+                "BybitFetcher._fetch_my_trades: dropped %d duplicate fill rows before canonicalization",
+                dropped,
+            )
+        return deduped
 
     async def _fetch_positions_history(self, start_ms: int, end_ms: int) -> List[Dict[str, object]]:
         """Fetch closed-pnl records using Bybit's raw API with hybrid pagination.

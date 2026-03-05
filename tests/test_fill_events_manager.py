@@ -1584,6 +1584,183 @@ async def test_bybit_fetcher_fees_captured():
 
 
 @pytest.mark.asyncio
+async def test_bybit_fetcher_deduplicates_duplicate_exec_ids_before_coalescing():
+    """Duplicate pages must not inflate canonical qty for the same execId."""
+    base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+    duplicated_trade = {
+        "id": "exec-dup",
+        "timestamp": base_ts,
+        "amount": 0.06,
+        "price": 346.47,
+        "side": "sell",
+        "symbol": "XMR/USDT:USDT",
+        "info": {
+            "orderId": "order-dup",
+            "orderLinkId": "0x0018004f2efba1b246dfb30ed39e7060eb",
+            "closedSize": "0.06",
+            "execQty": "0.06",
+            "orderQty": "13.26",
+        },
+    }
+
+    # Simulate Bybit pagination returning the same fill in two pages.
+    api = _FakeBybitAPI(
+        trades_batches=[[dict(duplicated_trade)], [dict(duplicated_trade)], []],
+        positions_batches=[[]],
+    )
+    fetcher = BybitFetcher(api, trade_limit=1)
+
+    events = await fetcher.fetch(
+        since_ms=base_ts - 1_000,
+        until_ms=base_ts + 1_000,
+        detail_cache={},
+    )
+
+    assert len(events) == 1
+    event = events[0]
+
+    raw_trades = [r["data"] for r in event["raw"] if r.get("source") == "fetch_my_trades"]
+    unique_exec_qtys: Dict[str, float] = {}
+    for raw in raw_trades:
+        info = raw.get("info")
+        info = info if isinstance(info, dict) else {}
+        exec_id = str(raw.get("id") or info.get("execId") or "")
+        if exec_id and exec_id not in unique_exec_qtys:
+            amount = raw.get("amount")
+            exec_qty = info.get("execQty")
+            unique_exec_qtys[exec_id] = float(amount or exec_qty or 0.0)
+
+    expected_unique_qty = sum(unique_exec_qtys.values())
+    assert expected_unique_qty == pytest.approx(0.06)
+    assert event["qty"] == pytest.approx(expected_unique_qty)
+
+
+@pytest.mark.asyncio
+async def test_fill_events_manager_bybit_doctor_detects_qty_inflation(tmp_path: Path):
+    cache_path = tmp_path / "fills_doctor_detect"
+    raw_trade = {
+        "id": "exec-dup",
+        "timestamp": 1_770_000_000_000,
+        "amount": 0.06,
+        "price": 346.47,
+        "side": "sell",
+        "symbol": "XMR/USDT:USDT",
+        "info": {
+            "execId": "exec-dup",
+            "orderId": "order-dup",
+            "execQty": "0.06",
+        },
+    }
+    malformed = FillEvent.from_dict(
+        {
+            "id": "exec-dup+exec-dup",
+            "source_ids": ["exec-dup"],
+            "timestamp": 1_770_000_000_000,
+            "datetime": "2026-02-28T00:00:00",
+            "symbol": "XMR/USDT:USDT",
+            "side": "sell",
+            "qty": -0.12,
+            "price": 346.47,
+            "pnl": 0.0,
+            "fees": None,
+            "pb_order_type": "close_auto_reduce_wel_long",
+            "position_side": "long",
+            "client_order_id": "0xabc",
+            "raw": [
+                {"source": "fetch_my_trades", "data": dict(raw_trade)},
+                {"source": "fetch_my_trades", "data": dict(raw_trade)},
+            ],
+        }
+    )
+    FillEventCache(cache_path).save([malformed])
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="u",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_path,
+    )
+    await manager.ensure_loaded()
+
+    report = await manager.run_doctor(auto_repair=False)
+    assert report["anomaly_events"] == 1
+    assert report["repaired"] is False
+
+
+@pytest.mark.asyncio
+async def test_fill_events_manager_bybit_doctor_auto_repairs_with_refresh(tmp_path: Path):
+    cache_path = tmp_path / "fills_doctor_repair"
+    raw_trade = {
+        "id": "exec-dup",
+        "timestamp": 1_770_000_000_000,
+        "amount": 0.06,
+        "price": 346.47,
+        "side": "sell",
+        "symbol": "XMR/USDT:USDT",
+        "info": {
+            "execId": "exec-dup",
+            "orderId": "order-dup",
+            "execQty": "0.06",
+        },
+    }
+    malformed = FillEvent.from_dict(
+        {
+            "id": "exec-dup+exec-dup",
+            "source_ids": ["exec-dup"],
+            "timestamp": 1_770_000_000_000,
+            "datetime": "2026-02-28T00:00:00",
+            "symbol": "XMR/USDT:USDT",
+            "side": "sell",
+            "qty": -0.12,
+            "price": 346.47,
+            "pnl": 0.0,
+            "fees": None,
+            "pb_order_type": "close_auto_reduce_wel_long",
+            "position_side": "long",
+            "client_order_id": "0xabc",
+            "raw": [
+                {"source": "fetch_my_trades", "data": dict(raw_trade)},
+                {"source": "fetch_my_trades", "data": dict(raw_trade)},
+            ],
+        }
+    )
+    FillEventCache(cache_path).save([malformed])
+
+    repaired_event = {
+        "id": "exec-dup",
+        "source_ids": ["exec-dup"],
+        "timestamp": 1_770_000_000_000,
+        "datetime": "2026-02-28T00:00:00",
+        "symbol": "XMR/USDT:USDT",
+        "side": "sell",
+        "qty": -0.06,
+        "price": 346.47,
+        "pnl": 0.0,
+        "fees": None,
+        "pb_order_type": "close_auto_reduce_wel_long",
+        "position_side": "long",
+        "client_order_id": "0xabc",
+        "raw": [{"source": "fetch_my_trades", "data": dict(raw_trade)}],
+    }
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="u",
+        fetcher=_StaticFetcher([repaired_event]),
+        cache_path=cache_path,
+    )
+    await manager.ensure_loaded()
+
+    report = await manager.run_doctor(auto_repair=True, repair_start_ms=1_769_999_000_000)
+    assert report["repaired"] is True
+    assert report["anomaly_events_after"] == 0
+
+    events = manager.get_events()
+    assert len(events) == 1
+    assert events[0].id == "exec-dup"
+    assert events[0].qty == pytest.approx(-0.06)
+
+
+@pytest.mark.asyncio
 async def test_hyperliquid_fetcher_basic(monkeypatch):
     base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
     trades_batches = [

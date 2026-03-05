@@ -3324,6 +3324,17 @@ class Passivbot:
             # Load cached events
             await self._pnls_manager.ensure_loaded()
 
+            doctor_mode = str(os.getenv("PASSIVBOT_FILL_EVENTS_DOCTOR", "")).strip().lower()
+            if doctor_mode:
+                auto_repair = doctor_mode in ("1", "true", "yes", "repair", "fix", "auto")
+                report = await self._pnls_manager.run_doctor(auto_repair=auto_repair)
+                logging.info(
+                    "[fills-doctor] startup report anomalies=%s repaired=%s mode=%s",
+                    report.get("anomaly_events", 0),
+                    report.get("repaired", False),
+                    doctor_mode,
+                )
+
             cached_count = len(self._pnls_manager._events)
             logging.info("[fills] initialized: %d cached events loaded", cached_count)
 
