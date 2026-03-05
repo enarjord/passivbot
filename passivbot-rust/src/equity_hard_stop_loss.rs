@@ -208,9 +208,9 @@ pub fn step_with_equity_peak(
     state.equity_peak = equity_peak;
     let drawdown_raw = (1.0 - (equity / state.equity_peak.max(f64::EPSILON))).max(0.0);
     state.drawdown_ema = alpha * drawdown_raw + (1.0 - alpha) * state.drawdown_ema;
-    // Effective trigger metric: EMA of raw drawdown.
-    // Keep "drawdown_score" naming for API compatibility.
-    let drawdown_score = state.drawdown_ema;
+    // Effective trigger metric: min(raw, EMA).
+    // Prevents false RED after recovery (stale EMA) and flash-crash bottom exits (raw spike).
+    let drawdown_score = drawdown_raw.min(state.drawdown_ema);
 
     let threshold_yellow = config.tier_ratios.yellow * config.threshold;
     let threshold_orange = config.tier_ratios.orange * config.threshold;
@@ -292,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn score_equals_drawdown_ema_metric() {
+    fn score_equals_min_raw_ema() {
         let mut state = HardStopState::default();
         let config = HardStopConfig {
             threshold: 0.2,
@@ -301,7 +301,27 @@ mod tests {
         };
         let _ = step(&mut state, config, 100.0, 1.0).unwrap();
         let s = step(&mut state, config, 90.0, 1.0).unwrap();
-        assert!((s.drawdown_score - s.drawdown_ema).abs() < 1e-12);
+        let expected = s.drawdown_raw.min(s.drawdown_ema);
+        assert!((s.drawdown_score - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn score_uses_raw_when_ema_is_stale_after_recovery() {
+        let mut state = HardStopState::default();
+        // Use 1-sample EMA so EMA tracks raw closely on drawdown
+        let config = HardStopConfig {
+            threshold: 0.5,
+            ema_span_minutes: 60.0,
+            tier_ratios: HardStopTierRatios::default(),
+        };
+        let _ = step(&mut state, config, 100.0, 1.0).unwrap();
+        // Large drawdown to push EMA up
+        let _ = step(&mut state, config, 80.0, 1.0).unwrap();
+        let _ = step(&mut state, config, 80.0, 1.0).unwrap();
+        // Now recover — raw goes to 0 but EMA is still elevated
+        let s = step(&mut state, config, 100.0, 1.0).unwrap();
+        assert!(s.drawdown_raw < s.drawdown_ema, "raw should be lower after recovery");
+        assert!((s.drawdown_score - s.drawdown_raw).abs() < 1e-12, "score should follow raw (min)");
     }
 
     #[test]

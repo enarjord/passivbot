@@ -288,6 +288,19 @@
         "candle_lock_timeout_seconds": 10,
         "empty_means_all_approved": true,
         "enable_archive_candle_fetch": false,
+        "equity_hard_stop_loss": {
+            "enabled": false,
+            "threshold": 0.25,
+            "ema_span_minutes": 60.0,
+            "cooldown_minutes_after_red": 0.0,
+            "no_restart_threshold": 1.0,
+            "tier_ratios": {
+                "yellow": 0.5,
+                "orange": 0.75
+            },
+            "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+            "panic_close_order_type": "market"
+        },
         "execution_delay_seconds": 2,
         "filter_by_min_effective_cost": true,
         "forced_mode_long": "",
