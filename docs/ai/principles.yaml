@@ -1,87 +1,44 @@
 passivbot_agent_principles:
-  general_ethos:
-    - Strive for simplicity, elegance, and clarity over complexity or cleverness.
-    - Write code that is modular, testable, and reusable.
-    - Ask clarifying questions before acting when a task is ambiguous.
+  architecture:
+    - Rust is the source of truth for order logic, risk, unstuck, and backtesting behavior.
+    - Backtester and live bot must use equivalent Rust behavior.
+    - Python is orchestration, exchange I/O, config, and data plumbing.
 
-  code_design:
-    - Prefer pure functions with no side effects.
-    - Favor statelessness; components must behave identically after restart or redeploy.
-    - Use small, composable modules instead of large procedural blocks.
-    - Avoid caching state locally unless it only optimizes performance and never changes behavior.
+  statelessness:
+    - Trading behavior must be reproducible after restart from exchange state + config.
+    - Do not add local state that changes behavior and cannot be rederived.
+    - Performance caches are acceptable only if they do not change decisions.
 
-  language_and_implementation:
-    - Rust is the source of truth.
-    - Fix or improve issues in Rust rather than patching in Python.
-    - Backtester and live bot should share the same Rust logic wherever possible.
-    - Use Python primarily for orchestration, bindings, and experimentation.
+  terminology:
+    - Position direction uses [position_side, pos_side, pside] = long/short.
+    - Order direction uses [side, order_side] = buy/sell.
+    - qty and pos_size are signed internally; abs(qty) is only for exchange payloads when required.
+
+  indicators:
+    - EMA spans are floats; do not round derived spans.
 
   config_hierarchy:
-    description: |
-      Configuration sections form an inheritance hierarchy. When adding new parameters,
-      place them in the section that matches which components need to read them.
+    rule: Parameters shared by live + backtest belong in config.live.
     sections:
       - name: config.live
         used_by: [live_bot, backtester, optimizer]
-        description: Parameters that affect runtime behavior for all modes. Place new params here if they affect order calculation, risk management, or any logic shared between live trading and simulation.
-        examples: [hedge_mode, time_in_force, leverage, approved_coins]
       - name: config.backtest
         used_by: [backtester, optimizer]
-        description: Parameters specific to historical simulation that don't apply to live trading. Place new params here only if they control backtest-specific behavior like date ranges or data sources.
-        examples: [start_date, end_date, starting_balance, exchange]
       - name: config.optimize
         used_by: [optimizer]
-        description: Parameters only relevant to the optimization process. Place new params here if they control genetic algorithm behavior, fitness functions, or optimization-specific settings.
-        examples: [n_cpus, iters, population_size, bounds]
-    rule: When in doubt, prefer config.live. A parameter that works in both live and backtest belongs in config.live, not config.backtest.
-
-  notation_and_terminology:
-    - Position side or position direction (long or short) is consistently called, as appropriate, [position_side, pos_side, pside, PositionSide, PosSide, Pside] everywhere in the codebase and in documentation.
-    - Order side or order direction (buy or sell / bid or ask) is consistently called, as appropriate, [side, order_side, Side, OrderSide] everywhere in the codebase and in documentation.
-    - Throughout the codebase, qty and pos_size use signed conventions: buy qty and long pos_size are positive; sell qty and short pos_size are negative. The only exception is at the final stage when the live bot sends an exchange payload and the exchange requires abs(qty).
-
-  rounding:
-    - Effective min qty for entries must be observed at all times.
-    - Closes should observe effective min cost too, according to calc_min_entry_qty, the only exception being if pos size is smaller than effective min qty, in which case close qty is set equal to pos size.
-
-  indicators:
-    - EMA spans are floats; do not round derived spans (e.g. span2 = sqrt(span0 * span1)).
 
   error_handling:
-    - FIRST COMMANDMENT: FAIL LOUD. NO SILENT FALLBACKS. EVER.
-    - THIS RULE IS NON-NEGOTIABLE IN TRADING-CRITICAL PATHS.
-    - Fail loudly. Prefer clear exceptions or panics over silent error handling.
-    - Assume upstream code is correct; don't silently compensate for bad data.
-    - DO NOT "helpfully" inject downstream defaults for required fields. Fix the upstream contract instead.
-    - Include clear, actionable error messages for all expected failures.
-    - Exchange fetch methods (fetch_balance, fetch_positions, fetch_open_orders, etc.) must NOT catch exceptions. Let exceptions propagate to the caller who handles via restart_bot_on_too_many_errors(). This ensures clean return types (no Union[list, bool]), preserves exception context, and makes errors impossible to ignore.
-    - In critical trading paths (exchange data, EMA feeds, risk gating, order construction), default policy is hard-fail; exceptions require explicit task-level approval and tests.
-    - Forbidden in critical paths: silently dropping exceptions, silently dropping non-finite required values, and silently replacing required values with neutral defaults (0.0, None, {}, [], False).
-    - Forbidden in critical paths: dict.get(required_key, default) on required inputs.
-    - Forbidden in critical paths: "temporary backward-compatibility" defaults that hide missing required config.
-    - If a fallback is explicitly allowed, it must be bounded, observable, and test-covered: log reason/context every time and raise immediately when fallback source is unavailable.
+    - Fail loudly in trading-critical paths.
+    - Exchange fetch methods must not catch exceptions; let caller policy handle retries/restarts.
+    - Fallbacks are exception-only and must follow docs/ai/error_contract.md.
 
+  implementation_scope:
+    - Avoid scope creep and premature abstraction.
+    - Keep changes tightly aligned with the requested task.
 
   testing:
-    - Write comprehensive tests covering both normal and edge cases.
-    - Include property-based or randomized tests where applicable to uncover edge behavior.
-
-  logging:
-    - Implement structured, leveled logging according to best practices (error, warn, info, debug, trace).
-    - Every remote API call must have a corresponding debug-level log entry, including endpoint, params, and timing.
-    - Logging must be non-intrusive but sufficiently detailed for full replay or audit of bot actions.
-
-  collaboration_behavior:
-    - If uncertain, ask before executing or committing major changes.
-    - When modifying shared logic, explain reasoning and ensure compatibility across backtester and live bot modes.
-
-  safety_and_commit_practices:
-    - Before committing or running code, simulate or dry-run first.
-    - When proposing refactors, include before/after diff and rationale.
-    - If adding dependencies, explain necessity and impact.
+    - Add targeted tests for changed behavior, edge cases, and regressions.
+    - Any new fallback behavior requires explicit fallback coverage.
 
   changelog:
-    - Maintain a top-level CHANGELOG.md as the single source of truth for user-facing changes.
-    - Add concise entries under an Unreleased section as changes land; do not wait until tagging to note important behavior changes.
-    - When tagging a release, move Unreleased entries under a dated version heading and keep Unreleased ready for the next cycle.
-    - Capture breaking changes, migrations, config changes, notable fixes, performance/security updates; keep bullets short and actionable.
+    - Add user-facing behavior changes to top-level CHANGELOG.md under Unreleased.

@@ -2,246 +2,66 @@
 
 Instructions for AI coding assistants working on Passivbot.
 
-## Overview
+## Always Read First
 
-Passivbot is a cryptocurrency trading bot for perpetual futures markets. It uses a contrarian market-making strategy, implemented in Python (orchestration) and Rust (order calculations, backtesting).
+Read these files for every task:
 
-## Quick Start
+1. `AGENTS.md`
+2. `docs/ai/principles.yaml`
+3. `docs/ai/error_contract.md`
+
+Then use `docs/ai/README.md` to load task-specific docs only when relevant.
+
+## Non-Negotiables
+
+1. Rust is source of truth for order behavior.
+- Behavior changes in entries/closes/risk/unstuck belong in `passivbot-rust/src/`, not Python patches.
+2. Stateless behavior is required.
+- Bot behavior must be reproducible after restart from exchange state + config.
+3. Fail loudly in trading-critical paths.
+- Default is hard-fail for exchange data, EMA inputs, risk gates, and order construction.
+- Fallbacks are exceptions, not defaults, and must follow `docs/ai/error_contract.md`.
+4. Keep terminology and signed-qty conventions exact.
+- `position_side` = long/short.
+- `side` / `order_side` = buy/sell.
+- `qty` and `pos_size` are signed in internal logic.
+5. EMA spans are floats.
+- Do not round derived spans like `sqrt(span0 * span1)`.
+6. Avoid scope creep.
+- Make only requested or strictly necessary changes.
+
+## Before Coding
+
+1. Read `docs/ai/README.md` and open only docs relevant to the task.
+2. If touching exchange code, read `docs/ai/exchange_api_quirks.md`.
+3. If touching a documented feature, read the corresponding file in `docs/ai/features/`.
+4. Run a silent-handling self-audit for touched areas:
 
 ```bash
-# Setup
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+rg -n "except Exception|return_exceptions=True|\.get\([^\n]*,\s*(0|0\.0|None|False|\{\}|\[\])\)" src tests
+```
+
+5. Remove unsafe patterns or document explicit, approved fallback behavior with tests.
+
+## Testing Expectations
+
+1. Run targeted tests for changed paths.
+2. Add regression tests for bug fixes and fallback behavior.
+3. If Rust changed, rebuild extension before Python tests:
+
+```bash
 cd passivbot-rust && maturin develop --release && cd ..
-
-# Test
-pytest
-
-# Run live bot
-python3 src/main.py -u {account_name}
-
-# Backtest
-python3 src/backtest.py path/to/config.json
-
-# Optimize
-python3 src/optimize.py path/to/config.json
 ```
 
-See [docs/ai/commands.md](docs/ai/commands.md) for full command reference.
+See `docs/ai/code_review_prompt.md` for the review/test checklist.
 
-## Critical Principles
+## Commands
 
-### FIRST COMMANDMENT (NON-NEGOTIABLE): FAIL LOUD. NO SILENT FALLBACKS. EVER.
+Use `docs/ai/commands.md` for setup, test, backtest, optimizer, and Rust build commands.
 
-THIS IS THE LAW. DO NOT BREAK IT.
+## Documentation Hygiene
 
-- NEVER mask missing required trading inputs with safe defaults.
-- NEVER "repair" bad upstream data in critical paths by substituting `0`, `0.0`, `None`, `{}`, `[]`, or `False`.
-- NEVER add `.get(required_key, default)` for required config or required trading fields.
-- NEVER swallow exceptions in critical paths.
-- If required data is missing or invalid: RAISE IMMEDIATELY WITH CONTEXT.
-- If you think you need a fallback: STOP and get explicit user approval in the task, then add warning logs and tests.
-
-This rule takes priority over convenience and "backward compatibility" quick fixes.
-
-### Rust is Source of Truth
-
-All order calculation logic lives in `passivbot-rust/src/`. Both live bot and backtester use the same Rust code via PyO3 bindings.
-
-- **Behavior changes** (order logic, risk, unstuck) → modify Rust
-- **Python patches** to order logic → not acceptable
-- After Rust changes: `cd passivbot-rust && maturin develop --release && cd ..`
-
-### Stateless Design
-
-Bot must behave identically after restart. Never rely on "what happened earlier" unless it can be rederived from exchange state.
-
-- No local caches that change behavior (performance-only caches OK)
-- Minimal time-based heuristics outside natural candle boundaries
-
-### Fail Loudly
-
-Prefer clear exceptions over silent error handling.
-
-- Exchange fetch methods must NOT catch exceptions
-- Let errors propagate to caller who handles via `restart_bot_on_too_many_errors()`
-- Include actionable error messages
-- Silent error handling is forbidden in critical paths (exchange data, EMA computation, risk, order construction)
-
-#### Forbidden Patterns (Critical Paths)
-
-- `except Exception: pass`, `except Exception: continue`, or returning neutral defaults after catching errors
-- `asyncio.gather(..., return_exceptions=True)` when exceptions are then ignored/dropped
-- `dict.get(required_key, safe_default)` for required trading inputs
-- Converting required-input failures into `0.0`, `None`, `{}`, `[]`, or `False` without an explicit, documented fallback policy
-- Adding downstream "just in case" defaults for required config keys instead of fixing/normalizing the config contract upstream
-
-#### Required Error Contract
-
-- Required inputs must be complete before handing data to Rust orchestrator/backtester
-- If a required input fetch fails, either:
-  - raise immediately with full context; or
-  - use an explicitly allowed fallback with warning logs that include reason and context
-- If fallback is unavailable, raise immediately (do not degrade silently)
-
-#### Fallback Policy Matrix
-
-| Path/Input | Default Policy | Allowed Fallback | If Fallback Used |
-|------------|----------------|------------------|------------------|
-| Exchange fetch methods (`fetch_balance`, `fetch_positions`, `fetch_open_orders`, etc.) | Raise | None | N/A |
-| Required EMA inputs for orchestrator | Raise | Reuse previous EMA for same `symbol/span` only when explicitly implemented for that path | Log `[ema]` warning with symbol/span/reason/age/count and test fallback behavior |
-| Risk-gating inputs (loss caps, exposure limits, position state) | Raise | None unless explicitly approved by user in task | Log explicit warning + add regression test |
-| Any other trading-critical required field | Raise | None unless documented in feature docs + approved in task | Log explicit warning + add regression test |
-
-#### Critical Path Rule
-
-- In exchange data, EMA, risk, and order paths: hard-fail is the default.
-- Any exception to hard-fail must be explicitly requested/approved in the current task and covered by tests.
-- "Temporary" silent fallback is NOT an exception. It is a bug.
-
-### Avoid Over-Engineering
-
-Only make changes that are directly requested or clearly necessary.
-
-- Don't add features, refactor, or "improve" beyond what was asked
-- Don't add docstrings, comments, or type hints to unchanged code
-- Three similar lines beats a premature abstraction
-
-## Key Conventions
-
-### Terminology
-
-| Concept | Names Used |
-|---------|------------|
-| Position side (long/short) | `position_side`, `pos_side`, `pside` |
-| Order side (buy/sell) | `side`, `order_side` |
-
-**Don't confuse them.** A long position has both buy entries and sell closes.
-
-### Signed Quantities
-
-- `qty` and `pos_size` are signed: positive = long/buy, negative = short/sell
-- Exception: final exchange payload may need `abs(qty)`
-
-### EMA Spans
-
-EMA spans are floats. Don't round intermediate calculations.
-
-```python
-# WRONG
-span2 = int(sqrt(span0 * span1))
-
-# CORRECT
-span2 = sqrt(span0 * span1)
-```
-
-See [docs/ai/principles.yaml](docs/ai/principles.yaml) for full conventions.
-
-## Before You Code
-
-1. **Check [docs/ai/pitfalls.md](docs/ai/pitfalls.md)** for common mistakes
-2. **Check [docs/ai/exchange_api_quirks.md](docs/ai/exchange_api_quirks.md)** if touching exchange code
-3. **Check [docs/ai/features/](docs/ai/features/)** if a feature doc exists for your area
-4. **Read [docs/ai/principles.yaml](docs/ai/principles.yaml)** for conventions
-5. **Run a silent-handling self-audit** for touched files:
-
-```bash
-rg -n "except Exception|return_exceptions=True|\\.get\\([^\\n]*,\\s*(0|0\\.0|None|False|\\{\\}|\\[\\])\\)" src tests
-```
-
-6. **If matches are present in changed code**, either:
-   - remove them; or
-   - justify them explicitly in PR notes and add targeted tests.
-7. **Treat silent-default patterns as release blockers in critical paths.**
-   - Do not merge until they are removed or explicitly approved + tested + logged.
-
-## Architecture at a Glance
-
-```
-Python (src/)                          Rust (passivbot-rust/src/)
-├── passivbot.py (live loop)    ────►  ├── orchestrator.rs (order calc)
-├── backtest.py (coordinator)   ────►  ├── backtest.rs (simulation)
-├── optimize.py (genetic algo)  ────►  └── analysis.rs (metrics)
-├── candlestick_manager.py (OHLCV)
-├── fill_events_manager.py (PnL)
-└── exchanges/ (API wrappers)
-```
-
-See [docs/ai/architecture.md](docs/ai/architecture.md) for detailed component descriptions.
-
-## Configuration Hierarchy
-
-| Section | Used By | Purpose |
-|---------|---------|---------|
-| `config.live` | Live, Backtest, Optimizer | Runtime behavior (order logic, risk) |
-| `config.backtest` | Backtest, Optimizer | Simulation settings (dates, balance) |
-| `config.optimize` | Optimizer | Optimization settings (bounds, population) |
-
-**Rule**: When in doubt, prefer `config.live`.
-
-## Logging
-
-| Level | Audience | Content |
-|-------|----------|---------|
-| INFO | Operators | Essential events (orders, fills, positions) |
-| DEBUG | Developers | Decision context, API timing |
-| TRACE | Deep debugging | Full payloads, per-item iterations |
-
-Use `[tag]` format: `[order]`, `[fill]`, `[pos]`, `[health]`
-
-Fallbacks in trading-critical paths must log a warning with a stable tag and context fields:
-- Recommended tag: `[ema]` for EMA fallback, `[risk]` for risk fallback
-- Required fields: `symbol`, `span`/parameter, `reason`, fallback value source, `age_ms` (if applicable), consecutive fallback count
-
-See [docs/ai/logging_guide.md](docs/ai/logging_guide.md) for detailed guidelines.
-
-## Documentation Index
-
-| File | When to Read |
-|------|--------------|
-| [docs/ai/principles.yaml](docs/ai/principles.yaml) | Always (core conventions) |
-| [docs/ai/architecture.md](docs/ai/architecture.md) | New to codebase |
-| [docs/ai/commands.md](docs/ai/commands.md) | Need to run/test something |
-| [docs/ai/pitfalls.md](docs/ai/pitfalls.md) | Before implementing |
-| [docs/ai/exchange_api_quirks.md](docs/ai/exchange_api_quirks.md) | Working on exchange code |
-| [docs/ai/logging_guide.md](docs/ai/logging_guide.md) | Working on logging |
-| [docs/ai/decisions.md](docs/ai/decisions.md) | Understanding "why" |
-| [docs/ai/features/](docs/ai/features/) | Working on specific features |
-
-Full index: [docs/ai/README.md](docs/ai/README.md)
-
-## Testing
-
-```bash
-pytest                                    # All tests
-pytest tests/test_specific.py             # Specific file
-pytest tests/test_specific.py::test_name  # Specific test
-```
-
-Write tests for both normal and edge cases. Include property-based tests where applicable.
-
-For any new fallback behavior, tests must cover:
-- fallback is actually used when primary input fails
-- warning/visibility behavior (or explicit failure message content)
-- hard failure when fallback input is unavailable
-- explicit guard against unsafe substitution (e.g., last-price substitution for EMA)
-
-## Branch Context
-
-Current branch: `feature/stock-perps-hyperliquid`
-
-Recent work:
-- Stock perpetuals (HIP-3) support for Hyperliquid
-- Combined mode: crypto + stock perps with automatic margin mode
-- Symbol normalization and routing
-
-## Common Gotchas
-
-- **Rust changes not reflected**: Run `cd passivbot-rust && maturin develop --release && cd ..`
-- **Cache issues**: Delete `caches/ohlcv/{exchange}/{symbol}.parquet`
-- **Lock contention**: Check for orphan `.lock` files in `caches/`
-- **Stock perps on wrong exchange**: Only Hyperliquid supports HIP-3 markets
-
-## Changelog
-
-Maintain `CHANGELOG.md` for user-facing changes. Add entries under "Unreleased" as changes land.
+1. Keep AI docs lean and task-oriented.
+2. Put durable rules in `principles.yaml` or `error_contract.md`, not in many files.
+3. Put deep investigations in case-study docs, not core instruction docs.
+4. Update `CHANGELOG.md` for user-facing behavior changes.

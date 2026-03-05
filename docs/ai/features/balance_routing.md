@@ -1,59 +1,26 @@
 # Balance Routing (Raw vs Snapped)
 
-Passivbot carries two balance values with distinct responsibilities:
+## Contract
 
-- `balance`: hysteresis-snapped balance for sizing/order-shaping stability.
-- `balance_raw`: true/raw wallet balance for risk/accounting accuracy.
+1. `balance` is hysteresis-snapped for sizing stability.
+2. `balance_raw` is true wallet balance for risk/accounting-sensitive paths.
+3. Paths must not silently swap these semantics.
 
-## API Contract
+## Non-Obvious Details
 
-### Rust orchestrator input (`OrchestratorInput`)
+1. Risk gates and peak-sensitive logic should use `balance_raw`.
+2. Sizing/order-shaping logic may use snapped `balance` by design.
+3. Legacy test stubs may only provide `balance`; treat compatibility fallback as transitional.
 
-- `balance` is required and used for sizing logic.
-- `balance_raw` is used for peak/PnL-sensitive risk gates.
-- If `balance_raw` is missing/non-finite, risk-gate paths fall back to `balance`.
-- If `balance_raw` is explicitly `<= 0`, risk-gate paths treat it as non-actionable and early-return.
+## Test Focus
 
-### Python runtime (`src/passivbot.py`)
+1. Correct routing of raw vs snapped balance fields.
+2. Regression coverage for peak/risk drift scenarios.
+3. Explicit handling when `balance_raw` is missing/non-finite.
 
-- `self.balance` stores the snapped value.
-- `self.balance_raw` stores the true/raw value.
-- Helper methods:
-  - `get_hysteresis_snapped_balance()` -> snapped `balance`
-  - `get_raw_balance()` -> raw `balance_raw` (fallback-compatible for older test stubs)
+## Key Code
 
-## Routing Rules
-
-- Use snapped balance for sizing-like paths:
-  - min-effective-cost eligibility
-  - order-shaping paths that are intentionally hysteresis-stabilized
-- Use raw balance for risk/accounting paths:
-  - peak reconstruction (`balance_peak`)
-  - realized-loss gate floor checks
-  - auto-unstuck allowance budget calculations
-  - TWEL enforcer auto-reduce (wallet exposure uses raw for conservative risk)
-  - TWEL entry gating (prevents new entries that would exceed TWEL at real balance)
-  - unstuck action selection (wallet exposure threshold uses raw)
-  - equity/accounting displays
-
-## Migration Guidance
-
-For any external caller or test fixture constructing orchestrator JSON:
-
-1. Provide both `balance` and `balance_raw`.
-2. Do not treat `balance` and `balance_raw` as interchangeable:
-   - replacing `balance_raw` with snapped `balance` can reintroduce peak drift bugs.
-
-For lightweight Python test doubles:
-
-- Prefer defining both `balance` and `balance_raw`.
-- If a legacy stub only has `balance`, `get_raw_balance()` fallback keeps tests functional, but this should be transitional.
-
-## Regression Coverage
-
-See:
-
+- `src/passivbot.py`
+- `passivbot-rust/src/orchestrator.rs`
 - `tests/test_passivbot_balance_split.py`
 - `tests/test_orchestrator_json_api.py`
-
-These tests verify split routing and the peak-drift regression scenario.

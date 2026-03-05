@@ -1,62 +1,29 @@
-# Agent Documentation Index
+# AI Docs Router
 
-This directory contains documentation for AI coding assistants working on Passivbot.
+Use this file to decide what to read for a task.
 
-## FIRST COMMANDMENT (READ THIS FIRST)
+## Always Read
 
-FAIL LOUD. NO SILENT FALLBACKS. EVER.
+1. `../../AGENTS.md`
+2. `principles.yaml`
+3. `error_contract.md`
 
-- Do not hide missing required inputs with defaults.
-- Do not use `dict.get(required_key, default)` in trading-critical paths.
-- Do not swallow exceptions in trading-critical paths.
-- If required data is missing/invalid: raise immediately with context.
-- If a fallback is explicitly approved for a task, it must be logged and test-covered.
+## Read By Task
 
-## Quick Reference
+| Task | Read |
+|------|------|
+| Exchange/API integration, pagination, data fetch | `exchange_api_quirks.md` |
+| Logging behavior/levels/tags | `logging_guide.md` |
+| Order logic, risk, Python/Rust boundary | `architecture.md`, `decisions.md` |
+| Code review | `code_review_prompt.md` |
+| Common implementation mistakes | `pitfalls.md` |
+| Running tools/tests/backtests/optimizer | `commands.md` |
+| Feature-specific changes | `features/README.md` + relevant file in `features/` |
+| Deep incident context | `debugging_case_studies.md`, `suite_optimizer_memory_investigation.md` |
 
-| File | When to Read | Description |
-|------|--------------|-------------|
-| [principles.yaml](principles.yaml) | Always | Core conventions: terminology, error handling, design principles |
-| [architecture.md](architecture.md) | New to codebase | Python/Rust division, component overview, data flows |
-| [commands.md](commands.md) | Need to run something | Setup, testing, backtesting, optimization commands |
-| [pitfalls.md](pitfalls.md) | Before implementing | Common mistakes and how to avoid them |
+## Rules For AI Docs
 
-## Domain Knowledge
-
-| File | When to Read | Description |
-|------|--------------|-------------|
-| [exchange_api_quirks.md](exchange_api_quirks.md) | Working on exchange code | Known API limitations and workarounds |
-| [logging_guide.md](logging_guide.md) | Working on logging | Log level definitions and examples |
-
-## Learning & History
-
-| File | When to Read | Description |
-|------|--------------|-------------|
-| [debugging_case_studies.md](debugging_case_studies.md) | Complex investigation | Detailed debugging sessions as reference |
-| [decisions.md](decisions.md) | Understanding "why" | Architectural decision log |
-
-## Feature Documentation
-
-See [features/README.md](features/README.md) for feature-specific learnings.
-
-| File | Description |
-|------|-------------|
-| [features/stock_perps.md](features/stock_perps.md) | HIP-3 stock perpetuals on Hyperliquid |
-| [features/candlestick_manager.md](features/candlestick_manager.md) | OHLCV data fetching and caching |
-| [features/fill_events_manager.md](features/fill_events_manager.md) | Fill tracking and PnL computation |
-| [features/balance_routing.md](features/balance_routing.md) | Raw vs snapped balance contract and migration rules |
-
-## Adding New Documentation
-
-**When to add new docs:**
-- **Exchange quirks**: Add to `exchange_api_quirks.md` (or create `{exchange}_quirks.md` if extensive)
-- **Complex debugging**: Add case study to `debugging_case_studies.md`
-- **Architectural decision**: Add entry to `decisions.md`
-- **Common pitfall discovered**: Add entry to `pitfalls.md`
-- **New feature**: Create `features/{feature}.md` and update features/README.md
-
-**Documentation principles:**
-- Keep files focused on a single topic
-- Use consistent formatting (see existing files as templates)
-- Include concrete examples, not just abstract guidelines
-- Reference code locations where applicable (`file.py:123`)
+1. Keep core docs short and normative.
+2. Avoid repeating the same rule across many files.
+3. Keep historical notes separate from core instructions.
+4. Include code references only where they add non-obvious context.
