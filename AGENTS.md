@@ -31,6 +31,19 @@ See [docs/ai/commands.md](docs/ai/commands.md) for full command reference.
 
 ## Critical Principles
 
+### FIRST COMMANDMENT (NON-NEGOTIABLE): FAIL LOUD. NO SILENT FALLBACKS. EVER.
+
+THIS IS THE LAW. DO NOT BREAK IT.
+
+- NEVER mask missing required trading inputs with safe defaults.
+- NEVER "repair" bad upstream data in critical paths by substituting `0`, `0.0`, `None`, `{}`, `[]`, or `False`.
+- NEVER add `.get(required_key, default)` for required config or required trading fields.
+- NEVER swallow exceptions in critical paths.
+- If required data is missing or invalid: RAISE IMMEDIATELY WITH CONTEXT.
+- If you think you need a fallback: STOP and get explicit user approval in the task, then add warning logs and tests.
+
+This rule takes priority over convenience and "backward compatibility" quick fixes.
+
 ### Rust is Source of Truth
 
 All order calculation logic lives in `passivbot-rust/src/`. Both live bot and backtester use the same Rust code via PyO3 bindings.
@@ -61,6 +74,7 @@ Prefer clear exceptions over silent error handling.
 - `asyncio.gather(..., return_exceptions=True)` when exceptions are then ignored/dropped
 - `dict.get(required_key, safe_default)` for required trading inputs
 - Converting required-input failures into `0.0`, `None`, `{}`, `[]`, or `False` without an explicit, documented fallback policy
+- Adding downstream "just in case" defaults for required config keys instead of fixing/normalizing the config contract upstream
 
 #### Required Error Contract
 
@@ -83,6 +97,7 @@ Prefer clear exceptions over silent error handling.
 
 - In exchange data, EMA, risk, and order paths: hard-fail is the default.
 - Any exception to hard-fail must be explicitly requested/approved in the current task and covered by tests.
+- "Temporary" silent fallback is NOT an exception. It is a bug.
 
 ### Avoid Over-Engineering
 
@@ -137,6 +152,8 @@ rg -n "except Exception|return_exceptions=True|\\.get\\([^\\n]*,\\s*(0|0\\.0|Non
 6. **If matches are present in changed code**, either:
    - remove them; or
    - justify them explicitly in PR notes and add targeted tests.
+7. **Treat silent-default patterns as release blockers in critical paths.**
+   - Do not merge until they are removed or explicitly approved + tested + logged.
 
 ## Architecture at a Glance
 

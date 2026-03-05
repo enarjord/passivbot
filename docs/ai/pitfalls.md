@@ -8,6 +8,25 @@ Common mistakes and how to avoid them. Check here before implementing.
 
 These are common failure modes when coding with LLMs. Actively counteract them.
 
+### FIRST COMMANDMENT: FAIL LOUD. NO SILENT FALLBACKS. EVER.
+
+**THIS IS NON-NEGOTIABLE.**
+
+**Don't**: Hide missing required inputs behind "safe defaults."
+
+**Because**: Silent fallbacks create subtle, expensive, hard-to-trace trading bugs.
+
+**Instead**:
+- Raise immediately with clear context when required data is missing/invalid.
+- Enforce required config/input contracts upstream.
+- Only allow fallbacks when explicitly approved in the task, with warnings and tests.
+
+**BANNED IN CRITICAL PATHS**:
+- `dict.get(required_key, default)`
+- `except Exception: pass`
+- `except Exception: continue`
+- returning neutral defaults (`0.0`, `None`, `{}`, `[]`, `False`) for required fields
+
 ### Unchecked Assumptions
 
 **Don't**: Silently assume intent when requirements are ambiguous.

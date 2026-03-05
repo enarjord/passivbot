@@ -3170,7 +3170,7 @@ class Passivbot:
                     )
 
     def get_wallet_exposure_limit(self, pside, symbol=None):
-        """Return the wallet exposure limit for a side, honoring per-symbol overrides."""
+        """Return side WEL from fixed config denominator, honoring per-symbol overrides."""
         if symbol:
             fwel = (
                 self.coin_overrides.get(symbol, {})
@@ -3183,8 +3183,8 @@ class Passivbot:
         twel = self.bot_value(pside, "total_wallet_exposure_limit")
         if twel <= 0.0:
             return 0.0
-        n_positions = max(self.get_max_n_positions(pside), self.get_current_n_positions(pside))
-        if n_positions == 0:
+        n_positions = int(round(self.bot_value(pside, "n_positions")))
+        if n_positions <= 0:
             return 0.0
         return round(twel / n_positions, 8)
 
