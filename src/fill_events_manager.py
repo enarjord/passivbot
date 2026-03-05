@@ -615,6 +615,51 @@ def _extract_source_ids(raw: object, fallback_id: Optional[object]) -> List[str]
     return sorted(ids)
 
 
+def _bybit_trade_dedupe_key(trade: Dict[str, object]) -> Optional[Tuple[object, ...]]:
+    """Build a stable dedupe key for Bybit fetch_my_trades rows."""
+    info = trade.get("info")
+    info = info if isinstance(info, dict) else {}
+    exec_id = trade.get("id") or info.get("execId")
+    if exec_id:
+        return ("exec_id", str(exec_id))
+    # Fallback for malformed rows missing explicit exec ids.
+    timestamp = int(trade.get("timestamp") or info.get("execTime") or 0)
+    symbol = str(trade.get("symbol") or info.get("symbol") or "")
+    side = str(trade.get("side") or info.get("side") or "").lower()
+    order_id = str(trade.get("order") or info.get("orderId") or "")
+    amount = float(trade.get("amount") or info.get("execQty") or 0.0)
+    price = float(trade.get("price") or info.get("execPrice") or 0.0)
+    if timestamp <= 0 or not symbol or not side or not order_id or amount <= 0.0 or price <= 0.0:
+        return None
+    return ("fallback", timestamp, symbol, side, order_id, amount, price)
+
+
+def _bybit_trade_qty_abs(trade: Dict[str, object]) -> float:
+    info = trade.get("info")
+    info = info if isinstance(info, dict) else {}
+    return abs(float(trade.get("amount") or info.get("execQty") or 0.0))
+
+
+def _bybit_trade_qty_signed(trade: Dict[str, object]) -> float:
+    info = trade.get("info")
+    info = info if isinstance(info, dict) else {}
+    side = str(trade.get("side") or info.get("side") or "").lower()
+    qty = _bybit_trade_qty_abs(trade)
+    if side == "sell":
+        return -qty
+    return qty
+
+
+def _bybit_event_group_key(event: FillEvent) -> Tuple[int, str, str, str, str]:
+    return (
+        int(event.timestamp),
+        str(event.symbol),
+        str(event.pb_order_type),
+        str(event.side).lower(),
+        str(event.position_side).lower(),
+    )
+
+
 @dataclass(frozen=True)
 class FillEvent:
     """Canonical representation of a single fill event."""
@@ -1872,6 +1917,344 @@ class FillEventsManager:
             )
             self._loaded = True
 
+    @staticmethod
+    def _bybit_event_trade_rows(event: FillEvent) -> List[Dict[str, object]]:
+        rows: List[Dict[str, object]] = []
+        for item in _normalize_raw_field(getattr(event, "raw", None)):
+            if not isinstance(item, dict):
+                continue
+            if item.get("source") != "fetch_my_trades":
+                continue
+            data = item.get("data")
+            if isinstance(data, dict):
+                rows.append(data)
+        return rows
+
+    @staticmethod
+    def _bybit_event_non_trade_raw(event: FillEvent) -> List[Dict[str, object]]:
+        rows: List[Dict[str, object]] = []
+        for item in _normalize_raw_field(getattr(event, "raw", None)):
+            if not isinstance(item, dict):
+                continue
+            if item.get("source") == "fetch_my_trades":
+                continue
+            rows.append(item)
+        return rows
+
+    @staticmethod
+    def _bybit_group_stats(events: Sequence[FillEvent]) -> Dict[str, object]:
+        unique_rows: Dict[Tuple[object, ...], Dict[str, object]] = {}
+        fallback_idx = 0
+        duplicate_rows = 0
+        for ev in events:
+            for row in FillEventsManager._bybit_event_trade_rows(ev):
+                key = _bybit_trade_dedupe_key(row)
+                if key is None:
+                    key = ("__fallback__", fallback_idx)
+                    fallback_idx += 1
+                if key in unique_rows:
+                    duplicate_rows += 1
+                    continue
+                unique_rows[key] = row
+
+        unique_qty_abs = sum(_bybit_trade_qty_abs(row) for row in unique_rows.values())
+        side = str(events[0].side).lower() if events else "buy"
+        unique_qty_signed = -unique_qty_abs if side == "sell" else unique_qty_abs
+        group_qty = sum(float(ev.qty) for ev in events)
+        return {
+            "duplicate_rows": duplicate_rows,
+            "group_size": len(events),
+            "group_qty": group_qty,
+            "unique_qty_signed": unique_qty_signed,
+            "unique_row_count": len(unique_rows),
+        }
+
+    @staticmethod
+    def _scan_bybit_qty_inflation(events: Sequence[FillEvent]) -> List[Dict[str, object]]:
+        anomalies: List[Dict[str, object]] = []
+        tolerance = 1e-9
+
+        grouped: Dict[Tuple[int, str, str, str, str], List[FillEvent]] = defaultdict(list)
+        for ev in events:
+            grouped[_bybit_event_group_key(ev)].append(ev)
+
+        for key, group in grouped.items():
+            stats = FillEventsManager._bybit_group_stats(group)
+            group_size = int(stats["group_size"])
+            duplicate_rows = int(stats["duplicate_rows"])
+            group_qty = float(stats["group_qty"])
+            unique_qty_signed = float(stats["unique_qty_signed"])
+            if group_size <= 1 and duplicate_rows <= 0:
+                continue
+            if abs(group_qty - unique_qty_signed) <= tolerance and group_size == 1:
+                continue
+            anomalies.append(
+                {
+                    "key": key,
+                    "event_ids": [ev.id for ev in group],
+                    "group_size": group_size,
+                    "duplicate_rows": duplicate_rows,
+                    "group_qty": group_qty,
+                    "expected_qty": unique_qty_signed,
+                    "unique_trade_rows": int(stats["unique_row_count"]),
+                }
+            )
+        return anomalies
+
+    @staticmethod
+    def _normalize_fee_dict(fee: Optional[Dict[str, object]]) -> Optional[Dict[str, object]]:
+        if not isinstance(fee, dict):
+            return None
+        out: Dict[str, object] = {}
+        currency = fee.get("currency") or fee.get("code")
+        if currency:
+            out["currency"] = str(currency)
+        try:
+            out["cost"] = float(fee.get("cost", 0.0))
+        except Exception:
+            out["cost"] = 0.0
+        if fee.get("rate") is not None:
+            try:
+                out["rate"] = float(fee.get("rate"))
+            except Exception:
+                pass
+        return out
+
+    @staticmethod
+    def _extract_bybit_fee_from_trade_row(row: Dict[str, object]) -> Optional[Dict[str, object]]:
+        fee = FillEventsManager._normalize_fee_dict(row.get("fee"))
+        if fee is not None:
+            return fee
+        info = row.get("info")
+        info = info if isinstance(info, dict) else {}
+        fee_cost_raw = info.get("execFee")
+        fee_ccy = info.get("feeCurrency")
+        if fee_cost_raw is None:
+            return None
+        try:
+            fee_cost = float(fee_cost_raw)
+        except Exception:
+            return None
+        out: Dict[str, object] = {"cost": fee_cost}
+        if fee_ccy:
+            out["currency"] = str(fee_ccy)
+        fee_rate_raw = info.get("feeRate")
+        if fee_rate_raw is not None:
+            try:
+                out["rate"] = float(fee_rate_raw)
+            except Exception:
+                pass
+        return out
+
+    @staticmethod
+    def _dedupe_raw_payloads(items: Sequence[Dict[str, object]]) -> List[Dict[str, object]]:
+        deduped: List[Dict[str, object]] = []
+        seen: set[str] = set()
+        for item in items:
+            try:
+                marker = json.dumps(item, sort_keys=True, separators=(",", ":"))
+            except Exception:
+                marker = str(item)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            deduped.append(item)
+        return deduped
+
+    @staticmethod
+    def _build_consolidated_bybit_event(group: Sequence[FillEvent]) -> FillEvent:
+        # Pick best baseline event (prefer internally deduped, then largest unique coverage).
+        best_event = group[0]
+        best_rank: Tuple[int, int, float] = (-1, -1, float("-inf"))
+        mt_unique_by_key: Dict[Tuple[object, ...], Dict[str, object]] = {}
+        non_mt_rows: List[Dict[str, object]] = []
+        fallback_idx = 0
+
+        for ev in group:
+            mt_rows = FillEventsManager._bybit_event_trade_rows(ev)
+            keys_seen: set[Tuple[object, ...]] = set()
+            duplicates = 0
+            unique_count = 0
+            signed_qty_sum = 0.0
+            for row in mt_rows:
+                key = _bybit_trade_dedupe_key(row)
+                if key is None:
+                    key = ("__fallback__", fallback_idx)
+                    fallback_idx += 1
+                if key in keys_seen:
+                    duplicates += 1
+                    continue
+                keys_seen.add(key)
+                unique_count += 1
+                signed_qty_sum += _bybit_trade_qty_signed(row)
+                if key not in mt_unique_by_key:
+                    mt_unique_by_key[key] = row
+            qty_delta = -abs(float(ev.qty) - signed_qty_sum)
+            rank = (1 if duplicates == 0 else 0, unique_count, qty_delta)
+            if rank > best_rank:
+                best_rank = rank
+                best_event = ev
+            non_mt_rows.extend(FillEventsManager._bybit_event_non_trade_raw(ev))
+
+        mt_rows_unique = list(mt_unique_by_key.values())
+        side = str(best_event.side).lower()
+        qty_abs_sum = sum(_bybit_trade_qty_abs(row) for row in mt_rows_unique)
+        qty_signed_sum = -qty_abs_sum if side == "sell" else qty_abs_sum
+
+        price_num = 0.0
+        for row in mt_rows_unique:
+            info = row.get("info")
+            info = info if isinstance(info, dict) else {}
+            price = float(row.get("price") or info.get("execPrice") or 0.0)
+            price_num += price * _bybit_trade_qty_abs(row)
+        price = float(best_event.price)
+        if qty_abs_sum > 0.0:
+            price = price_num / qty_abs_sum
+
+        fees_merged = None
+        for row in mt_rows_unique:
+            fee = FillEventsManager._extract_bybit_fee_from_trade_row(row)
+            fees_merged = _merge_fee_lists(fees_merged, fee)
+        fees_out: Optional[Sequence]
+        if isinstance(fees_merged, list) and len(fees_merged) == 1:
+            fees_out = fees_merged[0]
+        else:
+            fees_out = fees_merged
+
+        source_ids: set[str] = set(best_event.source_ids or [])
+        for row in mt_rows_unique:
+            info = row.get("info")
+            info = info if isinstance(info, dict) else {}
+            trade_id = row.get("id") or info.get("execId")
+            if trade_id:
+                source_ids.add(str(trade_id))
+        source_ids_sorted = sorted(source_ids)
+        event_id = "+".join(source_ids_sorted) if source_ids_sorted else best_event.id
+
+        # Recompute close PnL when possible from positions_history + unique fills.
+        pnl: Optional[float] = None
+        positions_items = [
+            row
+            for row in non_mt_rows
+            if isinstance(row, dict) and str(row.get("source")) == "positions_history"
+        ]
+        for pos_item in positions_items:
+            data = pos_item.get("data")
+            if not isinstance(data, dict):
+                continue
+            info = data.get("info")
+            info = info if isinstance(info, dict) else {}
+            avg_entry = float(info.get("avgEntryPrice") or data.get("entryPrice") or 0.0)
+            total_closed = float(info.get("closedSize") or data.get("contracts") or 0.0)
+            if avg_entry <= 0.0 or total_closed <= 0.0:
+                continue
+            total_fees = float(info.get("closeFee") or 0.0) + float(info.get("openFee") or 0.0)
+            recomputed = 0.0
+            used = False
+            for row in mt_rows_unique:
+                info_row = row.get("info")
+                info_row = info_row if isinstance(info_row, dict) else {}
+                closed_size = float(info_row.get("closedSize") or info_row.get("closeSize") or 0.0)
+                if closed_size <= 0.0:
+                    continue
+                exit_price = float(row.get("price") or info_row.get("execPrice") or 0.0)
+                if exit_price <= 0.0:
+                    continue
+                if str(best_event.position_side).lower() == "long":
+                    gross = (exit_price - avg_entry) * closed_size
+                else:
+                    gross = (avg_entry - exit_price) * closed_size
+                fee_portion = (closed_size / total_closed) * total_fees if total_closed > 0.0 else 0.0
+                recomputed += gross - fee_portion
+                used = True
+            if used:
+                pnl = recomputed
+                break
+        if pnl is None:
+            if abs(float(best_event.qty)) > 1e-12:
+                pnl = float(best_event.pnl) * (qty_signed_sum / float(best_event.qty))
+            else:
+                pnl = float(best_event.pnl)
+
+        raw_payload = [
+            {"source": "fetch_my_trades", "data": dict(row)} for row in mt_rows_unique
+        ] + FillEventsManager._dedupe_raw_payloads(non_mt_rows)
+
+        return FillEvent(
+            id=event_id,
+            source_ids=source_ids_sorted,
+            timestamp=int(best_event.timestamp),
+            datetime=str(best_event.datetime),
+            symbol=str(best_event.symbol),
+            side=str(best_event.side).lower(),
+            qty=float(qty_signed_sum),
+            price=float(price),
+            pnl=float(pnl),
+            fees=fees_out,
+            pb_order_type=str(best_event.pb_order_type),
+            position_side=str(best_event.position_side).lower(),
+            client_order_id=str(best_event.client_order_id),
+            psize=float(best_event.psize),
+            pprice=float(best_event.pprice),
+            raw=raw_payload,
+        )
+
+    async def run_doctor(self, *, auto_repair: bool = False) -> Dict[str, object]:
+        """Detect and optionally auto-repair known fill-event cache anomalies."""
+        await self.ensure_loaded()
+        report: Dict[str, object] = {
+            "exchange": self.exchange,
+            "user": self.user,
+            "events_scanned": len(self._events),
+            "anomaly_events": 0,
+            "anomaly_examples": [],
+            "auto_repair": bool(auto_repair),
+            "repaired": False,
+        }
+        if self.exchange.lower() != "bybit":
+            return report
+
+        anomalies = self._scan_bybit_qty_inflation(self._events)
+        report["anomaly_events"] = len(anomalies)
+        report["anomaly_examples"] = anomalies[:5]
+        if not anomalies or not auto_repair:
+            return report
+
+        grouped: Dict[Tuple[int, str, str, str, str], List[FillEvent]] = defaultdict(list)
+        for ev in self._events:
+            grouped[_bybit_event_group_key(ev)].append(ev)
+
+        repaired_events: List[FillEvent] = []
+        for key in sorted(grouped.keys()):
+            group = grouped[key]
+            if len(group) == 1:
+                stats = self._bybit_group_stats(group)
+                if int(stats["duplicate_rows"]) <= 0:
+                    repaired_events.extend(group)
+                    continue
+            repaired_events.append(self._build_consolidated_bybit_event(group))
+
+        repaired_events.sort(key=lambda ev: ev.timestamp)
+        payload = [ev.to_dict() for ev in repaired_events]
+        ensure_qty_signage(payload)
+        compute_psize_pprice(payload)
+        self._events = [FillEvent.from_dict(ev) for ev in payload]
+        self.cache.save(self._events)
+        self.cache.update_metadata_from_events(self._events)
+
+        remaining = self._scan_bybit_qty_inflation(self._events)
+        report["anomaly_events_after"] = len(remaining)
+        report["anomaly_examples_after"] = remaining[:5]
+        report["repaired"] = len(remaining) == 0
+        if remaining:
+            logger.warning(
+                "[fills-doctor] repair incomplete: %d anomalies remain (continuing)",
+                len(remaining),
+            )
+        else:
+            logger.info("[fills-doctor] repair complete; no remaining Bybit anomalies")
+        return report
+
     async def refresh(
         self,
         *,
@@ -1889,6 +2272,10 @@ class FillEventsManager:
             ev.id: (ev.client_order_id, ev.pb_order_type) for ev in self._events if ev.client_order_id
         }
         updated_map: Dict[str, FillEvent] = {ev.id: ev for ev in self._events}
+        source_ids_index: Dict[Tuple[str, ...], set[str]] = defaultdict(set)
+        for ev in self._events:
+            if ev.source_ids:
+                source_ids_index[tuple(ev.source_ids)].add(ev.id)
         added_ids: set[str] = set()
         all_days_persisted: set[str] = set()
 
@@ -1906,11 +2293,20 @@ class FillEventsManager:
                         exc,
                     )
                     continue
+                source_key = tuple(event.source_ids) if event.source_ids else tuple()
+                replaced_ids: set[str] = set()
+                if source_key and source_key in source_ids_index:
+                    replaced_ids = {eid for eid in source_ids_index[source_key] if eid != event.id}
+                    for replaced_id in replaced_ids:
+                        updated_map.pop(replaced_id, None)
+                    source_ids_index[source_key] = {event.id}
                 prev = updated_map.get(event.id)
                 if prev is not None and event.timestamp < prev.timestamp:
                     continue
                 updated_map[event.id] = event
-                if prev is None:
+                if source_key:
+                    source_ids_index[source_key].add(event.id)
+                if prev is None and not replaced_ids:
                     added_ids.add(event.id)
                 day = _day_key(event.timestamp)
                 days_touched.add(day)
@@ -2307,7 +2703,25 @@ class BybitFetcher(BaseFetcher):
             results,
             key=lambda x: int(x.get("info", {}).get("updatedTime") or x.get("timestamp") or 0),
         )
-        return ordered
+        deduped: List[Dict[str, object]] = []
+        seen_keys: set[Tuple[object, ...]] = set()
+        duplicate_rows = 0
+        for trade in ordered:
+            key = _bybit_trade_dedupe_key(trade)
+            if key is None:
+                deduped.append(trade)
+                continue
+            if key in seen_keys:
+                duplicate_rows += 1
+                continue
+            seen_keys.add(key)
+            deduped.append(trade)
+        if duplicate_rows:
+            logger.info(
+                "BybitFetcher._fetch_my_trades: dropped %d duplicate fill rows before canonicalization",
+                duplicate_rows,
+            )
+        return deduped
 
     async def _fetch_positions_history(self, start_ms: int, end_ms: int) -> List[Dict[str, object]]:
         """Fetch closed-pnl records using Bybit's raw API with hybrid pagination.
