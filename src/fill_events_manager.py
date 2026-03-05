@@ -2675,7 +2675,7 @@ class BybitFetcher(BaseFetcher):
             fetch_count += 1
             batch = await self.api.fetch_my_trades(params=params)
             if fetch_count > 1:
-                logger.info(
+                logger.debug(
                     "BybitFetcher._fetch_my_trades: fetch #%d endTime=%s size=%d",
                     fetch_count,
                     _format_ms(params.get("endTime")),
@@ -2717,7 +2717,7 @@ class BybitFetcher(BaseFetcher):
             seen_keys.add(key)
             deduped.append(trade)
         if duplicate_rows:
-            logger.info(
+            logger.debug(
                 "BybitFetcher._fetch_my_trades: dropped %d duplicate fill rows before canonicalization",
                 duplicate_rows,
             )
