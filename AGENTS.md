@@ -60,7 +60,16 @@ Prefer clear exceptions over silent error handling.
 - `except Exception: pass`, `except Exception: continue`, or returning neutral defaults after catching errors
 - `asyncio.gather(..., return_exceptions=True)` when exceptions are then ignored/dropped
 - `dict.get(required_key, safe_default)` for required trading inputs
+- `value = required_value or safe_default` for required trading inputs
+- Rust `unwrap_or(...)` / `unwrap_or_default()` for required config or required trading inputs
 - Converting required-input failures into `0.0`, `None`, `{}`, `[]`, or `False` without an explicit, documented fallback policy
+
+#### Config Defaults Ownership
+
+- Defaults are defined once in centralized config loading/formatting.
+- Do not re-apply defaults in runtime paths (live loop, backtest prep, Rust parsers, orchestrator inputs).
+- For required config fields, enforce presence and type at point-of-use (`require_config_value` / `extract_value`) and raise on missing/invalid.
+- Only optional fields may use optional access patterns, and optionality must be explicit in schema/docs.
 
 #### Required Error Contract
 
@@ -132,6 +141,7 @@ See [docs/ai/principles.yaml](docs/ai/principles.yaml) for full conventions.
 
 ```bash
 rg -n "except Exception|return_exceptions=True|\\.get\\([^\\n]*,\\s*(0|0\\.0|None|False|\\{\\}|\\[\\])\\)" src tests
+rg -n "unwrap_or\\(|unwrap_or_default\\(" passivbot-rust/src
 ```
 
 6. **If matches are present in changed code**, either:

@@ -1083,30 +1083,53 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             for coin in coins
         ]
     if backtest_params is None:
-        hard_stop_cfg = get_optional_config_value(config, "live.equity_hard_stop_loss", {})
+        hard_stop_cfg = require_config_value(config, "live.equity_hard_stop_loss")
         if not isinstance(hard_stop_cfg, dict):
             raise TypeError(
                 f"live.equity_hard_stop_loss must be a dict, got {type(hard_stop_cfg).__name__}"
             )
-        hard_stop_enabled = bool(hard_stop_cfg.get("enabled", False))
-        hard_stop_threshold = float(hard_stop_cfg.get("threshold", 0.25))
-        hard_stop_ema_span_minutes = float(hard_stop_cfg.get("ema_span_minutes", 60.0))
-        tier_ratios = hard_stop_cfg.get("tier_ratios", {})
+        tier_ratios = require_config_value(config, "live.equity_hard_stop_loss.tier_ratios")
         if not isinstance(tier_ratios, dict):
             raise TypeError(
                 f"live.equity_hard_stop_loss.tier_ratios must be a dict, got {type(tier_ratios).__name__}"
             )
-        hard_stop_tier_ratio_yellow = float(tier_ratios.get("yellow", 0.5))
-        hard_stop_tier_ratio_orange = float(tier_ratios.get("orange", 0.75))
-        hard_stop_orange_tier_mode = str(
-            hard_stop_cfg.get("orange_tier_mode", "tp_only_with_active_entry_cancellation")
+        hard_stop_enabled = bool(require_config_value(config, "live.equity_hard_stop_loss.enabled"))
+        hard_stop_threshold = float(require_config_value(config, "live.equity_hard_stop_loss.threshold"))
+        hard_stop_ema_span_minutes = float(
+            require_config_value(config, "live.equity_hard_stop_loss.ema_span_minutes")
         )
-        hard_stop_panic_close_order_type = str(hard_stop_cfg.get("panic_close_order_type", "market"))
+        hard_stop_cooldown_minutes_after_red = float(
+            require_config_value(config, "live.equity_hard_stop_loss.cooldown_minutes_after_red")
+        )
+        hard_stop_no_restart_threshold = float(
+            require_config_value(config, "live.equity_hard_stop_loss.no_restart_threshold")
+        )
+        hard_stop_tier_ratio_yellow = float(
+            require_config_value(config, "live.equity_hard_stop_loss.tier_ratios.yellow")
+        )
+        hard_stop_tier_ratio_orange = float(
+            require_config_value(config, "live.equity_hard_stop_loss.tier_ratios.orange")
+        )
+        hard_stop_orange_tier_mode = str(
+            require_config_value(config, "live.equity_hard_stop_loss.orange_tier_mode")
+        )
+        hard_stop_panic_close_order_type = str(
+            require_config_value(config, "live.equity_hard_stop_loss.panic_close_order_type")
+        )
         if hard_stop_enabled and hard_stop_threshold <= 0.0:
             raise ValueError("live.equity_hard_stop_loss.threshold must be > 0.0 when enabled")
         if hard_stop_enabled and hard_stop_ema_span_minutes <= 0.0:
             raise ValueError(
                 "live.equity_hard_stop_loss.ema_span_minutes must be > 0.0 when enabled"
+            )
+        if hard_stop_cooldown_minutes_after_red < 0.0:
+            raise ValueError(
+                "live.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
+            )
+        if not (hard_stop_threshold < hard_stop_no_restart_threshold <= 1.0):
+            raise ValueError(
+                "live.equity_hard_stop_loss.no_restart_threshold must satisfy "
+                "threshold < no_restart_threshold <= 1.0"
             )
         if not (0.0 < hard_stop_tier_ratio_yellow < hard_stop_tier_ratio_orange < 1.0):
             raise ValueError(
@@ -1150,16 +1173,14 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                 require_config_value(config, "backtest.filter_by_min_effective_cost")
             ),
             "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
-            "max_realized_loss_pct": float(
-                get_optional_config_value(config, "live.max_realized_loss_pct", 1.0)
-            ),
-            "pnls_max_lookback_days": float(
-                get_optional_config_value(config, "live.pnls_max_lookback_days", 30.0)
-            ),
+            "max_realized_loss_pct": float(require_config_value(config, "live.max_realized_loss_pct")),
+            "pnls_max_lookback_days": float(require_config_value(config, "live.pnls_max_lookback_days")),
             "equity_hard_stop_loss": {
                 "enabled": hard_stop_enabled,
                 "threshold": hard_stop_threshold,
                 "ema_span_minutes": hard_stop_ema_span_minutes,
+                "cooldown_minutes_after_red": hard_stop_cooldown_minutes_after_red,
+                "no_restart_threshold": hard_stop_no_restart_threshold,
                 "tier_ratios": {
                     "yellow": hard_stop_tier_ratio_yellow,
                     "orange": hard_stop_tier_ratio_orange,

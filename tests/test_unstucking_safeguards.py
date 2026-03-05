@@ -44,9 +44,17 @@ def _make_mock_pbr():
             self._drawdown_ema = 0.0
             self._equity_peak = 0.0
             self._rolling_peak = _EquityHardStopRollingPeak()
+            self._last_rolling_peak = 0.0
 
         def reset(self):
             self._state_reset()
+
+        def reset_state_keep_peak(self):
+            self._initialized = False
+            self._red_latched = False
+            self._tier = "green"
+            self._drawdown_ema = 0.0
+            self._equity_peak = 0.0
 
         def initialized(self):
             return bool(self._initialized)
@@ -63,6 +71,9 @@ def _make_mock_pbr():
         def equity_peak(self):
             return float(self._equity_peak)
 
+        def rolling_equity_peak(self):
+            return float(self._last_rolling_peak)
+
         def apply_sample(
             self,
             *,
@@ -75,19 +86,21 @@ def _make_mock_pbr():
             tier_ratio_yellow,
             tier_ratio_orange,
         ):
-            self._equity_peak = float(self._rolling_peak.update(timestamp_ms, equity, lookback_ms))
+            self._last_rolling_peak = float(self._rolling_peak.update(timestamp_ms, equity, lookback_ms))
             span_samples = ema_span_minutes / sample_minutes
             alpha = 2.0 / (span_samples + 1.0)
             prev_tier = self._tier
 
             if not self._initialized:
                 self._initialized = True
+                self._equity_peak = float(equity)
                 self._drawdown_ema = 0.0
                 self._tier = "red" if self._red_latched else "green"
                 return {
                     "initialized": True,
                     "red_latched": bool(self._red_latched),
                     "equity_peak": float(self._equity_peak),
+                    "rolling_equity_peak": float(self._last_rolling_peak),
                     "drawdown_ema": float(self._drawdown_ema),
                     "tier": self._tier,
                     "drawdown_raw": 0.0,
@@ -97,9 +110,10 @@ def _make_mock_pbr():
                     "alpha": float(alpha),
                 }
 
+            self._equity_peak = max(float(self._equity_peak), float(equity))
             drawdown_raw = max(0.0, 1.0 - equity / max(self._equity_peak, 1e-12))
             self._drawdown_ema = alpha * drawdown_raw + (1.0 - alpha) * self._drawdown_ema
-            drawdown_score = min(drawdown_raw, self._drawdown_ema)
+            drawdown_score = self._drawdown_ema
             if self._red_latched or drawdown_score >= threshold:
                 self._tier = "red"
                 self._red_latched = True
@@ -113,6 +127,7 @@ def _make_mock_pbr():
                 "initialized": True,
                 "red_latched": bool(self._red_latched),
                 "equity_peak": float(self._equity_peak),
+                "rolling_equity_peak": float(self._last_rolling_peak),
                 "drawdown_ema": float(self._drawdown_ema),
                 "tier": self._tier,
                 "drawdown_raw": float(drawdown_raw),
@@ -182,7 +197,7 @@ def _make_mock_pbr():
             }
         drawdown_raw = max(0.0, 1.0 - equity / max(equity_peak, 1e-12))
         drawdown_ema_next = alpha * drawdown_raw + (1.0 - alpha) * drawdown_ema
-        drawdown_score = min(drawdown_raw, drawdown_ema_next)
+        drawdown_score = drawdown_ema_next
         if red_latched or drawdown_score >= threshold:
             out_tier = "red"
             red_latched = True
@@ -305,6 +320,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.user = cfg["live"]["user"]
             self.user_info = {"exchange": "test_exchange"}
             self.exchange = self.user_info["exchange"]
+            self.utc_offset = 0
             self.broker_code = ""
             self.custom_id_max_length = 36
             self.sym_padding = 17
@@ -342,6 +358,8 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "enabled": False,
                 "threshold": 0.25,
                 "ema_span_minutes": 60.0,
+                "cooldown_minutes_after_red": 0.0,
+                "no_restart_threshold": 1.0,
                 "tier_ratios": {"yellow": 0.5, "orange": 0.75},
                 "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "market",
@@ -763,6 +781,7 @@ def test_hard_stop_apply_sample_delegates_to_rust(monkeypatch):
             "initialized": True,
             "red_latched": False,
             "equity_peak": 1200.0,
+            "rolling_equity_peak": 1210.0,
             "drawdown_ema": 0.13,
             "tier": "orange",
             "drawdown_raw": 0.19,
@@ -792,8 +811,238 @@ def test_hard_stop_apply_sample_rolling_peak_prunes_by_lookback():
     m1 = bot._equity_hard_stop_apply_sample(2_000, 95.0, 1.0)
 
     assert m0["equity_peak"] == pytest.approx(100.0)
-    assert m1["equity_peak"] == pytest.approx(95.0)
-    assert m1["drawdown_raw"] == pytest.approx(0.0)
+    assert m1["equity_peak"] == pytest.approx(100.0)
+    assert m1["rolling_equity_peak"] == pytest.approx(95.0)
+    assert m1["drawdown_raw"] > 0.0
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_startup_latch_terminal_blocks(monkeypatch, tmp_path):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.equity_hard_stop_loss["enabled"] = True
+    latch_path = tmp_path / "hs_latch_terminal.json"
+    latch_path.write_text(
+        json.dumps(
+            {
+                "triggered_at": "2026-03-04T12:00:00Z",
+                "stop_event_timestamp_ms": 1_700_000_000_000,
+                "no_restart_latched": True,
+                "auto_restart_eligible": False,
+                "cooldown_until_ms": None,
+            }
+        )
+    )
+    monkeypatch.setattr(bot, "_equity_hard_stop_latch_path", lambda: str(latch_path))
+
+    handled = await bot._equity_hard_stop_handle_startup_latch()
+
+    assert handled is True
+    assert bot.stop_signal_received is True
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_startup_latch_autorestart_clears(monkeypatch, tmp_path):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.equity_hard_stop_loss["enabled"] = True
+    latch_path = tmp_path / "hs_latch_auto.json"
+    latch_path.write_text(
+        json.dumps(
+            {
+                "triggered_at": "2026-03-04T12:00:00Z",
+                "stop_event_timestamp_ms": 1_700_000_000_000,
+                "no_restart_latched": False,
+                "auto_restart_eligible": True,
+                "cooldown_until_ms": 1,
+            }
+        )
+    )
+    monkeypatch.setattr(bot, "_equity_hard_stop_latch_path", lambda: str(latch_path))
+
+    handled = await bot._equity_hard_stop_handle_startup_latch()
+
+    assert handled is False
+    assert bot.stop_signal_received is False
+    assert not latch_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_finalize_red_stop_terminal_latches_and_stops(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 5.0
+    bot.equity_hard_stop_loss["no_restart_threshold"] = 0.1
+
+    async def fake_compute(_ts):
+        return {
+            "stop_event_timestamp_ms": 1_700_000_000_000,
+            "equity": 98.0,
+            "equity_peak": 110.0,
+            "trigger_equity_peak": 101.0,
+            "drawdown_raw": 0.109090909,
+            "drawdown_ema": 0.105,
+            "drawdown_score": 0.105,
+        }
+
+    captured = {}
+
+    def fake_write(payload):
+        captured["payload"] = payload
+        return "/tmp/hs_latch_terminal.json"
+
+    async def fake_wait(_until):
+        raise AssertionError("cooldown wait should not run for terminal no-restart latch")
+
+    monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
+    monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
+    monkeypatch.setattr(bot, "_equity_hard_stop_wait_for_cooldown", fake_wait)
+
+    await bot._equity_hard_stop_finalize_red_stop()
+
+    assert bot.stop_signal_received is True
+    assert captured["payload"]["no_restart_latched"] is True
+    assert captured["payload"]["cooldown_until_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 1.0
+    bot.equity_hard_stop_loss["no_restart_threshold"] = 0.2
+    bot._equity_hard_stop_runtime._initialized = True
+    bot._equity_hard_stop_runtime._red_latched = True
+    bot._equity_hard_stop_runtime._tier = "red"
+    bot._equity_hard_stop_runtime._drawdown_ema = 0.12
+
+    async def fake_compute(_ts):
+        return {
+            "stop_event_timestamp_ms": 1_700_000_000_000,
+            "equity": 104.0,
+            "equity_peak": 110.0,
+            "trigger_equity_peak": 106.0,
+            "drawdown_raw": 0.05454545,
+            "drawdown_ema": 0.08,
+            "drawdown_score": 0.08,
+        }
+
+    captured = {}
+    waited = {}
+    cleared = {}
+
+    def fake_write(payload):
+        captured["payload"] = payload
+        return "/tmp/hs_latch_auto.json"
+
+    async def fake_wait(until_ms):
+        waited["until_ms"] = until_ms
+
+    def fake_remove():
+        cleared["done"] = True
+
+    monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
+    monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
+    monkeypatch.setattr(bot, "_equity_hard_stop_wait_for_cooldown", fake_wait)
+    monkeypatch.setattr(bot, "_equity_hard_stop_remove_latch_file", fake_remove)
+
+    await bot._equity_hard_stop_finalize_red_stop()
+
+    assert bot.stop_signal_received is False
+    assert captured["payload"]["no_restart_latched"] is False
+    assert captured["payload"]["cooldown_until_ms"] is not None
+    assert waited["until_ms"] == captured["payload"]["cooldown_until_ms"]
+    assert cleared["done"] is True
+    assert bot._equity_hard_stop_runtime.red_latched() is False
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_terminal_stop_sets_latch(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.equity_hard_stop_loss["enabled"] = True
+    bot.equity_hard_stop_loss["threshold"] = 0.05
+    bot.equity_hard_stop_loss["ema_span_minutes"] = 1.0
+    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 5.0
+    bot.equity_hard_stop_loss["no_restart_threshold"] = 0.1
+    bot.balance = 80.0
+
+    async def fake_history(*, current_balance=None):
+        return {
+            "timeline": [
+                {"timestamp": 1_000, "equity": 100.0, "is_flat": False},
+                {"timestamp": 61_000, "equity": 80.0, "is_flat": False},
+                {"timestamp": 121_000, "equity": 80.0, "is_flat": True},
+            ]
+        }
+
+    captured = {}
+
+    def fake_write(payload):
+        captured["payload"] = payload
+        return "/tmp/hs_replay_terminal.json"
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    assert bot.stop_signal_received is True
+    assert captured["payload"]["no_restart_latched"] is True
+    assert captured["payload"]["cooldown_until_ms"] is None
+    assert captured["payload"]["stop_event_timestamp_ms"] == 121_000
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.equity_hard_stop_loss["enabled"] = True
+    bot.equity_hard_stop_loss["threshold"] = 0.05
+    bot.equity_hard_stop_loss["ema_span_minutes"] = 1.0
+    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 1.0
+    bot.equity_hard_stop_loss["no_restart_threshold"] = 0.2
+    bot.balance = 104.0
+    bot._live_values["execution_delay_seconds"] = 60.0
+
+    async def fake_history(*, current_balance=None):
+        return {
+            "timeline": [
+                {"timestamp": 1_000, "equity": 100.0, "is_flat": False},
+                {"timestamp": 61_000, "equity": 110.0, "is_flat": False},
+                {"timestamp": 121_000, "equity": 104.0, "is_flat": False},
+                {"timestamp": 181_000, "equity": 104.0, "is_flat": True},
+                {"timestamp": 241_000, "equity": 104.0, "is_flat": False},
+            ]
+        }
+
+    reset_calls = {"count": 0}
+
+    def wrapped_reset_state_keep_peak():
+        reset_calls["count"] += 1
+        bot._equity_hard_stop_runtime._initialized = False
+        bot._equity_hard_stop_runtime._red_latched = False
+        bot._equity_hard_stop_runtime._tier = "green"
+        bot._equity_hard_stop_runtime._drawdown_ema = 0.0
+        bot._equity_hard_stop_runtime._equity_peak = 0.0
+
+    async def fake_upnl():
+        return 0.0
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(
+        bot._equity_hard_stop_runtime, "reset_state_keep_peak", wrapped_reset_state_keep_peak
+    )
+    monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+    monkeypatch.setattr(bot, "get_exchange_time", lambda: 301_000)
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    assert bot.stop_signal_received is False
+    assert reset_calls["count"] == 1
+    assert bot._equity_hard_stop_runtime.red_latched() is False
+    assert bot._equity_hard_stop_runtime.tier() != "red"
+    assert bot._equity_hard_stop_pending_red_since_ms is None
 
 
 @pytest.mark.asyncio

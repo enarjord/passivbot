@@ -256,6 +256,14 @@ pub struct TradingEnabled {
     short: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct HardStopStopSnapshot {
+    timestamp_ms: u64,
+    equity: f64,
+    equity_peak: f64,
+    drawdown_raw: f64,
+}
+
 // RollingSum (SMA) removed — volume & log range are now tracked via EMAs in `EMAs`.
 
 pub struct Backtest<'a> {
@@ -318,7 +326,11 @@ pub struct Backtest<'a> {
     hard_stop_tier: ehsl::HardStopTier,
     hard_stop_rolling_peak: VecDeque<(u64, f64)>,
     hard_stop_halted: bool,
+    hard_stop_no_restart_latched: bool,
+    hard_stop_cooldown_until_ms: Option<u64>,
     hard_stop_flat_confirmations: usize,
+    hard_stop_pending_stop: Option<HardStopStopSnapshot>,
+    hard_stop_last_stop: Option<HardStopStopSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1539,7 +1551,11 @@ impl<'a> Backtest<'a> {
             hard_stop_tier: ehsl::HardStopTier::Green,
             hard_stop_rolling_peak: VecDeque::new(),
             hard_stop_halted: false,
+            hard_stop_no_restart_latched: false,
+            hard_stop_cooldown_until_ms: None,
             hard_stop_flat_confirmations: 0,
+            hard_stop_pending_stop: None,
+            hard_stop_last_stop: None,
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -1592,7 +1608,7 @@ impl<'a> Backtest<'a> {
             self.update_rounded_balance(k);
             self.update_trailing_prices(k);
             let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;
-            if k > warmup_bars && current_ts >= guard_timestamp_ms {
+            if k > warmup_bars && current_ts >= guard_timestamp_ms && !self.hard_stop_halted {
                 if self.update_n_positions_and_wallet_exposure_limits(k) {
                     self.equity_tracking_active = true;
                 }
@@ -1600,11 +1616,18 @@ impl<'a> Backtest<'a> {
             }
             if self.equity_tracking_active {
                 self.update_equities(k);
-                self.update_hard_stop_state(k);
+                if !self.hard_stop_halted {
+                    self.update_hard_stop_state(k);
+                }
                 self.record_total_wallet_exposure();
             }
             if self.hard_stop_halted {
-                break;
+                if self.try_restart_after_hard_stop(current_ts) {
+                    continue;
+                }
+                if self.hard_stop_cooldown_until_ms.is_none() {
+                    break;
+                }
             }
         }
         if let Some(mut writer) = self.debug_writer.take() {
@@ -1764,6 +1787,39 @@ impl<'a> Backtest<'a> {
     }
 
     #[inline(always)]
+    fn has_any_open_orders(&self) -> bool {
+        self.open_orders
+            .long
+            .values()
+            .any(|bundle| !(bundle.entries.is_empty() && bundle.closes.is_empty()))
+            || self
+                .open_orders
+                .short
+                .values()
+                .any(|bundle| !(bundle.entries.is_empty() && bundle.closes.is_empty()))
+    }
+
+    #[inline(always)]
+    fn try_restart_after_hard_stop(&mut self, current_ts_ms: u64) -> bool {
+        if self.hard_stop_no_restart_latched {
+            return false;
+        }
+        let Some(until) = self.hard_stop_cooldown_until_ms else {
+            return false;
+        };
+        if current_ts_ms < until {
+            return false;
+        }
+        self.hard_stop_halted = false;
+        self.hard_stop_cooldown_until_ms = None;
+        self.hard_stop_flat_confirmations = 0;
+        self.hard_stop_tier = ehsl::HardStopTier::Green;
+        self.hard_stop_state = None;
+        self.hard_stop_pending_stop = None;
+        true
+    }
+
+    #[inline(always)]
     fn hard_stop_orange_target_mode(&self) -> orchestrator::TradingMode {
         if self
             .backtest_params
@@ -1864,6 +1920,16 @@ impl<'a> Backtest<'a> {
             .unwrap_or(equity);
 
         let cfg = &self.backtest_params.equity_hard_stop_loss;
+        if !(cfg.no_restart_threshold.is_finite()
+            && cfg.threshold.is_finite()
+            && cfg.threshold < cfg.no_restart_threshold
+            && cfg.no_restart_threshold <= 1.0)
+        {
+            panic!(
+                "invalid hard-stop config: require threshold < no_restart_threshold <= 1.0, got threshold={} no_restart_threshold={}",
+                cfg.threshold, cfg.no_restart_threshold
+            );
+        }
         let hs_cfg = ehsl::HardStopConfig {
             threshold: cfg.threshold,
             ema_span_minutes: cfg.ema_span_minutes,
@@ -1876,27 +1942,67 @@ impl<'a> Backtest<'a> {
         let state = self
             .hard_stop_state
             .get_or_insert_with(ehsl::HardStopState::default);
-        let step = ehsl::step_with_equity_peak(state, hs_cfg, equity, rolling_peak, sample_minutes)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "hard-stop evaluation failed at k {} ts {} equity {} peak {}: {}",
-                    k, timestamp_ms, equity, rolling_peak, e
-                )
-            });
+        let step = ehsl::step(state, hs_cfg, equity, sample_minutes).unwrap_or_else(|e| {
+            panic!(
+                "hard-stop evaluation failed at k {} ts {} equity {} peak {}: {}",
+                k, timestamp_ms, equity, rolling_peak, e
+            )
+        });
         self.hard_stop_tier = step.tier;
 
         if step.tier == ehsl::HardStopTier::Red {
-            if self.has_any_open_position() {
+            if self.has_any_open_position() || self.has_any_open_orders() {
                 self.hard_stop_flat_confirmations = 0;
+                self.hard_stop_pending_stop = None;
             } else {
                 self.hard_stop_flat_confirmations =
                     self.hard_stop_flat_confirmations.saturating_add(1);
+                if self.hard_stop_flat_confirmations == 1 {
+                    self.hard_stop_pending_stop = Some(HardStopStopSnapshot {
+                        timestamp_ms,
+                        equity,
+                        equity_peak: rolling_peak,
+                        drawdown_raw: step.drawdown_raw,
+                    });
+                }
                 if self.hard_stop_flat_confirmations >= 2 {
+                    let stop_snapshot =
+                        self.hard_stop_pending_stop
+                            .unwrap_or(HardStopStopSnapshot {
+                                timestamp_ms,
+                                equity,
+                                equity_peak: rolling_peak,
+                                drawdown_raw: step.drawdown_raw,
+                            });
+                    self.hard_stop_last_stop = Some(stop_snapshot);
+                    self.hard_stop_pending_stop = None;
                     self.hard_stop_halted = true;
+                    let stop_drawdown_raw = stop_snapshot.drawdown_raw.max(
+                        (1.0 - stop_snapshot.equity / stop_snapshot.equity_peak.max(f64::EPSILON))
+                            .max(0.0),
+                    );
+                    if stop_drawdown_raw > cfg.no_restart_threshold {
+                        self.hard_stop_no_restart_latched = true;
+                        self.hard_stop_cooldown_until_ms = None;
+                    } else {
+                        let cooldown_minutes = self
+                            .backtest_params
+                            .equity_hard_stop_loss
+                            .cooldown_minutes_after_red;
+                        if cooldown_minutes.is_finite() && cooldown_minutes > 0.0 {
+                            let cooldown_ms =
+                                ((cooldown_minutes * 60_000.0).round() as u64).max(self.interval_ms);
+                            self.hard_stop_cooldown_until_ms =
+                                Some(stop_snapshot.timestamp_ms.saturating_add(cooldown_ms));
+                        } else {
+                            self.hard_stop_cooldown_until_ms = None;
+                        }
+                    }
                 }
             }
         } else {
             self.hard_stop_flat_confirmations = 0;
+            self.hard_stop_pending_stop = None;
         }
     }
 
@@ -3249,7 +3355,218 @@ mod tests {
         bt.equities.usd_total_equity.push(90.0);
         bt.update_hard_stop_state(1);
         let peak1 = bt.hard_stop_state.as_ref().unwrap().equity_peak;
-        assert!((peak1 - 90.0).abs() < 1e-12);
+        assert!((peak1 - 100.0).abs() < 1e-12);
+        let rolling_peak1 = bt.hard_stop_rolling_peak.front().map(|(_, eq)| *eq).unwrap_or(0.0);
+        assert!((rolling_peak1 - 90.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn hard_stop_red_sets_cooldown_when_configured() {
+        let hlcvs = Array3::from_shape_vec((3, 1, 4), vec![1.0; 3 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.threshold = 0.1;
+        hs.ema_span_minutes = 1.0;
+        hs.cooldown_minutes_after_red = 5.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![2],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            equity_hard_stop_loss: hs,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.equities.timestamps_ms.push(0);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state(0);
+
+        bt.equities.timestamps_ms.push(60_000);
+        bt.equities.usd_total_equity.push(80.0);
+        bt.update_hard_stop_state(1);
+
+        bt.equities.timestamps_ms.push(120_000);
+        bt.equities.usd_total_equity.push(70.0);
+        bt.update_hard_stop_state(2);
+
+        assert!(bt.hard_stop_halted);
+        assert_eq!(bt.hard_stop_cooldown_until_ms, Some(360_000));
+    }
+
+    #[test]
+    fn hard_stop_cooldown_restart_resets_runtime_state() {
+        let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.cooldown_minutes_after_red = 1.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            equity_hard_stop_loss: hs,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.hard_stop_halted = true;
+        bt.hard_stop_cooldown_until_ms = Some(120_000);
+        bt.hard_stop_flat_confirmations = 2;
+        bt.hard_stop_tier = ehsl::HardStopTier::Red;
+        bt.hard_stop_no_restart_latched = false;
+        bt.hard_stop_state = Some(ehsl::HardStopState {
+            initialized: true,
+            red_latched: true,
+            equity_peak: 123.0,
+            drawdown_ema: 0.2,
+            tier: ehsl::HardStopTier::Red,
+        });
+        bt.hard_stop_rolling_peak.push_back((0, 123.0));
+
+        assert!(!bt.try_restart_after_hard_stop(119_999));
+        assert!(bt.hard_stop_halted);
+        assert!(bt.try_restart_after_hard_stop(120_000));
+        assert!(!bt.hard_stop_halted);
+        assert_eq!(bt.hard_stop_cooldown_until_ms, None);
+        assert_eq!(bt.hard_stop_flat_confirmations, 0);
+        assert_eq!(bt.hard_stop_tier, ehsl::HardStopTier::Green);
+        assert!(bt.hard_stop_state.is_none());
+        assert_eq!(bt.hard_stop_rolling_peak.len(), 1);
+        assert!(bt.hard_stop_pending_stop.is_none());
+
+        bt.equities.timestamps_ms.push(180_000);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state(0);
+        bt.equities.timestamps_ms.push(240_000);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state(1);
+        assert_eq!(bt.hard_stop_tier, ehsl::HardStopTier::Green);
+        assert!(!bt.hard_stop_halted);
+    }
+
+    #[test]
+    fn hard_stop_no_restart_threshold_latches_terminal_halt() {
+        let hlcvs = Array3::from_shape_vec((3, 1, 4), vec![1.0; 3 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.threshold = 0.05;
+        hs.no_restart_threshold = 0.10;
+        hs.ema_span_minutes = 1.0;
+        hs.cooldown_minutes_after_red = 15.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![2],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            equity_hard_stop_loss: hs,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.equities.timestamps_ms.push(0);
+        bt.equities.usd_total_equity.push(110.0);
+        bt.update_hard_stop_state(0);
+
+        bt.equities.timestamps_ms.push(60_000);
+        bt.equities.usd_total_equity.push(98.0); // 10.9% drawdown from peak
+        bt.update_hard_stop_state(1);
+
+        bt.equities.timestamps_ms.push(120_000);
+        bt.equities.usd_total_equity.push(98.0);
+        bt.update_hard_stop_state(2);
+
+        assert!(bt.hard_stop_halted);
+        assert!(bt.hard_stop_no_restart_latched);
+        assert_eq!(bt.hard_stop_cooldown_until_ms, None);
+        assert!(!bt.try_restart_after_hard_stop(10_000_000));
     }
 
     #[test]

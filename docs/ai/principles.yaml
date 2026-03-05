@@ -51,9 +51,11 @@ passivbot_agent_principles:
     - Fail loudly. Prefer clear exceptions or panics over silent error handling.
     - Assume upstream code is correct; don't silently compensate for bad data.
     - Include clear, actionable error messages for all expected failures.
+    - Defaults for config values belong in centralized config loading/formatting; do not re-apply defaults in runtime code.
     - Exchange fetch methods (fetch_balance, fetch_positions, fetch_open_orders, etc.) must NOT catch exceptions. Let exceptions propagate to the caller who handles via restart_bot_on_too_many_errors(). This ensures clean return types (no Union[list, bool]), preserves exception context, and makes errors impossible to ignore.
     - In critical trading paths (exchange data, EMA feeds, risk gating, order construction), default policy is hard-fail; exceptions require explicit task-level approval and tests.
     - Forbidden in critical paths: silently dropping exceptions, silently dropping non-finite required values, and silently replacing required values with neutral defaults (0.0, None, {}, [], False).
+    - Forbidden for required inputs: Python `.get(key, default)`, `required_value or default`, and Rust `unwrap_or(...)` / `unwrap_or_default()`.
     - If a fallback is explicitly allowed, it must be bounded, observable, and test-covered: log reason/context every time and raise immediately when fallback source is unavailable.
 
 

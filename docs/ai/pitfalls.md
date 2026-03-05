@@ -300,6 +300,37 @@ ema = m1_close_emas[symbol][span]
 
 ---
 
+### Re-Applying Config Defaults Outside Config Loading
+
+**Don't**: Re-define defaults in runtime code for required config fields.
+
+**Because**: It hides config/schema regressions and scatters source-of-truth for defaults.
+
+**Example**:
+```python
+# WRONG: Runtime fallback for required config
+threshold = float(config["live"]["equity_hard_stop_loss"].get("threshold", 0.25))
+
+# CORRECT: Required config access (defaults handled centrally at config load)
+threshold = float(require_config_value(config, "live.equity_hard_stop_loss.threshold"))
+```
+
+```rust
+// WRONG: Silent fallback in parser for required key
+let threshold = cfg
+    .get_item("threshold")?
+    .map(|v| v.extract::<f64>())
+    .transpose()?
+    .unwrap_or(0.25);
+
+// CORRECT: Required key extraction
+let threshold: f64 = extract_value(cfg, "threshold")?;
+```
+
+**Instead**: Keep defaults in one place (config loader/formatter). Runtime code must validate and consume required fields without fallback.
+
+---
+
 ### Using Raw CCXT Exchange IDs for Cache Paths
 
 **Don't**: Use `exchange.id` (the CCXT instance ID) directly in file paths or cache directories.

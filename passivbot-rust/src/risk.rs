@@ -677,7 +677,8 @@ pub fn calc_twel_enforcer_actions(
             );
             continue;
         }
-        let floor_exposure = base_limit;
+        let per_position_twel_share = total_wallet_exposure_limit / (effective_n_positions as f64);
+        let floor_exposure = base_limit.min(per_position_twel_share.max(0.0));
         if exposure <= floor_exposure + 1e-9 {
             continue;
         }

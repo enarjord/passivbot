@@ -57,7 +57,7 @@ Write focused tests that exercise the specific code paths introduced or modified
 **What to test:**
 - The happy path for the new/changed behavior
 - Edge cases: empty inputs, boundary values, sign flips (long vs short), zero quantities
-- Error paths: does it fail loudly as expected? No silent swallowing?
+- Error paths: does it fail loudly as expected? No silent swallowing, no runtime default compensation for required inputs?
 - Regression: if this is a bug fix, write a test that would have caught the original bug
 
 **Run them:**
@@ -201,4 +201,3 @@ If you need deeper context during the review, consult:
 ## Tone
 
 Be direct and factual. No filler ("Great PR!"). Flag real issues, acknowledge good work briefly, and move on. When uncertain, say so — don't guess.
-
