@@ -533,6 +533,10 @@ pub struct Analysis {
     pub high_exposure_hours_max_short: f64,
     pub entry_initial_balance_pct_long: f64,
     pub entry_initial_balance_pct_short: f64,
+
+    pub hard_stop_triggers: u32,
+    pub hard_stop_total_loss_pct: f64,
+    pub hard_stop_restarts: u32,
 }
 
 impl Default for Analysis {
@@ -595,6 +599,9 @@ impl Default for Analysis {
             high_exposure_hours_max_short: 0.0,
             entry_initial_balance_pct_long: 0.0,
             entry_initial_balance_pct_short: 0.0,
+            hard_stop_triggers: 0,
+            hard_stop_total_loss_pct: 0.0,
+            hard_stop_restarts: 0,
         }
     }
 }

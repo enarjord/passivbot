@@ -305,6 +305,10 @@ pub struct Backtest<'a> {
     trailing_prices: TrailingPrices,
     pnl_cumsum_running: f64,
     pnl_cumsum_max: f64,
+    pnl_lookback_bars: usize,
+    pnl_events: VecDeque<(usize, f64)>,
+    rolling_pnl_cumsum: f64,
+    rolling_pnl_cumsum_max: f64,
     fills: Vec<Fill>,
     trading_enabled: TradingEnabled,
     trailing_enabled: Vec<TrailingEnabled>,
@@ -333,6 +337,10 @@ pub struct Backtest<'a> {
     hard_stop_flat_confirmations: usize,
     hard_stop_pending_stop: Option<HardStopStopSnapshot>,
     hard_stop_last_stop: Option<HardStopStopSnapshot>,
+    hard_stop_n_triggers: u32,
+    hard_stop_n_restarts: u32,
+    hard_stop_total_panic_loss: f64,
+    hard_stop_equity_at_halt: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -556,6 +564,7 @@ impl<'a> Backtest<'a> {
 
         let balance = self.balance.usd_total_balance_rounded;
         let balance_raw = self.balance.usd_total_balance;
+        let (effective_cumsum_max, effective_cumsum_last) = self.effective_pnl_cumsum();
         let allowance = match side {
             LONG => {
                 if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
@@ -563,8 +572,8 @@ impl<'a> Backtest<'a> {
                         balance_raw,
                         self.bot_params_master.long.unstuck_loss_allowance_pct
                             * self.bot_params_master.long.total_wallet_exposure_limit,
-                        self.pnl_cumsum_max,
-                        self.pnl_cumsum_running,
+                        effective_cumsum_max,
+                        effective_cumsum_last,
                     )
                 } else {
                     0.0
@@ -576,8 +585,8 @@ impl<'a> Backtest<'a> {
                         balance_raw,
                         self.bot_params_master.short.unstuck_loss_allowance_pct
                             * self.bot_params_master.short.total_wallet_exposure_limit,
-                        self.pnl_cumsum_max,
-                        self.pnl_cumsum_running,
+                        effective_cumsum_max,
+                        effective_cumsum_last,
                     )
                 } else {
                     0.0
@@ -791,14 +800,15 @@ impl<'a> Backtest<'a> {
     {
         let balance = self.balance.usd_total_balance_rounded;
         let balance_raw = self.balance.usd_total_balance;
+        let (effective_cumsum_max, effective_cumsum_last) = self.effective_pnl_cumsum();
 
         let long_allowance = if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
             calc_auto_unstuck_allowance(
                 balance_raw,
                 self.bot_params_master.long.unstuck_loss_allowance_pct
                     * self.bot_params_master.long.total_wallet_exposure_limit,
-                self.pnl_cumsum_max,
-                self.pnl_cumsum_running,
+                effective_cumsum_max,
+                effective_cumsum_last,
             )
         } else {
             0.0
@@ -808,8 +818,8 @@ impl<'a> Backtest<'a> {
                 balance_raw,
                 self.bot_params_master.short.unstuck_loss_allowance_pct
                     * self.bot_params_master.short.total_wallet_exposure_limit,
-                self.pnl_cumsum_max,
-                self.pnl_cumsum_running,
+                effective_cumsum_max,
+                effective_cumsum_last,
             )
         } else {
             0.0
@@ -1031,8 +1041,8 @@ impl<'a> Backtest<'a> {
                 unstuck_allowance_long: long_allowance,
                 unstuck_allowance_short: short_allowance,
                 max_realized_loss_pct: self.backtest_params.max_realized_loss_pct,
-                realized_pnl_cumsum_max: self.pnl_cumsum_max,
-                realized_pnl_cumsum_last: self.pnl_cumsum_running,
+                realized_pnl_cumsum_max: effective_cumsum_max,
+                realized_pnl_cumsum_last: effective_cumsum_last,
                 sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
                 hedge_mode: self.backtest_params.hedge_mode,
@@ -1057,14 +1067,15 @@ impl<'a> Backtest<'a> {
         input.balance_raw = self.balance.usd_total_balance;
 
         let balance_raw = input.balance_raw;
+        let (effective_cumsum_max, effective_cumsum_last) = self.effective_pnl_cumsum();
         input.global.unstuck_allowance_long =
             if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
                 calc_auto_unstuck_allowance(
                     balance_raw,
                     self.bot_params_master.long.unstuck_loss_allowance_pct
                         * self.bot_params_master.long.total_wallet_exposure_limit,
-                    self.pnl_cumsum_max,
-                    self.pnl_cumsum_running,
+                    effective_cumsum_max,
+                    effective_cumsum_last,
                 )
             } else {
                 0.0
@@ -1075,15 +1086,15 @@ impl<'a> Backtest<'a> {
                     balance_raw,
                     self.bot_params_master.short.unstuck_loss_allowance_pct
                         * self.bot_params_master.short.total_wallet_exposure_limit,
-                    self.pnl_cumsum_max,
-                    self.pnl_cumsum_running,
+                    effective_cumsum_max,
+                    effective_cumsum_last,
                 )
             } else {
                 0.0
             };
         input.global.max_realized_loss_pct = self.backtest_params.max_realized_loss_pct;
-        input.global.realized_pnl_cumsum_max = self.pnl_cumsum_max;
-        input.global.realized_pnl_cumsum_last = self.pnl_cumsum_running;
+        input.global.realized_pnl_cumsum_max = effective_cumsum_max;
+        input.global.realized_pnl_cumsum_last = effective_cumsum_last;
 
         input.peek_hints = peek_hints;
 
@@ -1511,6 +1522,15 @@ impl<'a> Backtest<'a> {
             trailing_prices: TrailingPrices::default(),
             pnl_cumsum_running: 0.0,
             pnl_cumsum_max: 0.0,
+            pnl_lookback_bars: if backtest_params.pnls_max_lookback_days > 0.0 {
+                let minutes = backtest_params.pnls_max_lookback_days * 24.0 * 60.0;
+                (minutes / backtest_params.candle_interval_minutes.max(1) as f64).ceil() as usize
+            } else {
+                0
+            },
+            pnl_events: VecDeque::new(),
+            rolling_pnl_cumsum: 0.0,
+            rolling_pnl_cumsum_max: 0.0,
             fills: Vec::new(),
             trading_enabled: TradingEnabled {
                 long: bot_params
@@ -1562,6 +1582,10 @@ impl<'a> Backtest<'a> {
             hard_stop_flat_confirmations: 0,
             hard_stop_pending_stop: None,
             hard_stop_last_stop: None,
+            hard_stop_n_triggers: 0,
+            hard_stop_n_restarts: 0,
+            hard_stop_total_panic_loss: 0.0,
+            hard_stop_equity_at_halt: 0.0,
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -1832,6 +1856,16 @@ impl<'a> Backtest<'a> {
         if current_ts_ms < until {
             return false;
         }
+        self.hard_stop_n_restarts += 1;
+        // Track panic loss: equity lost between halt and restart
+        if self.hard_stop_equity_at_halt > 0.0 {
+            if let Some(&current_equity) = self.equities.usd_total_equity.last() {
+                let loss = self.hard_stop_equity_at_halt - current_equity;
+                if loss > 0.0 {
+                    self.hard_stop_total_panic_loss += loss;
+                }
+            }
+        }
         self.hard_stop_halted = false;
         self.hard_stop_cooldown_until_ms = None;
         self.hard_stop_flat_confirmations = 0;
@@ -1839,6 +1873,32 @@ impl<'a> Backtest<'a> {
         self.hard_stop_state = None;
         self.hard_stop_pending_stop = None;
         true
+    }
+
+    fn record_rolling_pnl(&mut self, k: usize, pnl: f64) {
+        if self.pnl_lookback_bars == 0 {
+            return;
+        }
+        self.rolling_pnl_cumsum += pnl;
+        self.pnl_events.push_back((k, pnl));
+        while let Some(&(old_k, old_pnl)) = self.pnl_events.front() {
+            if k.saturating_sub(old_k) > self.pnl_lookback_bars {
+                self.pnl_events.pop_front();
+                self.rolling_pnl_cumsum -= old_pnl;
+            } else {
+                break;
+            }
+        }
+        self.rolling_pnl_cumsum_max = self.rolling_pnl_cumsum_max.max(self.rolling_pnl_cumsum);
+    }
+
+    #[inline]
+    fn effective_pnl_cumsum(&self) -> (f64, f64) {
+        if self.pnl_lookback_bars > 0 {
+            (self.rolling_pnl_cumsum_max, self.rolling_pnl_cumsum)
+        } else {
+            (self.pnl_cumsum_max, self.pnl_cumsum_running)
+        }
     }
 
     #[inline(always)]
@@ -1999,6 +2059,8 @@ impl<'a> Backtest<'a> {
                     self.hard_stop_last_stop = Some(stop_snapshot);
                     self.hard_stop_pending_stop = None;
                     self.hard_stop_halted = true;
+                    self.hard_stop_n_triggers += 1;
+                    self.hard_stop_equity_at_halt = equity;
                     let stop_drawdown_raw = stop_snapshot.drawdown_raw.max(
                         (1.0 - stop_snapshot.equity / stop_snapshot.equity_peak.max(f64::EPSILON))
                             .max(0.0),
@@ -2307,6 +2369,7 @@ impl<'a> Backtest<'a> {
         );
         self.pnl_cumsum_running += pnl;
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
+        self.record_rolling_pnl(k, pnl);
         let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -2390,6 +2453,7 @@ impl<'a> Backtest<'a> {
         );
         self.pnl_cumsum_running += pnl;
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
+        self.record_rolling_pnl(k, pnl);
         let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -3055,6 +3119,16 @@ impl<'a> Backtest<'a> {
             self.effective_n_positions.short,
         );
         (long, short)
+    }
+
+    /// Returns (n_triggers, total_panic_loss, n_restarts, starting_balance).
+    pub fn hard_stop_metrics(&self) -> (u32, f64, u32, f64) {
+        (
+            self.hard_stop_n_triggers,
+            self.hard_stop_total_panic_loss,
+            self.hard_stop_n_restarts,
+            self.backtest_params.starting_balance,
+        )
     }
 }
 
