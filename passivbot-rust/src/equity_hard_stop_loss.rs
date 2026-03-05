@@ -95,7 +95,12 @@ impl RollingPeakTracker {
         self.peaks.len()
     }
 
-    pub fn update(&mut self, timestamp_ms: u64, equity: f64, lookback_ms: u64) -> Result<f64, String> {
+    pub fn update(
+        &mut self,
+        timestamp_ms: u64,
+        equity: f64,
+        lookback_ms: u64,
+    ) -> Result<f64, String> {
         if !equity.is_finite() || equity <= 0.0 {
             return Err("equity must be finite and > 0".to_string());
         }
@@ -203,17 +208,20 @@ pub fn step_with_equity_peak(
     state.equity_peak = equity_peak;
     let drawdown_raw = (1.0 - (equity / state.equity_peak.max(f64::EPSILON))).max(0.0);
     state.drawdown_ema = alpha * drawdown_raw + (1.0 - alpha) * state.drawdown_ema;
-    let drawdown_score = drawdown_raw.min(state.drawdown_ema);
+    // Effective trigger metric: EMA of raw drawdown.
+    // Keep "drawdown_score" naming for API compatibility.
+    let drawdown_score = state.drawdown_ema;
 
     let threshold_yellow = config.tier_ratios.yellow * config.threshold;
     let threshold_orange = config.tier_ratios.orange * config.threshold;
+    let cmp_eps = 1e-12;
     let next_tier = if state.red_latched {
         HardStopTier::Red
-    } else if drawdown_score >= config.threshold {
+    } else if drawdown_score + cmp_eps >= config.threshold {
         HardStopTier::Red
-    } else if drawdown_score >= threshold_orange {
+    } else if drawdown_score + cmp_eps >= threshold_orange {
         HardStopTier::Orange
-    } else if drawdown_score >= threshold_yellow {
+    } else if drawdown_score + cmp_eps >= threshold_yellow {
         HardStopTier::Yellow
     } else {
         HardStopTier::Green
@@ -284,27 +292,26 @@ mod tests {
     }
 
     #[test]
-    fn min_raw_and_ema_prevents_stale_ema_red_after_recovery() {
+    fn score_equals_drawdown_ema_metric() {
         let mut state = HardStopState::default();
-        let config = cfg();
-
+        let config = HardStopConfig {
+            threshold: 0.2,
+            ema_span_minutes: 15.0,
+            tier_ratios: HardStopTierRatios::default(),
+        };
         let _ = step(&mut state, config, 100.0, 1.0).unwrap();
-        // slow drop builds EMA
-        for _ in 0..30 {
-            let _ = step(&mut state, config, 80.0, 1.0).unwrap();
-        }
-        // recover strongly: raw drawdown low, ema still high.
-        let recovered = step(&mut state, config, 98.0, 1.0).unwrap();
-        assert!(recovered.drawdown_raw < config.threshold);
-        assert!(recovered.drawdown_ema > config.threshold * 0.5);
-        assert!(recovered.drawdown_score < config.threshold);
-        assert_ne!(recovered.tier, HardStopTier::Red);
+        let s = step(&mut state, config, 90.0, 1.0).unwrap();
+        assert!((s.drawdown_score - s.drawdown_ema).abs() < 1e-12);
     }
 
     #[test]
     fn red_is_latched_once_triggered() {
         let mut state = HardStopState::default();
-        let config = cfg();
+        let config = HardStopConfig {
+            threshold: 0.25,
+            ema_span_minutes: 1.0,
+            tier_ratios: HardStopTierRatios::default(),
+        };
         let _ = step(&mut state, config, 100.0, 1.0).unwrap();
         let red = step(&mut state, config, 60.0, 1.0).unwrap();
         assert_eq!(red.tier, HardStopTier::Red);

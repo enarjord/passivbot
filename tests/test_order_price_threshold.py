@@ -22,6 +22,7 @@ class PriceThresholdBot(Passivbot):
         self.min_costs = {symbol: 0.0}
         self.c_mults = {symbol: 1.0}
         self.custom_id_max_length = 36
+        self.equity_hard_stop_loss = {"panic_close_order_type": "market"}
         self._live_values = {"price_distance_threshold": 0.015, "market_orders_allowed": False}
 
     def live_value(self, key: str):

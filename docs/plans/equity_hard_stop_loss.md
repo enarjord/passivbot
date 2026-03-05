@@ -6,7 +6,7 @@
 
 ## 1. Objective
 
-Add an account-level hard stop based on equity drawdown from peak (realized + unrealized), with staged responses and a terminal RED latch requiring explicit human acknowledgement before restart.
+Add an account-level hard stop based on equity drawdown from peak (realized + unrealized), with staged responses, cooldown restart support (live + backtest), and a no-restart latch when stop-time drawdown is too deep.
 
 ## 2. Config
 
@@ -17,6 +17,8 @@ Use nested config under `config.live.equity_hard_stop_loss`:
   "enabled": false,
   "threshold": 0.25,
   "ema_span_minutes": 60.0,
+  "cooldown_minutes_after_red": 0.0,
+  "no_restart_threshold": 1.0,
   "tier_ratios": {
     "yellow": 0.5,
     "orange": 0.75
@@ -29,6 +31,8 @@ Use nested config under `config.live.equity_hard_stop_loss`:
 - `enabled` (`bool`): master switch.
 - `threshold` (`float`): RED trigger drawdown. Must be `> 0`.
 - `ema_span_minutes` (`float`): smoothing span in minutes (not samples).
+- `cooldown_minutes_after_red` (`float`): auto-restart cooldown after a fully-confirmed RED stop. `0.0` disables auto-restart (terminal halt).
+- `no_restart_threshold` (`float`): if stop-time raw drawdown exceeds this level, auto-restart is disabled and halt becomes terminal for this run.
 - `tier_ratios.yellow` (`float`): default `0.5`.
 - `tier_ratios.orange` (`float`): default `0.75`.
 - `orange_tier_mode` (`enum`):
@@ -39,6 +43,8 @@ Use nested config under `config.live.equity_hard_stop_loss`:
 Validation:
 - `0 < yellow < orange < 1`.
 - `threshold > 0`, `ema_span_minutes > 0`.
+- `cooldown_minutes_after_red >= 0`.
+- `threshold < no_restart_threshold <= 1.0`.
 
 Backtest receives these values via `prep_backtest_args()` passthrough from `config.live`.
 
@@ -46,12 +52,13 @@ Backtest receives these values via `prep_backtest_args()` passthrough from `conf
 
 Per sample:
 - `equity = balance_raw + upnl_sum_strict`
-- `equity_peak = max(equity_peak_prev, equity)` (rolling-window constrained, see section 7)
-- `drawdown_raw = max(0, 1 - equity / max(equity_peak, eps))`
+- `cycle_peak = max(cycle_peak_prev, equity)` (resets on cooldown restart)
+- `rolling_peak = rolling max over pnls lookback window` (section 7)
+- `drawdown_raw = max(0, 1 - equity / max(cycle_peak, eps))`
 - `span_samples = ema_span_minutes / sample_minutes` (float, no rounding)
 - `alpha = 2 / (span_samples + 1)`
 - `drawdown_ema = alpha * drawdown_raw + (1 - alpha) * drawdown_ema_prev`
-- `drawdown_score = min(drawdown_raw, drawdown_ema)`
+- `drawdown_score = drawdown_ema` (effective trigger metric; kept as `score` label for API/log continuity)
 
 Tier classification:
 - GREEN: `< yellow * threshold`
@@ -59,7 +66,9 @@ Tier classification:
 - ORANGE: `>= orange * threshold`
 - RED: `>= threshold`
 
-`drawdown_score = min(raw, ema)` is retained to avoid stale-EMA RED triggers after recovery while filtering crash spikes.
+Tier/RED decisions are keyed off `drawdown_ema` (smoothed drawdown from cycle peak).  
+`rolling_peak` is retained for no-restart gating at stop finalization:
+- `stop_drawdown_raw = 1 - equity_at_stop / rolling_peak_at_stop`
 
 ## 4. Trading Mode Semantics
 
@@ -83,7 +92,7 @@ Implementation detail:
 ## 5. Tier Actions
 
 GREEN/YELLOW/ORANGE can de-escalate.  
-RED is terminal and latched.
+RED latches for the active stop cycle; post-cooldown restart is allowed only when no-restart latch is not set.
 
 ### ORANGE
 
@@ -108,8 +117,10 @@ Flat confirmation rule ("beyond doubt"):
   - no open non-panic close orders remain.
 
 After confirmation:
-- set `stop_signal_received = True`;
-- exit trading loop without triggering auto-restart path.
+- define **stop event timestamp** as the first flat-confirmed timestamp (not initial RED-cross timestamp);
+- compute `stop_drawdown_raw = 1 - equity_at_stop / equity_peak_at_stop`;
+- if `stop_drawdown_raw > no_restart_threshold`: terminal halt (no auto-restart);
+- else: apply cooldown restart policy (`cooldown_minutes_after_red`).
 
 ## 6. Architecture
 
@@ -143,7 +154,11 @@ RED:
 - add hard-stop config/state.
 - evaluate each step after `update_equities(k)`.
 - apply ORANGE mode semantics.
-- RED latches; force panic flatten logic; halt further trading after flat confirmation.
+- RED latches; force panic flatten logic.
+- once RED is fully confirmed flat:
+  - if `stop_drawdown_raw > no_restart_threshold`: terminal halt;
+  - else if `cooldown_minutes_after_red == 0`: terminal halt;
+  - else pause trading until cooldown elapses, then auto-restart with fresh cycle peak/EMA/latch runtime state while preserving rolling-peak history.
 
 ## 7. Equity Reconstruction, Rolling Lookback, and Cache
 
@@ -175,7 +190,8 @@ Path:
 Required payload:
 - `triggered_at`, `exchange`, `user`
 - `threshold`, `ema_span_minutes`, `tier_ratios`, `orange_tier_mode`
-- `equity`, `equity_peak`, `drawdown_raw`, `drawdown_ema`, `drawdown_score`
+- `no_restart_threshold`
+- `equity`, `equity_peak` (rolling), `trigger_equity_peak` (cycle), `drawdown_raw`, `drawdown_ema`, `drawdown_score`
 - `panic_close_order_type`, `tier=red`
 
 Behavior:
@@ -203,7 +219,7 @@ No per-cycle spam outside transitions/RED progress checkpoints.
 Rust unit:
 - minute->samples conversion correctness (float span, no rounding).
 - tier-ratio boundary tests with custom ratios.
-- V-crash/recovery (`min(raw, ema)` guard).
+- RED/tier trigger on `drawdown_ema` (not raw drawdown).
 - rolling lookback peak logic.
 
 Live:
@@ -220,6 +236,21 @@ Backtest:
 
 ## 12. Non-goals
 
-- cooldown/auto-resume.
+- condition-based auto-resume predicates (fixed-minute cooldown only in current implementation).
 - per-side thresholds.
 - derivative/velocity confirmation filter.
+
+## 13. Future Auto-Restart Conditions (Suggestions)
+
+Live/backtest can later support condition-based restart in addition to fixed-minute cooldown. Candidate restart predicates:
+
+1. Drawdown stabilization gate:
+   - restart only when `drawdown_score < restart_ratio * threshold` for `N` consecutive bars (e.g. `restart_ratio=0.6`).
+2. Trend-recovery gate:
+   - restart only when price is above a medium EMA (long side) / below EMA (short side) for `N` bars, indicating regime recovery.
+3. Volatility-normalization gate:
+   - restart only when short-horizon realized volatility falls below a percentile/absolute cap, avoiding immediate re-entry into panic regimes.
+4. Liquidity-quality gate:
+   - restart only when spread and/or book-depth proxies are back within normal bounds.
+5. Hybrid gate (recommended long-term default):
+   - fixed minimum cooldown **and** stabilization gate; whichever is later.

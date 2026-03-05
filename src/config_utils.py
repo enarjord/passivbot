@@ -2882,6 +2882,8 @@ def get_template_config():
                 "enabled": False,
                 "threshold": 0.25,
                 "ema_span_minutes": 60.0,
+                "cooldown_minutes_after_red": 0.0,
+                "no_restart_threshold": 1.0,
                 "tier_ratios": {
                     "yellow": 0.5,
                     "orange": 0.75,

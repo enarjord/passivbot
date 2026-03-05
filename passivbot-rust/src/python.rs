@@ -38,7 +38,11 @@ pub struct HlcvsBundlePy {
     pub inner: HlcvsBundle,
 }
 
-#[pyclass(name = "EquityHardStopRollingPeak", module = "passivbot_rust", unsendable)]
+#[pyclass(
+    name = "EquityHardStopRollingPeak",
+    module = "passivbot_rust",
+    unsendable
+)]
 pub struct EquityHardStopRollingPeakPy {
     inner: ehsl::RollingPeakTracker,
 }
@@ -47,6 +51,7 @@ pub struct EquityHardStopRollingPeakPy {
 pub struct EquityHardStopRuntimePy {
     state: ehsl::HardStopState,
     rolling_peak: ehsl::RollingPeakTracker,
+    last_rolling_peak: f64,
 }
 
 #[pymethods]
@@ -134,12 +139,18 @@ impl EquityHardStopRuntimePy {
         Self {
             state: ehsl::HardStopState::default(),
             rolling_peak: ehsl::RollingPeakTracker::default(),
+            last_rolling_peak: 0.0,
         }
     }
 
     pub fn reset(&mut self) {
         self.state = ehsl::HardStopState::default();
         self.rolling_peak.reset();
+        self.last_rolling_peak = 0.0;
+    }
+
+    pub fn reset_state_keep_peak(&mut self) {
+        self.state = ehsl::HardStopState::default();
     }
 
     pub fn initialized(&self) -> bool {
@@ -160,6 +171,10 @@ impl EquityHardStopRuntimePy {
 
     pub fn equity_peak(&self) -> f64 {
         self.state.equity_peak
+    }
+
+    pub fn rolling_equity_peak(&self) -> f64 {
+        self.last_rolling_peak
     }
 
     #[pyo3(signature = (
@@ -185,10 +200,11 @@ impl EquityHardStopRuntimePy {
         tier_ratio_yellow: f64,
         tier_ratio_orange: f64,
     ) -> PyResult<Py<PyDict>> {
-        let equity_peak = self
+        let rolling_equity_peak = self
             .rolling_peak
             .update(timestamp_ms, equity, lookback_ms)
             .map_err(PyValueError::new_err)?;
+        self.last_rolling_peak = rolling_equity_peak;
         let cfg = ehsl::HardStopConfig {
             threshold,
             ema_span_minutes,
@@ -197,14 +213,14 @@ impl EquityHardStopRuntimePy {
                 orange: tier_ratio_orange,
             },
         };
-        let step =
-            ehsl::step_with_equity_peak(&mut self.state, cfg, equity, equity_peak, sample_minutes)
-                .map_err(PyValueError::new_err)?;
+        let step = ehsl::step(&mut self.state, cfg, equity, sample_minutes)
+            .map_err(PyValueError::new_err)?;
 
         let out = PyDict::new_bound(py);
         out.set_item("initialized", self.state.initialized)?;
         out.set_item("red_latched", self.state.red_latched)?;
         out.set_item("equity_peak", self.state.equity_peak)?;
+        out.set_item("rolling_equity_peak", self.last_rolling_peak)?;
         out.set_item("drawdown_ema", self.state.drawdown_ema)?;
         out.set_item("tier", hard_stop_tier_to_str(self.state.tier))?;
         out.set_item("drawdown_raw", step.drawdown_raw)?;
@@ -998,93 +1014,48 @@ fn struct_to_py_dict<T: Serialize + ?Sized>(py: Python<'_>, obj: &T) -> PyResult
 }
 
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
-    let hard_stop_cfg = match dict.get_item("equity_hard_stop_loss")? {
-        Some(item) if !item.is_none() => {
-            let cfg = item.downcast::<PyDict>()?;
-            let tier_ratios = match cfg.get_item("tier_ratios")? {
-                Some(item) if !item.is_none() => {
-                    let ratios = item.downcast::<PyDict>()?;
-                    EquityHardStopLossTierRatios {
-                        yellow: ratios
-                            .get_item("yellow")?
-                            .map(|v| v.extract::<f64>())
-                            .transpose()?
-                            .unwrap_or(0.5),
-                        orange: ratios
-                            .get_item("orange")?
-                            .map(|v| v.extract::<f64>())
-                            .transpose()?
-                            .unwrap_or(0.75),
-                    }
-                }
-                _ => EquityHardStopLossTierRatios::default(),
-            };
-            EquityHardStopLossConfig {
-                enabled: cfg
-                    .get_item("enabled")?
-                    .map(|v| v.extract::<bool>())
-                    .transpose()?
-                    .unwrap_or(false),
-                threshold: cfg
-                    .get_item("threshold")?
-                    .map(|v| v.extract::<f64>())
-                    .transpose()?
-                    .unwrap_or(0.25),
-                ema_span_minutes: cfg
-                    .get_item("ema_span_minutes")?
-                    .map(|v| v.extract::<f64>())
-                    .transpose()?
-                    .unwrap_or(60.0),
-                tier_ratios,
-                orange_tier_mode: cfg
-                    .get_item("orange_tier_mode")?
-                    .map(|v| v.extract::<String>())
-                    .transpose()?
-                    .unwrap_or_else(|| "tp_only_with_active_entry_cancellation".to_string()),
-                panic_close_order_type: cfg
-                    .get_item("panic_close_order_type")?
-                    .map(|v| v.extract::<String>())
-                    .transpose()?
-                    .unwrap_or_else(|| "market".to_string()),
-            }
-        }
-        _ => EquityHardStopLossConfig::default(),
+    let hard_stop_item = dict
+        .get_item("equity_hard_stop_loss")?
+        .ok_or_else(|| PyValueError::new_err("missing required key: equity_hard_stop_loss"))?;
+    let cfg = hard_stop_item
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("equity_hard_stop_loss must be a dict"))?;
+    let ratios_item = cfg
+        .get_item("tier_ratios")?
+        .ok_or_else(|| PyValueError::new_err("missing required key: equity_hard_stop_loss.tier_ratios"))?;
+    let ratios = ratios_item
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("equity_hard_stop_loss.tier_ratios must be a dict"))?;
+    let hard_stop_cfg = EquityHardStopLossConfig {
+        enabled: extract_value(cfg, "enabled")?,
+        threshold: extract_value(cfg, "threshold")?,
+        ema_span_minutes: extract_value(cfg, "ema_span_minutes")?,
+        cooldown_minutes_after_red: extract_value(cfg, "cooldown_minutes_after_red")?,
+        no_restart_threshold: extract_value(cfg, "no_restart_threshold")?,
+        tier_ratios: EquityHardStopLossTierRatios {
+            yellow: extract_value(ratios, "yellow")?,
+            orange: extract_value(ratios, "orange")?,
+        },
+        orange_tier_mode: extract_value(cfg, "orange_tier_mode")?,
+        panic_close_order_type: extract_value(cfg, "panic_close_order_type")?,
     };
 
     Ok(BacktestParams {
-        starting_balance: extract_value(dict, "starting_balance").unwrap_or_default(),
-        maker_fee: extract_value(dict, "maker_fee").unwrap_or_default(),
-        coins: extract_value(dict, "coins").unwrap_or_default(),
-        active_coin_indices: dict
-            .get_item("active_coin_indices")?
-            .map(|item| item.extract::<Vec<usize>>())
-            .transpose()?,
-        // First timestamp (ms); default to 0 if not provided
-        first_timestamp_ms: extract_value(dict, "first_timestamp_ms").unwrap_or(0u64),
-        requested_start_timestamp_ms: extract_value(dict, "requested_start_timestamp_ms")
-            .unwrap_or(0u64),
-        first_valid_indices: dict
-            .get_item("first_valid_indices")?
-            .map(|item| item.extract::<Vec<usize>>())
-            .transpose()?
-            .unwrap_or_default(),
-        last_valid_indices: dict
-            .get_item("last_valid_indices")?
-            .map(|item| item.extract::<Vec<usize>>())
-            .transpose()?
-            .unwrap_or_default(),
-        warmup_minutes: dict
-            .get_item("warmup_minutes")?
-            .map(|item| item.extract::<Vec<usize>>())
-            .transpose()?
-            .unwrap_or_default(),
-        trade_start_indices: dict
-            .get_item("trade_start_indices")?
-            .map(|item| item.extract::<Vec<usize>>())
-            .transpose()?
-            .unwrap_or_default(),
-        global_warmup_bars: extract_value(dict, "global_warmup_bars").unwrap_or(0usize),
-        btc_collateral_cap: extract_value(dict, "btc_collateral_cap").unwrap_or(0.0f64),
+        starting_balance: extract_value(dict, "starting_balance")?,
+        maker_fee: extract_value(dict, "maker_fee")?,
+        coins: extract_value(dict, "coins")?,
+        active_coin_indices: match dict.get_item("active_coin_indices")? {
+            Some(item) if !item.is_none() => Some(item.extract::<Vec<usize>>()?),
+            _ => None,
+        },
+        first_timestamp_ms: extract_value(dict, "first_timestamp_ms")?,
+        requested_start_timestamp_ms: extract_value(dict, "requested_start_timestamp_ms")?,
+        first_valid_indices: extract_value(dict, "first_valid_indices")?,
+        last_valid_indices: extract_value(dict, "last_valid_indices")?,
+        warmup_minutes: extract_value(dict, "warmup_minutes")?,
+        trade_start_indices: extract_value(dict, "trade_start_indices")?,
+        global_warmup_bars: extract_value(dict, "global_warmup_bars")?,
+        btc_collateral_cap: extract_value(dict, "btc_collateral_cap")?,
         btc_collateral_ltv_cap: match dict.get_item("btc_collateral_ltv_cap")? {
             Some(item) if !item.is_none() => Some(item.extract::<f64>()?),
             _ => None,
@@ -1116,11 +1087,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .transpose()?
             .unwrap_or(30.0),
         equity_hard_stop_loss: hard_stop_cfg,
-        candle_interval_minutes: dict
-            .get_item("candle_interval_minutes")?
-            .map(|item| item.extract::<u64>())
-            .transpose()?
-            .unwrap_or(1), // default to 1m candles
+        candle_interval_minutes: extract_value(dict, "candle_interval_minutes")?,
     })
 }
 
