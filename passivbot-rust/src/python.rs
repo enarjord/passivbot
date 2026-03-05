@@ -837,6 +837,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
+        dynamic_wel_by_tradability: extract_value(dict, "dynamic_wel_by_tradability")?,
         hedge_mode: dict
             .get_item("hedge_mode")?
             .map(|item| item.extract::<bool>())

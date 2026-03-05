@@ -17,6 +17,9 @@ This document provides an overview of the parameters found in `config/template.j
 - **filter_by_min_effective_cost**: When `true`, skip coins whose projected initial entry
   (balance × wallet_exposure_limit × entry_initial_qty_pct, including WE excess allowance)
   would fall below the exchange’s effective minimum cost.
+- **dynamic_wel_by_tradability**: Backtest-only WEL denominator mode.  
+  - `true` (default): `wallet_exposure_limit = total_wallet_exposure_limit / min(n_positions, n_tradable_max)` where `n_tradable_max` is the highest number of coins that have had real candles at any timestep so far (non-shrinking).  
+  - `false`: fixed denominator, same as live: `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
 - **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use the exchange-derived maker fees.
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
   `balance_and_equity.csv` and related plots. `1` keeps full per-minute resolution; higher values
@@ -78,7 +81,8 @@ Example per-metric aggregation:
 - **total_wallet_exposure_limit**: Maximum exposure allowed.
   - Example: `total_wallet_exposure_limit = 0.75` means 75% of (unleveraged) wallet balance is used.
   - Example: `total_wallet_exposure_limit = 1.6` means 160% of (unleveraged) wallet balance is used.
-  - Each position is given an equal share: `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
+  - Live denominator is fixed: `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
+  - Backtest denominator is controlled by `backtest.dynamic_wel_by_tradability`.
   - See more: `docs/risk_management.md`.
 - **enforce_exposure_limit**: If `true`, enforces exposure limits for each position.
   - Example: If a position's exposure exceeds 1% of the limit, reduce the position at market price to the exposure limit.

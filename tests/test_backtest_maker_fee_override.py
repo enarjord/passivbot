@@ -34,3 +34,15 @@ def test_prep_backtest_args_uses_maker_fee_override_when_set():
     mss = _base_mss()
     _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["maker_fee"] == 0.0002
+
+
+def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():
+    config = _base_config()
+    mss = _base_mss()
+
+    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    assert backtest_params["dynamic_wel_by_tradability"] is True
+
+    config["backtest"]["dynamic_wel_by_tradability"] = False
+    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    assert backtest_params["dynamic_wel_by_tradability"] is False

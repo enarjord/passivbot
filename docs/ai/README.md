@@ -2,6 +2,16 @@
 
 This directory contains documentation for AI coding assistants working on Passivbot.
 
+## FIRST COMMANDMENT (READ THIS FIRST)
+
+FAIL LOUD. NO SILENT FALLBACKS. EVER.
+
+- Do not hide missing required inputs with defaults.
+- Do not use `dict.get(required_key, default)` in trading-critical paths.
+- Do not swallow exceptions in trading-critical paths.
+- If required data is missing/invalid: raise immediately with context.
+- If a fallback is explicitly approved for a task, it must be logged and test-covered.
+
 ## Quick Reference
 
 | File | When to Read | Description |

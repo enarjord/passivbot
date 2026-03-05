@@ -16,6 +16,7 @@
         "end_date": "now",
         "exchanges": ["binance","bybit"],
         "filter_by_min_effective_cost": false,
+        "dynamic_wel_by_tradability": true,
         "gap_tolerance_ohlcvs_minutes": 120,
         "maker_fee_override": 0.0004,
         "market_settings_sources": {},

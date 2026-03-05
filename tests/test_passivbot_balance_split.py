@@ -184,6 +184,25 @@ def test_accessor_returns_raw_when_present():
     assert bot.get_hysteresis_snapped_balance() == pytest.approx(1000.0)
 
 
+def test_get_wallet_exposure_limit_uses_configured_n_positions_only():
+    bot = Passivbot.__new__(Passivbot)
+    bot.coin_overrides = {}
+
+    def bot_value(pside, key):
+        if key == "total_wallet_exposure_limit":
+            return 1.4
+        if key == "n_positions":
+            return 7
+        raise KeyError(key)
+
+    bot.bot_value = bot_value
+    bot.get_max_n_positions = lambda pside: 1
+    bot.get_current_n_positions = lambda pside: 99
+
+    wel = bot.get_wallet_exposure_limit("long")
+    assert wel == pytest.approx(0.2)
+
+
 def test_balance_peak_uses_raw_not_snapped():
     """Core bug regression: balance_peak must be derived from raw balance, not snapped.
 

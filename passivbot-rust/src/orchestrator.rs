@@ -3273,8 +3273,9 @@ mod core {
                 bid: 100.0,
                 ask: 100.0,
             };
-            sym.long.bot_params.wallet_exposure_limit = 1.0;
-            sym.long.bot_params.risk_wel_enforcer_threshold = 1.0;
+            // Keep WEL reducer inactive while leaving enough reducible size for TWEL reducer.
+            sym.long.bot_params.wallet_exposure_limit = 0.4;
+            sym.long.bot_params.risk_wel_enforcer_threshold = 2.0;
             sym.long.bot_params.total_wallet_exposure_limit = 0.6;
             sym.long.bot_params.n_positions = 1;
 
@@ -3284,8 +3285,8 @@ mod core {
             global_bp.long.n_positions = 1;
 
             let input = OrchestratorInput {
-                balance: 1000.0,      // snapped: WE = 500/1000 = 0.5 (under limit)
-                balance_raw: 800.0,   // raw: WE = 500/800 = 0.625 (over limit)
+                balance: 1000.0,    // snapped: WE = 500/1000 = 0.5 (under limit)
+                balance_raw: 800.0, // raw: WE = 500/800 = 0.625 (over limit)
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
@@ -3353,13 +3354,17 @@ mod core {
                 peek_hints: None,
             };
             let out = compute_ideal_orders(&input).unwrap();
-            let entry_orders: Vec<_> = out.orders
+            let entry_orders: Vec<_> = out
+                .orders
                 .iter()
-                .filter(|o| matches!(o.order_type,
-                    OrderType::EntryGridNormalLong
-                    | OrderType::EntryInitialNormalLong
-                    | OrderType::EntryInitialPartialLong
-                ))
+                .filter(|o| {
+                    matches!(
+                        o.order_type,
+                        OrderType::EntryGridNormalLong
+                            | OrderType::EntryInitialNormalLong
+                            | OrderType::EntryInitialPartialLong
+                    )
+                })
                 .collect();
             if !entry_orders.is_empty() {
                 // If entries exist, their total cost must fit within raw balance budget ($5)
