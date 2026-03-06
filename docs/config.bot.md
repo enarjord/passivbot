@@ -14,6 +14,8 @@ Throughout:
   (`>0` long, `<0` short).
 * `wallet_exposure(balance, size, price, c_mult)` returns `abs(size) * price / (balance * c_mult)`.
 * `wel_base` abbreviates `wallet_exposure_limit` for the symbol and pside.
+  In live mode this is derived from a fixed denominator (`n_positions`); in backtests it may be
+  fixed or tradability-driven depending on `backtest.dynamic_wel_by_tradability`.
 
 ## Initial Entry & Grid Re-entries
 

@@ -1172,6 +1172,9 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "filter_by_min_effective_cost": bool(
                 require_config_value(config, "backtest.filter_by_min_effective_cost")
             ),
+            "dynamic_wel_by_tradability": bool(
+                require_config_value(config, "backtest.dynamic_wel_by_tradability")
+            ),
             "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
             "max_realized_loss_pct": float(require_config_value(config, "live.max_realized_loss_pct")),
             "pnls_max_lookback_days": float(require_config_value(config, "live.pnls_max_lookback_days")),

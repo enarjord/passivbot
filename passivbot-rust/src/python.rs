@@ -1069,13 +1069,34 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             Some(item) if !item.is_none() => Some(item.extract::<f64>()?),
             _ => None,
         },
-        metrics_only: extract_value(dict, "metrics_only")?,
-        filter_by_min_effective_cost: extract_value(dict, "filter_by_min_effective_cost")?,
-        hedge_mode: extract_value(dict, "hedge_mode")?,
-        max_realized_loss_pct: extract_value(dict, "max_realized_loss_pct")?,
+        metrics_only: dict
+            .get_item("metrics_only")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(false),
+        filter_by_min_effective_cost: dict
+            .get_item("filter_by_min_effective_cost")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(false),
+        dynamic_wel_by_tradability: extract_value(dict, "dynamic_wel_by_tradability")?,
+        hedge_mode: dict
+            .get_item("hedge_mode")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(true),
+        max_realized_loss_pct: dict
+            .get_item("max_realized_loss_pct")?
+            .map(|item| item.extract::<f64>())
+            .transpose()?
+            .unwrap_or(1.0),
         pnls_max_lookback_days: extract_value(dict, "pnls_max_lookback_days")?,
         equity_hard_stop_loss: hard_stop_cfg,
-        candle_interval_minutes: extract_value(dict, "candle_interval_minutes")?,
+        candle_interval_minutes: dict
+            .get_item("candle_interval_minutes")?
+            .map(|item| item.extract::<u64>())
+            .transpose()?
+            .unwrap_or(1), // default to 1m candles
     })
 }
 

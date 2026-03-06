@@ -274,6 +274,7 @@ pub struct Backtest<'a> {
     bot_params_master: BotParamsPair,
     bot_params: Vec<BotParamsPair>,
     bot_params_original: Vec<BotParamsPair>,
+    configured_n_positions: EffectiveNPositions,
     effective_n_positions: EffectiveNPositions,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
@@ -326,6 +327,7 @@ pub struct Backtest<'a> {
     orchestrator_input_cache: Option<orchestrator::OrchestratorInput>,
     orchestrator_workspace: orchestrator::OrchestratorWorkspace,
     orch_profile: Option<OrchProfile>,
+    max_tradable_coins_seen: usize,
     hard_stop_state: Option<ehsl::HardStopState>,
     hard_stop_tier: ehsl::HardStopTier,
     hard_stop_rolling_peak: VecDeque<(u64, f64)>,
@@ -1154,8 +1156,9 @@ impl<'a> Backtest<'a> {
                 .cloned()
                 .unwrap_or_default();
 
-            // Bot params are mostly static, but `wallet_exposure_limit` may be dynamically updated
-            // per timestep based on `effective_n_positions` and eligible coin count.
+            // Bot params are mostly static, but `wallet_exposure_limit` may be updated per
+            // timestep from the active denominator mode (fixed configured n_positions, or
+            // backtest tradability-driven denominator).
             sym.long.bot_params.wallet_exposure_limit =
                 self.bot_params[idx].long.wallet_exposure_limit;
             sym.short.bot_params.wallet_exposure_limit =
@@ -1429,6 +1432,10 @@ impl<'a> Backtest<'a> {
         let equities = Equities::default();
 
         // init bot params
+        let configured_n_positions = EffectiveNPositions {
+            long: bot_params[0].long.n_positions,
+            short: bot_params[0].short.n_positions,
+        };
         let mut bot_params_master = bot_params[0].clone();
         bot_params_master.long.n_positions = n_coins.min(bot_params_master.long.n_positions);
         bot_params_master.short.n_positions = n_coins.min(bot_params_master.short.n_positions);
@@ -1436,10 +1443,7 @@ impl<'a> Backtest<'a> {
         // Store original bot params to preserve dynamic WEL indicators
         let bot_params_original = bot_params.clone();
 
-        let effective_n_positions = EffectiveNPositions {
-            long: bot_params_master.long.n_positions,
-            short: bot_params_master.short.n_positions,
-        };
+        let effective_n_positions = configured_n_positions.clone();
 
         // Calculate EMA alphas for each coin, adjusted for candle interval
         let interval = backtest_params.candle_interval_minutes;
@@ -1472,6 +1476,7 @@ impl<'a> Backtest<'a> {
             bot_params_master: bot_params_master.clone(),
             bot_params: bot_params.clone(),
             bot_params_original,
+            configured_n_positions,
             effective_n_positions,
             exchange_params_list,
             backtest_params: backtest_params.clone(),
@@ -1567,6 +1572,7 @@ impl<'a> Backtest<'a> {
                     mode: "orchestrator",
                     ..OrchProfile::default()
                 }),
+            max_tradable_coins_seen: 0,
             hard_stop_state: None,
             hard_stop_tier: ehsl::HardStopTier::Green,
             hard_stop_rolling_peak: VecDeque::new(),
@@ -1677,11 +1683,27 @@ impl<'a> Backtest<'a> {
             return false; // nothing tradable right now
         }
 
-        // ---------- 2. effective position counts ----------
-        self.effective_n_positions.long =
-            self.bot_params_master.long.n_positions.min(eligible.len());
-        self.effective_n_positions.short =
-            self.bot_params_master.short.n_positions.min(eligible.len());
+        let tradable_now = eligible.len();
+        let tradable_for_denom = if self.backtest_params.dynamic_wel_by_tradability {
+            // Grow-only tradable universe: once a coin has been tradable, later delistings
+            // do not reduce the denominator.
+            self.max_tradable_coins_seen = self.max_tradable_coins_seen.max(tradable_now);
+            self.max_tradable_coins_seen
+        } else {
+            tradable_now
+        };
+
+        // ---------- 2. denominator/effective position counts ----------
+        self.effective_n_positions.long = if self.backtest_params.dynamic_wel_by_tradability {
+            self.configured_n_positions.long.min(tradable_for_denom)
+        } else {
+            self.configured_n_positions.long
+        };
+        self.effective_n_positions.short = if self.backtest_params.dynamic_wel_by_tradability {
+            self.configured_n_positions.short.min(tradable_for_denom)
+        } else {
+            self.configured_n_positions.short
+        };
 
         // avoid division by zero (possible directly after a delisting)
         if self.effective_n_positions.long == 0 && self.effective_n_positions.short == 0 {
@@ -3672,6 +3694,7 @@ mod tests {
             btc_collateral_ltv_cap: None,
             metrics_only: true,
             filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
@@ -3732,6 +3755,7 @@ mod tests {
             btc_collateral_ltv_cap: None,
             metrics_only: true,
             filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
@@ -3815,6 +3839,7 @@ mod tests {
             btc_collateral_ltv_cap: None,
             metrics_only: true,
             filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
@@ -3872,6 +3897,131 @@ mod tests {
             "unstuck allowance should use updated raw balance (1050), got {}",
             input2.global.unstuck_allowance_long
         );
+    }
+
+    #[test]
+    fn dynamic_wel_by_tradability_uses_non_shrinking_tradable_count() {
+        let hlcvs = Array3::from_shape_vec((6, 3, 4), vec![1.0; 6 * 3 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 6]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 3;
+        bp_pair.long.total_wallet_exposure_limit = 1.5;
+        bp_pair.long.wallet_exposure_limit = -1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            coins: vec!["A".to_string(), "B".to_string(), "C".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0, 0, 0],
+            last_valid_indices: vec![5, 2, 5],
+            warmup_minutes: vec![0, 0, 1],
+            trade_start_indices: vec![0, 0, 1],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair.clone(), bp_pair.clone(), bp_pair],
+            vec![
+                ExchangeParams::default(),
+                ExchangeParams::default(),
+                ExchangeParams::default(),
+            ],
+            &backtest_params,
+        );
+
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert!(
+            (bt.bot_params[0].long.wallet_exposure_limit - 0.75).abs() < 1e-12,
+            "k=0 expected wel 1.5/2"
+        );
+        assert_eq!(bt.effective_n_positions.long, 2);
+
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(1));
+        assert!(
+            (bt.bot_params[0].long.wallet_exposure_limit - 0.5).abs() < 1e-12,
+            "k=1 expected wel 1.5/3 after third coin becomes tradable"
+        );
+        assert_eq!(bt.effective_n_positions.long, 3);
+
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(4));
+        assert!(
+            (bt.bot_params[0].long.wallet_exposure_limit - 0.5).abs() < 1e-12,
+            "k=4 expected wel to remain 1.5/3 after B delists"
+        );
+        assert_eq!(bt.effective_n_positions.long, 3);
+    }
+
+    #[test]
+    fn fixed_backtest_wel_uses_configured_n_positions() {
+        let hlcvs = Array3::from_shape_vec((6, 2, 4), vec![1.0; 6 * 2 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 6]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 4;
+        bp_pair.long.total_wallet_exposure_limit = 2.0;
+        bp_pair.long.wallet_exposure_limit = -1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            coins: vec!["A".to_string(), "B".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0, 0],
+            last_valid_indices: vec![5, 1],
+            warmup_minutes: vec![0, 0],
+            trade_start_indices: vec![0, 0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: false,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair.clone(), bp_pair],
+            vec![ExchangeParams::default(), ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert!(
+            (bt.bot_params[0].long.wallet_exposure_limit - 0.5).abs() < 1e-12,
+            "k=0 expected fixed wel 2.0/4"
+        );
+        assert_eq!(bt.effective_n_positions.long, 4);
+
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(4));
+        assert!(
+            (bt.bot_params[0].long.wallet_exposure_limit - 0.5).abs() < 1e-12,
+            "k=4 expected fixed wel to stay 2.0/4 despite fewer tradable coins"
+        );
+        assert_eq!(bt.effective_n_positions.long, 4);
     }
 
     #[test]

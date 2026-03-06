@@ -1584,6 +1584,227 @@ async def test_bybit_fetcher_fees_captured():
 
 
 @pytest.mark.asyncio
+async def test_bybit_fetcher_deduplicates_duplicate_exec_ids_before_coalescing():
+    """Duplicate pages must not inflate canonical qty for the same execId."""
+    base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+    duplicated_trade = {
+        "id": "exec-dup",
+        "timestamp": base_ts,
+        "amount": 0.06,
+        "price": 346.47,
+        "side": "sell",
+        "symbol": "XMR/USDT:USDT",
+        "info": {
+            "orderId": "order-dup",
+            "orderLinkId": "0x0018004f2efba1b246dfb30ed39e7060eb",
+            "closedSize": "0.06",
+            "execQty": "0.06",
+            "orderQty": "13.26",
+        },
+    }
+
+    # Simulate Bybit pagination returning the same fill in two pages.
+    api = _FakeBybitAPI(
+        trades_batches=[[dict(duplicated_trade)], [dict(duplicated_trade)], []],
+        positions_batches=[[]],
+    )
+    fetcher = BybitFetcher(api, trade_limit=1)
+
+    events = await fetcher.fetch(
+        since_ms=base_ts - 1_000,
+        until_ms=base_ts + 1_000,
+        detail_cache={},
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["qty"] == pytest.approx(0.06)
+    assert event["side"] == "sell"
+
+
+@pytest.mark.asyncio
+async def test_fill_events_manager_bybit_doctor_detects_cross_event_duplicates(tmp_path: Path):
+    cache_path = tmp_path / "fills_doctor_detect"
+    ts = 1_770_000_000_000
+
+    trade_a = {
+        "id": "exec-a",
+        "timestamp": ts,
+        "amount": 0.4,
+        "price": 100.0,
+        "side": "sell",
+        "symbol": "BTC/USDT:USDT",
+        "info": {"execId": "exec-a", "orderId": "order-1", "execQty": "0.4", "closedSize": "0.4"},
+    }
+    trade_b = {
+        "id": "exec-b",
+        "timestamp": ts,
+        "amount": 0.6,
+        "price": 101.0,
+        "side": "sell",
+        "symbol": "BTC/USDT:USDT",
+        "info": {"execId": "exec-b", "orderId": "order-1", "execQty": "0.6", "closedSize": "0.6"},
+    }
+
+    events = [
+        FillEvent.from_dict(
+            {
+                "id": "exec-a+exec-b",
+                "source_ids": ["exec-a", "exec-b"],
+                "timestamp": ts,
+                "datetime": "2026-02-28T00:00:00",
+                "symbol": "BTC/USDT:USDT",
+                "side": "sell",
+                "qty": -1.0,
+                "price": 100.6,
+                "pnl": -1.0,
+                "fees": {"currency": "USDT", "cost": 0.05},
+                "pb_order_type": "close_auto_reduce_wel_long",
+                "position_side": "long",
+                "client_order_id": "0xabc",
+                "raw": [
+                    {"source": "fetch_my_trades", "data": dict(trade_a)},
+                    {"source": "fetch_my_trades", "data": dict(trade_b)},
+                ],
+            }
+        ),
+        FillEvent.from_dict(
+            {
+                "id": "exec-a",
+                "source_ids": ["exec-a"],
+                "timestamp": ts,
+                "datetime": "2026-02-28T00:00:00",
+                "symbol": "BTC/USDT:USDT",
+                "side": "sell",
+                "qty": -0.4,
+                "price": 100.0,
+                "pnl": -0.4,
+                "fees": {"currency": "USDT", "cost": 0.02},
+                "pb_order_type": "close_auto_reduce_wel_long",
+                "position_side": "long",
+                "client_order_id": "0xabc",
+                "raw": [{"source": "fetch_my_trades", "data": dict(trade_a)}],
+            }
+        ),
+    ]
+    FillEventCache(cache_path).save(events)
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="u",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_path,
+    )
+    await manager.ensure_loaded()
+
+    report = await manager.run_doctor(auto_repair=False)
+    assert report["anomaly_events"] > 0
+    assert report["repaired"] is False
+
+
+@pytest.mark.asyncio
+async def test_fill_events_manager_bybit_doctor_auto_repairs_cross_event_duplicates(tmp_path: Path):
+    cache_path = tmp_path / "fills_doctor_repair"
+    ts = 1_770_000_000_000
+
+    trade_a = {
+        "id": "exec-a",
+        "timestamp": ts,
+        "amount": 0.4,
+        "price": 100.0,
+        "side": "sell",
+        "symbol": "BTC/USDT:USDT",
+        "fee": {"currency": "USDT", "cost": 0.02},
+        "info": {"execId": "exec-a", "orderId": "order-1", "execQty": "0.4", "closedSize": "0.4"},
+    }
+    trade_b = {
+        "id": "exec-b",
+        "timestamp": ts,
+        "amount": 0.6,
+        "price": 101.0,
+        "side": "sell",
+        "symbol": "BTC/USDT:USDT",
+        "fee": {"currency": "USDT", "cost": 0.03},
+        "info": {"execId": "exec-b", "orderId": "order-1", "execQty": "0.6", "closedSize": "0.6"},
+    }
+    pos_hist = {
+        "source": "positions_history",
+        "data": {
+            "info": {
+                "orderId": "order-1",
+                "avgEntryPrice": "110.0",
+                "closedSize": "1.0",
+                "closeFee": "0.05",
+                "openFee": "0.0",
+            }
+        },
+    }
+
+    malformed_events = [
+        FillEvent.from_dict(
+            {
+                "id": "exec-a+exec-b+exec-a",
+                "source_ids": ["exec-a", "exec-b"],
+                "timestamp": ts,
+                "datetime": "2026-02-28T00:00:00",
+                "symbol": "BTC/USDT:USDT",
+                "side": "sell",
+                "qty": -1.4,
+                "price": 100.4,
+                "pnl": -14.0,
+                "fees": {"currency": "USDT", "cost": 0.07},
+                "pb_order_type": "close_auto_reduce_wel_long",
+                "position_side": "long",
+                "client_order_id": "0xabc",
+                "raw": [
+                    {"source": "fetch_my_trades", "data": dict(trade_a)},
+                    {"source": "fetch_my_trades", "data": dict(trade_b)},
+                    {"source": "fetch_my_trades", "data": dict(trade_a)},
+                    dict(pos_hist),
+                ],
+            }
+        ),
+        FillEvent.from_dict(
+            {
+                "id": "exec-b",
+                "source_ids": ["exec-b"],
+                "timestamp": ts,
+                "datetime": "2026-02-28T00:00:00",
+                "symbol": "BTC/USDT:USDT",
+                "side": "sell",
+                "qty": -0.6,
+                "price": 101.0,
+                "pnl": -5.4,
+                "fees": {"currency": "USDT", "cost": 0.03},
+                "pb_order_type": "close_auto_reduce_wel_long",
+                "position_side": "long",
+                "client_order_id": "0xabc",
+                "raw": [{"source": "fetch_my_trades", "data": dict(trade_b)}, dict(pos_hist)],
+            }
+        ),
+    ]
+    FillEventCache(cache_path).save(malformed_events)
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="u",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_path,
+    )
+    await manager.ensure_loaded()
+
+    report = await manager.run_doctor(auto_repair=True)
+    assert report["anomaly_events"] > 0
+    assert report["anomaly_events_after"] == 0
+    assert report["repaired"] is True
+
+    repaired_events = manager.get_events()
+    assert len(repaired_events) == 1
+    assert repaired_events[0].qty == pytest.approx(-1.0)
+    assert repaired_events[0].id == "exec-a+exec-b"
+
+
+@pytest.mark.asyncio
 async def test_hyperliquid_fetcher_basic(monkeypatch):
     base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
     trades_batches = [

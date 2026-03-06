@@ -3930,7 +3930,7 @@ class Passivbot:
                     )
 
     def get_wallet_exposure_limit(self, pside, symbol=None):
-        """Return the wallet exposure limit for a side, honoring per-symbol overrides."""
+        """Return side WEL from fixed config denominator, honoring per-symbol overrides."""
         if symbol:
             fwel = (
                 self.coin_overrides.get(symbol, {})
@@ -3943,8 +3943,8 @@ class Passivbot:
         twel = self.bot_value(pside, "total_wallet_exposure_limit")
         if twel <= 0.0:
             return 0.0
-        n_positions = max(self.get_max_n_positions(pside), self.get_current_n_positions(pside))
-        if n_positions == 0:
+        n_positions = int(round(self.bot_value(pside, "n_positions")))
+        if n_positions <= 0:
             return 0.0
         return round(twel / n_positions, 8)
 
@@ -4083,6 +4083,28 @@ class Passivbot:
 
             # Load cached events
             await self._pnls_manager.ensure_loaded()
+
+            # Bybit cache doctor runs by default on startup to self-heal known duplicate-fill issues.
+            doctor_mode = str(os.getenv("PASSIVBOT_FILL_EVENTS_DOCTOR", "")).strip().lower()
+            if self.exchange == "bybit":
+                if doctor_mode not in ("0", "false", "off", "disable", "disabled"):
+                    auto_repair = doctor_mode not in ("check", "scan", "detect")
+                    report = await self._pnls_manager.run_doctor(auto_repair=auto_repair)
+                    logging.info(
+                        "[fills-doctor] startup report anomalies=%s repaired=%s mode=%s",
+                        report.get("anomaly_events", 0),
+                        report.get("repaired", False),
+                        doctor_mode or ("repair" if auto_repair else "check"),
+                    )
+            elif doctor_mode:
+                auto_repair = doctor_mode in ("1", "true", "yes", "repair", "fix", "auto")
+                report = await self._pnls_manager.run_doctor(auto_repair=auto_repair)
+                logging.info(
+                    "[fills-doctor] startup report anomalies=%s repaired=%s mode=%s",
+                    report.get("anomaly_events", 0),
+                    report.get("repaired", False),
+                    doctor_mode,
+                )
 
             cached_count = len(self._pnls_manager._events)
             logging.info("[fills] initialized: %d cached events loaded", cached_count)

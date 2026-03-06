@@ -212,6 +212,7 @@ pub struct BacktestParams {
     pub btc_collateral_ltv_cap: Option<f64>,
     pub metrics_only: bool,
     pub filter_by_min_effective_cost: bool,
+    pub dynamic_wel_by_tradability: bool,
     pub hedge_mode: bool,
     pub max_realized_loss_pct: f64,
     pub pnls_max_lookback_days: f64,

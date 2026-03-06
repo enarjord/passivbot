@@ -220,6 +220,7 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
                 "btc_collateral_cap": 0.5,
                 "btc_collateral_ltv_cap": None,
                 "filter_by_min_effective_cost": False,
+                "dynamic_wel_by_tradability": True,
             },
             "bot": {
                 "long": {
