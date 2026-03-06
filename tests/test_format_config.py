@@ -102,8 +102,10 @@ def test_format_config_live_only_adds_sections():
     tmpl = _template()
     live_only = {"bot": tmpl["bot"], "live": tmpl["live"]}
     out = format_config(live_only, verbose=False)
+    out_live_only = format_config(live_only, verbose=False, live_only=True)
     # ensure missing sections were added
     assert "optimize" in out and "backtest" in out
+    assert "optimize" in out_live_only and "backtest" in out_live_only
 
 
 def test_format_config_current_roundtrip_basic():
@@ -149,3 +151,116 @@ def test_format_config_prunes_unknown_keys_recursively():
     assert "bar" not in out["bot"]["short"]
     assert "extra" not in out["optimize"]["bounds"]
     assert "extra_section" not in out
+
+
+def test_format_config_current_with_empty_optimize_adds_bounds():
+    tmpl = _template()
+    current = copy.deepcopy(tmpl)
+    current["optimize"] = {}
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert "bounds" in out["optimize"]
+    assert out["optimize"]["bounds"]["long_close_grid_markup_start"] == tmpl["optimize"]["bounds"][
+        "long_close_grid_markup_start"
+    ]
+    assert out["optimize"]["bounds"]["short_close_grid_markup_end"] == tmpl["optimize"]["bounds"][
+        "short_close_grid_markup_end"
+    ]
+
+
+def test_format_config_current_with_optimize_missing_bounds_adds_defaults():
+    tmpl = _template()
+    current = copy.deepcopy(tmpl)
+    current["optimize"] = {"scoring": ["adg"]}
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["optimize"]["scoring"] == ["adg"]
+    assert "long_close_grid_qty_pct" in out["optimize"]["bounds"]
+    assert "short_close_grid_qty_pct" in out["optimize"]["bounds"]
+
+
+def test_format_config_current_with_missing_bot_side_adds_defaults():
+    tmpl = _template()
+    current = copy.deepcopy(tmpl)
+    del current["bot"]["short"]
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["short"]["close_grid_markup_end"] == tmpl["bot"]["short"]["close_grid_markup_end"]
+    assert out["bot"]["short"]["n_positions"] == tmpl["bot"]["short"]["n_positions"]
+
+
+def test_format_config_raises_on_non_dict_optimize_bounds():
+    tmpl = _template()
+    current = copy.deepcopy(tmpl)
+    current["optimize"]["bounds"] = []
+
+    with pytest.raises(TypeError, match="config.optimize.bounds must be a dict"):
+        format_config(current, verbose=False, live_only=True)
+
+
+def test_format_config_preserves_legacy_derivations_before_hydration():
+    current = copy.deepcopy(_template())
+    legacy_per_side = {
+        "long": {
+            "min_markup": 0.006,
+            "markup_range": 0.018,
+            "ddown_factor": 1.23,
+            "bounds_min_markup": [0.005, 0.02],
+            "bounds_close_grid_min_markup": [0.003, 0.015],
+        },
+        "short": {
+            "min_markup": 0.007,
+            "markup_range": 0.02,
+            "ddown_factor": 1.11,
+            "bounds_min_markup": [0.006, 0.021],
+            "bounds_close_grid_min_markup": [0.004, 0.016],
+        },
+    }
+
+    for pside, values in legacy_per_side.items():
+        current["bot"][pside]["close_grid_min_markup"] = values["min_markup"]
+        current["bot"][pside]["close_grid_markup_range"] = values["markup_range"]
+        current["bot"][pside]["entry_grid_double_down_factor"] = values["ddown_factor"]
+        current["bot"][pside].pop("close_grid_markup_start", None)
+        current["bot"][pside].pop("close_grid_markup_end", None)
+        current["bot"][pside].pop("entry_trailing_double_down_factor", None)
+
+        current["optimize"]["bounds"][f"{pside}_min_markup"] = values["bounds_min_markup"]
+        current["optimize"]["bounds"][f"{pside}_close_grid_min_markup"] = values[
+            "bounds_close_grid_min_markup"
+        ]
+        current["optimize"]["bounds"].pop(f"{pside}_close_grid_markup_start", None)
+        current["optimize"]["bounds"].pop(f"{pside}_close_grid_markup_end", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    for pside, values in legacy_per_side.items():
+        assert out["bot"][pside]["close_grid_markup_start"] == pytest.approx(
+            values["min_markup"] + values["markup_range"]
+        )
+        assert out["bot"][pside]["close_grid_markup_end"] == pytest.approx(values["min_markup"])
+        assert out["bot"][pside]["entry_trailing_double_down_factor"] == pytest.approx(
+            values["ddown_factor"]
+        )
+        assert out["optimize"]["bounds"][f"{pside}_close_grid_markup_start"] == values[
+            "bounds_min_markup"
+        ]
+        assert out["optimize"]["bounds"][f"{pside}_close_grid_markup_end"] == values[
+            "bounds_close_grid_min_markup"
+        ]
+        assert f"{pside}_min_markup" not in out["optimize"]["bounds"]
+        assert f"{pside}_close_grid_min_markup" not in out["optimize"]["bounds"]
+
+
+def test_format_config_is_idempotent_for_lean_live_config():
+    tmpl = _template()
+    lean_live = {"bot": copy.deepcopy(tmpl["bot"]), "live": copy.deepcopy(tmpl["live"])}
+
+    first = format_config(lean_live, verbose=False, live_only=True)
+    second = format_config(copy.deepcopy(first), verbose=False, live_only=True)
+
+    for key in ("backtest", "bot", "coin_overrides", "live", "logging", "optimize"):
+        assert first[key] == second[key]

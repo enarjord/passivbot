@@ -10,6 +10,7 @@ from config_utils import (
     _apply_backward_compatibility_renames,
     _apply_non_live_adjustments,
     _ensure_bot_defaults_and_bounds,
+    _hydrate_missing_template_fields,
     _migrate_btc_collateral_settings,
     _normalize_position_counts,
     _rename_config_keys,
@@ -74,7 +75,7 @@ def test_rename_config_keys_records_tracker_events():
     )
 
 
-def test_sync_with_template_adds_missing_and_removes_extras():
+def test_hydrate_then_sync_with_template_adds_missing_and_removes_extras():
     template = get_template_config()
     result = {
         "live": {},
@@ -84,6 +85,7 @@ def test_sync_with_template_adds_missing_and_removes_extras():
         "coin_overrides": {},
     }
 
+    _hydrate_missing_template_fields(template, result, verbose=False)
     _sync_with_template(template, result, base_config_path="/tmp/base_config.json", verbose=False)
 
     assert "extra_side" not in result["bot"]
