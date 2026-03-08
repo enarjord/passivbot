@@ -41,15 +41,15 @@ impl HardStopTierRatios {
 
 #[derive(Debug, Clone, Copy)]
 pub struct HardStopConfig {
-    pub threshold: f64,
+    pub red_threshold: f64,
     pub ema_span_minutes: f64,
     pub tier_ratios: HardStopTierRatios,
 }
 
 impl HardStopConfig {
     pub fn validate(self) -> Result<(), String> {
-        if !self.threshold.is_finite() || self.threshold <= 0.0 {
-            return Err("threshold must be finite and > 0".to_string());
+        if !self.red_threshold.is_finite() || self.red_threshold <= 0.0 {
+            return Err("red_threshold must be finite and > 0".to_string());
         }
         if !self.ema_span_minutes.is_finite() || self.ema_span_minutes <= 0.0 {
             return Err("ema_span_minutes must be finite and > 0".to_string());
@@ -60,7 +60,7 @@ impl HardStopConfig {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HardStopState {
-    pub equity_peak: f64,
+    pub peak_strategy_equity: f64,
     pub drawdown_ema: f64,
     pub tier: HardStopTier,
     pub red_latched: bool,
@@ -70,11 +70,9 @@ pub struct HardStopState {
 #[derive(Debug, Clone, Copy)]
 pub struct HardStopStep {
     pub drawdown_raw: f64,
-    pub drawdown_ema: f64,
     pub drawdown_score: f64,
     pub tier: HardStopTier,
     pub changed: bool,
-    pub red_latched: bool,
     pub span_samples: f64,
     pub alpha: f64,
 }
@@ -146,36 +144,37 @@ pub fn span_samples(ema_span_minutes: f64, sample_minutes: f64) -> Result<f64, S
     Ok(ema_span_minutes / sample_minutes)
 }
 
+#[allow(dead_code)] // Kept as a convenience helper for callers that want internal peak tracking.
 pub fn step(
     state: &mut HardStopState,
     config: HardStopConfig,
     equity: f64,
     sample_minutes: f64,
 ) -> Result<HardStopStep, String> {
-    let next_equity_peak = if !state.initialized {
+    let next_peak_strategy_equity = if !state.initialized {
         equity
     } else {
-        state.equity_peak.max(equity)
+        state.peak_strategy_equity.max(equity)
     };
-    step_with_equity_peak(state, config, equity, next_equity_peak, sample_minutes)
+    step_with_peak_strategy_equity(state, config, equity, next_peak_strategy_equity, sample_minutes)
 }
 
-pub fn step_with_equity_peak(
+pub fn step_with_peak_strategy_equity(
     state: &mut HardStopState,
     config: HardStopConfig,
     equity: f64,
-    equity_peak: f64,
+    peak_strategy_equity: f64,
     sample_minutes: f64,
 ) -> Result<HardStopStep, String> {
     config.validate()?;
     if !equity.is_finite() || equity <= 0.0 {
         return Err("equity must be finite and > 0".to_string());
     }
-    if !equity_peak.is_finite() || equity_peak <= 0.0 {
-        return Err("equity_peak must be finite and > 0".to_string());
+    if !peak_strategy_equity.is_finite() || peak_strategy_equity <= 0.0 {
+        return Err("peak_strategy_equity must be finite and > 0".to_string());
     }
-    if equity_peak + f64::EPSILON < equity {
-        return Err("equity_peak must be >= equity".to_string());
+    if peak_strategy_equity + f64::EPSILON < equity {
+        return Err("peak_strategy_equity must be >= equity".to_string());
     }
     let span_samples = span_samples(config.ema_span_minutes, sample_minutes)?;
     let alpha = 2.0 / (span_samples + 1.0);
@@ -186,7 +185,7 @@ pub fn step_with_equity_peak(
     let prev_tier = state.tier;
     if !state.initialized {
         state.initialized = true;
-        state.equity_peak = equity_peak;
+        state.peak_strategy_equity = peak_strategy_equity;
         state.drawdown_ema = 0.0;
         state.tier = if state.red_latched {
             HardStopTier::Red
@@ -195,29 +194,27 @@ pub fn step_with_equity_peak(
         };
         return Ok(HardStopStep {
             drawdown_raw: 0.0,
-            drawdown_ema: 0.0,
             drawdown_score: 0.0,
             tier: state.tier,
             changed: state.tier != prev_tier,
-            red_latched: state.red_latched,
             span_samples,
             alpha,
         });
     }
 
-    state.equity_peak = equity_peak;
-    let drawdown_raw = (1.0 - (equity / state.equity_peak.max(f64::EPSILON))).max(0.0);
+    state.peak_strategy_equity = peak_strategy_equity;
+    let drawdown_raw = (1.0 - (equity / state.peak_strategy_equity.max(f64::EPSILON))).max(0.0);
     state.drawdown_ema = alpha * drawdown_raw + (1.0 - alpha) * state.drawdown_ema;
     // Effective trigger metric: min(raw, EMA).
     // Prevents false RED after recovery (stale EMA) and flash-crash bottom exits (raw spike).
     let drawdown_score = drawdown_raw.min(state.drawdown_ema);
 
-    let threshold_yellow = config.tier_ratios.yellow * config.threshold;
-    let threshold_orange = config.tier_ratios.orange * config.threshold;
+    let threshold_yellow = config.tier_ratios.yellow * config.red_threshold;
+    let threshold_orange = config.tier_ratios.orange * config.red_threshold;
     let cmp_eps = 1e-12;
     let next_tier = if state.red_latched {
         HardStopTier::Red
-    } else if drawdown_score + cmp_eps >= config.threshold {
+    } else if drawdown_score + cmp_eps >= config.red_threshold {
         HardStopTier::Red
     } else if drawdown_score + cmp_eps >= threshold_orange {
         HardStopTier::Orange
@@ -236,11 +233,9 @@ pub fn step_with_equity_peak(
     };
     Ok(HardStopStep {
         drawdown_raw,
-        drawdown_ema: state.drawdown_ema,
         drawdown_score,
         tier: state.tier,
         changed: state.tier != prev_tier,
-        red_latched: state.red_latched,
         span_samples,
         alpha,
     })
@@ -252,7 +247,7 @@ mod tests {
 
     fn cfg() -> HardStopConfig {
         HardStopConfig {
-            threshold: 0.25,
+            red_threshold: 0.25,
             ema_span_minutes: 60.0,
             tier_ratios: HardStopTierRatios {
                 yellow: 0.5,
@@ -271,8 +266,8 @@ mod tests {
     fn tier_boundaries_follow_configurable_ratios() {
         let mut state = HardStopState::default();
         let config = HardStopConfig {
-            threshold: 0.2,
-            ema_span_minutes: 1.0, // one-sample EMA for direct threshold checks
+            red_threshold: 0.2,
+            ema_span_minutes: 1.0, // one-sample EMA for direct red_threshold checks
             tier_ratios: HardStopTierRatios {
                 yellow: 0.4,
                 orange: 0.8,
@@ -295,7 +290,7 @@ mod tests {
     fn score_equals_min_raw_ema() {
         let mut state = HardStopState::default();
         let config = HardStopConfig {
-            threshold: 0.2,
+            red_threshold: 0.2,
             ema_span_minutes: 15.0,
             tier_ratios: HardStopTierRatios::default(),
         };
@@ -310,7 +305,7 @@ mod tests {
         let mut state = HardStopState::default();
         // Use 1-sample EMA so EMA tracks raw closely on drawdown
         let config = HardStopConfig {
-            threshold: 0.5,
+            red_threshold: 0.5,
             ema_span_minutes: 60.0,
             tier_ratios: HardStopTierRatios::default(),
         };
@@ -328,7 +323,7 @@ mod tests {
     fn red_is_latched_once_triggered() {
         let mut state = HardStopState::default();
         let config = HardStopConfig {
-            threshold: 0.25,
+            red_threshold: 0.25,
             ema_span_minutes: 1.0,
             tier_ratios: HardStopTierRatios::default(),
         };
@@ -345,15 +340,15 @@ mod tests {
     fn rolling_peak_override_allows_peak_to_decrease() {
         let mut state = HardStopState::default();
         let config = HardStopConfig {
-            threshold: 0.25,
+            red_threshold: 0.25,
             ema_span_minutes: 1.0,
             tier_ratios: HardStopTierRatios::default(),
         };
-        let _ = step_with_equity_peak(&mut state, config, 100.0, 100.0, 1.0).unwrap();
+        let _ = step_with_peak_strategy_equity(&mut state, config, 100.0, 100.0, 1.0).unwrap();
         // Simulate old peaks aged out from lookback: peak now 90, equity 90.
-        let s = step_with_equity_peak(&mut state, config, 90.0, 90.0, 1.0).unwrap();
+        let s = step_with_peak_strategy_equity(&mut state, config, 90.0, 90.0, 1.0).unwrap();
         assert!((s.drawdown_raw - 0.0).abs() < 1e-12);
-        assert!((state.equity_peak - 90.0).abs() < 1e-12);
+        assert!((state.peak_strategy_equity - 90.0).abs() < 1e-12);
     }
 
     #[test]

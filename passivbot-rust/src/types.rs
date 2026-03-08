@@ -171,12 +171,13 @@ impl Default for EquityHardStopLossTierRatios {
 #[derive(Clone, Debug)]
 pub struct EquityHardStopLossConfig {
     pub enabled: bool,
-    pub threshold: f64,
+    pub red_threshold: f64,
     pub ema_span_minutes: f64,
     pub cooldown_minutes_after_red: f64,
-    pub no_restart_threshold: f64,
+    pub no_restart_drawdown_threshold: f64,
     pub tier_ratios: EquityHardStopLossTierRatios,
     pub orange_tier_mode: String,
+    #[allow(dead_code)] // Parsed in Rust for config parity; consumed by Python live order handling.
     pub panic_close_order_type: String,
 }
 
@@ -184,10 +185,10 @@ impl Default for EquityHardStopLossConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            threshold: 0.25,
+            red_threshold: 0.25,
             ema_span_minutes: 60.0,
             cooldown_minutes_after_red: 0.0,
-            no_restart_threshold: 1.0,
+            no_restart_drawdown_threshold: 1.0,
             tier_ratios: EquityHardStopLossTierRatios::default(),
             orange_tier_mode: "tp_only_with_active_entry_cancellation".to_string(),
             panic_close_order_type: "market".to_string(),

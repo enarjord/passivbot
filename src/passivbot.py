@@ -733,6 +733,7 @@ class Passivbot:
         self.equity_hard_stop_loss = self._parse_equity_hard_stop_loss_config()
         self._runtime_forced_modes = {"long": {}, "short": {}}
         self._equity_hard_stop_runtime = pbr.EquityHardStopRuntime()
+        self._equity_hard_stop_strategy_pnl_peak = pbr.EquityHardStopRollingPeak()
         self._equity_hard_stop_supervisor_running = False
         self._equity_hard_stop_last_metrics = None
         self._equity_hard_stop_last_red_progress = None
@@ -757,15 +758,15 @@ class Passivbot:
             )
 
         enabled = bool(require_live_value(self.config, "equity_hard_stop_loss.enabled"))
-        threshold = float(require_live_value(self.config, "equity_hard_stop_loss.threshold"))
+        red_threshold = float(require_live_value(self.config, "equity_hard_stop_loss.red_threshold"))
         ema_span_minutes = float(
             require_live_value(self.config, "equity_hard_stop_loss.ema_span_minutes")
         )
         cooldown_minutes_after_red = float(
             require_live_value(self.config, "equity_hard_stop_loss.cooldown_minutes_after_red")
         )
-        no_restart_threshold = float(
-            require_live_value(self.config, "equity_hard_stop_loss.no_restart_threshold")
+        no_restart_drawdown_threshold = float(
+            require_live_value(self.config, "equity_hard_stop_loss.no_restart_drawdown_threshold")
         )
 
         tier_ratios_raw = require_live_value(self.config, "equity_hard_stop_loss.tier_ratios")
@@ -788,8 +789,8 @@ class Passivbot:
             require_live_value(self.config, "equity_hard_stop_loss.panic_close_order_type")
         )
 
-        if enabled and threshold <= 0.0:
-            raise ValueError("live.equity_hard_stop_loss.threshold must be > 0.0 when enabled")
+        if enabled and red_threshold <= 0.0:
+            raise ValueError("live.equity_hard_stop_loss.red_threshold must be > 0.0 when enabled")
         if enabled and ema_span_minutes <= 0.0:
             raise ValueError(
                 "live.equity_hard_stop_loss.ema_span_minutes must be > 0.0 when enabled"
@@ -798,10 +799,10 @@ class Passivbot:
             raise ValueError(
                 "live.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
             )
-        if not (threshold < no_restart_threshold <= 1.0):
+        if not (red_threshold < no_restart_drawdown_threshold <= 1.0):
             raise ValueError(
-                "live.equity_hard_stop_loss.no_restart_threshold must satisfy "
-                "threshold < no_restart_threshold <= 1.0"
+                "live.equity_hard_stop_loss.no_restart_drawdown_threshold must satisfy "
+                "red_threshold < no_restart_drawdown_threshold <= 1.0"
             )
         if not (0.0 < ratio_yellow < ratio_orange < 1.0):
             raise ValueError(
@@ -820,24 +821,24 @@ class Passivbot:
 
         out = {
             "enabled": enabled,
-            "threshold": threshold,
+            "red_threshold": red_threshold,
             "ema_span_minutes": ema_span_minutes,
             "cooldown_minutes_after_red": cooldown_minutes_after_red,
-            "no_restart_threshold": no_restart_threshold,
+            "no_restart_drawdown_threshold": no_restart_drawdown_threshold,
             "tier_ratios": {"yellow": ratio_yellow, "orange": ratio_orange},
             "orange_tier_mode": orange_tier_mode,
             "panic_close_order_type": panic_close_order_type,
         }
         if enabled:
             logging.info(
-                "[risk] equity hard stop enabled | threshold=%.6f ema_span_minutes=%.3f "
+                "[risk] equity hard stop enabled | red_threshold=%.6f ema_span_minutes=%.3f "
                 "cooldown_minutes_after_red=%.3f "
-                "no_restart_threshold=%.6f yellow_ratio=%.3f orange_ratio=%.3f "
+                "no_restart_drawdown_threshold=%.6f yellow_ratio=%.3f orange_ratio=%.3f "
                 "orange_mode=%s panic_close=%s",
-                threshold,
+                red_threshold,
                 ema_span_minutes,
                 cooldown_minutes_after_red,
-                no_restart_threshold,
+                no_restart_drawdown_threshold,
                 ratio_yellow,
                 ratio_orange,
                 orange_tier_mode,
@@ -900,6 +901,7 @@ class Passivbot:
 
     def _equity_hard_stop_reset_state(self) -> None:
         self._equity_hard_stop_runtime.reset()
+        self._equity_hard_stop_strategy_pnl_peak.reset()
         self._equity_hard_stop_last_metrics = None
         self._equity_hard_stop_last_red_progress = None
         self._equity_hard_stop_red_flat_confirmations = 0
@@ -951,32 +953,85 @@ class Passivbot:
             upnl_sum += upnl
         return upnl_sum
 
-    def _equity_hard_stop_apply_sample(
-        self, timestamp_ms: int, equity: float, sample_minutes: float
-    ) -> dict:
-        if not math.isfinite(equity) or equity <= 0.0:
-            raise ValueError(f"equity must be finite and > 0, got {equity}")
-        if not math.isfinite(sample_minutes) or sample_minutes <= 0.0:
-            raise ValueError(f"sample_minutes must be finite and > 0, got {sample_minutes}")
+    @staticmethod
+    def _equity_hard_stop_fee_cost(fill: Any) -> float:
+        if fill is None:
+            return 0.0
+        if isinstance(fill, dict):
+            fee_obj = fill.get("fee")
+            if isinstance(fee_obj, dict):
+                return float(fee_obj.get("cost", 0.0) or 0.0)
+            if isinstance(fee_obj, (int, float, str)):
+                return float(fee_obj or 0.0)
+            fees_obj = fill.get("fees")
+        else:
+            fees_obj = getattr(fill, "fees", None)
+        if isinstance(fees_obj, dict):
+            return float(fees_obj.get("cost", 0.0) or 0.0)
+        if isinstance(fees_obj, (list, tuple)):
+            total = 0.0
+            for item in fees_obj:
+                if isinstance(item, dict):
+                    total += float(item.get("cost", 0.0) or 0.0)
+            return total
+        return 0.0
 
+    def _equity_hard_stop_realized_pnl_now(self) -> float:
+        if self._pnls_manager is None:
+            return 0.0
+        realized = 0.0
+        for event in self._pnls_manager.get_events():
+            realized += float(getattr(event, "pnl", 0.0) or 0.0)
+            realized += self._equity_hard_stop_fee_cost(event)
+        return realized
+
+    def _equity_hard_stop_lookback_ms(self) -> int:
         lookback_days_raw = float(require_live_value(self.config, "pnls_max_lookback_days"))
         if not math.isfinite(lookback_days_raw):
             raise ValueError(
                 "live.pnls_max_lookback_days must be finite for hard-stop rolling-peak logic"
             )
         lookback_days = max(0.0, lookback_days_raw)
-        lookback_ms = max(1, int(round(lookback_days * 86_400_000.0)))
+        return max(1, int(round(lookback_days * 86_400_000.0)))
+
+    def _equity_hard_stop_apply_sample(
+        self,
+        timestamp_ms: int,
+        balance: float,
+        realized_pnl: float,
+        unrealized_pnl: float,
+        sample_minutes: float,
+    ) -> dict:
+        if not math.isfinite(balance) or balance <= 0.0:
+            raise ValueError(f"balance must be finite and > 0, got {balance}")
+        if not math.isfinite(realized_pnl):
+            raise ValueError(f"realized_pnl must be finite, got {realized_pnl}")
+        if not math.isfinite(unrealized_pnl):
+            raise ValueError(f"unrealized_pnl must be finite, got {unrealized_pnl}")
+        if not math.isfinite(sample_minutes) or sample_minutes <= 0.0:
+            raise ValueError(f"sample_minutes must be finite and > 0, got {sample_minutes}")
+
+        lookback_ms = self._equity_hard_stop_lookback_ms()
         prev_tier = self._equity_hard_stop_runtime_tier()
-        threshold = float(self.equity_hard_stop_loss["threshold"])
+        red_threshold = float(self.equity_hard_stop_loss["red_threshold"])
         ratio_yellow = float(self.equity_hard_stop_loss["tier_ratios"]["yellow"])
         ratio_orange = float(self.equity_hard_stop_loss["tier_ratios"]["orange"])
         ema_span_minutes = float(self.equity_hard_stop_loss["ema_span_minutes"])
+        strategy_pnl = realized_pnl + unrealized_pnl
+        peak_strategy_pnl = float(
+            self._equity_hard_stop_strategy_pnl_peak.update(
+                int(timestamp_ms), float(strategy_pnl), int(lookback_ms)
+            )
+        )
+        baseline_balance = balance - realized_pnl
+        equity = balance + unrealized_pnl
+        peak_strategy_equity = max(float(equity), float(baseline_balance + peak_strategy_pnl))
         step = self._equity_hard_stop_runtime.apply_sample(
             timestamp_ms=int(timestamp_ms),
             equity=float(equity),
-            lookback_ms=int(lookback_ms),
+            peak_strategy_equity=float(peak_strategy_equity),
             sample_minutes=float(sample_minutes),
-            threshold=threshold,
+            red_threshold=red_threshold,
             ema_span_minutes=ema_span_minutes,
             tier_ratio_yellow=ratio_yellow,
             tier_ratio_orange=ratio_orange,
@@ -989,13 +1044,19 @@ class Passivbot:
 
         metrics = {
             "timestamp_ms": int(timestamp_ms),
+            "balance": float(balance),
+            "realized_pnl": float(realized_pnl),
+            "unrealized_pnl": float(unrealized_pnl),
+            "strategy_pnl": float(strategy_pnl),
+            "peak_strategy_pnl": float(peak_strategy_pnl),
+            "baseline_balance": float(baseline_balance),
             "equity": float(equity),
-            "equity_peak": float(step["equity_peak"]),
-            "rolling_equity_peak": float(step["rolling_equity_peak"]),
+            "peak_strategy_equity": float(step["peak_strategy_equity"]),
+            "rolling_peak_strategy_equity": float(step["rolling_peak_strategy_equity"]),
             "drawdown_raw": float(step["drawdown_raw"]),
             "drawdown_ema": float(step["drawdown_ema"]),
             "drawdown_score": float(step["drawdown_score"]),
-            "threshold": threshold,
+            "red_threshold": red_threshold,
             "tier": str(step["tier"]),
             "changed": bool(step["changed"]) or str(step["tier"]) != prev_tier,
             "sample_minutes": float(sample_minutes),
@@ -1007,18 +1068,21 @@ class Passivbot:
 
     def _equity_hard_stop_log_transition(self, metrics: dict, prev_tier: str) -> None:
         logging.info(
-            "[risk] equity hard stop tier transition %s -> %s | equity=%.6f peak=%.6f "
-            "rolling_peak=%.6f "
-            "raw=%.6f ema=%.6f score=%.6f threshold=%.6f yellow=%.3f orange=%.3f",
+            "[risk] equity hard stop tier transition %s -> %s | balance=%.6f equity=%.6f "
+            "peak_strategy_equity=%.6f drawdown_raw=%.6f drawdown_ema=%.6f drawdown_score=%.6f "
+            "strategy_pnl=%.6f peak_strategy_pnl=%.6f "
+            "red_threshold=%.6f yellow=%.3f orange=%.3f",
             prev_tier,
             metrics["tier"],
+            metrics["balance"],
             metrics["equity"],
-            metrics["equity_peak"],
-            metrics["rolling_equity_peak"],
+            metrics["peak_strategy_equity"],
             metrics["drawdown_raw"],
             metrics["drawdown_ema"],
             metrics["drawdown_score"],
-            metrics["threshold"],
+            metrics["strategy_pnl"],
+            metrics["peak_strategy_pnl"],
+            metrics["red_threshold"],
             float(self.equity_hard_stop_loss["tier_ratios"]["yellow"]),
             float(self.equity_hard_stop_loss["tier_ratios"]["orange"]),
         )
@@ -1027,9 +1091,14 @@ class Passivbot:
         self,
         *,
         stop_event_timestamp_ms: int,
+        balance: Optional[float] = None,
+        realized_pnl: Optional[float] = None,
+        unrealized_pnl: Optional[float] = None,
+        strategy_pnl: Optional[float] = None,
+        peak_strategy_pnl: Optional[float] = None,
         equity: float,
-        equity_peak: float,
-        trigger_equity_peak: float,
+        peak_strategy_equity: float,
+        trigger_peak_strategy_equity: float,
         drawdown_raw: float,
         drawdown_ema: float,
         drawdown_score: float,
@@ -1041,12 +1110,12 @@ class Passivbot:
             "exchange": str(self.exchange),
             "user": str(self.user),
             "tier": "red",
-            "threshold": float(self.equity_hard_stop_loss["threshold"]),
+            "red_threshold": float(self.equity_hard_stop_loss["red_threshold"]),
             "ema_span_minutes": float(self.equity_hard_stop_loss["ema_span_minutes"]),
             "cooldown_minutes_after_red": float(
                 self.equity_hard_stop_loss["cooldown_minutes_after_red"]
             ),
-            "no_restart_threshold": float(self.equity_hard_stop_loss["no_restart_threshold"]),
+            "no_restart_drawdown_threshold": float(self.equity_hard_stop_loss["no_restart_drawdown_threshold"]),
             "tier_ratios": {
                 "yellow": float(self.equity_hard_stop_loss["tier_ratios"]["yellow"]),
                 "orange": float(self.equity_hard_stop_loss["tier_ratios"]["orange"]),
@@ -1054,9 +1123,14 @@ class Passivbot:
             "orange_tier_mode": str(self.equity_hard_stop_loss["orange_tier_mode"]),
             "panic_close_order_type": str(self.equity_hard_stop_loss["panic_close_order_type"]),
             "stop_event_timestamp_ms": int(stop_event_timestamp_ms),
+            "balance": None if balance is None else float(balance),
+            "realized_pnl": None if realized_pnl is None else float(realized_pnl),
+            "unrealized_pnl": None if unrealized_pnl is None else float(unrealized_pnl),
+            "strategy_pnl": None if strategy_pnl is None else float(strategy_pnl),
+            "peak_strategy_pnl": None if peak_strategy_pnl is None else float(peak_strategy_pnl),
             "equity": float(equity),
-            "equity_peak": float(equity_peak),
-            "trigger_equity_peak": float(trigger_equity_peak),
+            "peak_strategy_equity": float(peak_strategy_equity),
+            "trigger_peak_strategy_equity": float(trigger_peak_strategy_equity),
             "drawdown_raw": float(drawdown_raw),
             "drawdown_ema": float(drawdown_ema),
             "drawdown_score": float(drawdown_score),
@@ -1069,25 +1143,40 @@ class Passivbot:
         }
 
     async def _equity_hard_stop_compute_stop_event(self, stop_event_ts_ms: int) -> dict:
-        equity = float(self.get_raw_balance() + await self._calc_upnl_sum_strict())
-        trigger_equity_peak = float(self._equity_hard_stop_runtime.equity_peak())
-        equity_peak = float(self._equity_hard_stop_runtime.rolling_equity_peak())
-        if not math.isfinite(trigger_equity_peak) or trigger_equity_peak <= 0.0:
-            raise RuntimeError(
-                f"invalid hard-stop trigger_equity_peak at stop finalization: {trigger_equity_peak}"
+        balance = float(self.get_raw_balance())
+        unrealized_pnl = float(await self._calc_upnl_sum_strict())
+        realized_pnl = float(self._equity_hard_stop_realized_pnl_now())
+        strategy_pnl = realized_pnl + unrealized_pnl
+        peak_strategy_pnl = float(
+            max(
+                strategy_pnl,
+                (self._equity_hard_stop_last_metrics or {}).get("peak_strategy_pnl", strategy_pnl),
             )
-        if not math.isfinite(equity_peak) or equity_peak <= 0.0:
-            raise RuntimeError(f"invalid hard-stop rolling equity_peak at stop finalization: {equity_peak}")
+        )
+        equity = float(balance + unrealized_pnl)
+        trigger_peak_strategy_equity = float(self._equity_hard_stop_runtime.peak_strategy_equity())
+        peak_strategy_equity = float(max(equity, (balance - realized_pnl) + peak_strategy_pnl))
+        if not math.isfinite(trigger_peak_strategy_equity) or trigger_peak_strategy_equity <= 0.0:
+            raise RuntimeError(
+                f"invalid hard-stop trigger_peak_strategy_equity at stop finalization: {trigger_peak_strategy_equity}"
+            )
+        if not math.isfinite(peak_strategy_equity) or peak_strategy_equity <= 0.0:
+            raise RuntimeError(f"invalid hard-stop rolling peak_strategy_equity at stop finalization: {peak_strategy_equity}")
         drawdown_ema = float(self._equity_hard_stop_runtime.drawdown_ema())
-        drawdown_raw = max(0.0, 1.0 - equity / max(equity_peak, 1e-12))
+        drawdown_raw = max(0.0, 1.0 - equity / max(peak_strategy_equity, 1e-12))
         return {
             "stop_event_timestamp_ms": int(stop_event_ts_ms),
+            "balance": balance,
+            "realized_pnl": realized_pnl,
+            "unrealized_pnl": unrealized_pnl,
+            "strategy_pnl": strategy_pnl,
+            "peak_strategy_pnl": peak_strategy_pnl,
             "equity": equity,
-            "equity_peak": equity_peak,
-            "trigger_equity_peak": trigger_equity_peak,
+            "peak_strategy_equity": peak_strategy_equity,
+            "trigger_peak_strategy_equity": trigger_peak_strategy_equity,
             "drawdown_raw": drawdown_raw,
             "drawdown_ema": drawdown_ema,
-            "drawdown_score": drawdown_ema,
+            "drawdown_score": min(drawdown_raw, drawdown_ema),
         }
 
     async def _equity_hard_stop_wait_for_cooldown(self, cooldown_until_ms: int) -> None:
@@ -1114,7 +1203,7 @@ class Passivbot:
             )
 
         cooldown_minutes = float(self.equity_hard_stop_loss["cooldown_minutes_after_red"])
-        no_restart_threshold = float(self.equity_hard_stop_loss["no_restart_threshold"])
+        no_restart_drawdown_threshold = float(self.equity_hard_stop_loss["no_restart_drawdown_threshold"])
         cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
         cooldown_until_ms = None
         pending_red = False
@@ -1122,19 +1211,25 @@ class Passivbot:
         for row in timeline:
             if not isinstance(row, dict):
                 continue
-            if "timestamp" not in row or "equity" not in row:
+            required = ("timestamp", "balance", "realized_pnl", "unrealized_pnl")
+            if any(key not in row for key in required):
                 continue
             ts = int(row["timestamp"])
-            eq = float(row["equity"])
+            balance = float(row["balance"])
+            realized_pnl = float(row["realized_pnl"])
+            unrealized_pnl = float(row["unrealized_pnl"])
 
             if cooldown_until_ms is not None:
                 if ts < cooldown_until_ms:
                     continue
-                self._equity_hard_stop_runtime.reset_state_keep_peak()
+                self._equity_hard_stop_runtime.reset()
+                self._equity_hard_stop_strategy_pnl_peak.reset()
                 cooldown_until_ms = None
                 pending_red = False
 
-            self._equity_hard_stop_apply_sample(int(ts), float(eq), 1.0)
+            current_metrics = self._equity_hard_stop_apply_sample(
+                int(ts), balance, realized_pnl, unrealized_pnl, 1.0
+            )
             n_rows += 1
 
             if self._equity_hard_stop_runtime_tier() == "red":
@@ -1143,37 +1238,49 @@ class Passivbot:
 
             is_flat = bool(row["is_flat"]) if "is_flat" in row else False
             if pending_red and is_flat:
-                rolling_peak = float(self._equity_hard_stop_runtime.rolling_equity_peak())
-                trigger_peak = float(self._equity_hard_stop_runtime.equity_peak())
-                if not math.isfinite(rolling_peak) or rolling_peak <= 0.0:
+                peak_strategy_equity = float(current_metrics["peak_strategy_equity"])
+                trigger_peak_strategy_equity = float(
+                    self._equity_hard_stop_runtime.peak_strategy_equity()
+                )
+                if not math.isfinite(peak_strategy_equity) or peak_strategy_equity <= 0.0:
                     raise RuntimeError(
-                        f"invalid rolling peak during hard-stop replay at ts={ts}: {rolling_peak}"
+                        "invalid peak_strategy_equity during hard-stop replay at "
+                        f"ts={ts}: {peak_strategy_equity}"
                     )
-                if not math.isfinite(trigger_peak) or trigger_peak <= 0.0:
+                if (
+                    not math.isfinite(trigger_peak_strategy_equity)
+                    or trigger_peak_strategy_equity <= 0.0
+                ):
                     raise RuntimeError(
-                        f"invalid trigger peak during hard-stop replay at ts={ts}: {trigger_peak}"
+                        "invalid trigger_peak_strategy_equity during hard-stop replay at "
+                        f"ts={ts}: {trigger_peak_strategy_equity}"
                     )
-                stop_drawdown_raw = max(0.0, 1.0 - eq / max(rolling_peak, 1e-12))
-                if stop_drawdown_raw > no_restart_threshold or cooldown_ms <= 0:
+                stop_drawdown_raw = float(current_metrics["drawdown_raw"])
+                if stop_drawdown_raw > no_restart_drawdown_threshold or cooldown_ms <= 0:
                     payload = self._equity_hard_stop_build_latch_payload(
                         stop_event_timestamp_ms=ts,
-                        equity=eq,
-                        equity_peak=rolling_peak,
-                        trigger_equity_peak=trigger_peak,
-                        drawdown_raw=stop_drawdown_raw,
-                        drawdown_ema=float(self._equity_hard_stop_runtime.drawdown_ema()),
-                        drawdown_score=float(self._equity_hard_stop_runtime.drawdown_ema()),
-                        no_restart_latched=bool(stop_drawdown_raw > no_restart_threshold),
+                        balance=balance,
+                        realized_pnl=realized_pnl,
+                        unrealized_pnl=unrealized_pnl,
+                        strategy_pnl=float(current_metrics["strategy_pnl"]),
+                        peak_strategy_pnl=float(current_metrics["peak_strategy_pnl"]),
+                        equity=float(current_metrics["equity"]),
+                        peak_strategy_equity=peak_strategy_equity,
+                        trigger_peak_strategy_equity=trigger_peak_strategy_equity,
+                        drawdown_raw=float(current_metrics["drawdown_raw"]),
+                        drawdown_ema=float(current_metrics["drawdown_ema"]),
+                        drawdown_score=float(current_metrics["drawdown_score"]),
+                        no_restart_latched=bool(stop_drawdown_raw > no_restart_drawdown_threshold),
                         cooldown_until_ms=None,
                     )
                     self._equity_hard_stop_last_stop_event = payload
                     latch_path = self._equity_hard_stop_write_latch(payload)
                     logging.critical(
                         "[risk] hard-stop replay found terminal RED stop event in lookback | "
-                        "stop_ts=%s drawdown_raw=%.6f no_restart_threshold=%.6f latch=%s",
+                        "stop_ts=%s drawdown_raw=%.6f no_restart_drawdown_threshold=%.6f latch=%s",
                         ts,
                         stop_drawdown_raw,
-                        no_restart_threshold,
+                        no_restart_drawdown_threshold,
                         latch_path,
                     )
                     self.stop_signal_received = True
@@ -1182,20 +1289,25 @@ class Passivbot:
                 pending_red = False
                 self._equity_hard_stop_pending_red_since_ms = None
 
-        current_equity = self.get_raw_balance() + await self._calc_upnl_sum_strict()
+        current_balance = self.get_raw_balance()
+        current_realized = self._equity_hard_stop_realized_pnl_now()
+        current_upnl = await self._calc_upnl_sum_strict()
         current_metrics = self._equity_hard_stop_apply_sample(
             int(self.get_exchange_time()),
-            float(current_equity),
+            float(current_balance),
+            float(current_realized),
+            float(current_upnl),
             self._equity_hard_stop_sample_minutes(),
         )
         logging.info(
             "[risk] hard-stop initialized from equity history | rows=%d tier=%s equity=%.6f "
-            "peak=%.6f rolling_peak=%.6f raw=%.6f ema=%.6f score=%.6f",
+            "peak_strategy_equity=%.6f rolling_peak_strategy_equity=%.6f "
+            "drawdown_raw=%.6f drawdown_ema=%.6f drawdown_score=%.6f",
             n_rows,
             current_metrics["tier"],
             current_metrics["equity"],
-            current_metrics["equity_peak"],
-            current_metrics["rolling_equity_peak"],
+            current_metrics["peak_strategy_equity"],
+            current_metrics["rolling_peak_strategy_equity"],
             current_metrics["drawdown_raw"],
             current_metrics["drawdown_ema"],
             current_metrics["drawdown_score"],
@@ -1211,22 +1323,30 @@ class Passivbot:
 
         prev_latched = self._equity_hard_stop_runtime_red_latched()
         prev_tier = self._equity_hard_stop_runtime_tier()
-        equity = self.get_raw_balance() + await self._calc_upnl_sum_strict()
+        balance = self.get_raw_balance()
+        realized_pnl = self._equity_hard_stop_realized_pnl_now()
+        unrealized_pnl = await self._calc_upnl_sum_strict()
         metrics = self._equity_hard_stop_apply_sample(
-            int(self.get_exchange_time()), float(equity), self._equity_hard_stop_sample_minutes()
+            int(self.get_exchange_time()),
+            float(balance),
+            float(realized_pnl),
+            float(unrealized_pnl),
+            self._equity_hard_stop_sample_minutes(),
         )
         if metrics["changed"]:
             self._equity_hard_stop_log_transition(metrics, prev_tier)
         if metrics["tier"] == "red" and not prev_latched:
             self._equity_hard_stop_pending_red_since_ms = int(metrics["timestamp_ms"])
             logging.critical(
-                "[risk] equity hard stop RED triggered | equity=%.6f peak=%.6f rolling_peak=%.6f score=%.6f "
-                "threshold=%.6f",
+                "[risk] equity hard stop RED triggered | equity=%.6f "
+                "peak_strategy_equity=%.6f rolling_peak_strategy_equity=%.6f "
+                "drawdown_score=%.6f "
+                "red_threshold=%.6f",
                 metrics["equity"],
-                metrics["equity_peak"],
-                metrics["rolling_equity_peak"],
+                metrics["peak_strategy_equity"],
+                metrics["rolling_peak_strategy_equity"],
                 metrics["drawdown_score"],
-                metrics["threshold"],
+                metrics["red_threshold"],
             )
         elif metrics["tier"] != "red":
             self._equity_hard_stop_pending_red_since_ms = None
@@ -1292,17 +1412,22 @@ class Passivbot:
         else:
             stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
         cooldown_minutes = float(self.equity_hard_stop_loss["cooldown_minutes_after_red"])
-        no_restart_threshold = float(self.equity_hard_stop_loss["no_restart_threshold"])
-        no_restart_latched = bool(stop_event["drawdown_raw"] > no_restart_threshold)
+        no_restart_drawdown_threshold = float(self.equity_hard_stop_loss["no_restart_drawdown_threshold"])
+        no_restart_latched = bool(stop_event["drawdown_raw"] > no_restart_drawdown_threshold)
         cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
         cooldown_until_ms = (
             None if no_restart_latched or cooldown_ms <= 0 else int(stop_ts_ms + cooldown_ms)
         )
         payload = self._equity_hard_stop_build_latch_payload(
             stop_event_timestamp_ms=stop_ts_ms,
+            balance=stop_event.get("balance"),
+            realized_pnl=stop_event.get("realized_pnl"),
+            unrealized_pnl=stop_event.get("unrealized_pnl"),
+            strategy_pnl=stop_event.get("strategy_pnl"),
+            peak_strategy_pnl=stop_event.get("peak_strategy_pnl"),
             equity=float(stop_event["equity"]),
-            equity_peak=float(stop_event["equity_peak"]),
-            trigger_equity_peak=float(stop_event["trigger_equity_peak"]),
+            peak_strategy_equity=float(stop_event["peak_strategy_equity"]),
+            trigger_peak_strategy_equity=float(stop_event["trigger_peak_strategy_equity"]),
             drawdown_raw=float(stop_event["drawdown_raw"]),
             drawdown_ema=float(stop_event["drawdown_ema"]),
             drawdown_score=float(stop_event["drawdown_score"]),
@@ -1314,13 +1439,14 @@ class Passivbot:
 
         if no_restart_latched or cooldown_until_ms is None:
             logging.critical(
-                "[risk] RED stop finalized (terminal) | stop_ts=%s equity=%.6f peak=%.6f "
-                "drawdown_raw=%.6f no_restart_threshold=%.6f latch=%s",
+                "[risk] RED stop finalized (terminal) | stop_ts=%s equity=%.6f "
+                "peak_strategy_equity=%.6f drawdown_raw=%.6f "
+                "no_restart_drawdown_threshold=%.6f latch=%s",
                 stop_ts_ms,
                 stop_event["equity"],
-                stop_event["equity_peak"],
+                stop_event["peak_strategy_equity"],
                 stop_event["drawdown_raw"],
-                no_restart_threshold,
+                no_restart_drawdown_threshold,
                 latch_path,
             )
             self._equity_hard_stop_clear_runtime_forced_modes()
@@ -1339,7 +1465,8 @@ class Passivbot:
         await self._equity_hard_stop_wait_for_cooldown(cooldown_until_ms)
         if self.stop_signal_received:
             return
-        self._equity_hard_stop_runtime.reset_state_keep_peak()
+        self._equity_hard_stop_runtime.reset()
+        self._equity_hard_stop_strategy_pnl_peak.reset()
         self._equity_hard_stop_clear_runtime_forced_modes()
         self._equity_hard_stop_red_flat_confirmations = 0
         self._equity_hard_stop_last_red_progress = None

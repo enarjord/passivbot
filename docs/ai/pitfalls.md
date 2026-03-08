@@ -72,7 +72,6 @@ new_exposure = position_size + entry_qty
 Avoid: `int(sqrt(span0 * span1))`.
 
 Do: keep EMA spans as float throughout calculations.
-
 Example:
 
 ```python
