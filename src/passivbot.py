@@ -813,10 +813,10 @@ class Passivbot:
                 "live.equity_hard_stop_loss.orange_tier_mode must be one of "
                 "{graceful_stop, tp_only_with_active_entry_cancellation}"
             )
-        if panic_close_order_type not in {"market", "limit_panic"}:
+        if panic_close_order_type not in {"market", "limit"}:
             raise ValueError(
                 "live.equity_hard_stop_loss.panic_close_order_type must be one of "
-                "{market, limit_panic}"
+                "{market, limit}"
             )
 
         out = {

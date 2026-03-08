@@ -21,6 +21,7 @@ This document provides an overview of the parameters found in `config/template.j
   - `true` (default): `wallet_exposure_limit = total_wallet_exposure_limit / min(n_positions, n_tradable_max)` where `n_tradable_max` is the highest number of coins that have had real candles at any timestep so far (non-shrinking).  
   - `false`: fixed denominator, same as live: `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
 - **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use the exchange-derived maker fees.
+- **panic_market_slippage_pct**: Backtest-only slippage applied to HSL panic closes when `live.equity_hard_stop_loss.panic_close_order_type` is `"market"`. A long panic close sells at `close * (1 - slippage_pct)` rounded down to `price_step`; a short panic close buys at `close * (1 + slippage_pct)` rounded up. Default `0.0005` (5 bps).
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
   `balance_and_equity.csv` and related plots. `1` keeps full per-minute resolution; higher values
   thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes.

@@ -9,7 +9,7 @@ use crate::orchestrator::{
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
     BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Fill,
-    Order, OrderBook, Position, Positions, TrailingPriceBundle,
+    Order, OrderBook, OrderType, Position, Positions, TrailingPriceBundle,
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
@@ -262,6 +262,12 @@ struct HardStopStopSnapshot {
     equity: f64,
     peak_strategy_equity: f64,
     drawdown_raw: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OrderFillExecution {
+    price: f64,
+    fee_rate: f64,
 }
 
 // RollingSum (SMA) removed — volume & log range are now tracked via EMAs in `EMAs`.
@@ -1934,12 +1940,10 @@ impl<'a> Backtest<'a> {
 
         match self.hard_stop_tier {
             ehsl::HardStopTier::Red => {
-                if pos_long.size != 0.0 {
-                    *mode_long = Some(orchestrator::TradingMode::Panic);
-                }
-                if pos_short.size != 0.0 {
-                    *mode_short = Some(orchestrator::TradingMode::Panic);
-                }
+                let _ = pos_long;
+                let _ = pos_short;
+                *mode_long = Some(orchestrator::TradingMode::Panic);
+                *mode_short = Some(orchestrator::TradingMode::Panic);
             }
             ehsl::HardStopTier::Orange => {
                 let target = self.hard_stop_orange_target_mode();
@@ -2285,17 +2289,17 @@ impl<'a> Backtest<'a> {
                     let mut closes_to_process = Vec::new();
                     {
                         for close_order in &self.open_orders.long[&idx].closes {
-                            if self.order_filled(k, idx, close_order) {
-                                closes_to_process.push(close_order.clone());
+                            if let Some(exec) = self.order_fill_execution(k, idx, close_order) {
+                                closes_to_process.push((*close_order, exec));
                             }
                         }
                     }
-                    for order in closes_to_process {
+                    for (order, exec) in closes_to_process {
                         //if order.qty != 0.0 && self.positions.long.contains_key(&idx) && self.positions.long.contains_key(&idx)
                         //if order.qty != 0.0 && self.get_position
                         if self.positions.long.contains_key(&idx) {
                             self.did_fill_long.insert(idx);
-                            self.process_close_fill_long(k, idx, &order);
+                            self.process_close_fill_long(k, idx, &order, exec);
                         }
                     }
                 }
@@ -2326,15 +2330,15 @@ impl<'a> Backtest<'a> {
                     let mut closes_to_process = Vec::new();
                     {
                         for close_order in &self.open_orders.short[&idx].closes {
-                            if self.order_filled(k, idx, close_order) {
-                                closes_to_process.push(close_order.clone());
+                            if let Some(exec) = self.order_fill_execution(k, idx, close_order) {
+                                closes_to_process.push((*close_order, exec));
                             }
                         }
                     }
-                    for order in closes_to_process {
+                    for (order, exec) in closes_to_process {
                         if self.positions.short.contains_key(&idx) {
                             self.did_fill_short.insert(idx);
-                            self.process_close_fill_short(k, idx, &order);
+                            self.process_close_fill_short(k, idx, &order, exec);
                         }
                     }
                 }
@@ -2357,7 +2361,13 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    fn process_close_fill_long(&mut self, k: usize, idx: usize, close_fill: &Order) {
+    fn process_close_fill_long(
+        &mut self,
+        k: usize,
+        idx: usize,
+        close_fill: &Order,
+        exec: OrderFillExecution,
+    ) {
         let mut new_psize = round_(
             self.positions.long[&idx].size + close_fill.qty,
             self.exchange_params_list[idx].qty_step,
@@ -2374,12 +2384,12 @@ impl<'a> Backtest<'a> {
         }
         let fee_paid = -qty_to_cost(
             adjusted_close_qty,
-            close_fill.price,
+            exec.price,
             self.exchange_params_list[idx].c_mult,
-        ) * self.backtest_params.maker_fee;
+        ) * exec.fee_rate;
         let pnl = calc_pnl_long(
             self.positions.long[&idx].price,
-            close_fill.price,
+            exec.price,
             adjusted_close_qty,
             self.exchange_params_list[idx].c_mult,
         );
@@ -2396,7 +2406,7 @@ impl<'a> Backtest<'a> {
             "close_long",
             close_fill,
             adjusted_close_qty,
-            close_fill.price,
+            exec.price,
             pnl,
             fee_paid,
             balance_before,
@@ -2432,7 +2442,7 @@ impl<'a> Backtest<'a> {
             usd_cash_wallet: self.balance.usd_cash_wallet,
             btc_price: self.btc_usd_prices[k],         // Added
             fill_qty: adjusted_close_qty,              // fill qty
-            fill_price: close_fill.price,              // fill price
+            fill_price: exec.price,                    // fill price
             position_size: new_psize,                  // psize after fill
             position_price: current_pprice,            // pprice after fill
             order_type: close_fill.order_type.clone(), // fill type
@@ -2443,7 +2453,13 @@ impl<'a> Backtest<'a> {
         });
     }
 
-    fn process_close_fill_short(&mut self, k: usize, idx: usize, order: &Order) {
+    fn process_close_fill_short(
+        &mut self,
+        k: usize,
+        idx: usize,
+        order: &Order,
+        exec: OrderFillExecution,
+    ) {
         let mut new_psize = round_(
             self.positions.short[&idx].size + order.qty,
             self.exchange_params_list[idx].qty_step,
@@ -2459,12 +2475,12 @@ impl<'a> Backtest<'a> {
         }
         let fee_paid = -qty_to_cost(
             adjusted_close_qty,
-            order.price,
+            exec.price,
             self.exchange_params_list[idx].c_mult,
-        ) * self.backtest_params.maker_fee;
+        ) * exec.fee_rate;
         let pnl = calc_pnl_short(
             self.positions.short[&idx].price,
-            order.price,
+            exec.price,
             adjusted_close_qty,
             self.exchange_params_list[idx].c_mult,
         );
@@ -2481,7 +2497,7 @@ impl<'a> Backtest<'a> {
             "close_short",
             order,
             adjusted_close_qty,
-            order.price,
+            exec.price,
             pnl,
             fee_paid,
             balance_before,
@@ -2517,7 +2533,7 @@ impl<'a> Backtest<'a> {
             usd_cash_wallet: self.balance.usd_cash_wallet,
             btc_price: self.btc_usd_prices[k],
             fill_qty: adjusted_close_qty,
-            fill_price: order.price,
+            fill_price: exec.price,
             position_size: new_psize,
             position_price: current_pprice,
             order_type: order.order_type.clone(),
@@ -2730,6 +2746,51 @@ impl<'a> Backtest<'a> {
         } else {
             false
         }
+    }
+
+    fn panic_close_uses_market_execution(&self) -> bool {
+        self.backtest_params.equity_hard_stop_loss.panic_close_order_type == "market"
+    }
+
+    fn panic_market_fill_price(&self, k: usize, idx: usize, order: &Order) -> Option<f64> {
+        if !self.coin_is_tradeable_at(idx, k) {
+            return None;
+        }
+        let close_price = self.hlcvs_value(k, idx, CLOSE).max(f64::EPSILON);
+        let price_step = self.exchange_params_list[idx].price_step.max(f64::EPSILON);
+        let slippage_pct = self.backtest_params.panic_market_slippage_pct.max(0.0);
+        match order.order_type {
+            OrderType::ClosePanicLong => {
+                let slipped = close_price * (1.0 - slippage_pct);
+                Some(round_dn(slipped, price_step).max(price_step))
+            }
+            OrderType::ClosePanicShort => {
+                let slipped = close_price * (1.0 + slippage_pct);
+                Some(round_up(slipped, price_step).max(price_step))
+            }
+            _ => None,
+        }
+    }
+
+    fn order_fill_execution(&self, k: usize, idx: usize, order: &Order) -> Option<OrderFillExecution> {
+        let is_market_panic = self.panic_close_uses_market_execution()
+            && matches!(
+                order.order_type,
+                OrderType::ClosePanicLong | OrderType::ClosePanicShort
+            );
+        if is_market_panic {
+            return self.panic_market_fill_price(k, idx, order).map(|price| OrderFillExecution {
+                price,
+                fee_rate: self.exchange_params_list[idx].taker_fee,
+            });
+        }
+        if self.order_filled(k, idx, order) {
+            return Some(OrderFillExecution {
+                price: order.price,
+                fee_rate: self.backtest_params.maker_fee,
+            });
+        }
+        None
     }
 
     fn update_open_orders_all(&mut self, k: usize) {
@@ -3270,6 +3331,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3331,6 +3393,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3355,7 +3418,7 @@ mod tests {
     }
 
     #[test]
-    fn hard_stop_red_only_forces_panic_on_open_positions() {
+    fn hard_stop_red_forces_panic_on_all_sides() {
         let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
 
@@ -3391,6 +3454,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3415,7 +3479,159 @@ mod tests {
             input.symbols[0].long.mode,
             Some(orchestrator::TradingMode::Panic)
         );
-        assert_eq!(input.symbols[0].short.mode, None);
+        assert_eq!(
+            input.symbols[0].short.mode,
+            Some(orchestrator::TradingMode::Panic)
+        );
+    }
+
+    #[test]
+    fn panic_market_close_fills_next_bar_as_taker() {
+        let hlcvs = Array3::from_shape_vec(
+            (2, 1, 4),
+            vec![
+                101.0, 99.0, 100.0, 1.0, //
+                101.0, 99.0, 100.0, 1.0,
+            ],
+        )
+        .unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.panic_close_order_type = "market".to_string();
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0002,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            equity_hard_stop_loss: hs,
+            panic_market_slippage_pct: 0.0005,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+        bt.positions.long.insert(
+            0,
+            Position {
+                size: 1.0,
+                price: 100.0,
+            },
+        );
+        bt.open_orders.long.entry(0).or_default().closes.push(Order {
+            qty: -1.0,
+            price: 200.0,
+            order_type: OrderType::ClosePanicLong,
+        });
+
+        bt.check_for_fills(1);
+
+        assert!(!bt.positions.long.contains_key(&0));
+        assert_eq!(bt.fills.len(), 1);
+        assert_eq!(bt.fills[0].order_type, OrderType::ClosePanicLong);
+        assert!((bt.fills[0].fill_price - 99.9).abs() < 1e-12);
+        assert!(bt.fills[0].fee_paid < 0.0);
+    }
+
+    #[test]
+    fn panic_limit_close_still_requires_cross() {
+        let hlcvs = Array3::from_shape_vec(
+            (2, 1, 4),
+            vec![
+                101.0, 99.0, 100.0, 1.0, //
+                101.0, 99.0, 100.0, 1.0,
+            ],
+        )
+        .unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.panic_close_order_type = "limit".to_string();
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0002,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            equity_hard_stop_loss: hs,
+            panic_market_slippage_pct: 0.0005,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+        bt.positions.long.insert(
+            0,
+            Position {
+                size: 1.0,
+                price: 100.0,
+            },
+        );
+        bt.open_orders.long.entry(0).or_default().closes.push(Order {
+            qty: -1.0,
+            price: 200.0,
+            order_type: OrderType::ClosePanicLong,
+        });
+
+        bt.check_for_fills(1);
+
+        assert!(bt.positions.long.contains_key(&0));
+        assert!(bt.fills.is_empty());
     }
 
     #[test]
@@ -3454,6 +3670,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 1.0,
             equity_hard_stop_loss: hs,
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3523,6 +3740,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3588,6 +3806,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3674,6 +3893,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3740,6 +3960,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3801,6 +4022,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3885,6 +4107,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3973,6 +4196,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -4043,6 +4267,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            panic_market_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 

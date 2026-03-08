@@ -139,6 +139,8 @@ pub struct ExchangeParams {
     pub min_qty: f64,
     pub min_cost: f64,
     pub c_mult: f64,
+    pub maker_fee: f64,
+    pub taker_fee: f64,
 }
 
 impl Default for ExchangeParams {
@@ -149,6 +151,8 @@ impl Default for ExchangeParams {
             min_qty: 0.00001,
             min_cost: 1.0,
             c_mult: 1.0,
+            maker_fee: 0.0002,
+            taker_fee: 0.00055,
         }
     }
 }
@@ -218,6 +222,7 @@ pub struct BacktestParams {
     pub max_realized_loss_pct: f64,
     pub pnls_max_lookback_days: f64,
     pub equity_hard_stop_loss: EquityHardStopLossConfig,
+    pub panic_market_slippage_pct: f64,
     pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
 }
 

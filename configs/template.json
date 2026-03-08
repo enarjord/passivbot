@@ -19,6 +19,7 @@
         "dynamic_wel_by_tradability": true,
         "gap_tolerance_ohlcvs_minutes": 120,
         "maker_fee_override": 0.0004,
+        "panic_market_slippage_pct": 0.0005,
         "market_settings_sources": {},
         "max_warmup_minutes": 0,
         "ohlcv_source_dir": null,
