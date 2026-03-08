@@ -936,7 +936,7 @@ fn run_backtest_core<'py>(
 
     // Run the backtest and process results
     Python::with_gil(|py| {
-        let (fills, equities) = backtest.run();
+        let (fills, equities) = backtest.run().map_err(PyValueError::new_err)?;
         let (entry_pct_long, entry_pct_short) = backtest.initial_entry_balance_pct();
         let (mut analysis_usd, mut analysis_btc) = analyze_backtest_pair(
             &fills,

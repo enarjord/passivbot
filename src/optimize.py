@@ -352,9 +352,6 @@ def _format_objectives(values: Sequence[float]) -> str:
 
 
 def _is_recoverable_backtest_candidate_error(exc: BaseException) -> bool:
-    name = exc.__class__.__name__
-    if name != "PanicException":
-        return False
     message = str(exc)
     return any(pattern in message for pattern in _RECOVERABLE_BACKTEST_PANIC_PATTERNS)
 
