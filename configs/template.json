@@ -767,6 +767,21 @@
                 "value": 1680
             },
             {
+                "metric": "hard_stop_time_in_red_pct",
+                "penalize_if": "greater_than",
+                "value": 0.02
+            },
+            {
+                "metric": "hard_stop_post_restart_retrigger_pct",
+                "penalize_if": "greater_than",
+                "value": 0.25
+            },
+            {
+                "metric": "hard_stop_halt_to_restart_equity_loss_pct",
+                "penalize_if": "greater_than",
+                "value": 0.05
+            },
+            {
                 "metric": "position_held_hours_max",
                 "penalize_if": "greater_than",
                 "value": 840

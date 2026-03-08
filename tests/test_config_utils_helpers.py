@@ -189,6 +189,15 @@ def test_normalize_limit_entries_preserves_integers():
     assert normalized[0]["value"] == 2016
 
 
+def test_normalize_limit_entries_canonicalizes_shared_hsl_metric_alias():
+    raw = [{"metric": "usd_hard_stop_time_in_red_pct", "penalize_if": ">", "value": 0.02}]
+    normalized = config_utils.normalize_limit_entries(raw)
+    assert len(normalized) == 1
+    assert normalized[0]["metric"] == "hard_stop_time_in_red_pct"
+    assert normalized[0]["penalize_if"] == "greater_than"
+    assert normalized[0]["value"] == 0.02
+
+
 def test_limits_structural_equal_detects_canonical_entries():
     raw = [
         {"metric": "drawdown_worst_btc", "penalize_if": "greater_than", "value": 0.3},
