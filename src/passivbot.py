@@ -742,73 +742,70 @@ class Passivbot:
     def bot_value(self, pside: str, key: str):
         return require_config_value(self.config, f"bot.{pside}.{key}")
 
+    def bot_common_value(self, key: str):
+        return require_config_value(self.config, f"bot.common.{key}")
+
     def _parse_equity_hard_stop_loss_config(self) -> dict[str, Any]:
-        """Parse and validate live.equity_hard_stop_loss config."""
-        raw = require_live_value(self.config, "equity_hard_stop_loss")
+        """Parse and validate bot.common.equity_hard_stop_loss config."""
+        raw = self.bot_common_value("equity_hard_stop_loss")
         if not isinstance(raw, dict):
             raise TypeError(
-                f"live.equity_hard_stop_loss must be a dict, got {type(raw).__name__}"
+                f"bot.common.equity_hard_stop_loss must be a dict, got {type(raw).__name__}"
             )
 
-        enabled = bool(require_live_value(self.config, "equity_hard_stop_loss.enabled"))
-        red_threshold = float(require_live_value(self.config, "equity_hard_stop_loss.red_threshold"))
-        ema_span_minutes = float(
-            require_live_value(self.config, "equity_hard_stop_loss.ema_span_minutes")
-        )
+        enabled = bool(self.bot_common_value("equity_hard_stop_loss.enabled"))
+        red_threshold = float(self.bot_common_value("equity_hard_stop_loss.red_threshold"))
+        ema_span_minutes = float(self.bot_common_value("equity_hard_stop_loss.ema_span_minutes"))
         cooldown_minutes_after_red = float(
-            require_live_value(self.config, "equity_hard_stop_loss.cooldown_minutes_after_red")
+            self.bot_common_value("equity_hard_stop_loss.cooldown_minutes_after_red")
         )
         no_restart_drawdown_threshold = float(
-            require_live_value(self.config, "equity_hard_stop_loss.no_restart_drawdown_threshold")
+            self.bot_common_value("equity_hard_stop_loss.no_restart_drawdown_threshold")
         )
 
-        tier_ratios_raw = require_live_value(self.config, "equity_hard_stop_loss.tier_ratios")
+        tier_ratios_raw = self.bot_common_value("equity_hard_stop_loss.tier_ratios")
         if not isinstance(tier_ratios_raw, dict):
             raise TypeError(
-                "live.equity_hard_stop_loss.tier_ratios must be a dict, "
+                "bot.common.equity_hard_stop_loss.tier_ratios must be a dict, "
                 f"got {type(tier_ratios_raw).__name__}"
             )
-        ratio_yellow = float(
-            require_live_value(self.config, "equity_hard_stop_loss.tier_ratios.yellow")
-        )
-        ratio_orange = float(
-            require_live_value(self.config, "equity_hard_stop_loss.tier_ratios.orange")
-        )
+        ratio_yellow = float(self.bot_common_value("equity_hard_stop_loss.tier_ratios.yellow"))
+        ratio_orange = float(self.bot_common_value("equity_hard_stop_loss.tier_ratios.orange"))
 
-        orange_tier_mode = str(
-            require_live_value(self.config, "equity_hard_stop_loss.orange_tier_mode")
-        )
+        orange_tier_mode = str(self.bot_common_value("equity_hard_stop_loss.orange_tier_mode"))
         panic_close_order_type = str(
-            require_live_value(self.config, "equity_hard_stop_loss.panic_close_order_type")
+            self.bot_common_value("equity_hard_stop_loss.panic_close_order_type")
         )
 
         if enabled and red_threshold <= 0.0:
-            raise ValueError("live.equity_hard_stop_loss.red_threshold must be > 0.0 when enabled")
+            raise ValueError(
+                "bot.common.equity_hard_stop_loss.red_threshold must be > 0.0 when enabled"
+            )
         if enabled and ema_span_minutes <= 0.0:
             raise ValueError(
-                "live.equity_hard_stop_loss.ema_span_minutes must be > 0.0 when enabled"
+                "bot.common.equity_hard_stop_loss.ema_span_minutes must be > 0.0 when enabled"
             )
         if cooldown_minutes_after_red < 0.0:
             raise ValueError(
-                "live.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
+                "bot.common.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
             )
         if not (red_threshold < no_restart_drawdown_threshold <= 1.0):
             raise ValueError(
-                "live.equity_hard_stop_loss.no_restart_drawdown_threshold must satisfy "
+                "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold must satisfy "
                 "red_threshold < no_restart_drawdown_threshold <= 1.0"
             )
         if not (0.0 < ratio_yellow < ratio_orange < 1.0):
             raise ValueError(
-                "live.equity_hard_stop_loss.tier_ratios must satisfy 0 < yellow < orange < 1"
+                "bot.common.equity_hard_stop_loss.tier_ratios must satisfy 0 < yellow < orange < 1"
             )
         if orange_tier_mode not in {"graceful_stop", "tp_only_with_active_entry_cancellation"}:
             raise ValueError(
-                "live.equity_hard_stop_loss.orange_tier_mode must be one of "
+                "bot.common.equity_hard_stop_loss.orange_tier_mode must be one of "
                 "{graceful_stop, tp_only_with_active_entry_cancellation}"
             )
         if panic_close_order_type not in {"market", "limit"}:
             raise ValueError(
-                "live.equity_hard_stop_loss.panic_close_order_type must be one of "
+                "bot.common.equity_hard_stop_loss.panic_close_order_type must be one of "
                 "{market, limit}"
             )
 

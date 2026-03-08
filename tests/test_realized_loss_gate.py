@@ -223,6 +223,18 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
                 "dynamic_wel_by_tradability": True,
             },
             "bot": {
+                "common": {
+                    "equity_hard_stop_loss": {
+                        "enabled": False,
+                        "red_threshold": 0.25,
+                        "ema_span_minutes": 60.0,
+                        "cooldown_minutes_after_red": 0.0,
+                        "no_restart_drawdown_threshold": 1.0,
+                        "tier_ratios": {"yellow": 0.5, "orange": 0.75},
+                        "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                        "panic_close_order_type": "market",
+                    },
+                },
                 "long": {
                     "n_positions": 1,
                     "total_wallet_exposure_limit": 1.0,
@@ -238,16 +250,6 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
                 "hedge_mode": True,
                 "max_realized_loss_pct": 1.0,
                 "pnls_max_lookback_days": 30.0,
-                "equity_hard_stop_loss": {
-                    "enabled": False,
-                    "red_threshold": 0.25,
-                    "ema_span_minutes": 60.0,
-                    "cooldown_minutes_after_red": 0.0,
-                    "no_restart_drawdown_threshold": 1.0,
-                    "tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                    "orange_tier_mode": "tp_only_with_active_entry_cancellation",
-                    "panic_close_order_type": "market",
-                },
             },
             "coin_overrides": {},
         }
@@ -298,6 +300,18 @@ class TestPrepBacktestArgsEquityHardStopLoss:
                 "dynamic_wel_by_tradability": True,
             },
             "bot": {
+                "common": {
+                    "equity_hard_stop_loss": {
+                        "enabled": False,
+                        "red_threshold": 0.25,
+                        "ema_span_minutes": 60.0,
+                        "cooldown_minutes_after_red": 0.0,
+                        "no_restart_drawdown_threshold": 1.0,
+                        "tier_ratios": {"yellow": 0.5, "orange": 0.75},
+                        "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                        "panic_close_order_type": "market",
+                    },
+                },
                 "long": {
                     "n_positions": 1,
                     "total_wallet_exposure_limit": 1.0,
@@ -313,27 +327,17 @@ class TestPrepBacktestArgsEquityHardStopLoss:
                 "hedge_mode": True,
                 "max_realized_loss_pct": 1.0,
                 "pnls_max_lookback_days": 30.0,
-                "equity_hard_stop_loss": {
-                    "enabled": False,
-                    "red_threshold": 0.25,
-                    "ema_span_minutes": 60.0,
-                    "cooldown_minutes_after_red": 0.0,
-                    "no_restart_drawdown_threshold": 1.0,
-                    "tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                    "orange_tier_mode": "tp_only_with_active_entry_cancellation",
-                    "panic_close_order_type": "market",
-                },
             },
             "coin_overrides": {},
         }
         if hard_stop_block is not None:
-            merged = deepcopy(config["live"]["equity_hard_stop_loss"])
+            merged = deepcopy(config["bot"]["common"]["equity_hard_stop_loss"])
             for key, value in hard_stop_block.items():
                 if key == "tier_ratios" and isinstance(value, dict):
                     merged["tier_ratios"].update(value)
                 else:
                     merged[key] = value
-            config["live"]["equity_hard_stop_loss"] = merged
+            config["bot"]["common"]["equity_hard_stop_loss"] = merged
         return config
 
     def _make_mss(self):

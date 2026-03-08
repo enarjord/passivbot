@@ -6,7 +6,7 @@ All notable user-facing changes will be documented in this file.
 
 ### Fixed
 - **Backtest HSL panic execution and metrics export** - Account-level RED panic now forces panic mode on all symbols/sides in Rust backtests, `panic_close_order_type="market"` is simulated as next-bar taker execution instead of limit-only behavior, and `hard_stop_*` analysis metrics are exported once as shared metrics rather than duplicated into `_usd`/`_btc` variants.
-- **Backtest HSL EMA span validation** - Backtests now fail early in Python when `live.equity_hard_stop_loss.ema_span_minutes` is smaller than `backtest.candle_interval_minutes`, instead of panicking later inside Rust.
+- **Backtest HSL EMA span validation** - Backtests now fail early in Python when `bot.common.equity_hard_stop_loss.ema_span_minutes` is smaller than `backtest.candle_interval_minutes`, instead of panicking later inside Rust.
 - **Backtest market-order slippage config naming** - Renamed `backtest.panic_market_slippage_pct` to `backtest.market_order_slippage_pct` so one backtest slippage knob can cover all simulated market-order execution, while HSL panic closes remain the first current consumer.
 
 ## v7.8.4 - 2026-03-06
@@ -16,7 +16,7 @@ All notable user-facing changes will be documented in this file.
 - **WEL denominator behavior split by mode** - Live now uses a hard fixed denominator for per-symbol WEL (`total_wallet_exposure_limit / config.bot.{pside}.n_positions`), removing runtime denominator drift from open-position count. Backtests now expose `backtest.dynamic_wel_by_tradability` (default `true`): when enabled, WEL uses tradability-aware denominator growth (`min(n_positions, n_tradable_max)`) based on coins with real candles, and does not shrink after delistings; when disabled, backtests use the same fixed denominator as live.
 - **Bulk price fetch for Hyperliquid** - `calc_ideal_orders` now uses a single `allMids` API call to get prices for all symbols instead of individual `get_current_close` calls per symbol (1 call vs ~70). Falls back to per-symbol fetches for non-Hyperliquid exchanges or on error.
 - **Sequential margin mode setting for Hyperliquid** - Margin mode and leverage API calls are now sequential with a small delay instead of being fired in parallel, reducing API burst on coin changes.
-- **Equity hard-stop framework (live+backtest)** - Added nested `live.equity_hard_stop_loss` config (threshold, EMA span in minutes, configurable yellow/orange tier ratios, orange mode selector, panic close order type), Rust drawdown/tier state machine module, backtest rolling-peak enforcement using `pnls_max_lookback_days`, and live runtime hooks for tier tracking/latching with RED supervisory flatten-until-confirmed-flat behavior.
+- **Equity hard-stop framework (live+backtest)** - Added nested equity hard-stop config (now under `bot.common.equity_hard_stop_loss`) with threshold, EMA span in minutes, configurable yellow/orange tier ratios, orange mode selector, panic close order type, plus Rust drawdown/tier state machine module, backtest rolling-peak enforcement using `pnls_max_lookback_days`, and live runtime hooks for tier tracking/latching with RED supervisory flatten-until-confirmed-flat behavior.
 
 ### Fixed
 - **Bybit fill-event qty inflation on duplicate pages** - `BybitFetcher` now deduplicates `fetch_my_trades` rows by exec id before canonicalization/coalescing, preventing duplicate pagination rows from inflating canonical `qty`, `fees`, and close PnL.

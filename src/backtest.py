@@ -118,6 +118,38 @@ ANALYSIS_SHARED_KEYS = {
     "sortino_ratio_pnl",
     "sortino_ratio_pnl_w",
 }
+PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl"}
+PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
+
+
+def parse_disabled_plot_groups(value) -> set[str]:
+    if value in (None, False, "", [], ()):
+        return set()
+    if value is True:
+        return set(PLOT_GROUP_ALL)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw or raw.lower() in {"false", "none", "n", "no", "0"}:
+            return set()
+        tokens = [token.strip().lower() for token in raw.split(",") if token.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        tokens = [str(token).strip().lower() for token in value if str(token).strip()]
+    else:
+        raise ValueError(f"invalid disable_plotting value type: {type(value).__name__}")
+
+    disabled = set()
+    for token in tokens:
+        if token in {"true", "all", "y", "yes", "1"}:
+            disabled.update(PLOT_GROUP_ALL)
+        elif token == "summary":
+            disabled.update(PLOT_GROUP_SUMMARY)
+        elif token in PLOT_GROUP_ALL:
+            disabled.add(token)
+        else:
+            raise ValueError(
+                "disable_plotting must be one of all, summary, balance, twe, pnl, coin_fills"
+            )
+    return disabled
 
 ANALYSIS_SHARED_PREFIXES = ("hard_stop_",)
 
@@ -1127,78 +1159,87 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             for coin in coins
         ]
     if backtest_params is None:
-        hard_stop_cfg = require_config_value(config, "live.equity_hard_stop_loss")
+        hard_stop_cfg = require_config_value(config, "bot.common.equity_hard_stop_loss")
         if not isinstance(hard_stop_cfg, dict):
             raise TypeError(
-                f"live.equity_hard_stop_loss must be a dict, got {type(hard_stop_cfg).__name__}"
+                f"bot.common.equity_hard_stop_loss must be a dict, got {type(hard_stop_cfg).__name__}"
             )
-        tier_ratios = require_config_value(config, "live.equity_hard_stop_loss.tier_ratios")
+        tier_ratios = require_config_value(config, "bot.common.equity_hard_stop_loss.tier_ratios")
         if not isinstance(tier_ratios, dict):
             raise TypeError(
-                f"live.equity_hard_stop_loss.tier_ratios must be a dict, got {type(tier_ratios).__name__}"
+                "bot.common.equity_hard_stop_loss.tier_ratios must be a dict, "
+                f"got {type(tier_ratios).__name__}"
             )
-        hard_stop_enabled = bool(require_config_value(config, "live.equity_hard_stop_loss.enabled"))
+        hard_stop_enabled = bool(
+            require_config_value(config, "bot.common.equity_hard_stop_loss.enabled")
+        )
         hard_stop_red_threshold = float(
-            require_config_value(config, "live.equity_hard_stop_loss.red_threshold")
+            require_config_value(config, "bot.common.equity_hard_stop_loss.red_threshold")
         )
         hard_stop_ema_span_minutes = float(
-            require_config_value(config, "live.equity_hard_stop_loss.ema_span_minutes")
+            require_config_value(config, "bot.common.equity_hard_stop_loss.ema_span_minutes")
         )
         hard_stop_cooldown_minutes_after_red = float(
-            require_config_value(config, "live.equity_hard_stop_loss.cooldown_minutes_after_red")
+            require_config_value(
+                config, "bot.common.equity_hard_stop_loss.cooldown_minutes_after_red"
+            )
         )
         hard_stop_no_restart_drawdown_threshold = float(
-            require_config_value(config, "live.equity_hard_stop_loss.no_restart_drawdown_threshold")
+            require_config_value(
+                config, "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold"
+            )
         )
         hard_stop_tier_ratio_yellow = float(
-            require_config_value(config, "live.equity_hard_stop_loss.tier_ratios.yellow")
+            require_config_value(config, "bot.common.equity_hard_stop_loss.tier_ratios.yellow")
         )
         hard_stop_tier_ratio_orange = float(
-            require_config_value(config, "live.equity_hard_stop_loss.tier_ratios.orange")
+            require_config_value(config, "bot.common.equity_hard_stop_loss.tier_ratios.orange")
         )
         hard_stop_orange_tier_mode = str(
-            require_config_value(config, "live.equity_hard_stop_loss.orange_tier_mode")
+            require_config_value(config, "bot.common.equity_hard_stop_loss.orange_tier_mode")
         )
         hard_stop_panic_close_order_type = str(
-            require_config_value(config, "live.equity_hard_stop_loss.panic_close_order_type")
+            require_config_value(config, "bot.common.equity_hard_stop_loss.panic_close_order_type")
         )
         if hard_stop_enabled and hard_stop_red_threshold <= 0.0:
-            raise ValueError("live.equity_hard_stop_loss.red_threshold must be > 0.0 when enabled")
+            raise ValueError(
+                "bot.common.equity_hard_stop_loss.red_threshold must be > 0.0 when enabled"
+            )
         if hard_stop_enabled and hard_stop_ema_span_minutes <= 0.0:
             raise ValueError(
-                "live.equity_hard_stop_loss.ema_span_minutes must be > 0.0 when enabled"
+                "bot.common.equity_hard_stop_loss.ema_span_minutes must be > 0.0 when enabled"
             )
         if hard_stop_enabled and hard_stop_ema_span_minutes < float(candle_interval):
             raise ValueError(
-                "live.equity_hard_stop_loss.ema_span_minutes must be >= "
+                "bot.common.equity_hard_stop_loss.ema_span_minutes must be >= "
                 f"backtest.candle_interval_minutes ({candle_interval}) when enabled"
             )
         if hard_stop_cooldown_minutes_after_red < 0.0:
             raise ValueError(
-                "live.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
+                "bot.common.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
             )
         if not (
             hard_stop_red_threshold < hard_stop_no_restart_drawdown_threshold <= 1.0
         ):
             raise ValueError(
-                "live.equity_hard_stop_loss.no_restart_drawdown_threshold must satisfy "
+                "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold must satisfy "
                 "red_threshold < no_restart_drawdown_threshold <= 1.0"
             )
         if not (0.0 < hard_stop_tier_ratio_yellow < hard_stop_tier_ratio_orange < 1.0):
             raise ValueError(
-                "live.equity_hard_stop_loss.tier_ratios must satisfy 0 < yellow < orange < 1"
+                "bot.common.equity_hard_stop_loss.tier_ratios must satisfy 0 < yellow < orange < 1"
             )
         if hard_stop_orange_tier_mode not in {
             "graceful_stop",
             "tp_only_with_active_entry_cancellation",
         }:
             raise ValueError(
-                "live.equity_hard_stop_loss.orange_tier_mode must be one of "
+                "bot.common.equity_hard_stop_loss.orange_tier_mode must be one of "
                 "{graceful_stop, tp_only_with_active_entry_cancellation}"
             )
         if hard_stop_panic_close_order_type not in {"market", "limit"}:
             raise ValueError(
-                "live.equity_hard_stop_loss.panic_close_order_type must be one of {market, limit}"
+                "bot.common.equity_hard_stop_loss.panic_close_order_type must be one of {market, limit}"
             )
         market_order_slippage_pct = float(
             get_optional_config_value(config, "backtest.market_order_slippage_pct", 0.0005) or 0.0
@@ -1369,6 +1410,7 @@ def post_process(
     plot_hlcvs=None,
 ):
     sts = utc_ms()
+    disabled_plot_groups = parse_disabled_plot_groups(config.get("disable_plotting"))
     equities_array = np.asarray(equities_array)
     balance_sample_divider = get_optional_config_value(config, "backtest.balance_sample_divider", 60)
     try:
@@ -1399,25 +1441,27 @@ def post_process(
     dump_config(sanitized_config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv.gz"), compression="gzip")
-    balance_figs = create_forager_balance_figures(
-        bal_eq,
-        include_logy=True,
-        autoplot=False,
-        return_figures=True,
-    )
-    save_figures(balance_figs, results_path)
-    twe_figs = create_forager_twe_figure(fdf, autoplot=False, return_figures=True)
-    save_figures(twe_figs, results_path)
-    pnl_figs = create_forager_pnl_figure(
-        fdf,
-        bal_eq,
-        balance_sample_divider=balance_sample_divider,
-        autoplot=False,
-        return_figures=True,
-    )
-    save_figures(pnl_figs, results_path)
-
-    if not config["disable_plotting"]:
+    if "balance" not in disabled_plot_groups:
+        balance_figs = create_forager_balance_figures(
+            bal_eq,
+            include_logy=True,
+            autoplot=False,
+            return_figures=True,
+        )
+        save_figures(balance_figs, results_path)
+    if "twe" not in disabled_plot_groups:
+        twe_figs = create_forager_twe_figure(fdf, autoplot=False, return_figures=True)
+        save_figures(twe_figs, results_path)
+    if "pnl" not in disabled_plot_groups:
+        pnl_figs = create_forager_pnl_figure(
+            fdf,
+            bal_eq,
+            balance_sample_divider=balance_sample_divider,
+            autoplot=False,
+            return_figures=True,
+        )
+        save_figures(pnl_figs, results_path)
+    if "coin_fills" not in disabled_plot_groups:
         try:
             coins = require_config_value(config, f"backtest.coins.{exchange}")
             fills_plot_dir = oj(results_path, "fills_plots")
@@ -1446,8 +1490,13 @@ async def main():
         "--disable_plotting",
         "-dp",
         dest="disable_plotting",
-        action="store_true",
-        help="disable plotting",
+        nargs="?",
+        const="all",
+        default=None,
+        help=(
+            "Disable selected plot groups. Use without a value to disable all plotting. "
+            "Allowed values: all, summary, balance, twe, pnl, coin_fills, or a comma-separated combination."
+        ),
     )
     parser.add_argument(
         "--log-level",
@@ -1515,7 +1564,6 @@ async def main():
         "hedge_mode",
         "ignored_coins",
         "max_realized_loss_pct",
-        "equity_hard_stop_loss",
         "minimum_coin_age_days",
     }
     for key in sorted(template_config["live"]):
@@ -1592,8 +1640,8 @@ async def main():
         suite_cfg["enabled"] = bool(args.suite)
 
     # Log disable_plotting if set (not a config key, just a runtime flag)
-    if args.disable_plotting:
-        logging.info("changed disable_plotting False -> True")
+    if args.disable_plotting is not None:
+        logging.info("changed disable_plotting False -> %s", args.disable_plotting)
 
     if suite_cfg.get("enabled"):
         logging.info("Running backtest suite (%d scenarios)...", len(suite_cfg.get("scenarios", [])))
@@ -1613,7 +1661,7 @@ async def main():
     for ex in backtest_exchanges:
         await load_markets(ex)
     await format_approved_ignored_coins(config, backtest_exchanges)
-    config["disable_plotting"] = args.disable_plotting
+    config["disable_plotting"] = args.disable_plotting if args.disable_plotting is not None else False
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
     force_refetch_gaps = getattr(args, "force_refetch_gaps", False)

@@ -84,10 +84,10 @@ Do: keep EMA spans as float throughout calculations.
 **Example**:
 ```python
 # WRONG: Runtime fallback for required config
-red_threshold = float(config["live"]["equity_hard_stop_loss"].get("red_threshold", 0.25))
+red_threshold = float(config["bot"]["common"]["equity_hard_stop_loss"].get("red_threshold", 0.25))
 
 # CORRECT: Required config access (defaults handled centrally at config load)
-red_threshold = float(require_config_value(config, "live.equity_hard_stop_loss.red_threshold"))
+red_threshold = float(require_config_value(config, "bot.common.equity_hard_stop_loss.red_threshold"))
 ```
 
 ```rust

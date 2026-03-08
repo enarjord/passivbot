@@ -148,6 +148,7 @@ from optimization.bounds import (
     enforce_bounds,
 )
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
+from optimization.config_adapter import get_optimization_key_paths
 from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
@@ -550,23 +551,30 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
     assume individual is already bound enforced (or will be after)
     """
     config = deepcopy(template)
-    i = 0
+    key_paths = get_optimization_key_paths(config)
+    assert len(individual) == len(key_paths), (
+        f"individual length {len(individual)} does not match optimization key count {len(key_paths)}"
+    )
+    for value, (_, path) in zip(individual, key_paths):
+        target = config
+        for part in path[:-1]:
+            target = target[part]
+        target[path[-1]] = value
     for pside in sorted(config["bot"]):
-        for key in sorted(config["bot"][pside]):
-            config["bot"][pside][key] = individual[i]
-            i += 1
         config = optimizer_overrides(overrides_list, config, pside)
 
     return config
 
 
 def config_to_individual(config, bounds, sig_digits=None):
+    values = []
+    for _, path in get_optimization_key_paths(config):
+        target = config
+        for part in path:
+            target = target[part]
+        values.append(target)
     return enforce_bounds(
-        [
-            config["bot"][pside][key]
-            for pside in sorted(config["bot"])
-            for key in sorted(config["bot"][pside])
-        ],
+        values,
         bounds,
         sig_digits,
     )

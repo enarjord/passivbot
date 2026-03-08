@@ -241,7 +241,8 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {"param1": 99.0, "param2": 99.0},
                 "short": {"param1": 99.0, "param2": 99.0},
-            }
+            },
+            "optimize": {"bounds": {}},
         }
         original_template = deepcopy(template)
         overrides_list = []
@@ -251,6 +252,34 @@ class TestIndividualToConfig:
 
         # Template should be unchanged
         assert template == original_template
+
+    def test_includes_live_hsl_values_when_present_in_bounds(self):
+        individual = [1.0, 2.0, 3.0, 4.0, 60.0, 0.22]
+        template = {
+            "bot": {
+                "common": {
+                    "equity_hard_stop_loss": {
+                        "red_threshold": 0.25,
+                        "ema_span_minutes": 120.0,
+                    }
+                },
+                "long": {"param1": 0.0, "param2": 0.0},
+                "short": {"param1": 0.0, "param2": 0.0},
+            },
+            "optimize": {
+                "bounds": {
+                    "common_equity_hard_stop_loss_red_threshold": [0.15, 0.35, 0.01],
+                    "common_equity_hard_stop_loss_ema_span_minutes": [30.0, 180.0, 5.0],
+                }
+            },
+        }
+        overrides_list = []
+        mock_overrides = lambda x, y, z: y
+
+        result = individual_to_config(individual, mock_overrides, overrides_list, template)
+
+        assert result["bot"]["common"]["equity_hard_stop_loss"]["red_threshold"] == pytest.approx(0.22)
+        assert result["bot"]["common"]["equity_hard_stop_loss"]["ema_span_minutes"] == pytest.approx(60.0)
 
 
 class TestConfigToIndividual:
@@ -280,7 +309,8 @@ class TestConfigToIndividual:
             "bot": {
                 "long": {"z_param": 100.0, "a_param": 200.0},
                 "short": {"z_param": 300.0, "a_param": 400.0},
-            }
+            },
+            "optimize": {"bounds": {}},
         }
         bounds = [Bound(0.0, 1000.0)] * 4
         sig_digits = 6
@@ -292,6 +322,32 @@ class TestConfigToIndividual:
         assert result[1] == pytest.approx(100.0)
         assert result[2] == pytest.approx(400.0)
         assert result[3] == pytest.approx(300.0)
+
+    def test_appends_live_hsl_values_when_present_in_bounds(self):
+        config = {
+            "bot": {
+                "common": {
+                    "equity_hard_stop_loss": {
+                        "red_threshold": 0.22,
+                        "ema_span_minutes": 60.0,
+                    }
+                },
+                "long": {"a_param": 1.0, "z_param": 2.0},
+                "short": {"a_param": 3.0, "z_param": 4.0},
+            },
+            "optimize": {
+                "bounds": {
+                    "common_equity_hard_stop_loss_red_threshold": [0.15, 0.35, 0.01],
+                    "common_equity_hard_stop_loss_ema_span_minutes": [30.0, 180.0, 5.0],
+                }
+            },
+        }
+        bounds = [Bound(0.0, 1000.0)] * 6
+        sig_digits = 6
+
+        result = config_to_individual(config, bounds, sig_digits)
+
+        assert result == pytest.approx([1.0, 2.0, 3.0, 4.0, 60.0, 0.22])
 
 
 class TestValidateArray:

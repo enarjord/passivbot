@@ -97,6 +97,7 @@ SHARED_METRICS = {
 
 
 Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
+BOT_POSITION_SIDES = ("long", "short")
 
 
 def load_hjson_config(config_path: str) -> dict:
@@ -554,7 +555,7 @@ def _build_from_pb_multi(config: dict, template: dict) -> dict:
         result["live"]["coin_flags"] = config["approved_symbols"]
     result["live"]["approved_coins"] = sorted(set(config.get("approved_symbols", [])))
     result["live"]["ignored_coins"] = sorted(set(config.get("ignored_symbols", [])))
-    for pside in ("long", "short"):
+    for pside in BOT_POSITION_SIDES:
         universal_cfg = config.get("universal_live_config", {}).get(pside, {})
         for key in result["bot"][pside]:
             inverse_key = PB_MULTI_FIELD_MAP_INV.get(key)
@@ -1056,6 +1057,67 @@ def _rename_config_keys(
                 [exchange],
             )
         del result["backtest"]["exchange"]
+    optimize_bounds = result.get("optimize", {}).get("bounds", {})
+    for old, new in [
+        (
+            "live_equity_hard_stop_loss_cooldown_minutes_after_red",
+            "common_equity_hard_stop_loss_cooldown_minutes_after_red",
+        ),
+        (
+            "live_equity_hard_stop_loss_ema_span_minutes",
+            "common_equity_hard_stop_loss_ema_span_minutes",
+        ),
+        (
+            "live_equity_hard_stop_loss_no_restart_drawdown_threshold",
+            "common_equity_hard_stop_loss_no_restart_drawdown_threshold",
+        ),
+        (
+            "live_equity_hard_stop_loss_red_threshold",
+            "common_equity_hard_stop_loss_red_threshold",
+        ),
+    ]:
+        if old in optimize_bounds and new not in optimize_bounds:
+            optimize_bounds[new] = deepcopy(optimize_bounds[old])
+            _log_config(
+                verbose, logging.INFO, "renaming parameter optimize.bounds.%s -> %s", old, new
+            )
+            if tracker is not None:
+                tracker.rename(["optimize", "bounds", old], ["optimize", "bounds", new], optimize_bounds[new])
+            del optimize_bounds[old]
+
+
+def _migrate_bot_common_hsl(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    live = result.setdefault("live", {})
+    bot = result.setdefault("bot", {})
+    common = bot.setdefault("common", {})
+    live_hsl = live.get("equity_hard_stop_loss")
+    common_hsl = common.get("equity_hard_stop_loss")
+    if live_hsl is None:
+        return
+    if common_hsl is None:
+        common["equity_hard_stop_loss"] = deepcopy(live_hsl)
+        _log_config(
+            verbose,
+            logging.INFO,
+            "migrating parameter live.equity_hard_stop_loss -> bot.common.equity_hard_stop_loss",
+        )
+        if tracker is not None:
+            tracker.rename(
+                ["live", "equity_hard_stop_loss"],
+                ["bot", "common", "equity_hard_stop_loss"],
+                common["equity_hard_stop_loss"],
+            )
+    else:
+        _log_config(
+            verbose,
+            logging.INFO,
+            "dropping legacy live.equity_hard_stop_loss because bot.common.equity_hard_stop_loss is present",
+        )
+        if tracker is not None:
+            tracker.remove(["live", "equity_hard_stop_loss"], live_hsl)
+    del live["equity_hard_stop_loss"]
 
 
 def _sync_with_template(
@@ -1078,6 +1140,11 @@ def _sync_with_template(
                 tracker.update(["live", "base_config_path"], existing_base, base_config_path)
     template_with_extras = deepcopy(template)
     template_with_extras.setdefault("live", {})["base_config_path"] = ""
+    preserved_live_optimize_bounds = [
+        ("optimize", "bounds", key)
+        for key in result.get("optimize", {}).get("bounds", {})
+        if isinstance(key, str) and key.startswith("live_")
+    ]
     remove_unused_keys_recursively(
         template_with_extras,
         result,
@@ -1088,7 +1155,8 @@ def _sync_with_template(
             ("backtest", "suite", "scenarios"),
             ("backtest", "aggregate"),  # Preserve per-metric aggregation settings
             ("backtest", "market_settings_sources"),  # Preserve per-coin market settings
-        ],
+        ]
+        + preserved_live_optimize_bounds,
         tracker=tracker,
     )
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose, tracker=tracker)
@@ -1096,6 +1164,11 @@ def _sync_with_template(
         template["optimize"]["bounds"],
         result["optimize"]["bounds"],
         verbose=verbose,
+        preserve=[
+            (key,)
+            for key in result["optimize"]["bounds"]
+            if isinstance(key, str) and key.startswith("live_")
+        ],
         tracker=tracker,
     )
     remove_unused_keys_recursively(
@@ -1110,7 +1183,7 @@ def _normalize_position_counts(
     result: dict, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
     """Round position counts to integers for each side."""
-    for pside in result["bot"]:
+    for pside in BOT_POSITION_SIDES:
         current = result["bot"][pside].get("n_positions")
         rounded = int(round(current))
         if tracker is not None and current != rounded:
@@ -1225,6 +1298,7 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     result["bot"] = sort_dict_keys(result["bot"])
 
     _rename_config_keys(result, verbose=verbose, tracker=tracker)
+    _migrate_bot_common_hsl(result, verbose=verbose, tracker=tracker)
 
     _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
 
@@ -2103,6 +2177,21 @@ def get_template_config():
             "volume_normalization": True,
         },
         "bot": {
+            "common": {
+                "equity_hard_stop_loss": {
+                    "enabled": False,
+                    "red_threshold": 0.25,
+                    "ema_span_minutes": 60.0,
+                    "cooldown_minutes_after_red": 0.0,
+                    "no_restart_drawdown_threshold": 1.0,
+                    "tier_ratios": {
+                        "yellow": 0.5,
+                        "orange": 0.75,
+                    },
+                    "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                    "panic_close_order_type": "market",
+                },
+            },
             "long": {
                 "close_grid_markup_end": 0.0089,
                 "close_grid_markup_start": 0.0344,
@@ -2207,19 +2296,6 @@ def get_template_config():
             "max_n_restarts_per_day": 10,
             "max_ohlcv_fetches_per_minute": 30,
             "max_realized_loss_pct": 1.0,
-            "equity_hard_stop_loss": {
-                "enabled": False,
-                "red_threshold": 0.25,
-                "ema_span_minutes": 60.0,
-                "cooldown_minutes_after_red": 0.0,
-                "no_restart_drawdown_threshold": 1.0,
-                "tier_ratios": {
-                    "yellow": 0.5,
-                    "orange": 0.75,
-                },
-                "orange_tier_mode": "tp_only_with_active_entry_cancellation",
-                "panic_close_order_type": "market",
-            },
             "max_warmup_minutes": 0.0,
             "minimum_coin_age_days": 7.0,
             "order_match_tolerance_pct": 0.0002,
@@ -2240,6 +2316,10 @@ def get_template_config():
         },
         "optimize": {
             "bounds": {
+                "common_equity_hard_stop_loss_cooldown_minutes_after_red": [0.0, 0.0],
+                "common_equity_hard_stop_loss_ema_span_minutes": [60.0, 60.0],
+                "common_equity_hard_stop_loss_no_restart_drawdown_threshold": [1.0, 1.0],
+                "common_equity_hard_stop_loss_red_threshold": [0.25, 0.25],
                 "long_close_grid_markup_end": [0.001, 0.03],
                 "long_close_grid_markup_start": [0.001, 0.03],
                 "long_close_grid_qty_pct": [0.05, 1.0],
