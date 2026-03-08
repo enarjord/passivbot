@@ -2748,17 +2748,13 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    fn panic_close_uses_market_execution(&self) -> bool {
-        self.backtest_params.equity_hard_stop_loss.panic_close_order_type == "market"
-    }
-
-    fn panic_market_fill_price(&self, k: usize, idx: usize, order: &Order) -> Option<f64> {
+    fn market_fill_price(&self, k: usize, idx: usize, order: &Order) -> Option<f64> {
         if !self.coin_is_tradeable_at(idx, k) {
             return None;
         }
         let close_price = self.hlcvs_value(k, idx, CLOSE).max(f64::EPSILON);
         let price_step = self.exchange_params_list[idx].price_step.max(f64::EPSILON);
-        let slippage_pct = self.backtest_params.panic_market_slippage_pct.max(0.0);
+        let slippage_pct = self.backtest_params.market_order_slippage_pct.max(0.0);
         match order.order_type {
             OrderType::ClosePanicLong => {
                 let slipped = close_price * (1.0 - slippage_pct);
@@ -2772,14 +2768,18 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    fn order_uses_market_execution(&self, order: &Order) -> bool {
+        match order.order_type {
+            OrderType::ClosePanicLong | OrderType::ClosePanicShort => {
+                self.backtest_params.equity_hard_stop_loss.panic_close_order_type == "market"
+            }
+            _ => false,
+        }
+    }
+
     fn order_fill_execution(&self, k: usize, idx: usize, order: &Order) -> Option<OrderFillExecution> {
-        let is_market_panic = self.panic_close_uses_market_execution()
-            && matches!(
-                order.order_type,
-                OrderType::ClosePanicLong | OrderType::ClosePanicShort
-            );
-        if is_market_panic {
-            return self.panic_market_fill_price(k, idx, order).map(|price| OrderFillExecution {
+        if self.order_uses_market_execution(order) {
+            return self.market_fill_price(k, idx, order).map(|price| OrderFillExecution {
                 price,
                 fee_rate: self.exchange_params_list[idx].taker_fee,
             });
@@ -3331,7 +3331,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3393,7 +3393,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3454,7 +3454,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3528,7 +3528,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3604,7 +3604,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3670,7 +3670,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 1.0,
             equity_hard_stop_loss: hs,
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3740,7 +3740,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3806,7 +3806,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3893,7 +3893,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: hs,
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -3960,7 +3960,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -4022,7 +4022,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -4107,7 +4107,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -4196,7 +4196,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 
@@ -4267,7 +4267,7 @@ mod tests {
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            panic_market_slippage_pct: 0.0005,
+            market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
         };
 

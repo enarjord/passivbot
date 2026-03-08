@@ -222,7 +222,7 @@ pub struct BacktestParams {
     pub max_realized_loss_pct: f64,
     pub pnls_max_lookback_days: f64,
     pub equity_hard_stop_loss: EquityHardStopLossConfig,
-    pub panic_market_slippage_pct: f64,
+    pub market_order_slippage_pct: f64,
     pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
 }
 

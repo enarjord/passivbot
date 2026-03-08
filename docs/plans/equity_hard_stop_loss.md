@@ -5,7 +5,7 @@
 
 ## 1. Objective
 
-Add a per-side hard stop based on strategy P&L drawdown, with staged responses (GREEN/YELLOW/ORANGE/RED), cooldown restart support, and a no-restart latch when drawdown is too deep. The metric must be immune to BTC collateral FX noise.
+Add an account-level hard stop based on strategy P&L drawdown, with staged responses (GREEN/YELLOW/ORANGE/RED), cooldown restart support, and a no-restart latch when drawdown is too deep. The metric must be immune to BTC collateral FX noise.
 
 ## 2. Implementation Status
 
@@ -372,7 +372,7 @@ Use `[risk]` tag. Log on tier transitions only (no per-cycle spam).
 
 3. **Live equity reconstruction per-side.** `get_balance_equity_history()` currently reconstructs total equity. Needs to be extended to produce per-side P&L series (filter fills by side, compute per-side upnl from per-side positions). Fills already have side information.
 
-4. **Backtest market-panic execution model.** Backtest now respects `panic_close_order_type`, but `"market"` still relies on a simplified next-bar taker-fill model with configurable slippage rather than a full intrabar market-impact model.
+4. **Backtest market-order execution model.** Backtest now respects `panic_close_order_type`, and the generic `backtest.market_order_slippage_pct` knob applies whenever simulated market-order execution is used. The current `"market"` path still relies on a simplified next-bar taker-fill model rather than a full intrabar market-impact model.
 
 5. **Separate margin/liquidation guard.** With the FX-robust metric, HSL no longer protects against pure collateral-driven margin stress (BTC drops 50%, no strategy losses, but liquidation distance shrinks). Should there be a separate, simpler margin guard (e.g. `if liq_distance_pct < red_threshold: force graceful_stop`)? This is independent of HSL but related.
 

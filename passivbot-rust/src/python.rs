@@ -1086,8 +1086,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .unwrap_or(1.0),
         pnls_max_lookback_days: extract_value(dict, "pnls_max_lookback_days")?,
         equity_hard_stop_loss: hard_stop_cfg,
-        panic_market_slippage_pct: dict
-            .get_item("panic_market_slippage_pct")?
+        market_order_slippage_pct: dict
+            .get_item("market_order_slippage_pct")?
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.0005),

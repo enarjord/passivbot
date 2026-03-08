@@ -1200,11 +1200,11 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             raise ValueError(
                 "live.equity_hard_stop_loss.panic_close_order_type must be one of {market, limit}"
             )
-        panic_market_slippage_pct = float(
-            get_optional_config_value(config, "backtest.panic_market_slippage_pct", 0.0005) or 0.0
+        market_order_slippage_pct = float(
+            get_optional_config_value(config, "backtest.market_order_slippage_pct", 0.0005) or 0.0
         )
-        if panic_market_slippage_pct < 0.0:
-            raise ValueError("backtest.panic_market_slippage_pct must be >= 0.0")
+        if market_order_slippage_pct < 0.0:
+            raise ValueError("backtest.market_order_slippage_pct must be >= 0.0")
         btc_collateral_cap = float(require_config_value(config, "backtest.btc_collateral_cap"))
         btc_collateral_ltv_cap = require_config_value(config, "backtest.btc_collateral_ltv_cap")
         if btc_collateral_ltv_cap is not None:
@@ -1249,7 +1249,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                 "orange_tier_mode": hard_stop_orange_tier_mode,
                 "panic_close_order_type": hard_stop_panic_close_order_type,
             },
-            "panic_market_slippage_pct": panic_market_slippage_pct,
+            "market_order_slippage_pct": market_order_slippage_pct,
         }
     return bot_params_list, exchange_params, backtest_params
 
