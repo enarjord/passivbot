@@ -72,6 +72,34 @@ new_exposure = position_size + entry_qty
 Avoid: `int(sqrt(span0 * span1))`.
 
 Do: keep EMA spans as float throughout calculations.
+## 7) Re-Applying Config Defaults Outside Config Loading
+
+**Don't**: Re-define defaults in runtime code for required config fields.
+
+**Because**: It hides config/schema regressions and scatters source-of-truth for defaults.
+
+**Example**:
+```python
+# WRONG: Runtime fallback for required config
+red_threshold = float(config["bot"]["common"]["equity_hard_stop_loss"].get("red_threshold", 0.25))
+
+# CORRECT: Required config access (defaults handled centrally at config load)
+red_threshold = float(require_config_value(config, "bot.common.equity_hard_stop_loss.red_threshold"))
+```
+
+```rust
+// WRONG: Silent fallback in parser for required key
+let red_threshold = cfg
+    .get_item("red_threshold")?
+    .map(|v| v.extract::<f64>())
+    .transpose()?
+    .unwrap_or(0.25);
+
+// CORRECT: Required key extraction
+let red_threshold: f64 = extract_value(cfg, "red_threshold")?;
+```
+
+**Instead**: Keep defaults in one place (config loader/formatter). Runtime code must validate and consume required fields without fallback.
 Example:
 
 ```python
@@ -82,31 +110,31 @@ span2 = int(sqrt(span0 * span1))
 span2 = sqrt(span0 * span1)
 ```
 
-## 7) Restart-Dependent Runtime State
+## 8) Restart-Dependent Runtime State
 
 Avoid: local state that changes trading decisions and cannot be rederived.
 
 Do: keep only performance caches that do not alter decisions.
 
-## 8) Exchange Name Mismatch In Cache Paths
+## 9) Exchange Name Mismatch In Cache Paths
 
 Avoid: raw CCXT IDs (`binanceusdm`, `kucoinfutures`) in cache paths.
 
 Do: normalize with `to_standard_exchange_name()`.
 
-## 9) Blind Pagination Assumptions
+## 10) Blind Pagination Assumptions
 
 Avoid: trusting wrapper defaults for completeness.
 
 Do: read `exchange_api_quirks.md` and use overlap/cursor strategy where needed.
 
-## 10) Stock Perps On Non-Hyperliquid
+## 11) Stock Perps On Non-Hyperliquid
 
 Avoid: routing HIP-3 stock perps to non-Hyperliquid exchanges.
 
 Do: keep stock perp routing constrained to Hyperliquid.
 
-## 11) Rust/PyO3 Build Confusion
+## 12) Rust/PyO3 Build Confusion
 
 Avoid: debugging behavior before validating which extension binary is loaded.
 

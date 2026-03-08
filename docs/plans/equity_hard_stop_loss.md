@@ -48,7 +48,7 @@ Add a per-side hard stop based on strategy P&L drawdown, with staged responses (
   - Parsed from Python dict in `python.rs`
 
 - **Template config:** `configs/template.json`
-  - `live.equity_hard_stop_loss` section with all fields and defaults
+  - `bot.common.equity_hard_stop_loss` section with all fields and defaults
 
 ### Implemented (Python — live bot)
 
@@ -228,7 +228,7 @@ Can be revisited if concrete use cases demand it.
 
 ## 5. Current Config (implemented)
 
-Located at `config.live.equity_hard_stop_loss`:
+Located at `config.bot.common.equity_hard_stop_loss`:
 
 ```json
 "equity_hard_stop_loss": {
@@ -366,7 +366,7 @@ Use `[risk]` tag. Log on tier transitions only (no per-cycle spam).
 
 ## 14. Open Questions
 
-1. **Config migration path.** Current config is at `config.live.equity_hard_stop_loss`. Moving to `config.bot.{pside}.equity_hard_stop_loss` is a breaking change. Support both locations with deprecation warning? Or clean break since the feature hasn't shipped to users yet?
+1. **Config migration path.** Current config is at `config.bot.common.equity_hard_stop_loss`. Moving to `config.bot.{pside}.equity_hard_stop_loss` later is still a schema change. Support both locations with deprecation warning? Or clean break since the feature hasn't shipped to users yet?
 
 2. **Per-side PnL tracking in backtest.** The backtest currently tracks `pnl_cumsum_running` as a single aggregate. Per-side HSL needs `pnl_cumsum_long` and `pnl_cumsum_short` separately, plus per-side `upnl`. The per-side upnl is already available from positions. Need to split the rolling PnL cumsum by side.
 

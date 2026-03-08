@@ -17,6 +17,7 @@ from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
 from optimization.bounds import Bound
+from optimization.config_adapter import get_optimization_key_paths
 from pareto_core import (
     compute_ideal,
     crowding_distances,
@@ -115,43 +116,38 @@ def _suite_metrics_to_stats(
     return stats_flat, aggregated_values
 
 
-def _quantize_entry_bot_params_with_bounds(
+def _quantize_entry_params_with_bounds(
     entry: dict, bounds: Sequence[Bound], log: logging.Logger
 ) -> dict:
-    bot = entry.get("bot", {})
-    if not isinstance(bot, dict):
+    if not isinstance(entry, dict):
         return entry
 
-    idx = 0
-    for pside in sorted(bot):
-        pside_params = bot.get(pside, {})
-        if not isinstance(pside_params, dict):
-            continue
-        for key in sorted(pside_params):
-            if idx >= len(bounds):
-                log.warning(
-                    "ParetoStore bounds length mismatch: bot has more params than bounds "
-                    "(at least %d > %d); skipping remaining params",
-                    idx + 1,
-                    len(bounds),
-                )
-                return entry
-            bound = bounds[idx]
-            value = pside_params[key]
-            if bound.is_stepped:
-                pside_params[key] = bound.quantize(value)
-            else:
-                pside_params[key] = (
-                    bound.high if value > bound.high else bound.low if value < bound.low else value
-                )
-            idx += 1
-
-    if idx != len(bounds):
+    key_paths = get_optimization_key_paths(entry)
+    if len(key_paths) != len(bounds):
         log.warning(
-            "ParetoStore bounds length mismatch: bounds has %d entries but bot has %d params",
+            "ParetoStore bounds length mismatch: bounds has %d entries but optimization key list has %d params",
             len(bounds),
-            idx,
+            len(key_paths),
         )
+    for idx, (_, path) in enumerate(key_paths):
+        if idx >= len(bounds):
+            return entry
+        target = entry
+        for part in path[:-1]:
+            if not isinstance(target, dict) or part not in target:
+                target = None
+                break
+            target = target[part]
+        if not isinstance(target, dict) or path[-1] not in target:
+            continue
+        bound = bounds[idx]
+        value = target[path[-1]]
+        if bound.is_stepped:
+            target[path[-1]] = bound.quantize(value)
+        else:
+            target[path[-1]] = (
+                bound.high if value > bound.high else bound.low if value < bound.low else value
+            )
     return entry
 
 
@@ -215,7 +211,7 @@ class ParetoStore:
             self.scoring_keys = entry["optimize"]["scoring"]
         rounded = round_floats(entry, self.sig_digits)
         if self.bounds is not None:
-            rounded = _quantize_entry_bot_params_with_bounds(rounded, self.bounds, self._log)
+            rounded = _quantize_entry_params_with_bounds(rounded, self.bounds, self._log)
         h = calc_hash(rounded)
         with self._lock:
             if h in self._entries:  # fast‑dedupe

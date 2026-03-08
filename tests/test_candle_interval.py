@@ -154,8 +154,8 @@ def test_backtest_rejects_hsl_ema_span_below_candle_interval():
     config["live"]["warmup_ratio"] = 0.0
     config["live"]["max_warmup_minutes"] = 0
     config["live"]["hedge_mode"] = False
-    config["live"]["equity_hard_stop_loss"]["enabled"] = True
-    config["live"]["equity_hard_stop_loss"]["ema_span_minutes"] = 1.0
+    config["bot"]["common"]["equity_hard_stop_loss"]["enabled"] = True
+    config["bot"]["common"]["equity_hard_stop_loss"]["ema_span_minutes"] = 1.0
 
     n_minutes = 60
     start_ts = 1609459200000

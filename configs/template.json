@@ -14,7 +14,10 @@
         "coin_sources": {},
         "compress_cache": true,
         "end_date": "now",
-        "exchanges": ["binance","bybit"],
+        "exchanges": [
+            "binance",
+            "bybit"
+        ],
         "filter_by_min_effective_cost": false,
         "dynamic_wel_by_tradability": true,
         "gap_tolerance_ohlcvs_minutes": 120,
@@ -195,6 +198,21 @@
         "volume_normalization": true
     },
     "bot": {
+        "common": {
+            "equity_hard_stop_loss": {
+                "enabled": false,
+                "red_threshold": 0.25,
+                "ema_span_minutes": 60.0,
+                "cooldown_minutes_after_red": 0.0,
+                "no_restart_drawdown_threshold": 1.0,
+                "tier_ratios": {
+                    "yellow": 0.5,
+                    "orange": 0.75
+                },
+                "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                "panic_close_order_type": "market"
+            }
+        },
         "long": {
             "close_grid_markup_end": 0.0094,
             "close_grid_markup_start": 0.00634,
@@ -283,25 +301,15 @@
         "candle_lock_timeout_seconds": 10,
         "empty_means_all_approved": true,
         "enable_archive_candle_fetch": false,
-        "equity_hard_stop_loss": {
-            "enabled": false,
-            "red_threshold": 0.25,
-            "ema_span_minutes": 60.0,
-            "cooldown_minutes_after_red": 0.0,
-            "no_restart_drawdown_threshold": 1.0,
-            "tier_ratios": {
-                "yellow": 0.5,
-                "orange": 0.75
-            },
-            "orange_tier_mode": "tp_only_with_active_entry_cancellation",
-            "panic_close_order_type": "market"
-        },
         "execution_delay_seconds": 2,
         "filter_by_min_effective_cost": true,
         "forced_mode_long": "",
         "forced_mode_short": "",
         "hedge_mode": true,
-        "ignored_coins": {"long":[],"short":[]},
+        "ignored_coins": {
+            "long": [],
+            "short": []
+        },
         "inactive_coin_candle_ttl_minutes": 10,
         "leverage": 10,
         "market_orders_allowed": false,
@@ -332,6 +340,10 @@
     },
     "optimize": {
         "bounds": {
+            "common_equity_hard_stop_loss_cooldown_minutes_after_red": [0.0,0.0],
+            "common_equity_hard_stop_loss_ema_span_minutes": [60.0,60.0],
+            "common_equity_hard_stop_loss_no_restart_drawdown_threshold": [1.0,1.0],
+            "common_equity_hard_stop_loss_red_threshold": [0.25,0.25],
             "long_close_grid_markup_end": [0.0015,0.012,0.00001],
             "long_close_grid_markup_start": [0.0015,0.012,0.00001],
             "long_close_grid_qty_pct": [0.05,1,0.01],
