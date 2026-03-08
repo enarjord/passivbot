@@ -264,6 +264,23 @@ struct HardStopStopSnapshot {
     drawdown_raw: f64,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HardStopMetrics {
+    pub triggers: u32,
+    pub halt_to_restart_equity_loss_pct: f64,
+    pub restarts: u32,
+    pub time_in_yellow_pct: f64,
+    pub time_in_orange_pct: f64,
+    pub time_in_red_pct: f64,
+    pub duration_minutes_mean: f64,
+    pub duration_minutes_max: f64,
+    pub trigger_drawdown_mean: f64,
+    pub panic_close_loss_sum: f64,
+    pub panic_close_loss_max: f64,
+    pub flatten_time_minutes_mean: f64,
+    pub post_restart_retrigger_pct: f64,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct OrderFillExecution {
     price: f64,
@@ -348,6 +365,24 @@ pub struct Backtest<'a> {
     hard_stop_n_restarts: u32,
     hard_stop_total_panic_loss: f64,
     hard_stop_equity_at_halt: f64,
+    hard_stop_tier_samples_total: u64,
+    hard_stop_tier_samples_yellow: u64,
+    hard_stop_tier_samples_orange: u64,
+    hard_stop_tier_samples_red: u64,
+    hard_stop_current_red_start_ms: Option<u64>,
+    hard_stop_current_halt_start_ms: Option<u64>,
+    hard_stop_halt_duration_minutes_sum: f64,
+    hard_stop_halt_duration_minutes_max: f64,
+    hard_stop_halt_duration_count: u32,
+    hard_stop_trigger_drawdown_sum: f64,
+    hard_stop_trigger_drawdown_count: u32,
+    hard_stop_panic_close_loss_sum: f64,
+    hard_stop_panic_close_loss_max: f64,
+    hard_stop_flatten_time_minutes_sum: f64,
+    hard_stop_flatten_time_minutes_max: f64,
+    hard_stop_flatten_time_count: u32,
+    hard_stop_last_restart_ts_ms: Option<u64>,
+    hard_stop_restart_retrigger_count: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -1594,6 +1629,24 @@ impl<'a> Backtest<'a> {
             hard_stop_n_restarts: 0,
             hard_stop_total_panic_loss: 0.0,
             hard_stop_equity_at_halt: 0.0,
+            hard_stop_tier_samples_total: 0,
+            hard_stop_tier_samples_yellow: 0,
+            hard_stop_tier_samples_orange: 0,
+            hard_stop_tier_samples_red: 0,
+            hard_stop_current_red_start_ms: None,
+            hard_stop_current_halt_start_ms: None,
+            hard_stop_halt_duration_minutes_sum: 0.0,
+            hard_stop_halt_duration_minutes_max: 0.0,
+            hard_stop_halt_duration_count: 0,
+            hard_stop_trigger_drawdown_sum: 0.0,
+            hard_stop_trigger_drawdown_count: 0,
+            hard_stop_panic_close_loss_sum: 0.0,
+            hard_stop_panic_close_loss_max: 0.0,
+            hard_stop_flatten_time_minutes_sum: 0.0,
+            hard_stop_flatten_time_minutes_max: 0.0,
+            hard_stop_flatten_time_count: 0,
+            hard_stop_last_restart_ts_ms: None,
+            hard_stop_restart_retrigger_count: 0,
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -1657,6 +1710,7 @@ impl<'a> Backtest<'a> {
                 if !self.hard_stop_halted {
                     self.update_hard_stop_state(k);
                 }
+                self.record_hard_stop_tier_sample();
                 self.record_total_wallet_exposure();
             }
             if self.hard_stop_halted {
@@ -1667,6 +1721,15 @@ impl<'a> Backtest<'a> {
                     break;
                 }
             }
+        }
+        if self.hard_stop_halted {
+            let end_ts_ms = self
+                .equities
+                .timestamps_ms
+                .last()
+                .copied()
+                .unwrap_or(self.first_timestamp_ms);
+            self.finalize_hard_stop_halt(end_ts_ms);
         }
         if let Some(mut writer) = self.debug_writer.take() {
             writer.finish();
@@ -1874,6 +1937,7 @@ impl<'a> Backtest<'a> {
                 }
             }
         }
+        self.finalize_hard_stop_halt(current_ts_ms);
         self.hard_stop_halted = false;
         self.hard_stop_cooldown_until_ms = None;
         self.hard_stop_flat_confirmations = 0;
@@ -1881,7 +1945,42 @@ impl<'a> Backtest<'a> {
         self.hard_stop_state = None;
         self.hard_stop_rolling_peak_strategy_pnl.clear();
         self.hard_stop_pending_stop = None;
+        self.hard_stop_current_red_start_ms = None;
+        self.hard_stop_last_restart_ts_ms = Some(current_ts_ms);
         true
+    }
+
+    #[inline(always)]
+    fn record_hard_stop_tier_sample(&mut self) {
+        self.hard_stop_tier_samples_total = self.hard_stop_tier_samples_total.saturating_add(1);
+        match self.hard_stop_tier {
+            ehsl::HardStopTier::Yellow => {
+                self.hard_stop_tier_samples_yellow =
+                    self.hard_stop_tier_samples_yellow.saturating_add(1);
+            }
+            ehsl::HardStopTier::Orange => {
+                self.hard_stop_tier_samples_orange =
+                    self.hard_stop_tier_samples_orange.saturating_add(1);
+            }
+            ehsl::HardStopTier::Red => {
+                self.hard_stop_tier_samples_red =
+                    self.hard_stop_tier_samples_red.saturating_add(1);
+            }
+            ehsl::HardStopTier::Green => {}
+        }
+    }
+
+    #[inline(always)]
+    fn finalize_hard_stop_halt(&mut self, end_ts_ms: u64) {
+        let Some(start_ts_ms) = self.hard_stop_current_halt_start_ms.take() else {
+            return;
+        };
+        let duration_minutes = end_ts_ms.saturating_sub(start_ts_ms) as f64 / 60_000.0;
+        self.hard_stop_halt_duration_minutes_sum += duration_minutes;
+        self.hard_stop_halt_duration_minutes_max = self
+            .hard_stop_halt_duration_minutes_max
+            .max(duration_minutes);
+        self.hard_stop_halt_duration_count = self.hard_stop_halt_duration_count.saturating_add(1);
     }
 
     fn record_rolling_pnl(&mut self, k: usize, pnl: f64) {
@@ -2050,15 +2149,24 @@ impl<'a> Backtest<'a> {
                 k, timestamp_ms, equity, peak_strategy_equity, e
             )
         });
+        let prev_tier = self.hard_stop_tier;
         self.hard_stop_tier = step.tier;
+
+        if step.tier == ehsl::HardStopTier::Red {
+            if prev_tier != ehsl::HardStopTier::Red {
+                self.hard_stop_current_red_start_ms = Some(timestamp_ms);
+            }
+        } else {
+            self.hard_stop_current_red_start_ms = None;
+        }
 
         if step.tier == ehsl::HardStopTier::Red {
             if self.has_any_open_position() || self.has_any_open_orders() {
                 self.hard_stop_flat_confirmations = 0;
                 self.hard_stop_pending_stop = None;
             } else {
-                    self.hard_stop_flat_confirmations =
-                        self.hard_stop_flat_confirmations.saturating_add(1);
+                self.hard_stop_flat_confirmations =
+                    self.hard_stop_flat_confirmations.saturating_add(1);
                 if self.hard_stop_flat_confirmations == 1 {
                     self.hard_stop_pending_stop = Some(HardStopStopSnapshot {
                         timestamp_ms,
@@ -2069,22 +2177,48 @@ impl<'a> Backtest<'a> {
                 }
                 if self.hard_stop_flat_confirmations >= 2 {
                     let stop_snapshot =
-                        self.hard_stop_pending_stop
-                            .unwrap_or(HardStopStopSnapshot {
-                                timestamp_ms,
-                                equity,
-                                peak_strategy_equity,
-                                drawdown_raw: step.drawdown_raw,
-                            });
+                        self.hard_stop_pending_stop.unwrap_or(HardStopStopSnapshot {
+                            timestamp_ms,
+                            equity,
+                            peak_strategy_equity,
+                            drawdown_raw: step.drawdown_raw,
+                        });
                     self.hard_stop_last_stop = Some(stop_snapshot);
                     self.hard_stop_pending_stop = None;
                     self.hard_stop_halted = true;
+                    self.hard_stop_current_halt_start_ms = Some(stop_snapshot.timestamp_ms);
                     self.hard_stop_n_triggers += 1;
                     self.hard_stop_equity_at_halt = equity;
                     let stop_drawdown_raw = stop_snapshot.drawdown_raw.max(
-                        (1.0 - stop_snapshot.equity / stop_snapshot.peak_strategy_equity.max(f64::EPSILON))
-                            .max(0.0),
+                        (1.0 - stop_snapshot.equity
+                            / stop_snapshot.peak_strategy_equity.max(f64::EPSILON))
+                        .max(0.0),
                     );
+                    self.hard_stop_trigger_drawdown_sum += stop_drawdown_raw;
+                    self.hard_stop_trigger_drawdown_count =
+                        self.hard_stop_trigger_drawdown_count.saturating_add(1);
+                    if let Some(red_start_ts_ms) = self.hard_stop_current_red_start_ms {
+                        let flatten_minutes =
+                            stop_snapshot.timestamp_ms.saturating_sub(red_start_ts_ms) as f64
+                                / 60_000.0;
+                        self.hard_stop_flatten_time_minutes_sum += flatten_minutes;
+                        self.hard_stop_flatten_time_minutes_max = self
+                            .hard_stop_flatten_time_minutes_max
+                            .max(flatten_minutes);
+                        self.hard_stop_flatten_time_count =
+                            self.hard_stop_flatten_time_count.saturating_add(1);
+                    }
+                    if let Some(last_restart_ts_ms) = self.hard_stop_last_restart_ts_ms {
+                        if stop_snapshot
+                            .timestamp_ms
+                            .saturating_sub(last_restart_ts_ms)
+                            <= 24 * 60 * 60 * 1000
+                        {
+                            self.hard_stop_restart_retrigger_count =
+                                self.hard_stop_restart_retrigger_count.saturating_add(1);
+                        }
+                        self.hard_stop_last_restart_ts_ms = None;
+                    }
                     if stop_drawdown_raw > cfg.no_restart_drawdown_threshold {
                         self.hard_stop_no_restart_latched = true;
                         self.hard_stop_cooldown_until_ms = None;
@@ -2094,8 +2228,8 @@ impl<'a> Backtest<'a> {
                             .equity_hard_stop_loss
                             .cooldown_minutes_after_red;
                         if cooldown_minutes.is_finite() && cooldown_minutes > 0.0 {
-                            let cooldown_ms =
-                                ((cooldown_minutes * 60_000.0).round() as u64).max(self.interval_ms);
+                            let cooldown_ms = ((cooldown_minutes * 60_000.0).round() as u64)
+                                .max(self.interval_ms);
                             self.hard_stop_cooldown_until_ms =
                                 Some(stop_snapshot.timestamp_ms.saturating_add(cooldown_ms));
                         } else {
@@ -2412,6 +2546,12 @@ impl<'a> Backtest<'a> {
             balance_before,
             balance_after,
         );
+        if matches!(close_fill.order_type, OrderType::ClosePanicLong) {
+            let panic_loss = (-(pnl + fee_paid)).max(0.0);
+            self.hard_stop_panic_close_loss_sum += panic_loss;
+            self.hard_stop_panic_close_loss_max =
+                self.hard_stop_panic_close_loss_max.max(panic_loss);
+        }
 
         let current_pprice = self.positions.long[&idx].price;
         if new_psize == 0.0 {
@@ -2503,6 +2643,12 @@ impl<'a> Backtest<'a> {
             balance_before,
             balance_after,
         );
+        if matches!(order.order_type, OrderType::ClosePanicShort) {
+            let panic_loss = (-(pnl + fee_paid)).max(0.0);
+            self.hard_stop_panic_close_loss_sum += panic_loss;
+            self.hard_stop_panic_close_loss_max =
+                self.hard_stop_panic_close_loss_max.max(panic_loss);
+        }
 
         let current_pprice = self.positions.short[&idx].price;
         if new_psize == 0.0 {
@@ -2771,18 +2917,28 @@ impl<'a> Backtest<'a> {
     fn order_uses_market_execution(&self, order: &Order) -> bool {
         match order.order_type {
             OrderType::ClosePanicLong | OrderType::ClosePanicShort => {
-                self.backtest_params.equity_hard_stop_loss.panic_close_order_type == "market"
+                self.backtest_params
+                    .equity_hard_stop_loss
+                    .panic_close_order_type
+                    == "market"
             }
             _ => false,
         }
     }
 
-    fn order_fill_execution(&self, k: usize, idx: usize, order: &Order) -> Option<OrderFillExecution> {
+    fn order_fill_execution(
+        &self,
+        k: usize,
+        idx: usize,
+        order: &Order,
+    ) -> Option<OrderFillExecution> {
         if self.order_uses_market_execution(order) {
-            return self.market_fill_price(k, idx, order).map(|price| OrderFillExecution {
-                price,
-                fee_rate: self.exchange_params_list[idx].taker_fee,
-            });
+            return self
+                .market_fill_price(k, idx, order)
+                .map(|price| OrderFillExecution {
+                    price,
+                    fee_rate: self.exchange_params_list[idx].taker_fee,
+                });
         }
         if self.order_filled(k, idx, order) {
             return Some(OrderFillExecution {
@@ -3202,14 +3358,58 @@ impl<'a> Backtest<'a> {
         (long, short)
     }
 
-    /// Returns (n_triggers, total_panic_loss, n_restarts, starting_balance).
-    pub fn hard_stop_metrics(&self) -> (u32, f64, u32, f64) {
-        (
-            self.hard_stop_n_triggers,
-            self.hard_stop_total_panic_loss,
-            self.hard_stop_n_restarts,
-            self.backtest_params.starting_balance,
-        )
+    pub fn hard_stop_metrics(&self) -> HardStopMetrics {
+        let starting_balance = self.backtest_params.starting_balance.max(f64::EPSILON);
+        let time_in_yellow_pct = if self.hard_stop_tier_samples_total > 0 {
+            self.hard_stop_tier_samples_yellow as f64 / self.hard_stop_tier_samples_total as f64
+        } else {
+            0.0
+        };
+        let time_in_orange_pct = if self.hard_stop_tier_samples_total > 0 {
+            self.hard_stop_tier_samples_orange as f64 / self.hard_stop_tier_samples_total as f64
+        } else {
+            0.0
+        };
+        let time_in_red_pct = if self.hard_stop_tier_samples_total > 0 {
+            self.hard_stop_tier_samples_red as f64 / self.hard_stop_tier_samples_total as f64
+        } else {
+            0.0
+        };
+        let duration_minutes_mean = if self.hard_stop_halt_duration_count > 0 {
+            self.hard_stop_halt_duration_minutes_sum / self.hard_stop_halt_duration_count as f64
+        } else {
+            0.0
+        };
+        let trigger_drawdown_mean = if self.hard_stop_trigger_drawdown_count > 0 {
+            self.hard_stop_trigger_drawdown_sum / self.hard_stop_trigger_drawdown_count as f64
+        } else {
+            0.0
+        };
+        let flatten_time_minutes_mean = if self.hard_stop_flatten_time_count > 0 {
+            self.hard_stop_flatten_time_minutes_sum / self.hard_stop_flatten_time_count as f64
+        } else {
+            0.0
+        };
+        let post_restart_retrigger_pct = if self.hard_stop_n_restarts > 0 {
+            self.hard_stop_restart_retrigger_count as f64 / self.hard_stop_n_restarts as f64
+        } else {
+            0.0
+        };
+        HardStopMetrics {
+            triggers: self.hard_stop_n_triggers,
+            halt_to_restart_equity_loss_pct: self.hard_stop_total_panic_loss / starting_balance,
+            restarts: self.hard_stop_n_restarts,
+            time_in_yellow_pct,
+            time_in_orange_pct,
+            time_in_red_pct,
+            duration_minutes_mean,
+            duration_minutes_max: self.hard_stop_halt_duration_minutes_max,
+            trigger_drawdown_mean,
+            panic_close_loss_sum: self.hard_stop_panic_close_loss_sum,
+            panic_close_loss_max: self.hard_stop_panic_close_loss_max,
+            flatten_time_minutes_mean,
+            post_restart_retrigger_pct,
+        }
     }
 }
 
@@ -3546,11 +3746,16 @@ mod tests {
                 price: 100.0,
             },
         );
-        bt.open_orders.long.entry(0).or_default().closes.push(Order {
-            qty: -1.0,
-            price: 200.0,
-            order_type: OrderType::ClosePanicLong,
-        });
+        bt.open_orders
+            .long
+            .entry(0)
+            .or_default()
+            .closes
+            .push(Order {
+                qty: -1.0,
+                price: 200.0,
+                order_type: OrderType::ClosePanicLong,
+            });
 
         bt.check_for_fills(1);
 
@@ -3622,11 +3827,16 @@ mod tests {
                 price: 100.0,
             },
         );
-        bt.open_orders.long.entry(0).or_default().closes.push(Order {
-            qty: -1.0,
-            price: 200.0,
-            order_type: OrderType::ClosePanicLong,
-        });
+        bt.open_orders
+            .long
+            .entry(0)
+            .or_default()
+            .closes
+            .push(Order {
+                qty: -1.0,
+                price: 200.0,
+                order_type: OrderType::ClosePanicLong,
+            });
 
         bt.check_for_fills(1);
 

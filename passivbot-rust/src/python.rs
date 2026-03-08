@@ -207,8 +207,14 @@ impl EquityHardStopRuntimePy {
                 orange: tier_ratio_orange,
             },
         };
-        let step = ehsl::step_with_peak_strategy_equity(&mut self.state, cfg, equity, peak_strategy_equity, sample_minutes)
-            .map_err(PyValueError::new_err)?;
+        let step = ehsl::step_with_peak_strategy_equity(
+            &mut self.state,
+            cfg,
+            equity,
+            peak_strategy_equity,
+            sample_minutes,
+        )
+        .map_err(PyValueError::new_err)?;
 
         let out = PyDict::new_bound(py);
         out.set_item("initialized", self.state.initialized)?;
@@ -480,8 +486,14 @@ pub fn equity_hard_stop_step_py(
             orange: tier_ratio_orange,
         },
     };
-    let step = ehsl::step_with_peak_strategy_equity(&mut state, cfg, equity, peak_strategy_equity, sample_minutes)
-        .map_err(PyValueError::new_err)?;
+    let step = ehsl::step_with_peak_strategy_equity(
+        &mut state,
+        cfg,
+        equity,
+        peak_strategy_equity,
+        sample_minutes,
+    )
+    .map_err(PyValueError::new_err)?;
 
     let out = PyDict::new_bound(py);
     out.set_item("initialized", state.initialized)?;
@@ -937,14 +949,35 @@ fn run_backtest_core<'py>(
         analysis_btc.entry_initial_balance_pct_long = entry_pct_long;
         analysis_btc.entry_initial_balance_pct_short = entry_pct_short;
 
-        let (hs_triggers, hs_panic_loss, hs_restarts, starting_bal) = backtest.hard_stop_metrics();
-        let starting_bal = starting_bal.max(f64::EPSILON);
-        analysis_usd.hard_stop_triggers = hs_triggers;
-        analysis_usd.hard_stop_total_loss_pct = hs_panic_loss / starting_bal;
-        analysis_usd.hard_stop_restarts = hs_restarts;
-        analysis_btc.hard_stop_triggers = hs_triggers;
-        analysis_btc.hard_stop_total_loss_pct = hs_panic_loss / starting_bal;
-        analysis_btc.hard_stop_restarts = hs_restarts;
+        let hs = backtest.hard_stop_metrics();
+        analysis_usd.hard_stop_triggers = hs.triggers;
+        analysis_usd.hard_stop_halt_to_restart_equity_loss_pct =
+            hs.halt_to_restart_equity_loss_pct;
+        analysis_usd.hard_stop_restarts = hs.restarts;
+        analysis_usd.hard_stop_time_in_yellow_pct = hs.time_in_yellow_pct;
+        analysis_usd.hard_stop_time_in_orange_pct = hs.time_in_orange_pct;
+        analysis_usd.hard_stop_time_in_red_pct = hs.time_in_red_pct;
+        analysis_usd.hard_stop_duration_minutes_mean = hs.duration_minutes_mean;
+        analysis_usd.hard_stop_duration_minutes_max = hs.duration_minutes_max;
+        analysis_usd.hard_stop_trigger_drawdown_mean = hs.trigger_drawdown_mean;
+        analysis_usd.hard_stop_panic_close_loss_sum = hs.panic_close_loss_sum;
+        analysis_usd.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
+        analysis_usd.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
+        analysis_usd.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
+        analysis_btc.hard_stop_triggers = hs.triggers;
+        analysis_btc.hard_stop_halt_to_restart_equity_loss_pct =
+            hs.halt_to_restart_equity_loss_pct;
+        analysis_btc.hard_stop_restarts = hs.restarts;
+        analysis_btc.hard_stop_time_in_yellow_pct = hs.time_in_yellow_pct;
+        analysis_btc.hard_stop_time_in_orange_pct = hs.time_in_orange_pct;
+        analysis_btc.hard_stop_time_in_red_pct = hs.time_in_red_pct;
+        analysis_btc.hard_stop_duration_minutes_mean = hs.duration_minutes_mean;
+        analysis_btc.hard_stop_duration_minutes_max = hs.duration_minutes_max;
+        analysis_btc.hard_stop_trigger_drawdown_mean = hs.trigger_drawdown_mean;
+        analysis_btc.hard_stop_panic_close_loss_sum = hs.panic_close_loss_sum;
+        analysis_btc.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
+        analysis_btc.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
+        analysis_btc.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
 
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
@@ -1023,9 +1056,9 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
     let cfg = hard_stop_item
         .downcast::<PyDict>()
         .map_err(|_| PyValueError::new_err("equity_hard_stop_loss must be a dict"))?;
-    let ratios_item = cfg
-        .get_item("tier_ratios")?
-        .ok_or_else(|| PyValueError::new_err("missing required key: equity_hard_stop_loss.tier_ratios"))?;
+    let ratios_item = cfg.get_item("tier_ratios")?.ok_or_else(|| {
+        PyValueError::new_err("missing required key: equity_hard_stop_loss.tier_ratios")
+    })?;
     let ratios = ratios_item
         .downcast::<PyDict>()
         .map_err(|_| PyValueError::new_err("equity_hard_stop_loss.tier_ratios must be a dict"))?;

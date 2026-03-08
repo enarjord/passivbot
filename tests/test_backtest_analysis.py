@@ -113,14 +113,34 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
         {
             "hard_stop_triggers": 3,
             "hard_stop_restarts": 2,
-            "hard_stop_total_loss_pct": 0.125,
+            "hard_stop_halt_to_restart_equity_loss_pct": 0.125,
+            "hard_stop_time_in_yellow_pct": 0.15,
+            "hard_stop_time_in_orange_pct": 0.1,
+            "hard_stop_time_in_red_pct": 0.2,
+            "hard_stop_duration_minutes_mean": 180.0,
+            "hard_stop_duration_minutes_max": 360.0,
+            "hard_stop_trigger_drawdown_mean": 0.27,
+            "hard_stop_panic_close_loss_sum": 1250.0,
+            "hard_stop_panic_close_loss_max": 800.0,
+            "hard_stop_flatten_time_minutes_mean": 12.0,
+            "hard_stop_post_restart_retrigger_pct": 0.5,
         }
     )
     analysis_btc.update(
         {
             "hard_stop_triggers": 3,
             "hard_stop_restarts": 2,
-            "hard_stop_total_loss_pct": 0.125,
+            "hard_stop_halt_to_restart_equity_loss_pct": 0.125,
+            "hard_stop_time_in_yellow_pct": 0.15,
+            "hard_stop_time_in_orange_pct": 0.1,
+            "hard_stop_time_in_red_pct": 0.2,
+            "hard_stop_duration_minutes_mean": 180.0,
+            "hard_stop_duration_minutes_max": 360.0,
+            "hard_stop_trigger_drawdown_mean": 0.27,
+            "hard_stop_panic_close_loss_sum": 1250.0,
+            "hard_stop_panic_close_loss_max": 800.0,
+            "hard_stop_flatten_time_minutes_mean": 12.0,
+            "hard_stop_post_restart_retrigger_pct": 0.5,
         }
     )
     config = {
@@ -140,13 +160,27 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
 
     assert result["hard_stop_triggers"] == 3
     assert result["hard_stop_restarts"] == 2
-    assert result["hard_stop_total_loss_pct"] == 0.125
+    assert result["hard_stop_halt_to_restart_equity_loss_pct"] == 0.125
+    assert result["hard_stop_time_in_yellow_pct"] == 0.15
+    assert result["hard_stop_time_in_orange_pct"] == 0.1
+    assert result["hard_stop_time_in_red_pct"] == 0.2
+    assert result["hard_stop_duration_minutes_mean"] == 180.0
+    assert result["hard_stop_duration_minutes_max"] == 360.0
+    assert result["hard_stop_trigger_drawdown_mean"] == 0.27
+    assert result["hard_stop_panic_close_loss_sum"] == 1250.0
+    assert result["hard_stop_panic_close_loss_max"] == 800.0
+    assert result["hard_stop_flatten_time_minutes_mean"] == 12.0
+    assert result["hard_stop_post_restart_retrigger_pct"] == 0.5
     assert "hard_stop_triggers_usd" not in result
     assert "hard_stop_triggers_btc" not in result
     assert "hard_stop_restarts_usd" not in result
     assert "hard_stop_restarts_btc" not in result
-    assert "hard_stop_total_loss_pct_usd" not in result
-    assert "hard_stop_total_loss_pct_btc" not in result
+    assert "hard_stop_halt_to_restart_equity_loss_pct_usd" not in result
+    assert "hard_stop_halt_to_restart_equity_loss_pct_btc" not in result
+    assert "hard_stop_time_in_red_pct_usd" not in result
+    assert "hard_stop_time_in_red_pct_btc" not in result
+    assert "hard_stop_duration_minutes_mean_usd" not in result
+    assert "hard_stop_duration_minutes_mean_btc" not in result
 
 
 def test_process_forager_fills_handles_zero_pnl_division():

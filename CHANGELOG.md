@@ -9,6 +9,7 @@ All notable user-facing changes will be documented in this file.
 - **Backtest HSL EMA span validation** - Backtests now fail early in Python when `bot.common.equity_hard_stop_loss.ema_span_minutes` is smaller than `backtest.candle_interval_minutes`, instead of panicking later inside Rust.
 - **Backtest market-order slippage config naming** - Renamed `backtest.panic_market_slippage_pct` to `backtest.market_order_slippage_pct` so one backtest slippage knob can cover all simulated market-order execution, while HSL panic closes remain the first current consumer.
 - **Optimizer HSL bound safety** - Optimizer candidate generation now normalizes `bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold` above `red_threshold` before evaluation, preventing worker crashes from invalid sampled HSL pairs during optimization.
+- **Backtest HSL analysis metrics expanded and clarified** - Added account-level HSL metrics for yellow/orange/red time share, RED halt duration, trigger drawdown, panic-close realized loss, flatten time, and restart-to-retrigger rate. Also renamed the old ambiguous halt-loss metric to `hard_stop_halt_to_restart_equity_loss_pct`.
 
 ## v7.8.4 - 2026-03-06
 

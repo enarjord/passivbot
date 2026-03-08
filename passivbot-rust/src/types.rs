@@ -181,7 +181,8 @@ pub struct EquityHardStopLossConfig {
     pub no_restart_drawdown_threshold: f64,
     pub tier_ratios: EquityHardStopLossTierRatios,
     pub orange_tier_mode: String,
-    #[allow(dead_code)] // Parsed in Rust for config parity; consumed by Python live order handling.
+    #[allow(dead_code)]
+    // Parsed in Rust for config parity; consumed by Python live order handling.
     pub panic_close_order_type: String,
 }
 
@@ -541,8 +542,18 @@ pub struct Analysis {
     pub entry_initial_balance_pct_short: f64,
 
     pub hard_stop_triggers: u32,
-    pub hard_stop_total_loss_pct: f64,
+    pub hard_stop_halt_to_restart_equity_loss_pct: f64,
     pub hard_stop_restarts: u32,
+    pub hard_stop_time_in_yellow_pct: f64,
+    pub hard_stop_time_in_orange_pct: f64,
+    pub hard_stop_time_in_red_pct: f64,
+    pub hard_stop_duration_minutes_mean: f64,
+    pub hard_stop_duration_minutes_max: f64,
+    pub hard_stop_trigger_drawdown_mean: f64,
+    pub hard_stop_panic_close_loss_sum: f64,
+    pub hard_stop_panic_close_loss_max: f64,
+    pub hard_stop_flatten_time_minutes_mean: f64,
+    pub hard_stop_post_restart_retrigger_pct: f64,
 }
 
 impl Default for Analysis {
@@ -606,8 +617,18 @@ impl Default for Analysis {
             entry_initial_balance_pct_long: 0.0,
             entry_initial_balance_pct_short: 0.0,
             hard_stop_triggers: 0,
-            hard_stop_total_loss_pct: 0.0,
+            hard_stop_halt_to_restart_equity_loss_pct: 0.0,
             hard_stop_restarts: 0,
+            hard_stop_time_in_yellow_pct: 0.0,
+            hard_stop_time_in_orange_pct: 0.0,
+            hard_stop_time_in_red_pct: 0.0,
+            hard_stop_duration_minutes_mean: 0.0,
+            hard_stop_duration_minutes_max: 0.0,
+            hard_stop_trigger_drawdown_mean: 0.0,
+            hard_stop_panic_close_loss_sum: 0.0,
+            hard_stop_panic_close_loss_max: 0.0,
+            hard_stop_flatten_time_minutes_mean: 0.0,
+            hard_stop_post_restart_retrigger_pct: 0.0,
         }
     }
 }
