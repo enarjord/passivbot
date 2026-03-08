@@ -335,6 +335,12 @@ logging.basicConfig(
 
 
 TEMPLATE_CONFIG_MODE = "v7"
+INVALID_BACKTEST_CANDIDATE_PENALTY = 1e18
+_RECOVERABLE_BACKTEST_PANIC_PATTERNS = (
+    "hard-stop evaluation failed",
+    "equity must be finite and > 0",
+    "peak_strategy_equity must be finite and > 0",
+)
 
 
 def _format_objectives(values: Sequence[float]) -> str:
@@ -343,6 +349,34 @@ def _format_objectives(values: Sequence[float]) -> str:
     if not values:
         return "[]"
     return "[" + ", ".join(f"{float(v):.3g}" for v in values) + "]"
+
+
+def _is_recoverable_backtest_candidate_error(exc: BaseException) -> bool:
+    name = exc.__class__.__name__
+    if name != "PanicException":
+        return False
+    message = str(exc)
+    return any(pattern in message for pattern in _RECOVERABLE_BACKTEST_PANIC_PATTERNS)
+
+
+def _build_invalid_candidate_metrics(
+    scoring_keys: Sequence[str],
+    error: str,
+    *,
+    include_stats: bool = True,
+    include_suite_metrics: bool = False,
+) -> tuple[tuple[float, ...], float, dict]:
+    objectives = tuple(0.0 for _ in scoring_keys)
+    metrics_payload = {
+        "objectives": {f"w_{i}": val for i, val in enumerate(objectives)},
+        "constraint_violation": INVALID_BACKTEST_CANDIDATE_PENALTY,
+        "error": error,
+    }
+    if include_stats:
+        metrics_payload["stats"] = {}
+    if include_suite_metrics:
+        metrics_payload["suite_metrics"] = {}
+    return objectives, INVALID_BACKTEST_CANDIDATE_PENALTY, metrics_payload
 
 
 def _record_individual_result(individual, evaluator_config, overrides_list, recorder):
@@ -887,7 +921,27 @@ class Evaluator:
                 self.shared_btc_np[exchange],
                 self.timestamps.get(exchange),
             )
-            fills, equities_array, analysis = execute_backtest(payload, config)
+            try:
+                fills, equities_array, analysis = execute_backtest(payload, config)
+            except BaseException as exc:
+                if not _is_recoverable_backtest_candidate_error(exc):
+                    raise
+                error = f"{exc.__class__.__name__}: {exc}"
+                logging.warning(
+                    "Optimizer candidate invalid due to recoverable backtest panic | hash=%s | exchange=%s | error=%s",
+                    individual_hash[:12],
+                    exchange,
+                    error,
+                )
+                objectives, total_penalty, metrics_payload = _build_invalid_candidate_metrics(
+                    self.config["optimize"]["scoring"],
+                    error,
+                    include_stats=True,
+                )
+                individual.evaluation_metrics = metrics_payload
+                actual_hash = calc_hash(individual)
+                self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
+                return tuple(objectives), total_penalty, metrics_payload
             analyses[exchange] = analysis
 
             # Explicitly drop large intermediate arrays to keep worker RSS low.
@@ -1198,7 +1252,28 @@ class SuiteEvaluator:
                     ctx.timestamps.get(exchange),
                     coin_indices=coin_indices,
                 )
-                fills, equities_array, analysis = execute_backtest(payload, scenario_config)
+                try:
+                    fills, equities_array, analysis = execute_backtest(payload, scenario_config)
+                except BaseException as exc:
+                    if not _is_recoverable_backtest_candidate_error(exc):
+                        raise
+                    error = f"{exc.__class__.__name__}: {exc}"
+                    logging.warning(
+                        "Optimizer suite candidate invalid due to recoverable backtest panic | label=%s | exchange=%s | error=%s",
+                        ctx.label,
+                        exchange,
+                        error,
+                    )
+                    objectives, total_penalty, metrics_payload = _build_invalid_candidate_metrics(
+                        self.base.config["optimize"]["scoring"],
+                        error,
+                        include_stats=False,
+                        include_suite_metrics=True,
+                    )
+                    individual.evaluation_metrics = metrics_payload
+                    actual_hash = calc_hash(individual)
+                    self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
+                    return tuple(objectives), total_penalty, metrics_payload
                 analyses[exchange] = analysis
 
                 # Free backtest results to allow memory reuse

@@ -31,6 +31,7 @@ from optimize import (
     ResultRecorder,
 )
 from optimization.bounds import Bound
+from optimize_suite import ScenarioEvalContext
 
 
 class TestApplyConfigOverrides:
@@ -948,3 +949,97 @@ class TestEvaluator:
         assert len(evaluator.limit_checks) > 0
         # Check that metric key is created (could be max, mean, etc.)
         assert "drawdown_worst_usd" in evaluator.limit_checks[0]["metric_key"]
+
+    def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
+        from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
+        from config_utils import get_template_config
+
+        class PanicException(Exception):
+            pass
+
+        class DummyIndividual(list):
+            pass
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["scoring"] = ["adg_pnl_w", "drawdown_worst_usd"]
+
+        evaluator = Evaluator(
+            hlcvs_specs={"binance": object()},
+            btc_usd_specs={},
+            msss={"binance": {}},
+            config=mock_config,
+            timestamps={"binance": None},
+        )
+        evaluator.shared_hlcvs_np["binance"] = np.zeros((1, 1, 5))
+        evaluator.shared_btc_np["binance"] = None
+
+        individual = DummyIndividual(
+            config_to_individual(mock_config, evaluator.bounds, evaluator.sig_digits)
+        )
+
+        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+            "optimize.execute_backtest",
+            side_effect=PanicException(
+                "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
+            ),
+        ):
+            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+
+        assert objectives == (0.0, 0.0)
+        assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
+        assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
+        assert "PanicException" in metrics["error"]
+        assert metrics["stats"] == {}
+
+    def test_suite_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
+        from optimize import Evaluator, SuiteEvaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
+        from config_utils import get_template_config
+
+        class PanicException(Exception):
+            pass
+
+        class DummyIndividual(list):
+            pass
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["scoring"] = ["adg_pnl_w"]
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+        ctx = ScenarioEvalContext(
+            label="test",
+            config=deepcopy(mock_config),
+            exchanges=["binance"],
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={"binance": {}},
+            timestamps={"binance": None},
+            shared_hlcvs_np={"binance": np.zeros((1, 1, 5))},
+            shared_btc_np={},
+            attachments={"hlcvs": {}, "btc": {}},
+            coin_indices={"binance": None},
+            overrides={},
+        )
+        ctx.config["backtest"]["coins"] = {}
+        evaluator = SuiteEvaluator(base, [ctx], {})
+        individual = DummyIndividual(config_to_individual(mock_config, base.bounds, base.sig_digits))
+
+        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+            "optimize.execute_backtest",
+            side_effect=PanicException(
+                "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
+            ),
+        ):
+            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+
+        assert objectives == (0.0,)
+        assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
+        assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
+        assert "PanicException" in metrics["error"]
+        assert metrics["suite_metrics"] == {}
