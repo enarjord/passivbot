@@ -156,7 +156,13 @@ pub fn step(
     } else {
         state.peak_strategy_equity.max(equity)
     };
-    step_with_peak_strategy_equity(state, config, equity, next_peak_strategy_equity, sample_minutes)
+    step_with_peak_strategy_equity(
+        state,
+        config,
+        equity,
+        next_peak_strategy_equity,
+        sample_minutes,
+    )
 }
 
 pub fn step_with_peak_strategy_equity(
@@ -319,7 +325,10 @@ mod tests {
             s.drawdown_raw < state.drawdown_ema,
             "raw should be lower after recovery"
         );
-        assert!((s.drawdown_score - s.drawdown_raw).abs() < 1e-12, "score should follow raw (min)");
+        assert!(
+            (s.drawdown_score - s.drawdown_raw).abs() < 1e-12,
+            "score should follow raw (min)"
+        );
     }
 
     #[test]
