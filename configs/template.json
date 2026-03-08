@@ -353,7 +353,7 @@
             "long_filter_volatility_ema_span": [10,720,1],
             "long_filter_volume_drop_pct": [0.4,1,0.01],
             "long_filter_volume_ema_span": [360,2880,10],
-            "long_n_positions": [1,20,1],
+            "long_n_positions": [10,10,1],
             "long_risk_twel_enforcer_threshold": [0.95,1.01,0.001],
             "long_risk_we_excess_allowance_pct": [0,0.4,0.01],
             "long_risk_wel_enforcer_threshold": [0.95,1.01,0.001],
