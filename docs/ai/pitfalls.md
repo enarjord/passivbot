@@ -84,22 +84,22 @@ Do: keep EMA spans as float throughout calculations.
 **Example**:
 ```python
 # WRONG: Runtime fallback for required config
-threshold = float(config["live"]["equity_hard_stop_loss"].get("threshold", 0.25))
+red_threshold = float(config["live"]["equity_hard_stop_loss"].get("red_threshold", 0.25))
 
 # CORRECT: Required config access (defaults handled centrally at config load)
-threshold = float(require_config_value(config, "live.equity_hard_stop_loss.threshold"))
+red_threshold = float(require_config_value(config, "live.equity_hard_stop_loss.red_threshold"))
 ```
 
 ```rust
 // WRONG: Silent fallback in parser for required key
-let threshold = cfg
-    .get_item("threshold")?
+let red_threshold = cfg
+    .get_item("red_threshold")?
     .map(|v| v.extract::<f64>())
     .transpose()?
     .unwrap_or(0.25);
 
 // CORRECT: Required key extraction
-let threshold: f64 = extract_value(cfg, "threshold")?;
+let red_threshold: f64 = extract_value(cfg, "red_threshold")?;
 ```
 
 **Instead**: Keep defaults in one place (config loader/formatter). Runtime code must validate and consume required fields without fallback.

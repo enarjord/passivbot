@@ -13,7 +13,7 @@ Add a per-side hard stop based on strategy P&L drawdown, with staged responses (
 
 - **Dedicated Rust module:** `passivbot-rust/src/equity_hard_stop_loss.rs`
   - `HardStopConfig`, `HardStopState`, `HardStopStep`, `HardStopTier` types
-  - `step()` / `step_with_equity_peak()` — core state machine
+  - `step()` / `step_with_peak_strategy_equity()` — core state machine
   - `RollingPeakTracker` — monotone-deque rolling max
   - `span_samples()` — minutes-to-samples conversion (float, no rounding)
   - Configurable tier ratios with strict validation (`0 < yellow < orange < 1`)
@@ -25,7 +25,7 @@ Add a per-side hard stop based on strategy P&L drawdown, with staged responses (
   - ORANGE tier: mode override to `tp_only_with_active_entry_cancellation` or `graceful_stop`
   - RED tier: force panic, verify flat (2 consecutive confirmations), halt
   - Cooldown restart: reset state after configured minutes, resume trading
-  - No-restart latch: if stop-time raw drawdown > `no_restart_threshold`, halt is permanent
+  - No-restart latch: if stop-time raw drawdown > `no_restart_drawdown_threshold`, halt is permanent
   - Rolling equity peak bounded by `pnls_max_lookback_days`
 
 - **Analysis metrics:** `passivbot-rust/src/types.rs`
@@ -72,12 +72,12 @@ The current implementation uses raw USD equity as the HSL input:
 
 ```
 equity = balance_raw + upnl_sum
-drawdown_raw = max(0, 1 - equity / equity_peak)
+drawdown_raw = max(0, 1 - equity / peak_strategy_equity)
 drawdown_ema = ema(drawdown_raw)
 drawdown_score = min(drawdown_raw, drawdown_ema)
 ```
 
-**Problem:** When BTC is collateral, a BTC/USD price drop reduces USD-denominated equity even when trading performance is fine. A 25% BTC drop on a BTC-collateral account triggers HSL at threshold=0.25 with zero strategy losses. Same issue for mixed (e.g. 50/50 BTC+USD) collateral.
+**Problem:** When BTC is collateral, a BTC/USD price drop reduces USD-denominated equity even when trading performance is fine. A 25% BTC drop on a BTC-collateral account triggers HSL at red_threshold=0.25 with zero strategy losses. Same issue for mixed (e.g. 50/50 BTC+USD) collateral.
 
 ## 3. Planned: FX-Robust Strategy P&L Metric
 
@@ -86,19 +86,43 @@ Replace raw equity with a strategy P&L-based metric that isolates trading perfor
 ### Core pipeline
 
 ```
-delta_t = pnl_cumsum_t + upnl_t              # total P&L (realized + unrealized) at time t
-peak_delta = rolling_max(delta_t)             # over lookback window
-dd_abs = peak_delta - delta_t                 # absolute strategy drawdown
-capital_base = max(balance_raw + peak_delta, eps)  # synthetic peak NAV
-dd_raw = dd_abs / capital_base                # percentage drawdown
-dd_ema = ema(dd_raw)                          # smoothed drawdown
-dd_score = min(dd_raw, dd_ema)                # robust score (anti-flash-crash + anti-stale-EMA)
+r_t = realized_pnl_cumsum_t                   # cumulative realized trading P&L at time t
+u_t = upnl_t                                  # unrealized P&L at time t
+strategy_pnl_t = r_t + u_t                           # total strategy P&L (realized + unrealized)
+baseline_balance_t = balance_t - r_t          # remove realized trading P&L from account balance
+peak_strategy_pnl_t = rolling_max(strategy_pnl_t)           # over lookback window
+peak_nav_t = baseline_balance_t + peak_strategy_pnl_t
+synthetic_nav_t = balance_t + u_t             # current account balance plus unrealized P&L
+dd_raw = max(0, 1 - synthetic_nav_t / peak_nav_t)
+dd_ema = ema(dd_raw)
+dd_score = min(dd_raw, dd_ema)
 ```
+
+Equivalent drawdown-space form:
+
+```
+peak_strategy_pnl_t = rolling_max(strategy_pnl_t)
+dd_abs = peak_strategy_pnl_t - strategy_pnl_t
+capital_base = max(baseline_balance_t + peak_strategy_pnl_t, eps)
+dd_raw = dd_abs / capital_base
+```
+
+At `t = now`, this becomes:
+
+```
+synthetic_nav_now = current_balance + upnl_now
+peak_nav_now = (current_balance - r_now) + peak_strategy_pnl_now
+```
+
+This is the key consistency property. Using `current_balance + strategy_pnl_t` directly would double-count realized P&L.
 
 ### Why this works
 
-- `delta_t` captures only trading activity (realized closes + mark-to-market unrealized). BTC collateral price changes don't appear here.
-- `balance_raw` as denominator scales drawdown sensitivity with current account size — a $5k loss matters more when the account is $20k (BTC dropped) than when it's $40k.
+- `strategy_pnl_t` captures only trading activity (realized closes + mark-to-market unrealized). BTC collateral price changes don't appear here.
+- `baseline_balance_t = balance_t - r_t` removes realized trading P&L from the account balance at each sample without double-counting it.
+- `peak_strategy_pnl_t` tracks the best observed strategy P&L state over the lookback window, independent of collateral valuation.
+- `peak_nav_t = baseline_balance_t + peak_strategy_pnl_t` is the correct collateral-aware denominator for percentage drawdown.
+- At the right edge, the metric reduces to `current_balance + upnl_now` versus `(current_balance - r_now) + peak_strategy_pnl_now`.
 - The `min(raw, ema)` guard prevents both failure modes:
   - **Stale EMA after recovery:** raw drawdown drops to 0, min(0, stale_ema) = 0.
   - **Flash crash bottom exit:** raw spikes, EMA lags, min(spike, low_ema) stays low.
@@ -121,8 +145,8 @@ Considered using `balance_hysteresis` instead of `balance_raw`. Rejected:
 
 ### Data sources
 
-- **Live:** `delta_t` from fill-event reconstruction via `get_balance_equity_history()` (minute resolution). `pnl_cumsum` from fill events, `upnl` from candle closes × reconstructed positions. `balance_raw` from latest exchange fetch.
-- **Backtest:** `delta_t` from `pnl_cumsum_running + upnl` computed each step. `balance_raw` from `self.balance.usd_total_balance`. Already available — the change is what gets fed to the state machine.
+- **Live:** `r_t`, `u_t`, and `balance_t` from fill-event reconstruction via `get_balance_equity_history()` (minute resolution). During the live loop, `r_now` comes from canonical fill events, `u_now` from current last prices, and `current_balance` from the latest exchange fetch. The runtime maintains `peak_strategy_pnl_t` online and computes `peak_nav_t = (balance_t - r_t) + peak_strategy_pnl_t`.
+- **Backtest:** `r_t` from realized net P&L cumsum (including fees), `u_t` from per-step mark-to-market unrealized P&L, and `balance_t` from step balance. The same `baseline_balance_t`, `peak_strategy_pnl_t`, and `peak_nav_t` formulation must be used so live and backtest remain equivalent.
 
 ## 4. Planned: Per-Side HSL
 
@@ -144,10 +168,10 @@ Move from `config.live.equity_hard_stop_loss` to `config.bot.{pside}.equity_hard
     "long": {
         "equity_hard_stop_loss": {
             "enabled": true,
-            "threshold": 0.25,
+            "red_threshold": 0.25,
             "ema_span_minutes": 60.0,
             "cooldown_minutes_after_red": 0.0,
-            "no_restart_threshold": 1.0,
+            "no_restart_drawdown_threshold": 1.0,
             "tier_ratios": { "yellow": 0.5, "orange": 0.75 },
             "orange_tier_mode": "tp_only_with_active_entry_cancellation"
         },
@@ -167,13 +191,13 @@ Move from `config.live.equity_hard_stop_loss` to `config.bot.{pside}.equity_hard
 Same pipeline as section 3, but with side-filtered inputs:
 
 ```
-delta_long_t = pnl_cumsum_long_t + upnl_long_t
-delta_short_t = pnl_cumsum_short_t + upnl_short_t
+strategy_pnl_long_t = pnl_cumsum_long_t + upnl_long_t
+strategy_pnl_short_t = pnl_cumsum_short_t + upnl_short_t
 ```
 
 Each side runs its own independent state machine (peak, EMA, tier, latch).
 
-**Denominator:** Always total account `balance_raw` (+ side's `peak_delta`), not "side-allocated capital." Capital allocation between sides is fluid in cross-margin — a side-local denominator would be misleading.
+**Denominator:** Always total account `balance_raw` (+ side's `peak_strategy_pnl`), not "side-allocated capital." Capital allocation between sides is fluid in cross-margin — a side-local denominator would be misleading.
 
 ### Per-side RED action
 
@@ -209,10 +233,10 @@ Located at `config.live.equity_hard_stop_loss`:
 ```json
 "equity_hard_stop_loss": {
     "enabled": false,
-    "threshold": 0.25,
+    "red_threshold": 0.25,
     "ema_span_minutes": 60.0,
     "cooldown_minutes_after_red": 0.0,
-    "no_restart_threshold": 1.0,
+    "no_restart_drawdown_threshold": 1.0,
     "tier_ratios": { "yellow": 0.5, "orange": 0.75 },
     "orange_tier_mode": "tp_only_with_active_entry_cancellation",
     "panic_close_order_type": "market"
@@ -222,16 +246,16 @@ Located at `config.live.equity_hard_stop_loss`:
 | Param | Type | Default | Meaning |
 |-------|------|---------|---------|
 | `enabled` | bool | `false` | Master switch |
-| `threshold` | float | `0.25` | Drawdown level triggering RED (25% from peak) |
+| `red_threshold` | float | `0.25` | Drawdown level triggering RED (25% from peak) |
 | `ema_span_minutes` | float | `60.0` | EMA span in minutes. Higher = more flash-crash resistant, slower reaction |
 | `cooldown_minutes_after_red` | float | `0.0` | `0` = permanent halt. `>0` = auto-restart after N minutes |
-| `no_restart_threshold` | float | `1.0` | If stop-time drawdown exceeds this, halt is permanent even with cooldown. Must be > `threshold` |
-| `tier_ratios.yellow` | float | `0.5` | Fraction of threshold where YELLOW begins |
-| `tier_ratios.orange` | float | `0.75` | Fraction of threshold where ORANGE begins |
+| `no_restart_drawdown_threshold` | float | `1.0` | If stop-time drawdown exceeds this, halt is permanent even with cooldown. Must be > `red_threshold` |
+| `tier_ratios.yellow` | float | `0.5` | Fraction of red_threshold where YELLOW begins |
+| `tier_ratios.orange` | float | `0.75` | Fraction of red_threshold where ORANGE begins |
 | `orange_tier_mode` | string | `"tp_only..."` | Mode applied at ORANGE: `"tp_only_with_active_entry_cancellation"` or `"graceful_stop"` |
 | `panic_close_order_type` | string | `"market"` | Order type for RED panic closes |
 
-Validation: `0 < yellow < orange < 1`, `threshold > 0`, `ema_span_minutes > 0`, `threshold < no_restart_threshold <= 1.0`.
+Validation: `0 < yellow < orange < 1`, `red_threshold > 0`, `ema_span_minutes > 0`, `red_threshold < no_restart_drawdown_threshold <= 1.0`.
 
 ## 6. Tier Actions
 
@@ -239,10 +263,10 @@ GREEN/YELLOW/ORANGE can de-escalate. RED latches until explicit reset (cooldown 
 
 | Tier | Condition | Action |
 |------|-----------|--------|
-| GREEN | `score < yellow * threshold` | Normal operation |
-| YELLOW | `score >= yellow * threshold` | Warning logs only |
-| ORANGE | `score >= orange * threshold` | Override mode to `orange_tier_mode` for affected side |
-| RED | `score >= threshold` | Panic close affected side, verify flat, halt |
+| GREEN | `score < yellow * red_threshold` | Normal operation |
+| YELLOW | `score >= yellow * red_threshold` | Warning logs only |
+| ORANGE | `score >= orange * red_threshold` | Override mode to `orange_tier_mode` for affected side |
+| RED | `score >= red_threshold` | Panic close affected side, verify flat, halt |
 
 ### ORANGE semantics
 
@@ -255,8 +279,8 @@ GREEN/YELLOW/ORANGE can de-escalate. RED latches until explicit reset (cooldown 
 2. Cancel all non-panic open orders for affected side
 3. Submit panic close orders (market by default)
 4. Verify flat: require 2 consecutive refreshes confirming zero positions and no blocking orders
-5. After flat confirmation, evaluate no-restart threshold:
-   - If `stop_drawdown_raw > no_restart_threshold`: permanent halt
+5. After flat confirmation, evaluate no-restart drawdown threshold:
+   - If `stop_drawdown_raw > no_restart_drawdown_threshold`: permanent halt
    - Else if `cooldown_minutes > 0`: schedule restart after cooldown
    - Else: permanent halt
 6. Write halt latch file
@@ -284,7 +308,7 @@ Distinct from `tp_only` (which does not cancel existing entry orders) and `grace
 
 Path: `caches/equity_hard_stop/{exchange}/{user}.json`
 
-Payload includes: trigger timestamp, equity, equity_peak, drawdown metrics, threshold, config snapshot.
+Payload includes: trigger timestamp, equity, peak_strategy_equity, drawdown metrics, red_threshold, config snapshot.
 
 Startup behavior:
 - Latch exists + `cooldown == 0`: refuse to start, log message to delete file
@@ -313,7 +337,7 @@ Startup behavior:
 
 Use `[risk]` tag. Log on tier transitions only (no per-cycle spam).
 
-- Tier change: `tier_prev`, `tier_new`, `dd_raw`, `dd_ema`, `dd_score`, `delta_t`, `peak_delta`, `balance_raw`
+- Tier change: `tier_prev`, `tier_new`, `dd_raw`, `dd_ema`, `dd_score`, `strategy_pnl_t`, `peak_strategy_pnl`, `balance_raw`
 - RED progress: canceled count, panic submitted count, remaining positions, flat-confirmation streak
 
 ## 13. Test Plan
@@ -330,7 +354,7 @@ Use `[risk]` tag. Log on tier transitions only (no per-cycle spam).
 ### To add
 
 - FX-robust metric: BTC collateral price drop produces zero strategy drawdown
-- Per-side delta isolation: long losses don't affect short HSL score
+- Per-side strategy_pnl isolation: long losses don't affect short HSL score
 - Rolling PnL cumsum window correctness (expiry, max tracking)
 - Per-side RED: only affected side's positions are panic-closed
 
@@ -344,17 +368,13 @@ Use `[risk]` tag. Log on tier transitions only (no per-cycle spam).
 
 1. **Config migration path.** Current config is at `config.live.equity_hard_stop_loss`. Moving to `config.bot.{pside}.equity_hard_stop_loss` is a breaking change. Support both locations with deprecation warning? Or clean break since the feature hasn't shipped to users yet?
 
-2. **Backtest metric input.** In backtest, should `balance_raw` in the denominator be the step-by-step balance (mirrors live, includes BTC collateral effects) or `starting_balance` (fixed constant, purely strategy-focused)? Step-by-step provides better live parity. Fixed constant removes all collateral influence from the metric.
+2. **Per-side PnL tracking in backtest.** The backtest currently tracks `pnl_cumsum_running` as a single aggregate. Per-side HSL needs `pnl_cumsum_long` and `pnl_cumsum_short` separately, plus per-side `upnl`. The per-side upnl is already available from positions. Need to split the rolling PnL cumsum by side.
 
-3. **Per-side PnL tracking in backtest.** The backtest currently tracks `pnl_cumsum_running` as a single aggregate. Per-side HSL needs `pnl_cumsum_long` and `pnl_cumsum_short` separately, plus per-side `upnl`. The per-side upnl is already available from positions. Need to split the rolling PnL cumsum by side.
+3. **Live equity reconstruction per-side.** `get_balance_equity_history()` currently reconstructs total equity. Needs to be extended to produce per-side P&L series (filter fills by side, compute per-side upnl from per-side positions). Fills already have side information.
 
-4. **Live equity reconstruction per-side.** `get_balance_equity_history()` currently reconstructs total equity. Needs to be extended to produce per-side P&L series (filter fills by side, compute per-side upnl from per-side positions). Fills already have side information.
+4. **`panic_close_order_type` field.** Currently in config but the `panic_close_order_type` field on `EquityHardStopLossConfig` is never read in Rust (compiler warning). Needs to be either wired up or removed. In per-side config, this may not belong per-side — panic order type is arguably account-level.
 
-5. **`panic_close_order_type` field.** Currently in config but the `panic_close_order_type` field on `EquityHardStopLossConfig` is never read in Rust (compiler warning). Needs to be either wired up or removed. In per-side config, this may not belong per-side — panic order type is arguably account-level.
-
-6. **Separate margin/liquidation guard.** With the FX-robust metric, HSL no longer protects against pure collateral-driven margin stress (BTC drops 50%, no strategy losses, but liquidation distance shrinks). Should there be a separate, simpler margin guard (e.g. `if liq_distance_pct < threshold: force graceful_stop`)? This is independent of HSL but related.
-
-7. **EMA warm-start with new metric.** The live bot currently warm-starts EMA by replaying equity history through the state machine. With the new metric, it needs to replay the *strategy delta* series instead. The reconstruction data is the same (fills + candles), but the computation changes.
+5. **Separate margin/liquidation guard.** With the FX-robust metric, HSL no longer protects against pure collateral-driven margin stress (BTC drops 50%, no strategy losses, but liquidation distance shrinks). Should there be a separate, simpler margin guard (e.g. `if liq_distance_pct < red_threshold: force graceful_stop`)? This is independent of HSL but related.
 
 ## 15. Non-Goals
 
@@ -364,6 +384,6 @@ Use `[risk]` tag. Log on tier transitions only (no per-cycle spam).
 
 ## 16. Future Extensions
 
-1. **Condition-based restart:** Restart only when `dd_score < restart_ratio * threshold` for N consecutive bars, optionally combined with volatility normalization.
-2. **Catastrophic bypass:** Raw (unsmoothed) check: `if dd_raw > threshold * 2: immediate RED`. Handles extreme single-candle events.
+1. **Condition-based restart:** Restart only when `dd_score < restart_ratio * red_threshold` for N consecutive bars, optionally combined with volatility normalization.
+2. **Catastrophic bypass:** Raw (unsmoothed) check: `if dd_raw > red_threshold * 2: immediate RED`. Handles extreme single-candle events.
 3. **Per-side independent cooldowns:** Different cooldown durations for long vs short.
