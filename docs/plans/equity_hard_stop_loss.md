@@ -253,7 +253,7 @@ Located at `config.live.equity_hard_stop_loss`:
 | `tier_ratios.yellow` | float | `0.5` | Fraction of red_threshold where YELLOW begins |
 | `tier_ratios.orange` | float | `0.75` | Fraction of red_threshold where ORANGE begins |
 | `orange_tier_mode` | string | `"tp_only..."` | Mode applied at ORANGE: `"tp_only_with_active_entry_cancellation"` or `"graceful_stop"` |
-| `panic_close_order_type` | string | `"market"` | Order type for RED panic closes |
+| `panic_close_order_type` | string | `"market"` | Order type for RED panic closes: `"market"` or `"limit"` |
 
 Validation: `0 < yellow < orange < 1`, `red_threshold > 0`, `ema_span_minutes > 0`, `red_threshold < no_restart_drawdown_threshold <= 1.0`.
 
@@ -372,7 +372,7 @@ Use `[risk]` tag. Log on tier transitions only (no per-cycle spam).
 
 3. **Live equity reconstruction per-side.** `get_balance_equity_history()` currently reconstructs total equity. Needs to be extended to produce per-side P&L series (filter fills by side, compute per-side upnl from per-side positions). Fills already have side information.
 
-4. **`panic_close_order_type` field.** Currently in config but the `panic_close_order_type` field on `EquityHardStopLossConfig` is never read in Rust (compiler warning). Needs to be either wired up or removed. In per-side config, this may not belong per-side — panic order type is arguably account-level.
+4. **Backtest market-panic execution model.** Backtest now respects `panic_close_order_type`, but `"market"` still relies on a simplified next-bar taker-fill model with configurable slippage rather than a full intrabar market-impact model.
 
 5. **Separate margin/liquidation guard.** With the FX-robust metric, HSL no longer protects against pure collateral-driven margin stress (BTC drops 50%, no strategy losses, but liquidation distance shrinks). Should there be a separate, simpler margin guard (e.g. `if liq_distance_pct < red_threshold: force graceful_stop`)? This is independent of HSL but related.
 

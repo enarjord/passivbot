@@ -2539,6 +2539,7 @@ mod core {
                     min_qty: 0.0,
                     min_cost: 0.0,
                     c_mult: 1.0,
+                    ..Default::default()
                 },
                 tradable: true,
                 next_candle: None,
@@ -2825,6 +2826,7 @@ mod core {
                 min_qty: 0.0,
                 min_cost: 0.0,
                 c_mult: 1.0,
+                ..Default::default()
             };
             let mut closes = vec![
                 IdealOrder {
@@ -2937,6 +2939,7 @@ mod core {
                 min_qty: 0.0,
                 min_cost: 0.0,
                 c_mult: 1.0,
+                ..Default::default()
             };
             let mut sym = make_basic_symbol(0);
             sym.order_book = ob;
@@ -3008,6 +3011,7 @@ mod core {
                 min_qty: 10.0,
                 min_cost: 0.0,
                 c_mult: 1.0,
+                ..Default::default()
             };
             let mut sym = make_basic_symbol(symbol_idx);
             sym.order_book = ob;
@@ -3057,6 +3061,7 @@ mod core {
                 min_qty: 10.0,
                 min_cost: 0.0,
                 c_mult: 1.0,
+                ..Default::default()
             };
 
             // pos larger than effective min => drop dust close

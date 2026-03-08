@@ -296,7 +296,7 @@ mod tests {
         };
         let _ = step(&mut state, config, 100.0, 1.0).unwrap();
         let s = step(&mut state, config, 90.0, 1.0).unwrap();
-        let expected = s.drawdown_raw.min(s.drawdown_ema);
+        let expected = s.drawdown_raw.min(state.drawdown_ema);
         assert!((s.drawdown_score - expected).abs() < 1e-12);
     }
 
@@ -315,7 +315,10 @@ mod tests {
         let _ = step(&mut state, config, 80.0, 1.0).unwrap();
         // Now recover — raw goes to 0 but EMA is still elevated
         let s = step(&mut state, config, 100.0, 1.0).unwrap();
-        assert!(s.drawdown_raw < s.drawdown_ema, "raw should be lower after recovery");
+        assert!(
+            s.drawdown_raw < state.drawdown_ema,
+            "raw should be lower after recovery"
+        );
         assert!((s.drawdown_score - s.drawdown_raw).abs() < 1e-12, "score should follow raw (min)");
     }
 
@@ -330,10 +333,10 @@ mod tests {
         let _ = step(&mut state, config, 100.0, 1.0).unwrap();
         let red = step(&mut state, config, 60.0, 1.0).unwrap();
         assert_eq!(red.tier, HardStopTier::Red);
-        assert!(red.red_latched);
+        assert!(state.red_latched);
         let after_recovery = step(&mut state, config, 100.0, 1.0).unwrap();
         assert_eq!(after_recovery.tier, HardStopTier::Red);
-        assert!(after_recovery.red_latched);
+        assert!(state.red_latched);
     }
 
     #[test]
@@ -360,7 +363,7 @@ mod tests {
         };
         let first = step(&mut state, config, 100.0, 1.0).unwrap();
         assert_eq!(first.tier, HardStopTier::Red);
-        assert!(first.red_latched);
+        assert!(state.red_latched);
     }
 
     #[test]

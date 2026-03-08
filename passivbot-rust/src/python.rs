@@ -1086,6 +1086,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .unwrap_or(1.0),
         pnls_max_lookback_days: extract_value(dict, "pnls_max_lookback_days")?,
         equity_hard_stop_loss: hard_stop_cfg,
+        panic_market_slippage_pct: dict
+            .get_item("panic_market_slippage_pct")?
+            .map(|item| item.extract::<f64>())
+            .transpose()?
+            .unwrap_or(0.0005),
         candle_interval_minutes: dict
             .get_item("candle_interval_minutes")?
             .map(|item| item.extract::<u64>())
@@ -1101,6 +1106,8 @@ fn exchange_params_from_dict(dict: &PyDict) -> PyResult<ExchangeParams> {
         min_qty: extract_value(dict, "min_qty").unwrap_or_default(),
         min_cost: extract_value(dict, "min_cost").unwrap_or_default(),
         c_mult: extract_value(dict, "c_mult").unwrap_or_default(),
+        maker_fee: extract_value(dict, "maker_fee").unwrap_or(0.0002),
+        taker_fee: extract_value(dict, "taker_fee").unwrap_or(0.00055),
     })
 }
 
@@ -1282,6 +1289,7 @@ pub fn calc_next_entry_long_py(
         min_qty,
         min_cost,
         c_mult,
+        ..Default::default()
     };
     let state_params = StateParams {
         balance,
@@ -1372,6 +1380,7 @@ pub fn calc_next_close_long_py(
         min_qty,
         min_cost,
         c_mult,
+        ..Default::default()
     };
     let state_params = StateParams {
         balance,
@@ -1458,6 +1467,7 @@ pub fn calc_next_entry_short_py(
         min_qty,
         min_cost,
         c_mult,
+        ..Default::default()
     };
     let state_params = StateParams {
         balance,
@@ -1548,6 +1558,7 @@ pub fn calc_next_close_short_py(
         min_qty,
         min_cost,
         c_mult,
+        ..Default::default()
     };
     let state_params = StateParams {
         balance,
@@ -1634,6 +1645,7 @@ pub fn calc_entries_long_py(
         min_qty,
         min_cost,
         c_mult,
+        ..Default::default()
     };
 
     let state_params = StateParams {
@@ -1735,6 +1747,7 @@ pub fn calc_entries_short_py(
         min_qty,
         min_cost,
         c_mult,
+        ..Default::default()
     };
 
     let state_params = StateParams {
@@ -1810,6 +1823,7 @@ pub fn calc_min_entry_qty_py(
         min_qty,
         min_cost,
         c_mult,
+        ..Default::default()
     };
     crate::entries::calc_min_entry_qty(price, &exchange_params)
 }
@@ -1846,6 +1860,7 @@ pub fn calc_closes_long_py(
         min_qty,
         min_cost,
         c_mult,
+        ..Default::default()
     };
 
     let state_params = StateParams {
@@ -1928,6 +1943,7 @@ pub fn calc_closes_short_py(
         min_qty,
         min_cost,
         c_mult,
+        ..Default::default()
     };
 
     let state_params = StateParams {

@@ -440,6 +440,7 @@ pub fn calc_unstucking_action(
             min_qty: input.min_qty,
             min_cost: input.min_cost,
             c_mult: input.c_mult,
+            ..Default::default()
         };
         let min_entry_qty = calc_min_entry_qty(input.current_price, &exchange_params);
         let allowance_multiplier = 1.0 + input.risk_we_excess_allowance_pct.max(0.0);
@@ -874,6 +875,7 @@ pub fn calc_twel_enforcer_actions(
             min_qty: candidate.min_qty,
             min_cost: candidate.min_cost,
             c_mult: candidate.c_mult,
+            ..Default::default()
         };
         let min_entry_qty = calc_min_entry_qty(price, &exchange_params);
         let mut abs_qty = qty_to_close

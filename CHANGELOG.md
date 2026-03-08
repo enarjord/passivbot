@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **Backtest HSL panic execution and metrics export** - Account-level RED panic now forces panic mode on all symbols/sides in Rust backtests, `panic_close_order_type="market"` is simulated as next-bar taker execution instead of limit-only behavior, and `hard_stop_*` analysis metrics are exported once as shared metrics rather than duplicated into `_usd`/`_btc` variants.
+- **Backtest HSL EMA span validation** - Backtests now fail early in Python when `live.equity_hard_stop_loss.ema_span_minutes` is smaller than `backtest.candle_interval_minutes`, instead of panicking later inside Rust.
+
 ## v7.8.4 - 2026-03-06
 
 ### Changed

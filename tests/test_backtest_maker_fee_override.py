@@ -12,6 +12,7 @@ def _base_mss():
     return {
         "BTC/USDT:USDT": {
             "maker": 0.0001,
+            "taker": 0.0005,
             "qty_step": 0.001,
             "price_step": 0.1,
             "min_qty": 0.001,
@@ -34,6 +35,14 @@ def test_prep_backtest_args_uses_maker_fee_override_when_set():
     mss = _base_mss()
     _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["maker_fee"] == 0.0002
+
+
+def test_prep_backtest_args_passes_panic_market_slippage_pct():
+    config = _base_config()
+    config["backtest"]["panic_market_slippage_pct"] = 0.0015
+    mss = _base_mss()
+    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    assert backtest_params["panic_market_slippage_pct"] == 0.0015
 
 
 def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():

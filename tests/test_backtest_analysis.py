@@ -104,6 +104,49 @@ def test_expand_analysis_includes_high_exposure_hours():
         assert result[f"high_exposure_hours_max_{side}"] == 0.5
 
 
+def test_expand_analysis_deduplicates_hard_stop_metrics():
+    analysis_usd = _make_analysis_entry(0.5)
+    analysis_btc = _make_analysis_entry(0.5)
+    analysis_usd.update(
+        {
+            "hard_stop_triggers": 3,
+            "hard_stop_restarts": 2,
+            "hard_stop_total_loss_pct": 0.125,
+        }
+    )
+    analysis_btc.update(
+        {
+            "hard_stop_triggers": 3,
+            "hard_stop_restarts": 2,
+            "hard_stop_total_loss_pct": 0.125,
+        }
+    )
+    config = {
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 1.0},
+        }
+    }
+
+    result = expand_analysis(
+        analysis_usd,
+        analysis_btc,
+        fills=np.empty((0, 0)),
+        equities_array=np.empty((0, 3)),
+        config=config,
+    )
+
+    assert result["hard_stop_triggers"] == 3
+    assert result["hard_stop_restarts"] == 2
+    assert result["hard_stop_total_loss_pct"] == 0.125
+    assert "hard_stop_triggers_usd" not in result
+    assert "hard_stop_triggers_btc" not in result
+    assert "hard_stop_restarts_usd" not in result
+    assert "hard_stop_restarts_btc" not in result
+    assert "hard_stop_total_loss_pct_usd" not in result
+    assert "hard_stop_total_loss_pct_btc" not in result
+
+
 def test_process_forager_fills_handles_zero_pnl_division():
     """Zero-PnL inputs should not raise and should return stable neutral ratios."""
     equities_array = np.array([[1704067200000, 1000.0, 0.02]], dtype=np.float64)

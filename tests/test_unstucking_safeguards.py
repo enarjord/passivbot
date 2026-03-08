@@ -760,7 +760,7 @@ def test_panic_close_order_type_pref_market_overrides_limit_path():
     orders, _ = bot._to_executable_orders(ideal_orders, last_prices)
     assert orders[symbol][0]["type"] == "market"
 
-    bot.equity_hard_stop_loss["panic_close_order_type"] = "limit_panic"
+    bot.equity_hard_stop_loss["panic_close_order_type"] = "limit"
     orders, _ = bot._to_executable_orders(ideal_orders, last_prices)
     assert orders[symbol][0]["type"] == "limit"
 

@@ -372,7 +372,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
                 "no_restart_drawdown_threshold": 0.6,
                 "tier_ratios": {"yellow": 0.55, "orange": 0.8},
                 "orange_tier_mode": "graceful_stop",
-                "panic_close_order_type": "limit_panic",
+                "panic_close_order_type": "limit",
             }
         )
         _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
@@ -385,7 +385,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         assert hs["tier_ratios"]["yellow"] == pytest.approx(0.55)
         assert hs["tier_ratios"]["orange"] == pytest.approx(0.8)
         assert hs["orange_tier_mode"] == "graceful_stop"
-        assert hs["panic_close_order_type"] == "limit_panic"
+        assert hs["panic_close_order_type"] == "limit"
 
     def test_invalid_tier_ratios_raise(self):
         config = self._make_config(

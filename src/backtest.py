@@ -33,6 +33,7 @@ import math
 import pandas as pd
 import json
 import asyncio
+import numbers
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 from config_utils import (
@@ -85,6 +86,40 @@ from logging_setup import configure_logging, resolve_log_level
 from suite_runner import extract_suite_config, filter_scenarios_by_label, run_backtest_suite_async
 import passivbot_rust as pbr  # noqa: E402
 from tools.event_loop_policy import set_windows_event_loop_policy
+
+
+ANALYSIS_SHARED_KEYS = {
+    "positions_held_per_day",
+    "positions_held_per_day_w",
+    "position_held_hours_mean",
+    "position_held_hours_max",
+    "position_held_hours_median",
+    "position_unchanged_hours_max",
+    "loss_profit_ratio",
+    "loss_profit_ratio_w",
+    "volume_pct_per_day_avg",
+    "volume_pct_per_day_avg_w",
+    "peak_recovery_hours_pnl",
+    "total_wallet_exposure_max",
+    "total_wallet_exposure_mean",
+    "total_wallet_exposure_median",
+    "high_exposure_hours_mean_long",
+    "high_exposure_hours_max_long",
+    "high_exposure_hours_mean_short",
+    "high_exposure_hours_max_short",
+    "entry_initial_balance_pct_long",
+    "entry_initial_balance_pct_short",
+    "adg_pnl",
+    "adg_pnl_w",
+    "mdg_pnl",
+    "mdg_pnl_w",
+    "sharpe_ratio_pnl",
+    "sharpe_ratio_pnl_w",
+    "sortino_ratio_pnl",
+    "sortino_ratio_pnl_w",
+}
+
+ANALYSIS_SHARED_PREFIXES = ("hard_stop_",)
 
 # Fallback stubs for test environments without full extension symbols
 if not hasattr(pbr, "HlcvsBundle"):  # pragma: no cover
@@ -1057,6 +1092,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
 
 def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
     coins = sorted(set(require_config_value(config, f"backtest.coins.{exchange}")))
+    candle_interval = int(config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
     bot_params_list = []
     bot_params_template = deepcopy(require_config_value(config, "bot"))
     for coin in coins:
@@ -1079,7 +1115,15 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
         bot_params_list.append(coin_specific_bot_params)
     if exchange_params is None:
         exchange_params = [
-            {k: mss[coin][k] for k in ["qty_step", "price_step", "min_qty", "min_cost", "c_mult"]}
+            {
+                "qty_step": mss[coin]["qty_step"],
+                "price_step": mss[coin]["price_step"],
+                "min_qty": mss[coin]["min_qty"],
+                "min_cost": mss[coin]["min_cost"],
+                "c_mult": mss[coin]["c_mult"],
+                "maker_fee": float(mss[coin].get("maker_fee", mss[coin].get("maker", 0.0002))),
+                "taker_fee": float(mss[coin].get("taker_fee", mss[coin].get("taker", 0.00055))),
+            }
             for coin in coins
         ]
     if backtest_params is None:
@@ -1124,6 +1168,11 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             raise ValueError(
                 "live.equity_hard_stop_loss.ema_span_minutes must be > 0.0 when enabled"
             )
+        if hard_stop_enabled and hard_stop_ema_span_minutes < float(candle_interval):
+            raise ValueError(
+                "live.equity_hard_stop_loss.ema_span_minutes must be >= "
+                f"backtest.candle_interval_minutes ({candle_interval}) when enabled"
+            )
         if hard_stop_cooldown_minutes_after_red < 0.0:
             raise ValueError(
                 "live.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
@@ -1147,10 +1196,15 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                 "live.equity_hard_stop_loss.orange_tier_mode must be one of "
                 "{graceful_stop, tp_only_with_active_entry_cancellation}"
             )
-        if hard_stop_panic_close_order_type not in {"market", "limit_panic"}:
+        if hard_stop_panic_close_order_type not in {"market", "limit"}:
             raise ValueError(
-                "live.equity_hard_stop_loss.panic_close_order_type must be one of {market, limit_panic}"
+                "live.equity_hard_stop_loss.panic_close_order_type must be one of {market, limit}"
             )
+        panic_market_slippage_pct = float(
+            get_optional_config_value(config, "backtest.panic_market_slippage_pct", 0.0005) or 0.0
+        )
+        if panic_market_slippage_pct < 0.0:
+            raise ValueError("backtest.panic_market_slippage_pct must be >= 0.0")
         btc_collateral_cap = float(require_config_value(config, "backtest.btc_collateral_cap"))
         btc_collateral_ltv_cap = require_config_value(config, "backtest.btc_collateral_ltv_cap")
         if btc_collateral_ltv_cap is not None:
@@ -1195,6 +1249,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                 "orange_tier_mode": hard_stop_orange_tier_mode,
                 "panic_close_order_type": hard_stop_panic_close_order_type,
             },
+            "panic_market_slippage_pct": panic_market_slippage_pct,
         }
     return bot_params_list, exchange_params, backtest_params
 
@@ -1217,45 +1272,39 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
                 else None
             )
 
-    shared_keys = {
-        "positions_held_per_day",
-        "positions_held_per_day_w",
-        "position_held_hours_mean",
-        "position_held_hours_max",
-        "position_held_hours_median",
-        "position_unchanged_hours_max",
-        "loss_profit_ratio",
-        "loss_profit_ratio_w",
-        "volume_pct_per_day_avg",
-        "volume_pct_per_day_avg_w",
-        "peak_recovery_hours_pnl",
-        "total_wallet_exposure_max",
-        "total_wallet_exposure_mean",
-        "total_wallet_exposure_median",
-        "high_exposure_hours_mean_long",
-        "high_exposure_hours_max_long",
-        "high_exposure_hours_mean_short",
-        "high_exposure_hours_max_short",
-        "entry_initial_balance_pct_long",
-        "entry_initial_balance_pct_short",
-        "adg_pnl",
-        "adg_pnl_w",
-        "mdg_pnl",
-        "mdg_pnl_w",
-        "sharpe_ratio_pnl",
-        "sharpe_ratio_pnl_w",
-        "sortino_ratio_pnl",
-        "sortino_ratio_pnl_w",
-    }
-
     result = {}
 
-    for key in shared_keys:
-        usd_val = analysis_usd.pop(key, None)
-        btc_val = analysis_btc.pop(key, None)
+    def _scalar_values_match(usd_val, btc_val) -> bool:
+        if usd_val is None or btc_val is None:
+            return False
+        if isinstance(usd_val, numbers.Integral) and isinstance(btc_val, numbers.Integral):
+            return usd_val == btc_val
+        if isinstance(usd_val, bool) and isinstance(btc_val, bool):
+            return usd_val == btc_val
+        try:
+            return bool(np.isclose(usd_val, btc_val, equal_nan=True))
+        except Exception:
+            return usd_val == btc_val
+
+    def _is_shared_key(key: str, usd_val, btc_val) -> bool:
+        if key in ANALYSIS_SHARED_KEYS:
+            return True
+        if key.startswith(ANALYSIS_SHARED_PREFIXES):
+            return True
+        if isinstance(usd_val, (bool, numbers.Integral)) and isinstance(
+            btc_val, (bool, numbers.Integral)
+        ):
+            return usd_val == btc_val
+        return False
+
+    for key in sorted(set(analysis_usd) | set(analysis_btc)):
+        usd_val = analysis_usd.get(key)
+        btc_val = analysis_btc.get(key)
+        if not _is_shared_key(key, usd_val, btc_val):
+            continue
         if usd_val is not None:
             result[key] = usd_val
-            if btc_val is not None and not np.isclose(usd_val, btc_val, equal_nan=True):
+            if btc_val is not None and not _scalar_values_match(usd_val, btc_val):
                 logging.debug(
                     "shared metric %s differs across denominations: usd=%s btc=%s",
                     key,
@@ -1264,6 +1313,8 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
                 )
         elif btc_val is not None:
             result[key] = btc_val
+        analysis_usd.pop(key, None)
+        analysis_btc.pop(key, None)
 
     def _add_metrics(metrics: dict, suffix: str):
         for key, value in metrics.items():
