@@ -1963,8 +1963,7 @@ impl<'a> Backtest<'a> {
                     self.hard_stop_tier_samples_orange.saturating_add(1);
             }
             ehsl::HardStopTier::Red => {
-                self.hard_stop_tier_samples_red =
-                    self.hard_stop_tier_samples_red.saturating_add(1);
+                self.hard_stop_tier_samples_red = self.hard_stop_tier_samples_red.saturating_add(1);
             }
             ehsl::HardStopTier::Green => {}
         }
@@ -2202,9 +2201,8 @@ impl<'a> Backtest<'a> {
                             stop_snapshot.timestamp_ms.saturating_sub(red_start_ts_ms) as f64
                                 / 60_000.0;
                         self.hard_stop_flatten_time_minutes_sum += flatten_minutes;
-                        self.hard_stop_flatten_time_minutes_max = self
-                            .hard_stop_flatten_time_minutes_max
-                            .max(flatten_minutes);
+                        self.hard_stop_flatten_time_minutes_max =
+                            self.hard_stop_flatten_time_minutes_max.max(flatten_minutes);
                         self.hard_stop_flatten_time_count =
                             self.hard_stop_flatten_time_count.saturating_add(1);
                     }
