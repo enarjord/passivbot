@@ -45,6 +45,14 @@ def test_prep_backtest_args_passes_panic_market_slippage_pct():
     assert backtest_params["panic_market_slippage_pct"] == 0.0015
 
 
+def test_prep_backtest_args_passes_liquidation_threshold():
+    config = _base_config()
+    config["backtest"]["liquidation_threshold"] = 0.07
+    mss = _base_mss()
+    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    assert backtest_params["liquidation_threshold"] == 0.07
+
+
 def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():
     config = _base_config()
     mss = _base_mss()

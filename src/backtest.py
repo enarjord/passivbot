@@ -176,6 +176,12 @@ def aggregate_candles(candles_1m: np.ndarray, interval: int) -> np.ndarray:
     return aggregate_hlcvs(candles_1m, interval)
 
 
+def _liquidation_drawdown_threshold(config: dict) -> float:
+    threshold = float(get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0)
+    threshold = min(max(threshold, 0.0), 1.0 - 1e-12)
+    return 1.0 - threshold
+
+
 def _looks_like_bool_token(value: str) -> bool:
     if value is None:
         return False
@@ -592,6 +598,14 @@ def execute_backtest(payload: BacktestPayload, config: dict):
 
     equities_array = np.asarray(equities_array)
     analysis = expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config)
+    if float(analysis.get("drawdown_worst", 0.0) or 0.0) >= _liquidation_drawdown_threshold(
+        config
+    ) - 1e-12:
+        logging.debug(
+            "Backtest liquidated early | drawdown_worst=%.6f | liquidation_threshold=%.6f",
+            float(analysis.get("drawdown_worst", 0.0) or 0.0),
+            float(get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0),
+        )
     return fills, equities_array, analysis
 
 
@@ -1253,6 +1267,11 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
         )
         if panic_market_slippage_pct < 0.0:
             raise ValueError("backtest.panic_market_slippage_pct must be >= 0.0")
+        liquidation_threshold = float(
+            get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0
+        )
+        if not (0.0 <= liquidation_threshold < 1.0):
+            raise ValueError("backtest.liquidation_threshold must satisfy 0.0 <= x < 1.0")
         btc_collateral_cap = float(require_config_value(config, "backtest.btc_collateral_cap"))
         btc_collateral_ltv_cap = require_config_value(config, "backtest.btc_collateral_ltv_cap")
         if btc_collateral_ltv_cap is not None:
@@ -1298,6 +1317,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                 "panic_close_order_type": hard_stop_panic_close_order_type,
             },
             "panic_market_slippage_pct": panic_market_slippage_pct,
+            "liquidation_threshold": liquidation_threshold,
         }
     return bot_params_list, exchange_params, backtest_params
 

@@ -68,6 +68,80 @@ Example per-metric aggregation:
 
 ## Bot Settings
 
+### Common Account-Level Bot Parameters
+
+`bot.common` is the shared home for account-level strategy and supervisory behavior used by live trading, backtests, and optimizer runs.
+
+Current use in this branch:
+
+1. `bot.common.equity_hard_stop_loss`
+
+This replaces the earlier `live.equity_hard_stop_loss` location. Existing configs are migrated on load.
+
+See also:
+
+1. [Equity Hard Stop Loss](/Users/eiriknarjord/repos/passivbot-3/docs/equity_hard_stop_loss.md)
+2. [Risk Management](/Users/eiriknarjord/repos/passivbot-3/docs/risk_management.md)
+
+### Equity Hard Stop Loss (`bot.common.equity_hard_stop_loss`)
+
+Account-level drawdown circuit breaker.
+
+- **enabled**:
+  - Enables or disables HSL.
+- **red_threshold**:
+  - RED trigger threshold for the HSL drawdown score.
+- **ema_span_minutes**:
+  - EMA span used for smoothed drawdown.
+  - In backtests, when HSL is enabled, this must be `>= backtest.candle_interval_minutes`.
+- **cooldown_minutes_after_red**:
+  - Minutes to wait before auto-restart after a RED halt.
+  - `0.0` means halt without auto-restart.
+- **no_restart_drawdown_threshold**:
+  - If trigger drawdown exceeds this threshold, RED becomes terminal and the bot will not auto-restart.
+  - Must satisfy: `red_threshold < no_restart_drawdown_threshold <= 1.0`.
+- **tier_ratios.yellow / tier_ratios.orange**:
+  - Multipliers used to derive YELLOW and ORANGE thresholds from `red_threshold`.
+  - Must satisfy: `0 < yellow < orange < 1`.
+- **orange_tier_mode**:
+  - Allowed values:
+    - `graceful_stop`
+    - `tp_only_with_active_entry_cancellation`
+  - Determines how the bot behaves in ORANGE.
+- **panic_close_order_type**:
+  - Allowed values:
+    - `market`
+    - `limit`
+  - Determines how RED panic exits are executed or simulated.
+
+Behavior summary:
+
+1. YELLOW: warning tier
+2. ORANGE: reduced-risk mode
+3. RED: panic close, flat confirmation, halt, optional cooldown restart
+
+Backtest-specific note:
+
+1. If `panic_close_order_type = "market"`, the backtester uses `backtest.panic_market_slippage_pct` for simulated taker execution.
+
+Key HSL analysis metrics:
+
+1. `hard_stop_triggers`
+2. `hard_stop_restarts`
+3. `hard_stop_time_in_yellow_pct`
+4. `hard_stop_time_in_orange_pct`
+5. `hard_stop_time_in_red_pct`
+6. `hard_stop_duration_minutes_mean`
+7. `hard_stop_duration_minutes_max`
+8. `hard_stop_trigger_drawdown_mean`
+9. `hard_stop_panic_close_loss_sum`
+10. `hard_stop_panic_close_loss_max`
+11. `hard_stop_flatten_time_minutes_mean`
+12. `hard_stop_post_restart_retrigger_pct`
+13. `hard_stop_halt_to_restart_equity_loss_pct`
+
+These are shared account metrics. They are not split into `_usd` and `_btc` variants.
+
 ### General Parameters for Long and Short
 
 - **ema_span_0**, **ema_span_1**:
@@ -339,6 +413,13 @@ In this example:
 - `entry_grid_spacing_pct`: Values 0.005, 0.01, 0.015, ..., 0.05
 - `ema_span_0` and `ema_span_1`: Continuous optimization (no step defined)
 
+HSL bounds under `bot.common.equity_hard_stop_loss` use `common_` prefixes here:
+
+1. `common_equity_hard_stop_loss_red_threshold`
+2. `common_equity_hard_stop_loss_ema_span_minutes`
+3. `common_equity_hard_stop_loss_cooldown_minutes_after_red`
+4. `common_equity_hard_stop_loss_no_restart_drawdown_threshold`
+
 **Validation:**
 
 - Step must be positive; negative or zero steps are treated as continuous
@@ -387,6 +468,7 @@ Use `--suite-config path/to/file.json` to layer additional scenario definitions 
 The optimizer penalizes backtests whose metric values exceed or fall short of specified thresholds. Penalties are added to the fitness score to discourage undesirable configurations but do not disqualify the config.
 
 Any metric listed above (and its `btc_` prefixed counterpart when `backtest.use_btc_collateral=True`) can be used when defining limits. Each limit entry is a dictionary with:
+Any metric listed above (and its `btc_` prefixed counterpart when `backtest.use_btc_collateral=True`) can be used when defining limits. This includes the shared HSL metrics such as `hard_stop_time_in_red_pct`, `hard_stop_post_restart_retrigger_pct`, and `hard_stop_halt_to_restart_equity_loss_pct`. HSL metrics are account-level shared metrics and therefore remain single-valued rather than being split into `_usd` and `_btc`. Each limit entry is a dictionary with:
 
 - `metric`: canonical metric name (`drawdown_worst_btc`, `loss_profit_ratio`, `peak_recovery_hours_pnl`, etc.).
 - `penalize_if`: one of `<`, `>`, `outside_range`, or `inside_range` (aliases like `less_than`, `greater_than`, `auto`, etc. are also accepted). Use `outside_range` to keep a metric within `[low, high]`, and `inside_range` to forbid a specific band.

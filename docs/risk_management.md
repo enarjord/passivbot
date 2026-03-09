@@ -163,6 +163,32 @@ Operational notes:
 * This can intentionally block automatic reducers if they would realize too much loss.
 * If you need immediate forced reduction regardless of realized loss, use panic mode.
 
+### D. Equity Hard Stop Loss (`bot.common.equity_hard_stop_loss`)
+This is an account-level circuit breaker based on reconstructed strategy drawdown, not just raw exchange equity.
+
+It exists for cases where:
+
+1. auto-unstuck is too slow
+2. the realized-loss gate is still allowing the bot to operate in a clearly degraded state
+3. you want a final supervisory backstop that can flatten and halt the account
+
+Behavior:
+
+1. `yellow`: warning tier
+2. `orange`: reduced-risk mode (`graceful_stop` or `tp_only_with_active_entry_cancellation`)
+3. `red`: force panic exits, wait until flat, and halt
+
+Operational notes:
+
+1. HSL is currently account-level, not split into long and short.
+2. It uses a collateral-FX-robust drawdown metric reconstructed from realized PnL plus unrealized PnL.
+3. RED can auto-restart after `cooldown_minutes_after_red`, unless the trigger drawdown exceeded `no_restart_drawdown_threshold`.
+4. In backtests, simulated market panic closes use `backtest.panic_market_slippage_pct`.
+
+See the dedicated guide:
+
+1. [Equity Hard Stop Loss](/Users/eiriknarjord/repos/passivbot-3/docs/equity_hard_stop_loss.md)
+
 ---
 
 ## 4. Bankruptcy & Liquidation Technicals

@@ -1089,6 +1089,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(30.0),
+        liquidation_threshold: dict
+            .get_item("liquidation_threshold")?
+            .map(|item| item.extract::<f64>())
+            .transpose()?
+            .unwrap_or(0.05),
         equity_hard_stop_loss: hard_stop_cfg,
         panic_market_slippage_pct: dict
             .get_item("panic_market_slippage_pct")?
