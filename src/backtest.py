@@ -175,6 +175,31 @@ def _liquidation_drawdown_threshold(config: dict) -> float:
     return 1.0 - threshold
 
 
+def _compute_backtest_completion_ratio(
+    payload: "BacktestPayload", equities_array: np.ndarray, config: dict
+) -> float:
+    requested_start_ts = int(
+        payload.backtest_params.get("requested_start_timestamp_ms")
+        or date_to_ts(require_config_value(config, "backtest.start_date"))
+    )
+    requested_end_ts = int(date_to_ts(require_config_value(config, "backtest.end_date")))
+    requested_duration_ms = max(0, requested_end_ts - requested_start_ts)
+    if requested_duration_ms <= 0:
+        return 1.0
+    candle_interval_minutes = int(
+        payload.backtest_params.get("candle_interval_minutes")
+        or get_optional_config_value(config, "backtest.candle_interval_minutes", 1)
+        or 1
+    )
+    sample_ms = max(1, candle_interval_minutes) * 60_000
+    if equities_array is None or len(equities_array) == 0:
+        return 0.0
+    last_timestamp_ms = int(np.asarray(equities_array)[-1, 0])
+    simulated_end_ts = max(requested_start_ts, last_timestamp_ms + sample_ms)
+    covered_duration_ms = max(0, simulated_end_ts - requested_start_ts)
+    return float(min(1.0, covered_duration_ms / requested_duration_ms))
+
+
 def _looks_like_bool_token(value: str) -> bool:
     if value is None:
         return False
@@ -591,6 +616,9 @@ def execute_backtest(payload: BacktestPayload, config: dict):
 
     equities_array = np.asarray(equities_array)
     analysis = expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config)
+    analysis["backtest_completion_ratio"] = _compute_backtest_completion_ratio(
+        payload, equities_array, config
+    )
     if float(analysis.get("drawdown_worst", 0.0) or 0.0) >= _liquidation_drawdown_threshold(
         config
     ) - 1e-12:

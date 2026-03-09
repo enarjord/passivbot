@@ -138,6 +138,60 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     assert config["live"]["approved_coins"]["short"] == ["btc", "eth"]
 
 
+def test_apply_non_live_adjustments_keeps_default_completion_limit():
+    config = get_template_config()
+    config["live"]["approved_coins"] = "btc"
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["end_date"] = "2023-01-01"
+
+    _apply_non_live_adjustments(config, verbose=False)
+
+    limits = config["optimize"]["limits"]
+    completion_limit = next(
+        (entry for entry in limits if entry["metric"] == "backtest_completion_ratio"), None
+    )
+    assert completion_limit is not None
+    assert completion_limit["penalize_if"] == "less_than"
+    assert completion_limit["value"] == pytest.approx(1.0)
+
+
+def test_apply_non_live_adjustments_merges_missing_default_limit_into_existing_list():
+    config = get_template_config()
+    config["live"]["approved_coins"] = "btc"
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["end_date"] = "2023-01-01"
+    config["optimize"]["limits"] = [
+        {"metric": "drawdown_worst_btc", "penalize_if": "greater_than", "value": 0.85},
+        {"metric": "position_held_hours_max", "penalize_if": "greater_than", "value": 2160},
+    ]
+
+    _apply_non_live_adjustments(config, verbose=False)
+
+    limits = config["optimize"]["limits"]
+    completion_limit = next(
+        (entry for entry in limits if entry["metric"] == "backtest_completion_ratio"), None
+    )
+    assert completion_limit is not None
+    assert completion_limit["penalize_if"] == "less_than"
+    assert completion_limit["value"] == pytest.approx(1.0)
+
+
+def test_apply_non_live_adjustments_respects_disabled_default_limit_tombstone():
+    config = get_template_config()
+    config["live"]["approved_coins"] = "btc"
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["end_date"] = "2023-01-01"
+    config["optimize"]["limits"] = [
+        {"metric": "backtest_completion_ratio", "enabled": False},
+    ]
+
+    _apply_non_live_adjustments(config, verbose=False)
+
+    limits = config["optimize"]["limits"]
+    matches = [entry for entry in limits if entry["metric"] == "backtest_completion_ratio"]
+    assert matches == [{"metric": "backtest_completion_ratio", "enabled": False}]
+
+
 def test_apply_non_live_adjustments_supports_legacy_coins_file():
     config = get_template_config()
     config["live"]["approved_coins"] = "configs/approved_coins_topmcap.json"
@@ -196,6 +250,12 @@ def test_normalize_limit_entries_canonicalizes_shared_hsl_metric_alias():
     assert normalized[0]["metric"] == "hard_stop_time_in_red_pct"
     assert normalized[0]["penalize_if"] == "greater_than"
     assert normalized[0]["value"] == 0.02
+
+
+def test_normalize_limit_entries_supports_enabled_false_tombstone():
+    raw = [{"metric": "backtest_completion_ratio", "enabled": False}]
+    normalized = config_utils.normalize_limit_entries(raw)
+    assert normalized == [{"metric": "backtest_completion_ratio", "enabled": False}]
 
 
 def test_limits_structural_equal_detects_canonical_entries():

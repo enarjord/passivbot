@@ -98,3 +98,18 @@ def test_limit_penalty_remains_global_for_non_scoring_metric():
     assert pytest.approx(scores[0]) == expected_penalty
     assert pytest.approx(scores[1]) == expected_penalty
     assert pytest.approx(penalty) == expected_penalty
+
+
+def test_disabled_limit_is_ignored():
+    limits = [
+        {"metric": "drawdown_worst", "enabled": False},
+    ]
+    cfg = _make_config(limits, scoring=["adg"])
+    evaluator = Evaluator({}, {}, {}, cfg)
+    stats = {
+        "adg_mean": 0.001,
+        "drawdown_worst_max": 0.99,
+    }
+    scores, penalty = evaluator.calc_fitness(stats)
+    assert pytest.approx(scores[0]) == -0.001
+    assert pytest.approx(penalty) == 0.0

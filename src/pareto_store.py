@@ -38,6 +38,28 @@ class LimitSpec:
     value: float
 
 
+def _filter_ideal_selection_to_feasible(
+    values_matrix: np.ndarray, hashes: list[str], violations: np.ndarray
+) -> tuple[np.ndarray, list[str], str | None]:
+    feasible_mask = np.isclose(violations, 0.0, atol=1e-12, rtol=0.0)
+    if feasible_mask.any():
+        if not feasible_mask.all():
+            return (
+                values_matrix[feasible_mask],
+                [h for h, keep in zip(hashes, feasible_mask) if keep],
+                (
+                    f"Filtering closest-to-ideal selection to {int(feasible_mask.sum())} feasible "
+                    f"Pareto members (excluded {int((~feasible_mask).sum())} constrained members)."
+                ),
+            )
+        return values_matrix, hashes, None
+    return (
+        values_matrix,
+        hashes,
+        "No zero-violation Pareto members found; closest-to-ideal selection will use constrained members.",
+    )
+
+
 def _split_metric_field(raw_key: str) -> tuple[str, str]:
     key = raw_key.strip()
     if "." in key:
@@ -550,6 +572,7 @@ def main():
             pareto_dir += "/pareto"
             entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))
     points = []
+    point_violations = []
     filenames = {}
     w_keys = []
     metric_names, metric_name_map = None, None
@@ -649,7 +672,9 @@ def main():
                 continue
             values = [objectives.get(k) for k in w_keys]
             if all(v is not None for v in values):
+                violation = extract_violation(entry)
                 points.append((*values, h))
+                point_violations.append(float(violation))
                 filenames[h] = os.path.split(entry_path)[-1]
         except Exception as e:
             print(f"Error loading {h}: {e}")
@@ -662,9 +687,16 @@ def main():
 
     values_matrix = np.array([p[:-1] for p in points])
     hashes = [p[-1] for p in points]
+    violations = np.asarray(point_violations, dtype=float)
     if values_matrix.shape[1] != len(w_keys):
         print("Mismatch between values and keys!")
         exit(1)
+
+    values_matrix, hashes, feasible_message = _filter_ideal_selection_to_feasible(
+        values_matrix, hashes, violations
+    )
+    if feasible_message:
+        print(feasible_message)
 
     weights = tuple([0.0] * values_matrix.shape[1]) if args.weights is None else args.weights
     if len(weights) == 1:

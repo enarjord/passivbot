@@ -758,6 +758,11 @@
                 "value": 0
             },
             {
+                "metric": "backtest_completion_ratio",
+                "penalize_if": "less_than",
+                "value": 1.0
+            },
+            {
                 "metric": "high_exposure_hours_max_long",
                 "penalize_if": "greater_than",
                 "value": 840

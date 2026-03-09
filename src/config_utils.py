@@ -1267,6 +1267,17 @@ def _apply_non_live_adjustments(
     existing_limits = deepcopy(result["optimize"].get("limits", []))
     limits_snapshot = deepcopy(existing_limits)
     normalized_limits = normalize_limit_entries(existing_limits)
+    default_limits = normalize_limit_entries(get_template_config()["optimize"].get("limits", []))
+    merged_limits = _merge_missing_default_limits(normalized_limits, default_limits)
+    if len(merged_limits) != len(normalized_limits):
+        _log_config(
+            verbose,
+            logging.INFO,
+            "added missing default optimize.limits entries (%d -> %d)",
+            len(normalized_limits),
+            len(merged_limits),
+        )
+        normalized_limits = merged_limits
     changed_limits = not _limits_structurally_equal(existing_limits, normalized_limits)
     result["optimize"]["limits"] = normalized_limits
     if changed_limits:
@@ -1590,6 +1601,21 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
     if not metric:
         raise ValueError("Limit entries must include a 'metric' field.")
     metric = canonicalize_metric_name(str(metric))
+    enabled_raw = payload.get("enabled")
+    enabled: Optional[bool] = None
+    if enabled_raw is not None:
+        if isinstance(enabled_raw, bool):
+            enabled = enabled_raw
+        else:
+            token = str(enabled_raw).strip().lower()
+            if token in {"true", "1", "yes", "y"}:
+                enabled = True
+            elif token in {"false", "0", "no", "n"}:
+                enabled = False
+            else:
+                raise ValueError(f"Unsupported enabled value '{enabled_raw}' for limit on {metric}.")
+    if enabled is False:
+        return {"metric": metric, "enabled": False}
     penalize_if = _normalize_penalize_if(payload.get("penalize_if"))
     stat = payload.get("stat") or payload.get("field")
     normalized_stat: Optional[str] = None
@@ -1599,6 +1625,8 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
             raise ValueError(f"Unsupported stat '{stat}' for limit on {metric}.")
         normalized_stat = stat
     result: Dict[str, Any] = {"metric": metric, "penalize_if": penalize_if}
+    if enabled is True:
+        result["enabled"] = True
     if normalized_stat:
         result["stat"] = normalized_stat
     if penalize_if in {"greater_than", "less_than", "auto"}:
@@ -1669,6 +1697,26 @@ def _limits_structurally_equal(raw_limits: Any, normalized_limits: List[Dict[str
     if len(raw_limits) != len(normalized_limits):
         return False
     return all(_entries_equivalent(raw, norm) for raw, norm in zip(raw_limits, normalized_limits))
+
+
+def _merge_missing_default_limits(
+    current_limits: List[Dict[str, Any]], default_limits: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    merged = deepcopy(current_limits)
+    for default_entry in default_limits:
+        if any(_entries_equivalent(existing, default_entry) for existing in merged):
+            continue
+        same_metric = [
+            existing
+            for existing in merged
+            if isinstance(existing, dict) and existing.get("metric") == default_entry.get("metric")
+        ]
+        # If the user already has an explicit entry for the same metric, including enabled=false,
+        # treat that as intentional and do not re-add the default.
+        if same_metric:
+            continue
+        merged.append(deepcopy(default_entry))
+    return merged
 
 
 def add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=None):
@@ -2412,7 +2460,7 @@ def get_template_config():
             "crossover_probability": 0.7,
             "enable_overrides": [],
             "iters": 30000,
-            "limits": "--drawdown_worst 0.333 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 300.0",
+            "limits": "--drawdown_worst 0.333 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 300.0 --penalize_if_lower_than_backtest_completion_ratio 1.0",
             "mutation_eta": 20.0,
             "mutation_indpb": 0.0,
             "mutation_probability": 0.45,

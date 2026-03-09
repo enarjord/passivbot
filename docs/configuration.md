@@ -467,12 +467,13 @@ Use `--suite-config path/to/file.json` to layer additional scenario definitions 
 
 The optimizer penalizes backtests whose metric values exceed or fall short of specified thresholds. Penalties are added to the fitness score to discourage undesirable configurations but do not disqualify the config.
 
-Any metric listed above (and its `btc_` prefixed counterpart when `backtest.use_btc_collateral=True`) can be used when defining limits. This includes the shared HSL metrics such as `hard_stop_time_in_red_pct`, `hard_stop_post_restart_retrigger_pct`, and `hard_stop_halt_to_restart_equity_loss_pct`. HSL metrics are account-level shared metrics and therefore remain single-valued rather than being split into `_usd` and `_btc`. Each limit entry is a dictionary with:
+Any metric listed above (and its `btc_` prefixed counterpart when `backtest.use_btc_collateral=True`) can be used when defining limits. This includes the shared HSL metrics such as `hard_stop_time_in_red_pct`, `hard_stop_post_restart_retrigger_pct`, and `hard_stop_halt_to_restart_equity_loss_pct`, plus `backtest_completion_ratio` for rejecting truncated runs. HSL metrics are account-level shared metrics and therefore remain single-valued rather than being split into `_usd` and `_btc`. Each limit entry is a dictionary with:
 
 - `metric`: canonical metric name (`drawdown_worst_btc`, `loss_profit_ratio`, `peak_recovery_hours_pnl`, etc.).
 - `penalize_if`: one of `<`, `>`, `outside_range`, or `inside_range` (aliases like `less_than`, `greater_than`, `auto`, etc. are also accepted). Use `outside_range` to keep a metric within `[low, high]`, and `inside_range` to forbid a specific band.
 - `value`: numeric threshold for `<`/`>` modes.
 - `range`: two-value list `[low, high]` for the range modes.
+- Optional `enabled`: set to `false` to disable a default limit without deleting it. This prevents config normalization from re-adding that metric's default limit later.
 - Optional `stat`: when you want to compare against a specific statistic (`min`, `max`, `mean`, `std`). Defaults mirror the legacy behaviour (`>` checks use `_max`, `<` checks use `_min`, range checks use `_mean`).
 
 #### Format
@@ -484,8 +485,15 @@ Define limits in `optimize.limits` as a list:
   {"metric": "drawdown_worst_btc", "penalize_if": ">", "value": 0.3},
   {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.7]},
   {"metric": "adg_btc", "penalize_if": "<", "value": 0.0005, "stat": "mean"},
-  {"metric": "hard_stop_time_in_red_pct", "penalize_if": ">", "value": 0.02}
+  {"metric": "hard_stop_time_in_red_pct", "penalize_if": ">", "value": 0.02},
+  {"metric": "backtest_completion_ratio", "penalize_if": "<", "value": 1.0}
 ]
+```
+
+To intentionally opt out of a default limit, keep the metric name but disable it:
+
+```json
+{"metric": "backtest_completion_ratio", "enabled": false}
 ```
 
 For quick CLI overrides you can pass the JSON/HJSON string directly:

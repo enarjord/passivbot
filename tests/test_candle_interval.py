@@ -1,6 +1,7 @@
 """Tests for configurable candle interval feature."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -243,3 +244,57 @@ def test_backtest_rejects_invalid_liquidation_threshold():
             btc_usd_prices,
             timestamps,
         )
+
+
+def test_backtest_completion_ratio_is_one_for_full_range():
+    from backtest import _compute_backtest_completion_ratio
+
+    payload = SimpleNamespace(
+        backtest_params={
+            "requested_start_timestamp_ms": 1609459200000,
+            "candle_interval_minutes": 5,
+        }
+    )
+    config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-02",
+        }
+    }
+    equities_array = np.array(
+        [
+            [1609459200000, 1000.0, 0.05],
+            [1609545300000, 1100.0, 0.055],
+        ],
+        dtype=np.float64,
+    )
+
+    ratio = _compute_backtest_completion_ratio(payload, equities_array, config)
+    assert ratio == pytest.approx(1.0)
+
+
+def test_backtest_completion_ratio_drops_for_truncated_run():
+    from backtest import _compute_backtest_completion_ratio
+
+    payload = SimpleNamespace(
+        backtest_params={
+            "requested_start_timestamp_ms": 1609459200000,
+            "candle_interval_minutes": 5,
+        }
+    )
+    config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-11",
+        }
+    }
+    equities_array = np.array(
+        [
+            [1609459200000, 1000.0, 0.05],
+            [1609545300000, 900.0, 0.045],
+        ],
+        dtype=np.float64,
+    )
+
+    ratio = _compute_backtest_completion_ratio(payload, equities_array, config)
+    assert 0.09 < ratio < 0.11
