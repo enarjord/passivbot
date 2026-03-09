@@ -75,7 +75,7 @@ All parameters live under `bot.common.equity_hard_stop_loss`:
    - RED trigger drawdown score
 3. `ema_span_minutes`
    - EMA span used for smoothed drawdown
-   - in backtests this must be `>= backtest.candle_interval_minutes`
+   - in backtests, if this is smaller than `backtest.candle_interval_minutes`, HSL falls back to a one-sample EMA, which disables smoothing
 4. `cooldown_minutes_after_red`
    - wait time before auto-restart after RED
    - `0` means no auto-restart

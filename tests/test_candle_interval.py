@@ -139,7 +139,7 @@ def test_backtest_with_candle_interval():
     assert np.isfinite(analysis["positions_held_per_day"])
 
 
-def test_backtest_rejects_hsl_ema_span_below_candle_interval():
+def test_backtest_allows_hsl_ema_span_below_candle_interval():
     from backtest import build_backtest_payload
     from config_utils import load_config
 
@@ -181,18 +181,15 @@ def test_backtest_rejects_hsl_ema_span_below_candle_interval():
         },
     }
 
-    with pytest.raises(
-        ValueError,
-        match=r"ema_span_minutes must be >= backtest\.candle_interval_minutes \(5\)",
-    ):
-        build_backtest_payload(
-            hlcvs,
-            mss,
-            config,
-            "binance",
-            btc_usd_prices,
-            timestamps,
-        )
+    payload = build_backtest_payload(
+        hlcvs,
+        mss,
+        config,
+        "binance",
+        btc_usd_prices,
+        timestamps,
+    )
+    assert payload.backtest_params["equity_hard_stop_loss"]["ema_span_minutes"] == pytest.approx(1.0)
 
 
 def test_backtest_rejects_invalid_liquidation_threshold():

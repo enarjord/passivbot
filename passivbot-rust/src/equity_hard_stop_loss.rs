@@ -182,7 +182,7 @@ pub fn step_with_peak_strategy_equity(
     if peak_strategy_equity + f64::EPSILON < equity {
         return Err("peak_strategy_equity must be >= equity".to_string());
     }
-    let span_samples = span_samples(config.ema_span_minutes, sample_minutes)?;
+    let span_samples = span_samples(config.ema_span_minutes, sample_minutes)?.max(1.0);
     let alpha = 2.0 / (span_samples + 1.0);
     if !alpha.is_finite() || !(0.0 < alpha && alpha <= 1.0) {
         return Err("computed alpha is invalid".to_string());
@@ -290,6 +290,22 @@ mod tests {
         // 20% dd => red
         let s3 = step(&mut state, config, 80.0, 1.0).unwrap();
         assert_eq!(s3.tier, HardStopTier::Red);
+    }
+
+    #[test]
+    fn sub_sample_ema_span_disables_smoothing() {
+        let mut state = HardStopState::default();
+        let config = HardStopConfig {
+            red_threshold: 0.2,
+            ema_span_minutes: 1.0,
+            tier_ratios: HardStopTierRatios::default(),
+        };
+        let _ = step(&mut state, config, 100.0, 5.0).unwrap();
+        let s = step(&mut state, config, 90.0, 5.0).unwrap();
+        assert!((s.span_samples - 1.0).abs() < 1e-12);
+        assert!((s.alpha - 1.0).abs() < 1e-12);
+        assert!((state.drawdown_ema - s.drawdown_raw).abs() < 1e-12);
+        assert!((s.drawdown_score - s.drawdown_raw).abs() < 1e-12);
     }
 
     #[test]

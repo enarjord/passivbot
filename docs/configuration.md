@@ -93,7 +93,7 @@ Account-level drawdown circuit breaker.
   - RED trigger threshold for the HSL drawdown score.
 - **ema_span_minutes**:
   - EMA span used for smoothed drawdown.
-  - In backtests, when HSL is enabled, this must be `>= backtest.candle_interval_minutes`.
+  - In backtests, if this is smaller than `backtest.candle_interval_minutes`, smoothing is effectively disabled and HSL uses raw drawdown for the EMA leg.
 - **cooldown_minutes_after_red**:
   - Minutes to wait before auto-restart after a RED halt.
   - `0.0` means halt without auto-restart.

@@ -1223,11 +1223,6 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             raise ValueError(
                 "bot.common.equity_hard_stop_loss.ema_span_minutes must be > 0.0 when enabled"
             )
-        if hard_stop_enabled and hard_stop_ema_span_minutes < float(candle_interval):
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.ema_span_minutes must be >= "
-                f"backtest.candle_interval_minutes ({candle_interval}) when enabled"
-            )
         if hard_stop_cooldown_minutes_after_red < 0.0:
             raise ValueError(
                 "bot.common.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
