@@ -1707,6 +1707,9 @@ impl<'a> Backtest<'a> {
             }
             if self.equity_tracking_active {
                 self.update_equities(k);
+                if self.check_and_apply_liquidation(k) {
+                    break;
+                }
                 if !self.hard_stop_halted {
                     self.update_hard_stop_state(k)?;
                 }
@@ -1743,6 +1746,36 @@ impl<'a> Backtest<'a> {
         let fills = std::mem::take(&mut self.fills);
         let equities = std::mem::take(&mut self.equities);
         Ok((fills, equities))
+    }
+
+    #[inline(always)]
+    fn liquidation_equity_floor_usd(&self) -> f64 {
+        let threshold = self.backtest_params.liquidation_threshold.max(0.0);
+        self.backtest_params.starting_balance.max(0.0) * threshold
+    }
+
+    fn check_and_apply_liquidation(&mut self, k: usize) -> bool {
+        let Some(&equity_usd) = self.equities.usd_total_equity.last() else {
+            return false;
+        };
+        let floor_usd = self.liquidation_equity_floor_usd();
+        let liquidated = if floor_usd > 0.0 {
+            equity_usd <= floor_usd
+        } else {
+            equity_usd <= 0.0
+        };
+        if !liquidated {
+            return false;
+        }
+
+        if let Some(last_usd_equity) = self.equities.usd_total_equity.last_mut() {
+            *last_usd_equity = floor_usd.max(0.0);
+        }
+        if let Some(last_btc_equity) = self.equities.btc_total_equity.last_mut() {
+            let btc_price = self.btc_usd_prices[k].max(f64::EPSILON);
+            *last_btc_equity = floor_usd.max(0.0) / btc_price;
+        }
+        true
     }
 
     fn update_n_positions_and_wallet_exposure_limits(&mut self, k: usize) -> bool {
@@ -3529,6 +3562,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -3591,6 +3625,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -3652,6 +3687,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -3726,6 +3762,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -3807,6 +3844,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -3878,6 +3916,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 1.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -3948,6 +3987,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -4014,6 +4054,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -4101,6 +4142,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -4171,6 +4213,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -4190,6 +4233,58 @@ mod tests {
         let err = bt.update_hard_stop_state(0).unwrap_err();
         assert!(err.contains("hard-stop evaluation failed"));
         assert!(err.contains("equity must be finite and > 0"));
+    }
+
+    #[test]
+    fn liquidation_threshold_clamps_equity_and_stops() {
+        let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_order_slippage_pct: 0.0005,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.equities.timestamps_ms.push(0);
+        bt.equities.usd_total_equity.push(-10.0);
+        bt.equities.btc_total_equity.push(-0.001);
+        assert!(bt.check_and_apply_liquidation(0));
+        assert!((bt.equities.usd_total_equity[0] - 50.0).abs() < 1e-12);
+        assert!((bt.equities.btc_total_equity[0] - 0.0025).abs() < 1e-12);
     }
 
     #[test]
@@ -4225,6 +4320,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -4287,6 +4383,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -4372,6 +4469,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -4461,6 +4559,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,
@@ -4532,6 +4631,7 @@ mod tests {
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_order_slippage_pct: 0.0005,
             candle_interval_minutes: 1,

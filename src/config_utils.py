@@ -2178,6 +2178,7 @@ def get_template_config():
             "dynamic_wel_by_tradability": True,
             "candle_interval_minutes": 1,
             "gap_tolerance_ohlcvs_minutes": 120.0,
+            "liquidation_threshold": 0.05,
             "maker_fee_override": None,
             "market_order_slippage_pct": 0.0005,
             "max_warmup_minutes": 0.0,

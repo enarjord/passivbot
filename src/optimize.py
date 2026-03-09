@@ -376,6 +376,29 @@ def _build_invalid_candidate_metrics(
     return objectives, INVALID_BACKTEST_CANDIDATE_PENALTY, metrics_payload
 
 
+def _liquidation_drawdown_threshold(config: dict) -> float:
+    raw = (
+        get_optional_config_value(config, "backtest.liquidation_threshold", 0.05)
+        if isinstance(config, dict)
+        else 0.05
+    )
+    try:
+        threshold = float(raw if raw is not None else 0.05)
+    except (TypeError, ValueError):
+        threshold = 0.05
+    threshold = min(max(threshold, 0.0), 1.0 - 1e-12)
+    return 1.0 - threshold
+
+
+def _analysis_indicates_liquidation(analysis: dict | None, config: dict) -> bool:
+    if not isinstance(analysis, dict):
+        return False
+    drawdown = analysis.get("drawdown_worst")
+    if not isinstance(drawdown, (int, float)):
+        return False
+    return float(drawdown) >= _liquidation_drawdown_threshold(config) - 1e-12
+
+
 def _record_individual_result(individual, evaluator_config, overrides_list, recorder):
     metrics = getattr(individual, "evaluation_metrics", {}) or {}
     suite_metrics = metrics.pop("suite_metrics", None)
@@ -421,9 +444,11 @@ def ea_mu_plus_lambda_stream(
 
     start_time = time.time()
     total_evals = 0
+    liquidation_total = 0
+    liquidation_prev_total = 0
 
     def evaluate_and_record(individuals):
-        nonlocal total_evals
+        nonlocal total_evals, liquidation_total
         if not individuals:
             return 0
         logging.debug("Evaluating %d candidates", len(individuals))
@@ -470,6 +495,8 @@ def ea_mu_plus_lambda_stream(
                                 prh_val,
                             )
                     if metrics is not None:
+                        if bool(metrics.get("liquidated")):
+                            liquidation_total += 1
                         ind.evaluation_metrics = metrics
                         _record_individual_result(ind, evaluator_config, overrides_list, recorder)
                     elif hasattr(ind, "evaluation_metrics"):
@@ -496,7 +523,7 @@ def ea_mu_plus_lambda_stream(
     dup_prev_reused = 0
 
     def log_generation(gen, nevals, record):
-        nonlocal dup_prev_total, dup_prev_resolved, dup_prev_reused
+        nonlocal dup_prev_total, dup_prev_resolved, dup_prev_reused, liquidation_prev_total
         best = record.get("min") if record else None
         front_size = len(halloffame) if halloffame is not None else 0
         dup_tot = duplicate_counter["total"]
@@ -507,11 +534,13 @@ def ea_mu_plus_lambda_stream(
         dup_res_delta = dup_res - dup_prev_resolved
         dup_reuse_delta = dup_reuse - dup_prev_reused
         dup_gen_ratio = (dup_delta / nevals) if nevals else 0.0
+        liquidation_delta = liquidation_total - liquidation_prev_total
         logging.info(
             (
                 "Gen %d complete | evals=%d | total=%d | front=%d | best=%s | "
                 "dups=%d (resolved=%d reused=%d) | dup_delta=%d (res=%d reuse=%d) | "
-                "dup_ratio=%.2f%% | dup_gen=%.2f%% | elapsed=%.1fs"
+                "dup_ratio=%.2f%% | dup_gen=%.2f%% | "
+                "n_bankruptcies=%d (delta=%d) | elapsed=%.1fs"
             ),
             gen,
             nevals,
@@ -526,11 +555,14 @@ def ea_mu_plus_lambda_stream(
             dup_reuse_delta,
             dup_ratio * 100.0,
             dup_gen_ratio * 100.0,
+            liquidation_total,
+            liquidation_delta,
             time.time() - start_time,
         )
         dup_prev_total = dup_tot
         dup_prev_resolved = dup_res
         dup_prev_reused = dup_reuse
+        liquidation_prev_total = liquidation_total
         if verbose and record:
             logging.debug("Logbook: %s", " ".join(f"{k}={v}" for k, v in record.items()))
 
@@ -908,6 +940,7 @@ class Evaluator:
         else:
             self.seen_hashes[individual_hash] = None
         analyses = {}
+        liquidated = False
         for exchange in self.exchanges:
             self._ensure_attached(exchange)
             payload = build_backtest_payload(
@@ -924,8 +957,8 @@ class Evaluator:
                 if not _is_recoverable_backtest_candidate_error(exc):
                     raise
                 error = f"{exc.__class__.__name__}: {exc}"
-                logging.warning(
-                    "Optimizer candidate invalid due to recoverable backtest panic | hash=%s | exchange=%s | error=%s",
+                logging.debug(
+                    "Optimizer candidate invalid due to recoverable backtest failure | hash=%s | exchange=%s | error=%s",
                     individual_hash[:12],
                     exchange,
                     error,
@@ -940,6 +973,7 @@ class Evaluator:
                 self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
                 return tuple(objectives), total_penalty, metrics_payload
             analyses[exchange] = analysis
+            liquidated = liquidated or _analysis_indicates_liquidation(analysis, config)
 
             # Explicitly drop large intermediate arrays to keep worker RSS low.
             del fills
@@ -953,6 +987,7 @@ class Evaluator:
             "stats": aggregate_stats,
             "objectives": objectives_map,
             "constraint_violation": total_penalty,
+            "liquidated": liquidated,
         }
         individual.evaluation_metrics = metrics_payload
         actual_hash = calc_hash(individual)
@@ -1198,6 +1233,7 @@ class SuiteEvaluator:
             seen_hashes[individual_hash] = None
 
         scenario_results: List[ScenarioResult] = []
+        liquidated = False
 
         from tools.iterative_backtester import combine_analyses as combine
 
@@ -1255,8 +1291,8 @@ class SuiteEvaluator:
                     if not _is_recoverable_backtest_candidate_error(exc):
                         raise
                     error = f"{exc.__class__.__name__}: {exc}"
-                    logging.warning(
-                        "Optimizer suite candidate invalid due to recoverable backtest panic | label=%s | exchange=%s | error=%s",
+                    logging.debug(
+                        "Optimizer suite candidate invalid due to recoverable backtest failure | label=%s | exchange=%s | error=%s",
                         ctx.label,
                         exchange,
                         error,
@@ -1272,6 +1308,9 @@ class SuiteEvaluator:
                     self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
                     return tuple(objectives), total_penalty, metrics_payload
                 analyses[exchange] = analysis
+                liquidated = liquidated or _analysis_indicates_liquidation(
+                    analysis, scenario_config
+                )
 
                 # Free backtest results to allow memory reuse
                 del fills
@@ -1327,6 +1366,7 @@ class SuiteEvaluator:
             "objectives": objectives_map,
             "suite_metrics": suite_payload,
             "constraint_violation": total_penalty,
+            "liquidated": liquidated,
         }
 
         individual.evaluation_metrics = metrics_payload
@@ -1600,6 +1640,7 @@ async def main():
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
     pool = None
+    manager = None
     pool_terminated = False
     try:
         array_manager = SharedArrayManager()
@@ -1997,7 +2038,7 @@ async def main():
 
     except KeyboardInterrupt:
         interrupted = True
-        logging.warning("Keyboard interrupt received; terminating optimization...")
+        logging.info("SIGINT received; starting graceful shutdown")
         if "pool" in locals():
             already = pool_state["terminated"] if "pool_state" in locals() else pool_terminated
             if not already:
@@ -2011,24 +2052,46 @@ async def main():
         traceback.print_exc()
     finally:
         if "recorder" in locals():
+            logging.info("Flushing Pareto/results recorder...")
             try:
                 recorder.flush()
             except Exception:
                 logging.exception("Failed to flush recorder")
+            logging.info("Closing results recorder...")
             recorder.close()
         if "pool" in locals() and pool is not None:
+            if interrupted and not pool_terminated:
+                logging.info("Terminating worker pool...")
+                pool.terminate()
+                pool_terminated = True
             if pool_terminated or interrupted:
                 logging.info("Joining terminated worker pool...")
             else:
                 logging.info("Closing worker pool...")
                 pool.close()
-            pool.join()
+            try:
+                pool.join()
+            except KeyboardInterrupt:
+                logging.info("Additional SIGINT received during pool join; continuing shutdown")
+        if manager is not None:
+            logging.info("Shutting down multiprocessing manager...")
+            try:
+                manager.shutdown()
+            except Exception:
+                logging.exception("Failed to shut down multiprocessing manager")
         if "array_manager" in locals():
-            array_manager.cleanup()
+            logging.info("Releasing shared memory...")
+            try:
+                array_manager.cleanup()
+            except Exception:
+                logging.exception("Failed to release shared memory")
 
-        logging.info("Cleanup complete. Exiting.")
+        logging.info("Shutdown complete.")
         sys.exit(130 if interrupted else 0)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

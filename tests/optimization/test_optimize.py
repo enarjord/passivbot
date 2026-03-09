@@ -17,6 +17,7 @@ import pytest
 import optimize
 from optimize import (
     _apply_config_overrides,
+    _analysis_indicates_liquidation,
     _looks_like_bool_token,
     _normalize_optional_bool_flag,
     _format_objectives,
@@ -80,6 +81,16 @@ class TestApplyConfigOverrides:
         config = {"bot": {"long": "not_a_dict"}}
         _apply_config_overrides(config, {"bot.long.value": 3.0})
         assert config["bot"]["long"]["value"] == 3.0
+
+
+class TestLiquidationHelpers:
+    def test_analysis_indicates_liquidation_at_threshold(self):
+        from config_utils import get_template_config
+
+        config = get_template_config()
+        config["backtest"]["liquidation_threshold"] = 0.05
+        assert _analysis_indicates_liquidation({"drawdown_worst": 0.95}, config) is True
+        assert _analysis_indicates_liquidation({"drawdown_worst": 0.949}, config) is False
 
 
 class TestLooksLikeBoolToken:
