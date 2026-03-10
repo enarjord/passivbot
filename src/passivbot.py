@@ -1113,7 +1113,9 @@ class Passivbot:
             "cooldown_minutes_after_red": float(
                 self.equity_hard_stop_loss["cooldown_minutes_after_red"]
             ),
-            "no_restart_drawdown_threshold": float(self.equity_hard_stop_loss["no_restart_drawdown_threshold"]),
+            "no_restart_drawdown_threshold": float(
+                self.equity_hard_stop_loss["no_restart_drawdown_threshold"]
+            ),
             "tier_ratios": {
                 "yellow": float(self.equity_hard_stop_loss["tier_ratios"]["yellow"]),
                 "orange": float(self.equity_hard_stop_loss["tier_ratios"]["orange"]),
@@ -1159,7 +1161,9 @@ class Passivbot:
                 f"invalid hard-stop trigger_peak_strategy_equity at stop finalization: {trigger_peak_strategy_equity}"
             )
         if not math.isfinite(peak_strategy_equity) or peak_strategy_equity <= 0.0:
-            raise RuntimeError(f"invalid hard-stop rolling peak_strategy_equity at stop finalization: {peak_strategy_equity}")
+            raise RuntimeError(
+                f"invalid hard-stop rolling peak_strategy_equity at stop finalization: {peak_strategy_equity}"
+            )
         drawdown_ema = float(self._equity_hard_stop_runtime.drawdown_ema())
         drawdown_raw = max(0.0, 1.0 - equity / max(peak_strategy_equity, 1e-12))
         return {
@@ -1201,7 +1205,9 @@ class Passivbot:
             )
 
         cooldown_minutes = float(self.equity_hard_stop_loss["cooldown_minutes_after_red"])
-        no_restart_drawdown_threshold = float(self.equity_hard_stop_loss["no_restart_drawdown_threshold"])
+        no_restart_drawdown_threshold = float(
+            self.equity_hard_stop_loss["no_restart_drawdown_threshold"]
+        )
         cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
         cooldown_until_ms = None
         pending_red = False
@@ -1410,7 +1416,9 @@ class Passivbot:
         else:
             stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
         cooldown_minutes = float(self.equity_hard_stop_loss["cooldown_minutes_after_red"])
-        no_restart_drawdown_threshold = float(self.equity_hard_stop_loss["no_restart_drawdown_threshold"])
+        no_restart_drawdown_threshold = float(
+            self.equity_hard_stop_loss["no_restart_drawdown_threshold"]
+        )
         no_restart_latched = bool(stop_event["drawdown_raw"] >= no_restart_drawdown_threshold)
         cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
         cooldown_until_ms = (
@@ -1489,7 +1497,9 @@ class Passivbot:
                     continue
 
                 n_positions = self._equity_hard_stop_count_open_positions()
-                entry_orders, nonpanic_close_orders = self._equity_hard_stop_count_blocking_open_orders()
+                entry_orders, nonpanic_close_orders = (
+                    self._equity_hard_stop_count_blocking_open_orders()
+                )
                 if n_positions == 0 and entry_orders == 0 and nonpanic_close_orders == 0:
                     if self._equity_hard_stop_red_flat_confirmations == 0:
                         self._equity_hard_stop_pending_stop_event = (
@@ -1528,7 +1538,10 @@ class Passivbot:
     def _apply_equity_hard_stop_orange_overlay(self) -> None:
         if not self._equity_hard_stop_enabled():
             return
-        if self._equity_hard_stop_runtime_red_latched() or self._equity_hard_stop_runtime_tier() != "orange":
+        if (
+            self._equity_hard_stop_runtime_red_latched()
+            or self._equity_hard_stop_runtime_tier() != "orange"
+        ):
             return
         orange_mode = str(self.equity_hard_stop_loss["orange_tier_mode"])
         symbols = (
@@ -1546,7 +1559,9 @@ class Passivbot:
                     if current_mode == "normal":
                         self.PB_modes[pside][symbol] = "graceful_stop"
                 else:
-                    size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
+                    size = float(
+                        self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0
+                    )
                     if size == 0.0:
                         continue
                     if current_mode in ("normal", "graceful_stop"):
@@ -1845,7 +1860,8 @@ class Passivbot:
             delay = random.uniform(0, boot_stagger)
             logging.info(
                 "[boot] stagger delay: waiting %.1fs before init (max=%.0fs)...",
-                delay, boot_stagger,
+                delay,
+                boot_stagger,
             )
             await asyncio.sleep(delay)
 
@@ -3914,7 +3930,9 @@ class Passivbot:
                     else:
                         has_pos = self.has_position(symbol)
                         has_oo = (
-                            bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
+                            bool(self.open_orders.get(symbol))
+                            if hasattr(self, "open_orders")
+                            else False
                         )
                         ttl = (
                             60_000
@@ -4036,11 +4054,7 @@ class Passivbot:
     def get_forced_PB_mode(self, pside, symbol=None):
         """Return an explicitly forced mode for the side or symbol, if configured."""
         if symbol is not None:
-            runtime_forced = (
-                getattr(self, "_runtime_forced_modes", {})
-                .get(pside, {})
-                .get(symbol)
-            )
+            runtime_forced = getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
             if runtime_forced:
                 return str(runtime_forced)
         mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
@@ -4095,12 +4109,9 @@ class Passivbot:
         allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
         allowance_multiplier = 1.0 + max(0.0, allowance_pct)
         effective_limit = base_limit * allowance_multiplier
-        return (
-            self.get_hysteresis_snapped_balance()
-            * effective_limit
-            * self.bp(pside, "entry_initial_qty_pct", symbol)
-            >= self.effective_min_cost.get(symbol, float("inf"))
-        )
+        return self.get_hysteresis_snapped_balance() * effective_limit * self.bp(
+            pside, "entry_initial_qty_pct", symbol
+        ) >= self.effective_min_cost.get(symbol, float("inf"))
 
     def get_hysteresis_snapped_balance(self) -> float:
         """Return hysteresis-snapped balance used for sizing."""
@@ -5593,9 +5604,9 @@ class Passivbot:
                     prev_ts = int(prev[1])
                     if math.isfinite(prev_val):
                         out[span] = prev_val
-                        n_fallbacks = int(
-                            self._orchestrator_close_ema_fallback_counts.get(key, 0)
-                        ) + 1
+                        n_fallbacks = (
+                            int(self._orchestrator_close_ema_fallback_counts.get(key, 0)) + 1
+                        )
                         self._orchestrator_close_ema_fallback_counts[key] = n_fallbacks
                         age_ms = max(0, now_ms - prev_ts)
                         logging.warning(
@@ -6967,7 +6978,9 @@ class Passivbot:
                         # More generous TTL for non-traded symbols
                         has_pos = self.has_position(symbol)
                         has_oo = (
-                            bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
+                            bool(self.open_orders.get(symbol))
+                            if hasattr(self, "open_orders")
+                            else False
                         )
                         ttl = (
                             60_000

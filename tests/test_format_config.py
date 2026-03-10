@@ -155,7 +155,11 @@ def test_format_config_preserves_live_optimize_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
     current["optimize"]["bounds"]["common_equity_hard_stop_loss_red_threshold"] = [0.1, 0.3, 0.01]
-    current["optimize"]["bounds"]["common_equity_hard_stop_loss_ema_span_minutes"] = [10.0, 120.0, 5.0]
+    current["optimize"]["bounds"]["common_equity_hard_stop_loss_ema_span_minutes"] = [
+        10.0,
+        120.0,
+        5.0,
+    ]
 
     out = format_config(current, verbose=False)
 

@@ -615,19 +615,15 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
     """
     config = deepcopy(template)
     key_paths = get_optimization_key_paths(config)
-    assert len(individual) == len(key_paths), (
-        f"individual length {len(individual)} does not match optimization key count {len(key_paths)}"
-    )
+    assert len(individual) == len(
+        key_paths
+    ), f"individual length {len(individual)} does not match optimization key count {len(key_paths)}"
     for value, (_, path) in zip(individual, key_paths):
         target = config
         for part in path[:-1]:
             target = target[part]
         target[path[-1]] = value
-    common_hsl = (
-        config.get("bot", {})
-        .get("common", {})
-        .get("equity_hard_stop_loss")
-    )
+    common_hsl = config.get("bot", {}).get("common", {}).get("equity_hard_stop_loss")
     if isinstance(common_hsl, dict):
         red_threshold = common_hsl.get("red_threshold")
         no_restart = common_hsl.get("no_restart_drawdown_threshold")
@@ -1307,9 +1303,7 @@ class SuiteEvaluator:
                     self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
                     return tuple(objectives), total_penalty, metrics_payload
                 analyses[exchange] = analysis
-                liquidated = liquidated or _analysis_indicates_liquidation(
-                    analysis, scenario_config
-                )
+                liquidated = liquidated or _analysis_indicates_liquidation(analysis, scenario_config)
 
                 # Free backtest results to allow memory reuse
                 del fills

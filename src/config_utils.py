@@ -1093,7 +1093,9 @@ def _rename_config_keys(
                 verbose, logging.INFO, "renaming parameter optimize.bounds.%s -> %s", old, new
             )
             if tracker is not None:
-                tracker.rename(["optimize", "bounds", old], ["optimize", "bounds", new], optimize_bounds[new])
+                tracker.rename(
+                    ["optimize", "bounds", old], ["optimize", "bounds", new], optimize_bounds[new]
+                )
             del optimize_bounds[old]
 
 
@@ -2463,41 +2465,17 @@ def get_template_config():
             "enable_overrides": [],
             "iters": 30000,
             "limits": [
-                {
-                    "metric": "drawdown_worst_btc",
-                    "penalize_if": "greater_than",
-                    "value": 0.8
-                },
-                {
-                    "metric": "drawdown_worst_usd",
-                    "penalize_if": "greater_than",
-                    "value": 0.8
-                },
-                {
-                    "metric": "loss_profit_ratio",
-                    "penalize_if": "greater_than",
-                    "value": 0.85
-                },
+                {"metric": "drawdown_worst_btc", "penalize_if": "greater_than", "value": 0.8},
+                {"metric": "drawdown_worst_usd", "penalize_if": "greater_than", "value": 0.8},
+                {"metric": "loss_profit_ratio", "penalize_if": "greater_than", "value": 0.85},
                 {
                     "metric": "high_exposure_hours_max_long",
                     "penalize_if": "greater_than",
-                    "value": 2160
+                    "value": 2160,
                 },
-                {
-                    "metric": "peak_recovery_hours_pnl",
-                    "penalize_if": "greater_than",
-                    "value": 2160
-                },
-                {
-                    "metric": "position_held_hours_max",
-                    "penalize_if": "greater_than",
-                    "value": 2160
-                },
-                {
-                    "metric": "backtest_completion_ratio",
-                    "penalize_if": "less_than",
-                    "value": 0.9
-                }
+                {"metric": "peak_recovery_hours_pnl", "penalize_if": "greater_than", "value": 2160},
+                {"metric": "position_held_hours_max", "penalize_if": "greater_than", "value": 2160},
+                {"metric": "backtest_completion_ratio", "penalize_if": "less_than", "value": 0.9},
             ],
             "mutation_eta": 20.0,
             "mutation_indpb": 0.0,

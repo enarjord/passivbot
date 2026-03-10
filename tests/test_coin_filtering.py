@@ -68,7 +68,9 @@ class CoinFilterHarness(Passivbot):
     async def calc_volumes(self, _pside, symbols):
         return {sym: self._volumes[sym] for sym in symbols}
 
-    async def calc_log_range(self, _pside, eligible_symbols, max_age_ms=None, max_network_fetches=None):
+    async def calc_log_range(
+        self, _pside, eligible_symbols, max_age_ms=None, max_network_fetches=None
+    ):
         return {sym: self._log_ranges[sym] for sym in eligible_symbols}
 
     def is_pside_enabled(self, _pside):
@@ -186,10 +188,8 @@ async def test_calc_log_range_respects_cache_only_budget_for_cold_symbols():
     bot.cm = _CMColdCacheOnlyStub()
     bot.open_orders = {}
     bot.positions = {}
-    bot.bot_value = (
-        lambda _pside, key: 12.0
-        if key in ("filter_volatility_ema_span", "filter_volume_ema_span")
-        else 0.0
+    bot.bot_value = lambda _pside, key: (
+        12.0 if key in ("filter_volatility_ema_span", "filter_volume_ema_span") else 0.0
     )
     bot.has_position = lambda *_args, **_kwargs: False
     out = await bot.calc_log_range(
@@ -209,10 +209,8 @@ async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_s
     bot.cm = _CMColdCacheOnlyStub()
     bot.open_orders = {}
     bot.positions = {}
-    bot.bot_value = (
-        lambda _pside, key: 12.0
-        if key in ("filter_volatility_ema_span", "filter_volume_ema_span")
-        else 0.0
+    bot.bot_value = lambda _pside, key: (
+        12.0 if key in ("filter_volatility_ema_span", "filter_volume_ema_span") else 0.0
     )
     bot.has_position = lambda *_args, **_kwargs: False
     volumes, log_ranges = await bot.calc_volumes_and_log_ranges(

@@ -10,7 +10,6 @@ from typing import List, Tuple
 from config_utils import get_template_config
 from optimization.bounds import Bound
 
-
 OPTIMIZABLE_COMMON_KEY_PATHS = {
     "common_equity_hard_stop_loss_cooldown_minutes_after_red": (
         "bot",

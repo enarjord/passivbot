@@ -157,7 +157,7 @@ class HyperliquidBot(CCXTBot):
                 self._health_ws_reconnects += 1
                 self._health_rate_limits += 1
                 _ws_consecutive_rate_limits += 1
-                backoff = min(30, 2 ** _ws_consecutive_rate_limits) + random.uniform(0, 1)
+                backoff = min(30, 2**_ws_consecutive_rate_limits) + random.uniform(0, 1)
                 logging.warning(
                     "[ws] %s: rate limited (reconnect #%d), backing off %.0fs...",
                     self.exchange,
@@ -524,12 +524,8 @@ class HyperliquidBot(CCXTBot):
                     params["vaultAddress"] = self.user_info["wallet_address"]
 
                 try:
-                    res = await self.cca.set_margin_mode(
-                        margin_mode, symbol=symbol, params=params
-                    )
-                    to_print = (
-                        f"margin={format_exchange_config_response(res)} ({margin_mode})"
-                    )
+                    res = await self.cca.set_margin_mode(margin_mode, symbol=symbol, params=params)
+                    to_print = f"margin={format_exchange_config_response(res)} ({margin_mode})"
                 except Exception as e:
                     if '"code":"59107"' in str(e):
                         to_print = f"margin=ok (unchanged, {margin_mode})"

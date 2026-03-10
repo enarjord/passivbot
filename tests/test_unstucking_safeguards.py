@@ -165,6 +165,7 @@ def _make_mock_pbr():
     )
     module.round_ = lambda value, step: value
     module.compute_ideal_orders_json = lambda *_args, **_kwargs: "{}"
+
     def _equity_hard_stop_step_py(
         *,
         initialized,
@@ -219,6 +220,7 @@ def _make_mock_pbr():
             "span_samples": float(span_samples),
             "alpha": float(alpha),
         }
+
     module.equity_hard_stop_step_py = _equity_hard_stop_step_py
 
     def _get_order_id_type_from_string(name: str) -> int:

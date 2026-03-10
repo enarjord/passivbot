@@ -425,6 +425,6 @@ class TestPrepBacktestArgsEquityHardStopLoss:
             }
         )
         _, _, backtest_params = prep_backtest_args(config, self._make_mss(), "binance")
-        assert backtest_params["equity_hard_stop_loss"]["no_restart_drawdown_threshold"] == pytest.approx(
-            0.3
-        )
+        assert backtest_params["equity_hard_stop_loss"][
+            "no_restart_drawdown_threshold"
+        ] == pytest.approx(0.3)

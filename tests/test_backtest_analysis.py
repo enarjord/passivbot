@@ -251,7 +251,10 @@ def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, mon
     config = {
         "disable_plotting": True,
         "backtest": {"balance_sample_divider": 60, "coins": {"binance": ["BTC"]}},
-        "bot": {"long": {"total_wallet_exposure_limit": 1.0}, "short": {"total_wallet_exposure_limit": 0.0}},
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 0.0},
+        },
         "live": {},
     }
 
@@ -287,7 +290,8 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     monkeypatch.setattr(
         bt,
         "create_forager_balance_figures",
-        lambda *args, **kwargs: calls.__setitem__("balance", calls["balance"] + 1) or {"balance": object()},
+        lambda *args, **kwargs: calls.__setitem__("balance", calls["balance"] + 1)
+        or {"balance": object()},
     )
     monkeypatch.setattr(
         bt,
@@ -319,7 +323,10 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     config = {
         "disable_plotting": "coin_fills",
         "backtest": {"balance_sample_divider": 60, "coins": {"binance": ["BTC"]}},
-        "bot": {"long": {"total_wallet_exposure_limit": 1.0}, "short": {"total_wallet_exposure_limit": 0.0}},
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 0.0},
+        },
         "live": {},
     }
 

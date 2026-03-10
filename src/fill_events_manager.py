@@ -3082,7 +3082,7 @@ class HyperliquidFetcher(BaseFetcher):
                     max_rate_limit_retries,
                     exc,
                 )
-                await asyncio.sleep(min(30.0, 2.0 ** rate_limit_retries))
+                await asyncio.sleep(min(30.0, 2.0**rate_limit_retries))
                 # Reset prev_params so the retry is not flagged as repeated
                 prev_params = None
                 continue

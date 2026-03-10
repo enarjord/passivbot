@@ -88,7 +88,6 @@ from suite_runner import extract_suite_config, filter_scenarios_by_label, run_ba
 import passivbot_rust as pbr  # noqa: E402
 from tools.event_loop_policy import set_windows_event_loop_policy
 
-
 ANALYSIS_SHARED_KEYS = {
     "positions_held_per_day",
     "positions_held_per_day_w",
@@ -152,6 +151,7 @@ def parse_disabled_plot_groups(value) -> set[str]:
             )
     return disabled
 
+
 ANALYSIS_SHARED_PREFIXES = ("hard_stop_",)
 
 # Fallback stubs for test environments without full extension symbols
@@ -171,7 +171,9 @@ def aggregate_candles(candles_1m: np.ndarray, interval: int) -> np.ndarray:
 
 
 def _liquidation_drawdown_threshold(config: dict) -> float:
-    threshold = float(get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0)
+    threshold = float(
+        get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0
+    )
     threshold = min(max(threshold, 0.0), 1.0 - 1e-12)
     return 1.0 - threshold
 
@@ -620,9 +622,10 @@ def execute_backtest(payload: BacktestPayload, config: dict):
     analysis["backtest_completion_ratio"] = _compute_backtest_completion_ratio(
         payload, equities_array, config
     )
-    if float(analysis.get("drawdown_worst", 0.0) or 0.0) >= _liquidation_drawdown_threshold(
-        config
-    ) - 1e-12:
+    if (
+        float(analysis.get("drawdown_worst", 0.0) or 0.0)
+        >= _liquidation_drawdown_threshold(config) - 1e-12
+    ):
         logging.debug(
             "Backtest liquidated early | drawdown_worst=%.6f | liquidation_threshold=%.6f",
             float(analysis.get("drawdown_worst", 0.0) or 0.0),
@@ -1265,9 +1268,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                 hard_stop_red_threshold,
             )
             hard_stop_no_restart_drawdown_threshold = hard_stop_red_threshold
-        if not (
-            hard_stop_red_threshold <= hard_stop_no_restart_drawdown_threshold <= 1.0
-        ):
+        if not (hard_stop_red_threshold <= hard_stop_no_restart_drawdown_threshold <= 1.0):
             raise ValueError(
                 "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold must satisfy "
                 "red_threshold <= no_restart_drawdown_threshold <= 1.0"
@@ -1297,8 +1298,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             get_optional_config_value(config, "live.market_orders_allowed", False)
         )
         market_order_near_touch_threshold = float(
-            get_optional_config_value(config, "live.market_order_near_touch_threshold", 0.001)
-            or 0.0
+            get_optional_config_value(config, "live.market_order_near_touch_threshold", 0.001) or 0.0
         )
         if market_order_near_touch_threshold < 0.0:
             raise ValueError("live.market_order_near_touch_threshold must be >= 0.0")
@@ -1342,8 +1342,12 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                 require_config_value(config, "backtest.dynamic_wel_by_tradability")
             ),
             "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
-            "max_realized_loss_pct": float(require_config_value(config, "live.max_realized_loss_pct")),
-            "pnls_max_lookback_days": float(require_config_value(config, "live.pnls_max_lookback_days")),
+            "max_realized_loss_pct": float(
+                require_config_value(config, "live.max_realized_loss_pct")
+            ),
+            "pnls_max_lookback_days": float(
+                require_config_value(config, "live.pnls_max_lookback_days")
+            ),
             "equity_hard_stop_loss": {
                 "enabled": hard_stop_enabled,
                 "red_threshold": hard_stop_red_threshold,

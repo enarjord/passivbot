@@ -980,9 +980,9 @@ def create_forager_hard_stop_drawdown_figure(
         sample_minutes = 1.0
     lookback_window = pd.Timedelta(days=max(pnls_max_lookback_days, sample_minutes / (24.0 * 60.0)))
     peak_strategy_equity = df["usd_total_equity"].rolling(lookback_window, min_periods=1).max()
-    drawdown_raw = (1.0 - (df["usd_total_equity"] / peak_strategy_equity.clip(lower=np.finfo(float).eps))).clip(
-        lower=0.0
-    )
+    drawdown_raw = (
+        1.0 - (df["usd_total_equity"] / peak_strategy_equity.clip(lower=np.finfo(float).eps))
+    ).clip(lower=0.0)
     span_samples = max(1.0, ema_span_minutes / sample_minutes)
     alpha = 2.0 / (span_samples + 1.0)
     drawdown_ema = drawdown_raw.ewm(alpha=alpha, adjust=False).mean()
@@ -994,15 +994,23 @@ def create_forager_hard_stop_drawdown_figure(
     yellow_threshold = float(tier_ratios.get("yellow", 0.5) or 0.5) * red_threshold
     orange_threshold = float(tier_ratios.get("orange", 0.75) or 0.75) * red_threshold
 
-    fig, axes = plt.subplots(2, 1, sharex=True, figsize=figsize, gridspec_kw={"height_ratios": [3, 1]})
+    fig, axes = plt.subplots(
+        2, 1, sharex=True, figsize=figsize, gridspec_kw={"height_ratios": [3, 1]}
+    )
     x = df.index.to_numpy()
 
     axes[0].plot(x, drawdown_raw.to_numpy(), linewidth=1.0, label="Raw Strategy Drawdown")
     axes[0].plot(x, drawdown_ema.to_numpy(), linewidth=1.0, label="EMA Drawdown")
     axes[0].plot(x, drawdown_score.to_numpy(), linewidth=1.2, linestyle="--", label="Trigger Score")
-    axes[0].axhline(yellow_threshold, color="#d4a017", linestyle=":", linewidth=1.0, label="Yellow Threshold")
-    axes[0].axhline(orange_threshold, color="#d95f02", linestyle=":", linewidth=1.0, label="Orange Threshold")
-    axes[0].axhline(red_threshold, color="#b22222", linestyle="--", linewidth=1.2, label="RED Threshold")
+    axes[0].axhline(
+        yellow_threshold, color="#d4a017", linestyle=":", linewidth=1.0, label="Yellow Threshold"
+    )
+    axes[0].axhline(
+        orange_threshold, color="#d95f02", linestyle=":", linewidth=1.0, label="Orange Threshold"
+    )
+    axes[0].axhline(
+        red_threshold, color="#b22222", linestyle="--", linewidth=1.2, label="RED Threshold"
+    )
     axes[0].set_title("Equity Hard Stop Drawdown")
     axes[0].set_ylabel("Drawdown")
     axes[0].grid(True, linestyle="--", alpha=0.3)

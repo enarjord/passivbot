@@ -290,8 +290,12 @@ class TestIndividualToConfig:
 
         result = individual_to_config(individual, mock_overrides, overrides_list, template)
 
-        assert result["bot"]["common"]["equity_hard_stop_loss"]["red_threshold"] == pytest.approx(0.22)
-        assert result["bot"]["common"]["equity_hard_stop_loss"]["ema_span_minutes"] == pytest.approx(60.0)
+        assert result["bot"]["common"]["equity_hard_stop_loss"]["red_threshold"] == pytest.approx(
+            0.22
+        )
+        assert result["bot"]["common"]["equity_hard_stop_loss"]["ema_span_minutes"] == pytest.approx(
+            60.0
+        )
 
     def test_normalizes_common_hsl_no_restart_to_red_threshold_floor(self):
         individual = [1.0, 2.0, 3.0, 4.0, 0.20, 0.25]
