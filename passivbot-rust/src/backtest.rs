@@ -4048,14 +4048,19 @@ mod tests {
             vec![ExchangeParams::default()],
             &backtest_params,
         );
-        bt.open_orders.long.entry(0).or_default().entries.push(BacktestOrder {
-            order: Order {
-                qty: 1.0,
-                price: 100.0,
-                order_type: OrderType::EntryGridNormalLong,
-            },
-            execution_type: orchestrator::ExecutionType::Market,
-        });
+        bt.open_orders
+            .long
+            .entry(0)
+            .or_default()
+            .entries
+            .push(BacktestOrder {
+                order: Order {
+                    qty: 1.0,
+                    price: 100.0,
+                    order_type: OrderType::EntryGridNormalLong,
+                },
+                execution_type: orchestrator::ExecutionType::Market,
+            });
 
         bt.check_for_fills(1);
 
