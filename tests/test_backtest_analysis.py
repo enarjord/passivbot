@@ -2,7 +2,9 @@ import numpy as np
 import pandas as pd
 
 import backtest as bt
+import plotting
 from backtest import expand_analysis, parse_disabled_plot_groups, process_forager_fills
+from plotting import create_forager_hard_stop_drawdown_figure
 
 
 def _make_analysis_entry(value):
@@ -201,7 +203,7 @@ def test_process_forager_fills_handles_zero_pnl_division():
 
 
 def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, monkeypatch):
-    calls = {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
+    calls = {"balance": 0, "twe": 0, "pnl": 0, "hard_stop": 0, "save": 0, "coin": 0}
 
     def _fake_process_forager_fills(*args, **kwargs):
         fdf = pd.DataFrame(columns=["coin", "pnl"])
@@ -232,6 +234,11 @@ def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, mon
     )
     monkeypatch.setattr(
         bt,
+        "create_forager_hard_stop_drawdown_figure",
+        lambda *args, **kwargs: calls.__setitem__("hard_stop", calls["hard_stop"] + 1) or {},
+    )
+    monkeypatch.setattr(
+        bt,
         "save_figures",
         lambda *args, **kwargs: calls.__setitem__("save", calls["save"] + 1) or {},
     )
@@ -259,11 +266,11 @@ def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, mon
         exchange="binance",
     )
 
-    assert calls == {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
+    assert calls == {"balance": 0, "twe": 0, "pnl": 0, "hard_stop": 0, "save": 0, "coin": 0}
 
 
 def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
-    calls = {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
+    calls = {"balance": 0, "twe": 0, "pnl": 0, "hard_stop": 0, "save": 0, "coin": 0}
 
     def _fake_process_forager_fills(*args, **kwargs):
         fdf = pd.DataFrame(columns=["coin", "pnl"])
@@ -294,6 +301,12 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         bt,
+        "create_forager_hard_stop_drawdown_figure",
+        lambda *args, **kwargs: calls.__setitem__("hard_stop", calls["hard_stop"] + 1)
+        or {"hard_stop": object()},
+    )
+    monkeypatch.setattr(
+        bt,
         "save_figures",
         lambda *args, **kwargs: calls.__setitem__("save", calls["save"] + 1) or {},
     )
@@ -321,7 +334,7 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
         exchange="binance",
     )
 
-    assert calls == {"balance": 1, "twe": 1, "pnl": 1, "save": 3, "coin": 0}
+    assert calls == {"balance": 1, "twe": 1, "pnl": 1, "hard_stop": 1, "save": 4, "coin": 0}
 
 
 def test_parse_disabled_plot_groups_accepts_summary_alias_and_commas():
@@ -329,5 +342,70 @@ def test_parse_disabled_plot_groups_accepts_summary_alias_and_commas():
         "balance",
         "twe",
         "pnl",
+        "hard_stop",
         "coin_fills",
     }
+
+
+def test_create_forager_hard_stop_drawdown_figure_returns_plot_when_enabled(monkeypatch):
+    class _Axis:
+        def plot(self, *args, **kwargs):
+            return None
+
+        def axhline(self, *args, **kwargs):
+            return None
+
+        def set_title(self, *args, **kwargs):
+            return None
+
+        def set_ylabel(self, *args, **kwargs):
+            return None
+
+        def set_xlabel(self, *args, **kwargs):
+            return None
+
+        def grid(self, *args, **kwargs):
+            return None
+
+        def legend(self, *args, **kwargs):
+            return None
+
+        def fill_between(self, *args, **kwargs):
+            return None
+
+    class _Figure:
+        def tight_layout(self):
+            return None
+
+    monkeypatch.setattr(
+        plotting.plt,
+        "subplots",
+        lambda *args, **kwargs: (_Figure(), [_Axis(), _Axis()]),
+    )
+
+    idx = pd.date_range("2021-01-01", periods=6, freq="1h")
+    bal_eq = pd.DataFrame(
+        {
+            "usd_total_balance": [1000.0, 1000.0, 980.0, 970.0, 990.0, 995.0],
+            "usd_total_equity": [1000.0, 990.0, 950.0, 940.0, 980.0, 992.0],
+        },
+        index=idx,
+    )
+    config = {
+        "live": {"pnls_max_lookback_days": 30.0},
+        "bot": {
+            "common": {
+                "equity_hard_stop_loss": {
+                    "enabled": True,
+                    "red_threshold": 0.1,
+                    "ema_span_minutes": 60.0,
+                    "tier_ratios": {"yellow": 0.5, "orange": 0.75},
+                }
+            }
+        },
+    }
+
+    figs = create_forager_hard_stop_drawdown_figure(
+        bal_eq, config, autoplot=False, return_figures=True
+    )
+    assert "hard_stop_drawdown" in figs

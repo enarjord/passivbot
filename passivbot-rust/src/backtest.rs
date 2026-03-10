@@ -2078,8 +2078,8 @@ impl<'a> Backtest<'a> {
             }
             ehsl::HardStopTier::Orange => {
                 let target = self.hard_stop_orange_target_mode();
-                Self::apply_orange_override(mode_long, target);
-                Self::apply_orange_override(mode_short, target);
+                Self::apply_orange_override(mode_long, target, pos_long.size != 0.0);
+                Self::apply_orange_override(mode_short, target, pos_short.size != 0.0);
             }
             _ => {}
         }
@@ -2089,6 +2089,7 @@ impl<'a> Backtest<'a> {
     fn apply_orange_override(
         mode: &mut Option<orchestrator::TradingMode>,
         target: orchestrator::TradingMode,
+        has_pos: bool,
     ) {
         use orchestrator::TradingMode::*;
         match target {
@@ -2096,10 +2097,15 @@ impl<'a> Backtest<'a> {
                 None | Some(Normal) => *mode = Some(GracefulStop),
                 _ => {}
             },
-            TpOnly => match mode {
-                None | Some(Normal) | Some(GracefulStop) => *mode = Some(TpOnly),
-                _ => {}
-            },
+            TpOnly => {
+                if !has_pos {
+                    return;
+                }
+                match mode {
+                    None | Some(Normal) | Some(GracefulStop) => *mode = Some(TpOnly),
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
@@ -3639,16 +3645,77 @@ mod tests {
             &backtest_params,
         );
         bt.hard_stop_tier = ehsl::HardStopTier::Orange;
+        bt.positions.long.insert(
+            0,
+            Position {
+                size: 1.0,
+                price: 1.0,
+            },
+        );
 
         let input = bt.get_orchestrator_input_cached(1, None);
         assert_eq!(
             input.symbols[0].long.mode,
             Some(orchestrator::TradingMode::TpOnly)
         );
-        assert_eq!(
-            input.symbols[0].short.mode,
-            Some(orchestrator::TradingMode::TpOnly)
+        assert_eq!(input.symbols[0].short.mode, None);
+    }
+
+    #[test]
+    fn hard_stop_orange_tp_only_leaves_flat_sides_unchanged() {
+        let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.short.n_positions = 1;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.short.ema_span_0 = 10.0;
+        bp_pair.short.ema_span_1 = 20.0;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.orange_tier_mode = "tp_only_with_active_entry_cancellation".to_string();
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: hs,
+            market_order_slippage_pct: 0.0005,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
         );
+        bt.hard_stop_tier = ehsl::HardStopTier::Orange;
+
+        let input = bt.get_orchestrator_input_cached(1, None);
+        assert_eq!(input.symbols[0].long.mode, None);
+        assert_eq!(input.symbols[0].short.mode, None);
     }
 
     #[test]

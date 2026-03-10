@@ -5,6 +5,7 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 ### Fixed
+- **Backtest HSL drawdown visualization** - Backtests now output `hard_stop_drawdown.png` alongside the existing summary plots when account-level HSL is enabled. The new plot shows raw drawdown, EMA-smoothed drawdown, the active HSL trigger score, tier thresholds, and RED-threshold proximity over time. `--disable_plotting` also supports a dedicated `hard_stop` plot group.
 - **Backtest HSL panic execution and metrics export** - Account-level RED panic now forces panic mode on all symbols/sides in Rust backtests, `panic_close_order_type="market"` is simulated as next-bar taker execution instead of limit-only behavior, and `hard_stop_*` analysis metrics are exported once as shared metrics rather than duplicated into `_usd`/`_btc` variants.
 - **Backtest HSL EMA span fallback** - Backtests no longer fail when `bot.common.equity_hard_stop_loss.ema_span_minutes` is smaller than `backtest.candle_interval_minutes`. Sub-interval spans now fall back to a one-sample EMA, which disables smoothing and makes the HSL score follow raw drawdown.
 - **Backtest market-order slippage config naming** - Renamed `backtest.panic_market_slippage_pct` to `backtest.market_order_slippage_pct` so one backtest slippage knob can cover all simulated market-order execution, while HSL panic closes remain the first current consumer.

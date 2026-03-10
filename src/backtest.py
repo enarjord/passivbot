@@ -74,6 +74,7 @@ from pathlib import Path
 from plotting import (
     create_forager_balance_figures,
     create_forager_coin_figures,
+    create_forager_hard_stop_drawdown_figure,
     create_forager_pnl_figure,
     create_forager_twe_figure,
     save_figures,
@@ -118,7 +119,7 @@ ANALYSIS_SHARED_KEYS = {
     "sortino_ratio_pnl",
     "sortino_ratio_pnl_w",
 }
-PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl"}
+PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl", "hard_stop"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
 
 
@@ -147,7 +148,7 @@ def parse_disabled_plot_groups(value) -> set[str]:
             disabled.add(token)
         else:
             raise ValueError(
-                "disable_plotting must be one of all, summary, balance, twe, pnl, coin_fills"
+                "disable_plotting must be one of all, summary, balance, twe, pnl, hard_stop, coin_fills"
             )
     return disabled
 
@@ -1504,6 +1505,14 @@ def post_process(
             return_figures=True,
         )
         save_figures(pnl_figs, results_path)
+    if "hard_stop" not in disabled_plot_groups:
+        hard_stop_figs = create_forager_hard_stop_drawdown_figure(
+            bal_eq,
+            config,
+            autoplot=False,
+            return_figures=True,
+        )
+        save_figures(hard_stop_figs, results_path)
     if "coin_fills" not in disabled_plot_groups:
         try:
             coins = require_config_value(config, f"backtest.coins.{exchange}")
@@ -1538,7 +1547,7 @@ async def main():
         default=None,
         help=(
             "Disable selected plot groups. Use without a value to disable all plotting. "
-            "Allowed values: all, summary, balance, twe, pnl, coin_fills, or a comma-separated combination."
+            "Allowed values: all, summary, balance, twe, pnl, hard_stop, coin_fills, or a comma-separated combination."
         ),
     )
     parser.add_argument(
