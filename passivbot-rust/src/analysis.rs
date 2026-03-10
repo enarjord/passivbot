@@ -688,11 +688,12 @@ pub fn analyze_backtest(
 }
 
 /// Returns (Analysis in USD, Analysis in BTC).
-/// If `balance.use_btc_collateral == false`, both are identical.
+/// BTC analysis is always computed from BTC-denominated balances/equity, even when the
+/// backtest never allocates collateral to BTC.
 pub fn analyze_backtest_pair(
     fills: &[Fill],
     equities: &Equities,
-    use_btc_collateral: bool,
+    _use_btc_collateral: bool,
     total_wallet_exposures: &[f64],
 ) -> (Analysis, Analysis) {
     let analysis_usd = analyze_backtest(
@@ -701,9 +702,6 @@ pub fn analyze_backtest_pair(
         &equities.timestamps_ms,
         total_wallet_exposures,
     );
-    if !use_btc_collateral {
-        return (analysis_usd.clone(), analysis_usd);
-    }
     let mut btc_fills = fills.to_vec();
     for fill in btc_fills.iter_mut() {
         let price = if fill.btc_price > 0.0 {
@@ -979,7 +977,7 @@ pub fn calc_exponential_fit_error(equity: &[f64]) -> f64 {
     mse
 }
 
-/// Applies EMA smoothing (span=3) to daily equity values and computes geometric mean growth rate
+/// Computes terminal gain from the mean of the last up to 3 daily equity values and derives ADG.
 pub fn smoothed_terminal_geometric_gain_and_adg(daily_eqs: &[f64]) -> (f64, f64) {
     if daily_eqs.len() < 2 {
         return (0.0, 0.0);
@@ -987,17 +985,9 @@ pub fn smoothed_terminal_geometric_gain_and_adg(daily_eqs: &[f64]) -> (f64, f64)
     if daily_eqs[0] <= 0.0 {
         return (f64::INFINITY, f64::INFINITY);
     }
-    let alpha = 2.0 / (3.0 + 1.0); // span = 3 → alpha = 0.5
-    let mut smoothed = Vec::with_capacity(daily_eqs.len());
-    smoothed.push(daily_eqs[0]);
-    for i in 1..daily_eqs.len() {
-        let prev = *smoothed.last().unwrap();
-        let current = alpha * daily_eqs[i] + (1.0 - alpha) * prev;
-        smoothed.push(current);
-    }
-
-    let start = smoothed[0];
-    let end = *smoothed.last().unwrap();
+    let start = daily_eqs[0];
+    let tail_len = daily_eqs.len().min(3);
+    let end = daily_eqs[daily_eqs.len() - tail_len..].iter().sum::<f64>() / tail_len as f64;
     if end <= 0.0 {
         return (-1.0, -1.0);
     }
@@ -1177,6 +1167,39 @@ mod tests {
             (analysis.peak_recovery_hours_pnl - 2.0).abs() < 1e-9,
             "Expected gross pnl recovery of 2.0h, got {}",
             analysis.peak_recovery_hours_pnl
+        );
+    }
+
+    #[test]
+    fn test_smoothed_terminal_geometric_gain_uses_last_three_day_mean() {
+        let daily_eqs = vec![100.0, 110.0, 120.0, 90.0];
+        let (gain, adg) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
+        let expected_end: f64 = (110.0 + 120.0 + 90.0) / 3.0;
+        let expected_gain: f64 = expected_end / 100.0;
+        let expected_adg = expected_gain.powf(1.0 / daily_eqs.len() as f64) - 1.0;
+
+        assert!((gain - expected_gain).abs() < 1e-12);
+        assert!((adg - expected_adg).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_analyze_backtest_pair_computes_btc_metrics_without_btc_collateral() {
+        let fills = vec![make_fill(0, -0.1), make_fill(1, -0.1)];
+        let equities = Equities {
+            timestamps_ms: vec![0, MS_PER_DAY],
+            usd_total_equity: vec![1000.0, 1100.0],
+            btc_total_equity: vec![0.1, 0.095],
+        };
+        let exposures_series: Vec<f64> = vec![];
+
+        let (analysis_usd, analysis_btc) =
+            analyze_backtest_pair(&fills, &equities, false, &exposures_series);
+
+        assert!(analysis_usd.adg > 0.0, "expected positive usd adg");
+        assert!(analysis_btc.adg < 0.0, "expected negative btc adg");
+        assert!(
+            (analysis_usd.adg - analysis_btc.adg).abs() > 1e-12,
+            "expected btc metrics to differ from usd metrics without btc collateral"
         );
     }
 }

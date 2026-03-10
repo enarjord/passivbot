@@ -10,6 +10,7 @@ from config_utils import (
     _apply_backward_compatibility_renames,
     _apply_non_live_adjustments,
     _ensure_bot_defaults_and_bounds,
+    _hydrate_missing_template_fields,
     _migrate_btc_collateral_settings,
     _normalize_position_counts,
     _rename_config_keys,
@@ -74,7 +75,7 @@ def test_rename_config_keys_records_tracker_events():
     )
 
 
-def test_sync_with_template_adds_missing_and_removes_extras():
+def test_hydrate_then_sync_with_template_adds_missing_and_removes_extras():
     template = get_template_config()
     result = {
         "live": {},
@@ -84,6 +85,7 @@ def test_sync_with_template_adds_missing_and_removes_extras():
         "coin_overrides": {},
     }
 
+    _hydrate_missing_template_fields(template, result, verbose=False)
     _sync_with_template(template, result, base_config_path="/tmp/base_config.json", verbose=False)
 
     assert "extra_side" not in result["bot"]
@@ -152,7 +154,7 @@ def test_apply_non_live_adjustments_keeps_default_completion_limit():
     )
     assert completion_limit is not None
     assert completion_limit["penalize_if"] == "less_than"
-    assert completion_limit["value"] == pytest.approx(1.0)
+    assert completion_limit["value"] == pytest.approx(0.9)
 
 
 def test_apply_non_live_adjustments_merges_missing_default_limit_into_existing_list():
@@ -173,7 +175,7 @@ def test_apply_non_live_adjustments_merges_missing_default_limit_into_existing_l
     )
     assert completion_limit is not None
     assert completion_limit["penalize_if"] == "less_than"
-    assert completion_limit["value"] == pytest.approx(1.0)
+    assert completion_limit["value"] == pytest.approx(0.9)
 
 
 def test_apply_non_live_adjustments_respects_disabled_default_limit_tombstone():

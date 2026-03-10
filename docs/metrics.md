@@ -1,12 +1,15 @@
 # Metrics reference
 
 This page documents the main backtest metrics exposed by `passivbot-rust`. Values may appear with
-`_usd`/`_btc` suffixes, depending on the denomination used for a run. Metrics without a suffix are
-currency-agnostic (e.g., position counts) or already expressed as percentages/ratios.
+`_usd`/`_btc` suffixes. `_usd` metrics are computed from USD-denominated balance/equity, while
+`_btc` metrics are computed from BTC-denominated balance/equity even when the backtest never holds
+BTC collateral. Metrics without a suffix are currency-agnostic (e.g., position counts) or already
+expressed as percentages/ratios.
 
 ## Core growth metrics
-- `gain`: Terminal equity divided by starting equity (after EMA smoothing of daily equity).
-- `adg`: Average daily gain derived from smoothed daily equity (`gain.powf(1 / n_days) - 1`).
+- `gain`: Terminal equity divided by starting equity, where terminal equity is the mean of the
+  last up to three daily equity values.
+- `adg`: Average daily gain derived from that smoothed terminal equity (`gain.powf(1 / n_days) - 1`).
 - `adg_w`: Mean of `adg` computed on the trailing 10% slices (full run, last half, last third, …).
 - `adg_pnl`: Collateral-agnostic daily PnL ratio. For each day, sum all `pnl` and divide by that
   day’s last recorded `usd_total_balance`, then average those daily ratios across the run.

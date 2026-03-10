@@ -957,6 +957,7 @@ def _ensure_bot_defaults_and_bounds(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
     """Ensure required bot defaults and optimize bounds exist for each position side."""
+    bounds = result["optimize"]["bounds"]
     for pside in ("long", "short"):
         for k0, v_bt, v_opt in [
             ("close_trailing_qty_pct", 1.0, [0.05, 1.0]),
@@ -991,12 +992,12 @@ def _ensure_bot_defaults_and_bounds(
                 "close_grid_markup_start",
                 result["bot"][pside].get("close_grid_min_markup", 0.001)
                 + result["bot"][pside].get("close_grid_markup_range", 0.001),
-                result["optimize"]["bounds"].get(f"{pside}_min_markup", [0.001, 0.03]),
+                bounds.get(f"{pside}_min_markup", [0.001, 0.03]),
             ),
             (
                 "close_grid_markup_end",
                 result["bot"][pside].get("close_grid_min_markup", 0.001),
-                result["optimize"]["bounds"].get(f"{pside}_close_grid_min_markup", [0.001, 0.03]),
+                bounds.get(f"{pside}_close_grid_min_markup", [0.001, 0.03]),
             ),
             (
                 "filter_volume_drop_pct",
@@ -1022,8 +1023,8 @@ def _ensure_bot_defaults_and_bounds(
                 if tracker is not None:
                     tracker.add(["bot", pside, k0], v_bt)
             opt_key = f"{pside}_{k0}"
-            if opt_key not in result["optimize"]["bounds"]:
-                result["optimize"]["bounds"][opt_key] = v_opt
+            if opt_key not in bounds:
+                bounds[opt_key] = v_opt
                 _log_config(
                     verbose,
                     logging.INFO,
@@ -1140,8 +1141,7 @@ def _sync_with_template(
     verbose: bool = True,
     tracker: Optional[ConfigTransformTracker] = None,
 ) -> None:
-    """Synchronize the config with the template structure and prune unused keys."""
-    add_missing_keys_recursively(template, result, verbose=verbose, tracker=tracker)
+    """Prune unused keys and enforce final template-aligned structure."""
     existing_base = result["live"].get("base_config_path") if "live" in result else None
     had_key = "live" in result and "base_config_path" in result["live"]
     if base_config_path or "base_config_path" not in result["live"]:
@@ -1190,6 +1190,37 @@ def _sync_with_template(
         verbose=verbose,
         tracker=tracker,
     )
+
+
+def _hydrate_missing_template_fields(
+    template: dict,
+    result: dict,
+    *,
+    verbose: bool = True,
+    tracker: Optional[ConfigTransformTracker] = None,
+) -> None:
+    """Centralized schema hydration: add all missing template keys before downstream consumers."""
+    add_missing_keys_recursively(template, result, verbose=verbose, tracker=tracker)
+
+
+def _seed_missing_compatibility_sections(
+    template: dict,
+    result: dict,
+    *,
+    tracker: Optional[ConfigTransformTracker] = None,
+) -> None:
+    """Seed missing structural sections without pre-filling legacy-derived leaf values."""
+    for pside in ("long", "short"):
+        if pside not in result["bot"]:
+            seeded = deepcopy(template["bot"][pside])
+            result["bot"][pside] = seeded
+            if tracker is not None:
+                tracker.add(["bot", pside], seeded)
+    if "bounds" not in result["optimize"]:
+        seeded_bounds = deepcopy(template["optimize"]["bounds"])
+        result["optimize"]["bounds"] = seeded_bounds
+        if tracker is not None:
+            tracker.add(["optimize", "bounds"], seeded_bounds)
 
 
 def _normalize_position_counts(
@@ -1315,10 +1346,16 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     template = get_template_config()
     flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
+    for path in ("backtest", "bot", "live", "optimize"):
+        require_config_dict(result, path)
     _apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
     _migrate_btc_collateral_settings(result, verbose=verbose, tracker=tracker)
     _migrate_suite_to_scenarios(result, verbose=verbose, tracker=tracker)
+    _seed_missing_compatibility_sections(template, result, tracker=tracker)
+    for path in ("bot.long", "bot.short", "optimize.bounds"):
+        require_config_dict(result, path)
     _ensure_bot_defaults_and_bounds(result, verbose=verbose, tracker=tracker)
+    _hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
     result["bot"] = sort_dict_keys(result["bot"])
 
     _rename_config_keys(result, verbose=verbose, tracker=tracker)
@@ -2188,6 +2225,13 @@ def require_config_value(config: dict, dotted_path: str):
             raise KeyError(f"config missing required key '{'.'.join(traversed)}'")
         current = current[part]
     return current
+
+
+def require_config_dict(config: dict, dotted_path: str) -> dict:
+    value = require_config_value(config, dotted_path)
+    if not isinstance(value, dict):
+        raise TypeError(f"config.{dotted_path} must be a dict; got {type(value).__name__}")
+    return value
 
 
 def get_optional_config_value(config: dict, dotted_path: str, default=None):

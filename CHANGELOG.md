@@ -14,6 +14,10 @@ All notable user-facing changes will be documented in this file.
 - **HSL no-restart threshold semantics** - Values of `bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold` below `red_threshold` are now clamped up to `red_threshold` in live, backtest, and optimizer flows. Stop events now treat `drawdown_raw >= no_restart_drawdown_threshold` as terminal, so setting both thresholds equal makes the first RED halt non-restarting.
 - **Backtest HSL analysis metrics expanded and clarified** - Added account-level HSL metrics for yellow/orange/red time share, RED halt duration, trigger drawdown, panic-close realized loss, flatten time, and restart-to-retrigger rate. Also renamed the old ambiguous halt-loss metric to `hard_stop_halt_to_restart_equity_loss_pct`.
 
+### Changed
+- **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.
+- **ADG terminal smoothing simplified** - Backtest `gain`/`adg` now smooth the terminal value by taking the mean of the last up to 3 daily equity samples instead of running an EMA over the full daily-equity series. This preserves end-of-run drawdown smoothing while reducing computation.
+
 ## v7.8.4 - 2026-03-06
 
 ### Changed
