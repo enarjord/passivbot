@@ -1056,6 +1056,7 @@ mod tests {
             position_size: -0.1,
             position_price: 50000.0,
             order_type: OrderType::EntryInitialNormalShort,
+            liquidity: "maker".to_string(),
             wallet_exposure: twe_net.abs(),
             twe_long: 0.0,
             twe_short: twe_net,

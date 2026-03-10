@@ -69,6 +69,13 @@ mod core {
         Manual,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ExecutionType {
+        Limit,
+        Market,
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct IdealOrder {
@@ -78,6 +85,17 @@ mod core {
         pub qty: f64,
         pub price: f64,
         pub order_type: OrderType,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ExecutableOrder {
+        pub symbol_idx: usize,
+        pub pside: PositionSide,
+        pub qty: f64,
+        pub price: f64,
+        pub order_type: OrderType,
+        pub execution_type: ExecutionType,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,7 +158,7 @@ mod core {
     #[derive(Debug, Default, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct OrchestratorOutput {
-        pub orders: Vec<IdealOrder>,
+        pub orders: Vec<ExecutableOrder>,
         pub diagnostics: OrchestratorDiagnostics,
     }
 
@@ -168,6 +186,12 @@ mod core {
     #[serde(deny_unknown_fields)]
     pub struct OrchestratorGlobal {
         pub filter_by_min_effective_cost: bool,
+        #[serde(default)]
+        pub market_orders_allowed: bool,
+        #[serde(default = "default_market_order_near_touch_threshold")]
+        pub market_order_near_touch_threshold: f64,
+        #[serde(default)]
+        pub panic_close_market: bool,
         pub unstuck_allowance_long: f64,
         pub unstuck_allowance_short: f64,
         /// Fraction of peak balance that may be realized as drawdown before lossy closes are blocked.
@@ -197,6 +221,10 @@ mod core {
 
     fn default_max_realized_loss_pct() -> f64 {
         1.0
+    }
+
+    fn default_market_order_near_touch_threshold() -> f64 {
+        0.001
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,6 +313,67 @@ mod core {
             order_type,
             OrderType::ClosePanicLong | OrderType::ClosePanicShort
         )
+    }
+
+    fn current_market_price(order_book: &OrderBook) -> f64 {
+        if order_book.bid.is_finite()
+            && order_book.ask.is_finite()
+            && order_book.bid > 0.0
+            && order_book.ask > 0.0
+        {
+            (order_book.bid + order_book.ask) * 0.5
+        } else {
+            order_book.bid.max(order_book.ask)
+        }
+    }
+
+    fn should_use_market_execution(
+        order: &IdealOrder,
+        global: &OrchestratorGlobal,
+        order_book: &OrderBook,
+    ) -> bool {
+        if is_panic_close_order_type(order.order_type) {
+            return global.panic_close_market;
+        }
+        if !global.market_orders_allowed {
+            return false;
+        }
+        let market_price = current_market_price(order_book);
+        if !market_price.is_finite() || market_price <= 0.0 {
+            return false;
+        }
+        if order.qty > 0.0 && order.price >= market_price {
+            return true;
+        }
+        if order.qty < 0.0 && order.price <= market_price {
+            return true;
+        }
+        let diff = if order.qty > 0.0 {
+            calc_order_price_diff_bid(order.price, market_price).abs()
+        } else {
+            calc_order_price_diff_ask(order.price, market_price).abs()
+        };
+        diff <= global.market_order_near_touch_threshold.max(0.0)
+    }
+
+    fn to_executable_order(
+        order: IdealOrder,
+        global: &OrchestratorGlobal,
+        order_book: &OrderBook,
+    ) -> ExecutableOrder {
+        let execution_type = if should_use_market_execution(&order, global, order_book) {
+            ExecutionType::Market
+        } else {
+            ExecutionType::Limit
+        };
+        ExecutableOrder {
+            symbol_idx: order.symbol_idx,
+            pside: order.pside,
+            qty: order.qty,
+            price: order.price,
+            order_type: order.order_type,
+            execution_type,
+        }
     }
 
     fn is_pside_enabled(global: &BotParamsPair, pside: PositionSide) -> bool {
@@ -2498,6 +2587,14 @@ mod core {
             });
         }
 
+        let orders = orders
+            .into_iter()
+            .map(|order| {
+                let order_book = &input.symbols[order.symbol_idx].order_book;
+                to_executable_order(order, &input.global, order_book)
+            })
+            .collect();
+
         Ok(OrchestratorOutput {
             orders,
             diagnostics,
@@ -2560,6 +2657,125 @@ mod core {
             }
         }
 
+        fn make_basic_global() -> OrchestratorGlobal {
+            OrchestratorGlobal {
+                filter_by_min_effective_cost: false,
+                market_orders_allowed: false,
+                market_order_near_touch_threshold: 0.001,
+                panic_close_market: false,
+                unstuck_allowance_long: 0.0,
+                unstuck_allowance_short: 0.0,
+                max_realized_loss_pct: 1.0,
+                realized_pnl_cumsum_max: 0.0,
+                realized_pnl_cumsum_last: 0.0,
+                sort_global: true,
+                global_bot_params: BotParamsPair::default(),
+                hedge_mode: true,
+            }
+        }
+
+        #[test]
+        fn market_execution_uses_near_touch_threshold() {
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.001;
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            let order = IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: -1.0,
+                price: 100.05,
+                order_type: OrderType::CloseGridLong,
+            };
+            assert!(should_use_market_execution(&order, &global, &order_book));
+            let executable = to_executable_order(order, &global, &order_book);
+            assert_eq!(executable.execution_type, ExecutionType::Market);
+        }
+
+        #[test]
+        fn market_execution_uses_crossing_rules_for_buys_and_sells() {
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.0;
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            let buy = IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: 1.0,
+                price: 100.0,
+                order_type: OrderType::EntryGridNormalLong,
+            };
+            let sell = IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: -1.0,
+                price: 100.0,
+                order_type: OrderType::CloseGridLong,
+            };
+            assert!(should_use_market_execution(&buy, &global, &order_book));
+            assert!(should_use_market_execution(&sell, &global, &order_book));
+            assert_eq!(
+                to_executable_order(buy, &global, &order_book).execution_type,
+                ExecutionType::Market
+            );
+            assert_eq!(
+                to_executable_order(sell, &global, &order_book).execution_type,
+                ExecutionType::Market
+            );
+        }
+
+        #[test]
+        fn market_execution_disabled_keeps_non_panic_orders_limit() {
+            let global = make_basic_global();
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            let order = IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: -1.0,
+                price: 100.0,
+                order_type: OrderType::CloseGridLong,
+            };
+            assert!(!should_use_market_execution(&order, &global, &order_book));
+            assert_eq!(
+                to_executable_order(order, &global, &order_book).execution_type,
+                ExecutionType::Limit
+            );
+        }
+
+        #[test]
+        fn panic_close_respects_panic_close_market_flag() {
+            let mut global = make_basic_global();
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            let order = IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: -1.0,
+                price: 50.0,
+                order_type: OrderType::ClosePanicLong,
+            };
+            assert_eq!(
+                to_executable_order(order.clone(), &global, &order_book).execution_type,
+                ExecutionType::Limit
+            );
+            global.panic_close_market = true;
+            assert_eq!(
+                to_executable_order(order, &global, &order_book).execution_type,
+                ExecutionType::Market
+            );
+        }
+
         #[test]
         fn next_candle_peek_expands_only_when_next_would_fill() {
             let mut sym = make_basic_symbol(0);
@@ -2582,6 +2798,9 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -2672,6 +2891,9 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -2704,6 +2926,9 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -2745,6 +2970,9 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -2791,6 +3019,9 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -2900,6 +3131,9 @@ mod core {
                 balance_raw: 1_000_000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3113,6 +3347,9 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3180,6 +3417,9 @@ mod core {
                 balance_raw: f64::NAN,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.01,
@@ -3235,6 +3475,9 @@ mod core {
                     balance_raw: raw_balance,
                     global: OrchestratorGlobal {
                         filter_by_min_effective_cost: false,
+                        market_orders_allowed: false,
+                        market_order_near_touch_threshold: 0.001,
+                        panic_close_market: false,
                         unstuck_allowance_long: 0.0,
                         unstuck_allowance_short: 0.0,
                         max_realized_loss_pct: 0.01,
@@ -3294,6 +3537,9 @@ mod core {
                 balance_raw: 800.0, // raw: WE = 500/800 = 0.625 (over limit)
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3346,6 +3592,9 @@ mod core {
                 balance_raw: 500.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3404,6 +3653,9 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.0,
@@ -3447,6 +3699,9 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
                     unstuck_allowance_long: 1000.0,
                     unstuck_allowance_short: 1000.0,
                     max_realized_loss_pct: 1.0,

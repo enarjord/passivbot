@@ -25,7 +25,7 @@ Add an account-level hard stop based on strategy P&L drawdown, with staged respo
   - ORANGE tier: mode override to `tp_only_with_active_entry_cancellation` or `graceful_stop`
   - RED tier: force panic, verify flat (2 consecutive confirmations), halt
   - Cooldown restart: reset state after configured minutes, resume trading
-  - No-restart latch: if stop-time raw drawdown > `no_restart_drawdown_threshold`, halt is permanent
+  - No-restart latch: if stop-time raw drawdown >= `no_restart_drawdown_threshold`, halt is permanent
   - Rolling equity peak bounded by `pnls_max_lookback_days`
 
 - **Analysis metrics:** `passivbot-rust/src/types.rs`
@@ -249,13 +249,13 @@ Located at `config.bot.common.equity_hard_stop_loss`:
 | `red_threshold` | float | `0.25` | Drawdown level triggering RED (25% from peak) |
 | `ema_span_minutes` | float | `60.0` | EMA span in minutes. Higher = more flash-crash resistant, slower reaction |
 | `cooldown_minutes_after_red` | float | `0.0` | `0` = permanent halt. `>0` = auto-restart after N minutes |
-| `no_restart_drawdown_threshold` | float | `1.0` | If stop-time drawdown exceeds this, halt is permanent even with cooldown. Must be > `red_threshold` |
+| `no_restart_drawdown_threshold` | float | `1.0` | If stop-time drawdown is at or above this, halt is permanent even with cooldown. Values below `red_threshold` are clamped to `red_threshold`. |
 | `tier_ratios.yellow` | float | `0.5` | Fraction of red_threshold where YELLOW begins |
 | `tier_ratios.orange` | float | `0.75` | Fraction of red_threshold where ORANGE begins |
 | `orange_tier_mode` | string | `"tp_only..."` | Mode applied at ORANGE: `"tp_only_with_active_entry_cancellation"` or `"graceful_stop"` |
 | `panic_close_order_type` | string | `"market"` | Order type for RED panic closes: `"market"` or `"limit"` |
 
-Validation: `0 < yellow < orange < 1`, `red_threshold > 0`, `ema_span_minutes > 0`, `red_threshold < no_restart_drawdown_threshold <= 1.0`.
+Validation: `0 < yellow < orange < 1`, `red_threshold > 0`, `ema_span_minutes > 0`, `red_threshold <= no_restart_drawdown_threshold <= 1.0` after clamping values below `red_threshold` up to `red_threshold`.
 
 ## 6. Tier Actions
 
@@ -280,7 +280,7 @@ GREEN/YELLOW/ORANGE can de-escalate. RED latches until explicit reset (cooldown 
 3. Submit panic close orders (market by default)
 4. Verify flat: require 2 consecutive refreshes confirming zero positions and no blocking orders
 5. After flat confirmation, evaluate no-restart drawdown threshold:
-   - If `stop_drawdown_raw > no_restart_drawdown_threshold`: permanent halt
+   - If `stop_drawdown_raw >= no_restart_drawdown_threshold`: permanent halt
    - Else if `cooldown_minutes > 0`: schedule restart after cooldown
    - Else: permanent halt
 6. Write halt latch file

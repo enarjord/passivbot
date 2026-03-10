@@ -988,7 +988,7 @@ fn run_backtest_core<'py>(
                 py_analysis_btc,
             ));
         }
-        let mut py_fills = Array2::from_elem((fills.len(), 18), py.None());
+        let mut py_fills = Array2::from_elem((fills.len(), 19), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
             py_fills[(i, 1)] = (fill.timestamp_ms as i64).into_py(py);
@@ -1004,10 +1004,11 @@ fn run_backtest_core<'py>(
             py_fills[(i, 11)] = fill.position_size.into_py(py);
             py_fills[(i, 12)] = fill.position_price.into_py(py);
             py_fills[(i, 13)] = fill.order_type.to_string().into_py(py);
-            py_fills[(i, 14)] = fill.wallet_exposure.into_py(py);
-            py_fills[(i, 15)] = fill.twe_long.into_py(py);
-            py_fills[(i, 16)] = fill.twe_short.into_py(py);
-            py_fills[(i, 17)] = fill.twe_net.into_py(py);
+            py_fills[(i, 14)] = fill.liquidity.clone().into_py(py);
+            py_fills[(i, 15)] = fill.wallet_exposure.into_py(py);
+            py_fills[(i, 16)] = fill.twe_long.into_py(py);
+            py_fills[(i, 17)] = fill.twe_short.into_py(py);
+            py_fills[(i, 18)] = fill.twe_net.into_py(py);
         }
 
         let equities_array =
@@ -1077,6 +1078,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
     Ok(BacktestParams {
         starting_balance: extract_value(dict, "starting_balance")?,
         maker_fee: extract_value(dict, "maker_fee")?,
+        taker_fee: extract_value(dict, "taker_fee")?,
         coins: extract_value(dict, "coins")?,
         active_coin_indices: match dict.get_item("active_coin_indices")? {
             Some(item) if !item.is_none() => Some(item.extract::<Vec<usize>>()?),
@@ -1122,6 +1124,16 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .transpose()?
             .unwrap_or(0.05),
         equity_hard_stop_loss: hard_stop_cfg,
+        market_orders_allowed: dict
+            .get_item("market_orders_allowed")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(false),
+        market_order_near_touch_threshold: dict
+            .get_item("market_order_near_touch_threshold")?
+            .map(|item| item.extract::<f64>())
+            .transpose()?
+            .unwrap_or(0.001),
         market_order_slippage_pct: dict
             .get_item("market_order_slippage_pct")?
             .map(|item| item.extract::<f64>())

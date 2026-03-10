@@ -632,9 +632,8 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
         red_threshold = common_hsl.get("red_threshold")
         no_restart = common_hsl.get("no_restart_drawdown_threshold")
         if red_threshold is not None and no_restart is not None:
-            min_no_restart = min(1.0, float(red_threshold) + 0.01)
-            if float(no_restart) <= float(red_threshold):
-                common_hsl["no_restart_drawdown_threshold"] = min_no_restart
+            if float(no_restart) < float(red_threshold):
+                common_hsl["no_restart_drawdown_threshold"] = float(red_threshold)
     for pside in sorted(config["bot"]):
         if pside == "common":
             continue

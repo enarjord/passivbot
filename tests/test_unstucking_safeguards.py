@@ -908,6 +908,44 @@ async def test_hard_stop_finalize_red_stop_terminal_latches_and_stops(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_hard_stop_finalize_red_stop_equal_threshold_latches_terminal(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 5.0
+    bot.equity_hard_stop_loss["no_restart_drawdown_threshold"] = 0.1
+
+    async def fake_compute(_ts):
+        return {
+            "stop_event_timestamp_ms": 1_700_000_000_000,
+            "equity": 98.0,
+            "peak_strategy_equity": 110.0,
+            "trigger_peak_strategy_equity": 101.0,
+            "drawdown_raw": 0.1,
+            "drawdown_ema": 0.095,
+            "drawdown_score": 0.095,
+        }
+
+    captured = {}
+
+    def fake_write(payload):
+        captured["payload"] = payload
+        return "/tmp/hs_latch_terminal_equal.json"
+
+    async def fake_wait(_until):
+        raise AssertionError("cooldown wait should not run for equality no-restart latch")
+
+    monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
+    monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
+    monkeypatch.setattr(bot, "_equity_hard_stop_wait_for_cooldown", fake_wait)
+
+    await bot._equity_hard_stop_finalize_red_stop()
+
+    assert bot.stop_signal_received is True
+    assert captured["payload"]["no_restart_latched"] is True
+    assert captured["payload"]["cooldown_until_ms"] is None
+
+
+@pytest.mark.asyncio
 async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
