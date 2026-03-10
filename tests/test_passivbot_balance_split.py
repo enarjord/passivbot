@@ -310,6 +310,7 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
         effective_min_cost = {}
         _config_hedge_mode = False
         hedge_mode = False
+        equity_hard_stop_loss = {"panic_close_order_type": "limit"}
 
         def config_get(self, keys):
             return None

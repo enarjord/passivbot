@@ -415,14 +415,16 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         with pytest.raises(ValueError, match="cooldown_minutes_after_red"):
             prep_backtest_args(config, self._make_mss(), "binance")
 
-    def test_invalid_no_restart_drawdown_threshold_raises(self):
+    def test_no_restart_drawdown_threshold_below_red_clamps_to_red(self):
         config = self._make_config(
             {
                 "enabled": True,
                 "red_threshold": 0.3,
                 "ema_span_minutes": 30.0,
-                "no_restart_drawdown_threshold": 0.3,
+                "no_restart_drawdown_threshold": 0.2,
             }
         )
-        with pytest.raises(ValueError, match="no_restart_drawdown_threshold"):
-            prep_backtest_args(config, self._make_mss(), "binance")
+        _, _, backtest_params = prep_backtest_args(config, self._make_mss(), "binance")
+        assert backtest_params["equity_hard_stop_loss"]["no_restart_drawdown_threshold"] == pytest.approx(
+            0.3
+        )

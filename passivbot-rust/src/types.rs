@@ -204,6 +204,7 @@ impl Default for EquityHardStopLossConfig {
 pub struct BacktestParams {
     pub starting_balance: f64,
     pub maker_fee: f64,
+    pub taker_fee: f64,
     pub coins: Vec<String>,
     pub active_coin_indices: Option<Vec<usize>>,
     pub first_timestamp_ms: u64,
@@ -224,6 +225,8 @@ pub struct BacktestParams {
     pub liquidation_threshold: f64,
     pub equity_hard_stop_loss: EquityHardStopLossConfig,
     pub panic_market_slippage_pct: f64,
+    pub market_orders_allowed: bool,
+    pub market_order_near_touch_threshold: f64,
     pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
 }
 
@@ -471,6 +474,7 @@ pub struct Fill {
     pub position_size: f64,
     pub position_price: f64,
     pub order_type: OrderType,
+    pub liquidity: String,
     pub wallet_exposure: f64, // signed: long positive, short negative
     pub twe_long: f64,
     pub twe_short: f64, // signed negative

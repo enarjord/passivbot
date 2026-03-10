@@ -85,4 +85,5 @@ Use `docs/ai/commands.md` for setup, test, backtest, optimizer, and Rust build c
 1. Keep AI docs lean and task-oriented.
 2. Put durable rules in `principles.yaml` or `error_contract.md`, not in many files.
 3. Put deep investigations in case-study docs, not core instruction docs.
-4. Update `CHANGELOG.md` for user-facing behavior changes.
+4. User-facing docs and `CHANGELOG.md` should describe the diff from `master`, not intermediate changes made within the current dev branch.
+5. Update `CHANGELOG.md` for user-facing behavior changes.

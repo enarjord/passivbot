@@ -796,10 +796,18 @@ class Passivbot:
             raise ValueError(
                 "bot.common.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
             )
-        if not (red_threshold < no_restart_drawdown_threshold <= 1.0):
+        if no_restart_drawdown_threshold < red_threshold:
+            logging.info(
+                "[config] clamped bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold "
+                "%.6f -> %.6f to match red_threshold",
+                no_restart_drawdown_threshold,
+                red_threshold,
+            )
+            no_restart_drawdown_threshold = red_threshold
+        if not (red_threshold <= no_restart_drawdown_threshold <= 1.0):
             raise ValueError(
                 "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold must satisfy "
-                "red_threshold < no_restart_drawdown_threshold <= 1.0"
+                "red_threshold <= no_restart_drawdown_threshold <= 1.0"
             )
         if not (0.0 < ratio_yellow < ratio_orange < 1.0):
             raise ValueError(
@@ -1253,7 +1261,7 @@ class Passivbot:
                         f"ts={ts}: {trigger_peak_strategy_equity}"
                     )
                 stop_drawdown_raw = float(current_metrics["drawdown_raw"])
-                if stop_drawdown_raw > no_restart_drawdown_threshold or cooldown_ms <= 0:
+                if stop_drawdown_raw >= no_restart_drawdown_threshold or cooldown_ms <= 0:
                     payload = self._equity_hard_stop_build_latch_payload(
                         stop_event_timestamp_ms=ts,
                         balance=balance,
@@ -1267,7 +1275,7 @@ class Passivbot:
                         drawdown_raw=float(current_metrics["drawdown_raw"]),
                         drawdown_ema=float(current_metrics["drawdown_ema"]),
                         drawdown_score=float(current_metrics["drawdown_score"]),
-                        no_restart_latched=bool(stop_drawdown_raw > no_restart_drawdown_threshold),
+                        no_restart_latched=bool(stop_drawdown_raw >= no_restart_drawdown_threshold),
                         cooldown_until_ms=None,
                     )
                     self._equity_hard_stop_last_stop_event = payload
@@ -1410,7 +1418,7 @@ class Passivbot:
             stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
         cooldown_minutes = float(self.equity_hard_stop_loss["cooldown_minutes_after_red"])
         no_restart_drawdown_threshold = float(self.equity_hard_stop_loss["no_restart_drawdown_threshold"])
-        no_restart_latched = bool(stop_event["drawdown_raw"] > no_restart_drawdown_threshold)
+        no_restart_latched = bool(stop_event["drawdown_raw"] >= no_restart_drawdown_threshold)
         cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
         cooldown_until_ms = (
             None if no_restart_latched or cooldown_ms <= 0 else int(stop_ts_ms + cooldown_ms)
@@ -5274,6 +5282,13 @@ class Passivbot:
             "balance_raw": self.get_raw_balance(),
             "global": {
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
+                "market_orders_allowed": bool(self.live_value("market_orders_allowed")),
+                "market_order_near_touch_threshold": float(
+                    self.live_value("market_order_near_touch_threshold")
+                ),
+                "panic_close_market": bool(
+                    str(self.equity_hard_stop_loss["panic_close_order_type"]) == "market"
+                ),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "max_realized_loss_pct": max_realized_loss_pct,
@@ -5387,7 +5402,8 @@ class Passivbot:
                 continue
             order_type = str(o["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
-            tup = (float(o["qty"]), float(o["price"]), order_type, order_type_id)
+            execution_type = str(o.get("execution_type", "limit"))
+            tup = (float(o["qty"]), float(o["price"]), order_type, order_type_id, execution_type)
             ideal_orders.setdefault(symbol, []).append(tup)
 
         # Log unstuck coin selection
@@ -5777,6 +5793,13 @@ class Passivbot:
             "balance_raw": self.get_raw_balance(),
             "global": {
                 "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
+                "market_orders_allowed": bool(self.live_value("market_orders_allowed")),
+                "market_order_near_touch_threshold": float(
+                    self.live_value("market_order_near_touch_threshold")
+                ),
+                "panic_close_market": bool(
+                    str(self.equity_hard_stop_loss["panic_close_order_type"]) == "market"
+                ),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "max_realized_loss_pct": max_realized_loss_pct,
@@ -5889,7 +5912,8 @@ class Passivbot:
                 continue
             order_type = str(o["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
-            tup = (float(o["qty"]), float(o["price"]), order_type, order_type_id)
+            execution_type = str(o.get("execution_type", "limit"))
+            tup = (float(o["qty"]), float(o["price"]), order_type, order_type_id, execution_type)
             ideal_orders.setdefault(symbol, []).append(tup)
 
         # Log unstuck coin selection
@@ -6001,18 +6025,15 @@ class Passivbot:
                     logging.debug("duplicate ideal order for %s skipped: %s", symbol, order)
                     continue
                 pb_order_type = snake_of(order[3])
-                order_type = "limit"
-                panic_close_pref = str(self.equity_hard_stop_loss["panic_close_order_type"])
-                if "panic" in pb_order_type:
-                    order_type = "market" if panic_close_pref == "market" else "limit"
-                elif self.live_value("market_orders_allowed") and (
-                    ("grid" in order[2] and mprice_diff < 0.0001)
-                    or ("trailing" in order[2] and mprice_diff < 0.001)
-                    or ("auto_reduce" in order[2] and mprice_diff < 0.001)
-                    or (order_side == "buy" and order[1] >= last_mprice)
-                    or (order_side == "sell" and order[1] <= last_mprice)
-                ):
-                    order_type = "market"
+                if len(order) >= 5:
+                    execution_type = str(order[4]).lower()
+                else:
+                    execution_type = "limit"
+                    panic_close_pref = str(self.equity_hard_stop_loss["panic_close_order_type"])
+                    if "panic" in pb_order_type:
+                        execution_type = "market" if panic_close_pref == "market" else "limit"
+                if execution_type not in {"limit", "market"}:
+                    execution_type = "limit"
                 ideal_orders_f[symbol].append(
                     {
                         "symbol": symbol,
@@ -6022,7 +6043,7 @@ class Passivbot:
                         "price": order[1],
                         "reduce_only": "close" in order[2],
                         "custom_id": self.format_custom_id_single(order[3]),
-                        "type": order_type,
+                        "type": execution_type,
                         "pb_order_type": pb_order_type,
                     }
                 )

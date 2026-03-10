@@ -634,6 +634,17 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
         for part in path[:-1]:
             target = target[part]
         target[path[-1]] = value
+    common_hsl = (
+        config.get("bot", {})
+        .get("common", {})
+        .get("equity_hard_stop_loss")
+    )
+    if isinstance(common_hsl, dict):
+        red_threshold = common_hsl.get("red_threshold")
+        no_restart = common_hsl.get("no_restart_drawdown_threshold")
+        if red_threshold is not None and no_restart is not None:
+            if float(no_restart) < float(red_threshold):
+                common_hsl["no_restart_drawdown_threshold"] = float(red_threshold)
     for pside in sorted(config["bot"]):
         config = optimizer_overrides(overrides_list, config, pside)
 

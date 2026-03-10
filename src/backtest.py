@@ -710,6 +710,7 @@ def process_forager_fills(
             "psize",
             "pprice",
             "type",
+            "liquidity",
             "wallet_exposure",
             "twe_long",
             "twe_short",
@@ -1239,12 +1240,20 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             raise ValueError(
                 "bot.common.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
             )
+        if hard_stop_no_restart_drawdown_threshold < hard_stop_red_threshold:
+            logging.info(
+                "[config] clamped bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold "
+                "%.6f -> %.6f to match red_threshold",
+                hard_stop_no_restart_drawdown_threshold,
+                hard_stop_red_threshold,
+            )
+            hard_stop_no_restart_drawdown_threshold = hard_stop_red_threshold
         if not (
-            hard_stop_red_threshold < hard_stop_no_restart_drawdown_threshold <= 1.0
+            hard_stop_red_threshold <= hard_stop_no_restart_drawdown_threshold <= 1.0
         ):
             raise ValueError(
                 "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold must satisfy "
-                "red_threshold < no_restart_drawdown_threshold <= 1.0"
+                "red_threshold <= no_restart_drawdown_threshold <= 1.0"
             )
         if not (0.0 < hard_stop_tier_ratio_yellow < hard_stop_tier_ratio_orange < 1.0):
             raise ValueError(
@@ -1267,6 +1276,15 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
         )
         if panic_market_slippage_pct < 0.0:
             raise ValueError("backtest.panic_market_slippage_pct must be >= 0.0")
+        market_orders_allowed = bool(
+            get_optional_config_value(config, "live.market_orders_allowed", False)
+        )
+        market_order_near_touch_threshold = float(
+            get_optional_config_value(config, "live.market_order_near_touch_threshold", 0.001)
+            or 0.0
+        )
+        if market_order_near_touch_threshold < 0.0:
+            raise ValueError("live.market_order_near_touch_threshold must be >= 0.0")
         liquidation_threshold = float(
             get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0
         )
@@ -1277,13 +1295,19 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
         if btc_collateral_ltv_cap is not None:
             btc_collateral_ltv_cap = float(btc_collateral_ltv_cap)
         maker_fee_override = get_optional_config_value(config, "backtest.maker_fee_override", None)
+        taker_fee_override = get_optional_config_value(config, "backtest.taker_fee_override", None)
         if maker_fee_override is None:
             maker_fee = mss[coins[0]]["maker"]
         else:
             maker_fee = float(maker_fee_override)
+        if taker_fee_override is None:
+            taker_fee = mss[coins[0]].get("taker_fee", mss[coins[0]].get("taker", 0.00055))
+        else:
+            taker_fee = float(taker_fee_override)
         backtest_params = {
             "starting_balance": require_config_value(config, "backtest.starting_balance"),
             "maker_fee": maker_fee,
+            "taker_fee": taker_fee,
             "coins": coins,
             "btc_collateral_cap": btc_collateral_cap,
             "btc_collateral_ltv_cap": btc_collateral_ltv_cap,
@@ -1316,6 +1340,9 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                 "orange_tier_mode": hard_stop_orange_tier_mode,
                 "panic_close_order_type": hard_stop_panic_close_order_type,
             },
+            "panic_market_slippage_pct": panic_market_slippage_pct,
+            "market_orders_allowed": market_orders_allowed,
+            "market_order_near_touch_threshold": market_order_near_touch_threshold,
             "panic_market_slippage_pct": panic_market_slippage_pct,
             "liquidation_threshold": liquidation_threshold,
         }

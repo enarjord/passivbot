@@ -63,7 +63,7 @@ At RED:
 4. trading halts
 5. optional cooldown-based restart may occur
 
-If the trigger drawdown exceeds `no_restart_drawdown_threshold`, the halt becomes terminal and auto-restart is disabled.
+If the trigger drawdown is at or above `no_restart_drawdown_threshold`, the halt becomes terminal and auto-restart is disabled. Values below `red_threshold` are treated as `red_threshold`.
 
 ## Parameters
 
@@ -80,7 +80,8 @@ All parameters live under `bot.common.equity_hard_stop_loss`:
    - wait time before auto-restart after RED
    - `0` means no auto-restart
 5. `no_restart_drawdown_threshold`
-   - if trigger drawdown exceeds this level, the halt will not auto-restart
+   - if trigger drawdown is at or above this level, the halt will not auto-restart
+   - values below `red_threshold` are clamped to `red_threshold`
 6. `tier_ratios.yellow`
    - yellow threshold multiplier
 7. `tier_ratios.orange`
@@ -136,5 +137,4 @@ The HSL backtest metrics listed above can also be used in:
 ## Notes
 
 1. HSL is currently account-level, not per-position-side.
-2. `bot.common.equity_hard_stop_loss` replaces the earlier `live.equity_hard_stop_loss` location. Existing configs are migrated on load.
-3. HSL is intended as a supervisory backstop, not as a replacement for sane wallet-exposure settings.
+2. HSL is intended as a supervisory backstop, not as a replacement for sane wallet-exposure settings.

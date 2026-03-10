@@ -27,6 +27,7 @@ def test_prep_backtest_args_uses_exchange_maker_fee_when_no_override():
     mss = _base_mss()
     _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["maker_fee"] == 0.0001
+    assert backtest_params["taker_fee"] == 0.0005
 
 
 def test_prep_backtest_args_uses_maker_fee_override_when_set():
@@ -36,6 +37,13 @@ def test_prep_backtest_args_uses_maker_fee_override_when_set():
     _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["maker_fee"] == 0.0002
 
+def test_prep_backtest_args_uses_taker_fee_override_when_set():
+    config = _base_config()
+    config["backtest"]["taker_fee_override"] = 0.0008
+    mss = _base_mss()
+    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    assert backtest_params["taker_fee"] == 0.0008
+
 
 def test_prep_backtest_args_passes_panic_market_slippage_pct():
     config = _base_config()
@@ -43,6 +51,14 @@ def test_prep_backtest_args_passes_panic_market_slippage_pct():
     mss = _base_mss()
     _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["panic_market_slippage_pct"] == 0.0015
+
+
+def test_prep_backtest_args_passes_market_order_near_touch_threshold_from_live():
+    config = _base_config()
+    config["live"]["market_order_near_touch_threshold"] = 0.0017
+    mss = _base_mss()
+    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    assert backtest_params["market_order_near_touch_threshold"] == 0.0017
 
 
 def test_prep_backtest_args_passes_liquidation_threshold():

@@ -293,6 +293,38 @@ class TestIndividualToConfig:
         assert result["bot"]["common"]["equity_hard_stop_loss"]["red_threshold"] == pytest.approx(0.22)
         assert result["bot"]["common"]["equity_hard_stop_loss"]["ema_span_minutes"] == pytest.approx(60.0)
 
+    def test_normalizes_common_hsl_no_restart_to_red_threshold_floor(self):
+        individual = [1.0, 2.0, 3.0, 4.0, 0.20, 0.25]
+        template = {
+            "bot": {
+                "common": {
+                    "equity_hard_stop_loss": {
+                        "red_threshold": 0.20,
+                        "no_restart_drawdown_threshold": 0.40,
+                    }
+                },
+                "long": {"param1": 0.0, "param2": 0.0},
+                "short": {"param1": 0.0, "param2": 0.0},
+            },
+            "optimize": {
+                "bounds": {
+                    "common_equity_hard_stop_loss_no_restart_drawdown_threshold": [
+                        0.20,
+                        0.90,
+                        0.01,
+                    ],
+                    "common_equity_hard_stop_loss_red_threshold": [0.15, 0.35, 0.01],
+                }
+            },
+        }
+        overrides_list = []
+        mock_overrides = lambda x, y, z: y
+
+        result = individual_to_config(individual, mock_overrides, overrides_list, template)
+
+        hsl_cfg = result["bot"]["common"]["equity_hard_stop_loss"]
+        assert hsl_cfg["red_threshold"] == pytest.approx(0.25)
+        assert hsl_cfg["no_restart_drawdown_threshold"] == pytest.approx(0.25)
 
 class TestConfigToIndividual:
     """Test config_to_individual function."""

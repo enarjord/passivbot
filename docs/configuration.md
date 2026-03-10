@@ -22,6 +22,8 @@ This document provides an overview of the parameters found in `config/template.j
   - `false`: fixed denominator, same as live: `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
 - **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use the exchange-derived maker fees.
 - **panic_market_slippage_pct**: Backtest-only slippage applied to HSL panic closes when `bot.common.equity_hard_stop_loss.panic_close_order_type` is `"market"`. A long panic close sells at `close * (1 - slippage_pct)` rounded down to `price_step`; a short panic close buys at `close * (1 + slippage_pct)` rounded up. Default `0.0005` (5 bps).
+- **taker_fee_override**: Optional taker fee override (part-per-one; use `0.00055` for 0.055%). Leave `null` to use the exchange-derived taker fees.
+- **panic_market_slippage_pct**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This covers both HSL panic closes when `bot.common.equity_hard_stop_loss.panic_close_order_type` is `"market"` and normal orchestrator orders promoted to market execution by `live.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps).
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
   `balance_and_equity.csv` and related plots. `1` keeps full per-minute resolution; higher values
   thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes.
@@ -72,11 +74,7 @@ Example per-metric aggregation:
 
 `bot.common` is the shared home for account-level strategy and supervisory behavior used by live trading, backtests, and optimizer runs.
 
-Current use in this branch:
-
 1. `bot.common.equity_hard_stop_loss`
-
-This replaces the earlier `live.equity_hard_stop_loss` location. Existing configs are migrated on load.
 
 See also:
 
@@ -98,8 +96,9 @@ Account-level drawdown circuit breaker.
   - Minutes to wait before auto-restart after a RED halt.
   - `0.0` means halt without auto-restart.
 - **no_restart_drawdown_threshold**:
-  - If trigger drawdown exceeds this threshold, RED becomes terminal and the bot will not auto-restart.
-  - Must satisfy: `red_threshold < no_restart_drawdown_threshold <= 1.0`.
+  - If trigger drawdown is at or above this threshold, RED becomes terminal and the bot will not auto-restart.
+  - Values below `red_threshold` are clamped up to `red_threshold`.
+  - Must satisfy: `red_threshold <= no_restart_drawdown_threshold <= 1.0`.
 - **tier_ratios.yellow / tier_ratios.orange**:
   - Multipliers used to derive YELLOW and ORANGE thresholds from `red_threshold`.
   - Must satisfy: `0 < yellow < orange < 1`.
@@ -123,6 +122,7 @@ Behavior summary:
 Backtest-specific note:
 
 1. If `panic_close_order_type = "market"`, the backtester uses `backtest.panic_market_slippage_pct` for simulated taker execution.
+1. If `panic_close_order_type = "market"`, the backtester uses `backtest.panic_market_slippage_pct` for simulated taker execution and charges taker fees (exchange-derived by default, or `backtest.taker_fee_override` when set).
 
 Key HSL analysis metrics:
 
@@ -342,6 +342,13 @@ Coins selected for trading are filtered by volume and log range. First, filter c
     - Example: `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
 - **leverage**: Leverage set on the exchange. Default is `10`.
 - **market_orders_allowed**: If `true`, allows Passivbot to place market orders when the order price is very close to the current market price. If `false`, only places limit orders. Default is `true`.
+- **market_order_near_touch_threshold**: Unified threshold used by Rust order orchestration when `market_orders_allowed` is enabled. If an order price is within this fractional distance of the current market price, Rust emits it as a market order. Crossing orders also become market orders (`bid >= market` for buys, `ask <= market` for sells). This execution intent is now shared by both live and backtest. Default is `0.001`.
+  - Decision rules:
+    - non-panic buy with `price >= market_price` => `market`
+    - non-panic sell with `price <= market_price` => `market`
+    - otherwise, if `abs(order_price_diff) <= market_order_near_touch_threshold` => `market`
+    - otherwise => `limit`
+    - panic closes are still controlled separately by `bot.common.equity_hard_stop_loss.panic_close_order_type`
 - **order_match_tolerance_pct**: Percentage tolerance (in %) used to match near-identical cancel/create pairs and avoid order churn. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling/replacing it.
 - **max_n_cancellations_per_batch**: Cancels `n` open orders per execution.
 - **max_n_creations_per_batch**: Creates `n` new orders per execution.
