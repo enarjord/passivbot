@@ -3,6 +3,7 @@ import sys
 import types
 
 import pytest
+import numpy as np
 
 
 def _make_mock_pbr():
@@ -443,6 +444,20 @@ def _make_dummy_bot(config, *, last_price=100.0):
             return self._live_values.get(key, 0.0)
 
     return DummyBot(config)
+
+
+def _make_candles(rows):
+    from candlestick_manager import CANDLE_DTYPE
+
+    arr = np.zeros(len(rows), dtype=CANDLE_DTYPE)
+    for i, (ts, o, h, l, c, v) in enumerate(rows):
+        arr[i]["ts"] = ts
+        arr[i]["o"] = o
+        arr[i]["h"] = h
+        arr[i]["l"] = l
+        arr[i]["c"] = c
+        arr[i]["bv"] = v
+    return arr
 
 
 def _set_basic_state(bot, symbol="TEST/USDT"):
@@ -1152,6 +1167,67 @@ async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(mo
     assert bot._equity_hard_stop_runtime.red_latched() is False
     assert bot._equity_hard_stop_runtime.tier() != "red"
     assert bot._equity_hard_stop_pending_red_since_ms is None
+
+
+@pytest.mark.asyncio
+async def test_get_balance_equity_history_hyperliquid_backfills_from_5m(monkeypatch):
+    cfg = _dummy_config()
+    cfg["live"]["pnls_max_lookback_days"] = 4.0
+    bot = _make_dummy_bot(cfg)
+    bot.exchange = "hyperliquid"
+    bot._live_values["pnls_max_lookback_days"] = 4.0
+    symbol = "BTC/USDT:USDT"
+    bot.c_mults = {symbol: 1.0}
+    bot.inverse = False
+
+    start_ts = 1_699_999_980_000
+    end_ts = start_ts + 5001 * 60_000
+    now_ts = end_ts
+
+    async def fake_init_pnls():
+        return None
+
+    class FakeCM:
+        async def get_candles(
+            self, symbol_, start_ts=None, end_ts=None, strict=False, timeframe=None
+        ):
+            if timeframe in (None, "1m"):
+                return _make_candles([])
+            if timeframe == "5m":
+                    return _make_candles(
+                        [
+                            (1_699_999_980_000, 100.0, 110.0, 95.0, 108.0, 1.0),
+                            (1_699_999_980_000 + 5 * 60_000, 108.0, 112.0, 101.0, 104.0, 1.0),
+                        ]
+                    )
+            if timeframe == "15m":
+                return _make_candles([])
+            raise AssertionError(f"unexpected timeframe {timeframe}")
+
+    monkeypatch.setattr(bot, "init_pnls", fake_init_pnls)
+    bot.cm = FakeCM()
+    bot.get_exchange_time = lambda: now_ts
+    bot.get_raw_balance = lambda: 100.0
+
+    fill_events = [
+        {
+            "timestamp": start_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 100.0,
+            "side": "buy",
+            "pnl": 0.0,
+        }
+    ]
+
+    history = await bot.get_balance_equity_history(fill_events=fill_events, current_balance=100.0)
+
+    assert len(history["timeline"]) == 5761
+    assert history["metadata"]["approximate_price_sources"][symbol]["5m"] > 0
+    event_offset = 5761 - 5002
+    assert history["timeline"][event_offset + 4]["equity"] > history["timeline"][event_offset]["equity"]
+    assert history["timeline"][-1]["equity"] == pytest.approx(104.0)
 
 
 @pytest.mark.asyncio
