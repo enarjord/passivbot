@@ -16,6 +16,7 @@ See also:
 
 1. [Risk Management](/Users/eiriknarjord/repos/passivbot-3/docs/risk_management.md)
 2. [Configuration](/Users/eiriknarjord/repos/passivbot-3/docs/configuration.md)
+3. [HSL Reference](/Users/eiriknarjord/repos/passivbot-3/docs/equity_hard_stop_loss_reference.md)
 
 ## How It Works
 
@@ -138,3 +139,11 @@ The HSL backtest metrics listed above can also be used in:
 
 1. HSL is currently account-level, not per-position-side.
 2. HSL is intended as a supervisory backstop, not as a replacement for sane wallet-exposure settings.
+
+## Stateless Restart Behavior
+
+Live HSL startup behavior is reconstructed from exchange-derived account history plus current exchange state. Restart behavior must not depend on any local latch file being present on disk.
+
+For the ongoing edge-case checklist and remaining implementation work, see:
+
+1. [HSL Reference](/Users/eiriknarjord/repos/passivbot-3/docs/equity_hard_stop_loss_reference.md)
