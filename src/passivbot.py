@@ -121,6 +121,12 @@ class RestartBotException(Exception):
 _TYPE_MARKER_RE = re.compile(r"0x([0-9a-fA-F]{4})", re.IGNORECASE)
 # Leading pure-hex fallback: optional 0x then 4 hex at the very start
 _LEADING_HEX4_RE = re.compile(r"^(?:0x)?([0-9a-fA-F]{4})", re.IGNORECASE)
+
+
+def _linear_interpolate(value0: float, value1: float, ratio: float) -> float:
+    return float(value0 + (value1 - value0) * ratio)
+
+
 def clip_by_timestamp(xs, start_ts, end_ts):
     # assumes xs is already sorted by timestamp
     timestamps = [x["timestamp"] for x in xs]
@@ -737,6 +743,50 @@ class Passivbot:
     def _assert_supported_live_state(self) -> None:
         """Hook: exchange-specific startup/runtime validation for unsupported live state."""
         return None
+
+    @staticmethod
+    def _build_intrabar_minute_close_lookup(
+        candles, tf_minutes: int
+    ) -> dict:
+        if tf_minutes <= 0 or candles is None or candles.size == 0:
+            return {}
+        import math as _math
+        out: dict = {}
+        last_idx = max(0, int(tf_minutes) - 1)
+        pivot_a = min(last_idx, max(1, int(tf_minutes) // 3))
+        pivot_b = min(last_idx, max(pivot_a + 1, (2 * int(tf_minutes)) // 3))
+        for row in candles:
+            ts = int(row["ts"])
+            o = float(row["o"])
+            h = float(row["h"])
+            l = float(row["l"])
+            c = float(row["c"])
+            if not all(_math.isfinite(x) for x in (o, h, l, c)):
+                continue
+            if h < l:
+                h, l = l, h
+            o = min(max(o, l), h)
+            c = min(max(c, l), h)
+            if last_idx == 0:
+                out[ts] = c
+                continue
+            if c >= o:
+                waypoints = [(0, o), (pivot_a, l), (pivot_b, h), (last_idx, c)]
+            else:
+                waypoints = [(0, o), (pivot_a, h), (pivot_b, l), (last_idx, c)]
+            deduped = [waypoints[0]]
+            for idx, value in waypoints[1:]:
+                if idx > deduped[-1][0]:
+                    deduped.append((idx, value))
+                else:
+                    deduped[-1] = (idx, value)
+            for (i0, v0), (i1, v1) in zip(deduped, deduped[1:]):
+                span = max(1, i1 - i0)
+                for minute_idx in range(i0, i1 + 1):
+                    ratio = 0.0 if i1 == i0 else (minute_idx - i0) / span
+                    price = _linear_interpolate(v0, v1, ratio)
+                    out[ts + minute_idx * 60_000] = min(max(float(price), l), h)
+        return out
 
     def _build_ccxt_options(self, overrides: Optional[dict] = None) -> dict:
         options = {"adjustForTimeDifference": True}
@@ -4047,6 +4097,7 @@ class Passivbot:
 
         symbols = {evt["symbol"] for evt in events if evt["symbol"]}
         price_lookup: Dict[str, Dict[int, float]] = {}
+        approximate_price_sources: Dict[str, Dict[str, int]] = {}
         if symbols and getattr(self, "cm", None) is not None:
             tasks = {
                 sym: asyncio.create_task(
@@ -4063,6 +4114,54 @@ class Passivbot:
                 price_lookup[sym] = {
                     int(row["ts"]): float(row["c"]) for row in arr if float(row["c"]) > 0.0
                 }
+            is_hyperliquid = str(getattr(self, "exchange", "")).lower() == "hyperliquid"
+            if is_hyperliquid:
+                lookback_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
+                tf_plan: list[tuple[str, int]] = []
+                if lookback_minutes > 5000:
+                    tf_plan.append(("5m", 5))
+                if lookback_minutes > 5000 * 5:
+                    tf_plan.append(("15m", 15))
+                for timeframe, tf_minutes in tf_plan:
+                    tf_tasks = {
+                        sym: asyncio.create_task(
+                            self.cm.get_candles(
+                                sym,
+                                start_ts=start_minute,
+                                end_ts=end_minute,
+                                strict=False,
+                                timeframe=timeframe,
+                            )
+                        )
+                        for sym in symbols
+                    }
+                    for sym, task in tf_tasks.items():
+                        try:
+                            arr = await task
+                        except Exception as exc:
+                            logging.error(
+                                "error fetching %s candles for %s during equity history replay: %s",
+                                timeframe,
+                                sym,
+                                exc,
+                            )
+                            continue
+                        if arr is None or arr.size == 0:
+                            continue
+                        reconstructed = self._build_intrabar_minute_close_lookup(arr, tf_minutes)
+                        if not reconstructed:
+                            continue
+                        added = 0
+                        lookup = price_lookup.setdefault(sym, {})
+                        for ts, close in reconstructed.items():
+                            if ts < start_minute or ts > end_minute:
+                                continue
+                            if ts in lookup:
+                                continue
+                            lookup[ts] = float(close)
+                            added += 1
+                        if added > 0:
+                            approximate_price_sources.setdefault(sym, {})[timeframe] = added
         else:
             price_lookup = {sym: {} for sym in symbols}
 
@@ -4166,6 +4265,7 @@ class Passivbot:
             "events_used": len(events),
             "symbols_covered": sorted(symbols),
             "missing_price_symbols": sorted(missing_price_symbols),
+            "approximate_price_sources": approximate_price_sources,
         }
         return {
             "timeline": timeline,
