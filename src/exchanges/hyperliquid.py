@@ -28,6 +28,7 @@ class HyperliquidBot(CCXTBot):
     HIP3_MAX_LEVERAGE = 10
     # HIP-3 symbols use "xyz:" prefix (TradeXYZ builder)
     HIP3_PREFIX = "xyz:"
+    HIP3_ALT_PREFIXES = ("XYZ-", "XYZ:")
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -121,7 +122,7 @@ class HyperliquidBot(CCXTBot):
         """Check if a symbol requires isolated margin mode.
 
         On Hyperliquid, this includes:
-        1. Symbols with xyz: prefix (HIP-3 stock perps from TradeXYZ)
+        1. Symbols with HIP-3 prefixes (TradeXYZ stock perps)
         2. Markets with onlyIsolated=True flag
 
         Args:
@@ -130,11 +131,12 @@ class HyperliquidBot(CCXTBot):
         Returns:
             True if this symbol requires isolated margin mode
         """
-        # Check for xyz: prefix in symbol or base
-        if symbol.startswith(self.HIP3_PREFIX):
+        # CCXT can expose HIP-3 symbols as either xyz:TSLA/... or XYZ-TSLA/...
+        prefixes = (self.HIP3_PREFIX,) + tuple(self.HIP3_ALT_PREFIXES)
+        if symbol.startswith(prefixes):
             return True
         base = symbol.split("/")[0] if "/" in symbol else symbol
-        if base.startswith(self.HIP3_PREFIX):
+        if base.startswith(prefixes):
             return True
 
         # Fall back to base class check (onlyIsolated flag, etc.)

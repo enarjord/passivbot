@@ -12,6 +12,7 @@ Tests cover:
 import importlib
 import sys
 import types
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -149,10 +150,13 @@ class TestHyperliquidBotHIP3:
         bot = object.__new__(bot_class)
         bot.markets_dict = {}
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
 
         # Test prefix detection
         assert bot._requires_isolated_margin("xyz:TSLA/USDC:USDC") is True
         assert bot._requires_isolated_margin("xyz:NVDA/USDC:USDC") is True
+        assert bot._requires_isolated_margin("XYZ-XYZ100/USDC:USDC") is True
+        assert bot._requires_isolated_margin("XYZ:XYZ100/USDC:USDC") is True
         assert bot._requires_isolated_margin("BTC/USDC:USDC") is False
         assert bot._requires_isolated_margin("ETH/USDC:USDC") is False
 
@@ -160,6 +164,7 @@ class TestHyperliquidBotHIP3:
         """Test isolated margin detection by onlyIsolated flag."""
         bot = object.__new__(bot_class)
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
         bot.markets_dict = {
             "NEWSTOCK/USDC:USDC": {"info": {"onlyIsolated": True}},
             "BTC/USDC:USDC": {"info": {"onlyIsolated": False}},
@@ -170,6 +175,26 @@ class TestHyperliquidBotHIP3:
 
         # Market with onlyIsolated=False should not require isolated margin
         assert bot._requires_isolated_margin("BTC/USDC:USDC") is False
+
+    @pytest.mark.asyncio
+    async def test_update_exchange_config_uses_isolated_for_xyz_prefixed_ccxt_symbol(self, bot_class):
+        """CCXT's XYZ- prefixed HIP-3 symbols must use isolated margin mode."""
+        bot = object.__new__(bot_class)
+        bot.exchange = "hyperliquid"
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.user_info = {"is_vault": False}
+        bot.cca = MagicMock()
+        bot.cca.set_margin_mode = AsyncMock(return_value={"status": "ok"})
+        bot._calc_leverage_for_symbol = lambda symbol: 7
+
+        await bot.update_exchange_config_by_symbols(["XYZ-XYZ100/USDC:USDC"])
+
+        bot.cca.set_margin_mode.assert_awaited_once_with(
+            "isolated",
+            symbol="XYZ-XYZ100/USDC:USDC",
+            params={"leverage": 7},
+        )
 
 
 class TestIsolatedMarginLeverageCapping:
