@@ -142,6 +142,50 @@ class HyperliquidBot(CCXTBot):
         # Fall back to base class check (onlyIsolated flag, etc.)
         return super()._requires_isolated_margin(symbol)
 
+    def _get_hl_dex_for_symbol(self, symbol: str) -> str | None:
+        """Return HIP-3 dex name for a symbol if available."""
+        market = getattr(self, "markets_dict", {}).get(symbol, {})
+        base_name = market.get("baseName") or market.get("info", {}).get("baseName", "")
+        if isinstance(base_name, str) and ":" in base_name:
+            dex_name = base_name.split(":", 1)[0]
+            if dex_name:
+                return dex_name
+        return None
+
+    def _get_hl_hip3_state_symbols(self) -> list[str]:
+        """Return tracked HIP-3 symbols that need dex-scoped state queries."""
+        tracked = set(getattr(self, "active_symbols", []) or [])
+        tracked.update(getattr(self, "open_orders", {}).keys())
+        tracked.update(getattr(self, "positions", {}).keys())
+        return sorted(
+            symbol
+            for symbol in tracked
+            if symbol in getattr(self, "markets_dict", {}) and self._get_hl_dex_for_symbol(symbol)
+        )
+
+    def _normalize_ccxt_position(self, position: dict) -> dict:
+        side = position.get("side")
+        contracts = float(position.get("contracts") or 0.0)
+        if side == "short":
+            contracts = -contracts
+        return {
+            "symbol": position["symbol"],
+            "position_side": side,
+            "size": contracts,
+            "price": float(position.get("entryPrice") or 0.0),
+        }
+
+    async def _fetch_hip3_positions(self) -> list[dict]:
+        """Fetch HIP-3 positions via dex-scoped CCXT routes."""
+        positions_by_key = {}
+        for symbol in self._get_hl_hip3_state_symbols():
+            fetched = await self.cca.fetch_positions(symbols=[symbol])
+            for position in fetched:
+                normalized = self._normalize_ccxt_position(position)
+                key = (normalized["symbol"], normalized["position_side"])
+                positions_by_key[key] = normalized
+        return list(positions_by_key.values())
+
     async def watch_orders(self):
         res = None
         _ws_consecutive_rate_limits = 0
@@ -204,7 +248,32 @@ class HyperliquidBot(CCXTBot):
         return self.determine_pos_side(order)
 
     async def fetch_open_orders(self, symbol: str = None):
-        fetched = await self.cca.fetch_open_orders()
+        fetched = []
+        seen_ids = set()
+        query_symbols = [symbol] if symbol is not None else self._get_hl_hip3_state_symbols()
+
+        # Default route covers core perps; HIP-3 symbols need dex-scoped queries.
+        if symbol is None or not self._get_hl_dex_for_symbol(symbol):
+            for order in await self.cca.fetch_open_orders(symbol=symbol):
+                if order["id"] in seen_ids:
+                    continue
+                seen_ids.add(order["id"])
+                fetched.append(order)
+
+        if symbol is None:
+            hip3_symbols = query_symbols
+        elif self._get_hl_dex_for_symbol(symbol):
+            hip3_symbols = query_symbols
+        else:
+            hip3_symbols = []
+
+        for hip3_symbol in hip3_symbols:
+            for order in await self.cca.fetch_open_orders(symbol=hip3_symbol):
+                if order["id"] in seen_ids:
+                    continue
+                seen_ids.add(order["id"])
+                fetched.append(order)
+
         for elm in fetched:
             elm["position_side"] = self.determine_pos_side(elm)
             elm["qty"] = elm["amount"]
@@ -212,19 +281,22 @@ class HyperliquidBot(CCXTBot):
 
     async def _fetch_positions_and_balance(self):
         info = await self.cca.fetch_balance()
-        positions = [
-            {
+        positions = {}
+        for x in info["info"]["assetPositions"]:
+            size = float(x["position"]["szi"])
+            elm = {
                 "symbol": self.coin_to_symbol(x["position"]["coin"]),
-                "position_side": ("long" if (size := float(x["position"]["szi"])) > 0.0 else "short"),
+                "position_side": ("long" if size > 0.0 else "short"),
                 "size": size,
                 "price": float(x["position"]["entryPx"]),
             }
-            for x in info["info"]["assetPositions"]
-        ]
+            positions[(elm["symbol"], elm["position_side"])] = elm
+        for position in await self._fetch_hip3_positions():
+            positions[(position["symbol"], position["position_side"])] = position
         balance = float(info["info"]["marginSummary"]["accountValue"]) - sum(
             [float(x["position"]["unrealizedPnl"]) for x in info["info"]["assetPositions"]]
         )
-        return positions, balance
+        return list(positions.values()), balance
 
     async def _get_positions_and_balance_cached(self, my_gen: int = 0):
         """Fetch positions+balance with dedup: concurrent callers share one API call.
