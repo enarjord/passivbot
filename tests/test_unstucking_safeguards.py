@@ -835,6 +835,35 @@ def test_hard_stop_apply_sample_rolling_peak_prunes_by_lookback():
     assert m1["drawdown_raw"] == pytest.approx(0.0)
 
 
+def test_hard_stop_status_logging_is_throttled(caplog):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot._equity_hard_stop_last_stop_event = {"stop_event_timestamp_ms": 1_600_000}
+    bot._equity_hard_stop_last_status_log_ms = 0
+    bot._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
+    bot._equity_hard_stop_halted_until_ms = None
+    bot._equity_hard_stop_pending_red_since_ms = None
+    metrics = {
+        "timestamp_ms": 1_700_000_000_000,
+        "tier": "yellow",
+        "drawdown_raw": 0.04,
+        "drawdown_ema": 0.03,
+        "drawdown_score": 0.03,
+        "red_threshold": 0.05,
+        "peak_strategy_equity": 120.0,
+        "rolling_peak_strategy_equity": 121.0,
+    }
+
+    with caplog.at_level("INFO"):
+        bot._equity_hard_stop_log_status(metrics)
+        bot._equity_hard_stop_log_status(metrics)
+
+    msgs = [r.message for r in caplog.records if "HSL status" in r.message]
+    assert len(msgs) == 1
+    assert "dist_to_red=0.020000" in msgs[0]
+    assert "last_red_ts=1600000" in msgs[0]
+
+
 @pytest.mark.asyncio
 async def test_hard_stop_finalize_red_stop_terminal_latches_and_stops(monkeypatch):
     cfg = _dummy_config()
@@ -1194,12 +1223,12 @@ async def test_get_balance_equity_history_hyperliquid_backfills_from_5m(monkeypa
             if timeframe in (None, "1m"):
                 return _make_candles([])
             if timeframe == "5m":
-                    return _make_candles(
-                        [
-                            (1_699_999_980_000, 100.0, 110.0, 95.0, 108.0, 1.0),
-                            (1_699_999_980_000 + 5 * 60_000, 108.0, 112.0, 101.0, 104.0, 1.0),
-                        ]
-                    )
+                return _make_candles(
+                    [
+                        (1_699_999_980_000, 100.0, 110.0, 95.0, 108.0, 1.0),
+                        (1_699_999_980_000 + 5 * 60_000, 108.0, 112.0, 101.0, 104.0, 1.0),
+                    ]
+                )
             if timeframe == "15m":
                 return _make_candles([])
             raise AssertionError(f"unexpected timeframe {timeframe}")

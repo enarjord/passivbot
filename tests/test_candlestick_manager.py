@@ -13,6 +13,8 @@ from candlestick_manager import (
     CANDLE_DTYPE,
     ONE_MIN_MS,
     _floor_minute,
+    ohlcv_5m_to_1m,
+    ohlcv_15m_to_1m,
 )
 
 
@@ -964,3 +966,33 @@ async def test_force_refetch_gaps_clears_gaps(tmp_path):
 
     # Gap should be cleared
     assert len(cm._get_known_gaps(symbol)) == 0
+
+
+def test_ohlcv_5m_to_1m_splits_volume_and_preserves_extremes():
+    base = 1_700_000_000_000
+    candle = np.array([(base, 100.0, 110.0, 95.0, 108.0, 25.0)], dtype=CANDLE_DTYPE)[0]
+
+    out = ohlcv_5m_to_1m(candle)
+
+    assert out.shape[0] == 5
+    assert list(out["ts"]) == [base + i * ONE_MIN_MS for i in range(5)]
+    assert np.allclose(np.asarray(out["bv"], dtype=np.float64), 5.0)
+    assert float(out[0]["o"]) == pytest.approx(100.0)
+    assert float(out[-1]["c"]) == pytest.approx(108.0)
+    assert float(np.max(np.asarray(out["h"], dtype=np.float64))) == pytest.approx(110.0)
+    assert float(np.min(np.asarray(out["l"], dtype=np.float64))) == pytest.approx(95.0)
+
+
+def test_ohlcv_15m_to_1m_splits_volume_and_preserves_extremes():
+    base = 1_700_000_000_000
+    candle = np.array([(base, 220.0, 230.0, 190.0, 200.0, 150.0)], dtype=CANDLE_DTYPE)[0]
+
+    out = ohlcv_15m_to_1m(candle)
+
+    assert out.shape[0] == 15
+    assert list(out["ts"][:3]) == [base + i * ONE_MIN_MS for i in range(3)]
+    assert np.allclose(np.asarray(out["bv"], dtype=np.float64), 10.0)
+    assert float(out[0]["o"]) == pytest.approx(220.0)
+    assert float(out[-1]["c"]) == pytest.approx(200.0)
+    assert float(np.max(np.asarray(out["h"], dtype=np.float64))) == pytest.approx(230.0)
+    assert float(np.min(np.asarray(out["l"], dtype=np.float64))) == pytest.approx(190.0)

@@ -24,7 +24,12 @@ import passivbot_rust as pbr
 import logging
 import math
 from pathlib import Path
-from candlestick_manager import CandlestickManager, CANDLE_DTYPE
+from candlestick_manager import (
+    CandlestickManager,
+    CANDLE_DTYPE,
+    ohlcv_5m_to_1m,
+    ohlcv_15m_to_1m,
+)
 from fill_events_manager import (
     FillEventsManager,
     _build_fetcher_for_bot,
@@ -140,10 +145,6 @@ def _get_process_rss_bytes() -> Optional[int]:
         except Exception:
             pass
     return None
-
-
-def _linear_interpolate(value0: float, value1: float, ratio: float) -> float:
-    return float(value0 + (value1 - value0) * ratio)
 
 
 def clip_by_timestamp(xs, start_ts, end_ts):
@@ -739,6 +740,10 @@ class Passivbot:
         self._equity_hard_stop_halted_until_ms = None
         self._equity_hard_stop_pending_stop_event = None
         self._equity_hard_stop_last_stop_event = None
+        self._equity_hard_stop_last_status_log_ms = 0
+        self._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
+        self._equity_hard_stop_last_cooldown_log_ms = 0
+        self._equity_hard_stop_cooldown_log_interval_ms = 60 * 1000
 
     def live_value(self, key: str):
         return require_live_value(self.config, key)
@@ -878,6 +883,8 @@ class Passivbot:
         self._equity_hard_stop_halted_until_ms = None
         self._equity_hard_stop_pending_stop_event = None
         self._equity_hard_stop_last_stop_event = None
+        self._equity_hard_stop_last_status_log_ms = 0
+        self._equity_hard_stop_last_cooldown_log_ms = 0
         self._runtime_forced_modes = {"long": {}, "short": {}}
 
     def _equity_hard_stop_runtime_initialized(self) -> bool:
@@ -972,49 +979,6 @@ class Passivbot:
             "maker_fee": float(maker_fee),
             "taker_fee": float(taker_fee),
         }
-
-    @staticmethod
-    def _build_intrabar_minute_close_lookup(
-        candles: np.ndarray, tf_minutes: int
-    ) -> Dict[int, float]:
-        if tf_minutes <= 0 or candles is None or candles.size == 0:
-            return {}
-        out: Dict[int, float] = {}
-        last_idx = max(0, int(tf_minutes) - 1)
-        pivot_a = min(last_idx, max(1, int(tf_minutes) // 3))
-        pivot_b = min(last_idx, max(pivot_a + 1, (2 * int(tf_minutes)) // 3))
-        for row in candles:
-            ts = int(row["ts"])
-            o = float(row["o"])
-            h = float(row["h"])
-            l = float(row["l"])
-            c = float(row["c"])
-            if not all(math.isfinite(x) for x in (o, h, l, c)):
-                continue
-            if h < l:
-                h, l = l, h
-            o = min(max(o, l), h)
-            c = min(max(c, l), h)
-            if last_idx == 0:
-                out[ts] = c
-                continue
-            if c >= o:
-                waypoints = [(0, o), (pivot_a, l), (pivot_b, h), (last_idx, c)]
-            else:
-                waypoints = [(0, o), (pivot_a, h), (pivot_b, l), (last_idx, c)]
-            deduped = [waypoints[0]]
-            for idx, value in waypoints[1:]:
-                if idx > deduped[-1][0]:
-                    deduped.append((idx, value))
-                else:
-                    deduped[-1] = (idx, value)
-            for (i0, v0), (i1, v1) in zip(deduped, deduped[1:]):
-                span = max(1, i1 - i0)
-                for minute_idx in range(i0, i1 + 1):
-                    ratio = 0.0 if i1 == i0 else (minute_idx - i0) / span
-                    price = _linear_interpolate(v0, v1, ratio)
-                    out[ts + minute_idx * 60_000] = min(max(float(price), l), h)
-        return out
 
     def _equity_hard_stop_realized_pnl_now(self) -> float:
         if self._pnls_manager is None:
@@ -1230,7 +1194,13 @@ class Passivbot:
             if now_ms >= cooldown_until_ms:
                 return
             remaining_seconds = max(0.0, (cooldown_until_ms - now_ms) / 1000.0)
-            logging.info("[risk] RED cooldown active | remaining_seconds=%.1f", remaining_seconds)
+            if (
+                self._equity_hard_stop_last_cooldown_log_ms == 0
+                or now_ms - self._equity_hard_stop_last_cooldown_log_ms
+                >= self._equity_hard_stop_cooldown_log_interval_ms
+            ):
+                self._equity_hard_stop_last_cooldown_log_ms = now_ms
+                logging.info("[risk] RED cooldown active | remaining_seconds=%.1f", remaining_seconds)
             await asyncio.sleep(min(float(self.live_value("execution_delay_seconds")), 5.0))
 
     def _equity_hard_stop_reset_after_restart(self) -> None:
@@ -1392,6 +1362,51 @@ class Passivbot:
         if current_metrics["tier"] == "red":
             self._equity_hard_stop_pending_red_since_ms = int(current_metrics["timestamp_ms"])
 
+    def _equity_hard_stop_log_status(self, metrics: dict) -> None:
+        now_ms = int(metrics["timestamp_ms"])
+        if (
+            self._equity_hard_stop_last_status_log_ms != 0
+            and now_ms - self._equity_hard_stop_last_status_log_ms
+            < self._equity_hard_stop_status_log_interval_ms
+        ):
+            return
+        self._equity_hard_stop_last_status_log_ms = now_ms
+        red_threshold = float(metrics["red_threshold"])
+        drawdown_score = float(metrics["drawdown_score"])
+        dist_to_red = max(0.0, red_threshold - drawdown_score)
+        cooldown_remaining_s = None
+        if self._equity_hard_stop_halted_until_ms is not None:
+            cooldown_remaining_s = max(0.0, (self._equity_hard_stop_halted_until_ms - now_ms) / 1000.0)
+        last_red_ts = None
+        if self._equity_hard_stop_last_stop_event is not None:
+            last_red_ts = self._equity_hard_stop_last_stop_event.get("stop_event_timestamp_ms")
+        if last_red_ts is None:
+            last_red_ts = self._equity_hard_stop_pending_red_since_ms
+        logging.info(
+            "[risk] HSL status | tier=%s dist_to_red=%.6f drawdown_raw=%.6f drawdown_ema=%.6f "
+            "drawdown_score=%.6f red_threshold=%.6f cooldown_remaining_s=%s last_red_ts=%s "
+            "pending_red_since_ms=%s peak_strategy_equity=%.6f rolling_peak_strategy_equity=%.6f",
+            metrics["tier"],
+            dist_to_red,
+            metrics["drawdown_raw"],
+            metrics["drawdown_ema"],
+            drawdown_score,
+            red_threshold,
+            (
+                f"{cooldown_remaining_s:.1f}"
+                if cooldown_remaining_s is not None
+                else "none"
+            ),
+            last_red_ts if last_red_ts is not None else "none",
+            (
+                self._equity_hard_stop_pending_red_since_ms
+                if self._equity_hard_stop_pending_red_since_ms is not None
+                else "none"
+            ),
+            metrics["peak_strategy_equity"],
+            metrics["rolling_peak_strategy_equity"],
+        )
+
     async def _equity_hard_stop_check(self) -> Optional[dict]:
         if not self._equity_hard_stop_enabled():
             return None
@@ -1427,6 +1442,7 @@ class Passivbot:
             )
         elif metrics["tier"] != "red":
             self._equity_hard_stop_pending_red_since_ms = None
+        self._equity_hard_stop_log_status(metrics)
         return metrics
 
     def _equity_hard_stop_set_red_runtime_forced_modes(self) -> None:
@@ -4750,12 +4766,19 @@ class Passivbot:
                             continue
                         if arr is None or arr.size == 0:
                             continue
-                        reconstructed = self._build_intrabar_minute_close_lookup(arr, tf_minutes)
-                        if not reconstructed:
+                        if tf_minutes == 5:
+                            synth = np.concatenate([ohlcv_5m_to_1m(row) for row in arr])
+                        elif tf_minutes == 15:
+                            synth = np.concatenate([ohlcv_15m_to_1m(row) for row in arr])
+                        else:
+                            raise ValueError(f"unsupported synthetic timeframe {tf_minutes}m")
+                        if synth.size == 0:
                             continue
                         added = 0
                         lookup = price_lookup.setdefault(sym, {})
-                        for ts, close in reconstructed.items():
+                        for row in synth:
+                            ts = int(row["ts"])
+                            close = float(row["c"])
                             if ts < start_minute or ts > end_minute:
                                 continue
                             if ts in lookup:
