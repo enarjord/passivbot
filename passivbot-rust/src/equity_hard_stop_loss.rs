@@ -99,8 +99,8 @@ impl RollingPeakTracker {
         equity: f64,
         lookback_ms: u64,
     ) -> Result<f64, String> {
-        if !equity.is_finite() || equity <= 0.0 {
-            return Err("equity must be finite and > 0".to_string());
+        if !equity.is_finite() {
+            return Err("equity must be finite".to_string());
         }
         if lookback_ms == 0 {
             return Err("lookback_ms must be > 0".to_string());
@@ -384,6 +384,18 @@ mod tests {
         let _ = tracker.update(1_000, 100.0, 1_000).unwrap();
         let err = tracker.update(999, 101.0, 1_000).unwrap_err();
         assert!(err.contains("non-decreasing"));
+    }
+
+    #[test]
+    fn rolling_peak_tracker_accepts_negative_finite_values() {
+        let mut tracker = RollingPeakTracker::default();
+        let lookback_ms = 1_000;
+        let p0 = tracker.update(1_000, -5.0, lookback_ms).unwrap();
+        assert!((p0 - -5.0).abs() < 1e-12);
+        let p1 = tracker.update(1_500, -2.0, lookback_ms).unwrap();
+        assert!((p1 - -2.0).abs() < 1e-12);
+        let p2 = tracker.update(2_100, -7.0, lookback_ms).unwrap();
+        assert!((p2 - -2.0).abs() < 1e-12);
     }
 }
 use std::collections::VecDeque;
