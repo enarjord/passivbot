@@ -857,13 +857,6 @@ class Passivbot:
     def _equity_hard_stop_latch_path(self) -> str:
         return make_get_filepath(f"caches/equity_hard_stop/{self.exchange}/{self.user}.json")
 
-    def _equity_hard_stop_load_latch(self) -> Optional[dict]:
-        path = self._equity_hard_stop_latch_path()
-        if not os.path.isfile(path):
-            return None
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-
     def _equity_hard_stop_write_latch(self, metrics: dict) -> str:
         path = self._equity_hard_stop_latch_path()
         payload = dict(metrics)
@@ -877,32 +870,6 @@ class Passivbot:
         path = self._equity_hard_stop_latch_path()
         if os.path.isfile(path):
             os.remove(path)
-
-    def _equity_hard_stop_parse_latch_payload(self, payload: dict) -> dict:
-        if not isinstance(payload, dict):
-            raise TypeError(f"hard-stop latch payload must be a dict, got {type(payload).__name__}")
-        required = (
-            "triggered_at",
-            "stop_event_timestamp_ms",
-            "no_restart_latched",
-            "auto_restart_eligible",
-            "cooldown_until_ms",
-        )
-        missing = [k for k in required if k not in payload]
-        if missing:
-            raise ValueError(f"hard-stop latch missing required keys: {', '.join(missing)}")
-        no_restart_latched = bool(payload["no_restart_latched"])
-        auto_restart_eligible = bool(payload["auto_restart_eligible"])
-        cooldown_until_ms = payload["cooldown_until_ms"]
-        if cooldown_until_ms is not None:
-            cooldown_until_ms = int(cooldown_until_ms)
-        return {
-            "triggered_at": str(payload["triggered_at"]),
-            "stop_event_timestamp_ms": int(payload["stop_event_timestamp_ms"]),
-            "no_restart_latched": no_restart_latched,
-            "auto_restart_eligible": auto_restart_eligible,
-            "cooldown_until_ms": cooldown_until_ms,
-        }
 
     def _equity_hard_stop_reset_state(self) -> None:
         self._equity_hard_stop_runtime.reset()
@@ -1194,6 +1161,16 @@ class Passivbot:
             logging.info("[risk] RED cooldown active | remaining_seconds=%.1f", remaining_seconds)
             await asyncio.sleep(min(float(self.live_value("execution_delay_seconds")), 5.0))
 
+    def _equity_hard_stop_reset_after_restart(self) -> None:
+        self._equity_hard_stop_runtime.reset()
+        self._equity_hard_stop_strategy_pnl_peak.reset()
+        self._equity_hard_stop_clear_runtime_forced_modes()
+        self._equity_hard_stop_red_flat_confirmations = 0
+        self._equity_hard_stop_last_red_progress = None
+        self._equity_hard_stop_pending_red_since_ms = None
+        self._equity_hard_stop_halted_until_ms = None
+        self._equity_hard_stop_pending_stop_event = None
+
     async def _equity_hard_stop_initialize_from_history(self) -> None:
         if not self._equity_hard_stop_enabled():
             return
@@ -1213,6 +1190,7 @@ class Passivbot:
         cooldown_until_ms = None
         pending_red = False
         n_rows = 0
+        latest_terminal_stop = None
         for row in timeline:
             if not isinstance(row, dict):
                 continue
@@ -1227,8 +1205,7 @@ class Passivbot:
             if cooldown_until_ms is not None:
                 if ts < cooldown_until_ms:
                     continue
-                self._equity_hard_stop_runtime.reset()
-                self._equity_hard_stop_strategy_pnl_peak.reset()
+                self._equity_hard_stop_reset_after_restart()
                 cooldown_until_ms = None
                 pending_red = False
 
@@ -1279,26 +1256,47 @@ class Passivbot:
                         cooldown_until_ms=None,
                     )
                     self._equity_hard_stop_last_stop_event = payload
+                    latest_terminal_stop = payload
                     latch_path = self._equity_hard_stop_write_latch(payload)
                     logging.critical(
-                        "[risk] hard-stop replay found terminal RED stop event in lookback | "
-                        "stop_ts=%s drawdown_raw=%.6f no_restart_drawdown_threshold=%.6f latch=%s",
+                        "[risk] hard-stop replay found terminal RED stop event in exchange-derived "
+                        "history | stop_ts=%s drawdown_raw=%.6f "
+                        "no_restart_drawdown_threshold=%.6f diagnostic=%s",
                         ts,
                         stop_drawdown_raw,
                         no_restart_drawdown_threshold,
                         latch_path,
                     )
-                    self.stop_signal_received = True
-                    return
+                    break
                 cooldown_until_ms = ts + cooldown_ms
                 pending_red = False
                 self._equity_hard_stop_pending_red_since_ms = None
+
+        if latest_terminal_stop is not None:
+            self.stop_signal_received = True
+            return
+
+        now_ms = int(self.get_exchange_time())
+        if cooldown_until_ms is not None:
+            if now_ms < cooldown_until_ms:
+                logging.critical(
+                    "[risk] reconstructed hard-stop cooldown from exchange-derived history; "
+                    "delaying startup %.1fs",
+                    (cooldown_until_ms - now_ms) / 1000.0,
+                )
+                await self._equity_hard_stop_wait_for_cooldown(cooldown_until_ms)
+                if self.stop_signal_received:
+                    return
+                now_ms = int(self.get_exchange_time())
+            self._equity_hard_stop_reset_after_restart()
+            cooldown_until_ms = None
+            pending_red = False
 
         current_balance = self.get_raw_balance()
         current_realized = self._equity_hard_stop_realized_pnl_now()
         current_upnl = await self._calc_upnl_sum_strict()
         current_metrics = self._equity_hard_stop_apply_sample(
-            int(self.get_exchange_time()),
+            now_ms,
             float(current_balance),
             float(current_realized),
             float(current_upnl),
@@ -1470,14 +1468,7 @@ class Passivbot:
         await self._equity_hard_stop_wait_for_cooldown(cooldown_until_ms)
         if self.stop_signal_received:
             return
-        self._equity_hard_stop_runtime.reset()
-        self._equity_hard_stop_strategy_pnl_peak.reset()
-        self._equity_hard_stop_clear_runtime_forced_modes()
-        self._equity_hard_stop_red_flat_confirmations = 0
-        self._equity_hard_stop_last_red_progress = None
-        self._equity_hard_stop_pending_red_since_ms = None
-        self._equity_hard_stop_halted_until_ms = None
-        self._equity_hard_stop_pending_stop_event = None
+        self._equity_hard_stop_reset_after_restart()
         self._equity_hard_stop_remove_latch_file()
         logging.info("[risk] RED cooldown elapsed; trading loop resumed")
 
@@ -1788,60 +1779,10 @@ class Passivbot:
         self._unstuck_last_log_ms = now_ms
         self._log_unstuck_status()
 
-    async def _equity_hard_stop_handle_startup_latch(self) -> bool:
-        if not self._equity_hard_stop_enabled():
-            return False
-        latch_path = self._equity_hard_stop_latch_path()
-        if not os.path.isfile(latch_path):
-            return False
-        try:
-            parsed = self._equity_hard_stop_parse_latch_payload(self._equity_hard_stop_load_latch())
-        except Exception as e:
-            logging.critical(
-                "[risk] failed to parse hard-stop latch file; refusing startup until manual clear | "
-                "latch=%s error=%s",
-                latch_path,
-                e,
-            )
-            self.stop_signal_received = True
-            return True
-        if parsed["no_restart_latched"] or (not parsed["auto_restart_eligible"]):
-            logging.critical(
-                "[risk] terminal hard-stop latch present; refusing startup until manually cleared | "
-                "latch=%s triggered_at=%s",
-                latch_path,
-                parsed["triggered_at"],
-            )
-            self.stop_signal_received = True
-            return True
-        cooldown_until_ms = parsed["cooldown_until_ms"]
-        if cooldown_until_ms is None:
-            logging.critical(
-                "[risk] hard-stop latch missing cooldown for auto-restart; refusing startup | "
-                "latch=%s",
-                latch_path,
-            )
-            self.stop_signal_received = True
-            return True
-        now_ms = utc_ms()
-        if now_ms < cooldown_until_ms:
-            wait_s = (cooldown_until_ms - now_ms) / 1000.0
-            logging.critical(
-                "[risk] hard-stop cooldown still active; delaying startup %.1fs | latch=%s",
-                wait_s,
-                latch_path,
-            )
-            await asyncio.sleep(wait_s)
-        self._equity_hard_stop_remove_latch_file()
-        logging.info("[risk] hard-stop cooldown elapsed; cleared latch and resuming startup")
-        return False
-
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
         self._log_startup_banner()
         logging.info("[boot] starting bot %s...", self.exchange)
-        if await self._equity_hard_stop_handle_startup_latch():
-            return
 
         # Random boot stagger to spread API load when multiple bots start simultaneously.
         # Applies BEFORE init_markets() so even the first API calls are staggered.

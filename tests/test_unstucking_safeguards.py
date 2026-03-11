@@ -819,57 +819,6 @@ def test_hard_stop_apply_sample_rolling_peak_prunes_by_lookback():
 
 
 @pytest.mark.asyncio
-async def test_hard_stop_startup_latch_terminal_blocks(monkeypatch, tmp_path):
-    cfg = _dummy_config()
-    bot = _make_dummy_bot(cfg)
-    bot.equity_hard_stop_loss["enabled"] = True
-    latch_path = tmp_path / "hs_latch_terminal.json"
-    latch_path.write_text(
-        json.dumps(
-            {
-                "triggered_at": "2026-03-04T12:00:00Z",
-                "stop_event_timestamp_ms": 1_700_000_000_000,
-                "no_restart_latched": True,
-                "auto_restart_eligible": False,
-                "cooldown_until_ms": None,
-            }
-        )
-    )
-    monkeypatch.setattr(bot, "_equity_hard_stop_latch_path", lambda: str(latch_path))
-
-    handled = await bot._equity_hard_stop_handle_startup_latch()
-
-    assert handled is True
-    assert bot.stop_signal_received is True
-
-
-@pytest.mark.asyncio
-async def test_hard_stop_startup_latch_autorestart_clears(monkeypatch, tmp_path):
-    cfg = _dummy_config()
-    bot = _make_dummy_bot(cfg)
-    bot.equity_hard_stop_loss["enabled"] = True
-    latch_path = tmp_path / "hs_latch_auto.json"
-    latch_path.write_text(
-        json.dumps(
-            {
-                "triggered_at": "2026-03-04T12:00:00Z",
-                "stop_event_timestamp_ms": 1_700_000_000_000,
-                "no_restart_latched": False,
-                "auto_restart_eligible": True,
-                "cooldown_until_ms": 1,
-            }
-        )
-    )
-    monkeypatch.setattr(bot, "_equity_hard_stop_latch_path", lambda: str(latch_path))
-
-    handled = await bot._equity_hard_stop_handle_startup_latch()
-
-    assert handled is False
-    assert bot.stop_signal_received is False
-    assert not latch_path.exists()
-
-
-@pytest.mark.asyncio
 async def test_hard_stop_finalize_red_stop_terminal_latches_and_stops(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
@@ -1049,6 +998,77 @@ async def test_hard_stop_initialize_from_history_terminal_stop_sets_latch(monkey
     assert captured["payload"]["no_restart_latched"] is True
     assert captured["payload"]["cooldown_until_ms"] is None
     assert captured["payload"]["stop_event_timestamp_ms"] == 121_000
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_reconstructs_active_cooldown_without_latch(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.equity_hard_stop_loss["enabled"] = True
+    bot.equity_hard_stop_loss["red_threshold"] = 0.05
+    bot.equity_hard_stop_loss["ema_span_minutes"] = 1.0
+    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 1.0
+    bot.equity_hard_stop_loss["no_restart_drawdown_threshold"] = 0.2
+    bot.balance = 104.0
+    bot._live_values["execution_delay_seconds"] = 60.0
+
+    async def fake_history(*, current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 1_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "unrealized_pnl": 0.0,
+                    "is_flat": False,
+                },
+                {
+                    "timestamp": 61_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "unrealized_pnl": 10.0,
+                    "is_flat": False,
+                },
+                {
+                    "timestamp": 121_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "unrealized_pnl": 4.0,
+                    "is_flat": False,
+                },
+                {
+                    "timestamp": 181_000,
+                    "balance": 104.0,
+                    "realized_pnl": 4.0,
+                    "unrealized_pnl": 0.0,
+                    "is_flat": True,
+                },
+            ]
+        }
+
+    current_time = {"ts": 200_000}
+    waited = {}
+
+    async def fake_wait(until_ms):
+        waited["until_ms"] = until_ms
+        current_time["ts"] = until_ms
+
+    async def fake_upnl():
+        return 0.0
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(bot, "_equity_hard_stop_wait_for_cooldown", fake_wait)
+    monkeypatch.setattr(bot, "get_exchange_time", lambda: current_time["ts"])
+    monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    assert waited["until_ms"] == 241_000
+    assert bot.stop_signal_received is False
+    assert bot._equity_hard_stop_runtime.red_latched() is False
+    assert bot._equity_hard_stop_pending_red_since_ms is None
 
 
 @pytest.mark.asyncio
