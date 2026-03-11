@@ -30,6 +30,30 @@ from pareto_core import (
 STAT_FIELDS = {"mean", "min", "max", "std"}
 
 
+def _summarize_constraint_details(details: Sequence[Dict[str, Any]], limit: int = 2) -> str:
+    if not details:
+        return ""
+    sorted_details = sorted(
+        details,
+        key=lambda detail: float(detail.get("penalty") or 0.0),
+        reverse=True,
+    )
+    formatted = []
+    for detail in sorted_details[:limit]:
+        metric_key = detail.get("metric_key") or detail.get("metric") or "unknown_metric"
+        value = detail.get("value")
+        penalty = detail.get("penalty")
+        if isinstance(value, (int, float)):
+            value = pbr.round_dynamic(float(value), 4)
+        if isinstance(penalty, (int, float)):
+            penalty = pbr.round_dynamic(float(penalty), 4)
+        formatted.append(f"{metric_key}={value} (penalty={penalty})")
+    remaining = len(sorted_details) - limit
+    if remaining > 0:
+        formatted.append(f"+{remaining} more")
+    return "; ".join(formatted)
+
+
 @dataclass(frozen=True)
 class LimitSpec:
     metric: str
@@ -211,6 +235,7 @@ class ParetoStore:
         self._entries: dict[str, str] = {}  # hash -> file path
         self._objectives: dict[str, tuple] = {}  # hash -> objective vector
         self._violations: dict[str, float] = {}  # hash -> constraint violation
+        self._constraint_summaries: dict[str, str] = {}  # hash -> loggable violation summary
         self._front: list[str] = []  # list of hashes (Pareto set)
         self._objective_lookup: dict[tuple, str] = {}  # objective vector ➜ hash
         # ------------------------------------------------------------------
@@ -243,6 +268,9 @@ class ParetoStore:
             scoring_keys = self.scoring_keys or entry.get("optimize", {}).get("scoring")
             obj, _ = extract_objectives(rounded, scoring_keys=scoring_keys)
             violation = extract_violation(rounded)
+            violation_summary = _summarize_constraint_details(
+                metrics_block.get("constraint_details") or []
+            )
 
             # ───────────── NEW: dedupe on the objective vector ──────────────
             existing_hash = self._objective_lookup.get(obj)
@@ -286,6 +314,7 @@ class ParetoStore:
             self._persist_entry(h, rounded, source_path=source_path)
             self._objectives[h] = obj
             self._violations[h] = violation
+            self._constraint_summaries[h] = violation_summary
             self._front.append(h)
             self._objective_lookup[obj] = h
 
@@ -380,9 +409,15 @@ class ParetoStore:
                     f"{pbr.round_dynamic(min(viols), 3)},"
                     f"{pbr.round_dynamic(max(viols), 3)})"
                 )
+        constraint_details_summary = ""
+        if self._front:
+            worst_hash = max(self._front, key=lambda idx: self._violations.get(idx, 0.0))
+            worst_summary = self._constraint_summaries.get(worst_hash) or ""
+            if worst_summary:
+                constraint_details_summary = f" | violated:{worst_summary}"
 
         self._log.info(
-            f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}{violation_summary}"
+            f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}{violation_summary}{constraint_details_summary}"
         )
 
     def _prune_front(self, n_prune: int) -> None:
@@ -400,6 +435,7 @@ class ParetoStore:
         if obj is not None:
             self._objective_lookup.pop(obj, None)
         self._violations.pop(hash_id, None)
+        self._constraint_summaries.pop(hash_id, None)
         self._delete_entry_file(hash_id)
         try:
             self._front.remove(hash_id)

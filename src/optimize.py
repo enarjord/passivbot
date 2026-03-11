@@ -306,6 +306,7 @@ class ResultRecorder:
                 logging.error(f"Error writing results: {exc}")
         metrics_block = data.get("metrics", {}) or {}
         violation = metrics_block.get("constraint_violation")
+        violation_details = metrics_block.get("constraint_details") or []
         try:
             updated = self.store.add_entry(data)
         except Exception as exc:
@@ -323,12 +324,15 @@ class ResultRecorder:
                     if isinstance(violation, (int, float))
                     else ""
                 )
+                detail_summary = _summarize_constraint_details(violation_details)
+                detail_str = f" | violated={detail_summary}" if detail_summary else ""
                 logging.info(
-                    "Pareto update | eval=%d | front=%d | objectives=%s%s",
+                    "Pareto update | eval=%d | front=%d | objectives=%s%s%s",
                     self.store.n_iters,
                     len(self.store._front),
                     _format_objectives(objective_values),
                     violation_str,
+                    detail_str,
                 )
 
     def flush(self) -> None:
@@ -361,6 +365,54 @@ def _format_objectives(values: Sequence[float]) -> str:
     if not values:
         return "[]"
     return "[" + ", ".join(f"{float(v):.3g}" for v in values) + "]"
+
+
+def _format_constraint_target(detail: dict) -> str:
+    mode = detail.get("mode")
+    if mode in {"greater_than", "less_than"}:
+        bound = detail.get("bound")
+        if isinstance(bound, (int, float)):
+            comparator = ">" if mode == "greater_than" else "<"
+            return f"{comparator} {pbr.round_dynamic(float(bound), 4)}"
+    if mode in {"outside_range", "inside_range"}:
+        rng = detail.get("range")
+        if isinstance(rng, (list, tuple)) and len(rng) == 2:
+            low, high = rng
+            label = "outside" if mode == "outside_range" else "inside"
+            return (
+                f"{label} [{pbr.round_dynamic(float(low), 4)}, "
+                f"{pbr.round_dynamic(float(high), 4)}]"
+            )
+    return str(mode or "unknown")
+
+
+def _format_constraint_detail(detail: dict) -> str:
+    metric_key = detail.get("metric_key") or detail.get("metric") or "unknown_metric"
+    value = detail.get("value")
+    penalty = detail.get("penalty")
+    value_str = pbr.round_dynamic(float(value), 4) if isinstance(value, (int, float)) else value
+    penalty_str = (
+        pbr.round_dynamic(float(penalty), 4) if isinstance(penalty, (int, float)) else penalty
+    )
+    return (
+        f"{metric_key}={value_str} "
+        f"({_format_constraint_target(detail)}, penalty={penalty_str})"
+    )
+
+
+def _summarize_constraint_details(details: Sequence[dict], *, limit: int = 3) -> str:
+    if not details:
+        return ""
+    sorted_details = sorted(
+        details,
+        key=lambda detail: float(detail.get("penalty") or 0.0),
+        reverse=True,
+    )
+    summary = "; ".join(_format_constraint_detail(detail) for detail in sorted_details[:limit])
+    remaining = len(sorted_details) - limit
+    if remaining > 0:
+        summary = f"{summary}; +{remaining} more"
+    return summary
 
 
 def _is_recoverable_backtest_candidate_error(exc: BaseException) -> bool:
@@ -714,6 +766,7 @@ class Evaluator:
         self.duplicate_counter = duplicate_counter if duplicate_counter is not None else {"count": 0}
         self.bounds = extract_bounds_tuple_list_from_config(self.config)
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
+        self.last_constraint_details: List[Dict[str, Any]] = []
 
         shared_metric_weights = {
             "positions_held_per_day": 1.0,
@@ -997,6 +1050,8 @@ class Evaluator:
             "constraint_violation": total_penalty,
             "liquidated": liquidated,
         }
+        if self.last_constraint_details:
+            metrics_payload["constraint_details"] = deepcopy(self.last_constraint_details)
         individual.evaluation_metrics = metrics_payload
         actual_hash = calc_hash(individual)
         self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
@@ -1018,11 +1073,26 @@ class Evaluator:
         scoring_keys = self.config["optimize"]["scoring"]
         per_objective_modifier = [0.0] * len(scoring_keys)
         global_modifier = 0.0
+        violation_details = []
         for check in self.limit_checks:
             val = analyses_combined.get(check["metric_key"])
             penalty = compute_limit_violation(check, val)
             if not penalty:
                 continue
+            detail = {
+                "metric": check.get("metric"),
+                "metric_key": check.get("metric_key"),
+                "mode": check.get("mode"),
+                "stat": check.get("stat"),
+                "value": float(val) if isinstance(val, (int, float)) else val,
+                "penalty": float(penalty),
+                "objective_indexes": list(check.get("objective_indexes") or []),
+            }
+            if "bound" in check:
+                detail["bound"] = float(check["bound"])
+            if "range" in check:
+                detail["range"] = [float(check["range"][0]), float(check["range"][1])]
+            violation_details.append(detail)
             targets = check.get("objective_indexes") or []
             if targets:
                 for idx in targets:
@@ -1032,6 +1102,11 @@ class Evaluator:
                 global_modifier += penalty
 
         total_penalty = global_modifier + sum(per_objective_modifier)
+        self.last_constraint_details = sorted(
+            violation_details,
+            key=lambda detail: detail["penalty"],
+            reverse=True,
+        )
         scores = []
         for idx, sk in enumerate(scoring_keys):
             penalty_total = global_modifier + per_objective_modifier[idx]
@@ -1374,6 +1449,8 @@ class SuiteEvaluator:
             "constraint_violation": total_penalty,
             "liquidated": liquidated,
         }
+        if self.base.last_constraint_details:
+            metrics_payload["constraint_details"] = deepcopy(self.base.last_constraint_details)
 
         individual.evaluation_metrics = metrics_payload
         actual_hash = calc_hash(individual)
