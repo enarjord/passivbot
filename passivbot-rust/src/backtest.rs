@@ -1978,7 +1978,10 @@ impl<'a> Backtest<'a> {
 
     #[inline(always)]
     fn is_panic_close_order(order_type: OrderType) -> bool {
-        matches!(order_type, OrderType::ClosePanicLong | OrderType::ClosePanicShort)
+        matches!(
+            order_type,
+            OrderType::ClosePanicLong | OrderType::ClosePanicShort
+        )
     }
 
     #[inline(always)]
