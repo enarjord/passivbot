@@ -153,6 +153,7 @@ from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
 )
+from rust_utils import collect_runtime_provenance
 
 
 def _ignore_sigint_in_worker():
@@ -274,6 +275,17 @@ class ResultRecorder:
         self.prev_data = None
         self.counter = 0
         self.scoring_keys = list(scoring_keys)
+        self.session_provenance = {
+            "optimizer_runtime": collect_runtime_provenance(),
+            "results_dir": results_dir,
+            "results_file": os.path.join(results_dir, "all_results.bin"),
+        }
+
+    def build_provenance(self) -> dict:
+        return {
+            **deepcopy(self.session_provenance),
+            "recorded_at_ms": utc_ms(),
+        }
 
     def record(self, data: dict) -> None:
         if self.write_all and self.results_file:
@@ -415,6 +427,7 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
             if violation is not None:
                 metrics["constraint_violation"] = violation
         entry["metrics"] = metrics
+    entry["provenance"] = recorder.build_provenance()
     entry = strip_config_metadata(entry)
     recorder.record(entry)
     if hasattr(individual, "evaluation_metrics"):
