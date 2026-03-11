@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
 import warnings
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import portalocker  # type: ignore
@@ -232,6 +232,22 @@ def ohlcv_5m_to_1m(candle: np.void) -> np.ndarray:
 
 def ohlcv_15m_to_1m(candle: np.void) -> np.ndarray:
     return ohlcv_xm_to_1m(candle, 15)
+
+
+def synthesize_1m_from_higher_tf(candles: np.ndarray, tf_minutes: int) -> np.ndarray:
+    """Expand a higher-timeframe candle array into synthetic 1m OHLCV candles."""
+    arr = _ensure_dtype(candles)
+    if arr.size == 0:
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+    if tf_minutes == 5:
+        expanded = [ohlcv_5m_to_1m(row) for row in arr]
+    elif tf_minutes == 15:
+        expanded = [ohlcv_15m_to_1m(row) for row in arr]
+    else:
+        raise ValueError(f"unsupported tf_minutes={tf_minutes}")
+    if not expanded:
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+    return np.sort(np.concatenate(expanded), order="ts")
 
 
 def get_caller_name(depth: int = 2, logger: Optional[logging.Logger] = None) -> str:
@@ -2099,6 +2115,84 @@ class CandlestickManager:
             seed_last_real_ts=last_ts,
         )
         return int(synth_ts.shape[0])
+
+    async def _backfill_1m_gaps_from_higher_timeframes(
+        self, symbol: str, start_ts: int, end_ts: int
+    ) -> int:
+        """Fill missing 1m candles in memory from 5m/15m candles when 1m history is unavailable."""
+        try:
+            exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
+        except Exception:
+            exid = ""
+        if "hyperliquid" not in exid:
+            return 0
+
+        cache_arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+        sub = self._slice_ts_range(cache_arr, start_ts, end_ts) if cache_arr.size else cache_arr
+        if not self._missing_spans(sub, start_ts, end_ts):
+            return 0
+
+        total_added = 0
+        summary_parts: list[str] = []
+        for timeframe, tf_minutes in (("5m", 5), ("15m", 15)):
+            cache_arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+            sub = self._slice_ts_range(cache_arr, start_ts, end_ts) if cache_arr.size else cache_arr
+            missing = self._missing_spans(sub, start_ts, end_ts)
+            if not missing:
+                break
+            tf_start = min(s for s, _ in missing)
+            tf_end = max(e for _, e in missing)
+            higher_tf = await self.get_candles(
+                symbol,
+                start_ts=tf_start,
+                end_ts=tf_end,
+                timeframe=timeframe,
+                strict=False,
+            )
+            if higher_tf.size == 0:
+                continue
+            synth = synthesize_1m_from_higher_tf(higher_tf, tf_minutes)
+            if synth.size == 0:
+                continue
+
+            existing_ts = set(int(x) for x in cache_arr["ts"]) if cache_arr.size else set()
+            keep_mask = np.array(
+                [
+                    start_ts <= int(row["ts"]) <= end_ts and int(row["ts"]) not in existing_ts
+                    for row in synth
+                ],
+                dtype=bool,
+            )
+            synth = synth[keep_mask]
+            if synth.size == 0:
+                continue
+
+            self._cache[symbol] = self._merge_overwrite(cache_arr, synth)
+            self._track_synthetic_timestamps(symbol, [int(x) for x in synth["ts"]])
+            total_added += int(synth.size)
+            summary_parts.append(f"{timeframe}:source_rows={higher_tf.size},added_1m={synth.size}")
+            first_dt = datetime.fromtimestamp(int(synth[0]["ts"]) / 1000, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M"
+            )
+            last_dt = datetime.fromtimestamp(int(synth[-1]["ts"]) / 1000, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M"
+            )
+            self.log.info(
+                "[candle] %s: synthesized %d 1m candles from %s candles at %s to %s",
+                symbol,
+                int(synth.size),
+                timeframe,
+                first_dt,
+                last_dt,
+            )
+
+        if total_added > 0:
+            self.log.info(
+                "[candle] %s: used higher-TF fallback for 1m gaps after 1m coverage limit/cache miss (%s)",
+                symbol,
+                ", ".join(summary_parts),
+            )
+        return int(total_added)
 
     def _invalidate_ema_cache(self, symbol: str) -> None:
         """Invalidate all cached EMA values for a symbol, forcing recomputation."""
@@ -5538,6 +5632,17 @@ class CandlestickManager:
                 if synthesized > 0:
                     arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
                     sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
+
+        # Hyperliquid-specific historical fallback: where native 1m history is capped,
+        # synthesize missing 1m candles from real 5m/15m candles in memory before
+        # resorting to flat zero-candle standardization.
+        if self.exchange is not None and not strict:
+            added_from_higher_tf = await self._backfill_1m_gaps_from_higher_timeframes(
+                symbol, start_ts, end_ts
+            )
+            if added_from_higher_tf > 0:
+                arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
 
         # Standardize gaps: synthesize zero-candles where missing.
         # To help seed forward-fill, include one candle before start_ts if available.

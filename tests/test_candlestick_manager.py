@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 import math
@@ -15,6 +16,7 @@ from candlestick_manager import (
     _floor_minute,
     ohlcv_5m_to_1m,
     ohlcv_15m_to_1m,
+    synthesize_1m_from_higher_tf,
 )
 
 
@@ -996,3 +998,56 @@ def test_ohlcv_15m_to_1m_splits_volume_and_preserves_extremes():
     assert float(out[-1]["c"]) == pytest.approx(200.0)
     assert float(np.max(np.asarray(out["h"], dtype=np.float64))) == pytest.approx(230.0)
     assert float(np.min(np.asarray(out["l"], dtype=np.float64))) == pytest.approx(190.0)
+
+
+def test_synthesize_1m_from_higher_tf_concatenates_rows():
+    base = 1_700_000_000_000
+    candles = np.array(
+        [
+            (base, 100.0, 110.0, 95.0, 108.0, 25.0),
+            (base + 5 * ONE_MIN_MS, 108.0, 112.0, 101.0, 104.0, 20.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    out = synthesize_1m_from_higher_tf(candles, 5)
+
+    assert out.shape[0] == 10
+    assert int(out[0]["ts"]) == base
+    assert int(out[-1]["ts"]) == base + 9 * ONE_MIN_MS
+    assert float(np.sum(np.asarray(out["bv"], dtype=np.float64))) == pytest.approx(45.0)
+
+
+@pytest.mark.asyncio
+async def test_get_candles_hyperliquid_backfills_missing_1m_from_5m(monkeypatch, tmp_path, caplog):
+    fixed_now_ms = 1_700_000_900_000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="hyperliquid", cache_dir=str(tmp_path / "caches"))
+    symbol = "BTC/USDC:USDC"
+    start_ts = _floor_minute(fixed_now_ms) - 10 * ONE_MIN_MS
+    end_ts = start_ts + 9 * ONE_MIN_MS
+
+    async def fake_fetch(symbol_, since_ms, end_exclusive_ms, *, timeframe=None, on_batch=None):
+        if timeframe == "5m":
+            return np.array(
+                [
+                    (start_ts, 100.0, 110.0, 95.0, 108.0, 25.0),
+                    (start_ts + 5 * ONE_MIN_MS, 108.0, 112.0, 101.0, 104.0, 20.0),
+                ],
+                dtype=CANDLE_DTYPE,
+            )
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+
+    with caplog.at_level(logging.INFO, logger="passivbot.candlestick_manager"):
+        out = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, strict=False)
+
+    assert out.shape[0] == 10
+    assert np.any(np.asarray(out["bv"], dtype=np.float64) > 0.0)
+    assert float(np.max(np.asarray(out["h"], dtype=np.float64))) >= 110.0
+    assert any("used higher-TF fallback for 1m gaps" in r.message for r in caplog.records)

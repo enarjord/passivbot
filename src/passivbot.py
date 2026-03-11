@@ -27,8 +27,7 @@ from pathlib import Path
 from candlestick_manager import (
     CandlestickManager,
     CANDLE_DTYPE,
-    ohlcv_5m_to_1m,
-    ohlcv_15m_to_1m,
+    synthesize_1m_from_higher_tf,
 )
 from fill_events_manager import (
     FillEventsManager,
@@ -4766,12 +4765,7 @@ class Passivbot:
                             continue
                         if arr is None or arr.size == 0:
                             continue
-                        if tf_minutes == 5:
-                            synth = np.concatenate([ohlcv_5m_to_1m(row) for row in arr])
-                        elif tf_minutes == 15:
-                            synth = np.concatenate([ohlcv_15m_to_1m(row) for row in arr])
-                        else:
-                            raise ValueError(f"unsupported synthetic timeframe {tf_minutes}m")
+                        synth = synthesize_1m_from_higher_tf(arr, tf_minutes)
                         if synth.size == 0:
                             continue
                         added = 0
