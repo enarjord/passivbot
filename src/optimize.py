@@ -148,7 +148,7 @@ from optimization.bounds import (
     enforce_bounds,
 )
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
-from optimization.config_adapter import get_optimization_key_paths
+from optimization.config_adapter import get_optimization_key_paths, OPTIMIZABLE_COMMON_KEY_PATHS
 from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
@@ -688,6 +688,10 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
         for part in path[:-1]:
             target = target[part]
         target[path[-1]] = value
+    _apply_config_overrides(
+        config,
+        config.get("optimize", {}).get("fixed_runtime_overrides", {}),
+    )
     common_hsl = config.get("bot", {}).get("common", {}).get("equity_hard_stop_loss")
     if isinstance(common_hsl, dict):
         red_threshold = common_hsl.get("red_threshold")
@@ -1519,7 +1523,40 @@ def apply_fine_tune_bounds(
     cli_overridden_bounds: set[str],
 ) -> None:
     bounds = config.get("optimize", {}).get("bounds", {})
-    bot_cfg = config.get("bot", {})
+
+    def _resolve_bound_key_path(bound_key: str):
+        if bound_key in OPTIMIZABLE_COMMON_KEY_PATHS:
+            return OPTIMIZABLE_COMMON_KEY_PATHS[bound_key]
+        try:
+            pside, param = bound_key.split("_", 1)
+        except ValueError:
+            return None
+        if pside not in ("long", "short"):
+            return None
+        return ("bot", pside, param)
+
+    def _fix_bound_to_current_value(bound_key: str) -> bool:
+        path = _resolve_bound_key_path(bound_key)
+        if path is None:
+            logging.warning("fine-tune bounds: unable to resolve key '%s', skipping", bound_key)
+            return False
+        target = config
+        try:
+            for part in path:
+                target = target[part]
+        except (KeyError, TypeError):
+            logging.warning(
+                "fine-tune bounds: missing current config value for '%s', leaving bounds unchanged",
+                bound_key,
+            )
+            return False
+        try:
+            value_float = float(target)
+            bounds[bound_key] = [value_float, value_float]
+        except (TypeError, ValueError):
+            bounds[bound_key] = [target, target]
+        return True
+
     # First, normalize any CLI overrides such that single values mean fixed bounds
     for key in cli_overridden_bounds:
         if key not in bounds:
@@ -1535,37 +1572,32 @@ def apply_fine_tune_bounds(
                 continue
             bounds[key] = [val, val]
 
-    if not fine_tune_params:
+    fine_tune_set = set(fine_tune_params)
+    config_fixed_params = set(config.get("optimize", {}).get("fixed_params", []) or [])
+
+    effective_fixed_params = set(config_fixed_params)
+    if fine_tune_set:
+        effective_fixed_params.update(key for key in bounds if key not in fine_tune_set)
+
+    if not effective_fixed_params:
         return
 
-    fine_tune_set = set(fine_tune_params)
-
-    for key in list(bounds.keys()):
-        if key in fine_tune_set:
+    for key in sorted(effective_fixed_params):
+        if key not in bounds:
             continue
-        try:
-            pside, param = key.split("_", 1)
-        except ValueError:
-            logging.warning(f"fine-tune bounds: unable to parse key '{key}', skipping")
-            continue
-        side_cfg = bot_cfg.get(pside)
-        if not isinstance(side_cfg, dict) or param not in side_cfg:
-            logging.warning(
-                f"fine-tune bounds: missing bot value for '{key}', leaving bounds unchanged"
-            )
-            continue
-        value = side_cfg[param]
-        try:
-            value_float = float(value)
-            bounds[key] = [value_float, value_float]
-        except (TypeError, ValueError):
-            bounds[key] = [value, value]
+        _fix_bound_to_current_value(key)
 
     missing = [key for key in fine_tune_set if key not in bounds]
     if missing:
         logging.warning(
             "fine-tune bounds: requested keys not found in optimize bounds: %s",
             ",".join(sorted(missing)),
+        )
+    fixed_missing = [key for key in config_fixed_params if key not in bounds]
+    if fixed_missing:
+        logging.warning(
+            "optimize.fixed_params keys not found in optimize bounds: %s",
+            ",".join(sorted(fixed_missing)),
         )
 
 
