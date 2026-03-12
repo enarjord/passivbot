@@ -2992,7 +2992,6 @@ def get_template_config():
             "bounds": {
                 "common_equity_hard_stop_loss_cooldown_minutes_after_red": [0.0, 0.0],
                 "common_equity_hard_stop_loss_ema_span_minutes": [60.0, 60.0],
-                "common_equity_hard_stop_loss_no_restart_drawdown_threshold": [1.0, 1.0],
                 "common_equity_hard_stop_loss_red_threshold": [0.25, 0.25],
                 "long_close_grid_markup_end": [0.001, 0.03],
                 "long_close_grid_markup_start": [0.001, 0.03],
@@ -3074,6 +3073,10 @@ def get_template_config():
             "crossover_eta": 20.0,
             "crossover_probability": 0.7,
             "enable_overrides": [],
+            "fixed_params": [],
+            "fixed_runtime_overrides": {
+                "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold": 1.0
+            },
             "iters": 30000,
             "limits": [
                 {

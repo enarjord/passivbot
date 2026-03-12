@@ -326,6 +326,35 @@ class TestIndividualToConfig:
         assert hsl_cfg["red_threshold"] == pytest.approx(0.25)
         assert hsl_cfg["no_restart_drawdown_threshold"] == pytest.approx(0.25)
 
+    def test_applies_optimize_fixed_runtime_overrides_without_mutating_template(self):
+        individual = [1.0, 2.0, 3.0, 4.0, 0.25]
+        template = {
+            "bot": {
+                "common": {
+                    "equity_hard_stop_loss": {
+                        "red_threshold": 0.20,
+                        "no_restart_drawdown_threshold": 0.30,
+                    }
+                },
+                "long": {"param1": 0.0, "param2": 0.0},
+                "short": {"param1": 0.0, "param2": 0.0},
+            },
+            "optimize": {
+                "bounds": {
+                    "common_equity_hard_stop_loss_red_threshold": [0.15, 0.35, 0.01],
+                },
+                "fixed_runtime_overrides": {
+                    "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold": 1.0
+                },
+            },
+        }
+        original_template = deepcopy(template)
+        result = individual_to_config(individual, lambda x, y, z: y, [], template)
+
+        hsl_cfg = result["bot"]["common"]["equity_hard_stop_loss"]
+        assert hsl_cfg["red_threshold"] == pytest.approx(0.25)
+        assert hsl_cfg["no_restart_drawdown_threshold"] == pytest.approx(1.0)
+        assert template == original_template
 class TestConfigToIndividual:
     """Test config_to_individual function."""
 
@@ -549,6 +578,69 @@ class TestApplyFineTuneBounds:
         }
         # Requesting a non-existent key should log warning
         apply_fine_tune_bounds(config, ["long_nonexistent"], set())
+
+    def test_config_fixed_params_fix_only_listed_bounds(self):
+        config = {
+            "optimize": {
+                "bounds": {
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                },
+                "fixed_params": ["long_param2"],
+            },
+            "bot": {
+                "long": {"param1": 0.5, "param2": 0.7},
+            },
+        }
+        apply_fine_tune_bounds(config, [], set())
+
+        assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
+        assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
+
+    def test_config_fixed_params_support_common_hsl_keys(self):
+        config = {
+            "optimize": {
+                "bounds": {
+                    "common_equity_hard_stop_loss_red_threshold": [0.1, 0.3],
+                },
+                "fixed_params": ["common_equity_hard_stop_loss_red_threshold"],
+            },
+            "bot": {
+                "common": {
+                    "equity_hard_stop_loss": {
+                        "red_threshold": 0.22,
+                    }
+                },
+                "long": {},
+                "short": {},
+            },
+        }
+        apply_fine_tune_bounds(config, [], set())
+
+        assert config["optimize"]["bounds"]["common_equity_hard_stop_loss_red_threshold"] == [
+            0.22,
+            0.22,
+        ]
+
+    def test_fine_tune_and_fixed_params_share_single_effective_fixing_path(self):
+        config = {
+            "optimize": {
+                "bounds": {
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_param3": [0.0, 1.0],
+                },
+                "fixed_params": ["long_param3"],
+            },
+            "bot": {
+                "long": {"param1": 0.5, "param2": 0.7, "param3": 0.9},
+            },
+        }
+        apply_fine_tune_bounds(config, ["long_param1", "long_param3"], set())
+
+        assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
+        assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
+        assert config["optimize"]["bounds"]["long_param3"] == [0.9, 0.9]
 
 
 class TestExtractConfigs:
