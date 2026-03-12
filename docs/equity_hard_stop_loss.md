@@ -14,9 +14,9 @@ This is separate from auto-unstuck and the realized-loss gate:
 
 See also:
 
-1. [Risk Management](/Users/eiriknarjord/repos/passivbot-3/docs/risk_management.md)
-2. [Configuration](/Users/eiriknarjord/repos/passivbot-3/docs/configuration.md)
-3. [HSL Reference](/Users/eiriknarjord/repos/passivbot-3/docs/equity_hard_stop_loss_reference.md)
+1. [Risk Management](risk_management.md)
+2. [Configuration](configuration.md)
+3. [HSL Reference](equity_hard_stop_loss_reference.md)
 
 ## How It Works
 
@@ -25,10 +25,9 @@ HSL uses a collateral-FX-robust drawdown metric based on reconstructed strategy 
 High level:
 
 1. Reconstruct `strategy_pnl = realized_pnl + unrealized_pnl`
-2. Rebase that against the current balance to produce `strategy_equity`
-3. Track a rolling `peak_strategy_equity`
-4. Compute raw drawdown and an EMA-smoothed drawdown
-5. Use `drawdown_score = min(drawdown_raw, drawdown_ema)` as the trigger metric
+2. Track a rolling rebased `peak_strategy_equity`
+3. Compute raw drawdown and an EMA-smoothed drawdown
+4. Use `drawdown_score = min(drawdown_raw, drawdown_ema)` as the trigger metric
 
 This avoids false triggers caused only by collateral price moves when strategy PnL itself has not deteriorated.
 
@@ -64,7 +63,7 @@ At RED:
 4. trading halts
 5. optional cooldown-based restart may occur
 
-If the trigger drawdown is at or above `no_restart_drawdown_threshold`, the halt becomes terminal and auto-restart is disabled. Values below `red_threshold` are treated as `red_threshold`.
+In live, a RED halt becomes terminal when the finalized RED-stop drawdown is at or above `no_restart_drawdown_threshold`. In backtests, the no-restart latch uses persistent cross-restart HSL drawdown so repeated RED events cannot be forgotten by cooldown restarts. Values below `red_threshold` are treated as `red_threshold`.
 
 ## Parameters
 
@@ -81,7 +80,9 @@ All parameters live under `bot.common.equity_hard_stop_loss`:
    - wait time before auto-restart after RED
    - `0` means no auto-restart
 5. `no_restart_drawdown_threshold`
-   - if trigger drawdown is at or above this level, the halt will not auto-restart
+   - terminal no-restart threshold
+   - in live, evaluated at RED-stop finalization
+   - in backtests, evaluated against persistent cross-restart HSL drawdown
    - values below `red_threshold` are clamped to `red_threshold`
 6. `tier_ratios.yellow`
    - yellow threshold multiplier
@@ -94,7 +95,7 @@ All parameters live under `bot.common.equity_hard_stop_loss`:
 
 ## Backtest Behavior
 
-Backtests honor the same HSL config as live.
+Backtests honor the same HSL config surface as live, but no-restart latching is intentionally stricter in backtests because it uses persistent cross-restart HSL drawdown.
 
 Important backtest details:
 
@@ -104,6 +105,10 @@ Important backtest details:
    - panic exits use simulated taker execution on the next bar
    - slippage is controlled by `backtest.market_order_slippage_pct`
 3. HSL metrics are exported as shared account metrics, not split into `_usd` and `_btc`
+4. The main optimizer-facing HSL metrics are:
+   - `drawdown_worst_hsl`
+   - `drawdown_worst_mean_1pct_hsl`
+   - `peak_recovery_hours_hsl`
 
 Useful HSL backtest metrics include:
 
@@ -123,12 +128,14 @@ Useful HSL backtest metrics include:
 
 ## Optimizer Support
 
-HSL parameters can be optimized through `optimize.bounds` using the `common_` prefix:
+Some HSL parameters can be optimized through `optimize.bounds` using the `common_` prefix:
 
 1. `common_equity_hard_stop_loss_red_threshold`
 2. `common_equity_hard_stop_loss_ema_span_minutes`
 3. `common_equity_hard_stop_loss_cooldown_minutes_after_red`
-4. `common_equity_hard_stop_loss_no_restart_drawdown_threshold`
+4. `common_equity_hard_stop_loss_no_restart_drawdown_threshold` is intentionally not part of the default optimize bounds.
+
+Optimizer runs instead disable terminal no-restart by default through `optimize.fixed_runtime_overrides` and constrain risk through `*_hsl` metrics.
 
 The HSL backtest metrics listed above can also be used in:
 
@@ -146,4 +153,4 @@ Live HSL startup behavior is reconstructed from exchange-derived account history
 
 For the ongoing edge-case checklist and remaining implementation work, see:
 
-1. [HSL Reference](/Users/eiriknarjord/repos/passivbot-3/docs/equity_hard_stop_loss_reference.md)
+1. [HSL Reference](equity_hard_stop_loss_reference.md)

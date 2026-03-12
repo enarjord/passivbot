@@ -57,6 +57,34 @@ Reference:
 - `src/candlestick_manager.py`
 - `src/passivbot.py`
 
+## Case: Runtime Risk Knob vs Optimizer Variable (2026-03)
+
+Signal:
+
+- A runtime safety control (`no_restart_drawdown_threshold`) was technically optimizable.
+- Optimizer pressure from `backtest_completion_ratio` made the "best" move to simply raise the threshold and avoid HSL intervention.
+
+Root cause:
+
+- Runtime/operator pain thresholds and strategy quality metrics are not the same class of variable.
+- Keeping them in the same optimization space let the optimizer game survivability instead of improving the strategy.
+
+Correct pattern:
+
+1. Keep runtime/operator controls in the runtime config where they belong.
+2. If optimizer should ignore a runtime control, do not force the user to mutate their live value.
+3. Add optimize-time runtime overrides instead of overloading bounds.
+4. Constrain the optimizer with the semantically correct metrics instead:
+   - `drawdown_worst_hsl`
+   - `drawdown_worst_mean_1pct_hsl`
+   - `peak_recovery_hours_hsl`
+5. Keep "fixed optimization params" separate from "optimize-time runtime overrides."
+
+Reference:
+
+- `src/optimize.py`
+- `src/config_utils.py`
+
 ## Reusable Investigation Loop
 
 1. Confirm symptom with concrete examples.

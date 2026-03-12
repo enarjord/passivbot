@@ -2,6 +2,11 @@
 
 Passivbot ships with a backtester that replays historical 1 minute candles. When a coin isn't cached locally, the backtester fetches data from the exchange archives and caches it under `caches/ohlcv/` for reuse.
 
+On exchanges with limited native `1m` retention, the backtester can also reconstruct missing
+minute history in memory from real `5m` / `15m` source candles. Real fetched higher-timeframe
+candles are cached under their own timeframe directories; synthesized `1m` candles are not written
+into the `1m` cache.
+
 > **GateIO cache note:** If you have existing GateIO OHLCV data in `caches/ohlcv/gateio`, delete the folder after upgrading to the new data strategy so fresh data (normalized to base volume) is fetched.
 
 ### External OHLCV source dir
@@ -31,6 +36,9 @@ If no config is specified, it will default to `configs/template.json`
 ## Backtest Results
 
 Standalone runs write metrics and plots to `backtests/{exchange}/timestamp/`. Suite runs collect everything under `backtests/suite_runs/<timestamp>/<scenario_label>/` and add a top-level `suite_summary.json`.
+
+Standalone backtests can optionally filter which metrics are printed to the terminal via
+`backtest.visible_metrics`. See [Metrics reference](metrics.md) for the visibility rules.
 
 ## Backtest CLI args
 
@@ -133,8 +141,10 @@ The backtester supports OHLCV data from the following exchanges:
 - **binance** - Binance USDT-M Futures
 - **bybit** - Bybit USDT Perpetuals
 - **gateio** - Gate.io USDT Perpetuals
+- **hyperliquid** - Hyperliquid perpetuals
 
-All three exchanges are included in the default template configuration.
+The default template configuration includes the main combined-exchange backtest set; exchange
+availability in specific example configs may differ.
 
 ## Exchange Name Conventions
 

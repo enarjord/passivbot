@@ -182,12 +182,12 @@ Operational notes:
 
 1. HSL is currently account-level, not split into long and short.
 2. It uses a collateral-FX-robust drawdown metric reconstructed from realized PnL plus unrealized PnL.
-3. RED can auto-restart after `cooldown_minutes_after_red`, unless the trigger drawdown exceeded `no_restart_drawdown_threshold`.
+3. RED can auto-restart after `cooldown_minutes_after_red`. In live, terminal no-restart is based on the finalized RED-stop drawdown; in backtests, terminal no-restart uses persistent cross-restart HSL drawdown.
 4. In backtests, simulated market panic closes use `backtest.market_order_slippage_pct`.
 
 See the dedicated guide:
 
-1. [Equity Hard Stop Loss](/Users/eiriknarjord/repos/passivbot-3/docs/equity_hard_stop_loss.md)
+1. [Equity Hard Stop Loss](equity_hard_stop_loss.md)
 
 ---
 

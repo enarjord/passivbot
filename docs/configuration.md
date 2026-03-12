@@ -77,8 +77,8 @@ Example per-metric aggregation:
 
 See also:
 
-1. [Equity Hard Stop Loss](/Users/eiriknarjord/repos/passivbot-3/docs/equity_hard_stop_loss.md)
-2. [Risk Management](/Users/eiriknarjord/repos/passivbot-3/docs/risk_management.md)
+1. [Equity Hard Stop Loss](equity_hard_stop_loss.md)
+2. [Risk Management](risk_management.md)
 
 ### Equity Hard Stop Loss (`bot.common.equity_hard_stop_loss`)
 
@@ -95,7 +95,9 @@ Account-level drawdown circuit breaker.
   - Minutes to wait before auto-restart after a RED halt.
   - `0.0` means halt without auto-restart.
 - **no_restart_drawdown_threshold**:
-  - If trigger drawdown is at or above this threshold, RED becomes terminal and the bot will not auto-restart.
+  - Terminal no-restart threshold.
+  - In live, evaluated from the finalized RED-stop drawdown snapshot.
+  - In backtests, evaluated from persistent cross-restart HSL drawdown.
   - Values below `red_threshold` are clamped up to `red_threshold`.
   - Must satisfy: `red_threshold <= no_restart_drawdown_threshold <= 1.0`.
 - **tier_ratios.yellow / tier_ratios.orange**:
@@ -423,7 +425,11 @@ HSL bounds under `bot.common.equity_hard_stop_loss` use `common_` prefixes here:
 1. `common_equity_hard_stop_loss_red_threshold`
 2. `common_equity_hard_stop_loss_ema_span_minutes`
 3. `common_equity_hard_stop_loss_cooldown_minutes_after_red`
-4. `common_equity_hard_stop_loss_no_restart_drawdown_threshold`
+
+`common_equity_hard_stop_loss_no_restart_drawdown_threshold` is intentionally no longer part of
+the default optimize bounds. The runtime parameter still lives under
+`bot.common.equity_hard_stop_loss`, but optimizer runs disable terminal no-restart by default via
+`optimize.fixed_runtime_overrides` and constrain risk through `*_hsl` metrics instead.
 
 **Validation:**
 

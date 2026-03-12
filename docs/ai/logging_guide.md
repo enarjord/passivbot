@@ -17,12 +17,14 @@ This file defines current logging policy. It is not a historical work log.
 3. Position/balance state changes.
 4. Mode changes meaningful to operators.
 5. Unexpected errors with traceback.
+6. Long-lived supervisory risk state changes and periodic status summaries when the operator would otherwise be left guessing whether the bot is waiting or broken.
 
 ## Keep Out Of INFO
 
 1. High-frequency polling or fetch loops with no state change.
 2. Internal cache noise and repeated maintenance chatter.
 3. Full API payloads.
+4. High-frequency cooldown or polling heartbeats that repeat the same HSL/risk state every few seconds.
 
 ## Tagging
 

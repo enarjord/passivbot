@@ -4,9 +4,9 @@ This file tracks implementation notes, open edge cases, and remaining work for t
 
 See also:
 
-1. [Equity Hard Stop Loss](/Users/eiriknarjord/repos/passivbot-3/docs/equity_hard_stop_loss.md)
-2. [Risk Management](/Users/eiriknarjord/repos/passivbot-3/docs/risk_management.md)
-3. [Configuration](/Users/eiriknarjord/repos/passivbot-3/docs/configuration.md)
+1. [Equity Hard Stop Loss](equity_hard_stop_loss.md)
+2. [Risk Management](risk_management.md)
+3. [Configuration](configuration.md)
 
 ## Current Scope
 
@@ -85,6 +85,11 @@ These are the main parity surfaces that should be reviewed together:
 6. HSL restart baseline reset
    - Live and backtest both reset HSL peak state after cooldown restart
 
+7. Terminal no-restart policy differs today
+   - Live still decides terminal latch from the finalized RED-stop drawdown snapshot
+   - Backtest decides it from persistent cross-restart HSL drawdown
+   - This difference should stay visible in parity reviews
+
 ### Confirmed Gaps / Risks
 
 1. Flat-confirmation parity
@@ -117,20 +122,18 @@ These are the main parity surfaces that should be reviewed together:
 
 Recommended HSL-focused optimizer study:
 
-1. Freeze most strategy behavior near a profile that triggers HSL at least once.
-2. Tune:
+1. Treat `no_restart_drawdown_threshold` as an operator/runtime control, not a default optimization variable.
+2. Use fixed optimize-time override:
+   - `optimize.fixed_runtime_overrides["bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold"] = 1.0`
+3. Tune:
    - `common_equity_hard_stop_loss_red_threshold`
    - `common_equity_hard_stop_loss_ema_span_minutes`
    - `common_equity_hard_stop_loss_cooldown_minutes_after_red`
-   - `common_equity_hard_stop_loss_no_restart_drawdown_threshold`
-3. Require at least one trigger:
-   - `hard_stop_triggers` with `stat = mean`, `penalize_if = less_than`, `value = 1`
-4. Reject incomplete runs:
-   - `backtest_completion_ratio` with `penalize_if = less_than`
-5. Constrain:
-   - drawdown
-   - recovery time
-   - liquidations / truncated runs
+4. Constrain:
+   - `drawdown_worst_hsl`
+   - `drawdown_worst_mean_1pct_hsl`
+   - `peak_recovery_hours_hsl`
+   - `backtest_completion_ratio`
 
 ## Candidate Starting Defaults To Validate
 

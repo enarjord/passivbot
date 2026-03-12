@@ -6,6 +6,7 @@ All notable user-facing changes will be documented in this file.
 
 ### Added
 - **Strategy-PnL rebased + HSL metric families** - Backtest analysis now includes shared `*_strategy_pnl_rebased` growth/quality metrics and `*_hsl` risk metrics, including `peak_recovery_hours_hsl`, so optimizer scoring and limits can use a cleaner collateral-agnostic return family plus HSL-style drawdown/recovery constraints. `backtest.visible_metrics` can also limit which analysis metrics are shown in CLI output without removing any persisted or internally computed metrics. Optimizer startup now logs starting-config dedup statistics, and `optimize.starting_config_twe_multiplier` controls the extra TWEL-scaled seed variant (`1.0` disables it).
+- **Optimizer provenance + replay diagnostics** - Optimizer results now include runtime provenance for the active Rust extension and related evaluation context, and `src/repro_harness.py` can compare stored metrics against current optimizer-path and backtest-path replays in one command.
 
 ### Fixed
 - **Rust-owned market-vs-limit execution intent** - Rust orchestrator now decides whether eligible non-panic orders should be emitted as `limit` or `market` using one shared near-touch threshold and market-crossing rules. Live now consumes that Rust execution intent directly, and backtests use the same intent for guaranteed market fills with slippage and taker fees.
@@ -16,12 +17,15 @@ All notable user-facing changes will be documented in this file.
 - **Backtest HSL panic execution and metrics export** - Account-level RED panic now forces panic mode on all symbols/sides in Rust backtests, `panic_close_order_type="market"` is simulated as next-bar taker execution instead of limit-only behavior, and `hard_stop_*` analysis metrics are exported once as shared metrics rather than duplicated into `_usd`/`_btc` variants.
 - **Backtest HSL EMA span fallback** - Backtests no longer fail when `bot.common.equity_hard_stop_loss.ema_span_minutes` is smaller than `backtest.candle_interval_minutes`. Sub-interval spans now fall back to a one-sample EMA, which disables smoothing and makes the HSL score follow raw drawdown.
 - **Backtest market-order slippage config naming** - Renamed `backtest.panic_market_slippage_pct` to `backtest.market_order_slippage_pct` so one backtest slippage knob can cover all simulated market-order execution.
-- **HSL no-restart threshold semantics** - Values of `bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold` below `red_threshold` are now clamped up to `red_threshold` in live, backtest, and optimizer flows. Stop events now treat `drawdown_raw >= no_restart_drawdown_threshold` as terminal, so setting both thresholds equal makes the first RED halt non-restarting.
+- **HSL no-restart threshold semantics** - Values of `bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold` below `red_threshold` are now clamped up to `red_threshold` in live, backtest, and optimizer flows. In backtests, no-restart latching now uses persistent cross-restart HSL drawdown rather than only the local RED-halt snapshot, while optimizer runs disable terminal no-restart by default via `optimize.fixed_runtime_overrides` so drawdown can be constrained through `*_hsl` metrics without prematurely ending candidate runs.
 - **Backtest HSL analysis metrics expanded and clarified** - Added account-level HSL metrics for yellow/orange/red time share, RED halt duration, trigger drawdown, panic-close realized loss, flatten time, and restart-to-retrigger rate. Also renamed the old ambiguous halt-loss metric to `hard_stop_halt_to_restart_equity_loss_pct`.
+- **Optimizer constraint visibility** - Pareto logging now reports the top violated constraints and penalties instead of only the aggregate penalty number.
+- **One-way forager shortlist eligibility** - In `hedge_mode: false`, coins already occupied on one side no longer consume initial-entry shortlist slots on the opposite side before being blocked.
 
 ### Changed
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.
 - **ADG terminal smoothing simplified** - Backtest `gain`/`adg` now smooth the terminal value by taking the mean of the last up to 3 daily equity samples instead of running an EMA over the full daily-equity series. This preserves end-of-run drawdown smoothing while reducing computation.
+- **Optimize-time runtime controls** - Optimizer config now supports `optimize.fixed_params` to lock selected bounds to the current config value and `optimize.fixed_runtime_overrides` to override runtime config values only during optimize evaluations.
 
 ## v7.8.4 - 2026-03-06
 
