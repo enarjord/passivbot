@@ -3582,7 +3582,8 @@ impl<'a> Backtest<'a> {
                 sharpe_ratio_strategy_pnl_rebased: equity_metrics.sharpe_ratio,
                 sortino_ratio_strategy_pnl_rebased: equity_metrics.sortino_ratio,
                 omega_ratio_strategy_pnl_rebased: equity_metrics.omega_ratio,
-                expected_shortfall_1pct_strategy_pnl_rebased: equity_metrics.expected_shortfall_1pct,
+                expected_shortfall_1pct_strategy_pnl_rebased: equity_metrics
+                    .expected_shortfall_1pct,
                 calmar_ratio_strategy_pnl_rebased: equity_metrics.adg / drawdown_worst.max(1e-12),
                 sterling_ratio_strategy_pnl_rebased: equity_metrics.adg
                     / drawdown_worst_mean_1pct.max(1e-12),
@@ -3734,13 +3735,17 @@ impl<'a> Backtest<'a> {
             expected_shortfall_1pct_strategy_pnl_rebased: strategy_metrics
                 .expected_shortfall_1pct_strategy_pnl_rebased,
             calmar_ratio_strategy_pnl_rebased: strategy_metrics.calmar_ratio_strategy_pnl_rebased,
-            sterling_ratio_strategy_pnl_rebased: strategy_metrics.sterling_ratio_strategy_pnl_rebased,
+            sterling_ratio_strategy_pnl_rebased: strategy_metrics
+                .sterling_ratio_strategy_pnl_rebased,
             adg_strategy_pnl_rebased_w: strategy_metrics.adg_strategy_pnl_rebased_w,
             mdg_strategy_pnl_rebased_w: strategy_metrics.mdg_strategy_pnl_rebased_w,
-            sharpe_ratio_strategy_pnl_rebased_w: strategy_metrics.sharpe_ratio_strategy_pnl_rebased_w,
-            sortino_ratio_strategy_pnl_rebased_w: strategy_metrics.sortino_ratio_strategy_pnl_rebased_w,
+            sharpe_ratio_strategy_pnl_rebased_w: strategy_metrics
+                .sharpe_ratio_strategy_pnl_rebased_w,
+            sortino_ratio_strategy_pnl_rebased_w: strategy_metrics
+                .sortino_ratio_strategy_pnl_rebased_w,
             omega_ratio_strategy_pnl_rebased_w: strategy_metrics.omega_ratio_strategy_pnl_rebased_w,
-            calmar_ratio_strategy_pnl_rebased_w: strategy_metrics.calmar_ratio_strategy_pnl_rebased_w,
+            calmar_ratio_strategy_pnl_rebased_w: strategy_metrics
+                .calmar_ratio_strategy_pnl_rebased_w,
             sterling_ratio_strategy_pnl_rebased_w: strategy_metrics
                 .sterling_ratio_strategy_pnl_rebased_w,
         }
@@ -4937,9 +4942,7 @@ mod tests {
         bt.equities = Equities::default();
 
         let cached = bt.hard_stop_metrics();
-        assert!(
-            (cached.drawdown_worst_hsl - expected.drawdown_worst_hsl).abs() < 1e-12
-        );
+        assert!((cached.drawdown_worst_hsl - expected.drawdown_worst_hsl).abs() < 1e-12);
         assert!(
             (cached.adg_strategy_pnl_rebased - expected.adg_strategy_pnl_rebased).abs() < 1e-12
         );

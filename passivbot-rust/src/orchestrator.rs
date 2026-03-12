@@ -921,9 +921,26 @@ mod core {
         }
     }
 
+    fn one_way_allows_initial_slot(
+        symbols: &[SymbolInput],
+        symbol_idx: usize,
+        pside: PositionSide,
+        hedge_mode: bool,
+    ) -> bool {
+        if hedge_mode {
+            return true;
+        }
+        let s = &symbols[symbol_idx];
+        match pside {
+            PositionSide::Long => s.short.position.size == 0.0,
+            PositionSide::Short => s.long.position.size == 0.0,
+        }
+    }
+
     fn build_forager_features_into(
         symbols: &[SymbolInput],
         pside: PositionSide,
+        hedge_mode: bool,
         span_volume: f64,
         span_volatility: f64,
         filter_enabled: bool,
@@ -943,6 +960,7 @@ mod core {
             let mode_no_pos = effective_mode(side.mode, false);
             let can_open_initial = should_generate_entries(mode_no_pos, false, true);
             let enabled = s.tradable
+                && one_way_allows_initial_slot(symbols, s.symbol_idx, pside, hedge_mode)
                 && can_open_initial
                 && effective_min_cost_is_low_enough(
                     balance,
@@ -1435,7 +1453,14 @@ mod core {
                 if actives_long_count >= enp_long {
                     break;
                 }
-                if !actives_long[*idx] {
+                if !actives_long[*idx]
+                    && one_way_allows_initial_slot(
+                        &input.symbols,
+                        *idx,
+                        PositionSide::Long,
+                        input.global.hedge_mode,
+                    )
+                {
                     actives_long[*idx] = true;
                     actives_long_count += 1;
                 }
@@ -1446,6 +1471,7 @@ mod core {
                 build_forager_features_into(
                     &input.symbols,
                     PositionSide::Long,
+                    input.global.hedge_mode,
                     input.global.global_bot_params.long.filter_volume_ema_span,
                     input
                         .global
@@ -1495,7 +1521,14 @@ mod core {
                 if actives_short_count >= enp_short {
                     break;
                 }
-                if !actives_short[*idx] {
+                if !actives_short[*idx]
+                    && one_way_allows_initial_slot(
+                        &input.symbols,
+                        *idx,
+                        PositionSide::Short,
+                        input.global.hedge_mode,
+                    )
+                {
                     actives_short[*idx] = true;
                     actives_short_count += 1;
                 }
@@ -1504,6 +1537,7 @@ mod core {
                 build_forager_features_into(
                     &input.symbols,
                     PositionSide::Short,
+                    input.global.hedge_mode,
                     input.global.global_bot_params.short.filter_volume_ema_span,
                     input
                         .global
@@ -2997,6 +3031,116 @@ mod core {
                 .any(|o| o.pside == PositionSide::Short && !is_close_order_type(o.order_type));
             assert!(has_long_entries);
             assert!(!has_short_entries);
+        }
+
+        #[test]
+        fn one_way_short_forager_skips_coin_already_held_long() {
+            let mut sym0 = make_basic_symbol(0);
+            let mut sym1 = make_basic_symbol(1);
+
+            sym0.long.position = Position {
+                size: 1.0,
+                price: 100.0,
+            };
+            sym0.emas.m1.volume = vec![(1.0, 10.0)];
+            sym0.emas.m1.log_range = vec![(1.0, 10.0)];
+            sym1.emas.m1.volume = vec![(1.0, 5.0)];
+            sym1.emas.m1.log_range = vec![(1.0, 5.0)];
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.0;
+            global_bp.long.n_positions = 1;
+            global_bp.short.total_wallet_exposure_limit = 1.0;
+            global_bp.short.n_positions = 1;
+            global_bp.long.filter_volume_drop_pct = 0.0;
+            global_bp.long.filter_volatility_drop_pct = 0.0;
+            global_bp.short.filter_volume_drop_pct = 0.0;
+            global_bp.short.filter_volatility_drop_pct = 0.0;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: false,
+                },
+                symbols: vec![sym0, sym1],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            let short_entry_symbol_idxs: Vec<usize> = out
+                .orders
+                .iter()
+                .filter(|o| o.pside == PositionSide::Short && !is_close_order_type(o.order_type))
+                .map(|o| o.symbol_idx)
+                .collect();
+            assert_eq!(short_entry_symbol_idxs, vec![1]);
+        }
+
+        #[test]
+        fn one_way_long_forager_skips_coin_already_held_short() {
+            let mut sym0 = make_basic_symbol(0);
+            let mut sym1 = make_basic_symbol(1);
+
+            sym0.short.position = Position {
+                size: -1.0,
+                price: 100.0,
+            };
+            sym0.emas.m1.volume = vec![(1.0, 10.0)];
+            sym0.emas.m1.log_range = vec![(1.0, 10.0)];
+            sym1.emas.m1.volume = vec![(1.0, 5.0)];
+            sym1.emas.m1.log_range = vec![(1.0, 5.0)];
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 1.0;
+            global_bp.long.n_positions = 1;
+            global_bp.short.total_wallet_exposure_limit = 1.0;
+            global_bp.short.n_positions = 1;
+            global_bp.long.filter_volume_drop_pct = 0.0;
+            global_bp.long.filter_volatility_drop_pct = 0.0;
+            global_bp.short.filter_volume_drop_pct = 0.0;
+            global_bp.short.filter_volatility_drop_pct = 0.0;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: false,
+                },
+                symbols: vec![sym0, sym1],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            let long_entry_symbol_idxs: Vec<usize> = out
+                .orders
+                .iter()
+                .filter(|o| o.pside == PositionSide::Long && !is_close_order_type(o.order_type))
+                .map(|o| o.symbol_idx)
+                .collect();
+            assert_eq!(long_entry_symbol_idxs, vec![1]);
         }
 
         #[test]
