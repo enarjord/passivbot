@@ -1605,23 +1605,53 @@ def get_starting_configs(starting_configs: str):
     return extract_configs(starting_configs)
 
 
-def configs_to_individuals(cfgs, bounds, sig_digits=0):
+def configs_to_individuals(cfgs, bounds, sig_digits=0, twe_multiplier=0.75):
     inds = set()
+    stats = {
+        "raw_configs": len(cfgs),
+        "valid_configs": 0,
+        "invalid_configs": 0,
+        "original_unique": 0,
+        "original_duplicates_collapsed": 0,
+        "variant_attempted": 0,
+        "variant_added": 0,
+        "variant_duplicates_collapsed": 0,
+        "variant_skipped_multiplier_is_one": 0,
+        "total_unique": 0,
+        "twe_multiplier": twe_multiplier,
+    }
     for cfg in cfgs:
         try:
             fcfg = format_config(cfg, verbose=False)
+            stats["valid_configs"] += 1
             individual = config_to_individual(fcfg, bounds, sig_digits)
-            inds.add(tuple(individual))
-            # add duplicate of config, but with lowered total wallet exposure limit
+            original = tuple(individual)
+            if original in inds:
+                stats["original_duplicates_collapsed"] += 1
+            else:
+                inds.add(original)
+                stats["original_unique"] += 1
+            # optionally add duplicate of config with scaled total wallet exposure limit
+            if math.isclose(float(twe_multiplier), 1.0, rel_tol=0.0, abs_tol=1e-12):
+                stats["variant_skipped_multiplier_is_one"] += 1
+                continue
+            stats["variant_attempted"] += 1
             fcfg2 = deepcopy(fcfg)
             for pside in ["long", "short"]:
-                value = fcfg2["bot"][pside]["total_wallet_exposure_limit"] * 0.75
+                value = fcfg2["bot"][pside]["total_wallet_exposure_limit"] * twe_multiplier
                 fcfg2["bot"][pside]["total_wallet_exposure_limit"] = value
             individual2 = config_to_individual(fcfg2, bounds, sig_digits)
-            inds.add(tuple(individual2))
+            variant = tuple(individual2)
+            if variant in inds:
+                stats["variant_duplicates_collapsed"] += 1
+            else:
+                inds.add(variant)
+                stats["variant_added"] += 1
         except Exception as e:
+            stats["invalid_configs"] += 1
             logging.error(f"error loading starting config: {e}")
-    return list(inds)
+    stats["total_unique"] = len(inds)
+    return list(inds), stats
 
 
 async def main():
@@ -2064,11 +2094,38 @@ async def main():
             )
         else:
             logging.info("No starting configs provided; population will be random-initialized")
-        starting_individuals = configs_to_individuals(
+        twe_multiplier = (
+            config.get("optimize", {}).get("starting_config_twe_multiplier", 0.75)
+        )
+        starting_individuals, starting_stats = configs_to_individuals(
             starting_configs,
             bounds,
             sig_digits,
+            twe_multiplier=twe_multiplier,
         )
+        if starting_configs:
+            logging.info(
+                "Starting config dedup | raw=%d | valid=%d | invalid=%d | "
+                "original_unique=%d | original_dups_collapsed=%d | "
+                "variant_multiplier=%.6g | variant_attempted=%d | variant_added=%d | "
+                "variant_dups_collapsed=%d | unique_total=%d",
+                starting_stats["raw_configs"],
+                starting_stats["valid_configs"],
+                starting_stats["invalid_configs"],
+                starting_stats["original_unique"],
+                starting_stats["original_duplicates_collapsed"],
+                starting_stats["twe_multiplier"],
+                starting_stats["variant_attempted"],
+                starting_stats["variant_added"],
+                starting_stats["variant_duplicates_collapsed"],
+                starting_stats["total_unique"],
+            )
+            if starting_stats["variant_skipped_multiplier_is_one"] > 0:
+                logging.info(
+                    "Starting config TWEL variant disabled by multiplier=1.0 "
+                    "(skipped %d variant expansions)",
+                    starting_stats["variant_skipped_multiplier_is_one"],
+                )
 
         def _make_random_individual():
             """Generate a random individual respecting step constraints."""

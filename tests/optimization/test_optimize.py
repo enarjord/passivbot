@@ -656,8 +656,9 @@ class TestConfigsToIndividuals:
     """Test configs_to_individuals function."""
 
     def test_empty_configs(self):
-        result = configs_to_individuals([], [], 6)
+        result, stats = configs_to_individuals([], [], 6)
         assert result == []
+        assert stats["raw_configs"] == 0
 
     def test_single_config(self):
         from config_utils import get_template_config
@@ -668,11 +669,12 @@ class TestConfigsToIndividuals:
 
         bounds = extract_bounds_tuple_list_from_config(config)
 
-        result = configs_to_individuals([config], bounds, 6)
+        result, stats = configs_to_individuals([config], bounds, 6)
 
         # Should return 2 individuals: original + one with lowered TWE
         assert len(result) >= 1
         assert len(result[0]) == len(bounds)
+        assert stats["valid_configs"] == 1
 
     def test_creates_twe_variant(self):
         from config_utils import get_template_config
@@ -682,17 +684,34 @@ class TestConfigsToIndividuals:
 
         bounds = extract_bounds_tuple_list_from_config(config)
 
-        result = configs_to_individuals([config], bounds, 6)
+        result, stats = configs_to_individuals([config], bounds, 6)
 
         # Should create duplicate with 0.75x TWE
         assert len(result) == 2
+        assert stats["variant_attempted"] == 1
+        assert stats["variant_added"] == 1
+
+    def test_twe_multiplier_one_disables_variant(self):
+        from config_utils import get_template_config
+
+        config = get_template_config()
+        from optimization.config_adapter import extract_bounds_tuple_list_from_config
+
+        bounds = extract_bounds_tuple_list_from_config(config)
+
+        result, stats = configs_to_individuals([config], bounds, 6, twe_multiplier=1.0)
+
+        assert len(result) == 1
+        assert stats["variant_attempted"] == 0
+        assert stats["variant_skipped_multiplier_is_one"] == 1
 
     def test_invalid_config_logged(self):
         invalid_config = {"invalid": "structure"}
         bounds = [(0.0, 10.0, 0.0)] * 4
-        result = configs_to_individuals([invalid_config], bounds, 6)
+        result, stats = configs_to_individuals([invalid_config], bounds, 6)
 
         assert len(result) == 0
+        assert stats["invalid_configs"] == 1
 
 
 class TestConstraintAwareFitness:

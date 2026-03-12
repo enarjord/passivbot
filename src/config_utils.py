@@ -2560,6 +2560,7 @@ def get_template_config():
                 "peak_recovery_hours_hsl",
                 "position_held_hours_max",
             ],
+            "starting_config_twe_multiplier": 0.75,
             "write_all_results": True,
         },
     }
