@@ -50,6 +50,7 @@ from config_utils import (
     get_optional_config_value,
     strip_config_metadata,
 )
+from analysis_visibility import filter_analysis_for_visibility
 from utils import (
     utc_ms,
     make_get_filepath,
@@ -57,7 +58,6 @@ from utils import (
     format_end_date,
     format_approved_ignored_coins,
     date_to_ts,
-    trim_analysis_aliases,
 )
 from pure_funcs import (
     ts_to_date,
@@ -117,6 +117,25 @@ ANALYSIS_SHARED_KEYS = {
     "sharpe_ratio_pnl_w",
     "sortino_ratio_pnl",
     "sortino_ratio_pnl_w",
+    "gain_strategy_pnl_rebased",
+    "adg_strategy_pnl_rebased",
+    "mdg_strategy_pnl_rebased",
+    "sharpe_ratio_strategy_pnl_rebased",
+    "sortino_ratio_strategy_pnl_rebased",
+    "omega_ratio_strategy_pnl_rebased",
+    "expected_shortfall_1pct_strategy_pnl_rebased",
+    "calmar_ratio_strategy_pnl_rebased",
+    "sterling_ratio_strategy_pnl_rebased",
+    "adg_strategy_pnl_rebased_w",
+    "mdg_strategy_pnl_rebased_w",
+    "sharpe_ratio_strategy_pnl_rebased_w",
+    "sortino_ratio_strategy_pnl_rebased_w",
+    "omega_ratio_strategy_pnl_rebased_w",
+    "calmar_ratio_strategy_pnl_rebased_w",
+    "sterling_ratio_strategy_pnl_rebased_w",
+    "drawdown_worst_hsl",
+    "drawdown_worst_mean_1pct_hsl",
+    "peak_recovery_hours_hsl",
 }
 PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl", "hard_stop"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
@@ -1504,7 +1523,14 @@ def post_process(
             analysis[k] = analysis_py[k]
     logging.info(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
     label_prefix = f"[{label}] " if label else ""
-    print(f"{label_prefix}{pprint.pformat(trim_analysis_aliases(analysis))}")
+    visible_analysis = filter_analysis_for_visibility(analysis, config)
+    if visible_analysis.shown_count < visible_analysis.total_count:
+        print(
+            f"{label_prefix}Showing {visible_analysis.shown_count} of "
+            f"{visible_analysis.total_count} metrics "
+            "(set backtest.visible_metrics=[] to show all)."
+        )
+    print(f"{label_prefix}{pprint.pformat(visible_analysis.analysis)}")
     results_path = make_get_filepath(
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )

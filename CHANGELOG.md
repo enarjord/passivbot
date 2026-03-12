@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+### Added
+- **Strategy-PnL rebased + HSL metric families** - Backtest analysis now includes shared `*_strategy_pnl_rebased` growth/quality metrics and `*_hsl` risk metrics, including `peak_recovery_hours_hsl`, so optimizer scoring and limits can use a cleaner collateral-agnostic return family plus HSL-style drawdown/recovery constraints. `backtest.visible_metrics` can also limit which analysis metrics are shown in CLI output without removing any persisted or internally computed metrics.
+
 ### Fixed
 - **Rust-owned market-vs-limit execution intent** - Rust orchestrator now decides whether eligible non-panic orders should be emitted as `limit` or `market` using one shared near-touch threshold and market-crossing rules. Live now consumes that Rust execution intent directly, and backtests use the same intent for guaranteed market fills with slippage and taker fees.
 - **Live orchestrator fee payload + Hyperliquid hard-stop history replay** - Live orchestrator inputs now include per-symbol `maker_fee` and `taker_fee`, matching the Rust JSON contract used by backtests. Hyperliquid hard-stop equity-history replay now backfills older missing 1m minutes from 5m/15m candles with deterministic intrabar reconstruction instead of relying only on flat carry-forward gaps once the exchange's 5000-candle fetch cap is exceeded.

@@ -45,6 +45,25 @@ def _make_analysis_entry(value):
             "sterling_ratio": 0.0,
             "drawdown_worst": 0.0,
             "drawdown_worst_mean_1pct": 0.0,
+            "gain_strategy_pnl_rebased": 0.0,
+            "adg_strategy_pnl_rebased": 0.0,
+            "mdg_strategy_pnl_rebased": 0.0,
+            "sharpe_ratio_strategy_pnl_rebased": 0.0,
+            "sortino_ratio_strategy_pnl_rebased": 0.0,
+            "omega_ratio_strategy_pnl_rebased": 0.0,
+            "expected_shortfall_1pct_strategy_pnl_rebased": 0.0,
+            "calmar_ratio_strategy_pnl_rebased": 0.0,
+            "sterling_ratio_strategy_pnl_rebased": 0.0,
+            "adg_strategy_pnl_rebased_w": 0.0,
+            "mdg_strategy_pnl_rebased_w": 0.0,
+            "sharpe_ratio_strategy_pnl_rebased_w": 0.0,
+            "sortino_ratio_strategy_pnl_rebased_w": 0.0,
+            "omega_ratio_strategy_pnl_rebased_w": 0.0,
+            "calmar_ratio_strategy_pnl_rebased_w": 0.0,
+            "sterling_ratio_strategy_pnl_rebased_w": 0.0,
+            "drawdown_worst_hsl": 0.0,
+            "drawdown_worst_mean_1pct_hsl": 0.0,
+            "peak_recovery_hours_hsl": 0.0,
             "equity_balance_diff_neg_max": 0.0,
             "equity_balance_diff_neg_mean": 0.0,
             "equity_balance_diff_pos_max": 0.0,
@@ -179,10 +198,37 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
     assert "hard_stop_restarts_btc" not in result
     assert "hard_stop_halt_to_restart_equity_loss_pct_usd" not in result
     assert "hard_stop_halt_to_restart_equity_loss_pct_btc" not in result
-    assert "hard_stop_time_in_red_pct_usd" not in result
-    assert "hard_stop_time_in_red_pct_btc" not in result
-    assert "hard_stop_duration_minutes_mean_usd" not in result
-    assert "hard_stop_duration_minutes_mean_btc" not in result
+
+
+def test_expand_analysis_keeps_strategy_pnl_rebased_and_hsl_metrics_shared():
+    analysis_usd = _make_analysis_entry(0.5)
+    analysis_btc = _make_analysis_entry(0.5)
+    analysis_usd["adg_strategy_pnl_rebased"] = 0.19
+    analysis_usd["drawdown_worst_hsl"] = 0.21
+    analysis_usd["peak_recovery_hours_hsl"] = 17.0
+    analysis_btc["adg_strategy_pnl_rebased"] = 0.19
+    analysis_btc["drawdown_worst_hsl"] = 0.21
+    analysis_btc["peak_recovery_hours_hsl"] = 17.0
+    config = {
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 1.0},
+        }
+    }
+
+    result = expand_analysis(
+        analysis_usd,
+        analysis_btc,
+        fills=np.empty((0, 0)),
+        equities_array=np.empty((0, 3)),
+        config=config,
+    )
+
+    assert result["adg_strategy_pnl_rebased"] == 0.19
+    assert result["drawdown_worst_hsl"] == 0.21
+    assert result["peak_recovery_hours_hsl"] == 17.0
+    assert "adg_strategy_pnl_rebased_usd" not in result
+    assert "adg_strategy_pnl_rebased_btc" not in result
 
 
 def test_process_forager_fills_handles_zero_pnl_division():

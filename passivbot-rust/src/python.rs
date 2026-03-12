@@ -963,6 +963,27 @@ fn run_backtest_core<'py>(
         analysis_usd.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
         analysis_usd.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
         analysis_usd.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
+        analysis_usd.drawdown_worst_hsl = hs.drawdown_worst_hsl;
+        analysis_usd.drawdown_worst_mean_1pct_hsl = hs.drawdown_worst_mean_1pct_hsl;
+        analysis_usd.peak_recovery_hours_hsl = hs.peak_recovery_hours_hsl;
+        analysis_usd.gain_strategy_pnl_rebased = hs.gain_strategy_pnl_rebased;
+        analysis_usd.adg_strategy_pnl_rebased = hs.adg_strategy_pnl_rebased;
+        analysis_usd.mdg_strategy_pnl_rebased = hs.mdg_strategy_pnl_rebased;
+        analysis_usd.sharpe_ratio_strategy_pnl_rebased = hs.sharpe_ratio_strategy_pnl_rebased;
+        analysis_usd.sortino_ratio_strategy_pnl_rebased = hs.sortino_ratio_strategy_pnl_rebased;
+        analysis_usd.omega_ratio_strategy_pnl_rebased = hs.omega_ratio_strategy_pnl_rebased;
+        analysis_usd.expected_shortfall_1pct_strategy_pnl_rebased =
+            hs.expected_shortfall_1pct_strategy_pnl_rebased;
+        analysis_usd.calmar_ratio_strategy_pnl_rebased = hs.calmar_ratio_strategy_pnl_rebased;
+        analysis_usd.sterling_ratio_strategy_pnl_rebased = hs.sterling_ratio_strategy_pnl_rebased;
+        analysis_usd.adg_strategy_pnl_rebased_w = hs.adg_strategy_pnl_rebased_w;
+        analysis_usd.mdg_strategy_pnl_rebased_w = hs.mdg_strategy_pnl_rebased_w;
+        analysis_usd.sharpe_ratio_strategy_pnl_rebased_w = hs.sharpe_ratio_strategy_pnl_rebased_w;
+        analysis_usd.sortino_ratio_strategy_pnl_rebased_w = hs.sortino_ratio_strategy_pnl_rebased_w;
+        analysis_usd.omega_ratio_strategy_pnl_rebased_w = hs.omega_ratio_strategy_pnl_rebased_w;
+        analysis_usd.calmar_ratio_strategy_pnl_rebased_w = hs.calmar_ratio_strategy_pnl_rebased_w;
+        analysis_usd.sterling_ratio_strategy_pnl_rebased_w =
+            hs.sterling_ratio_strategy_pnl_rebased_w;
         analysis_btc.hard_stop_triggers = hs.triggers;
         analysis_btc.hard_stop_halt_to_restart_equity_loss_pct = hs.halt_to_restart_equity_loss_pct;
         analysis_btc.hard_stop_restarts = hs.restarts;
@@ -976,6 +997,27 @@ fn run_backtest_core<'py>(
         analysis_btc.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
         analysis_btc.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
         analysis_btc.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
+        analysis_btc.drawdown_worst_hsl = hs.drawdown_worst_hsl;
+        analysis_btc.drawdown_worst_mean_1pct_hsl = hs.drawdown_worst_mean_1pct_hsl;
+        analysis_btc.peak_recovery_hours_hsl = hs.peak_recovery_hours_hsl;
+        analysis_btc.gain_strategy_pnl_rebased = hs.gain_strategy_pnl_rebased;
+        analysis_btc.adg_strategy_pnl_rebased = hs.adg_strategy_pnl_rebased;
+        analysis_btc.mdg_strategy_pnl_rebased = hs.mdg_strategy_pnl_rebased;
+        analysis_btc.sharpe_ratio_strategy_pnl_rebased = hs.sharpe_ratio_strategy_pnl_rebased;
+        analysis_btc.sortino_ratio_strategy_pnl_rebased = hs.sortino_ratio_strategy_pnl_rebased;
+        analysis_btc.omega_ratio_strategy_pnl_rebased = hs.omega_ratio_strategy_pnl_rebased;
+        analysis_btc.expected_shortfall_1pct_strategy_pnl_rebased =
+            hs.expected_shortfall_1pct_strategy_pnl_rebased;
+        analysis_btc.calmar_ratio_strategy_pnl_rebased = hs.calmar_ratio_strategy_pnl_rebased;
+        analysis_btc.sterling_ratio_strategy_pnl_rebased = hs.sterling_ratio_strategy_pnl_rebased;
+        analysis_btc.adg_strategy_pnl_rebased_w = hs.adg_strategy_pnl_rebased_w;
+        analysis_btc.mdg_strategy_pnl_rebased_w = hs.mdg_strategy_pnl_rebased_w;
+        analysis_btc.sharpe_ratio_strategy_pnl_rebased_w = hs.sharpe_ratio_strategy_pnl_rebased_w;
+        analysis_btc.sortino_ratio_strategy_pnl_rebased_w = hs.sortino_ratio_strategy_pnl_rebased_w;
+        analysis_btc.omega_ratio_strategy_pnl_rebased_w = hs.omega_ratio_strategy_pnl_rebased_w;
+        analysis_btc.calmar_ratio_strategy_pnl_rebased_w = hs.calmar_ratio_strategy_pnl_rebased_w;
+        analysis_btc.sterling_ratio_strategy_pnl_rebased_w =
+            hs.sterling_ratio_strategy_pnl_rebased_w;
 
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;

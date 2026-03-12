@@ -9,6 +9,96 @@ fn fallback_timestamp_ms(index: usize) -> u64 {
     (index as u64) * 60_000
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct EquitySeriesMetrics {
+    pub gain: f64,
+    pub adg: f64,
+    pub mdg: f64,
+    pub sharpe_ratio: f64,
+    pub sortino_ratio: f64,
+    pub omega_ratio: f64,
+    pub expected_shortfall_1pct: f64,
+}
+
+pub fn analyze_equity_series(equities: &[f64], timestamps_ms: &[u64]) -> EquitySeriesMetrics {
+    if equities.len() < 2 {
+        return EquitySeriesMetrics::default();
+    }
+    let mut daily_eqs = Vec::new();
+    let mut daily_eqs_mins = Vec::new();
+
+    let use_timestamps = !timestamps_ms.is_empty() && timestamps_ms.len() == equities.len();
+    let mut current_day = if use_timestamps {
+        (timestamps_ms[0] / MS_PER_DAY) as usize
+    } else {
+        0
+    };
+    let mut current_min = equities[0];
+    let mut last_equity = equities[0];
+    for (i, &equity) in equities.iter().enumerate() {
+        let day = if use_timestamps {
+            (timestamps_ms[i] / MS_PER_DAY) as usize
+        } else {
+            i / 1440
+        };
+        if day > current_day {
+            daily_eqs.push(last_equity);
+            daily_eqs_mins.push(current_min);
+            current_day = day;
+            current_min = equity;
+        } else {
+            current_min = current_min.min(equity);
+        }
+        last_equity = equity;
+    }
+    daily_eqs.push(last_equity);
+    daily_eqs_mins.push(current_min);
+
+    let daily_eqs_pct_change: Vec<f64> = daily_eqs
+        .windows(2)
+        .map(|w| {
+            let denom = w[0].abs().max(1e-12);
+            (w[1] - w[0]) / denom
+        })
+        .collect();
+    let daily_eqs_mins_pct_change: Vec<f64> = daily_eqs_mins
+        .windows(2)
+        .map(|w| {
+            let denom = w[0].abs().max(1e-12);
+            (w[1] - w[0]) / denom
+        })
+        .collect();
+
+    let (gain, adg) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
+    let mdg = median(&daily_eqs_pct_change);
+    let (sharpe_ratio, sortino_ratio) = calc_sharpe_and_sortino(&daily_eqs_mins_pct_change, adg);
+    let (gains_sum, losses_sum) =
+        daily_eqs_pct_change
+            .iter()
+            .fold((0.0, 0.0), |(gains, losses), &ret| {
+                if ret >= 0.0 {
+                    (gains + ret, losses)
+                } else {
+                    (gains, losses + ret.abs())
+                }
+            });
+    let omega_ratio = if losses_sum != 0.0 {
+        gains_sum / losses_sum
+    } else {
+        f64::INFINITY
+    };
+    let expected_shortfall_1pct = mean_worst_1pct_abs(&daily_eqs_mins_pct_change);
+    EquitySeriesMetrics {
+        gain,
+        adg,
+        mdg,
+        sharpe_ratio,
+        sortino_ratio,
+        omega_ratio,
+        expected_shortfall_1pct,
+    }
+}
+
 fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[u64]) -> Analysis {
     if fills.len() <= 1 {
         return Analysis::default();
@@ -776,6 +866,27 @@ fn median(values: &[f64]) -> f64 {
     } else {
         sorted[mid]
     }
+}
+
+fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| {
+        a.partial_cmp(b).unwrap_or_else(|| {
+            if a.is_nan() && b.is_nan() {
+                Ordering::Equal
+            } else if a.is_nan() {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            }
+        })
+    });
+    let cutoff_index = (sorted.len() as f64 * 0.01).max(1.0) as usize;
+    let worst_n = cutoff_index.min(sorted.len());
+    sorted[..worst_n].iter().map(|x| x.abs()).sum::<f64>() / worst_n as f64
 }
 
 fn calc_sharpe_and_sortino(values: &[f64], mean_val: f64) -> (f64, f64) {
