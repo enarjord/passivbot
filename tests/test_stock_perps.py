@@ -3,8 +3,7 @@ Tests for HIP-3 Stock Perpetuals support.
 
 Tests cover:
 - Symbol detection (xyz: prefix, onlyIsolated flag)
-- Leverage capping (10x max for HIP-3)
-- Margin mode selection (isolated for HIP-3, cross otherwise)
+- Margin mode selection (dynamic for HIP-3, cross otherwise)
 - Symbol mapping (xyz:TSLA <-> TSLA)
 - Config enablement (stock_perps.enabled)
 """
@@ -140,50 +139,54 @@ class TestHyperliquidBotHIP3:
         """Test HIP-3 prefix constant is correct."""
         assert bot_class.HIP3_PREFIX == "xyz:"
 
-    def test_hip3_max_leverage_constant(self, bot_class):
-        """Test HIP-3 max leverage constant is 10."""
-        assert bot_class.HIP3_MAX_LEVERAGE == 10
-
-    def test_requires_isolated_margin_by_prefix(self, bot_class):
-        """Test isolated margin detection by xyz: prefix."""
+    def test_is_hip3_symbol_by_prefix(self, bot_class):
+        """Test HIP-3 routing detection by prefix."""
         # Create minimal bot instance for method testing
         bot = object.__new__(bot_class)
         bot.markets_dict = {}
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
         bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
 
-        # Test prefix detection
-        assert bot._requires_isolated_margin("xyz:TSLA/USDC:USDC") is True
-        assert bot._requires_isolated_margin("xyz:NVDA/USDC:USDC") is True
-        assert bot._requires_isolated_margin("XYZ-XYZ100/USDC:USDC") is True
-        assert bot._requires_isolated_margin("XYZ:XYZ100/USDC:USDC") is True
-        assert bot._requires_isolated_margin("BTC/USDC:USDC") is False
-        assert bot._requires_isolated_margin("ETH/USDC:USDC") is False
+        assert bot._is_hip3_symbol("xyz:TSLA/USDC:USDC") is True
+        assert bot._is_hip3_symbol("xyz:NVDA/USDC:USDC") is True
+        assert bot._is_hip3_symbol("XYZ-XYZ100/USDC:USDC") is True
+        assert bot._is_hip3_symbol("XYZ:XYZ100/USDC:USDC") is True
+        assert bot._is_hip3_symbol("BTC/USDC:USDC") is False
+        assert bot._is_hip3_symbol("ETH/USDC:USDC") is False
 
     def test_requires_isolated_margin_by_flag(self, bot_class):
-        """Test isolated margin detection by onlyIsolated flag."""
+        """Test isolated-only detection by exchange metadata."""
         bot = object.__new__(bot_class)
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
         bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
         bot.markets_dict = {
-            "NEWSTOCK/USDC:USDC": {"info": {"onlyIsolated": True}},
+            "XYZ-NEWSTOCK/USDC:USDC": {"baseName": "xyz:NEWSTOCK", "info": {"onlyIsolated": True}},
+            "XYZ-CROSS/USDC:USDC": {"baseName": "xyz:CROSS", "info": {"onlyIsolated": False}},
             "BTC/USDC:USDC": {"info": {"onlyIsolated": False}},
         }
 
         # Market with onlyIsolated=True should require isolated margin
-        assert bot._requires_isolated_margin("NEWSTOCK/USDC:USDC") is True
+        assert bot._requires_isolated_margin("XYZ-NEWSTOCK/USDC:USDC") is True
 
-        # Market with onlyIsolated=False should not require isolated margin
+        # Cross-capable HIP-3 symbol should not be forced to isolated
+        assert bot._requires_isolated_margin("XYZ-CROSS/USDC:USDC") is False
         assert bot._requires_isolated_margin("BTC/USDC:USDC") is False
 
     @pytest.mark.asyncio
-    async def test_update_exchange_config_uses_isolated_for_xyz_prefixed_ccxt_symbol(self, bot_class):
-        """CCXT's XYZ- prefixed HIP-3 symbols must use isolated margin mode."""
+    async def test_update_exchange_config_auto_uses_cross_for_cross_capable_hip3(self, bot_class):
+        """HIP-3 symbols should use cross in auto mode when metadata allows it."""
         bot = object.__new__(bot_class)
         bot.exchange = "hyperliquid"
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
         bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
         bot.user_info = {"is_vault": False}
+        bot.config = {"live": {"hyperliquid_hip3_margin_mode": "auto"}}
+        bot.markets_dict = {
+            "XYZ-XYZ100/USDC:USDC": {
+                "baseName": "xyz:XYZ100",
+                "info": {"marginMode": "normal"},
+            }
+        }
         bot.cca = MagicMock()
         bot.cca.set_margin_mode = AsyncMock(return_value={"status": "ok"})
         bot._calc_leverage_for_symbol = lambda symbol: 7
@@ -191,10 +194,52 @@ class TestHyperliquidBotHIP3:
         await bot.update_exchange_config_by_symbols(["XYZ-XYZ100/USDC:USDC"])
 
         bot.cca.set_margin_mode.assert_awaited_once_with(
-            "isolated",
+            "cross",
             symbol="XYZ-XYZ100/USDC:USDC",
             params={"leverage": 7},
         )
+
+    def test_forced_cross_disables_isolated_only_hip3_from_approved_symbols(self, bot_class, caplog):
+        """Forced cross should disable only incompatible HIP-3 symbols for new entries."""
+        bot = object.__new__(bot_class)
+        bot.exchange = "hyperliquid"
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.config = {"live": {"hyperliquid_hip3_margin_mode": "cross"}}
+        bot.markets_dict = {
+            "XYZ-HOOD/USDC:USDC": {
+                "baseName": "xyz:HOOD",
+                "info": {"marginMode": "noCross", "onlyIsolated": True},
+            },
+            "XYZ-XYZ100/USDC:USDC": {
+                "baseName": "xyz:XYZ100",
+                "info": {"marginMode": "normal"},
+            },
+        }
+
+        with caplog.at_level("WARNING"):
+            filtered = bot._filter_approved_symbols(
+                "long", {"XYZ-HOOD/USDC:USDC", "XYZ-XYZ100/USDC:USDC"}
+            )
+
+        assert filtered == {"XYZ-XYZ100/USDC:USDC"}
+        assert "disabling long xyz:HOOD for new entries" in caplog.text
+        assert "hyperliquid_hip3_margin_mode=cross" in caplog.text
+
+    def test_forced_cross_keeps_isolated_mode_for_incompatible_hip3_state_management(self, bot_class):
+        """Forced cross should not break management of isolated-only HIP-3 symbols with positions."""
+        bot = object.__new__(bot_class)
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.config = {"live": {"hyperliquid_hip3_margin_mode": "cross"}}
+        bot.markets_dict = {
+            "XYZ-HOOD/USDC:USDC": {
+                "baseName": "xyz:HOOD",
+                "info": {"marginMode": "noCross", "onlyIsolated": True},
+            }
+        }
+
+        assert bot._get_margin_mode_for_symbol("XYZ-HOOD/USDC:USDC") == "isolated"
 
     @pytest.mark.asyncio
     async def test_fetch_positions_and_balance_augments_hip3_positions_via_fetch_positions(
@@ -295,17 +340,17 @@ class TestHyperliquidBotHIP3:
         }
 
 
-class TestIsolatedMarginLeverageCapping:
-    """Tests for isolated margin leverage capping."""
+class TestHip3LeverageSelection:
+    """Tests for leverage selection across HIP-3 margin modes."""
 
-    def test_leverage_capped_for_isolated_symbols(self, stubbed_modules):
-        """Test that isolated margin symbols have leverage capped appropriately."""
+    def test_exchange_max_leverage_used_for_cross_capable_hip3(self, stubbed_modules):
+        """Cross-capable HIP-3 symbols should use exchange-reported max leverage."""
         from exchanges.hyperliquid import HyperliquidBot
 
         # Create minimal bot instance
         bot = object.__new__(HyperliquidBot)
         bot.HIP3_PREFIX = HyperliquidBot.HIP3_PREFIX
-        bot.HIP3_MAX_LEVERAGE = HyperliquidBot.HIP3_MAX_LEVERAGE
+        bot.HIP3_ALT_PREFIXES = HyperliquidBot.HIP3_ALT_PREFIXES
         bot.max_leverage = {}
         bot.min_costs = {}
         bot.min_qtys = {}
@@ -316,9 +361,10 @@ class TestIsolatedMarginLeverageCapping:
 
         # Mock markets with different max leverage values
         bot.markets_dict = {
-            "xyz:TSLA/USDC:USDC": {
+            "XYZ-TSLA/USDC:USDC": {
                 "id": "TSLA",
-                "info": {"onlyIsolated": True, "maxLeverage": "20"},
+                "baseName": "xyz:TSLA",
+                "info": {"marginMode": "normal", "maxLeverage": "20"},
                 "limits": {"cost": {"min": 10}, "amount": {"min": 0.01}},
                 "precision": {"amount": 0.01, "price": 0.01},
                 "contractSize": 1,
@@ -342,18 +388,11 @@ class TestIsolatedMarginLeverageCapping:
             bot.min_qtys[symbol] = elm["limits"]["amount"]["min"]
             bot.price_steps[symbol] = elm["precision"]["price"]
             bot.c_mults[symbol] = elm["contractSize"]
+            bot.max_leverage[symbol] = int(elm["info"]["maxLeverage"])
 
-            if bot._requires_isolated_margin(symbol):
-                bot.max_leverage[symbol] = min(
-                    bot.HIP3_MAX_LEVERAGE,
-                    int(elm["info"]["maxLeverage"]),
-                )
-            else:
-                bot.max_leverage[symbol] = int(elm["info"]["maxLeverage"])
-
-        # Isolated symbol (xyz: prefix) should be capped at 10x
-        assert bot.max_leverage["xyz:TSLA/USDC:USDC"] == 10
-        assert bot._requires_isolated_margin("xyz:TSLA/USDC:USDC") is True
+        # Cross-capable HIP-3 symbol should use full exchange leverage
+        assert bot.max_leverage["XYZ-TSLA/USDC:USDC"] == 20
+        assert bot._requires_isolated_margin("XYZ-TSLA/USDC:USDC") is False
 
         # Cross margin symbol should use full leverage
         assert bot.max_leverage["BTC/USDC:USDC"] == 50

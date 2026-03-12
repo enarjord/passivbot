@@ -11,6 +11,7 @@ All notable user-facing changes will be documented in this file.
 ### Fixed
 - **Hyperliquid HIP-3 margin-mode detection for `XYZ-...` symbols** - Hyperliquid stock perps exposed by CCXT as `XYZ-...` or `XYZ:...` now correctly force isolated margin mode, preventing erroneous cross-margin config calls that could lead to repeated duplicate entry submissions on stock-perp markets such as `XYZ100`.
 - **Hyperliquid HIP-3 state sync for positions and open orders** - Hyperliquid stock-perp positions and open orders now use dex-scoped CCXT queries for HIP-3 symbols instead of relying only on the default `fetch_balance()` / global open-orders routes. This fixes bots repeatedly re-entering because filled HIP-3 positions or resting HIP-3 orders were invisible to local state reconciliation.
+- **Dynamic Hyperliquid HIP-3 cross-margin discovery** - Passivbot now reads per-market Hyperliquid metadata to decide whether a HIP-3 market is cross-capable or isolated-only. New `live.hyperliquid_hip3_margin_mode` supports `auto`, `cross`, and `isolated`. In `cross` mode, isolated-only HIP-3 markets are loudly disabled for new entries instead of crashing the bot, while existing positions remain manageable.
 
 ## v7.8.4 - 2026-03-06
 

@@ -56,3 +56,17 @@ def test_enable_archive_candle_fetch_preserved():
     cfg["live"]["enable_archive_candle_fetch"] = True
     out = format_config(copy.deepcopy(cfg), verbose=False)
     assert out["live"]["enable_archive_candle_fetch"] is True
+
+
+def test_hyperliquid_hip3_margin_mode_in_template():
+    """hyperliquid_hip3_margin_mode should be present in live template."""
+    template = get_template_config()
+    assert template["live"]["hyperliquid_hip3_margin_mode"] == "auto"
+
+
+def test_hyperliquid_hip3_margin_mode_preserved():
+    """hyperliquid_hip3_margin_mode should be preserved during format_config."""
+    cfg = _base_config()
+    cfg["live"]["hyperliquid_hip3_margin_mode"] = "cross"
+    out = format_config(copy.deepcopy(cfg), verbose=False)
+    assert out["live"]["hyperliquid_hip3_margin_mode"] == "cross"

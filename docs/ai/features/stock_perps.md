@@ -3,7 +3,7 @@
 ## Contract
 
 1. Stock perps are Hyperliquid-only in Passivbot.
-2. Stock perps use isolated margin behavior.
+2. HIP-3 margin mode must follow exchange metadata per market; do not assume all stock perps are isolated-only.
 3. Symbol normalization must preserve HIP-3 routing semantics.
 
 ## Non-Obvious Details
@@ -22,7 +22,7 @@
 ## Test Focus
 
 1. Symbol normalization and routing.
-2. Margin mode assignment by symbol type.
+2. Margin mode assignment by exchange metadata + live override.
 3. Mixed crypto + stock configs.
 4. Minimum-order behavior on small balances.
 

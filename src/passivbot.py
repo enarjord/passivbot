@@ -730,6 +730,10 @@ class Passivbot:
     def bot_value(self, pside: str, key: str):
         return require_config_value(self.config, f"bot.{pside}.{key}")
 
+    def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
+        """Hook: exchange-specific filtering for approved symbols used for new entries."""
+        return symbols
+
     def _build_ccxt_options(self, overrides: Optional[dict] = None) -> dict:
         options = {"adjustForTimeDifference": True}
         recv_window = get_optional_live_value(self.config, "recv_window_ms", None)
@@ -6334,8 +6338,9 @@ class Passivbot:
                 if self.live_value("empty_means_all_approved") and not self.approved_coins[pside]:
                     # if approved_coins is empty, all coins are approved
                     self.approved_coins[pside] = self.eligible_symbols
-                self.approved_coins_minus_ignored_coins[pside] = (
-                    self.approved_coins[pside] - self.ignored_coins[pside]
+                filtered = self.approved_coins[pside] - self.ignored_coins[pside]
+                self.approved_coins_minus_ignored_coins[pside] = self._filter_approved_symbols(
+                    pside, filtered
                 )
             # aggregate add/remove logs for readability
             for k, summary in (("added", added_summary.get("approved_coins", {})),):
