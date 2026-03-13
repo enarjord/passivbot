@@ -180,7 +180,7 @@ class TestHyperliquidBotHIP3:
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
         bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
         bot.user_info = {"is_vault": False}
-        bot.config = {"live": {"hyperliquid_hip3_margin_mode": "auto"}}
+        bot.config = {"live": {"margin_mode_preference": "auto"}}
         bot.markets_dict = {
             "XYZ-XYZ100/USDC:USDC": {
                 "baseName": "xyz:XYZ100",
@@ -205,7 +205,7 @@ class TestHyperliquidBotHIP3:
         bot.exchange = "hyperliquid"
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
         bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
-        bot.config = {"live": {"hyperliquid_hip3_margin_mode": "cross"}}
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
         bot.markets_dict = {
             "XYZ-HOOD/USDC:USDC": {
                 "baseName": "xyz:HOOD",
@@ -223,15 +223,15 @@ class TestHyperliquidBotHIP3:
             )
 
         assert filtered == {"XYZ-XYZ100/USDC:USDC"}
-        assert "disabling long xyz:HOOD for new entries" in caplog.text
-        assert "hyperliquid_hip3_margin_mode=cross" in caplog.text
+        assert "disabling long XYZ-HOOD/USDC:USDC for new entries" in caplog.text
+        assert "margin_mode_preference=cross" in caplog.text
 
     def test_forced_cross_keeps_isolated_mode_for_incompatible_hip3_state_management(self, bot_class):
         """Forced cross should not break management of isolated-only HIP-3 symbols with positions."""
         bot = object.__new__(bot_class)
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
         bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
-        bot.config = {"live": {"hyperliquid_hip3_margin_mode": "cross"}}
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
         bot.markets_dict = {
             "XYZ-HOOD/USDC:USDC": {
                 "baseName": "xyz:HOOD",
@@ -240,6 +240,21 @@ class TestHyperliquidBotHIP3:
         }
 
         assert bot._get_margin_mode_for_symbol("XYZ-HOOD/USDC:USDC") == "isolated"
+
+    def test_auto_isolated_prefers_isolated_for_cross_capable_hip3(self, bot_class):
+        """auto_isolated alias should choose isolated when both modes are available."""
+        bot = object.__new__(bot_class)
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.config = {"live": {"margin_mode_preference": "auto_isolated"}}
+        bot.markets_dict = {
+            "XYZ-XYZ100/USDC:USDC": {
+                "baseName": "xyz:XYZ100",
+                "info": {"marginMode": "normal"},
+            }
+        }
+
+        assert bot._get_margin_mode_for_symbol("XYZ-XYZ100/USDC:USDC") == "isolated"
 
     @pytest.mark.asyncio
     async def test_fetch_positions_and_balance_augments_hip3_positions_via_fetch_positions(

@@ -294,7 +294,7 @@
         "forced_mode_long": "",
         "forced_mode_short": "",
         "hedge_mode": true,
-        "hyperliquid_hip3_margin_mode": "auto",
+        "margin_mode_preference": "auto",
         "ignored_coins": {"long":[],"short":[]},
         "inactive_coin_candle_ttl_minutes": 10,
         "leverage": 10,

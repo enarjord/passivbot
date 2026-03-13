@@ -10,8 +10,8 @@ from ccxt.base.errors import RateLimitExceeded
 
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
-from utils import ts_to_date, utc_ms, symbol_to_coin
-from config_utils import require_live_value, get_optional_live_value
+from utils import ts_to_date, utc_ms
+from config_utils import require_live_value
 from pure_funcs import calc_hash
 from procedures import print_async_exception, assert_correct_ccxt_version
 
@@ -122,19 +122,6 @@ class HyperliquidBot(CCXTBot):
             return True
         return False
 
-    def _get_hip3_margin_preference(self) -> str:
-        raw = get_optional_live_value(self.config, "hyperliquid_hip3_margin_mode", "auto")
-        pref = str(raw).strip().lower() if raw is not None else "auto"
-        if pref in {"auto", "cross", "isolated"}:
-            return pref
-        if not getattr(self, "_hip3_margin_pref_warned", False):
-            logging.warning(
-                "Invalid live.hyperliquid_hip3_margin_mode=%r; using 'auto'. Valid values: auto, cross, isolated.",
-                raw,
-            )
-            self._hip3_margin_pref_warned = True
-        return "auto"
-
     def _hip3_margin_metadata(self, symbol: str) -> dict:
         market = getattr(self, "markets_dict", {}).get(symbol, {})
         info = market.get("info", {})
@@ -160,62 +147,6 @@ class HyperliquidBot(CCXTBot):
 
         # Fall back to base class check (onlyIsolated flag, etc.)
         return super()._requires_isolated_margin(symbol)
-
-    def _get_margin_mode_for_symbol(self, symbol: str) -> str:
-        if not self._is_hip3_symbol(symbol):
-            return super()._get_margin_mode_for_symbol(symbol)
-
-        pref = self._get_hip3_margin_preference()
-        if pref == "isolated":
-            return "isolated"
-        metadata = self._hip3_margin_metadata(symbol)
-        if pref == "cross" and metadata["cross_capable"]:
-            return "cross"
-        if pref == "cross":
-            # Keep state-management paths operational for existing positions/orders.
-            return "isolated"
-        return "cross" if metadata["cross_capable"] else "isolated"
-
-    def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
-        symbols = super()._filter_approved_symbols(pside, symbols)
-        if self._get_hip3_margin_preference() != "cross":
-            return symbols
-
-        kept = set()
-        disabled = {}
-        for symbol in symbols:
-            if not self._is_hip3_symbol(symbol):
-                kept.add(symbol)
-                continue
-            metadata = self._hip3_margin_metadata(symbol)
-            if metadata["cross_capable"]:
-                kept.add(symbol)
-                continue
-            disabled[symbol] = metadata
-
-        if not hasattr(self, "_hip3_cross_disabled_symbols"):
-            self._hip3_cross_disabled_symbols = {}
-        prev_disabled = getattr(self, "_hip3_cross_disabled_symbols")
-        self._hip3_cross_disabled_symbols = {**prev_disabled, **disabled}
-
-        for symbol, metadata in disabled.items():
-            warn_key = (pside, symbol, metadata["reason"])
-            if warn_key in getattr(self, "_hip3_cross_disabled_warned", set()):
-                continue
-            if not hasattr(self, "_hip3_cross_disabled_warned"):
-                self._hip3_cross_disabled_warned = set()
-            self._hip3_cross_disabled_warned.add(warn_key)
-            logging.warning(
-                "[margin] disabling %s %s for new entries: live.hyperliquid_hip3_margin_mode=cross "
-                "but exchange metadata marks this HIP-3 market isolated-only (reason=%s, onlyIsolated=%s, marginMode=%s). "
-                "To trade it, switch live.hyperliquid_hip3_margin_mode to auto or isolated, or choose a HIP-3 market with cross enabled.",
-                pside,
-                symbol_to_coin(symbol, verbose=False) or symbol,
-                metadata["reason"],
-                metadata["only_isolated"],
-                metadata["raw_margin_mode"] or "n/a",
-            )
-        return kept
 
     def _get_hl_dex_for_symbol(self, symbol: str) -> str | None:
         """Return HIP-3 dex name for a symbol if available."""
@@ -639,11 +570,7 @@ class HyperliquidBot(CCXTBot):
         return any_adjusted
 
     def symbol_is_eligible(self, symbol):
-        """Check if a symbol is eligible for trading.
-
-        HIP-3 stock perps (onlyIsolated=True) are eligible - they use isolated margin
-        automatically and have leverage capped at 10x.
-        """
+        """Check if a symbol is eligible for trading."""
         try:
             market_info = self.markets_dict[symbol]["info"]
 
@@ -658,7 +585,7 @@ class HyperliquidBot(CCXTBot):
     async def update_exchange_config_by_symbols(self, symbols):
         """Set leverage and margin mode for Hyperliquid symbols.
 
-        Uses base class methods for isolated margin detection and leverage calculation.
+        Uses shared margin-preference logic plus Hyperliquid-specific vault handling.
         Adds Hyperliquid-specific vault address handling.
         Calls are made sequentially with a small delay to avoid rate-limit bursts.
         """

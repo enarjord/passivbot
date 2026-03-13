@@ -2239,7 +2239,7 @@ def get_template_config():
             "forced_mode_long": "",
             "forced_mode_short": "",
             "hedge_mode": True,
-            "hyperliquid_hip3_margin_mode": "auto",
+            "margin_mode_preference": "auto",
             "ignored_coins": {"long": [], "short": []},
             "inactive_coin_candle_ttl_minutes": 10.0,
             "leverage": 10.0,
