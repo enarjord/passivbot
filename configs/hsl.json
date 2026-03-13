@@ -446,7 +446,8 @@
             "mdg_strategy_pnl_rebased_w",
             "peak_recovery_hours_hsl",
             "position_held_hours_max",
-            "drawdown_worst_hsl"
+            "drawdown_worst_hsl",
+            "drawdown_worst_mean_1pct_hsl"
         ],
         "starting_config_twe_multiplier": 1.0,
         "write_all_results": true
