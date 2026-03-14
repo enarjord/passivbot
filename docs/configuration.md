@@ -266,6 +266,29 @@ Coins selected for trading are filtered by volume and log range. First, filter c
   - May be split into long and short:
     - Example: `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
 - **leverage**: Leverage set on the exchange. Default is `10`.
+- **margin_mode_preference**: Preferred margin mode for live trading, applied per symbol using exchange metadata.
+  - Accepted values:
+    - `auto`, `auto_cross`, `auto_cross_preferred`: aliases for the same mode. If both cross and isolated are supported, prefer `cross`.
+    - `auto_isolated`, `auto_isolated_preferred`: aliases for the same mode. If both cross and isolated are supported, prefer `isolated`.
+    - `cross`: require `cross` mode for new entries.
+    - `isolated`: require `isolated` mode for new entries.
+  - Decision logic per symbol:
+    - If the symbol is **cross-only**:
+      - `auto*` chooses `cross`
+      - `cross` chooses `cross`
+      - `isolated` blocks new entries for that symbol
+    - If the symbol is **isolated-only**:
+      - `auto*` chooses `isolated`
+      - `isolated` chooses `isolated`
+      - `cross` blocks new entries for that symbol
+    - If the symbol supports **both**:
+      - `auto` / `auto_cross*` chooses `cross`
+      - `auto_isolated*` chooses `isolated`
+      - `cross` chooses `cross`
+      - `isolated` chooses `isolated`
+  - When a symbol is incompatible with strict `cross` or `isolated` preference, Passivbot logs a loud warning and disables that symbol for **new entries** instead of crashing the bot.
+  - Existing positions and open orders on blocked symbols remain manageable. The bot will still use the symbol's actual supported margin mode to keep syncing state and managing exits.
+  - This setting is only as good as the exchange metadata exposed through CCXT. If metadata is ambiguous, Passivbot falls back to the exchange's default behavior for `auto` modes.
 - **market_orders_allowed**: If `true`, allows Passivbot to place market orders when the order price is very close to the current market price. If `false`, only places limit orders. Default is `true`.
 - **order_match_tolerance_pct**: Percentage tolerance (in %) used to match near-identical cancel/create pairs and avoid order churn. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling/replacing it.
 - **max_n_cancellations_per_batch**: Cancels `n` open orders per execution.
