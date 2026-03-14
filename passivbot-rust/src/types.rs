@@ -546,8 +546,10 @@ pub struct Analysis {
     pub entry_initial_balance_pct_short: f64,
 
     pub hard_stop_triggers: u32,
+    pub hard_stop_triggers_per_year: f64,
     pub hard_stop_total_loss_pct: f64,
     pub hard_stop_restarts: u32,
+    pub hard_stop_restarts_per_year: f64,
 }
 
 impl Default for Analysis {
@@ -611,8 +613,10 @@ impl Default for Analysis {
             entry_initial_balance_pct_long: 0.0,
             entry_initial_balance_pct_short: 0.0,
             hard_stop_triggers: 0,
+            hard_stop_triggers_per_year: 0.0,
             hard_stop_total_loss_pct: 0.0,
             hard_stop_restarts: 0,
+            hard_stop_restarts_per_year: 0.0,
         }
     }
 }

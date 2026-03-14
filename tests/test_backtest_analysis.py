@@ -112,15 +112,19 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
     analysis_usd.update(
         {
             "hard_stop_triggers": 3,
+            "hard_stop_triggers_per_year": 36.5,
             "hard_stop_restarts": 2,
             "hard_stop_total_loss_pct": 0.125,
+            "hard_stop_restarts_per_year": 24.3333333333,
         }
     )
     analysis_btc.update(
         {
             "hard_stop_triggers": 3,
+            "hard_stop_triggers_per_year": 36.5,
             "hard_stop_restarts": 2,
             "hard_stop_total_loss_pct": 0.125,
+            "hard_stop_restarts_per_year": 24.3333333333,
         }
     )
     config = {
@@ -139,14 +143,20 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
     )
 
     assert result["hard_stop_triggers"] == 3
+    assert result["hard_stop_triggers_per_year"] == 36.5
     assert result["hard_stop_restarts"] == 2
     assert result["hard_stop_total_loss_pct"] == 0.125
+    assert result["hard_stop_restarts_per_year"] == 24.3333333333
     assert "hard_stop_triggers_usd" not in result
     assert "hard_stop_triggers_btc" not in result
+    assert "hard_stop_triggers_per_year_usd" not in result
+    assert "hard_stop_triggers_per_year_btc" not in result
     assert "hard_stop_restarts_usd" not in result
     assert "hard_stop_restarts_btc" not in result
     assert "hard_stop_total_loss_pct_usd" not in result
     assert "hard_stop_total_loss_pct_btc" not in result
+    assert "hard_stop_restarts_per_year_usd" not in result
+    assert "hard_stop_restarts_per_year_btc" not in result
 
 
 def test_process_forager_fills_handles_zero_pnl_division():

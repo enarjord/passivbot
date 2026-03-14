@@ -93,6 +93,8 @@ SHARED_METRICS = {
     "sharpe_ratio_pnl_w",
     "sortino_ratio_pnl",
     "sortino_ratio_pnl_w",
+    "hard_stop_triggers_per_year",
+    "hard_stop_restarts_per_year",
 }
 
 

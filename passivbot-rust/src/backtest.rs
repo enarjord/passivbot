@@ -3297,12 +3297,26 @@ impl<'a> Backtest<'a> {
         (long, short)
     }
 
-    /// Returns (n_triggers, total_panic_loss, n_restarts, starting_balance).
-    pub fn hard_stop_metrics(&self) -> (u32, f64, u32, f64) {
+    /// Returns (n_triggers, triggers_per_year, total_panic_loss, n_restarts, restarts_per_year,
+    /// starting_balance).
+    pub fn hard_stop_metrics(&self) -> (u32, f64, f64, u32, f64, f64) {
+        let n_days = if self.equities.timestamps_ms.len() >= 2 {
+            let first_ts = self.equities.timestamps_ms[0];
+            let last_ts = *self.equities.timestamps_ms.last().unwrap_or(&first_ts);
+            (last_ts.saturating_sub(first_ts) as f64 / 86_400_000.0)
+                .max(self.interval_ms as f64 / 86_400_000.0)
+        } else if self.equities.timestamps_ms.len() == 1 {
+            self.interval_ms as f64 / 86_400_000.0
+        } else {
+            0.0
+        };
+        let per_year_scale = if n_days > 0.0 { 365.25 / n_days } else { 0.0 };
         (
             self.hard_stop_n_triggers,
+            self.hard_stop_n_triggers as f64 * per_year_scale,
             self.hard_stop_total_panic_loss,
             self.hard_stop_n_restarts,
+            self.hard_stop_n_restarts as f64 * per_year_scale,
             self.backtest_params.starting_balance,
         )
     }

@@ -124,6 +124,8 @@ ANALYSIS_SHARED_KEYS = {
     "sharpe_ratio_pnl_w",
     "sortino_ratio_pnl",
     "sortino_ratio_pnl_w",
+    "hard_stop_triggers_per_year",
+    "hard_stop_restarts_per_year",
 }
 PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}

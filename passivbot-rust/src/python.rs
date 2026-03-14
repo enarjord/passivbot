@@ -937,14 +937,25 @@ fn run_backtest_core<'py>(
         analysis_btc.entry_initial_balance_pct_long = entry_pct_long;
         analysis_btc.entry_initial_balance_pct_short = entry_pct_short;
 
-        let (hs_triggers, hs_panic_loss, hs_restarts, starting_bal) = backtest.hard_stop_metrics();
+        let (
+            hs_triggers,
+            hs_triggers_per_year,
+            hs_panic_loss,
+            hs_restarts,
+            hs_restarts_per_year,
+            starting_bal,
+        ) = backtest.hard_stop_metrics();
         let starting_bal = starting_bal.max(f64::EPSILON);
         analysis_usd.hard_stop_triggers = hs_triggers;
+        analysis_usd.hard_stop_triggers_per_year = hs_triggers_per_year;
         analysis_usd.hard_stop_total_loss_pct = hs_panic_loss / starting_bal;
         analysis_usd.hard_stop_restarts = hs_restarts;
+        analysis_usd.hard_stop_restarts_per_year = hs_restarts_per_year;
         analysis_btc.hard_stop_triggers = hs_triggers;
+        analysis_btc.hard_stop_triggers_per_year = hs_triggers_per_year;
         analysis_btc.hard_stop_total_loss_pct = hs_panic_loss / starting_bal;
         analysis_btc.hard_stop_restarts = hs_restarts;
+        analysis_btc.hard_stop_restarts_per_year = hs_restarts_per_year;
 
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
