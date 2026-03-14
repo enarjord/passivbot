@@ -951,8 +951,10 @@ fn run_backtest_core<'py>(
 
         let hs = backtest.hard_stop_metrics();
         analysis_usd.hard_stop_triggers = hs.triggers;
+        analysis_usd.hard_stop_triggers_per_year = hs.triggers_per_year;
         analysis_usd.hard_stop_halt_to_restart_equity_loss_pct = hs.halt_to_restart_equity_loss_pct;
         analysis_usd.hard_stop_restarts = hs.restarts;
+        analysis_usd.hard_stop_restarts_per_year = hs.restarts_per_year;
         analysis_usd.hard_stop_time_in_yellow_pct = hs.time_in_yellow_pct;
         analysis_usd.hard_stop_time_in_orange_pct = hs.time_in_orange_pct;
         analysis_usd.hard_stop_time_in_red_pct = hs.time_in_red_pct;
@@ -985,8 +987,10 @@ fn run_backtest_core<'py>(
         analysis_usd.sterling_ratio_strategy_pnl_rebased_w =
             hs.sterling_ratio_strategy_pnl_rebased_w;
         analysis_btc.hard_stop_triggers = hs.triggers;
+        analysis_btc.hard_stop_triggers_per_year = hs.triggers_per_year;
         analysis_btc.hard_stop_halt_to_restart_equity_loss_pct = hs.halt_to_restart_equity_loss_pct;
         analysis_btc.hard_stop_restarts = hs.restarts;
+        analysis_btc.hard_stop_restarts_per_year = hs.restarts_per_year;
         analysis_btc.hard_stop_time_in_yellow_pct = hs.time_in_yellow_pct;
         analysis_btc.hard_stop_time_in_orange_pct = hs.time_in_orange_pct;
         analysis_btc.hard_stop_time_in_red_pct = hs.time_in_red_pct;

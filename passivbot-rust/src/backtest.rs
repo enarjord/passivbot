@@ -275,8 +275,10 @@ struct HardStopStopSnapshot {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HardStopMetrics {
     pub triggers: u32,
+    pub triggers_per_year: f64,
     pub halt_to_restart_equity_loss_pct: f64,
     pub restarts: u32,
+    pub restarts_per_year: f64,
     pub time_in_yellow_pct: f64,
     pub time_in_orange_pct: f64,
     pub time_in_red_pct: f64,
@@ -3721,11 +3723,24 @@ impl<'a> Backtest<'a> {
         } else {
             0.0
         };
+        let n_days = if self.equities.timestamps_ms.len() >= 2 {
+            let first_ts = self.equities.timestamps_ms[0];
+            let last_ts = *self.equities.timestamps_ms.last().unwrap_or(&first_ts);
+            (last_ts.saturating_sub(first_ts) as f64 / 86_400_000.0)
+                .max(self.interval_ms as f64 / 86_400_000.0)
+        } else if self.equities.timestamps_ms.len() == 1 {
+            self.interval_ms as f64 / 86_400_000.0
+        } else {
+            0.0
+        };
+        let per_year_scale = if n_days > 0.0 { 365.25 / n_days } else { 0.0 };
         let strategy_metrics = self.strategy_equity_metrics();
         HardStopMetrics {
             triggers: self.hard_stop_n_triggers,
+            triggers_per_year: self.hard_stop_n_triggers as f64 * per_year_scale,
             halt_to_restart_equity_loss_pct: self.hard_stop_total_panic_loss / starting_balance,
             restarts: self.hard_stop_n_restarts,
+            restarts_per_year: self.hard_stop_n_restarts as f64 * per_year_scale,
             time_in_yellow_pct,
             time_in_orange_pct,
             time_in_red_pct,

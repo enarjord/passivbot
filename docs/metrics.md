@@ -61,6 +61,10 @@ and more stable across collateral caps.
 - `drawdown_worst_mean_1pct_hsl`: Mean of the worst 1% HSL drawdown samples.
 - `peak_recovery_hours_hsl`: Longest time spent below the all-time rebased HSL peak before
   recovery. This uses the all-time rebased peak rather than the rolling trigger window.
+- `hard_stop_triggers`: Absolute count of RED trigger events during the run.
+- `hard_stop_restarts`: Absolute count of cooldown restarts after RED halts.
+- `hard_stop_triggers_per_year`: `hard_stop_triggers / n_days * 365.25`.
+- `hard_stop_restarts_per_year`: `hard_stop_restarts / n_days * 365.25`.
 
 ## Exposure, volume, and timing
 - `total_wallet_exposure_max/mean/median`: Stats over recorded wallet exposure values.

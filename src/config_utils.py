@@ -112,6 +112,8 @@ SHARED_METRICS = {
     "drawdown_worst_hsl",
     "drawdown_worst_mean_1pct_hsl",
     "peak_recovery_hours_hsl",
+    "hard_stop_triggers_per_year",
+    "hard_stop_restarts_per_year",
     "hard_stop_halt_to_restart_equity_loss_pct",
     "hard_stop_time_in_yellow_pct",
     "hard_stop_time_in_orange_pct",

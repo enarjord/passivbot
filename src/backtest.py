@@ -136,6 +136,8 @@ ANALYSIS_SHARED_KEYS = {
     "drawdown_worst_hsl",
     "drawdown_worst_mean_1pct_hsl",
     "peak_recovery_hours_hsl",
+    "hard_stop_triggers_per_year",
+    "hard_stop_restarts_per_year",
 }
 PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl", "hard_stop"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}

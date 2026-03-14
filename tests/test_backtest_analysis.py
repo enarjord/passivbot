@@ -133,7 +133,9 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
     analysis_usd.update(
         {
             "hard_stop_triggers": 3,
+            "hard_stop_triggers_per_year": 36.5,
             "hard_stop_restarts": 2,
+            "hard_stop_restarts_per_year": 24.3333333333,
             "hard_stop_halt_to_restart_equity_loss_pct": 0.125,
             "hard_stop_time_in_yellow_pct": 0.15,
             "hard_stop_time_in_orange_pct": 0.1,
@@ -150,7 +152,9 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
     analysis_btc.update(
         {
             "hard_stop_triggers": 3,
+            "hard_stop_triggers_per_year": 36.5,
             "hard_stop_restarts": 2,
+            "hard_stop_restarts_per_year": 24.3333333333,
             "hard_stop_halt_to_restart_equity_loss_pct": 0.125,
             "hard_stop_time_in_yellow_pct": 0.15,
             "hard_stop_time_in_orange_pct": 0.1,
@@ -180,7 +184,9 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
     )
 
     assert result["hard_stop_triggers"] == 3
+    assert result["hard_stop_triggers_per_year"] == 36.5
     assert result["hard_stop_restarts"] == 2
+    assert result["hard_stop_restarts_per_year"] == 24.3333333333
     assert result["hard_stop_halt_to_restart_equity_loss_pct"] == 0.125
     assert result["hard_stop_time_in_yellow_pct"] == 0.15
     assert result["hard_stop_time_in_orange_pct"] == 0.1
@@ -194,8 +200,12 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
     assert result["hard_stop_post_restart_retrigger_pct"] == 0.5
     assert "hard_stop_triggers_usd" not in result
     assert "hard_stop_triggers_btc" not in result
+    assert "hard_stop_triggers_per_year_usd" not in result
+    assert "hard_stop_triggers_per_year_btc" not in result
     assert "hard_stop_restarts_usd" not in result
     assert "hard_stop_restarts_btc" not in result
+    assert "hard_stop_restarts_per_year_usd" not in result
+    assert "hard_stop_restarts_per_year_btc" not in result
     assert "hard_stop_halt_to_restart_equity_loss_pct_usd" not in result
     assert "hard_stop_halt_to_restart_equity_loss_pct_btc" not in result
 
