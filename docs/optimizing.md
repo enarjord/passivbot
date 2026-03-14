@@ -77,6 +77,23 @@ That default override disables terminal no-restart during optimizer evaluations 
 be constrained through `drawdown_worst_hsl`, `drawdown_worst_mean_1pct_hsl`, and
 `peak_recovery_hours_hsl` instead of being prematurely truncated.
 
+When you provide many starting configs, optimizer now also bounds how many seed evaluations may be
+in flight at once:
+
+```json
+"optimize": {
+  "max_pending_starting_evals_per_cpu": 2
+}
+```
+
+Effective cap:
+
+- `max_pending = n_cpus * max_pending_starting_evals_per_cpu`
+
+This is mainly a memory-control knob for large seed pools, especially in suite mode where each
+candidate returns a larger metrics payload. Lower it first if the VPS spikes RAM during initial
+seed evaluation.
+
 ### Optimizer Suites
 
 The optimizer reuses the backtest suite configuration and allows every candidate to

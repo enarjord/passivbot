@@ -486,6 +486,42 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
         del individual.evaluation_metrics
 
 
+def _drain_async_results_bounded(
+    items,
+    submit_fn,
+    handle_result_fn,
+    *,
+    max_pending: int,
+    poll_interval_seconds: float = 0.05,
+):
+    max_pending = max(1, int(max_pending))
+    iterator = iter(items)
+    pending = {}
+    exhausted = False
+    completed = 0
+
+    while pending or not exhausted:
+        while not exhausted and len(pending) < max_pending:
+            try:
+                item = next(iterator)
+            except StopIteration:
+                exhausted = True
+                break
+            pending[submit_fn(item)] = item
+
+        ready = [res for res in pending if res.ready()]
+        if not ready:
+            time.sleep(poll_interval_seconds)
+            continue
+
+        for res in ready:
+            item = pending.pop(res)
+            handle_result_fn(item, res)
+            completed += 1
+
+    return completed
+
+
 def ea_mu_plus_lambda_stream(
     population,
     toolbox,
@@ -2074,41 +2110,47 @@ async def main():
             if not individuals:
                 return 0
             total = len(individuals)
-            pending = {}
-            for ind in individuals:
-                pending[pool.apply_async(toolbox.evaluate, (ind,))] = ind
+            max_pending = max(
+                1,
+                int(config["optimize"]["n_cpus"]) * int(
+                    config.get("optimize", {}).get("max_pending_starting_evals_per_cpu", 2)
+                ),
+            )
+            logging.info(
+                "Starting config evaluation queue | total=%d | max_pending=%d",
+                total,
+                max_pending,
+            )
             completed = 0
             try:
-                while pending:
-                    ready = [res for res in pending if res.ready()]
-                    if not ready:
-                        time.sleep(0.05)
-                        continue
-                    for res in ready:
-                        ind = pending.pop(res)
-                        fit_values, penalty, metrics = res.get()
-                        ind.fitness.values = fit_values
-                        ind.fitness.constraint_violation = penalty
-                        ind.constraint_violation = penalty
-                        if metrics is not None:
-                            ind.evaluation_metrics = metrics
-                            _record_individual_result(
-                                ind,
-                                evaluator.config,
-                                overrides_list,
-                                recorder,
-                            )
-                        elif hasattr(ind, "evaluation_metrics"):
-                            delattr(ind, "evaluation_metrics")
-                        completed += 1
-                        logging.info("Evaluated %d/%d starting configs", completed, total)
+                def _handle_result(ind, res):
+                    nonlocal completed
+                    fit_values, penalty, metrics = res.get()
+                    ind.fitness.values = fit_values
+                    ind.fitness.constraint_violation = penalty
+                    ind.constraint_violation = penalty
+                    if metrics is not None:
+                        ind.evaluation_metrics = metrics
+                        _record_individual_result(
+                            ind,
+                            evaluator.config,
+                            overrides_list,
+                            recorder,
+                        )
+                    elif hasattr(ind, "evaluation_metrics"):
+                        delattr(ind, "evaluation_metrics")
+                    completed += 1
+                    logging.info("Evaluated %d/%d starting configs", completed, total)
+
+                _drain_async_results_bounded(
+                    individuals,
+                    lambda ind: pool.apply_async(toolbox.evaluate, (ind,)),
+                    _handle_result,
+                    max_pending=max_pending,
+                    poll_interval_seconds=0.05,
+                )
             except KeyboardInterrupt:
                 logging.info("Evaluation interrupted; terminating pending starting configs...")
-                for res in pending:
-                    try:
-                        res.cancel()
-                    except Exception:
-                        pass
                 if not pool_state["terminated"]:
                     logging.info("Terminating worker pool immediately due to interrupt...")
                     pool.terminate()

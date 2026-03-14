@@ -18,6 +18,7 @@ import optimize
 from optimize import (
     _apply_config_overrides,
     _analysis_indicates_liquidation,
+    _drain_async_results_bounded,
     _looks_like_bool_token,
     _normalize_optional_bool_flag,
     _format_objectives,
@@ -81,6 +82,58 @@ class TestApplyConfigOverrides:
         config = {"bot": {"long": "not_a_dict"}}
         _apply_config_overrides(config, {"bot.long.value": 3.0})
         assert config["bot"]["long"]["value"] == 3.0
+
+
+class TestDrainAsyncResultsBounded:
+    def test_caps_in_flight_tasks(self, monkeypatch):
+        class FakeAsyncResult:
+            def __init__(self, value):
+                self.value = value
+                self.is_ready = False
+
+            def ready(self):
+                return self.is_ready
+
+            def get(self):
+                return self.value
+
+        submitted = []
+        active = 0
+        max_active = 0
+        handled = []
+
+        def submit_fn(item):
+            nonlocal active, max_active
+            res = FakeAsyncResult(item * 10)
+            submitted.append(res)
+            active += 1
+            max_active = max(max_active, active)
+            return res
+
+        def handle_result(item, res):
+            nonlocal active
+            handled.append((item, res.get()))
+            active -= 1
+
+        def fake_sleep(_seconds):
+            for res in submitted:
+                if not res.is_ready:
+                    res.is_ready = True
+                    break
+
+        monkeypatch.setattr(optimize.time, "sleep", fake_sleep)
+
+        completed = _drain_async_results_bounded(
+            [1, 2, 3, 4, 5],
+            submit_fn,
+            handle_result,
+            max_pending=2,
+            poll_interval_seconds=0.0,
+        )
+
+        assert completed == 5
+        assert handled == [(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)]
+        assert max_active <= 2
 
 
 class TestLiquidationHelpers:
