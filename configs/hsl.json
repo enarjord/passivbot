@@ -305,7 +305,7 @@
             "common_equity_hard_stop_loss_cooldown_minutes_after_red": [1,2880,1],
             "common_equity_hard_stop_loss_ema_span_minutes": [1,2880,1],
             "common_equity_hard_stop_loss_red_threshold": [0.01,0.2,0.001],
-            "long_close_grid_markup_end": [0.0015,0.012,1e-05],
+            "long_close_grid_markup_end": [-0.1,0.012,1e-05],
             "long_close_grid_markup_start": [0.0015,0.012,1e-05],
             "long_close_grid_qty_pct": [0.05,1,0.01],
             "long_close_trailing_grid_ratio": [-1,1,0.01],
@@ -342,7 +342,7 @@
             "long_unstuck_ema_dist": [0.01,-0.1,0.0001],
             "long_unstuck_loss_allowance_pct": [0.0001,0.05,0.0001],
             "long_unstuck_threshold": [0.2,1.1,0.001],
-            "short_close_grid_markup_end": [0.0015,0.012,1e-05],
+            "short_close_grid_markup_end": [-0.1,0.012,1e-05],
             "short_close_grid_markup_start": [0.0015,0.012,1e-05],
             "short_close_grid_qty_pct": [0.05,1,0.01],
             "short_close_trailing_grid_ratio": [-1,1,0.01],
@@ -408,22 +408,27 @@
             {
                 "metric": "high_exposure_hours_max_long",
                 "penalize_if": "greater_than",
-                "value": 2160
+                "value": 5000
             },
             {
                 "metric": "peak_recovery_hours_hsl",
                 "penalize_if": "greater_than",
-                "value": 2160
+                "value": 5000
             },
             {
                 "metric": "position_held_hours_max",
                 "penalize_if": "greater_than",
-                "value": 2160
+                "value": 5000
             },
             {
                 "metric": "backtest_completion_ratio",
                 "penalize_if": "less_than",
                 "value": 0.99
+            },
+            {
+                "metric": "adg_strategy_pnl_rebased",
+                "penalize_if": "less_than",
+                "value": 0.0
             },
             {
                 "metric": "hard_stop_restarts_per_year",
@@ -439,6 +444,7 @@
         "pareto_max_size": 500,
         "population_size": 500,
         "round_to_n_significant_digits": 3,
+        "max_pending_starting_evals_per_cpu": 1,
         "scoring": [
             "adg_strategy_pnl_rebased",
             "adg_strategy_pnl_rebased_w",
