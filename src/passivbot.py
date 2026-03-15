@@ -4415,7 +4415,7 @@ class Passivbot:
         is_close = "close" in order_type
         if is_close or event.pnl != 0.0:
             pnl_sign = "+" if event.pnl >= 0 else ""
-            msg += f", pnl={pnl_sign}{round_dynamic(event.pnl, 3)} USDT"
+            msg += f", pnl={pnl_sign}{round_dynamic(event.pnl, 3)} {self.quote}"
 
         # Add client_order_id for unknown orders
         if order_type == "unknown" and event.client_order_id:
@@ -4444,10 +4444,11 @@ class Passivbot:
             total_pnl = sum(ev.pnl for ev in new_events)
             pnl_sign = "+" if total_pnl >= 0 else ""
             logging.info(
-                "[fill] %d fills, pnl=%s%s USDT",
+                "[fill] %d fills, pnl=%s%s %s",
                 len(new_events),
                 pnl_sign,
                 round_dynamic(total_pnl, 3),
+                self.quote,
             )
         else:
             # Log each event
