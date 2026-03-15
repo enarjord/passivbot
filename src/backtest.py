@@ -521,13 +521,20 @@ def build_backtest_payload(
     bot_params_list, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
     backtest_params = dict(backtest_params)
     coins_order = backtest_params.get("coins", [])
+    meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
+    bundle_coins_order = meta.get("bundle_coins_order") if isinstance(meta, dict) else None
+    use_active_coin_view = bool(
+        coin_indices is not None
+        and isinstance(bundle_coins_order, list)
+        and len(bundle_coins_order) == int(hlcvs.shape[1])
+        and all(isinstance(coin, str) for coin in bundle_coins_order)
+    )
 
     # Read candle interval from config (default to 1m)
     candle_interval = config.get("backtest", {}).get("candle_interval_minutes", 1)
     if candle_interval < 1:
         raise ValueError(f"candle_interval_minutes must be >= 1, got {candle_interval}")
     backtest_params["candle_interval_minutes"] = candle_interval
-    meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
     data_interval = int(meta.get("data_interval_minutes", 1) or 1)
     offset_bars = int(meta.get("candle_interval_offset_bars", 0) or 0)
     if data_interval < 1:

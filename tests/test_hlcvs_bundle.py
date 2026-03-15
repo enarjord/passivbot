@@ -8,6 +8,7 @@ if not hasattr(pbr, "HlcvsBundle"):
 
 from backtest import (
     BacktestPayload,
+    build_backtest_payload,
     subset_backtest_payload,
     _build_hlcvs_bundle,
 )
@@ -244,3 +245,77 @@ def test_build_hlcvs_bundle_reuses_full_coin_axis_with_active_coin_indices():
     assert bundle.hlcvs.shape[1] == 5
     assert len(bundle.meta["coins"]) == 5
     assert bundle.meta["coins"][2]["symbol"] == "COIN_C/USDT:USDT"
+
+
+def test_build_backtest_payload_sets_original_active_coin_indices_for_bundle_coin_order():
+    hlcvs = np.zeros((3, 5, 4), dtype=np.float64)
+    btc = np.zeros(3, dtype=np.float64)
+    timestamps = np.array([0, 60_000, 120_000], dtype=np.int64)
+    selected_coins = ["COIN_A", "COIN_C", "COIN_E"]
+    bundle_coins = ["COIN_A", "COIN_B", "COIN_C", "COIN_D", "COIN_E"]
+    config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-02",
+            "coins": {"binanceusdm": selected_coins},
+            "starting_balance": 1000.0,
+            "btc_collateral_cap": 0.0,
+            "btc_collateral_ltv_cap": None,
+            "filter_by_min_effective_cost": False,
+            "dynamic_wel_by_tradability": False,
+        },
+        "live": {
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0,
+            "hedge_mode": True,
+            "max_realized_loss_pct": 1.0,
+            "pnls_max_lookback_days": 0.0,
+            "market_orders_allowed": False,
+            "market_order_near_touch_threshold": 0.001,
+        },
+        "bot": {
+            "long": {"wallet_exposure_limit": 0.0, "total_wallet_exposure_limit": 1.0, "n_positions": 3},
+            "short": {"wallet_exposure_limit": 0.0, "total_wallet_exposure_limit": 1.0, "n_positions": 3},
+            "common": {
+                "equity_hard_stop_loss": {
+                    "enabled": False,
+                    "red_threshold": 0.1,
+                    "ema_span_minutes": 60.0,
+                    "cooldown_minutes_after_red": 0.0,
+                    "no_restart_drawdown_threshold": 1.0,
+                    "tier_ratios": {"yellow": 0.5, "orange": 0.75},
+                    "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                    "panic_close_order_type": "limit",
+                }
+            },
+        },
+        "coin_overrides": {},
+    }
+    mss = {
+        coin: {
+            "symbol": f"{coin}/USDT:USDT",
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.001,
+            "min_cost": 10.0,
+            "c_mult": 1.0,
+            "maker": 0.0002,
+            "taker": 0.00055,
+            "first_valid_index": 0,
+            "last_valid_index": 2,
+            "warmup_minutes": 0,
+            "trade_start_index": 0,
+        }
+        for coin in bundle_coins
+    }
+    mss["__meta__"] = {"bundle_coins_order": bundle_coins}
+    payload = build_backtest_payload(
+        hlcvs,
+        mss,
+        config,
+        "binanceusdm",
+        btc,
+        timestamps,
+        coin_indices=[0, 2, 4],
+    )
+    assert payload.backtest_params["active_coin_indices"] == [0, 2, 4]
