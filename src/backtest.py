@@ -338,6 +338,44 @@ def _build_coin_metadata_entries(
     return entries
 
 
+def _build_coin_metadata_entries_from_mss(coins_order, exchange, mss):
+    entries = []
+    for idx, coin in enumerate(coins_order):
+        entry = mss.get(coin, {}) if isinstance(mss, dict) else {}
+        symbol = str(entry.get("symbol", coin))
+        base_from_symbol, quote_from_symbol = _split_symbol_parts(symbol)
+        coin_shorthand = entry.get("coin") or entry.get("base") or base_from_symbol
+        entry_exchange = entry.get("exchange") or exchange
+        maker_fee = entry.get("maker_fee")
+        if maker_fee is None:
+            maker_fee = entry.get("maker")
+        taker_fee = entry.get("taker_fee")
+        if taker_fee is None:
+            taker_fee = entry.get("taker")
+        entries.append(
+            {
+                "index": idx,
+                "symbol": symbol,
+                "coin": coin_shorthand,
+                "exchange": entry_exchange,
+                "quote": entry.get("quote") or quote_from_symbol,
+                "base": entry.get("base") or base_from_symbol,
+                "qty_step": _float_or(entry.get("qty_step")),
+                "price_step": _float_or(entry.get("price_step")),
+                "min_qty": _float_or(entry.get("min_qty")),
+                "min_cost": _float_or(entry.get("min_cost")),
+                "c_mult": _float_or(entry.get("c_mult"), 1.0),
+                "maker_fee": _float_or(maker_fee),
+                "taker_fee": _float_or(taker_fee),
+                "first_valid_index": _int_or(entry.get("first_valid_index")),
+                "last_valid_index": _int_or(entry.get("last_valid_index")),
+                "warmup_minutes": _int_or(entry.get("warmup_minutes")),
+                "trade_start_index": _int_or(entry.get("trade_start_index")),
+            }
+        )
+    return entries
+
+
 def _build_hlcvs_bundle(
     hlcvs,
     btc_usd_prices,
@@ -361,6 +399,8 @@ def _build_hlcvs_bundle(
         return np.ascontiguousarray(array, dtype=np_dtype)
 
     subset_positions = None
+    bundle_coins_order = None
+    use_active_coin_view = False
     if coin_indices is not None:
         if len(coin_indices) != len(coins_order):
             raise ValueError(
@@ -368,8 +408,18 @@ def _build_hlcvs_bundle(
             )
         subset_positions = [int(idx) for idx in coin_indices]
         n_coins = int(hlcvs.shape[1])
-        if len(subset_positions) == n_coins and subset_positions == list(range(n_coins)):
+        meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
+        bundle_coins_order = meta.get("bundle_coins_order") if isinstance(meta, dict) else None
+        if (
+            isinstance(bundle_coins_order, list)
+            and len(bundle_coins_order) == n_coins
+            and all(isinstance(coin, str) for coin in bundle_coins_order)
+        ):
+            use_active_coin_view = True
+        elif len(subset_positions) == n_coins and subset_positions == list(range(n_coins)):
             subset_positions = None
+        else:
+            bundle_coins_order = None
 
     def _rss_mb() -> float | None:
         try:
@@ -396,7 +446,7 @@ def _build_hlcvs_bundle(
             subset_positions is not None,
             f"{rss_before:.1f}" if rss_before is not None else "na",
         )
-    if subset_positions is not None:
+    if subset_positions is not None and not use_active_coin_view:
         hlcvs_view = hlcvs[:, subset_positions, :]
         hlcvs_arr = np.ascontiguousarray(hlcvs_view, dtype=np.float64)
     else:
@@ -415,15 +465,18 @@ def _build_hlcvs_bundle(
     effective_start_ts = int(
         meta_overrides.get("effective_start_ts", int(timestamps_arr[0]) if len(timestamps_arr) else 0)
     )
-    coin_meta_entries = _build_coin_metadata_entries(
-        coins_order,
-        exchange,
-        mss,
-        first_valid_indices,
-        last_valid_indices,
-        warmup_minutes,
-        trade_start_indices,
-    )
+    if use_active_coin_view and bundle_coins_order is not None:
+        coin_meta_entries = _build_coin_metadata_entries_from_mss(bundle_coins_order, exchange, mss)
+    else:
+        coin_meta_entries = _build_coin_metadata_entries(
+            coins_order,
+            exchange,
+            mss,
+            first_valid_indices,
+            last_valid_indices,
+            warmup_minutes,
+            trade_start_indices,
+        )
     bundle_meta = {
         "requested_start_timestamp_ms": requested_ts,
         "effective_start_timestamp_ms": effective_start_ts,
@@ -617,7 +670,10 @@ def build_backtest_payload(
     )
 
     if coin_indices is not None:
-        backtest_params["active_coin_indices"] = list(range(len(coins_order)))
+        if use_active_coin_view:
+            backtest_params["active_coin_indices"] = [int(idx) for idx in coin_indices]
+        else:
+            backtest_params["active_coin_indices"] = list(range(len(coins_order)))
 
     return BacktestPayload(
         bundle=bundle,

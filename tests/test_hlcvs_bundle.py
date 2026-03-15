@@ -199,3 +199,48 @@ def test_build_hlcvs_bundle_copies_non_contiguous_subset():
     )
     assert bundle.hlcvs is not hlcvs
     assert bundle.hlcvs.flags.c_contiguous
+
+
+def test_build_hlcvs_bundle_reuses_full_coin_axis_with_active_coin_indices():
+    hlcvs = np.zeros((3, 5, 4), dtype=np.float64)
+    btc = np.zeros(3, dtype=np.float64)
+    timestamps = np.array([0, 60_000, 120_000], dtype=np.int64)
+    config = {
+        "backtest": {"start_date": "2021-01-01", "end_date": "2021-01-02"},
+        "live": {"warmup_ratio": 0.0, "max_warmup_minutes": 0},
+        "bot": {"long": {}, "short": {}},
+    }
+    selected_coins = ["COIN_A", "COIN_C", "COIN_E"]
+    bundle_coins = ["COIN_A", "COIN_B", "COIN_C", "COIN_D", "COIN_E"]
+    mss = {
+        coin: {
+            "symbol": f"{coin}/USDT:USDT",
+            "first_valid_index": 0,
+            "last_valid_index": 2,
+            "warmup_minutes": 0,
+            "trade_start_index": 0,
+        }
+        for coin in bundle_coins
+    }
+    mss["__meta__"] = {"bundle_coins_order": bundle_coins}
+    bundle = _build_hlcvs_bundle(
+        hlcvs,
+        btc,
+        timestamps,
+        config,
+        "binanceusdm",
+        mss,
+        selected_coins,
+        [0, 0, 0],
+        [2, 2, 2],
+        [0, 0, 0],
+        [0, 0, 0],
+        requested_start_ts=0,
+        coin_indices=[0, 2, 4],
+    )
+    assert bundle.hlcvs is hlcvs
+    assert bundle.btc_usd is btc
+    assert bundle.timestamps is timestamps
+    assert bundle.hlcvs.shape[1] == 5
+    assert len(bundle.meta["coins"]) == 5
+    assert bundle.meta["coins"][2]["symbol"] == "COIN_C/USDT:USDT"
