@@ -33,6 +33,11 @@ python3 src/tools/iterative_history_plot.py backtests/.../fills.csv
 - `src/tools/pad_historical_daily.py` – Ensures daily OHLCV shards are present for the downloader when new coins are added.
 - `src/tools/verify_hlcvs_data.py` – Validates cached OHLCV data (gaps, duplicates) before long optimizations/backtests.
 - `src/tools/streamline_json.py` – Normalizes/compacts JSON configs (`python3 src/tools/streamline_json.py configs/template.json`).
+- `src/tools/capture_optimize_memory.py` – Captures optimizer RAM, `/dev/shm`, process-tree, and top-RSS snapshots into one JSON file while an optimize process is running.
+
+```shell
+python3 src/tools/capture_optimize_memory.py --wait --output /tmp/opt_mem.json
+```
 
 ## Market-cap based approved coins
 
