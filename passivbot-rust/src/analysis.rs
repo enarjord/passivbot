@@ -373,6 +373,33 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
         total_loss / total_profit
     };
 
+    let (long_profit, long_loss, short_profit, short_loss) =
+        fills
+            .iter()
+            .fold((0.0, 0.0, 0.0, 0.0), |(lp, ll, sp, sl), fill| {
+                if fill.order_type.is_long() {
+                    if fill.pnl > 0.0 {
+                        (lp + fill.pnl, ll, sp, sl)
+                    } else {
+                        (lp, ll + fill.pnl.abs(), sp, sl)
+                    }
+                } else if fill.pnl > 0.0 {
+                    (lp, ll, sp + fill.pnl, sl)
+                } else {
+                    (lp, ll, sp, sl + fill.pnl.abs())
+                }
+            });
+    let loss_profit_ratio_long = if long_profit == 0.0 {
+        1.0
+    } else {
+        long_loss / long_profit
+    };
+    let loss_profit_ratio_short = if short_profit == 0.0 {
+        1.0
+    } else {
+        short_loss / short_profit
+    };
+
     // Calculate position durations and position_unchanged_hours_max
     let mut positions_opened: HashMap<String, u64> = HashMap::new(); // Tracks position open time
     let mut durations_ms: Vec<u64> = Vec::new(); // Total position durations (ms)
@@ -515,6 +542,8 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
     analysis.equity_balance_diff_pos_max = equity_balance_diff_pos_max;
     analysis.equity_balance_diff_pos_mean = equity_balance_diff_pos_mean;
     analysis.loss_profit_ratio = loss_profit_ratio;
+    analysis.loss_profit_ratio_long = loss_profit_ratio_long;
+    analysis.loss_profit_ratio_short = loss_profit_ratio_short;
     analysis.positions_held_per_day = positions_held_per_day;
     analysis.position_held_hours_mean = position_held_hours_mean;
     analysis.position_held_hours_max = position_held_hours_max;
@@ -786,6 +815,23 @@ pub fn analyze_backtest_pair(
     _use_btc_collateral: bool,
     total_wallet_exposures: &[f64],
 ) -> (Analysis, Analysis) {
+    let (long_pnl_sum, short_pnl_sum) =
+        fills
+            .iter()
+            .fold((0.0, 0.0), |(long_sum, short_sum), fill| {
+                if fill.order_type.is_long() {
+                    (long_sum + fill.pnl, short_sum)
+                } else {
+                    (long_sum, short_sum + fill.pnl)
+                }
+            });
+    let pnl_sum = long_pnl_sum + short_pnl_sum;
+    let long_short_profit_ratio = if pnl_sum != 0.0 {
+        long_pnl_sum / pnl_sum
+    } else {
+        0.5
+    };
+
     let analysis_usd = analyze_backtest(
         fills,
         &equities.usd_total_equity,
@@ -811,6 +857,14 @@ pub fn analyze_backtest_pair(
         &equities.timestamps_ms,
         total_wallet_exposures,
     );
+    let mut analysis_usd = analysis_usd;
+    analysis_usd.pnl_ratio_long_short = long_short_profit_ratio;
+    analysis_usd.long_short_profit_ratio = long_short_profit_ratio;
+
+    let mut analysis_btc = analysis_btc;
+    analysis_btc.pnl_ratio_long_short = long_short_profit_ratio;
+    analysis_btc.long_short_profit_ratio = long_short_profit_ratio;
+
     (analysis_usd, analysis_btc)
 }
 

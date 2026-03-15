@@ -20,6 +20,8 @@ def _make_analysis_entry(value):
         "position_held_hours_median",
         "position_unchanged_hours_max",
         "loss_profit_ratio",
+        "loss_profit_ratio_long",
+        "loss_profit_ratio_short",
         "loss_profit_ratio_w",
         "volume_pct_per_day_avg",
         "volume_pct_per_day_avg_w",
@@ -77,6 +79,8 @@ def _make_analysis_entry(value):
             "exponential_fit_error_w": 0.0,
             "adg_per_exposure_long": 0.0,
             "adg_per_exposure_short": 0.0,
+            "pnl_ratio_long_short": 0.5,
+            "long_short_profit_ratio": 0.5,
         }
     )
     return analysis
@@ -241,6 +245,66 @@ def test_expand_analysis_keeps_strategy_pnl_rebased_and_hsl_metrics_shared():
     assert "adg_strategy_pnl_rebased_btc" not in result
 
 
+def test_expand_analysis_keeps_long_short_profit_ratio_shared():
+    analysis_usd = _make_analysis_entry(0.5)
+    analysis_btc = _make_analysis_entry(0.5)
+    analysis_usd["pnl_ratio_long_short"] = 0.6
+    analysis_usd["long_short_profit_ratio"] = 0.6
+    analysis_btc["pnl_ratio_long_short"] = 0.6
+    analysis_btc["long_short_profit_ratio"] = 0.6
+    config = {
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 1.0},
+        }
+    }
+
+    result = expand_analysis(
+        analysis_usd,
+        analysis_btc,
+        fills=np.empty((0, 0)),
+        equities_array=np.empty((0, 3)),
+        config=config,
+    )
+
+    assert result["pnl_ratio_long_short"] == 0.6
+    assert result["long_short_profit_ratio"] == 0.6
+    assert "pnl_ratio_long_short_usd" not in result
+    assert "pnl_ratio_long_short_btc" not in result
+    assert "long_short_profit_ratio_usd" not in result
+    assert "long_short_profit_ratio_btc" not in result
+
+
+def test_expand_analysis_keeps_side_loss_profit_ratios_shared():
+    analysis_usd = _make_analysis_entry(0.5)
+    analysis_btc = _make_analysis_entry(0.5)
+    analysis_usd["loss_profit_ratio_long"] = 0.2
+    analysis_usd["loss_profit_ratio_short"] = 0.8
+    analysis_btc["loss_profit_ratio_long"] = 0.2
+    analysis_btc["loss_profit_ratio_short"] = 0.8
+    config = {
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 1.0},
+        }
+    }
+
+    result = expand_analysis(
+        analysis_usd,
+        analysis_btc,
+        fills=np.empty((0, 0)),
+        equities_array=np.empty((0, 3)),
+        config=config,
+    )
+
+    assert result["loss_profit_ratio_long"] == 0.2
+    assert result["loss_profit_ratio_short"] == 0.8
+    assert "loss_profit_ratio_long_usd" not in result
+    assert "loss_profit_ratio_long_btc" not in result
+    assert "loss_profit_ratio_short_usd" not in result
+    assert "loss_profit_ratio_short_btc" not in result
+
+
 def test_process_forager_fills_handles_zero_pnl_division():
     """Zero-PnL inputs should not raise and should return stable neutral ratios."""
     equities_array = np.array([[1704067200000, 1000.0, 0.02]], dtype=np.float64)
@@ -256,6 +320,66 @@ def test_process_forager_fills_handles_zero_pnl_division():
     assert analysis_appendix["loss_profit_ratio_long"] == 1.0
     assert analysis_appendix["loss_profit_ratio_short"] == 1.0
     assert analysis_appendix["pnl_ratio_long_short"] == 0.5
+    assert analysis_appendix["long_short_profit_ratio"] == 0.5
+
+
+def test_process_forager_fills_reports_long_short_profit_ratio():
+    fills = [
+        {
+            "minute": 0,
+            "index": 0,
+            "symbol": "BTCUSDT",
+            "type": "close_long",
+            "pnl": 60.0,
+            "fee_paid": 0.0,
+            "timestamp": 1704067200000,
+            "usd_total_balance": 1000.0,
+            "btc_cash_wallet": 0.0,
+            "usd_cash_wallet": 1000.0,
+            "btc_price": 20_000.0,
+            "qty": 0.0,
+            "price": 0.0,
+            "psize": 0.0,
+            "pprice": 0.0,
+            "wallet_exposure": 0.0,
+            "twe_long": 0.0,
+            "twe_short": 0.0,
+            "twe_net": 0.0,
+        },
+        {
+            "minute": 1,
+            "index": 1,
+            "symbol": "ETHUSDT",
+            "type": "close_short",
+            "pnl": 40.0,
+            "fee_paid": 0.0,
+            "timestamp": 1704067260000,
+            "usd_total_balance": 1100.0,
+            "btc_cash_wallet": 0.0,
+            "usd_cash_wallet": 1100.0,
+            "btc_price": 20_000.0,
+            "qty": 0.0,
+            "price": 0.0,
+            "psize": 0.0,
+            "pprice": 0.0,
+            "wallet_exposure": 0.0,
+            "twe_long": 0.0,
+            "twe_short": 0.0,
+            "twe_net": 0.0,
+        },
+    ]
+    equities_array = np.array([[1704067200000, 1000.0, 0.05]], dtype=np.float64)
+
+    _fdf, analysis_appendix, _bal_eq = process_forager_fills(
+        fills=fills,
+        coins=["BTC", "ETH"],
+        hlcvs=np.empty((0, 0), dtype=np.float64),
+        equities_array=equities_array,
+        balance_sample_divider=1,
+    )
+
+    assert analysis_appendix["pnl_ratio_long_short"] == 0.6
+    assert analysis_appendix["long_short_profit_ratio"] == 0.6
 
 
 def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, monkeypatch):

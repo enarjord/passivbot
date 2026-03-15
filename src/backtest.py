@@ -96,7 +96,11 @@ ANALYSIS_SHARED_KEYS = {
     "position_held_hours_median",
     "position_unchanged_hours_max",
     "loss_profit_ratio",
+    "loss_profit_ratio_long",
+    "loss_profit_ratio_short",
     "loss_profit_ratio_w",
+    "pnl_ratio_long_short",
+    "long_short_profit_ratio",
     "volume_pct_per_day_avg",
     "volume_pct_per_day_avg_w",
     "peak_recovery_hours_pnl",
@@ -875,7 +879,9 @@ def process_forager_fills(
         pnls[pside] = profit + loss
         analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit) if profit != 0.0 else 1.0
     pnl_sum = pnls["long"] + pnls["short"]
-    analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / pnl_sum if pnl_sum != 0.0 else 0.5
+    long_short_profit_ratio = pnls["long"] / pnl_sum if pnl_sum != 0.0 else 0.5
+    analysis_appendix["pnl_ratio_long_short"] = long_short_profit_ratio
+    analysis_appendix["long_short_profit_ratio"] = long_short_profit_ratio
     sample_divider = max(1, int(balance_sample_divider))
     if not fdf.empty:
         timestamps_ns = fdf["timestamp"].astype("int64")
