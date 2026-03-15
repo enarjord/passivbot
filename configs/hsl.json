@@ -393,7 +393,7 @@
             {
                 "metric": "drawdown_worst_hsl",
                 "penalize_if": "greater_than",
-                "value": 0.5
+                "value": 0.7
             },
             {
                 "metric": "drawdown_worst_mean_1pct_hsl",
@@ -428,7 +428,7 @@
             {
                 "metric": "adg_strategy_pnl_rebased",
                 "penalize_if": "less_than",
-                "value": 0.0
+                "value": 0.002
             },
             {
                 "metric": "hard_stop_restarts_per_year",
