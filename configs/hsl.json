@@ -284,7 +284,7 @@
         "max_ohlcv_fetches_per_minute": 30,
         "max_realized_loss_pct": 0.05,
         "max_warmup_minutes": 0,
-        "minimum_coin_age_days": 365,
+        "minimum_coin_age_days": 60,
         "order_match_tolerance_pct": 0.0002,
         "pnls_max_lookback_days": 30,
         "price_distance_threshold": 0.002,
@@ -393,7 +393,7 @@
             {
                 "metric": "drawdown_worst_hsl",
                 "penalize_if": "greater_than",
-                "value": 0.8
+                "value": 0.5
             },
             {
                 "metric": "drawdown_worst_mean_1pct_hsl",
