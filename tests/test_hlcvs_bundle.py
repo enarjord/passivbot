@@ -139,3 +139,63 @@ def test_build_hlcvs_bundle_applies_coin_indices():
     )
     assert bundle.hlcvs.shape[1] == 3
     assert len(bundle.meta["coins"]) == 3
+
+
+def test_build_hlcvs_bundle_reuses_contiguous_arrays_without_copy():
+    hlcvs = np.zeros((3, 2, 4), dtype=np.float64)
+    btc = np.zeros(3, dtype=np.float64)
+    timestamps = np.array([0, 60_000, 120_000], dtype=np.int64)
+    config = {
+        "backtest": {"start_date": "2021-01-01", "end_date": "2021-01-02"},
+        "live": {"warmup_ratio": 0.0, "max_warmup_minutes": 0},
+        "bot": {"long": {}, "short": {}},
+    }
+    coins_order = ["COIN_A", "COIN_B"]
+    mss = {coin: {"symbol": f"{coin}/USDT:USDT"} for coin in coins_order}
+    bundle = _build_hlcvs_bundle(
+        hlcvs,
+        btc,
+        timestamps,
+        config,
+        "binanceusdm",
+        mss,
+        coins_order,
+        [0, 0],
+        [2, 2],
+        [0, 0],
+        [0, 0],
+        requested_start_ts=0,
+    )
+    assert bundle.hlcvs is hlcvs
+    assert bundle.btc_usd is btc
+    assert bundle.timestamps is timestamps
+
+
+def test_build_hlcvs_bundle_copies_non_contiguous_subset():
+    hlcvs = np.zeros((3, 5, 4), dtype=np.float64)
+    btc = np.zeros(3, dtype=np.float64)
+    timestamps = np.array([0, 60_000, 120_000], dtype=np.int64)
+    config = {
+        "backtest": {"start_date": "2021-01-01", "end_date": "2021-01-02"},
+        "live": {"warmup_ratio": 0.0, "max_warmup_minutes": 0},
+        "bot": {"long": {}, "short": {}},
+    }
+    coins_order = ["COIN_A", "COIN_B", "COIN_C"]
+    mss = {coin: {"symbol": f"{coin}/USDT:USDT"} for coin in coins_order}
+    bundle = _build_hlcvs_bundle(
+        hlcvs,
+        btc,
+        timestamps,
+        config,
+        "binanceusdm",
+        mss,
+        coins_order,
+        [0, 0, 0],
+        [2, 2, 2],
+        [0, 0, 0],
+        [0, 0, 0],
+        requested_start_ts=0,
+        coin_indices=[0, 2, 4],
+    )
+    assert bundle.hlcvs is not hlcvs
+    assert bundle.hlcvs.flags.c_contiguous

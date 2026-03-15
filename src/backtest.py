@@ -354,6 +354,12 @@ def _build_hlcvs_bundle(
     *,
     coin_indices: list[int] | None = None,
 ) -> pbr.HlcvsBundle:
+    def _as_c_contiguous_or_reuse(array, dtype):
+        np_dtype = np.dtype(dtype)
+        if isinstance(array, np.ndarray) and array.dtype == np_dtype and array.flags.c_contiguous:
+            return array
+        return np.ascontiguousarray(array, dtype=np_dtype)
+
     subset_positions = None
     if coin_indices is not None:
         if len(coin_indices) != len(coins_order):
@@ -394,12 +400,12 @@ def _build_hlcvs_bundle(
         hlcvs_view = hlcvs[:, subset_positions, :]
         hlcvs_arr = np.ascontiguousarray(hlcvs_view, dtype=np.float64)
     else:
-        hlcvs_arr = np.ascontiguousarray(hlcvs, dtype=np.float64)
-    btc_arr = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+        hlcvs_arr = _as_c_contiguous_or_reuse(hlcvs, np.float64)
+    btc_arr = _as_c_contiguous_or_reuse(btc_usd_prices, np.float64)
     if timestamps is None:
         timestamps_arr = np.arange(hlcvs_arr.shape[0], dtype=np.int64)
     else:
-        timestamps_arr = np.ascontiguousarray(timestamps, dtype=np.int64)
+        timestamps_arr = _as_c_contiguous_or_reuse(timestamps, np.int64)
     meta_overrides = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
     warmup_requested = int(
         meta_overrides.get("warmup_minutes_requested", compute_backtest_warmup_minutes(config))
