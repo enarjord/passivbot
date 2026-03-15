@@ -4994,6 +4994,8 @@ mod tests {
         bt.equities.timestamps_ms.push(172_800_000);
         bt.equities.usd_total_equity.push(75.0);
         bt.update_hard_stop_state(2).unwrap();
+        bt.hard_stop_n_triggers = 3;
+        bt.hard_stop_n_restarts = 2;
 
         let hs_metrics = bt.hard_stop_metrics();
         assert!((hs_metrics.drawdown_worst_hsl - 0.25).abs() < 1e-12);
@@ -5002,6 +5004,8 @@ mod tests {
             (hs_metrics.gain_strategy_pnl_rebased - ((100.0 + 90.0 + 75.0) / 3.0 / 100.0)).abs()
                 < 1e-12
         );
+        assert!((hs_metrics.triggers_per_year - 547.875).abs() < 1e-12);
+        assert!((hs_metrics.restarts_per_year - 365.25).abs() < 1e-12);
     }
 
     #[test]
