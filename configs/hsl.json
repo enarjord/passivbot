@@ -161,22 +161,10 @@
         "starting_balance": 100000,
         "suite_enabled": false,
         "taker_fee_override": null,
-        "visible_metrics": ["gain_strategy_pnl_rebased", "adg_btc", "adg_usd", "adg_pnl"],
+        "visible_metrics": ["gain_strategy_pnl_rebased", "adg_btc", "adg_usd", "adg_pnl", "pnl_ratio_long_short"],
         "volume_normalization": true
     },
     "bot": {
-        "common": {
-            "equity_hard_stop_loss": {
-                "cooldown_minutes_after_red": 457.0,
-                "ema_span_minutes": 2880.0,
-                "enabled": true,
-                "no_restart_drawdown_threshold": 1,
-                "orange_tier_mode": "tp_only_with_active_entry_cancellation",
-                "panic_close_order_type": "limit",
-                "red_threshold": 0.077,
-                "tier_ratios": {"orange":0.75,"yellow":0.5}
-            }
-        },
         "long": {
             "close_grid_markup_end": 0.00884,
             "close_grid_markup_start": 0.0028,
@@ -206,6 +194,14 @@
             "filter_volatility_ema_span": 334.0,
             "filter_volume_drop_pct": 0.58,
             "filter_volume_ema_span": 580.0,
+            "hsl_cooldown_minutes_after_red": 457.0,
+            "hsl_ema_span_minutes": 2880.0,
+            "hsl_enabled": true,
+            "hsl_no_restart_drawdown_threshold": 1.0,
+            "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+            "hsl_panic_close_order_type": "limit",
+            "hsl_red_threshold": 0.077,
+            "hsl_tier_ratios": {"orange":0.75,"yellow":0.5},
             "n_positions": 1.0,
             "risk_twel_enforcer_threshold": 0.958,
             "risk_we_excess_allowance_pct": 0.0,
@@ -245,6 +241,14 @@
             "filter_volatility_ema_span": 380.0,
             "filter_volume_drop_pct": 0.35,
             "filter_volume_ema_span": 2650.0,
+            "hsl_cooldown_minutes_after_red": 457.0,
+            "hsl_ema_span_minutes": 2880.0,
+            "hsl_enabled": true,
+            "hsl_no_restart_drawdown_threshold": 1.0,
+            "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+            "hsl_panic_close_order_type": "limit",
+            "hsl_red_threshold": 0.077,
+            "hsl_tier_ratios": {"orange":0.75,"yellow":0.5},
             "n_positions": 1.0,
             "risk_twel_enforcer_threshold": 0.993,
             "risk_we_excess_allowance_pct": 0.0,
@@ -302,9 +306,9 @@
     },
     "optimize": {
         "bounds": {
-            "common_equity_hard_stop_loss_cooldown_minutes_after_red": [1,2880,1],
-            "common_equity_hard_stop_loss_ema_span_minutes": [1,2880,1],
-            "common_equity_hard_stop_loss_red_threshold": [0.01,0.2,0.001],
+            "long_hsl_cooldown_minutes_after_red": [1,2880,1],
+            "long_hsl_ema_span_minutes": [1,2880,1],
+            "long_hsl_red_threshold": [0.01,0.2,0.001],
             "long_close_grid_markup_end": [-0.1,0.012,1e-05],
             "long_close_grid_markup_start": [0.0015,0.012,1e-05],
             "long_close_grid_qty_pct": [0.05,1,0.01],
@@ -370,6 +374,9 @@
             "short_filter_volatility_ema_span": [10,720,1],
             "short_filter_volume_drop_pct": [0.0,1.0,0.01],
             "short_filter_volume_ema_span": [360,2880,10],
+            "short_hsl_cooldown_minutes_after_red": [1,2880,1],
+            "short_hsl_ema_span_minutes": [1,2880,1],
+            "short_hsl_red_threshold": [0.01,0.2,0.001],
             "short_n_positions": [1,1,1],
             "short_risk_twel_enforcer_threshold": [0.95,1.01,0.001],
             "short_risk_we_excess_allowance_pct": [0,0,0.01],
@@ -386,19 +393,20 @@
         "enable_overrides": [],
         "fixed_params": [],
         "fixed_runtime_overrides": {
-            "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold": 1.0
+            "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
+            "bot.short.hsl_no_restart_drawdown_threshold": 1.0
         },
         "iters": 500000,
         "limits": [
             {
                 "metric": "drawdown_worst_hsl",
                 "penalize_if": "greater_than",
-                "value": 0.7
+                "value": 0.9
             },
             {
                 "metric": "drawdown_worst_mean_1pct_hsl",
                 "penalize_if": "greater_than",
-                "value": 0.6
+                "value": 0.9
             },
             {
                 "metric": "loss_profit_ratio",
@@ -428,7 +436,7 @@
             {
                 "metric": "adg_strategy_pnl_rebased",
                 "penalize_if": "less_than",
-                "value": 0.002
+                "value": 0.0
             },
             {
                 "metric": "hard_stop_restarts_per_year",

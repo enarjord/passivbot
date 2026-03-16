@@ -22,7 +22,7 @@ This document provides an overview of the parameters found in `config/template.j
   - `false`: fixed denominator, same as live: `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
 - **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use the exchange-derived maker fees.
 - **taker_fee_override**: Optional taker fee override (part-per-one; use `0.00055` for 0.055%). Leave `null` to use the exchange-derived taker fees.
-- **market_order_slippage_pct**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.common.equity_hard_stop_loss.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `live.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps).
+- **market_order_slippage_pct**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl_panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `live.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps).
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
   `balance_and_equity.csv` and related plots. `1` keeps full per-minute resolution; higher values
   thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes.
@@ -69,78 +69,82 @@ Example per-metric aggregation:
 
 ## Bot Settings
 
-### Common Account-Level Bot Parameters
+### Side-Specific HSL Parameters
 
-`bot.common` is the shared home for account-level strategy and supervisory behavior used by live trading, backtests, and optimizer runs.
+HSL now lives directly under each `pside`:
 
-1. `bot.common.equity_hard_stop_loss`
+1. `bot.long.hsl_*`
+2. `bot.short.hsl_*`
 
 See also:
 
 1. [Equity Hard Stop Loss](equity_hard_stop_loss.md)
 2. [Risk Management](risk_management.md)
 
-### Equity Hard Stop Loss (`bot.common.equity_hard_stop_loss`)
+### Equity Hard Stop Loss (`bot.{long,short}.hsl_*`)
 
-Account-level drawdown circuit breaker.
+Side-specific drawdown circuit breaker.
 
-- **enabled**:
-  - Enables or disables HSL.
-- **red_threshold**:
+Each `pside` has the same parameter set:
+
+- **hsl_enabled**:
+  - Enables or disables HSL on that `pside`.
+- **hsl_red_threshold**:
   - RED trigger threshold for the HSL drawdown score.
-- **ema_span_minutes**:
+- **hsl_ema_span_minutes**:
   - EMA span used for smoothed drawdown.
   - In backtests, if this is smaller than `backtest.candle_interval_minutes`, smoothing is effectively disabled and HSL uses raw drawdown for the EMA leg.
-- **cooldown_minutes_after_red**:
-  - Minutes to wait before auto-restart after a RED halt.
+- **hsl_cooldown_minutes_after_red**:
+  - Minutes to wait before auto-restart after a RED halt on that `pside`.
   - `0.0` means halt without auto-restart.
-- **no_restart_drawdown_threshold**:
-  - Terminal no-restart threshold.
-  - In live, evaluated from the finalized RED-stop drawdown snapshot.
-  - In backtests, evaluated from persistent cross-restart HSL drawdown.
-  - Values below `red_threshold` are clamped up to `red_threshold`.
-  - Must satisfy: `red_threshold <= no_restart_drawdown_threshold <= 1.0`.
-- **tier_ratios.yellow / tier_ratios.orange**:
-  - Multipliers used to derive YELLOW and ORANGE thresholds from `red_threshold`.
+- **hsl_no_restart_drawdown_threshold**:
+  - Terminal no-restart threshold for that `pside`.
+  - Evaluated from persistent cross-restart HSL drawdown.
+  - Values below `hsl_red_threshold` are clamped up to `hsl_red_threshold`.
+  - Must satisfy: `hsl_red_threshold <= hsl_no_restart_drawdown_threshold <= 1.0`.
+- **hsl_tier_ratios.yellow / hsl_tier_ratios.orange**:
+  - Multipliers used to derive YELLOW and ORANGE thresholds from `hsl_red_threshold`.
   - Must satisfy: `0 < yellow < orange < 1`.
-- **orange_tier_mode**:
+- **hsl_orange_tier_mode**:
   - Allowed values:
     - `graceful_stop`
     - `tp_only_with_active_entry_cancellation`
-  - Determines how the bot behaves in ORANGE.
-- **panic_close_order_type**:
+  - Determines how the bot behaves in ORANGE on that `pside`.
+- **hsl_panic_close_order_type**:
   - Allowed values:
     - `market`
     - `limit`
-  - Determines how RED panic exits are executed or simulated.
+  - Determines how RED panic exits are executed or simulated for that `pside`.
 
 Behavior summary:
 
-1. YELLOW: warning tier
-2. ORANGE: reduced-risk mode
-3. RED: panic close, flat confirmation, halt, optional cooldown restart
+1. YELLOW: warning tier for that `pside`
+2. ORANGE: reduced-risk mode for that `pside`
+3. RED: panic close, flat confirmation, halt, optional cooldown restart for that `pside`
 
 Backtest-specific note:
 
-1. If `panic_close_order_type = "market"`, the backtester uses `backtest.market_order_slippage_pct` for simulated taker execution and charges taker fees (exchange-derived by default, or `backtest.taker_fee_override` when set).
+1. If `hsl_panic_close_order_type = "market"`, the backtester uses `backtest.market_order_slippage_pct` for simulated taker execution and charges taker fees (exchange-derived by default, or `backtest.taker_fee_override` when set).
 
 Key HSL analysis metrics:
 
-1. `hard_stop_triggers`
-2. `hard_stop_restarts`
-3. `hard_stop_time_in_yellow_pct`
-4. `hard_stop_time_in_orange_pct`
-5. `hard_stop_time_in_red_pct`
-6. `hard_stop_duration_minutes_mean`
-7. `hard_stop_duration_minutes_max`
-8. `hard_stop_trigger_drawdown_mean`
-9. `hard_stop_panic_close_loss_sum`
-10. `hard_stop_panic_close_loss_max`
-11. `hard_stop_flatten_time_minutes_mean`
-12. `hard_stop_post_restart_retrigger_pct`
-13. `hard_stop_halt_to_restart_equity_loss_pct`
-
-These are shared account metrics. They are not split into `_usd` and `_btc` variants.
+1. Global account metrics:
+   - `drawdown_worst_hsl`
+   - `drawdown_worst_mean_1pct_hsl`
+   - `peak_recovery_hours_hsl`
+   - `hard_stop_triggers`
+   - `hard_stop_restarts`
+2. Side-specific metrics:
+   - `drawdown_worst_hsl_long`
+   - `drawdown_worst_hsl_short`
+   - `drawdown_worst_mean_1pct_hsl_long`
+   - `drawdown_worst_mean_1pct_hsl_short`
+   - `peak_recovery_hours_hsl_long`
+   - `peak_recovery_hours_hsl_short`
+   - `hard_stop_triggers_long`
+   - `hard_stop_triggers_short`
+   - `hard_stop_restarts_long`
+   - `hard_stop_restarts_short`
 
 ### General Parameters for Long and Short
 
@@ -348,7 +352,7 @@ Coins selected for trading are filtered by volume and log range. First, filter c
     - non-panic sell with `price <= market_price` => `market`
     - otherwise, if `abs(order_price_diff) <= market_order_near_touch_threshold` => `market`
     - otherwise => `limit`
-    - panic closes are still controlled separately by `bot.common.equity_hard_stop_loss.panic_close_order_type`
+    - panic closes are still controlled separately by `bot.{long,short}.hsl_panic_close_order_type`
 - **order_match_tolerance_pct**: Percentage tolerance (in %) used to match near-identical cancel/create pairs and avoid order churn. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling/replacing it.
 - **max_n_cancellations_per_batch**: Cancels `n` open orders per execution.
 - **max_n_creations_per_batch**: Creates `n` new orders per execution.
@@ -420,16 +424,21 @@ In this example:
 - `entry_grid_spacing_pct`: Values 0.005, 0.01, 0.015, ..., 0.05
 - `ema_span_0` and `ema_span_1`: Continuous optimization (no step defined)
 
-HSL bounds under `bot.common.equity_hard_stop_loss` use `common_` prefixes here:
+HSL bounds now use side-specific prefixes:
 
-1. `common_equity_hard_stop_loss_red_threshold`
-2. `common_equity_hard_stop_loss_ema_span_minutes`
-3. `common_equity_hard_stop_loss_cooldown_minutes_after_red`
+1. `long_hsl_red_threshold`
+2. `long_hsl_ema_span_minutes`
+3. `long_hsl_cooldown_minutes_after_red`
+4. `short_hsl_red_threshold`
+5. `short_hsl_ema_span_minutes`
+6. `short_hsl_cooldown_minutes_after_red`
 
-`common_equity_hard_stop_loss_no_restart_drawdown_threshold` is intentionally no longer part of
-the default optimize bounds. The runtime parameter still lives under
-`bot.common.equity_hard_stop_loss`, but optimizer runs disable terminal no-restart by default via
-`optimize.fixed_runtime_overrides` and constrain risk through `*_hsl` metrics instead.
+`long_hsl_no_restart_drawdown_threshold` and `short_hsl_no_restart_drawdown_threshold` are intentionally not part of the default optimize bounds. The runtime parameters still live under `bot.{long,short}.hsl_*`, but optimizer runs disable terminal no-restart by default via:
+
+1. `optimize.fixed_runtime_overrides["bot.long.hsl_no_restart_drawdown_threshold"] = 1.0`
+2. `optimize.fixed_runtime_overrides["bot.short.hsl_no_restart_drawdown_threshold"] = 1.0`
+
+Risk should be constrained through `*_hsl` metrics instead.
 
 **Validation:**
 

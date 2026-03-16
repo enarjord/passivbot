@@ -163,27 +163,28 @@ Operational notes:
 * This can intentionally block automatic reducers if they would realize too much loss.
 * If you need immediate forced reduction regardless of realized loss, use panic mode.
 
-### D. Equity Hard Stop Loss (`bot.common.equity_hard_stop_loss`)
-This is an account-level circuit breaker based on reconstructed strategy drawdown, not just raw exchange equity.
+### D. Equity Hard Stop Loss (`bot.{long,short}.hsl_*`)
+This is a side-specific circuit breaker based on reconstructed strategy drawdown, not just raw exchange equity.
 
 It exists for cases where:
 
 1. auto-unstuck is too slow
 2. the realized-loss gate is still allowing the bot to operate in a clearly degraded state
-3. you want a final supervisory backstop that can flatten and halt the account
+3. you want a final supervisory backstop that can flatten and halt one `pside`
 
 Behavior:
 
 1. `yellow`: warning tier
-2. `orange`: reduced-risk mode (`graceful_stop` or `tp_only_with_active_entry_cancellation`)
-3. `red`: force panic exits, wait until flat, and halt
+2. `orange`: reduced-risk mode (`graceful_stop` or `tp_only_with_active_entry_cancellation`) for that `pside`
+3. `red`: force panic exits, wait until that `pside` is flat, and halt that `pside`
 
 Operational notes:
 
-1. HSL is currently account-level, not split into long and short.
-2. It uses a collateral-FX-robust drawdown metric reconstructed from realized PnL plus unrealized PnL.
-3. RED can auto-restart after `cooldown_minutes_after_red`. In live, terminal no-restart is based on the finalized RED-stop drawdown; in backtests, terminal no-restart uses persistent cross-restart HSL drawdown.
+1. HSL is configured separately under `bot.long.hsl_*` and `bot.short.hsl_*`.
+2. It uses a collateral-FX-robust drawdown metric reconstructed from realized PnL plus unrealized PnL for that `pside`.
+3. RED can auto-restart after `hsl_cooldown_minutes_after_red`. Terminal no-restart uses persistent cross-restart HSL drawdown.
 4. In backtests, simulated market panic closes use `backtest.market_order_slippage_pct`.
+5. Backtests still export global `*_hsl` metrics in addition to side-specific `*_hsl_long` / `*_hsl_short` metrics.
 
 See the dedicated guide:
 

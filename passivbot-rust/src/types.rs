@@ -157,7 +157,7 @@ impl Default for ExchangeParams {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EquityHardStopLossTierRatios {
     pub yellow: f64,
     pub orange: f64,
@@ -172,7 +172,7 @@ impl Default for EquityHardStopLossTierRatios {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EquityHardStopLossConfig {
     pub enabled: bool,
     pub red_threshold: f64,
@@ -323,6 +323,15 @@ pub struct BotParams {
     pub filter_volume_drop_pct: f64,
     pub ema_span_0: f64,
     pub ema_span_1: f64,
+    pub hsl_enabled: bool,
+    pub hsl_red_threshold: f64,
+    pub hsl_ema_span_minutes: f64,
+    pub hsl_cooldown_minutes_after_red: f64,
+    pub hsl_no_restart_drawdown_threshold: f64,
+    pub hsl_tier_ratio_yellow: f64,
+    pub hsl_tier_ratio_orange: f64,
+    pub hsl_orange_tier_mode: String,
+    pub hsl_panic_close_order_type: String,
     pub n_positions: usize,
     pub total_wallet_exposure_limit: f64,
     pub wallet_exposure_limit: f64, // per-position base limit (without excess allowance)
@@ -509,8 +518,14 @@ pub struct Analysis {
     pub calmar_ratio_strategy_pnl_rebased: f64,
     pub sterling_ratio_strategy_pnl_rebased: f64,
     pub drawdown_worst_hsl: f64,
+    pub drawdown_worst_hsl_long: f64,
+    pub drawdown_worst_hsl_short: f64,
     pub drawdown_worst_mean_1pct_hsl: f64,
+    pub drawdown_worst_mean_1pct_hsl_long: f64,
+    pub drawdown_worst_mean_1pct_hsl_short: f64,
     pub peak_recovery_hours_hsl: f64,
+    pub peak_recovery_hours_hsl_long: f64,
+    pub peak_recovery_hours_hsl_short: f64,
     pub equity_balance_diff_neg_max: f64,
     pub equity_balance_diff_neg_mean: f64,
     pub equity_balance_diff_pos_max: f64,
@@ -571,9 +586,13 @@ pub struct Analysis {
 
     pub hard_stop_triggers: u32,
     pub hard_stop_triggers_per_year: f64,
+    pub hard_stop_triggers_long: u32,
+    pub hard_stop_triggers_short: u32,
     pub hard_stop_halt_to_restart_equity_loss_pct: f64,
     pub hard_stop_restarts: u32,
     pub hard_stop_restarts_per_year: f64,
+    pub hard_stop_restarts_long: u32,
+    pub hard_stop_restarts_short: u32,
     pub hard_stop_time_in_yellow_pct: f64,
     pub hard_stop_time_in_orange_pct: f64,
     pub hard_stop_time_in_red_pct: f64,
@@ -614,8 +633,14 @@ impl Default for Analysis {
             calmar_ratio_strategy_pnl_rebased: 0.0,
             sterling_ratio_strategy_pnl_rebased: 0.0,
             drawdown_worst_hsl: 0.0,
+            drawdown_worst_hsl_long: 0.0,
+            drawdown_worst_hsl_short: 0.0,
             drawdown_worst_mean_1pct_hsl: 0.0,
+            drawdown_worst_mean_1pct_hsl_long: 0.0,
+            drawdown_worst_mean_1pct_hsl_short: 0.0,
             peak_recovery_hours_hsl: 0.0,
+            peak_recovery_hours_hsl_long: 0.0,
+            peak_recovery_hours_hsl_short: 0.0,
             equity_balance_diff_neg_max: 1.0,
             equity_balance_diff_neg_mean: 1.0,
             equity_balance_diff_pos_max: 1.0,
@@ -671,9 +696,13 @@ impl Default for Analysis {
             entry_initial_balance_pct_short: 0.0,
             hard_stop_triggers: 0,
             hard_stop_triggers_per_year: 0.0,
+            hard_stop_triggers_long: 0,
+            hard_stop_triggers_short: 0,
             hard_stop_halt_to_restart_equity_loss_pct: 0.0,
             hard_stop_restarts: 0,
             hard_stop_restarts_per_year: 0.0,
+            hard_stop_restarts_long: 0,
+            hard_stop_restarts_short: 0,
             hard_stop_time_in_yellow_pct: 0.0,
             hard_stop_time_in_orange_pct: 0.0,
             hard_stop_time_in_red_pct: 0.0,

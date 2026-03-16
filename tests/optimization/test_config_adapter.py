@@ -47,20 +47,32 @@ class TestConfigAdapter:
         # Short should be disabled (fixed to low)
         assert bounds[short_param_idx].low == bounds[short_param_idx].high
 
-    def test_get_optimization_key_paths_includes_live_hsl_keys_when_bounded(self):
+    def test_get_optimization_key_paths_includes_pside_hsl_keys_when_bounded(self):
         config = {
             "bot": {
-                "long": {"n_positions": 1.0, "total_wallet_exposure_limit": 1.0},
-                "short": {"n_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                "long": {
+                    "n_positions": 1.0,
+                    "total_wallet_exposure_limit": 1.0,
+                    "hsl_red_threshold": 0.2,
+                    "hsl_ema_span_minutes": 60.0,
+                },
+                "short": {
+                    "n_positions": 1.0,
+                    "total_wallet_exposure_limit": 1.0,
+                    "hsl_red_threshold": 0.25,
+                    "hsl_ema_span_minutes": 90.0,
+                },
             },
             "optimize": {
                 "bounds": {
                     "long_n_positions": [1.0, 2.0, 1.0],
                     "long_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
+                    "long_hsl_red_threshold": [0.15, 0.35, 0.01],
+                    "long_hsl_ema_span_minutes": [30.0, 180.0, 5.0],
                     "short_n_positions": [1.0, 2.0, 1.0],
                     "short_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
-                    "common_equity_hard_stop_loss_red_threshold": [0.15, 0.35, 0.01],
-                    "common_equity_hard_stop_loss_ema_span_minutes": [30.0, 180.0, 5.0],
+                    "short_hsl_red_threshold": [0.15, 0.35, 0.01],
+                    "short_hsl_ema_span_minutes": [30.0, 180.0, 5.0],
                 }
             },
         }
@@ -68,10 +80,10 @@ class TestConfigAdapter:
         key_paths = get_optimization_key_paths(config)
 
         assert (
-            "common_equity_hard_stop_loss_red_threshold",
-            ("bot", "common", "equity_hard_stop_loss", "red_threshold"),
+            "long_hsl_red_threshold",
+            ("bot", "long", "hsl_red_threshold"),
         ) in key_paths
         assert (
-            "common_equity_hard_stop_loss_ema_span_minutes",
-            ("bot", "common", "equity_hard_stop_loss", "ema_span_minutes"),
+            "short_hsl_ema_span_minutes",
+            ("bot", "short", "hsl_ema_span_minutes"),
         ) in key_paths

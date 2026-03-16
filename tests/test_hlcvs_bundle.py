@@ -319,3 +319,91 @@ def test_build_backtest_payload_sets_original_active_coin_indices_for_bundle_coi
         coin_indices=[0, 2, 4],
     )
     assert payload.backtest_params["active_coin_indices"] == [0, 2, 4]
+
+
+def test_build_backtest_payload_preserves_divergent_pside_hsl_configs():
+    hlcvs = np.zeros((3, 1, 4), dtype=np.float64)
+    btc = np.zeros(3, dtype=np.float64)
+    timestamps = np.array([0, 60_000, 120_000], dtype=np.int64)
+    config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-02",
+            "coins": {"binanceusdm": ["XMR"]},
+            "starting_balance": 1000.0,
+            "btc_collateral_cap": 0.0,
+            "btc_collateral_ltv_cap": None,
+            "filter_by_min_effective_cost": False,
+            "dynamic_wel_by_tradability": False,
+        },
+        "live": {
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0,
+            "hedge_mode": True,
+            "max_realized_loss_pct": 1.0,
+            "pnls_max_lookback_days": 30.0,
+            "market_orders_allowed": False,
+            "market_order_near_touch_threshold": 0.001,
+        },
+        "bot": {
+            "long": {
+                "wallet_exposure_limit": 0.0,
+                "total_wallet_exposure_limit": 1.0,
+                "n_positions": 1,
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.12,
+                "hsl_ema_span_minutes": 45.0,
+                "hsl_cooldown_minutes_after_red": 60.0,
+                "hsl_no_restart_drawdown_threshold": 0.35,
+                "hsl_orange_tier_mode": "graceful_stop",
+                "hsl_panic_close_order_type": "market",
+                "hsl_tier_ratios": {"yellow": 0.45, "orange": 0.8},
+            },
+            "short": {
+                "wallet_exposure_limit": 0.0,
+                "total_wallet_exposure_limit": 1.0,
+                "n_positions": 1,
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.22,
+                "hsl_ema_span_minutes": 90.0,
+                "hsl_cooldown_minutes_after_red": 180.0,
+                "hsl_no_restart_drawdown_threshold": 0.55,
+                "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                "hsl_panic_close_order_type": "limit",
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.7},
+            },
+        },
+        "coin_overrides": {},
+    }
+    mss = {
+        "XMR": {
+            "symbol": "XMR/USDT:USDT",
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.001,
+            "min_cost": 10.0,
+            "c_mult": 1.0,
+            "maker": 0.0002,
+            "taker": 0.00055,
+            "first_valid_index": 0,
+            "last_valid_index": 2,
+            "warmup_minutes": 0,
+            "trade_start_index": 0,
+        }
+    }
+
+    payload = build_backtest_payload(
+        hlcvs,
+        mss,
+        config,
+        "binanceusdm",
+        btc,
+        timestamps,
+    )
+
+    long_cfg = payload.bot_params_list[0]["long"]
+    short_cfg = payload.bot_params_list[0]["short"]
+    assert long_cfg["hsl_red_threshold"] == pytest.approx(0.12)
+    assert long_cfg["hsl_panic_close_order_type"] == "market"
+    assert short_cfg["hsl_red_threshold"] == pytest.approx(0.22)
+    assert short_cfg["hsl_panic_close_order_type"] == "limit"

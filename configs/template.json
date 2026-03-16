@@ -207,21 +207,6 @@
         "volume_normalization": true
     },
     "bot": {
-        "common": {
-            "equity_hard_stop_loss": {
-                "enabled": false,
-                "red_threshold": 0.25,
-                "ema_span_minutes": 60.0,
-                "cooldown_minutes_after_red": 0.0,
-                "no_restart_drawdown_threshold": 1.0,
-                "tier_ratios": {
-                    "yellow": 0.5,
-                    "orange": 0.75
-                },
-                "orange_tier_mode": "tp_only_with_active_entry_cancellation",
-                "panic_close_order_type": "market"
-            }
-        },
         "long": {
             "close_grid_markup_end": 0.0094,
             "close_grid_markup_start": 0.00634,
@@ -232,6 +217,17 @@
             "close_trailing_threshold_pct": 0.001,
             "ema_span_0": 770.0,
             "ema_span_1": 210.0,
+            "hsl_cooldown_minutes_after_red": 0.0,
+            "hsl_ema_span_minutes": 60.0,
+            "hsl_enabled": false,
+            "hsl_no_restart_drawdown_threshold": 1.0,
+            "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+            "hsl_panic_close_order_type": "market",
+            "hsl_red_threshold": 0.25,
+            "hsl_tier_ratios": {
+                "yellow": 0.5,
+                "orange": 0.75
+            },
             "entry_grid_double_down_factor": 0.73,
             "entry_grid_spacing_pct": 0.033,
             "entry_grid_spacing_volatility_weight": 2.4,
@@ -271,6 +267,17 @@
             "close_trailing_threshold_pct": 0.001,
             "ema_span_0": 100,
             "ema_span_1": 100,
+            "hsl_cooldown_minutes_after_red": 0.0,
+            "hsl_ema_span_minutes": 60.0,
+            "hsl_enabled": false,
+            "hsl_no_restart_drawdown_threshold": 1.0,
+            "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+            "hsl_panic_close_order_type": "market",
+            "hsl_red_threshold": 0.25,
+            "hsl_tier_ratios": {
+                "yellow": 0.5,
+                "orange": 0.75
+            },
             "entry_grid_double_down_factor": 0.5,
             "entry_grid_spacing_pct": 0.025,
             "entry_grid_spacing_volatility_weight": 1,
@@ -350,19 +357,19 @@
     },
     "optimize": {
         "bounds": {
-            "common_equity_hard_stop_loss_cooldown_minutes_after_red": [
+            "long_hsl_cooldown_minutes_after_red": [
                 0.0,
                 0.0
             ],
-            "common_equity_hard_stop_loss_ema_span_minutes": [
+            "long_hsl_ema_span_minutes": [
                 60.0,
                 60.0
             ],
-            "common_equity_hard_stop_loss_no_restart_drawdown_threshold": [
+            "long_hsl_no_restart_drawdown_threshold": [
                 1.0,
                 1.0
             ],
-            "common_equity_hard_stop_loss_red_threshold": [
+            "long_hsl_red_threshold": [
                 0.25,
                 0.25
             ],
@@ -687,6 +694,22 @@
                 360,
                 2880,
                 10
+            ],
+            "short_hsl_cooldown_minutes_after_red": [
+                0.0,
+                0.0
+            ],
+            "short_hsl_ema_span_minutes": [
+                60.0,
+                60.0
+            ],
+            "short_hsl_no_restart_drawdown_threshold": [
+                1.0,
+                1.0
+            ],
+            "short_hsl_red_threshold": [
+                0.25,
+                0.25
             ],
             "short_n_positions": [
                 1,

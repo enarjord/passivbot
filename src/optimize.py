@@ -735,6 +735,15 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
         if red_threshold is not None and no_restart is not None:
             if float(no_restart) < float(red_threshold):
                 common_hsl["no_restart_drawdown_threshold"] = float(red_threshold)
+    for pside in ("long", "short"):
+        pside_cfg = config.get("bot", {}).get(pside, {})
+        if not isinstance(pside_cfg, dict):
+            continue
+        red_threshold = pside_cfg.get("hsl_red_threshold")
+        no_restart = pside_cfg.get("hsl_no_restart_drawdown_threshold")
+        if red_threshold is not None and no_restart is not None:
+            if float(no_restart) < float(red_threshold):
+                pside_cfg["hsl_no_restart_drawdown_threshold"] = float(red_threshold)
     for pside in sorted(config["bot"]):
         if pside == "common":
             continue
@@ -1561,8 +1570,6 @@ def apply_fine_tune_bounds(
     bounds = config.get("optimize", {}).get("bounds", {})
 
     def _resolve_bound_key_path(bound_key: str):
-        if bound_key in OPTIMIZABLE_COMMON_KEY_PATHS:
-            return OPTIMIZABLE_COMMON_KEY_PATHS[bound_key]
         try:
             pside, param = bound_key.split("_", 1)
         except ValueError:

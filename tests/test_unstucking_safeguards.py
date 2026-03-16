@@ -335,6 +335,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.active_symbols = []
             self.open_orders = {}
             self.positions = {}
+            self.fetched_positions = []
             self.symbol_ids = {}
             self.min_costs = {}
             self.min_qtys = {}
@@ -357,7 +358,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.trailing_prices = {}
             self.markets_dict = {}
             self.effective_min_cost = {}
-            self.equity_hard_stop_loss = {
+            hsl_cfg = {
                 "enabled": False,
                 "red_threshold": 0.25,
                 "ema_span_minutes": 60.0,
@@ -367,8 +368,31 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "market",
             }
-            self._equity_hard_stop_runtime = pbr.EquityHardStopRuntime()
-            self._equity_hard_stop_strategy_pnl_peak = pbr.EquityHardStopRollingPeak()
+            self.hsl = {"long": dict(hsl_cfg), "short": dict(hsl_cfg)}
+            self._equity_hard_stop = {
+                pside: {
+                    "runtime": pbr.EquityHardStopRuntime(),
+                    "strategy_pnl_peak": pbr.EquityHardStopRollingPeak(),
+                    "halted": False,
+                    "no_restart_latched": False,
+                    "last_metrics": None,
+                    "last_red_progress": None,
+                    "red_flat_confirmations": 0,
+                    "pending_red_since_ms": None,
+                    "cooldown_until_ms": None,
+                    "pending_stop_event": None,
+                    "last_stop_event": None,
+                    "last_status_log_ms": 0,
+                    "last_cooldown_log_ms": 0,
+                }
+                for pside in ("long", "short")
+            }
+            # Test-only aliases for concise fixtures.
+            self.equity_hard_stop_loss = self.hsl["long"]
+            self._equity_hard_stop_runtime = self._equity_hard_stop["long"]["runtime"]
+            self._equity_hard_stop_strategy_pnl_peak = self._equity_hard_stop["long"][
+                "strategy_pnl_peak"
+            ]
             self._bp_defaults = {
                 "ema_span_0": 1.0,
                 "ema_span_1": 2.0,
@@ -444,6 +468,14 @@ def _make_dummy_bot(config, *, last_price=100.0):
             return self._live_values.get(key, 0.0)
 
     return DummyBot(config)
+
+
+def _hsl_cfg(bot, pside="long"):
+    return bot.hsl[pside]
+
+
+def _hsl_state(bot, pside="long"):
+    return bot._equity_hard_stop[pside]
 
 
 def _make_candles(rows):
@@ -728,11 +760,11 @@ def test_orange_overlay_graceful_stop_preserves_restrictive_modes():
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
 
-    bot.equity_hard_stop_loss["enabled"] = True
-    bot.equity_hard_stop_loss["orange_tier_mode"] = "graceful_stop"
-    bot._equity_hard_stop_runtime._initialized = True
-    bot._equity_hard_stop_runtime._tier = "orange"
-    bot._equity_hard_stop_runtime._red_latched = False
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["orange_tier_mode"] = "graceful_stop"
+    _hsl_state(bot)["runtime"]._initialized = True
+    _hsl_state(bot)["runtime"]._tier = "orange"
+    _hsl_state(bot)["runtime"]._red_latched = False
     bot.PB_modes["long"][symbol] = "normal"
     bot.PB_modes["short"][symbol] = "manual"
 
@@ -747,11 +779,11 @@ def test_orange_overlay_tp_only_with_active_entry_cancellation_only_for_open_pos
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
 
-    bot.equity_hard_stop_loss["enabled"] = True
-    bot.equity_hard_stop_loss["orange_tier_mode"] = "tp_only_with_active_entry_cancellation"
-    bot._equity_hard_stop_runtime._initialized = True
-    bot._equity_hard_stop_runtime._tier = "orange"
-    bot._equity_hard_stop_runtime._red_latched = False
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["orange_tier_mode"] = "tp_only_with_active_entry_cancellation"
+    _hsl_state(bot)["runtime"]._initialized = True
+    _hsl_state(bot)["runtime"]._tier = "orange"
+    _hsl_state(bot)["runtime"]._red_latched = False
     bot.PB_modes["long"][symbol] = "normal"
     bot.PB_modes["short"][symbol] = "normal"
     bot.positions[symbol]["long"]["size"] = 1.0
@@ -773,11 +805,11 @@ def test_panic_close_order_type_pref_market_overrides_limit_path():
     ideal_orders = {symbol: [(0.1, 100.0, "close_panic_long", panic_id)]}
     last_prices = {symbol: 100.0}
 
-    bot.equity_hard_stop_loss["panic_close_order_type"] = "market"
+    _hsl_cfg(bot)["panic_close_order_type"] = "market"
     orders, _ = bot._to_executable_orders(ideal_orders, last_prices)
     assert orders[symbol][0]["type"] == "market"
 
-    bot.equity_hard_stop_loss["panic_close_order_type"] = "limit"
+    _hsl_cfg(bot)["panic_close_order_type"] = "limit"
     orders, _ = bot._to_executable_orders(ideal_orders, last_prices)
     assert orders[symbol][0]["type"] == "limit"
 
@@ -786,10 +818,10 @@ def test_hard_stop_apply_sample_delegates_to_rust(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
 
-    bot._equity_hard_stop_runtime._initialized = True
-    bot._equity_hard_stop_runtime._tier = "yellow"
-    bot._equity_hard_stop_runtime._drawdown_ema = 0.08
-    bot._equity_hard_stop_runtime._red_latched = False
+    _hsl_state(bot)["runtime"]._initialized = True
+    _hsl_state(bot)["runtime"]._tier = "yellow"
+    _hsl_state(bot)["runtime"]._drawdown_ema = 0.08
+    _hsl_state(bot)["runtime"]._red_latched = False
 
     captured = {}
 
@@ -809,9 +841,11 @@ def test_hard_stop_apply_sample_delegates_to_rust(monkeypatch):
             "alpha": 0.001110493,
         }
 
-    monkeypatch.setattr(bot._equity_hard_stop_runtime, "apply_sample", fake_apply_sample)
+    monkeypatch.setattr(_hsl_state(bot)["runtime"], "apply_sample", fake_apply_sample)
 
-    metrics = bot._equity_hard_stop_apply_sample(1_700_000_000_000, 900.0, 25.0, 50.0, 1.0)
+    metrics = bot._equity_hard_stop_apply_sample(
+        "long", 1_700_000_000_000, 900.0, 25.0, 25.0, 50.0, 1.0
+    )
 
     assert captured["sample_minutes"] == 1.0
     assert captured["equity"] == 950.0
@@ -826,8 +860,8 @@ def test_hard_stop_apply_sample_rolling_peak_prunes_by_lookback():
     cfg["live"]["pnls_max_lookback_days"] = 0.0
     bot = _make_dummy_bot(cfg)
 
-    m0 = bot._equity_hard_stop_apply_sample(1_000, 100.0, 0.0, 0.0, 1.0)
-    m1 = bot._equity_hard_stop_apply_sample(2_000, 95.0, 0.0, 0.0, 1.0)
+    m0 = bot._equity_hard_stop_apply_sample("long", 1_000, 100.0, 0.0, 0.0, 0.0, 1.0)
+    m1 = bot._equity_hard_stop_apply_sample("long", 2_000, 95.0, 0.0, 0.0, 0.0, 1.0)
 
     assert m0["peak_strategy_equity"] == pytest.approx(100.0)
     assert m1["peak_strategy_equity"] == pytest.approx(95.0)
@@ -838,11 +872,11 @@ def test_hard_stop_apply_sample_rolling_peak_prunes_by_lookback():
 def test_hard_stop_status_logging_is_throttled(caplog):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
-    bot._equity_hard_stop_last_stop_event = {"stop_event_timestamp_ms": 1_600_000}
-    bot._equity_hard_stop_last_status_log_ms = 0
+    _hsl_state(bot)["last_stop_event"] = {"stop_event_timestamp_ms": 1_600_000}
+    _hsl_state(bot)["last_status_log_ms"] = 0
     bot._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
-    bot._equity_hard_stop_halted_until_ms = None
-    bot._equity_hard_stop_pending_red_since_ms = None
+    _hsl_state(bot)["cooldown_until_ms"] = None
+    _hsl_state(bot)["pending_red_since_ms"] = None
     metrics = {
         "timestamp_ms": 1_700_000_000_000,
         "tier": "yellow",
@@ -855,10 +889,10 @@ def test_hard_stop_status_logging_is_throttled(caplog):
     }
 
     with caplog.at_level("INFO"):
-        bot._equity_hard_stop_log_status(metrics)
-        bot._equity_hard_stop_log_status(metrics)
+        bot._equity_hard_stop_log_status("long", metrics)
+        bot._equity_hard_stop_log_status("long", metrics)
 
-    msgs = [r.message for r in caplog.records if "HSL status" in r.message]
+    msgs = [r.message for r in caplog.records if "HSL[long] status" in r.message]
     assert len(msgs) == 1
     assert "dist_to_red=0.020000" in msgs[0]
     assert "last_red_ts=1600000" in msgs[0]
@@ -868,10 +902,11 @@ def test_hard_stop_status_logging_is_throttled(caplog):
 async def test_hard_stop_finalize_red_stop_terminal_latches_and_stops(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
-    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 5.0
-    bot.equity_hard_stop_loss["no_restart_drawdown_threshold"] = 0.1
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 5.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.1
 
-    async def fake_compute(_ts):
+    async def fake_compute(pside, _ts):
+        assert pside == "long"
         return {
             "stop_event_timestamp_ms": 1_700_000_000_000,
             "equity": 98.0,
@@ -884,32 +919,32 @@ async def test_hard_stop_finalize_red_stop_terminal_latches_and_stops(monkeypatc
 
     captured = {}
 
-    def fake_write(payload):
+    def fake_write(pside, payload):
+        captured["pside"] = pside
         captured["payload"] = payload
         return "/tmp/hs_latch_terminal.json"
 
-    async def fake_wait(_until):
-        raise AssertionError("cooldown wait should not run for terminal no-restart latch")
-
     monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
     monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
-    monkeypatch.setattr(bot, "_equity_hard_stop_wait_for_cooldown", fake_wait)
+    await bot._equity_hard_stop_finalize_red_stop("long")
 
-    await bot._equity_hard_stop_finalize_red_stop()
-
-    assert bot.stop_signal_received is True
+    assert bot.stop_signal_received is False
+    assert _hsl_state(bot)["halted"] is True
+    assert _hsl_state(bot)["no_restart_latched"] is True
     assert captured["payload"]["no_restart_latched"] is True
     assert captured["payload"]["cooldown_until_ms"] is None
+    assert captured["pside"] == "long"
 
 
 @pytest.mark.asyncio
 async def test_hard_stop_finalize_red_stop_equal_threshold_latches_terminal(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
-    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 5.0
-    bot.equity_hard_stop_loss["no_restart_drawdown_threshold"] = 0.1
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 5.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.1
 
-    async def fake_compute(_ts):
+    async def fake_compute(pside, _ts):
+        assert pside == "long"
         return {
             "stop_event_timestamp_ms": 1_700_000_000_000,
             "equity": 98.0,
@@ -922,36 +957,36 @@ async def test_hard_stop_finalize_red_stop_equal_threshold_latches_terminal(monk
 
     captured = {}
 
-    def fake_write(payload):
+    def fake_write(pside, payload):
+        captured["pside"] = pside
         captured["payload"] = payload
         return "/tmp/hs_latch_terminal_equal.json"
 
-    async def fake_wait(_until):
-        raise AssertionError("cooldown wait should not run for equality no-restart latch")
-
     monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
     monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
-    monkeypatch.setattr(bot, "_equity_hard_stop_wait_for_cooldown", fake_wait)
+    await bot._equity_hard_stop_finalize_red_stop("long")
 
-    await bot._equity_hard_stop_finalize_red_stop()
-
-    assert bot.stop_signal_received is True
+    assert bot.stop_signal_received is False
+    assert _hsl_state(bot)["halted"] is True
+    assert _hsl_state(bot)["no_restart_latched"] is True
     assert captured["payload"]["no_restart_latched"] is True
     assert captured["payload"]["cooldown_until_ms"] is None
+    assert captured["pside"] == "long"
 
 
 @pytest.mark.asyncio
 async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
-    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 1.0
-    bot.equity_hard_stop_loss["no_restart_drawdown_threshold"] = 0.2
-    bot._equity_hard_stop_runtime._initialized = True
-    bot._equity_hard_stop_runtime._red_latched = True
-    bot._equity_hard_stop_runtime._tier = "red"
-    bot._equity_hard_stop_runtime._drawdown_ema = 0.12
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.2
+    _hsl_state(bot)["runtime"]._initialized = True
+    _hsl_state(bot)["runtime"]._red_latched = True
+    _hsl_state(bot)["runtime"]._tier = "red"
+    _hsl_state(bot)["runtime"]._drawdown_ema = 0.12
 
-    async def fake_compute(_ts):
+    async def fake_compute(pside, _ts):
+        assert pside == "long"
         return {
             "stop_event_timestamp_ms": 1_700_000_000_000,
             "equity": 104.0,
@@ -963,43 +998,35 @@ async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypat
         }
 
     captured = {}
-    waited = {}
-    cleared = {}
 
-    def fake_write(payload):
+    def fake_write(pside, payload):
+        captured["pside"] = pside
         captured["payload"] = payload
         return "/tmp/hs_latch_auto.json"
 
-    async def fake_wait(until_ms):
-        waited["until_ms"] = until_ms
-
-    def fake_remove():
-        cleared["done"] = True
-
     monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
     monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
-    monkeypatch.setattr(bot, "_equity_hard_stop_wait_for_cooldown", fake_wait)
-    monkeypatch.setattr(bot, "_equity_hard_stop_remove_latch_file", fake_remove)
-
-    await bot._equity_hard_stop_finalize_red_stop()
+    await bot._equity_hard_stop_finalize_red_stop("long")
 
     assert bot.stop_signal_received is False
+    assert _hsl_state(bot)["halted"] is True
+    assert _hsl_state(bot)["no_restart_latched"] is False
     assert captured["payload"]["no_restart_latched"] is False
     assert captured["payload"]["cooldown_until_ms"] is not None
-    assert waited["until_ms"] == captured["payload"]["cooldown_until_ms"]
-    assert cleared["done"] is True
-    assert bot._equity_hard_stop_runtime.red_latched() is False
+    assert _hsl_state(bot)["cooldown_until_ms"] == captured["payload"]["cooldown_until_ms"]
+    assert _hsl_state(bot)["runtime"].red_latched() is True
+    assert captured["pside"] == "long"
 
 
 @pytest.mark.asyncio
 async def test_hard_stop_initialize_from_history_terminal_stop_sets_latch(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
-    bot.equity_hard_stop_loss["enabled"] = True
-    bot.equity_hard_stop_loss["red_threshold"] = 0.05
-    bot.equity_hard_stop_loss["ema_span_minutes"] = 1.0
-    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 5.0
-    bot.equity_hard_stop_loss["no_restart_drawdown_threshold"] = 0.1
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["red_threshold"] = 0.05
+    _hsl_cfg(bot)["ema_span_minutes"] = 1.0
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 5.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.1
     bot.balance = 80.0
 
     async def fake_history(*, current_balance=None):
@@ -1009,29 +1036,45 @@ async def test_hard_stop_initialize_from_history_terminal_stop_sets_latch(monkey
                     "timestamp": 1_000,
                     "balance": 100.0,
                     "realized_pnl": 0.0,
-                    "unrealized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
                 },
                 {
                     "timestamp": 61_000,
                     "balance": 100.0,
                     "realized_pnl": 0.0,
-                    "unrealized_pnl": -20.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": -20.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
                 },
                 {
                     "timestamp": 121_000,
                     "balance": 80.0,
                     "realized_pnl": -20.0,
-                    "unrealized_pnl": 0.0,
+                    "realized_pnl_long": -20.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": True,
+                    "is_flat_long": True,
+                    "is_flat_short": True,
                 },
             ]
         }
 
     captured = {}
 
-    def fake_write(payload):
+    def fake_write(pside, payload):
+        captured["pside"] = pside
         captured["payload"] = payload
         return "/tmp/hs_replay_terminal.json"
 
@@ -1040,10 +1083,13 @@ async def test_hard_stop_initialize_from_history_terminal_stop_sets_latch(monkey
 
     await bot._equity_hard_stop_initialize_from_history()
 
-    assert bot.stop_signal_received is True
+    assert bot.stop_signal_received is False
+    assert _hsl_state(bot)["halted"] is True
+    assert _hsl_state(bot)["no_restart_latched"] is True
     assert captured["payload"]["no_restart_latched"] is True
     assert captured["payload"]["cooldown_until_ms"] is None
     assert captured["payload"]["stop_event_timestamp_ms"] == 121_000
+    assert captured["pside"] == "long"
 
 
 @pytest.mark.asyncio
@@ -1052,11 +1098,11 @@ async def test_hard_stop_initialize_from_history_reconstructs_active_cooldown_wi
 ):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
-    bot.equity_hard_stop_loss["enabled"] = True
-    bot.equity_hard_stop_loss["red_threshold"] = 0.05
-    bot.equity_hard_stop_loss["ema_span_minutes"] = 1.0
-    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 1.0
-    bot.equity_hard_stop_loss["no_restart_drawdown_threshold"] = 0.2
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["red_threshold"] = 0.05
+    _hsl_cfg(bot)["ema_span_minutes"] = 1.0
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.2
     bot.balance = 104.0
     bot._live_values["execution_delay_seconds"] = 60.0
 
@@ -1067,65 +1113,79 @@ async def test_hard_stop_initialize_from_history_reconstructs_active_cooldown_wi
                     "timestamp": 1_000,
                     "balance": 100.0,
                     "realized_pnl": 0.0,
-                    "unrealized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
                 },
                 {
                     "timestamp": 61_000,
                     "balance": 100.0,
                     "realized_pnl": 0.0,
-                    "unrealized_pnl": 10.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 10.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
                 },
                 {
                     "timestamp": 121_000,
                     "balance": 100.0,
                     "realized_pnl": 0.0,
-                    "unrealized_pnl": 4.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 4.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
                 },
                 {
                     "timestamp": 181_000,
                     "balance": 104.0,
                     "realized_pnl": 4.0,
-                    "unrealized_pnl": 0.0,
+                    "realized_pnl_long": 4.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": True,
+                    "is_flat_long": True,
+                    "is_flat_short": True,
                 },
             ]
         }
 
     current_time = {"ts": 200_000}
-    waited = {}
 
-    async def fake_wait(until_ms):
-        waited["until_ms"] = until_ms
-        current_time["ts"] = until_ms
-
-    async def fake_upnl():
+    async def fake_upnl(*_args, **_kwargs):
         return 0.0
 
     monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
-    monkeypatch.setattr(bot, "_equity_hard_stop_wait_for_cooldown", fake_wait)
     monkeypatch.setattr(bot, "get_exchange_time", lambda: current_time["ts"])
     monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
 
     await bot._equity_hard_stop_initialize_from_history()
 
-    assert waited["until_ms"] == 241_000
     assert bot.stop_signal_received is False
-    assert bot._equity_hard_stop_runtime.red_latched() is False
-    assert bot._equity_hard_stop_pending_red_since_ms is None
+    assert _hsl_state(bot)["halted"] is True
+    assert _hsl_state(bot)["no_restart_latched"] is False
+    assert _hsl_state(bot)["cooldown_until_ms"] == 241_000
 
 
 @pytest.mark.asyncio
 async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
-    bot.equity_hard_stop_loss["enabled"] = True
-    bot.equity_hard_stop_loss["red_threshold"] = 0.05
-    bot.equity_hard_stop_loss["ema_span_minutes"] = 1.0
-    bot.equity_hard_stop_loss["cooldown_minutes_after_red"] = 1.0
-    bot.equity_hard_stop_loss["no_restart_drawdown_threshold"] = 0.2
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["red_threshold"] = 0.05
+    _hsl_cfg(bot)["ema_span_minutes"] = 1.0
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.2
     bot.balance = 104.0
     bot._live_values["execution_delay_seconds"] = 60.0
 
@@ -1136,36 +1196,61 @@ async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(mo
                     "timestamp": 1_000,
                     "balance": 100.0,
                     "realized_pnl": 0.0,
-                    "unrealized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
                 },
                 {
                     "timestamp": 61_000,
                     "balance": 100.0,
                     "realized_pnl": 0.0,
-                    "unrealized_pnl": 10.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 10.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
                 },
                 {
                     "timestamp": 121_000,
                     "balance": 100.0,
                     "realized_pnl": 0.0,
-                    "unrealized_pnl": 4.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 4.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
                 },
                 {
                     "timestamp": 181_000,
                     "balance": 104.0,
                     "realized_pnl": 4.0,
-                    "unrealized_pnl": 0.0,
+                    "realized_pnl_long": 4.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": True,
+                    "is_flat_long": True,
+                    "is_flat_short": True,
                 },
                 {
                     "timestamp": 241_000,
                     "balance": 104.0,
                     "realized_pnl": 4.0,
-                    "unrealized_pnl": 0.0,
+                    "realized_pnl_long": 4.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
                     "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
                 },
             ]
         }
@@ -1174,18 +1259,18 @@ async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(mo
 
     def wrapped_reset():
         reset_calls["count"] += 1
-        bot._equity_hard_stop_runtime._initialized = False
-        bot._equity_hard_stop_runtime._red_latched = False
-        bot._equity_hard_stop_runtime._tier = "green"
-        bot._equity_hard_stop_runtime._drawdown_ema = 0.0
-        bot._equity_hard_stop_runtime._peak_strategy_equity = 0.0
-        bot._equity_hard_stop_strategy_pnl_peak.reset()
+        _hsl_state(bot)["runtime"]._initialized = False
+        _hsl_state(bot)["runtime"]._red_latched = False
+        _hsl_state(bot)["runtime"]._tier = "green"
+        _hsl_state(bot)["runtime"]._drawdown_ema = 0.0
+        _hsl_state(bot)["runtime"]._peak_strategy_equity = 0.0
+        _hsl_state(bot)["strategy_pnl_peak"].reset()
 
-    async def fake_upnl():
+    async def fake_upnl(*_args, **_kwargs):
         return 0.0
 
     monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
-    monkeypatch.setattr(bot._equity_hard_stop_runtime, "reset", wrapped_reset)
+    monkeypatch.setattr(_hsl_state(bot)["runtime"], "reset", wrapped_reset)
     monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
     monkeypatch.setattr(bot, "get_exchange_time", lambda: 301_000)
 
@@ -1193,9 +1278,9 @@ async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(mo
 
     assert bot.stop_signal_received is False
     assert reset_calls["count"] == 2
-    assert bot._equity_hard_stop_runtime.red_latched() is False
-    assert bot._equity_hard_stop_runtime.tier() != "red"
-    assert bot._equity_hard_stop_pending_red_since_ms is None
+    assert _hsl_state(bot)["runtime"].red_latched() is False
+    assert _hsl_state(bot)["runtime"].tier() != "red"
+    assert _hsl_state(bot)["pending_red_since_ms"] is None
 
 
 @pytest.mark.asyncio

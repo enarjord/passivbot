@@ -333,7 +333,17 @@ mod core {
         order_book: &OrderBook,
     ) -> bool {
         if is_panic_close_order_type(order.order_type) {
-            return global.panic_close_market;
+            let pside_market = match order.pside {
+                PositionSide::Long => {
+                    global.global_bot_params.long.hsl_enabled
+                        && global.global_bot_params.long.hsl_panic_close_order_type == "market"
+                }
+                PositionSide::Short => {
+                    global.global_bot_params.short.hsl_enabled
+                        && global.global_bot_params.short.hsl_panic_close_order_type == "market"
+                }
+            };
+            return pside_market || global.panic_close_market;
         }
         if !global.market_orders_allowed {
             return false;

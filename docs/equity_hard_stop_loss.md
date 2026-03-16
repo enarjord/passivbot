@@ -1,16 +1,17 @@
 # Equity Hard Stop Loss
 
-Passivbot includes an account-level Equity Hard Stop Loss (HSL) that acts as a circuit breaker when strategy drawdown becomes too severe.
+Passivbot includes a side-specific Equity Hard Stop Loss (HSL) that acts as a circuit breaker when strategy drawdown becomes too severe.
 
-The HSL is configured at:
+HSL is configured separately for each `pside`:
 
-`bot.common.equity_hard_stop_loss`
+1. `bot.long.hsl_*`
+2. `bot.short.hsl_*`
 
 This is separate from auto-unstuck and the realized-loss gate:
 
 1. Auto-unstuck gradually trims stuck positions while continuing to trade.
 2. The realized-loss gate blocks loss-realizing closes below a configured balance floor.
-3. HSL is the last-resort account-level stop. It can switch the bot into reduced-risk modes and, at RED, force panic exits and halt trading.
+3. HSL is the last-resort supervisory stop. It can switch one `pside` into reduced-risk modes and, at RED, force panic exits and halt only that `pside`.
 
 See also:
 
@@ -22,10 +23,10 @@ See also:
 
 HSL uses a collateral-FX-robust drawdown metric based on reconstructed strategy PnL rather than raw exchange equity peaks.
 
-High level:
+High level for each `pside`:
 
-1. Reconstruct `strategy_pnl = realized_pnl + unrealized_pnl`
-2. Track a rolling rebased `peak_strategy_equity`
+1. Reconstruct `strategy_pnl_pside = realized_pnl_pside + unrealized_pnl_pside`
+2. Track a rolling rebased `peak_strategy_equity_pside`
 3. Compute raw drawdown and an EMA-smoothed drawdown
 4. Use `drawdown_score = min(drawdown_raw, drawdown_ema)` as the trigger metric
 
@@ -33,124 +34,149 @@ This avoids false triggers caused only by collateral price moves when strategy P
 
 ## Tiers
 
-HSL has four tiers:
+Each `pside` has four tiers:
 
 1. `green`: normal trading
 2. `yellow`: warning tier
 3. `orange`: reduced-risk mode
 4. `red`: hard stop
 
-Tier thresholds are derived from `red_threshold`:
+Tier thresholds are derived from that `pside`'s `hsl_red_threshold`:
 
-1. yellow threshold = `tier_ratios.yellow * red_threshold`
-2. orange threshold = `tier_ratios.orange * red_threshold`
-3. red threshold = `red_threshold`
+1. yellow threshold = `hsl_tier_ratios.yellow * hsl_red_threshold`
+2. orange threshold = `hsl_tier_ratios.orange * hsl_red_threshold`
+3. red threshold = `hsl_red_threshold`
 
 ### ORANGE behavior
 
-`orange_tier_mode` controls what happens in ORANGE:
+`hsl_orange_tier_mode` controls what happens in ORANGE for that `pside`:
 
 1. `graceful_stop`
 2. `tp_only_with_active_entry_cancellation`
 
 ### RED behavior
 
-At RED:
+At RED for one `pside`:
 
-1. both long and short sides are forced into panic mode
-2. the bot closes positions using `panic_close_order_type`
-3. the bot waits until the account is flat
-4. trading halts
-5. optional cooldown-based restart may occur
+1. that `pside` is forced into panic mode
+2. positions on that `pside` are closed using `hsl_panic_close_order_type`
+3. the bot waits until that `pside` is flat
+4. that `pside` halts
+5. optional cooldown-based restart may occur for that `pside`
 
-In live, a RED halt becomes terminal when the finalized RED-stop drawdown is at or above `no_restart_drawdown_threshold`. In backtests, the no-restart latch uses persistent cross-restart HSL drawdown so repeated RED events cannot be forgotten by cooldown restarts. Values below `red_threshold` are treated as `red_threshold`.
+The opposite `pside` can continue running if its own HSL remains green/orange/yellow.
+
+In both live and backtests, `hsl_no_restart_drawdown_threshold` is evaluated against persistent cross-restart HSL drawdown for that `pside`, not just the local RED-halt snapshot. Values below `hsl_red_threshold` are treated as `hsl_red_threshold`.
 
 ## Parameters
 
-All parameters live under `bot.common.equity_hard_stop_loss`:
+Each `pside` has the same HSL parameter set:
 
-1. `enabled`
-   - enables HSL
-2. `red_threshold`
+1. `hsl_enabled`
+   - enables HSL on that `pside`
+2. `hsl_red_threshold`
    - RED trigger drawdown score
-3. `ema_span_minutes`
+3. `hsl_ema_span_minutes`
    - EMA span used for smoothed drawdown
    - in backtests, if this is smaller than `backtest.candle_interval_minutes`, HSL falls back to a one-sample EMA, which disables smoothing
-4. `cooldown_minutes_after_red`
+4. `hsl_cooldown_minutes_after_red`
    - wait time before auto-restart after RED
    - `0` means no auto-restart
-5. `no_restart_drawdown_threshold`
-   - terminal no-restart threshold
-   - in live, evaluated at RED-stop finalization
-   - in backtests, evaluated against persistent cross-restart HSL drawdown
-   - values below `red_threshold` are clamped to `red_threshold`
-6. `tier_ratios.yellow`
+5. `hsl_no_restart_drawdown_threshold`
+   - terminal no-restart threshold for that `pside`
+   - evaluated against persistent cross-restart HSL drawdown
+   - values below `hsl_red_threshold` are clamped to `hsl_red_threshold`
+6. `hsl_tier_ratios.yellow`
    - yellow threshold multiplier
-7. `tier_ratios.orange`
+7. `hsl_tier_ratios.orange`
    - orange threshold multiplier
-8. `orange_tier_mode`
+8. `hsl_orange_tier_mode`
    - ORANGE behavior selector
-9. `panic_close_order_type`
+9. `hsl_panic_close_order_type`
    - `market` or `limit`
 
 ## Backtest Behavior
 
-Backtests honor the same HSL config surface as live, but no-restart latching is intentionally stricter in backtests because it uses persistent cross-restart HSL drawdown.
+Backtests honor the same side-specific HSL config surface as live.
 
 Important backtest details:
 
-1. `panic_close_order_type = "limit"`
+1. `hsl_panic_close_order_type = "limit"`
    - panic exits use the normal backtest crossed-limit execution model
-2. `panic_close_order_type = "market"`
+2. `hsl_panic_close_order_type = "market"`
    - panic exits use simulated taker execution on the next bar
    - slippage is controlled by `backtest.market_order_slippage_pct`
-3. HSL metrics are exported as shared account metrics, not split into `_usd` and `_btc`
-4. The main optimizer-facing HSL metrics are:
-   - `drawdown_worst_hsl`
-   - `drawdown_worst_mean_1pct_hsl`
-   - `peak_recovery_hours_hsl`
+3. Backtests export both:
+   - global account-level HSL metrics under `*_hsl`
+   - side-specific HSL metrics under `*_hsl_long` / `*_hsl_short`
 
-Useful HSL backtest metrics include:
+Main optimizer-facing global HSL metrics:
+
+1. `drawdown_worst_hsl`
+2. `drawdown_worst_mean_1pct_hsl`
+3. `peak_recovery_hours_hsl`
+
+Useful side-specific HSL metrics:
+
+1. `drawdown_worst_hsl_long`
+2. `drawdown_worst_hsl_short`
+3. `drawdown_worst_mean_1pct_hsl_long`
+4. `drawdown_worst_mean_1pct_hsl_short`
+5. `peak_recovery_hours_hsl_long`
+6. `peak_recovery_hours_hsl_short`
+7. `hard_stop_triggers_long`
+8. `hard_stop_triggers_short`
+9. `hard_stop_restarts_long`
+10. `hard_stop_restarts_short`
+
+Useful global HSL backtest metrics include:
 
 1. `hard_stop_triggers`
 2. `hard_stop_restarts`
-3. `hard_stop_time_in_yellow_pct`
-4. `hard_stop_time_in_orange_pct`
-5. `hard_stop_time_in_red_pct`
-6. `hard_stop_duration_minutes_mean`
-7. `hard_stop_duration_minutes_max`
-8. `hard_stop_trigger_drawdown_mean`
-9. `hard_stop_panic_close_loss_sum`
-10. `hard_stop_panic_close_loss_max`
-11. `hard_stop_flatten_time_minutes_mean`
-12. `hard_stop_post_restart_retrigger_pct`
-13. `hard_stop_halt_to_restart_equity_loss_pct`
+3. `hard_stop_triggers_per_year`
+4. `hard_stop_restarts_per_year`
+5. `hard_stop_time_in_yellow_pct`
+6. `hard_stop_time_in_orange_pct`
+7. `hard_stop_time_in_red_pct`
+8. `hard_stop_duration_minutes_mean`
+9. `hard_stop_duration_minutes_max`
+10. `hard_stop_trigger_drawdown_mean`
+11. `hard_stop_panic_close_loss_sum`
+12. `hard_stop_panic_close_loss_max`
+13. `hard_stop_flatten_time_minutes_mean`
+14. `hard_stop_post_restart_retrigger_pct`
+15. `hard_stop_halt_to_restart_equity_loss_pct`
 
 ## Optimizer Support
 
-Some HSL parameters can be optimized through `optimize.bounds` using the `common_` prefix:
+Some HSL parameters can be optimized through `optimize.bounds` using side-specific prefixes:
 
-1. `common_equity_hard_stop_loss_red_threshold`
-2. `common_equity_hard_stop_loss_ema_span_minutes`
-3. `common_equity_hard_stop_loss_cooldown_minutes_after_red`
-4. `common_equity_hard_stop_loss_no_restart_drawdown_threshold` is intentionally not part of the default optimize bounds.
+1. `long_hsl_red_threshold`
+2. `long_hsl_ema_span_minutes`
+3. `long_hsl_cooldown_minutes_after_red`
+4. `short_hsl_red_threshold`
+5. `short_hsl_ema_span_minutes`
+6. `short_hsl_cooldown_minutes_after_red`
 
-Optimizer runs instead disable terminal no-restart by default through `optimize.fixed_runtime_overrides` and constrain risk through `*_hsl` metrics.
+`long_hsl_no_restart_drawdown_threshold` and `short_hsl_no_restart_drawdown_threshold` are intentionally not part of the default optimize bounds.
 
-The HSL backtest metrics listed above can also be used in:
+Optimizer runs instead disable terminal no-restart by default through:
 
-1. `optimize.scoring`
-2. `optimize.limits`
+1. `optimize.fixed_runtime_overrides["bot.long.hsl_no_restart_drawdown_threshold"] = 1.0`
+2. `optimize.fixed_runtime_overrides["bot.short.hsl_no_restart_drawdown_threshold"] = 1.0`
+
+The optimizer should constrain risk through `*_hsl` metrics rather than by terminating candidates early with terminal no-restart.
 
 ## Notes
 
-1. HSL is currently account-level, not per-position-side.
-2. HSL is intended as a supervisory backstop, not as a replacement for sane wallet-exposure settings.
+1. Runtime HSL behavior is side-specific by `pside`.
+2. Global `*_hsl` metrics are retained because they remain useful for optimizer scoring and whole-account risk inspection.
+3. HSL is intended as a supervisory backstop, not as a replacement for sane wallet-exposure settings.
 
 ## Stateless Restart Behavior
 
 Live HSL startup behavior is reconstructed from exchange-derived account history plus current exchange state. Restart behavior must not depend on any local latch file being present on disk.
 
-For the ongoing edge-case checklist and remaining implementation work, see:
+For the ongoing edge-case checklist and parity notes, see:
 
 1. [HSL Reference](equity_hard_stop_loss_reference.md)

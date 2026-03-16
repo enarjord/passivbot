@@ -272,13 +272,35 @@ struct HardStopStopSnapshot {
     drawdown_raw: f64,
 }
 
+#[derive(Debug, Clone, Default)]
+struct HardStopPsideRuntime {
+    state: Option<ehsl::HardStopState>,
+    tier: ehsl::HardStopTier,
+    rolling_peak_strategy_pnl: VecDeque<(u64, f64)>,
+    halted: bool,
+    no_restart_latched: bool,
+    cooldown_until_ms: Option<u64>,
+    flat_confirmations: usize,
+    pending_stop: Option<HardStopStopSnapshot>,
+    last_stop: Option<HardStopStopSnapshot>,
+    current_red_start_ms: Option<u64>,
+    current_halt_start_ms: Option<u64>,
+    equity_at_halt: f64,
+    last_restart_ts_ms: Option<u64>,
+    no_restart_peak_strategy_equity: f64,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HardStopMetrics {
     pub triggers: u32,
     pub triggers_per_year: f64,
+    pub triggers_long: u32,
+    pub triggers_short: u32,
     pub halt_to_restart_equity_loss_pct: f64,
     pub restarts: u32,
     pub restarts_per_year: f64,
+    pub restarts_long: u32,
+    pub restarts_short: u32,
     pub time_in_yellow_pct: f64,
     pub time_in_orange_pct: f64,
     pub time_in_red_pct: f64,
@@ -290,8 +312,14 @@ pub struct HardStopMetrics {
     pub flatten_time_minutes_mean: f64,
     pub post_restart_retrigger_pct: f64,
     pub drawdown_worst_hsl: f64,
+    pub drawdown_worst_hsl_long: f64,
+    pub drawdown_worst_hsl_short: f64,
     pub drawdown_worst_mean_1pct_hsl: f64,
+    pub drawdown_worst_mean_1pct_hsl_long: f64,
+    pub drawdown_worst_mean_1pct_hsl_short: f64,
     pub peak_recovery_hours_hsl: f64,
+    pub peak_recovery_hours_hsl_long: f64,
+    pub peak_recovery_hours_hsl_short: f64,
     pub gain_strategy_pnl_rebased: f64,
     pub adg_strategy_pnl_rebased: f64,
     pub mdg_strategy_pnl_rebased: f64,
@@ -382,6 +410,7 @@ pub struct Backtest<'a> {
     pnl_cumsum_running: f64,
     pnl_cumsum_max: f64,
     pnl_cumsum_running_net: f64,
+    pnl_cumsum_running_net_pside: [f64; 2],
     pnl_lookback_bars: usize,
     pnl_events: VecDeque<(usize, f64)>,
     rolling_pnl_cumsum: f64,
@@ -405,6 +434,7 @@ pub struct Backtest<'a> {
     orchestrator_workspace: orchestrator::OrchestratorWorkspace,
     orch_profile: Option<OrchProfile>,
     max_tradable_coins_seen: usize,
+    hard_stop_pside: [HardStopPsideRuntime; 2],
     hard_stop_state: Option<ehsl::HardStopState>,
     hard_stop_tier: ehsl::HardStopTier,
     hard_stop_rolling_peak_strategy_pnl: VecDeque<(u64, f64)>,
@@ -416,7 +446,9 @@ pub struct Backtest<'a> {
     hard_stop_pending_stop: Option<HardStopStopSnapshot>,
     hard_stop_last_stop: Option<HardStopStopSnapshot>,
     hard_stop_n_triggers: u32,
+    hard_stop_n_triggers_pside: [u32; 2],
     hard_stop_n_restarts: u32,
+    hard_stop_n_restarts_pside: [u32; 2],
     hard_stop_total_panic_loss: f64,
     hard_stop_equity_at_halt: f64,
     hard_stop_tier_samples_total: u64,
@@ -438,8 +470,11 @@ pub struct Backtest<'a> {
     hard_stop_last_restart_ts_ms: Option<u64>,
     hard_stop_restart_retrigger_count: u32,
     hard_stop_drawdown_samples: Vec<f64>,
+    hard_stop_drawdown_samples_pside: [Vec<f64>; 2],
     strategy_equity_series: Vec<f64>,
+    strategy_equity_series_pside: [Vec<f64>; 2],
     peak_strategy_equity_series: Vec<f64>,
+    peak_strategy_equity_series_pside: [Vec<f64>; 2],
     hard_stop_no_restart_peak_strategy_equity: f64,
     final_hard_stop_metrics: Option<HardStopMetrics>,
 }
@@ -1647,6 +1682,7 @@ impl<'a> Backtest<'a> {
             pnl_cumsum_running: 0.0,
             pnl_cumsum_max: 0.0,
             pnl_cumsum_running_net: 0.0,
+            pnl_cumsum_running_net_pside: [0.0, 0.0],
             pnl_lookback_bars: if backtest_params.pnls_max_lookback_days > 0.0 {
                 let minutes = backtest_params.pnls_max_lookback_days * 24.0 * 60.0;
                 (minutes / backtest_params.candle_interval_minutes.max(1) as f64).ceil() as usize
@@ -1698,6 +1734,10 @@ impl<'a> Backtest<'a> {
                     ..OrchProfile::default()
                 }),
             max_tradable_coins_seen: 0,
+            hard_stop_pside: [
+                HardStopPsideRuntime::default(),
+                HardStopPsideRuntime::default(),
+            ],
             hard_stop_state: None,
             hard_stop_tier: ehsl::HardStopTier::Green,
             hard_stop_rolling_peak_strategy_pnl: VecDeque::new(),
@@ -1709,7 +1749,9 @@ impl<'a> Backtest<'a> {
             hard_stop_pending_stop: None,
             hard_stop_last_stop: None,
             hard_stop_n_triggers: 0,
+            hard_stop_n_triggers_pside: [0, 0],
             hard_stop_n_restarts: 0,
+            hard_stop_n_restarts_pside: [0, 0],
             hard_stop_total_panic_loss: 0.0,
             hard_stop_equity_at_halt: 0.0,
             hard_stop_tier_samples_total: 0,
@@ -1731,8 +1773,11 @@ impl<'a> Backtest<'a> {
             hard_stop_last_restart_ts_ms: None,
             hard_stop_restart_retrigger_count: 0,
             hard_stop_drawdown_samples: Vec::new(),
+            hard_stop_drawdown_samples_pside: [Vec::new(), Vec::new()],
             strategy_equity_series: Vec::new(),
+            strategy_equity_series_pside: [Vec::new(), Vec::new()],
             peak_strategy_equity_series: Vec::new(),
+            peak_strategy_equity_series_pside: [Vec::new(), Vec::new()],
             hard_stop_no_restart_peak_strategy_equity: 0.0,
             final_hard_stop_metrics: None,
             // EMAs already initialized in `emas`; no rolling buffers needed
@@ -1787,7 +1832,7 @@ impl<'a> Backtest<'a> {
             self.update_rounded_balance(k);
             self.update_trailing_prices(k);
             let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;
-            if k > warmup_bars && current_ts >= guard_timestamp_ms && !self.hard_stop_halted {
+            if k > warmup_bars && current_ts >= guard_timestamp_ms {
                 if self.update_n_positions_and_wallet_exposure_limits(k) {
                     self.equity_tracking_active = true;
                 }
@@ -1799,29 +1844,23 @@ impl<'a> Backtest<'a> {
                     self.record_strategy_equity_sample();
                     break;
                 }
-                if !self.hard_stop_halted {
-                    self.update_hard_stop_state(k)?;
-                }
+                self.update_hard_stop_state(k)?;
                 self.record_hard_stop_tier_sample();
                 self.record_total_wallet_exposure();
             }
-            if self.hard_stop_halted {
-                if self.try_restart_after_hard_stop(current_ts) {
-                    continue;
-                }
-                if self.hard_stop_cooldown_until_ms.is_none() {
-                    break;
-                }
-            }
+            self.try_restart_after_hard_stop(current_ts);
         }
-        if self.hard_stop_halted {
-            let end_ts_ms = self
-                .equities
-                .timestamps_ms
-                .last()
-                .copied()
-                .unwrap_or(self.first_timestamp_ms);
-            self.finalize_hard_stop_halt(end_ts_ms);
+        let end_ts_ms = self
+            .equities
+            .timestamps_ms
+            .last()
+            .copied()
+            .unwrap_or(self.first_timestamp_ms);
+        if self.hard_stop_pside[LONG].halted {
+            self.finalize_hard_stop_halt_pside(LONG, end_ts_ms);
+        }
+        if self.hard_stop_pside[SHORT].halted {
+            self.finalize_hard_stop_halt_pside(SHORT, end_ts_ms);
         }
         if let Some(mut writer) = self.debug_writer.take() {
             writer.finish();
@@ -2027,6 +2066,15 @@ impl<'a> Backtest<'a> {
     }
 
     #[inline(always)]
+    fn has_open_position_pside(&self, pside: usize) -> bool {
+        match pside {
+            LONG => !self.positions.long.is_empty(),
+            SHORT => !self.positions.short.is_empty(),
+            _ => unreachable!("invalid pside"),
+        }
+    }
+
+    #[inline(always)]
     fn has_any_blocking_open_orders(&self) -> bool {
         self.open_orders
             .long
@@ -2037,6 +2085,23 @@ impl<'a> Backtest<'a> {
                 .short
                 .values()
                 .any(Self::bundle_has_blocking_open_orders)
+    }
+
+    #[inline(always)]
+    fn has_blocking_open_orders_pside(&self, pside: usize) -> bool {
+        match pside {
+            LONG => self
+                .open_orders
+                .long
+                .values()
+                .any(Self::bundle_has_blocking_open_orders),
+            SHORT => self
+                .open_orders
+                .short
+                .values()
+                .any(Self::bundle_has_blocking_open_orders),
+            _ => unreachable!("invalid pside"),
+        }
     }
 
     #[inline(always)]
@@ -2060,36 +2125,8 @@ impl<'a> Backtest<'a> {
 
     #[inline(always)]
     fn try_restart_after_hard_stop(&mut self, current_ts_ms: u64) -> bool {
-        if self.hard_stop_no_restart_latched {
-            return false;
-        }
-        let Some(until) = self.hard_stop_cooldown_until_ms else {
-            return false;
-        };
-        if current_ts_ms < until {
-            return false;
-        }
-        self.hard_stop_n_restarts += 1;
-        // Track panic loss: equity lost between halt and restart
-        if self.hard_stop_equity_at_halt > 0.0 {
-            if let Some(&current_equity) = self.equities.usd_total_equity.last() {
-                let loss = self.hard_stop_equity_at_halt - current_equity;
-                if loss > 0.0 {
-                    self.hard_stop_total_panic_loss += loss;
-                }
-            }
-        }
-        self.finalize_hard_stop_halt(current_ts_ms);
-        self.hard_stop_halted = false;
-        self.hard_stop_cooldown_until_ms = None;
-        self.hard_stop_flat_confirmations = 0;
-        self.hard_stop_tier = ehsl::HardStopTier::Green;
-        self.hard_stop_state = None;
-        self.hard_stop_rolling_peak_strategy_pnl.clear();
-        self.hard_stop_pending_stop = None;
-        self.hard_stop_current_red_start_ms = None;
-        self.hard_stop_last_restart_ts_ms = Some(current_ts_ms);
-        true
+        self.try_restart_after_hard_stop_pside(current_ts_ms, LONG)
+            || self.try_restart_after_hard_stop_pside(current_ts_ms, SHORT)
     }
 
     #[inline(always)]
@@ -2124,6 +2161,58 @@ impl<'a> Backtest<'a> {
         self.hard_stop_halt_duration_count = self.hard_stop_halt_duration_count.saturating_add(1);
     }
 
+    fn finalize_hard_stop_halt_pside(&mut self, pside: usize, end_ts_ms: u64) {
+        let runtime = &mut self.hard_stop_pside[pside];
+        let Some(start_ts_ms) = runtime.current_halt_start_ms.take() else {
+            return;
+        };
+        let duration_minutes = end_ts_ms.saturating_sub(start_ts_ms) as f64 / 60_000.0;
+        self.hard_stop_halt_duration_minutes_sum += duration_minutes;
+        self.hard_stop_halt_duration_minutes_max = self
+            .hard_stop_halt_duration_minutes_max
+            .max(duration_minutes);
+        self.hard_stop_halt_duration_count = self.hard_stop_halt_duration_count.saturating_add(1);
+    }
+
+    fn try_restart_after_hard_stop_pside(&mut self, current_ts_ms: u64, pside: usize) -> bool {
+        let no_restart_latched = self.hard_stop_pside[pside].no_restart_latched;
+        let cooldown_until_ms = self.hard_stop_pside[pside].cooldown_until_ms;
+        if no_restart_latched {
+            return false;
+        }
+        let Some(until) = cooldown_until_ms else {
+            return false;
+        };
+        if current_ts_ms < until {
+            return false;
+        }
+        self.hard_stop_n_restarts += 1;
+        self.hard_stop_n_restarts_pside[pside] =
+            self.hard_stop_n_restarts_pside[pside].saturating_add(1);
+        let equity_at_halt = self.hard_stop_pside[pside].equity_at_halt;
+        if equity_at_halt > 0.0 {
+            if let Some(&current_equity) = self.equities.usd_total_equity.last() {
+                let loss = equity_at_halt - current_equity;
+                if loss > 0.0 {
+                    self.hard_stop_total_panic_loss += loss;
+                }
+            }
+        }
+        self.finalize_hard_stop_halt_pside(pside, current_ts_ms);
+        let runtime = &mut self.hard_stop_pside[pside];
+        runtime.halted = false;
+        runtime.cooldown_until_ms = None;
+        runtime.flat_confirmations = 0;
+        runtime.tier = ehsl::HardStopTier::Green;
+        runtime.state = None;
+        runtime.rolling_peak_strategy_pnl.clear();
+        runtime.pending_stop = None;
+        runtime.current_red_start_ms = None;
+        runtime.last_restart_ts_ms = Some(current_ts_ms);
+        self.refresh_global_hard_stop_tier();
+        true
+    }
+
     fn record_rolling_pnl(&mut self, k: usize, pnl: f64) {
         if self.pnl_lookback_bars == 0 {
             return;
@@ -2150,19 +2239,98 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    #[inline]
+    fn hard_stop_tier_severity(tier: ehsl::HardStopTier) -> u8 {
+        match tier {
+            ehsl::HardStopTier::Green => 0,
+            ehsl::HardStopTier::Yellow => 1,
+            ehsl::HardStopTier::Orange => 2,
+            ehsl::HardStopTier::Red => 3,
+        }
+    }
+
+    #[inline]
+    fn refresh_global_hard_stop_tier(&mut self) {
+        let long_tier = self.hard_stop_pside[LONG].tier;
+        let short_tier = self.hard_stop_pside[SHORT].tier;
+        self.hard_stop_tier = if Self::hard_stop_tier_severity(long_tier)
+            >= Self::hard_stop_tier_severity(short_tier)
+        {
+            long_tier
+        } else {
+            short_tier
+        };
+        self.sync_legacy_hard_stop_aliases();
+    }
+
+    fn sync_legacy_hard_stop_aliases(&mut self) {
+        let long_runtime = &self.hard_stop_pside[LONG];
+        let short_runtime = &self.hard_stop_pside[SHORT];
+        self.hard_stop_state = long_runtime.state.clone();
+        self.hard_stop_rolling_peak_strategy_pnl = long_runtime.rolling_peak_strategy_pnl.clone();
+        self.hard_stop_halted = long_runtime.halted || short_runtime.halted;
+        self.hard_stop_no_restart_latched =
+            long_runtime.no_restart_latched || short_runtime.no_restart_latched;
+        self.hard_stop_cooldown_until_ms = match (
+            long_runtime.cooldown_until_ms,
+            short_runtime.cooldown_until_ms,
+        ) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        self.hard_stop_flat_confirmations = long_runtime.flat_confirmations;
+        self.hard_stop_pending_stop = long_runtime.pending_stop;
+        self.hard_stop_last_stop = long_runtime.last_stop;
+        self.hard_stop_equity_at_halt = if long_runtime.halted {
+            long_runtime.equity_at_halt
+        } else if short_runtime.halted {
+            short_runtime.equity_at_halt
+        } else {
+            long_runtime
+                .equity_at_halt
+                .max(short_runtime.equity_at_halt)
+        };
+        self.hard_stop_current_red_start_ms = match (
+            long_runtime.current_red_start_ms,
+            short_runtime.current_red_start_ms,
+        ) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        self.hard_stop_current_halt_start_ms = match (
+            long_runtime.current_halt_start_ms,
+            short_runtime.current_halt_start_ms,
+        ) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        self.hard_stop_last_restart_ts_ms = match (
+            long_runtime.last_restart_ts_ms,
+            short_runtime.last_restart_ts_ms,
+        ) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+    }
+
     #[inline(always)]
-    fn hard_stop_orange_target_mode(&self) -> orchestrator::TradingMode {
+    fn hard_stop_orange_target_mode_pside(&self, pside: usize) -> orchestrator::TradingMode {
         if self
-            .backtest_params
-            .equity_hard_stop_loss
-            .orange_tier_mode
+            .hard_stop_cfg_pside(pside)
+            .hsl_orange_tier_mode
             .as_str()
             == "graceful_stop"
         {
             orchestrator::TradingMode::GracefulStop
         } else {
-            // Backtest order-book is rebuilt every step, so TpOnly naturally
-            // removes stale entry orders (active entry cancellation effect).
             orchestrator::TradingMode::TpOnly
         }
     }
@@ -2174,21 +2342,35 @@ impl<'a> Backtest<'a> {
         pos_long: Position,
         pos_short: Position,
     ) {
-        if !self.backtest_params.equity_hard_stop_loss.enabled {
+        self.apply_hard_stop_mode_override_pside(mode_long, pos_long, LONG);
+        self.apply_hard_stop_mode_override_pside(mode_short, pos_short, SHORT);
+    }
+
+    fn apply_hard_stop_mode_override_pside(
+        &self,
+        mode: &mut Option<orchestrator::TradingMode>,
+        pos: Position,
+        pside: usize,
+    ) {
+        if !self.hard_stop_enabled_pside(pside) {
             return;
         }
-
-        match self.hard_stop_tier {
+        let runtime = &self.hard_stop_pside[pside];
+        if runtime.halted {
+            if pos.size != 0.0 {
+                *mode = Some(orchestrator::TradingMode::Panic);
+            } else {
+                Self::apply_orange_override(mode, orchestrator::TradingMode::GracefulStop, false);
+            }
+            return;
+        }
+        match runtime.tier {
             ehsl::HardStopTier::Red => {
-                let _ = pos_long;
-                let _ = pos_short;
-                *mode_long = Some(orchestrator::TradingMode::Panic);
-                *mode_short = Some(orchestrator::TradingMode::Panic);
+                *mode = Some(orchestrator::TradingMode::Panic);
             }
             ehsl::HardStopTier::Orange => {
-                let target = self.hard_stop_orange_target_mode();
-                Self::apply_orange_override(mode_long, target, pos_long.size != 0.0);
-                Self::apply_orange_override(mode_short, target, pos_short.size != 0.0);
+                let target = self.hard_stop_orange_target_mode_pside(pside);
+                Self::apply_orange_override(mode, target, pos.size != 0.0);
             }
             _ => {}
         }
@@ -2221,10 +2403,9 @@ impl<'a> Backtest<'a> {
 
     fn update_hard_stop_state(&mut self, k: usize) -> Result<(), String> {
         self.record_strategy_equity_sample();
-        if !self.backtest_params.equity_hard_stop_loss.enabled {
-            return Ok(());
-        }
-        self.apply_hard_stop_state(k)
+        self.update_hard_stop_state_pside(k, LONG)?;
+        self.update_hard_stop_state_pside(k, SHORT)?;
+        Ok(())
     }
 
     fn update_strategy_pnl_peak_queue(
@@ -2283,103 +2464,115 @@ impl<'a> Backtest<'a> {
         self.hard_stop_drawdown_samples.push(drawdown_raw);
     }
 
-    fn apply_hard_stop_state(&mut self, k: usize) -> Result<(), String> {
-        let Some(&equity) = self.equities.usd_total_equity.last() else {
+    fn update_hard_stop_state_pside(&mut self, k: usize, pside: usize) -> Result<(), String> {
+        if !self.hard_stop_enabled_pside(pside) || self.hard_stop_pside[pside].halted {
             return Ok(());
-        };
+        }
         let Some(&timestamp_ms) = self.equities.timestamps_ms.last() else {
             return Ok(());
         };
-        let balance = self.balance.usd_total_balance;
-        let unrealized_pnl = equity - balance;
-        let realized_pnl = self.pnl_cumsum_running_net;
+        let realized_pnl = self.pnl_cumsum_running_net_pside[pside];
+        let unrealized_pnl = self.unrealized_pnl_pside(pside, k);
         let strategy_pnl = realized_pnl + unrealized_pnl;
         let days = self.backtest_params.pnls_max_lookback_days.max(0.0);
         let lookback_ms = ((days * 86_400_000.0).round() as u64).max(self.interval_ms);
         let peak_strategy_pnl = Self::update_strategy_pnl_peak_queue(
-            &mut self.hard_stop_rolling_peak_strategy_pnl,
+            &mut self.hard_stop_pside[pside].rolling_peak_strategy_pnl,
             timestamp_ms,
             strategy_pnl,
             lookback_ms,
         );
-        let baseline_balance = balance - realized_pnl;
-        let peak_strategy_equity = (baseline_balance + peak_strategy_pnl).max(equity);
-        let cfg = &self.backtest_params.equity_hard_stop_loss;
-        if !(cfg.no_restart_drawdown_threshold.is_finite()
-            && cfg.red_threshold.is_finite()
-            && cfg.red_threshold <= cfg.no_restart_drawdown_threshold
-            && cfg.no_restart_drawdown_threshold <= 1.0)
+        let strategy_equity =
+            (self.backtest_params.starting_balance + strategy_pnl).max(f64::EPSILON);
+        let peak_strategy_equity =
+            (self.backtest_params.starting_balance + peak_strategy_pnl).max(strategy_equity);
+        let cfg = self.hard_stop_cfg_pside(pside);
+        let hsl_red_threshold = cfg.hsl_red_threshold;
+        let hsl_ema_span_minutes = cfg.hsl_ema_span_minutes;
+        let hsl_tier_ratio_yellow = cfg.hsl_tier_ratio_yellow;
+        let hsl_tier_ratio_orange = cfg.hsl_tier_ratio_orange;
+        let hsl_no_restart_drawdown_threshold = cfg.hsl_no_restart_drawdown_threshold;
+        let hsl_cooldown_minutes_after_red = cfg.hsl_cooldown_minutes_after_red;
+        if !(hsl_no_restart_drawdown_threshold.is_finite()
+            && hsl_red_threshold.is_finite()
+            && hsl_red_threshold <= hsl_no_restart_drawdown_threshold
+            && hsl_no_restart_drawdown_threshold <= 1.0)
         {
             return Err(format!(
-                "invalid hard-stop config: require red_threshold <= no_restart_drawdown_threshold <= 1.0, got red_threshold={} no_restart_drawdown_threshold={}",
-                cfg.red_threshold, cfg.no_restart_drawdown_threshold
+                "invalid pside hard-stop config: require red_threshold <= no_restart_drawdown_threshold <= 1.0, got red_threshold={} no_restart_drawdown_threshold={} pside={}",
+                hsl_red_threshold, hsl_no_restart_drawdown_threshold, pside
             ));
         }
         let hs_cfg = ehsl::HardStopConfig {
-            red_threshold: cfg.red_threshold,
-            ema_span_minutes: cfg.ema_span_minutes,
+            red_threshold: hsl_red_threshold,
+            ema_span_minutes: hsl_ema_span_minutes,
             tier_ratios: ehsl::HardStopTierRatios {
-                yellow: cfg.tier_ratios.yellow,
-                orange: cfg.tier_ratios.orange,
+                yellow: hsl_tier_ratio_yellow,
+                orange: hsl_tier_ratio_orange,
             },
         };
         let sample_minutes = self.backtest_params.candle_interval_minutes.max(1) as f64;
-        let state = self
-            .hard_stop_state
-            .get_or_insert_with(ehsl::HardStopState::default);
         let step = ehsl::step_with_peak_strategy_equity(
-            state,
+            self.hard_stop_pside[pside]
+                .state
+                .get_or_insert_with(ehsl::HardStopState::default),
             hs_cfg,
-            equity,
+            strategy_equity,
             peak_strategy_equity,
             sample_minutes,
         )
         .map_err(|e| {
             format!(
-                "hard-stop evaluation failed at k {} ts {} equity {} peak_strategy_equity {}: {}",
-                k, timestamp_ms, equity, peak_strategy_equity, e
+                "pside hard-stop evaluation failed at k {} ts {} strategy_equity {} peak_strategy_equity {} pside {}: {}",
+                k, timestamp_ms, strategy_equity, peak_strategy_equity, pside, e
             )
         })?;
-        let prev_tier = self.hard_stop_tier;
-        self.hard_stop_tier = step.tier;
+        let has_open_position = self.has_open_position_pside(pside);
+        let has_blocking_open_orders = self.has_blocking_open_orders_pside(pside);
+        self.strategy_equity_series_pside[pside].push(strategy_equity);
+        self.peak_strategy_equity_series_pside[pside].push(peak_strategy_equity);
+        self.hard_stop_drawdown_samples_pside[pside].push(step.drawdown_raw);
+        let runtime = &mut self.hard_stop_pside[pside];
+        let prev_tier = runtime.tier;
+        runtime.tier = step.tier;
 
         if step.tier == ehsl::HardStopTier::Red {
             if prev_tier != ehsl::HardStopTier::Red {
-                self.hard_stop_current_red_start_ms = Some(timestamp_ms);
+                runtime.current_red_start_ms = Some(timestamp_ms);
             }
         } else {
-            self.hard_stop_current_red_start_ms = None;
+            runtime.current_red_start_ms = None;
         }
 
         if step.tier == ehsl::HardStopTier::Red {
-            if self.has_any_open_position() || self.has_any_blocking_open_orders() {
-                self.hard_stop_flat_confirmations = 0;
-                self.hard_stop_pending_stop = None;
+            if has_open_position || has_blocking_open_orders {
+                runtime.flat_confirmations = 0;
+                runtime.pending_stop = None;
             } else {
-                self.hard_stop_flat_confirmations =
-                    self.hard_stop_flat_confirmations.saturating_add(1);
-                if self.hard_stop_flat_confirmations == 1 {
-                    self.hard_stop_pending_stop = Some(HardStopStopSnapshot {
+                runtime.flat_confirmations = runtime.flat_confirmations.saturating_add(1);
+                if runtime.flat_confirmations == 1 {
+                    runtime.pending_stop = Some(HardStopStopSnapshot {
                         timestamp_ms,
-                        equity,
+                        equity: strategy_equity,
                         peak_strategy_equity,
                         drawdown_raw: step.drawdown_raw,
                     });
                 }
-                if self.hard_stop_flat_confirmations >= 2 {
-                    let stop_snapshot =
-                        self.hard_stop_pending_stop.unwrap_or(HardStopStopSnapshot {
-                            timestamp_ms,
-                            equity,
-                            peak_strategy_equity,
-                            drawdown_raw: step.drawdown_raw,
-                        });
-                    self.hard_stop_last_stop = Some(stop_snapshot);
-                    self.hard_stop_pending_stop = None;
-                    self.hard_stop_halted = true;
-                    self.hard_stop_current_halt_start_ms = Some(stop_snapshot.timestamp_ms);
+                if runtime.flat_confirmations >= 2 {
+                    let stop_snapshot = runtime.pending_stop.unwrap_or(HardStopStopSnapshot {
+                        timestamp_ms,
+                        equity: strategy_equity,
+                        peak_strategy_equity,
+                        drawdown_raw: step.drawdown_raw,
+                    });
+                    runtime.last_stop = Some(stop_snapshot);
+                    runtime.pending_stop = None;
+                    runtime.halted = true;
+                    runtime.current_halt_start_ms = Some(stop_snapshot.timestamp_ms);
                     self.hard_stop_n_triggers += 1;
-                    self.hard_stop_equity_at_halt = equity;
+                    self.hard_stop_n_triggers_pside[pside] =
+                        self.hard_stop_n_triggers_pside[pside].saturating_add(1);
+                    runtime.equity_at_halt = strategy_equity;
                     let stop_drawdown_raw = stop_snapshot.drawdown_raw.max(
                         (1.0 - stop_snapshot.equity
                             / stop_snapshot.peak_strategy_equity.max(f64::EPSILON))
@@ -2388,7 +2581,7 @@ impl<'a> Backtest<'a> {
                     self.hard_stop_trigger_drawdown_sum += stop_drawdown_raw;
                     self.hard_stop_trigger_drawdown_count =
                         self.hard_stop_trigger_drawdown_count.saturating_add(1);
-                    if let Some(red_start_ts_ms) = self.hard_stop_current_red_start_ms {
+                    if let Some(red_start_ts_ms) = runtime.current_red_start_ms {
                         let flatten_minutes =
                             stop_snapshot.timestamp_ms.saturating_sub(red_start_ts_ms) as f64
                                 / 60_000.0;
@@ -2398,7 +2591,7 @@ impl<'a> Backtest<'a> {
                         self.hard_stop_flatten_time_count =
                             self.hard_stop_flatten_time_count.saturating_add(1);
                     }
-                    if let Some(last_restart_ts_ms) = self.hard_stop_last_restart_ts_ms {
+                    if let Some(last_restart_ts_ms) = runtime.last_restart_ts_ms {
                         if stop_snapshot
                             .timestamp_ms
                             .saturating_sub(last_restart_ts_ms)
@@ -2407,38 +2600,37 @@ impl<'a> Backtest<'a> {
                             self.hard_stop_restart_retrigger_count =
                                 self.hard_stop_restart_retrigger_count.saturating_add(1);
                         }
-                        self.hard_stop_last_restart_ts_ms = None;
+                        runtime.last_restart_ts_ms = None;
                     }
-                    let persistent_peak_strategy_equity = self
-                        .hard_stop_no_restart_peak_strategy_equity
+                    runtime.no_restart_peak_strategy_equity = runtime
+                        .no_restart_peak_strategy_equity
                         .max(stop_snapshot.peak_strategy_equity)
                         .max(stop_snapshot.equity);
                     let persistent_drawdown_raw = (1.0
-                        - stop_snapshot.equity / persistent_peak_strategy_equity.max(f64::EPSILON))
+                        - stop_snapshot.equity
+                            / runtime.no_restart_peak_strategy_equity.max(f64::EPSILON))
                     .max(0.0);
-                    if persistent_drawdown_raw >= cfg.no_restart_drawdown_threshold {
-                        self.hard_stop_no_restart_latched = true;
-                        self.hard_stop_cooldown_until_ms = None;
+                    if persistent_drawdown_raw >= hsl_no_restart_drawdown_threshold {
+                        runtime.no_restart_latched = true;
+                        runtime.cooldown_until_ms = None;
                     } else {
-                        let cooldown_minutes = self
-                            .backtest_params
-                            .equity_hard_stop_loss
-                            .cooldown_minutes_after_red;
+                        let cooldown_minutes = hsl_cooldown_minutes_after_red;
                         if cooldown_minutes.is_finite() && cooldown_minutes > 0.0 {
                             let cooldown_ms = ((cooldown_minutes * 60_000.0).round() as u64)
                                 .max(self.interval_ms);
-                            self.hard_stop_cooldown_until_ms =
+                            runtime.cooldown_until_ms =
                                 Some(stop_snapshot.timestamp_ms.saturating_add(cooldown_ms));
                         } else {
-                            self.hard_stop_cooldown_until_ms = None;
+                            runtime.cooldown_until_ms = None;
                         }
                     }
                 }
             }
         } else {
-            self.hard_stop_flat_confirmations = 0;
-            self.hard_stop_pending_stop = None;
+            runtime.flat_confirmations = 0;
+            runtime.pending_stop = None;
         }
+        self.refresh_global_hard_stop_tier();
         Ok(())
     }
 
@@ -2728,6 +2920,7 @@ impl<'a> Backtest<'a> {
         self.pnl_cumsum_running += pnl;
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
         self.pnl_cumsum_running_net += pnl + fee_paid;
+        self.pnl_cumsum_running_net_pside[LONG] += pnl + fee_paid;
         self.record_rolling_pnl(k, pnl);
         let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
@@ -2826,6 +3019,7 @@ impl<'a> Backtest<'a> {
         self.pnl_cumsum_running += pnl;
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
         self.pnl_cumsum_running_net += pnl + fee_paid;
+        self.pnl_cumsum_running_net_pside[SHORT] += pnl + fee_paid;
         self.record_rolling_pnl(k, pnl);
         let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
@@ -2901,6 +3095,7 @@ impl<'a> Backtest<'a> {
         let fee_paid = -qty_to_cost(order.qty, exec.price, self.exchange_params_list[idx].c_mult)
             * exec.fee_rate;
         self.pnl_cumsum_running_net += fee_paid;
+        self.pnl_cumsum_running_net_pside[LONG] += fee_paid;
         let balance_before = self.snapshot_balance();
         self.update_balance(k, 0.0, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -2977,6 +3172,7 @@ impl<'a> Backtest<'a> {
         let fee_paid = -qty_to_cost(order.qty, exec.price, self.exchange_params_list[idx].c_mult)
             * exec.fee_rate;
         self.pnl_cumsum_running_net += fee_paid;
+        self.pnl_cumsum_running_net_pside[SHORT] += fee_paid;
         let balance_before = self.snapshot_balance();
         self.update_balance(k, 0.0, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -3102,6 +3298,68 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    #[inline(always)]
+    fn hard_stop_cfg_pside(&self, pside: usize) -> &BotParams {
+        match pside {
+            LONG => &self.bot_params_master.long,
+            SHORT => &self.bot_params_master.short,
+            _ => unreachable!("invalid pside"),
+        }
+    }
+
+    #[inline(always)]
+    fn hard_stop_enabled_pside(&self, pside: usize) -> bool {
+        self.hard_stop_cfg_pside(pside).hsl_enabled
+    }
+
+    fn unrealized_pnl_pside(&self, pside: usize, k: usize) -> f64 {
+        let mut upnl = 0.0;
+        match pside {
+            LONG => {
+                let mut keys: Vec<usize> = self.positions.long.keys().copied().collect();
+                keys.sort_unstable();
+                for idx in keys {
+                    let position = self.positions.long.get(&idx).expect("idx from keys");
+                    if !self.coin_is_valid_at(idx, k) {
+                        continue;
+                    }
+                    let current_price = self.hlcvs_value(k, idx, CLOSE);
+                    if !current_price.is_finite() {
+                        continue;
+                    }
+                    upnl += calc_pnl_long(
+                        position.price,
+                        current_price,
+                        position.size,
+                        self.exchange_params_list[idx].c_mult,
+                    );
+                }
+            }
+            SHORT => {
+                let mut keys: Vec<usize> = self.positions.short.keys().copied().collect();
+                keys.sort_unstable();
+                for idx in keys {
+                    let position = self.positions.short.get(&idx).expect("idx from keys");
+                    if !self.coin_is_valid_at(idx, k) {
+                        continue;
+                    }
+                    let current_price = self.hlcvs_value(k, idx, CLOSE);
+                    if !current_price.is_finite() {
+                        continue;
+                    }
+                    upnl += calc_pnl_short(
+                        position.price,
+                        current_price,
+                        position.size,
+                        self.exchange_params_list[idx].c_mult,
+                    );
+                }
+            }
+            _ => unreachable!("invalid pside"),
+        }
+        upnl
+    }
+
     fn market_fill_price(&self, k: usize, idx: usize, order: &Order) -> Option<f64> {
         if !self.coin_is_tradeable_at(idx, k) {
             return None;
@@ -3121,6 +3379,15 @@ impl<'a> Backtest<'a> {
     }
 
     fn order_uses_market_execution(&self, order: &BacktestOrder) -> bool {
+        match order.order.order_type {
+            OrderType::ClosePanicLong => {
+                return self.bot_params_master.long.hsl_panic_close_order_type == "market";
+            }
+            OrderType::ClosePanicShort => {
+                return self.bot_params_master.short.hsl_panic_close_order_type == "market";
+            }
+            _ => {}
+        }
         order.execution_type == orchestrator::ExecutionType::Market
     }
 
@@ -3562,27 +3829,30 @@ impl<'a> Backtest<'a> {
         (long, short)
     }
 
-    fn strategy_equity_metrics(&self) -> StrategyEquityMetrics {
-        let sample_count = self
-            .strategy_equity_series
+    fn strategy_equity_metrics_from_series(
+        &self,
+        strategy_equity_series: &[f64],
+        drawdown_samples: &[f64],
+        peak_strategy_equity_series: &[f64],
+        recovery_equity_series: &[f64],
+    ) -> StrategyEquityMetrics {
+        let sample_count = strategy_equity_series
             .len()
-            .min(self.hard_stop_drawdown_samples.len())
-            .min(self.peak_strategy_equity_series.len())
-            .min(self.equities.usd_total_equity.len())
+            .min(drawdown_samples.len())
+            .min(peak_strategy_equity_series.len())
+            .min(recovery_equity_series.len())
             .min(self.equities.timestamps_ms.len());
         if sample_count < 2 {
             return StrategyEquityMetrics::default();
         }
         let timestamps_offset = self.equities.timestamps_ms.len() - sample_count;
-        let series =
-            &self.strategy_equity_series[self.strategy_equity_series.len() - sample_count..];
+        let series = &strategy_equity_series[strategy_equity_series.len() - sample_count..];
         let timestamps = &self.equities.timestamps_ms[timestamps_offset..];
-        let drawdowns = &self.hard_stop_drawdown_samples
-            [self.hard_stop_drawdown_samples.len() - sample_count..];
-        let peak_series = &self.peak_strategy_equity_series
-            [self.peak_strategy_equity_series.len() - sample_count..];
-        let equity_series =
-            &self.equities.usd_total_equity[self.equities.usd_total_equity.len() - sample_count..];
+        let drawdowns = &drawdown_samples[drawdown_samples.len() - sample_count..];
+        let peak_series =
+            &peak_strategy_equity_series[peak_strategy_equity_series.len() - sample_count..];
+        let recovery_series =
+            &recovery_equity_series[recovery_equity_series.len() - sample_count..];
 
         let compute_metrics = |series: &[f64], timestamps_ms: &[u64], drawdowns: &[f64]| {
             let equity_metrics = analyze_equity_series(series, timestamps_ms);
@@ -3610,8 +3880,11 @@ impl<'a> Backtest<'a> {
 
         let full = compute_metrics(series, timestamps, drawdowns);
         let all_time_peak_series = cumulative_max(peak_series);
-        let peak_recovery_hours_hsl =
-            calc_peak_recovery_hours_against_peak(equity_series, &all_time_peak_series, timestamps);
+        let peak_recovery_hours_hsl = calc_peak_recovery_hours_against_peak(
+            recovery_series,
+            &all_time_peak_series,
+            timestamps,
+        );
         let n = sample_count;
         let mut subset_metrics = Vec::with_capacity(10);
         subset_metrics.push(StrategyEquityMetrics {
@@ -3628,12 +3901,12 @@ impl<'a> Backtest<'a> {
             let subset_timestamps = &timestamps[start_idx..];
             let subset_drawdowns = &drawdowns[start_idx..];
             let subset_peaks = &peak_series[start_idx..];
-            let subset_equities = &equity_series[start_idx..];
+            let subset_recovery_series = &recovery_series[start_idx..];
             let mut subset_metric =
                 compute_metrics(subset_series, subset_timestamps, subset_drawdowns);
             let subset_all_time_peaks = cumulative_max(subset_peaks);
             subset_metric.peak_recovery_hours_hsl = calc_peak_recovery_hours_against_peak(
-                subset_equities,
+                subset_recovery_series,
                 &subset_all_time_peaks,
                 subset_timestamps,
             );
@@ -3679,6 +3952,15 @@ impl<'a> Backtest<'a> {
                 / 10.0,
             ..full
         }
+    }
+
+    fn strategy_equity_metrics(&self) -> StrategyEquityMetrics {
+        self.strategy_equity_metrics_from_series(
+            &self.strategy_equity_series,
+            &self.hard_stop_drawdown_samples,
+            &self.peak_strategy_equity_series,
+            &self.equities.usd_total_equity,
+        )
     }
 
     pub fn hard_stop_metrics(&self) -> HardStopMetrics {
@@ -3735,12 +4017,28 @@ impl<'a> Backtest<'a> {
         };
         let per_year_scale = if n_days > 0.0 { 365.25 / n_days } else { 0.0 };
         let strategy_metrics = self.strategy_equity_metrics();
+        let strategy_metrics_long = self.strategy_equity_metrics_from_series(
+            &self.strategy_equity_series_pside[LONG],
+            &self.hard_stop_drawdown_samples_pside[LONG],
+            &self.peak_strategy_equity_series_pside[LONG],
+            &self.strategy_equity_series_pside[LONG],
+        );
+        let strategy_metrics_short = self.strategy_equity_metrics_from_series(
+            &self.strategy_equity_series_pside[SHORT],
+            &self.hard_stop_drawdown_samples_pside[SHORT],
+            &self.peak_strategy_equity_series_pside[SHORT],
+            &self.strategy_equity_series_pside[SHORT],
+        );
         HardStopMetrics {
             triggers: self.hard_stop_n_triggers,
             triggers_per_year: self.hard_stop_n_triggers as f64 * per_year_scale,
+            triggers_long: self.hard_stop_n_triggers_pside[LONG],
+            triggers_short: self.hard_stop_n_triggers_pside[SHORT],
             halt_to_restart_equity_loss_pct: self.hard_stop_total_panic_loss / starting_balance,
             restarts: self.hard_stop_n_restarts,
             restarts_per_year: self.hard_stop_n_restarts as f64 * per_year_scale,
+            restarts_long: self.hard_stop_n_restarts_pside[LONG],
+            restarts_short: self.hard_stop_n_restarts_pside[SHORT],
             time_in_yellow_pct,
             time_in_orange_pct,
             time_in_red_pct,
@@ -3752,8 +4050,14 @@ impl<'a> Backtest<'a> {
             flatten_time_minutes_mean,
             post_restart_retrigger_pct,
             drawdown_worst_hsl: strategy_metrics.drawdown_worst_hsl,
+            drawdown_worst_hsl_long: strategy_metrics_long.drawdown_worst_hsl,
+            drawdown_worst_hsl_short: strategy_metrics_short.drawdown_worst_hsl,
             drawdown_worst_mean_1pct_hsl: strategy_metrics.drawdown_worst_mean_1pct_hsl,
+            drawdown_worst_mean_1pct_hsl_long: strategy_metrics_long.drawdown_worst_mean_1pct_hsl,
+            drawdown_worst_mean_1pct_hsl_short: strategy_metrics_short.drawdown_worst_mean_1pct_hsl,
             peak_recovery_hours_hsl: strategy_metrics.peak_recovery_hours_hsl,
+            peak_recovery_hours_hsl_long: strategy_metrics_long.peak_recovery_hours_hsl,
+            peak_recovery_hours_hsl_short: strategy_metrics_short.peak_recovery_hours_hsl,
             gain_strategy_pnl_rebased: strategy_metrics.gain_strategy_pnl_rebased,
             adg_strategy_pnl_rebased: strategy_metrics.adg_strategy_pnl_rebased,
             mdg_strategy_pnl_rebased: strategy_metrics.mdg_strategy_pnl_rebased,

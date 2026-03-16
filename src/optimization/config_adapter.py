@@ -43,12 +43,30 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     bot_config = config.get("bot")
     if bot_config is None:
         bot_config = get_template_config()["bot"]
-    for pside in ("long", "short"):
-        for key in sorted(bot_config[pside]):
-            key_paths.append((f"{pside}_{key}", ("bot", pside, key)))
-    for bound_key in sorted(OPTIMIZABLE_COMMON_KEY_PATHS):
-        if bound_key in config.get("optimize", {}).get("bounds", {}):
+    optimize_bounds = config.get("optimize", {}).get("bounds", {})
+    if not optimize_bounds:
+        for pside in ("long", "short"):
+            pside_cfg = bot_config.get(pside, {})
+            for key in sorted(pside_cfg):
+                value = pside_cfg[key]
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+                key_paths.append((f"{pside}_{key}", ("bot", pside, key)))
+        return key_paths
+    for bound_key in sorted(optimize_bounds):
+        if not isinstance(bound_key, str):
+            continue
+        if bound_key in OPTIMIZABLE_COMMON_KEY_PATHS:
             key_paths.append((bound_key, OPTIMIZABLE_COMMON_KEY_PATHS[bound_key]))
+            continue
+        if "_" not in bound_key:
+            continue
+        pside, key = bound_key.split("_", 1)
+        if pside not in ("long", "short"):
+            continue
+        if key not in bot_config[pside]:
+            raise KeyError(f"optimize bound {bound_key} does not map to bot.{pside}.{key}")
+        key_paths.append((bound_key, ("bot", pside, key)))
     return key_paths
 
 
@@ -86,9 +104,4 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
             else:
                 # Disabled: fix to low value, preserve step for consistency
                 bounds.append(Bound(bound_vals.low, bound_vals.low, bound_vals.step))
-    for bound_key, path in key_paths:
-        if path[:2] != ("bot", "common"):
-            continue
-        assert bound_key in optimize_bounds, f"bound {bound_key} missing from optimize.bounds"
-        bounds.append(Bound.from_config(bound_key, optimize_bounds[bound_key]))
     return bounds

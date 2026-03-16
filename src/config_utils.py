@@ -130,6 +130,57 @@ SHARED_METRICS = {
 
 Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
 BOT_POSITION_SIDES = ("long", "short")
+HSL_TIER_RATIO_KEYS = ("yellow", "orange")
+HSL_PSIDE_KEYS = (
+    "hsl_enabled",
+    "hsl_red_threshold",
+    "hsl_ema_span_minutes",
+    "hsl_cooldown_minutes_after_red",
+    "hsl_no_restart_drawdown_threshold",
+    "hsl_orange_tier_mode",
+    "hsl_panic_close_order_type",
+    "hsl_tier_ratios",
+)
+
+
+def _legacy_hsl_to_pside_fields(hsl_cfg: dict) -> dict:
+    return {
+        "hsl_enabled": bool(hsl_cfg.get("enabled", False)),
+        "hsl_red_threshold": float(hsl_cfg.get("red_threshold", 0.25)),
+        "hsl_ema_span_minutes": float(hsl_cfg.get("ema_span_minutes", 60.0)),
+        "hsl_cooldown_minutes_after_red": float(hsl_cfg.get("cooldown_minutes_after_red", 0.0)),
+        "hsl_no_restart_drawdown_threshold": float(
+            hsl_cfg.get("no_restart_drawdown_threshold", 1.0)
+        ),
+        "hsl_orange_tier_mode": str(
+            hsl_cfg.get("orange_tier_mode", "tp_only_with_active_entry_cancellation")
+        ),
+        "hsl_panic_close_order_type": str(hsl_cfg.get("panic_close_order_type", "market")),
+        "hsl_tier_ratios": {
+            "yellow": float(hsl_cfg.get("tier_ratios", {}).get("yellow", 0.5)),
+            "orange": float(hsl_cfg.get("tier_ratios", {}).get("orange", 0.75)),
+        },
+    }
+
+
+def _pside_hsl_to_legacy_fields(pside_cfg: dict) -> dict:
+    return {
+        "enabled": bool(pside_cfg["hsl_enabled"]),
+        "red_threshold": float(pside_cfg["hsl_red_threshold"]),
+        "ema_span_minutes": float(pside_cfg["hsl_ema_span_minutes"]),
+        "cooldown_minutes_after_red": float(pside_cfg["hsl_cooldown_minutes_after_red"]),
+        "no_restart_drawdown_threshold": float(pside_cfg["hsl_no_restart_drawdown_threshold"]),
+        "orange_tier_mode": str(pside_cfg["hsl_orange_tier_mode"]),
+        "panic_close_order_type": str(pside_cfg["hsl_panic_close_order_type"]),
+        "tier_ratios": {
+            "yellow": float(pside_cfg["hsl_tier_ratios"]["yellow"]),
+            "orange": float(pside_cfg["hsl_tier_ratios"]["orange"]),
+        },
+    }
+
+
+def _has_pside_hsl_config(pside_cfg: dict) -> bool:
+    return any(key in pside_cfg for key in HSL_PSIDE_KEYS)
 
 
 def load_hjson_config(config_path: str) -> dict:
@@ -1091,34 +1142,59 @@ def _rename_config_keys(
             )
         del result["backtest"]["exchange"]
     optimize_bounds = result.get("optimize", {}).get("bounds", {})
-    for old, new in [
+    legacy_hsl_bounds = [
         (
             "live_equity_hard_stop_loss_cooldown_minutes_after_red",
+            "hsl_cooldown_minutes_after_red",
+        ),
+        (
             "common_equity_hard_stop_loss_cooldown_minutes_after_red",
+            "hsl_cooldown_minutes_after_red",
         ),
         (
             "live_equity_hard_stop_loss_ema_span_minutes",
+            "hsl_ema_span_minutes",
+        ),
+        (
             "common_equity_hard_stop_loss_ema_span_minutes",
+            "hsl_ema_span_minutes",
         ),
         (
             "live_equity_hard_stop_loss_no_restart_drawdown_threshold",
+            "hsl_no_restart_drawdown_threshold",
+        ),
+        (
             "common_equity_hard_stop_loss_no_restart_drawdown_threshold",
+            "hsl_no_restart_drawdown_threshold",
         ),
         (
             "live_equity_hard_stop_loss_red_threshold",
-            "common_equity_hard_stop_loss_red_threshold",
+            "hsl_red_threshold",
         ),
-    ]:
-        if old in optimize_bounds and new not in optimize_bounds:
-            optimize_bounds[new] = deepcopy(optimize_bounds[old])
-            _log_config(
-                verbose, logging.INFO, "renaming parameter optimize.bounds.%s -> %s", old, new
-            )
-            if tracker is not None:
-                tracker.rename(
-                    ["optimize", "bounds", old], ["optimize", "bounds", new], optimize_bounds[new]
+        (
+            "common_equity_hard_stop_loss_red_threshold",
+            "hsl_red_threshold",
+        ),
+    ]
+    for old, suffix in legacy_hsl_bounds:
+        if old not in optimize_bounds:
+            continue
+        for pside in BOT_POSITION_SIDES:
+            new = f"{pside}_{suffix}"
+            if new not in optimize_bounds:
+                optimize_bounds[new] = deepcopy(optimize_bounds[old])
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "renaming parameter optimize.bounds.%s -> %s",
+                    old,
+                    new,
                 )
-            del optimize_bounds[old]
+                if tracker is not None:
+                    tracker.add(["optimize", "bounds", new], optimize_bounds[new])
+        if tracker is not None:
+            tracker.remove(["optimize", "bounds", old], optimize_bounds[old])
+        del optimize_bounds[old]
 
 
 def _migrate_bot_common_hsl(
@@ -1153,6 +1229,26 @@ def _migrate_bot_common_hsl(
         if tracker is not None:
             tracker.remove(["live", "equity_hard_stop_loss"], live_hsl)
     del live["equity_hard_stop_loss"]
+    common_hsl = common.get("equity_hard_stop_loss")
+    if isinstance(common_hsl, dict):
+        defaults = _legacy_hsl_to_pside_fields(common_hsl)
+        for pside in BOT_POSITION_SIDES:
+            pside_cfg = bot.setdefault(pside, {})
+            for key, value in defaults.items():
+                if key not in pside_cfg:
+                    pside_cfg[key] = deepcopy(value)
+                    if tracker is not None:
+                        tracker.add(["bot", pside, key], pside_cfg[key])
+    if common_hsl is None:
+        pside_legacy_cfgs = []
+        for pside in BOT_POSITION_SIDES:
+            pside_cfg = bot.setdefault(pside, {})
+            if _has_pside_hsl_config(pside_cfg):
+                pside_legacy_cfgs.append(_pside_hsl_to_legacy_fields(pside_cfg))
+        if pside_legacy_cfgs and all(cfg == pside_legacy_cfgs[0] for cfg in pside_legacy_cfgs[1:]):
+            common["equity_hard_stop_loss"] = deepcopy(pside_legacy_cfgs[0])
+            if tracker is not None:
+                tracker.add(["bot", "common", "equity_hard_stop_loss"], common["equity_hard_stop_loss"])
 
 
 def _sync_with_template(
@@ -2306,21 +2402,6 @@ def get_template_config():
             "volume_normalization": True,
         },
         "bot": {
-            "common": {
-                "equity_hard_stop_loss": {
-                    "enabled": False,
-                    "red_threshold": 0.25,
-                    "ema_span_minutes": 60.0,
-                    "cooldown_minutes_after_red": 0.0,
-                    "no_restart_drawdown_threshold": 1.0,
-                    "tier_ratios": {
-                        "yellow": 0.5,
-                        "orange": 0.75,
-                    },
-                    "orange_tier_mode": "tp_only_with_active_entry_cancellation",
-                    "panic_close_order_type": "market",
-                },
-            },
             "long": {
                 "close_grid_markup_end": 0.0089,
                 "close_grid_markup_start": 0.0344,
@@ -2331,6 +2412,14 @@ def get_template_config():
                 "close_trailing_threshold_pct": 0.008,
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
+                "hsl_cooldown_minutes_after_red": 0.0,
+                "hsl_ema_span_minutes": 60.0,
+                "hsl_enabled": False,
+                "hsl_no_restart_drawdown_threshold": 1.0,
+                "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                "hsl_panic_close_order_type": "market",
+                "hsl_red_threshold": 0.25,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
                 "entry_grid_double_down_factor": 0.894,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_volatility_weight": 0.0,
@@ -2370,6 +2459,14 @@ def get_template_config():
                 "close_trailing_threshold_pct": 0.008,
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
+                "hsl_cooldown_minutes_after_red": 0.0,
+                "hsl_ema_span_minutes": 60.0,
+                "hsl_enabled": False,
+                "hsl_no_restart_drawdown_threshold": 1.0,
+                "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                "hsl_panic_close_order_type": "market",
+                "hsl_red_threshold": 0.25,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
                 "entry_grid_double_down_factor": 0.894,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_volatility_weight": 0.0,
@@ -2446,9 +2543,9 @@ def get_template_config():
         },
         "optimize": {
             "bounds": {
-                "common_equity_hard_stop_loss_cooldown_minutes_after_red": [0.0, 0.0],
-                "common_equity_hard_stop_loss_ema_span_minutes": [60.0, 60.0],
-                "common_equity_hard_stop_loss_red_threshold": [0.25, 0.25],
+                "long_hsl_cooldown_minutes_after_red": [0.0, 0.0],
+                "long_hsl_ema_span_minutes": [60.0, 60.0],
+                "long_hsl_red_threshold": [0.25, 0.25],
                 "long_close_grid_markup_end": [0.001, 0.03],
                 "long_close_grid_markup_start": [0.001, 0.03],
                 "long_close_grid_qty_pct": [0.05, 1.0],
@@ -2514,6 +2611,9 @@ def get_template_config():
                 "short_filter_volatility_ema_span": [10.0, 1440.0],
                 "short_filter_volume_drop_pct": [0.0, 1.0],
                 "short_filter_volume_ema_span": [10.0, 1440.0],
+                "short_hsl_cooldown_minutes_after_red": [0.0, 0.0],
+                "short_hsl_ema_span_minutes": [60.0, 60.0],
+                "short_hsl_red_threshold": [0.25, 0.25],
                 "short_n_positions": [1.0, 20.0],
                 "short_risk_twel_enforcer_threshold": [0.9, 1.01],
                 "short_risk_we_excess_allowance_pct": [0.0, 0.5],
@@ -2530,7 +2630,8 @@ def get_template_config():
             "enable_overrides": [],
             "fixed_params": [],
             "fixed_runtime_overrides": {
-                "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold": 1.0
+                "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
+                "bot.short.hsl_no_restart_drawdown_threshold": 1.0,
             },
             "iters": 30000,
             "limits": [

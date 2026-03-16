@@ -49,6 +49,7 @@ from config_utils import (
     require_live_value,
     get_optional_config_value,
     strip_config_metadata,
+    HSL_PSIDE_KEYS,
 )
 from analysis_visibility import filter_analysis_for_visibility
 from utils import (
@@ -138,10 +139,20 @@ ANALYSIS_SHARED_KEYS = {
     "calmar_ratio_strategy_pnl_rebased_w",
     "sterling_ratio_strategy_pnl_rebased_w",
     "drawdown_worst_hsl",
+    "drawdown_worst_hsl_long",
+    "drawdown_worst_hsl_short",
     "drawdown_worst_mean_1pct_hsl",
+    "drawdown_worst_mean_1pct_hsl_long",
+    "drawdown_worst_mean_1pct_hsl_short",
     "peak_recovery_hours_hsl",
+    "peak_recovery_hours_hsl_long",
+    "peak_recovery_hours_hsl_short",
     "hard_stop_triggers_per_year",
     "hard_stop_restarts_per_year",
+    "hard_stop_triggers_long",
+    "hard_stop_triggers_short",
+    "hard_stop_restarts_long",
+    "hard_stop_restarts_short",
 }
 PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl", "hard_stop"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
@@ -233,6 +244,31 @@ def _looks_like_bool_token(value: str) -> bool:
         return False
     lowered = value.lower()
     return lowered in {"1", "0", "true", "false", "t", "f", "yes", "no", "y", "n"}
+
+
+def _resolve_backtest_hsl_configs(config: dict) -> tuple[dict, dict]:
+    long_cfg = config.get("bot", {}).get("long", {})
+    short_cfg = config.get("bot", {}).get("short", {})
+    if all(key in long_cfg for key in HSL_PSIDE_KEYS) and all(key in short_cfg for key in HSL_PSIDE_KEYS):
+        def _convert(pside_cfg: dict) -> dict:
+            return {
+                "enabled": bool(pside_cfg["hsl_enabled"]),
+                "red_threshold": float(pside_cfg["hsl_red_threshold"]),
+                "ema_span_minutes": float(pside_cfg["hsl_ema_span_minutes"]),
+                "cooldown_minutes_after_red": float(pside_cfg["hsl_cooldown_minutes_after_red"]),
+                "no_restart_drawdown_threshold": float(
+                    pside_cfg["hsl_no_restart_drawdown_threshold"]
+                ),
+                "tier_ratios": {
+                    "yellow": float(pside_cfg["hsl_tier_ratios"]["yellow"]),
+                    "orange": float(pside_cfg["hsl_tier_ratios"]["orange"]),
+                },
+                "orange_tier_mode": str(pside_cfg["hsl_orange_tier_mode"]),
+                "panic_close_order_type": str(pside_cfg["hsl_panic_close_order_type"]),
+            }
+        return _convert(long_cfg), _convert(short_cfg)
+    legacy = require_config_value(config, "bot.common.equity_hard_stop_loss")
+    return deepcopy(legacy), deepcopy(legacy)
 
 
 def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
@@ -1302,89 +1338,68 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             for coin in coins
         ]
     if backtest_params is None:
-        hard_stop_cfg = require_config_value(config, "bot.common.equity_hard_stop_loss")
-        if not isinstance(hard_stop_cfg, dict):
+        hard_stop_cfg_long, hard_stop_cfg_short = _resolve_backtest_hsl_configs(config)
+        if not isinstance(hard_stop_cfg_long, dict) or not isinstance(hard_stop_cfg_short, dict):
             raise TypeError(
-                f"bot.common.equity_hard_stop_loss must be a dict, got {type(hard_stop_cfg).__name__}"
+                "HSL pside configs must be dicts"
             )
-        tier_ratios = require_config_value(config, "bot.common.equity_hard_stop_loss.tier_ratios")
-        if not isinstance(tier_ratios, dict):
-            raise TypeError(
-                "bot.common.equity_hard_stop_loss.tier_ratios must be a dict, "
-                f"got {type(tier_ratios).__name__}"
-            )
-        hard_stop_enabled = bool(
-            require_config_value(config, "bot.common.equity_hard_stop_loss.enabled")
-        )
-        hard_stop_red_threshold = float(
-            require_config_value(config, "bot.common.equity_hard_stop_loss.red_threshold")
-        )
-        hard_stop_ema_span_minutes = float(
-            require_config_value(config, "bot.common.equity_hard_stop_loss.ema_span_minutes")
-        )
-        hard_stop_cooldown_minutes_after_red = float(
-            require_config_value(
-                config, "bot.common.equity_hard_stop_loss.cooldown_minutes_after_red"
-            )
-        )
-        hard_stop_no_restart_drawdown_threshold = float(
-            require_config_value(
-                config, "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold"
-            )
-        )
-        hard_stop_tier_ratio_yellow = float(
-            require_config_value(config, "bot.common.equity_hard_stop_loss.tier_ratios.yellow")
-        )
-        hard_stop_tier_ratio_orange = float(
-            require_config_value(config, "bot.common.equity_hard_stop_loss.tier_ratios.orange")
-        )
-        hard_stop_orange_tier_mode = str(
-            require_config_value(config, "bot.common.equity_hard_stop_loss.orange_tier_mode")
-        )
-        hard_stop_panic_close_order_type = str(
-            require_config_value(config, "bot.common.equity_hard_stop_loss.panic_close_order_type")
-        )
-        if hard_stop_enabled and hard_stop_red_threshold <= 0.0:
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.red_threshold must be > 0.0 when enabled"
-            )
-        if hard_stop_enabled and hard_stop_ema_span_minutes <= 0.0:
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.ema_span_minutes must be > 0.0 when enabled"
-            )
-        if hard_stop_cooldown_minutes_after_red < 0.0:
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
-            )
-        if hard_stop_no_restart_drawdown_threshold < hard_stop_red_threshold:
-            logging.info(
-                "[config] clamped bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold "
-                "%.6f -> %.6f to match red_threshold",
-                hard_stop_no_restart_drawdown_threshold,
-                hard_stop_red_threshold,
-            )
-            hard_stop_no_restart_drawdown_threshold = hard_stop_red_threshold
-        if not (hard_stop_red_threshold <= hard_stop_no_restart_drawdown_threshold <= 1.0):
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold must satisfy "
-                "red_threshold <= no_restart_drawdown_threshold <= 1.0"
-            )
-        if not (0.0 < hard_stop_tier_ratio_yellow < hard_stop_tier_ratio_orange < 1.0):
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.tier_ratios must satisfy 0 < yellow < orange < 1"
-            )
-        if hard_stop_orange_tier_mode not in {
-            "graceful_stop",
-            "tp_only_with_active_entry_cancellation",
-        }:
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.orange_tier_mode must be one of "
-                "{graceful_stop, tp_only_with_active_entry_cancellation}"
-            )
-        if hard_stop_panic_close_order_type not in {"market", "limit"}:
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.panic_close_order_type must be one of {market, limit}"
-            )
+        def _normalize_hsl_cfg(cfg: dict, path_prefix: str) -> dict:
+            tier_ratios = cfg.get("tier_ratios")
+            if not isinstance(tier_ratios, dict):
+                raise TypeError(
+                    f"{path_prefix}.tier_ratios must be a dict, got {type(tier_ratios).__name__}"
+                )
+            enabled = bool(cfg["enabled"])
+            red_threshold = float(cfg["red_threshold"])
+            ema_span_minutes = float(cfg["ema_span_minutes"])
+            cooldown_minutes_after_red = float(cfg["cooldown_minutes_after_red"])
+            no_restart_drawdown_threshold = float(cfg["no_restart_drawdown_threshold"])
+            tier_ratio_yellow = float(tier_ratios["yellow"])
+            tier_ratio_orange = float(tier_ratios["orange"])
+            orange_tier_mode = str(cfg["orange_tier_mode"])
+            panic_close_order_type = str(cfg["panic_close_order_type"])
+            if enabled and red_threshold <= 0.0:
+                raise ValueError(f"{path_prefix}.red_threshold must be > 0.0 when enabled")
+            if enabled and ema_span_minutes <= 0.0:
+                raise ValueError(f"{path_prefix}.ema_span_minutes must be > 0.0 when enabled")
+            if cooldown_minutes_after_red < 0.0:
+                raise ValueError(f"{path_prefix}.cooldown_minutes_after_red must be >= 0.0")
+            if no_restart_drawdown_threshold < red_threshold:
+                logging.info(
+                    "[config] clamped %s.no_restart_drawdown_threshold %.6f -> %.6f to match red_threshold",
+                    path_prefix,
+                    no_restart_drawdown_threshold,
+                    red_threshold,
+                )
+                no_restart_drawdown_threshold = red_threshold
+            if not (red_threshold <= no_restart_drawdown_threshold <= 1.0):
+                raise ValueError(
+                    f"{path_prefix}.no_restart_drawdown_threshold must satisfy red_threshold <= no_restart_drawdown_threshold <= 1.0"
+                )
+            if not (0.0 < tier_ratio_yellow < tier_ratio_orange < 1.0):
+                raise ValueError(f"{path_prefix}.tier_ratios must satisfy 0 < yellow < orange < 1")
+            if orange_tier_mode not in {"graceful_stop", "tp_only_with_active_entry_cancellation"}:
+                raise ValueError(
+                    f"{path_prefix}.orange_tier_mode must be one of {{graceful_stop, tp_only_with_active_entry_cancellation}}"
+                )
+            if panic_close_order_type not in {"market", "limit"}:
+                raise ValueError(f"{path_prefix}.panic_close_order_type must be one of {{market, limit}}")
+            return {
+                "enabled": enabled,
+                "red_threshold": red_threshold,
+                "ema_span_minutes": ema_span_minutes,
+                "cooldown_minutes_after_red": cooldown_minutes_after_red,
+                "no_restart_drawdown_threshold": no_restart_drawdown_threshold,
+                "tier_ratios": {
+                    "yellow": tier_ratio_yellow,
+                    "orange": tier_ratio_orange,
+                },
+                "orange_tier_mode": orange_tier_mode,
+                "panic_close_order_type": panic_close_order_type,
+            }
+
+        hard_stop_cfg_long = _normalize_hsl_cfg(hard_stop_cfg_long, "bot.long.hsl")
+        hard_stop_cfg_short = _normalize_hsl_cfg(hard_stop_cfg_short, "bot.short.hsl")
         market_order_slippage_pct = float(
             get_optional_config_value(config, "backtest.market_order_slippage_pct", 0.0005) or 0.0
         )
@@ -1444,19 +1459,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "pnls_max_lookback_days": float(
                 require_config_value(config, "live.pnls_max_lookback_days")
             ),
-            "equity_hard_stop_loss": {
-                "enabled": hard_stop_enabled,
-                "red_threshold": hard_stop_red_threshold,
-                "ema_span_minutes": hard_stop_ema_span_minutes,
-                "cooldown_minutes_after_red": hard_stop_cooldown_minutes_after_red,
-                "no_restart_drawdown_threshold": hard_stop_no_restart_drawdown_threshold,
-                "tier_ratios": {
-                    "yellow": hard_stop_tier_ratio_yellow,
-                    "orange": hard_stop_tier_ratio_orange,
-                },
-                "orange_tier_mode": hard_stop_orange_tier_mode,
-                "panic_close_order_type": hard_stop_panic_close_order_type,
-            },
+            "equity_hard_stop_loss": hard_stop_cfg_long,
             "market_orders_allowed": market_orders_allowed,
             "market_order_near_touch_threshold": market_order_near_touch_threshold,
             "market_order_slippage_pct": market_order_slippage_pct,

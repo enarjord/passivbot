@@ -64,8 +64,14 @@ def _make_analysis_entry(value):
             "calmar_ratio_strategy_pnl_rebased_w": 0.0,
             "sterling_ratio_strategy_pnl_rebased_w": 0.0,
             "drawdown_worst_hsl": 0.0,
+            "drawdown_worst_hsl_long": 0.0,
+            "drawdown_worst_hsl_short": 0.0,
             "drawdown_worst_mean_1pct_hsl": 0.0,
+            "drawdown_worst_mean_1pct_hsl_long": 0.0,
+            "drawdown_worst_mean_1pct_hsl_short": 0.0,
             "peak_recovery_hours_hsl": 0.0,
+            "peak_recovery_hours_hsl_long": 0.0,
+            "peak_recovery_hours_hsl_short": 0.0,
             "equity_balance_diff_neg_max": 0.0,
             "equity_balance_diff_neg_mean": 0.0,
             "equity_balance_diff_pos_max": 0.0,
@@ -138,8 +144,12 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
         {
             "hard_stop_triggers": 3,
             "hard_stop_triggers_per_year": 36.5,
+            "hard_stop_triggers_long": 2,
+            "hard_stop_triggers_short": 1,
             "hard_stop_restarts": 2,
             "hard_stop_restarts_per_year": 24.3333333333,
+            "hard_stop_restarts_long": 1,
+            "hard_stop_restarts_short": 1,
             "hard_stop_halt_to_restart_equity_loss_pct": 0.125,
             "hard_stop_time_in_yellow_pct": 0.15,
             "hard_stop_time_in_orange_pct": 0.1,
@@ -157,8 +167,12 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
         {
             "hard_stop_triggers": 3,
             "hard_stop_triggers_per_year": 36.5,
+            "hard_stop_triggers_long": 2,
+            "hard_stop_triggers_short": 1,
             "hard_stop_restarts": 2,
             "hard_stop_restarts_per_year": 24.3333333333,
+            "hard_stop_restarts_long": 1,
+            "hard_stop_restarts_short": 1,
             "hard_stop_halt_to_restart_equity_loss_pct": 0.125,
             "hard_stop_time_in_yellow_pct": 0.15,
             "hard_stop_time_in_orange_pct": 0.1,
@@ -189,8 +203,12 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
 
     assert result["hard_stop_triggers"] == 3
     assert result["hard_stop_triggers_per_year"] == 36.5
+    assert result["hard_stop_triggers_long"] == 2
+    assert result["hard_stop_triggers_short"] == 1
     assert result["hard_stop_restarts"] == 2
     assert result["hard_stop_restarts_per_year"] == 24.3333333333
+    assert result["hard_stop_restarts_long"] == 1
+    assert result["hard_stop_restarts_short"] == 1
     assert result["hard_stop_halt_to_restart_equity_loss_pct"] == 0.125
     assert result["hard_stop_time_in_yellow_pct"] == 0.15
     assert result["hard_stop_time_in_orange_pct"] == 0.1
@@ -219,10 +237,18 @@ def test_expand_analysis_keeps_strategy_pnl_rebased_and_hsl_metrics_shared():
     analysis_btc = _make_analysis_entry(0.5)
     analysis_usd["adg_strategy_pnl_rebased"] = 0.19
     analysis_usd["drawdown_worst_hsl"] = 0.21
+    analysis_usd["drawdown_worst_hsl_long"] = 0.11
+    analysis_usd["drawdown_worst_hsl_short"] = 0.31
     analysis_usd["peak_recovery_hours_hsl"] = 17.0
+    analysis_usd["peak_recovery_hours_hsl_long"] = 12.0
+    analysis_usd["peak_recovery_hours_hsl_short"] = 21.0
     analysis_btc["adg_strategy_pnl_rebased"] = 0.19
     analysis_btc["drawdown_worst_hsl"] = 0.21
+    analysis_btc["drawdown_worst_hsl_long"] = 0.11
+    analysis_btc["drawdown_worst_hsl_short"] = 0.31
     analysis_btc["peak_recovery_hours_hsl"] = 17.0
+    analysis_btc["peak_recovery_hours_hsl_long"] = 12.0
+    analysis_btc["peak_recovery_hours_hsl_short"] = 21.0
     config = {
         "bot": {
             "long": {"total_wallet_exposure_limit": 1.0},
@@ -240,7 +266,11 @@ def test_expand_analysis_keeps_strategy_pnl_rebased_and_hsl_metrics_shared():
 
     assert result["adg_strategy_pnl_rebased"] == 0.19
     assert result["drawdown_worst_hsl"] == 0.21
+    assert result["drawdown_worst_hsl_long"] == 0.11
+    assert result["drawdown_worst_hsl_short"] == 0.31
     assert result["peak_recovery_hours_hsl"] == 17.0
+    assert result["peak_recovery_hours_hsl_long"] == 12.0
+    assert result["peak_recovery_hours_hsl_short"] == 21.0
     assert "adg_strategy_pnl_rebased_usd" not in result
     assert "adg_strategy_pnl_rebased_btc" not in result
 

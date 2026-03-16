@@ -68,7 +68,8 @@ operator-risk settings such as:
 ```json
 "optimize": {
   "fixed_runtime_overrides": {
-    "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold": 1.0
+    "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
+    "bot.short.hsl_no_restart_drawdown_threshold": 1.0
   }
 }
 ```
@@ -82,7 +83,7 @@ in flight at once:
 
 ```json
 "optimize": {
-  "max_pending_starting_evals_per_cpu": 2
+  "max_pending_starting_evals_per_cpu": 1
 }
 ```
 

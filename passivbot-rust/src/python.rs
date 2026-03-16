@@ -952,9 +952,13 @@ fn run_backtest_core<'py>(
         let hs = backtest.hard_stop_metrics();
         analysis_usd.hard_stop_triggers = hs.triggers;
         analysis_usd.hard_stop_triggers_per_year = hs.triggers_per_year;
+        analysis_usd.hard_stop_triggers_long = hs.triggers_long;
+        analysis_usd.hard_stop_triggers_short = hs.triggers_short;
         analysis_usd.hard_stop_halt_to_restart_equity_loss_pct = hs.halt_to_restart_equity_loss_pct;
         analysis_usd.hard_stop_restarts = hs.restarts;
         analysis_usd.hard_stop_restarts_per_year = hs.restarts_per_year;
+        analysis_usd.hard_stop_restarts_long = hs.restarts_long;
+        analysis_usd.hard_stop_restarts_short = hs.restarts_short;
         analysis_usd.hard_stop_time_in_yellow_pct = hs.time_in_yellow_pct;
         analysis_usd.hard_stop_time_in_orange_pct = hs.time_in_orange_pct;
         analysis_usd.hard_stop_time_in_red_pct = hs.time_in_red_pct;
@@ -966,8 +970,14 @@ fn run_backtest_core<'py>(
         analysis_usd.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
         analysis_usd.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
         analysis_usd.drawdown_worst_hsl = hs.drawdown_worst_hsl;
+        analysis_usd.drawdown_worst_hsl_long = hs.drawdown_worst_hsl_long;
+        analysis_usd.drawdown_worst_hsl_short = hs.drawdown_worst_hsl_short;
         analysis_usd.drawdown_worst_mean_1pct_hsl = hs.drawdown_worst_mean_1pct_hsl;
+        analysis_usd.drawdown_worst_mean_1pct_hsl_long = hs.drawdown_worst_mean_1pct_hsl_long;
+        analysis_usd.drawdown_worst_mean_1pct_hsl_short = hs.drawdown_worst_mean_1pct_hsl_short;
         analysis_usd.peak_recovery_hours_hsl = hs.peak_recovery_hours_hsl;
+        analysis_usd.peak_recovery_hours_hsl_long = hs.peak_recovery_hours_hsl_long;
+        analysis_usd.peak_recovery_hours_hsl_short = hs.peak_recovery_hours_hsl_short;
         analysis_usd.gain_strategy_pnl_rebased = hs.gain_strategy_pnl_rebased;
         analysis_usd.adg_strategy_pnl_rebased = hs.adg_strategy_pnl_rebased;
         analysis_usd.mdg_strategy_pnl_rebased = hs.mdg_strategy_pnl_rebased;
@@ -988,9 +998,13 @@ fn run_backtest_core<'py>(
             hs.sterling_ratio_strategy_pnl_rebased_w;
         analysis_btc.hard_stop_triggers = hs.triggers;
         analysis_btc.hard_stop_triggers_per_year = hs.triggers_per_year;
+        analysis_btc.hard_stop_triggers_long = hs.triggers_long;
+        analysis_btc.hard_stop_triggers_short = hs.triggers_short;
         analysis_btc.hard_stop_halt_to_restart_equity_loss_pct = hs.halt_to_restart_equity_loss_pct;
         analysis_btc.hard_stop_restarts = hs.restarts;
         analysis_btc.hard_stop_restarts_per_year = hs.restarts_per_year;
+        analysis_btc.hard_stop_restarts_long = hs.restarts_long;
+        analysis_btc.hard_stop_restarts_short = hs.restarts_short;
         analysis_btc.hard_stop_time_in_yellow_pct = hs.time_in_yellow_pct;
         analysis_btc.hard_stop_time_in_orange_pct = hs.time_in_orange_pct;
         analysis_btc.hard_stop_time_in_red_pct = hs.time_in_red_pct;
@@ -1002,8 +1016,14 @@ fn run_backtest_core<'py>(
         analysis_btc.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
         analysis_btc.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
         analysis_btc.drawdown_worst_hsl = hs.drawdown_worst_hsl;
+        analysis_btc.drawdown_worst_hsl_long = hs.drawdown_worst_hsl_long;
+        analysis_btc.drawdown_worst_hsl_short = hs.drawdown_worst_hsl_short;
         analysis_btc.drawdown_worst_mean_1pct_hsl = hs.drawdown_worst_mean_1pct_hsl;
+        analysis_btc.drawdown_worst_mean_1pct_hsl_long = hs.drawdown_worst_mean_1pct_hsl_long;
+        analysis_btc.drawdown_worst_mean_1pct_hsl_short = hs.drawdown_worst_mean_1pct_hsl_short;
         analysis_btc.peak_recovery_hours_hsl = hs.peak_recovery_hours_hsl;
+        analysis_btc.peak_recovery_hours_hsl_long = hs.peak_recovery_hours_hsl_long;
+        analysis_btc.peak_recovery_hours_hsl_short = hs.peak_recovery_hours_hsl_short;
         analysis_btc.gain_strategy_pnl_rebased = hs.gain_strategy_pnl_rebased;
         analysis_btc.adg_strategy_pnl_rebased = hs.adg_strategy_pnl_rebased;
         analysis_btc.mdg_strategy_pnl_rebased = hs.mdg_strategy_pnl_rebased;
@@ -1095,31 +1115,34 @@ fn struct_to_py_dict<T: Serialize + ?Sized>(py: Python<'_>, obj: &T) -> PyResult
 }
 
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
-    let hard_stop_item = dict
-        .get_item("equity_hard_stop_loss")?
-        .ok_or_else(|| PyValueError::new_err("missing required key: equity_hard_stop_loss"))?;
-    let cfg = hard_stop_item
-        .downcast::<PyDict>()
-        .map_err(|_| PyValueError::new_err("equity_hard_stop_loss must be a dict"))?;
-    let ratios_item = cfg.get_item("tier_ratios")?.ok_or_else(|| {
-        PyValueError::new_err("missing required key: equity_hard_stop_loss.tier_ratios")
-    })?;
-    let ratios = ratios_item
-        .downcast::<PyDict>()
-        .map_err(|_| PyValueError::new_err("equity_hard_stop_loss.tier_ratios must be a dict"))?;
-    let hard_stop_cfg = EquityHardStopLossConfig {
-        enabled: extract_value(cfg, "enabled")?,
-        red_threshold: extract_value(cfg, "red_threshold")?,
-        ema_span_minutes: extract_value(cfg, "ema_span_minutes")?,
-        cooldown_minutes_after_red: extract_value(cfg, "cooldown_minutes_after_red")?,
-        no_restart_drawdown_threshold: extract_value(cfg, "no_restart_drawdown_threshold")?,
-        tier_ratios: EquityHardStopLossTierRatios {
-            yellow: extract_value(ratios, "yellow")?,
-            orange: extract_value(ratios, "orange")?,
-        },
-        orange_tier_mode: extract_value(cfg, "orange_tier_mode")?,
-        panic_close_order_type: extract_value(cfg, "panic_close_order_type")?,
+    let parse_hsl_cfg = |parent: &PyDict, key: &str| -> PyResult<EquityHardStopLossConfig> {
+        let item = parent
+            .get_item(key)?
+            .ok_or_else(|| PyValueError::new_err(format!("missing required key: {key}")))?;
+        let cfg = item
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err(format!("{key} must be a dict")))?;
+        let ratios_item = cfg.get_item("tier_ratios")?.ok_or_else(|| {
+            PyValueError::new_err(format!("missing required key: {key}.tier_ratios"))
+        })?;
+        let ratios = ratios_item
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err(format!("{key}.tier_ratios must be a dict")))?;
+        Ok(EquityHardStopLossConfig {
+            enabled: extract_value(cfg, "enabled")?,
+            red_threshold: extract_value(cfg, "red_threshold")?,
+            ema_span_minutes: extract_value(cfg, "ema_span_minutes")?,
+            cooldown_minutes_after_red: extract_value(cfg, "cooldown_minutes_after_red")?,
+            no_restart_drawdown_threshold: extract_value(cfg, "no_restart_drawdown_threshold")?,
+            tier_ratios: EquityHardStopLossTierRatios {
+                yellow: extract_value(ratios, "yellow")?,
+                orange: extract_value(ratios, "orange")?,
+            },
+            orange_tier_mode: extract_value(cfg, "orange_tier_mode")?,
+            panic_close_order_type: extract_value(cfg, "panic_close_order_type")?,
+        })
     };
+    let hard_stop_cfg = parse_hsl_cfg(dict, "equity_hard_stop_loss")?;
 
     Ok(BacktestParams {
         starting_balance: extract_value(dict, "starting_balance")?,
@@ -1234,6 +1257,50 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     let wallet_exposure_limit_raw: f64 = extract_value(dict, "wallet_exposure_limit")?;
     let n_positions_float: f64 = extract_value(dict, "n_positions")?;
     let n_positions = n_positions_float.round() as usize;
+    let hsl_enabled = match dict.get_item("hsl_enabled")? {
+        Some(item) => item.extract::<bool>()?,
+        None => false,
+    };
+    let hsl_red_threshold = match dict.get_item("hsl_red_threshold")? {
+        Some(item) => item.extract::<f64>()?,
+        None => 0.25,
+    };
+    let hsl_ema_span_minutes = match dict.get_item("hsl_ema_span_minutes")? {
+        Some(item) => item.extract::<f64>()?,
+        None => 60.0,
+    };
+    let hsl_cooldown_minutes_after_red = match dict.get_item("hsl_cooldown_minutes_after_red")? {
+        Some(item) => item.extract::<f64>()?,
+        None => 0.0,
+    };
+    let hsl_no_restart_drawdown_threshold =
+        match dict.get_item("hsl_no_restart_drawdown_threshold")? {
+            Some(item) => item.extract::<f64>()?,
+            None => 1.0,
+        };
+    let hsl_tier_ratios = match dict.get_item("hsl_tier_ratios")? {
+        Some(item) if !item.is_none() => Some(
+            item.downcast::<PyDict>()
+                .map_err(|_| PyValueError::new_err("hsl_tier_ratios must be a dict"))?,
+        ),
+        _ => None,
+    };
+    let hsl_tier_ratio_yellow = match hsl_tier_ratios {
+        Some(ratios) => extract_value(ratios, "yellow")?,
+        None => 0.5,
+    };
+    let hsl_tier_ratio_orange = match hsl_tier_ratios {
+        Some(ratios) => extract_value(ratios, "orange")?,
+        None => 0.75,
+    };
+    let hsl_orange_tier_mode = match dict.get_item("hsl_orange_tier_mode")? {
+        Some(item) => item.extract::<String>()?,
+        None => "tp_only_with_active_entry_cancellation".to_string(),
+    };
+    let hsl_panic_close_order_type = match dict.get_item("hsl_panic_close_order_type")? {
+        Some(item) => item.extract::<String>()?,
+        None => "market".to_string(),
+    };
     let wallet_exposure_limit = if wallet_exposure_limit_raw < 0.0 {
         wallet_exposure_limit_raw
     } else if wallet_exposure_limit_raw > 0.0 {
@@ -1299,6 +1366,15 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         filter_volatility_drop_pct: extract_value(dict, "filter_volatility_drop_pct")?,
         ema_span_0: extract_value(dict, "ema_span_0")?,
         ema_span_1: extract_value(dict, "ema_span_1")?,
+        hsl_enabled,
+        hsl_red_threshold,
+        hsl_ema_span_minutes,
+        hsl_cooldown_minutes_after_red,
+        hsl_no_restart_drawdown_threshold,
+        hsl_tier_ratio_yellow,
+        hsl_tier_ratio_orange,
+        hsl_orange_tier_mode,
+        hsl_panic_close_order_type,
         n_positions,
         total_wallet_exposure_limit,
         wallet_exposure_limit,
