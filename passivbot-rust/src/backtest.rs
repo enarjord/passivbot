@@ -2061,30 +2061,12 @@ impl<'a> Backtest<'a> {
     }
 
     #[inline(always)]
-    fn has_any_open_position(&self) -> bool {
-        !self.positions.long.is_empty() || !self.positions.short.is_empty()
-    }
-
-    #[inline(always)]
     fn has_open_position_pside(&self, pside: usize) -> bool {
         match pside {
             LONG => !self.positions.long.is_empty(),
             SHORT => !self.positions.short.is_empty(),
             _ => unreachable!("invalid pside"),
         }
-    }
-
-    #[inline(always)]
-    fn has_any_blocking_open_orders(&self) -> bool {
-        self.open_orders
-            .long
-            .values()
-            .any(Self::bundle_has_blocking_open_orders)
-            || self
-                .open_orders
-                .short
-                .values()
-                .any(Self::bundle_has_blocking_open_orders)
     }
 
     #[inline(always)]
@@ -2146,19 +2128,6 @@ impl<'a> Backtest<'a> {
             }
             ehsl::HardStopTier::Green => {}
         }
-    }
-
-    #[inline(always)]
-    fn finalize_hard_stop_halt(&mut self, end_ts_ms: u64) {
-        let Some(start_ts_ms) = self.hard_stop_current_halt_start_ms.take() else {
-            return;
-        };
-        let duration_minutes = end_ts_ms.saturating_sub(start_ts_ms) as f64 / 60_000.0;
-        self.hard_stop_halt_duration_minutes_sum += duration_minutes;
-        self.hard_stop_halt_duration_minutes_max = self
-            .hard_stop_halt_duration_minutes_max
-            .max(duration_minutes);
-        self.hard_stop_halt_duration_count = self.hard_stop_halt_duration_count.saturating_add(1);
     }
 
     fn finalize_hard_stop_halt_pside(&mut self, pside: usize, end_ts_ms: u64) {
