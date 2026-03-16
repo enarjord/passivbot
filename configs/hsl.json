@@ -274,6 +274,7 @@
         "forced_mode_long": "",
         "forced_mode_short": "",
         "hedge_mode": false,
+        "hsl_signal_mode": "pside",
         "ignored_coins": {"long":[],"short":[]},
         "inactive_coin_candle_ttl_minutes": 10,
         "leverage": 10,

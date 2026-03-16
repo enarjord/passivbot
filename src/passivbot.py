@@ -78,6 +78,7 @@ from config_utils import (
     require_config_value,
     require_live_value,
     merge_negative_cli_values,
+    normalize_hsl_signal_mode,
 )
 from procedures import (
     load_broker_code,
@@ -764,6 +765,7 @@ class Passivbot:
         return self._equity_hard_stop[pside]
 
     def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
+        signal_mode = self._equity_hard_stop_signal_mode()
         out = {}
         for pside in self._hsl_psides():
             tier_ratios_raw = self.bot_value(pside, "hsl_tier_ratios")
@@ -834,13 +836,15 @@ class Passivbot:
                 logging.info(
                     "[risk] HSL[%s] enabled | red_threshold=%.6f ema_span_minutes=%.3f "
                     "cooldown_minutes_after_red=%.3f "
-                    "no_restart_drawdown_threshold=%.6f yellow_ratio=%.3f orange_ratio=%.3f "
+                    "no_restart_drawdown_threshold=%.6f signal_mode=%s "
+                    "yellow_ratio=%.3f orange_ratio=%.3f "
                     "orange_mode=%s panic_close=%s",
                     pside,
                     red_threshold,
                     ema_span_minutes,
                     cooldown_minutes_after_red,
                     no_restart_drawdown_threshold,
+                    signal_mode,
                     ratio_yellow,
                     ratio_orange,
                     orange_tier_mode,
@@ -849,9 +853,48 @@ class Passivbot:
         return out
 
     def _equity_hard_stop_enabled(self, pside: Optional[str] = None) -> bool:
+        if not hasattr(self, "hsl") or not isinstance(self.hsl, dict):
+            legacy_cfg = getattr(self, "equity_hard_stop_loss", None)
+            enabled = bool(isinstance(legacy_cfg, dict) and legacy_cfg.get("enabled", False))
+            if pside is None:
+                return enabled
+            return enabled
         if pside is None:
-            return any(bool(self.hsl[x]["enabled"]) for x in self._hsl_psides())
+            return any(bool(self.hsl[x]["enabled"]) for x in ("long", "short"))
         return bool(self.hsl[pside]["enabled"])
+
+    def _equity_hard_stop_signal_mode(self) -> str:
+        config = getattr(self, "config", {})
+        return normalize_hsl_signal_mode(get_optional_live_value(config, "hsl_signal_mode", "pside"))
+
+    def _equity_hard_stop_panic_close_order_type(self, pside: str) -> str:
+        hsl_cfg = getattr(self, "hsl", None)
+        if isinstance(hsl_cfg, dict) and pside in hsl_cfg and isinstance(hsl_cfg[pside], dict):
+            return str(hsl_cfg[pside].get("panic_close_order_type", "market"))
+        legacy_cfg = getattr(self, "equity_hard_stop_loss", None)
+        if isinstance(legacy_cfg, dict):
+            return str(legacy_cfg.get("panic_close_order_type", "market"))
+        return "market"
+
+    def _equity_hard_stop_signal_values(
+        self,
+        pside: str,
+        *,
+        realized_pnl_total: float,
+        realized_pnl_pside: float,
+        unrealized_pnl_pside: float,
+        unrealized_pnl_total: Optional[float] = None,
+    ) -> tuple[str, float, float]:
+        signal_mode = self._equity_hard_stop_signal_mode()
+        if signal_mode == "pside":
+            return signal_mode, float(realized_pnl_pside), float(unrealized_pnl_pside)
+        if unrealized_pnl_total is None:
+            raise ValueError(
+                f"HSL[{pside}] unified signal mode requires unrealized_pnl_total sample input"
+            )
+        if not math.isfinite(unrealized_pnl_total):
+            raise ValueError(f"unrealized_pnl_total must be finite, got {unrealized_pnl_total}")
+        return signal_mode, float(realized_pnl_total), float(unrealized_pnl_total)
 
     def _equity_hard_stop_latch_path(self, pside: str) -> str:
         return make_get_filepath(
@@ -1029,6 +1072,7 @@ class Passivbot:
         realized_pnl_pside: float,
         unrealized_pnl_pside: float,
         sample_minutes: float,
+        unrealized_pnl_total: Optional[float] = None,
     ) -> dict:
         if not math.isfinite(balance) or balance <= 0.0:
             raise ValueError(f"balance must be finite and > 0, got {balance}")
@@ -1041,6 +1085,15 @@ class Passivbot:
         if not math.isfinite(sample_minutes) or sample_minutes <= 0.0:
             raise ValueError(f"sample_minutes must be finite and > 0, got {sample_minutes}")
 
+        signal_mode, realized_pnl_signal, unrealized_pnl_signal = (
+            self._equity_hard_stop_signal_values(
+                pside,
+                realized_pnl_total=realized_pnl_total,
+                realized_pnl_pside=realized_pnl_pside,
+                unrealized_pnl_pside=unrealized_pnl_pside,
+                unrealized_pnl_total=unrealized_pnl_total,
+            )
+        )
         state = self._hsl_state(pside)
         cfg = self.hsl[pside]
         lookback_ms = self._equity_hard_stop_lookback_ms()
@@ -1049,7 +1102,7 @@ class Passivbot:
         ratio_yellow = float(cfg["tier_ratios"]["yellow"])
         ratio_orange = float(cfg["tier_ratios"]["orange"])
         ema_span_minutes = float(cfg["ema_span_minutes"])
-        strategy_pnl = realized_pnl_pside + unrealized_pnl_pside
+        strategy_pnl = realized_pnl_signal + unrealized_pnl_signal
         peak_strategy_pnl = float(
             state["strategy_pnl_peak"].update(
                 int(timestamp_ms), float(strategy_pnl), int(lookback_ms)
@@ -1079,11 +1132,12 @@ class Passivbot:
 
         metrics = {
             "pside": pside,
+            "signal_mode": signal_mode,
             "timestamp_ms": int(timestamp_ms),
             "balance": float(balance),
             "realized_pnl_total": float(realized_pnl_total),
-            "realized_pnl": float(realized_pnl_pside),
-            "unrealized_pnl": float(unrealized_pnl_pside),
+            "realized_pnl": float(realized_pnl_signal),
+            "unrealized_pnl": float(unrealized_pnl_signal),
             "strategy_pnl": float(strategy_pnl),
             "peak_strategy_pnl": float(peak_strategy_pnl),
             "baseline_balance": float(baseline_balance),
@@ -1152,6 +1206,7 @@ class Passivbot:
             "exchange": str(self.exchange),
             "user": str(self.user),
             "position_side": pside,
+            "signal_mode": self._equity_hard_stop_signal_mode(),
             "tier": "red",
             "red_threshold": float(cfg["red_threshold"]),
             "ema_span_minutes": float(cfg["ema_span_minutes"]),
@@ -1190,8 +1245,21 @@ class Passivbot:
         state = self._hsl_state(pside)
         balance = float(self.get_raw_balance())
         realized_pnl_total = float(self._equity_hard_stop_realized_pnl_now())
-        realized_pnl = float(self._equity_hard_stop_realized_pnl_now(pside))
-        unrealized_pnl = float(await self._calc_upnl_sum_strict(pside))
+        realized_pnl_pside = float(self._equity_hard_stop_realized_pnl_now(pside))
+        signal_mode = self._equity_hard_stop_signal_mode()
+        unrealized_pnl_total = (
+            float(await self._calc_upnl_sum_strict())
+            if signal_mode == "unified"
+            else None
+        )
+        unrealized_pnl_pside = float(await self._calc_upnl_sum_strict(pside))
+        _, realized_pnl, unrealized_pnl = self._equity_hard_stop_signal_values(
+            pside,
+            realized_pnl_total=realized_pnl_total,
+            realized_pnl_pside=realized_pnl_pside,
+            unrealized_pnl_pside=unrealized_pnl_pside,
+            unrealized_pnl_total=unrealized_pnl_total,
+        )
         strategy_pnl = realized_pnl + unrealized_pnl
         peak_strategy_pnl = float(
             max(
@@ -1217,6 +1285,7 @@ class Passivbot:
         drawdown_raw = max(0.0, 1.0 - strategy_equity / max(peak_strategy_equity, 1e-12))
         return {
             "position_side": pside,
+            "signal_mode": signal_mode,
             "stop_event_timestamp_ms": int(stop_event_ts_ms),
             "balance": balance,
             "realized_pnl_total": realized_pnl_total,
@@ -1288,6 +1357,7 @@ class Passivbot:
         if not self._equity_hard_stop_enabled():
             return
         self._equity_hard_stop_reset_state()
+        signal_mode = self._equity_hard_stop_signal_mode()
         history = await self.get_balance_equity_history(current_balance=self.get_raw_balance())
         if "timeline" not in history:
             raise ValueError("get_balance_equity_history() missing required key: timeline")
@@ -1302,6 +1372,7 @@ class Passivbot:
         current_upnl_by_pside = {
             pside: float(await self._calc_upnl_sum_strict(pside)) for pside in self._hsl_psides()
         }
+        current_upnl_total = float(sum(current_upnl_by_pside.values()))
         n_rows = {pside: 0 for pside in self._hsl_psides()}
         for pside in self._hsl_psides():
             if not self._equity_hard_stop_enabled(pside):
@@ -1319,11 +1390,24 @@ class Passivbot:
                     "timestamp",
                     "balance",
                     "realized_pnl",
-                    f"realized_pnl_{pside}",
-                    f"unrealized_pnl_{pside}",
                 )
+                if signal_mode == "pside":
+                    required += (f"realized_pnl_{pside}", f"unrealized_pnl_{pside}")
+                else:
+                    required += ("unrealized_pnl_long", "unrealized_pnl_short")
                 if any(key not in row for key in required):
                     continue
+                row_upnl_total = (
+                    float(row["unrealized_pnl_long"]) + float(row["unrealized_pnl_short"])
+                    if signal_mode == "unified"
+                    else None
+                )
+                row_realized_pside = (
+                    float(row[f"realized_pnl_{pside}"]) if signal_mode == "pside" else 0.0
+                )
+                row_unrealized_pside = (
+                    float(row[f"unrealized_pnl_{pside}"]) if signal_mode == "pside" else 0.0
+                )
                 ts = int(row["timestamp"])
                 if state["halted"] and not state["no_restart_latched"]:
                     cooldown_until_ms = state["cooldown_until_ms"]
@@ -1336,9 +1420,10 @@ class Passivbot:
                     int(ts),
                     float(row["balance"]),
                     float(row["realized_pnl"]),
-                    float(row[f"realized_pnl_{pside}"]),
-                    float(row[f"unrealized_pnl_{pside}"]),
+                    row_realized_pside,
+                    row_unrealized_pside,
                     1.0,
+                    unrealized_pnl_total=row_upnl_total,
                 )
                 n_rows[pside] += 1
                 if self._equity_hard_stop_runtime_tier(pside) == "red":
@@ -1410,6 +1495,7 @@ class Passivbot:
                 float(self._equity_hard_stop_realized_pnl_now(pside)),
                 current_upnl_by_pside[pside],
                 self._equity_hard_stop_sample_minutes(),
+                unrealized_pnl_total=current_upnl_total,
             )
             logging.info(
                 "[risk] HSL[%s] initialized from equity history | rows=%d tier=%s strategy_equity=%.6f peak_strategy_equity=%.6f rolling_peak_strategy_equity=%.6f drawdown_raw=%.6f drawdown_ema=%.6f drawdown_score=%.6f",
@@ -1481,10 +1567,16 @@ class Passivbot:
             await self._equity_hard_stop_initialize_from_history()
         balance = self.get_raw_balance()
         ts_ms = int(self.get_exchange_time())
+        signal_mode = self._equity_hard_stop_signal_mode()
         realized_pnl_total = self._equity_hard_stop_realized_pnl_now()
         unrealized_pnl_by_pside = {
             pside: await self._calc_upnl_sum_strict(pside) for pside in self._hsl_psides()
         }
+        unrealized_pnl_total = (
+            float(sum(float(v) for v in unrealized_pnl_by_pside.values()))
+            if signal_mode == "unified"
+            else None
+        )
         out = {}
         for pside in self._hsl_psides():
             if not self._equity_hard_stop_enabled(pside):
@@ -1514,6 +1606,7 @@ class Passivbot:
                 float(self._equity_hard_stop_realized_pnl_now(pside)),
                 float(unrealized_pnl_by_pside[pside]),
                 self._equity_hard_stop_sample_minutes(),
+                unrealized_pnl_total=unrealized_pnl_total,
             )
             if metrics["changed"]:
                 self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
@@ -5473,7 +5566,7 @@ class Passivbot:
             "unstuck_loss_allowance_pct",
             "unstuck_threshold",
         ]
-        out: dict[str, float | int] = {}
+        out: dict[str, Any] = {}
         for key in fields:
             if key in global_keys:
                 val = self.bot_value(pside, key)
@@ -5483,6 +5576,25 @@ class Passivbot:
                 out[key] = int(round(val or 0.0))
             else:
                 out[key] = float(val or 0.0)
+        out.update(
+            {
+                "hsl_enabled": bool(self.bot_value(pside, "hsl_enabled")),
+                "hsl_red_threshold": float(self.bot_value(pside, "hsl_red_threshold")),
+                "hsl_ema_span_minutes": float(self.bot_value(pside, "hsl_ema_span_minutes")),
+                "hsl_cooldown_minutes_after_red": float(
+                    self.bot_value(pside, "hsl_cooldown_minutes_after_red")
+                ),
+                "hsl_no_restart_drawdown_threshold": float(
+                    self.bot_value(pside, "hsl_no_restart_drawdown_threshold")
+                ),
+                "hsl_tier_ratio_yellow": float(self.bot_value(pside, "hsl_tier_ratios.yellow")),
+                "hsl_tier_ratio_orange": float(self.bot_value(pside, "hsl_tier_ratios.orange")),
+                "hsl_orange_tier_mode": str(self.bot_value(pside, "hsl_orange_tier_mode")),
+                "hsl_panic_close_order_type": str(
+                    self.bot_value(pside, "hsl_panic_close_order_type")
+                ),
+            }
+        )
         return out
 
     def _pb_mode_to_orchestrator_mode(self, mode: str) -> str:
@@ -5529,9 +5641,9 @@ class Passivbot:
                 ),
                 "panic_close_market": bool(
                     any(
-                        str(self.hsl[pside]["panic_close_order_type"]) == "market"
-                        for pside in self._hsl_psides()
-                        if self._equity_hard_stop_enabled(pside)
+                        Passivbot._equity_hard_stop_panic_close_order_type(self, pside) == "market"
+                        for pside in ("long", "short")
+                        if Passivbot._equity_hard_stop_enabled(self, pside)
                     )
                 ),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
@@ -6038,9 +6150,9 @@ class Passivbot:
                 ),
                 "panic_close_market": bool(
                     any(
-                        str(self.hsl[pside]["panic_close_order_type"]) == "market"
-                        for pside in self._hsl_psides()
-                        if self._equity_hard_stop_enabled(pside)
+                        Passivbot._equity_hard_stop_panic_close_order_type(self, pside) == "market"
+                        for pside in ("long", "short")
+                        if Passivbot._equity_hard_stop_enabled(self, pside)
                     )
                 ),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
@@ -6266,7 +6378,9 @@ class Passivbot:
                     execution_type = str(order[4]).lower()
                 else:
                     execution_type = "limit"
-                    panic_close_pref = str(self.hsl[position_side]["panic_close_order_type"])
+                    panic_close_pref = self._equity_hard_stop_panic_close_order_type(
+                        position_side
+                    )
                     if "panic" in pb_order_type:
                         execution_type = "market" if panic_close_pref == "market" else "limit"
                 if execution_type not in {"limit", "market"}:

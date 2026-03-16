@@ -1128,8 +1128,20 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         let ratios = ratios_item
             .downcast::<PyDict>()
             .map_err(|_| PyValueError::new_err(format!("{key}.tier_ratios must be a dict")))?;
+        let signal_mode = cfg
+            .get_item("signal_mode")?
+            .map(|item| item.extract::<String>())
+            .transpose()?
+            .unwrap_or_else(|| "pside".to_string());
+        if signal_mode != "pside" && signal_mode != "unified" {
+            return Err(PyValueError::new_err(format!(
+                "{key}.signal_mode must be one of {{pside, unified}}, got {:?}",
+                signal_mode
+            )));
+        }
         Ok(EquityHardStopLossConfig {
             enabled: extract_value(cfg, "enabled")?,
+            signal_mode,
             red_threshold: extract_value(cfg, "red_threshold")?,
             ema_span_minutes: extract_value(cfg, "ema_span_minutes")?,
             cooldown_minutes_after_red: extract_value(cfg, "cooldown_minutes_after_red")?,

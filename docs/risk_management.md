@@ -181,7 +181,7 @@ Behavior:
 Operational notes:
 
 1. HSL is configured separately under `bot.long.hsl_*` and `bot.short.hsl_*`.
-2. It uses a collateral-FX-robust drawdown metric reconstructed from realized PnL plus unrealized PnL for that `pside`.
+2. `live.hsl_signal_mode` chooses whether each `pside` controller uses its own `pside` strategy signal or a shared `unified` account-level signal.
 3. RED can auto-restart after `hsl_cooldown_minutes_after_red`. Terminal no-restart uses persistent cross-restart HSL drawdown.
 4. In backtests, simulated market panic closes use `backtest.market_order_slippage_pct`.
 5. Backtests still export global `*_hsl` metrics in addition to side-specific `*_hsl_long` / `*_hsl_short` metrics.

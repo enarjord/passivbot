@@ -141,6 +141,15 @@ HSL_PSIDE_KEYS = (
     "hsl_panic_close_order_type",
     "hsl_tier_ratios",
 )
+HSL_SIGNAL_MODES = ("pside", "unified")
+
+
+def normalize_hsl_signal_mode(value, path: str = "live.hsl_signal_mode") -> str:
+    mode = str(value)
+    if mode not in HSL_SIGNAL_MODES:
+        allowed = ", ".join(HSL_SIGNAL_MODES)
+        raise ValueError(f"{path} must be one of {{{allowed}}}, got {mode!r}")
+    return mode
 
 
 def _legacy_hsl_to_pside_fields(hsl_cfg: dict) -> dict:
@@ -1192,9 +1201,8 @@ def _rename_config_keys(
                 )
                 if tracker is not None:
                     tracker.add(["optimize", "bounds", new], optimize_bounds[new])
-        if tracker is not None:
-            tracker.remove(["optimize", "bounds", old], optimize_bounds[old])
-        del optimize_bounds[old]
+        # Preserve legacy shared HSL bounds for master-era config round-tripping.
+        # The new pside bounds seeded above are the canonical optimization keys.
 
 
 def _migrate_bot_common_hsl(
@@ -1273,7 +1281,8 @@ def _sync_with_template(
     preserved_live_optimize_bounds = [
         ("optimize", "bounds", key)
         for key in result.get("optimize", {}).get("bounds", {})
-        if isinstance(key, str) and key.startswith("live_")
+        if isinstance(key, str)
+        and (key.startswith("live_") or key.startswith("common_equity_hard_stop_loss_"))
     ]
     remove_unused_keys_recursively(
         template_with_extras,
@@ -1297,7 +1306,8 @@ def _sync_with_template(
         preserve=[
             (key,)
             for key in result["optimize"]["bounds"]
-            if isinstance(key, str) and key.startswith("live_")
+            if isinstance(key, str)
+            and (key.startswith("live_") or key.startswith("common_equity_hard_stop_loss_"))
         ],
         tracker=tracker,
     )
@@ -2511,6 +2521,7 @@ def get_template_config():
             "forced_mode_long": "",
             "forced_mode_short": "",
             "hedge_mode": True,
+            "hsl_signal_mode": "pside",
             "ignored_coins": {"long": [], "short": []},
             "inactive_coin_candle_ttl_minutes": 10.0,
             "leverage": 10.0,

@@ -1768,6 +1768,7 @@ async def main():
     del template_config["bot"]
     keep_live_keys = {
         "approved_coins",
+        "hsl_signal_mode",
         "minimum_coin_age_days",
     }
     for key in sorted(template_config["live"]):

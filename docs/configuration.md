@@ -75,6 +75,7 @@ HSL now lives directly under each `pside`:
 
 1. `bot.long.hsl_*`
 2. `bot.short.hsl_*`
+3. `live.hsl_signal_mode`
 
 See also:
 
@@ -121,6 +122,14 @@ Behavior summary:
 1. YELLOW: warning tier for that `pside`
 2. ORANGE: reduced-risk mode for that `pside`
 3. RED: panic close, flat confirmation, halt, optional cooldown restart for that `pside`
+
+Signal mode:
+
+1. `live.hsl_signal_mode = "pside"`
+   - each `pside` controller uses its own realized/unrealized strategy PnL
+2. `live.hsl_signal_mode = "unified"`
+   - long and short keep separate HSL controllers
+   - both are fed from the same unified account-level strategy signal
 
 Backtest-specific note:
 

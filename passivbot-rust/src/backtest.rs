@@ -2440,8 +2440,7 @@ impl<'a> Backtest<'a> {
         let Some(&timestamp_ms) = self.equities.timestamps_ms.last() else {
             return Ok(());
         };
-        let realized_pnl = self.pnl_cumsum_running_net_pside[pside];
-        let unrealized_pnl = self.unrealized_pnl_pside(pside, k);
+        let (realized_pnl, unrealized_pnl) = self.hard_stop_signal_values_pside(k, pside)?;
         let strategy_pnl = realized_pnl + unrealized_pnl;
         let days = self.backtest_params.pnls_max_lookback_days.max(0.0);
         let lookback_ms = ((days * 86_400_000.0).round() as u64).max(self.interval_ms);
@@ -3279,6 +3278,37 @@ impl<'a> Backtest<'a> {
     #[inline(always)]
     fn hard_stop_enabled_pside(&self, pside: usize) -> bool {
         self.hard_stop_cfg_pside(pside).hsl_enabled
+    }
+
+    #[inline(always)]
+    fn hard_stop_signal_mode(&self) -> &str {
+        self.backtest_params
+            .equity_hard_stop_loss
+            .signal_mode
+            .as_str()
+    }
+
+    fn hard_stop_signal_values_pside(&self, k: usize, pside: usize) -> Result<(f64, f64), String> {
+        match self.hard_stop_signal_mode() {
+            "pside" => Ok((
+                self.pnl_cumsum_running_net_pside[pside],
+                self.unrealized_pnl_pside(pside, k),
+            )),
+            "unified" => {
+                let equity = *self.equities.usd_total_equity.last().ok_or_else(|| {
+                    format!(
+                        "missing usd_total_equity sample for unified HSL signal at k {} pside {}",
+                        k, pside
+                    )
+                })?;
+                let balance = self.balance.usd_total_balance;
+                Ok((self.pnl_cumsum_running_net, equity - balance))
+            }
+            mode => Err(format!(
+                "invalid hsl signal_mode {:?}; expected 'pside' or 'unified'",
+                mode
+            )),
+        }
     }
 
     fn unrealized_pnl_pside(&self, pside: usize, k: usize) -> f64 {
@@ -4862,6 +4892,92 @@ mod tests {
 
         assert!(bt.hard_stop_halted);
         assert_eq!(bt.hard_stop_cooldown_until_ms, Some(360_000));
+    }
+
+    #[test]
+    fn hard_stop_unified_signal_feeds_same_equity_to_both_psides() {
+        let hlcvs = Array3::from_shape_vec((1, 1, 4), vec![90.0; 1 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0]);
+
+        let make_bt = |signal_mode: &str| {
+            let mut bp_pair = BotParamsPair::default();
+            for bp in [&mut bp_pair.long, &mut bp_pair.short] {
+                bp.n_positions = 1;
+                bp.ema_span_0 = 10.0;
+                bp.ema_span_1 = 20.0;
+                bp.hsl_enabled = true;
+                bp.hsl_red_threshold = 0.99;
+                bp.hsl_ema_span_minutes = 1.0;
+                bp.hsl_tier_ratio_yellow = 0.5;
+                bp.hsl_tier_ratio_orange = 0.75;
+            }
+
+            let mut hs = EquityHardStopLossConfig::default();
+            hs.enabled = true;
+            hs.signal_mode = signal_mode.to_string();
+            hs.red_threshold = 0.99;
+            hs.ema_span_minutes = 1.0;
+
+            let backtest_params = BacktestParams {
+                starting_balance: 100.0,
+                maker_fee: 0.0,
+                taker_fee: 0.00055,
+                coins: vec!["TEST".to_string()],
+                active_coin_indices: None,
+                first_timestamp_ms: 0,
+                requested_start_timestamp_ms: 0,
+                first_valid_indices: vec![0],
+                last_valid_indices: vec![0],
+                warmup_minutes: vec![0],
+                trade_start_indices: vec![0],
+                global_warmup_bars: 0,
+                btc_collateral_cap: 0.0,
+                btc_collateral_ltv_cap: None,
+                metrics_only: true,
+                filter_by_min_effective_cost: false,
+                dynamic_wel_by_tradability: true,
+                hedge_mode: true,
+                max_realized_loss_pct: 1.0,
+                pnls_max_lookback_days: 30.0,
+                liquidation_threshold: 0.05,
+                equity_hard_stop_loss: hs,
+                market_orders_allowed: false,
+                market_order_near_touch_threshold: 0.001,
+                market_order_slippage_pct: 0.0005,
+                candle_interval_minutes: 1,
+            };
+
+            let mut bt = Backtest::new(
+                hlcvs.view(),
+                btc_usd_prices.view(),
+                vec![bp_pair],
+                vec![ExchangeParams::default()],
+                &backtest_params,
+            );
+            bt.positions.long.insert(
+                0,
+                Position {
+                    size: 1.0,
+                    price: 100.0,
+                },
+            );
+            bt.balance.usd_total_balance = 100.0;
+            bt.equities.timestamps_ms.push(0);
+            bt.equities.usd_total_equity.push(90.0);
+            bt
+        };
+
+        let mut bt_pside = make_bt("pside");
+        bt_pside.update_hard_stop_state_pside(0, LONG).unwrap();
+        bt_pside.update_hard_stop_state_pside(0, SHORT).unwrap();
+        assert_eq!(bt_pside.strategy_equity_series_pside[LONG][0], 90.0);
+        assert_eq!(bt_pside.strategy_equity_series_pside[SHORT][0], 100.0);
+
+        let mut bt_unified = make_bt("unified");
+        bt_unified.update_hard_stop_state_pside(0, LONG).unwrap();
+        bt_unified.update_hard_stop_state_pside(0, SHORT).unwrap();
+        assert_eq!(bt_unified.strategy_equity_series_pside[LONG][0], 90.0);
+        assert_eq!(bt_unified.strategy_equity_series_pside[SHORT][0], 90.0);
     }
 
     #[test]

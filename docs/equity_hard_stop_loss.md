@@ -7,6 +7,42 @@ HSL is configured separately for each `pside`:
 1. `bot.long.hsl_*`
 2. `bot.short.hsl_*`
 
+Signal construction is selected globally with `live.hsl_signal_mode`:
+
+1. `pside`
+   - long HSL uses long realized/unrealized strategy PnL
+   - short HSL uses short realized/unrealized strategy PnL
+2. `unified`
+   - long and short keep separate HSL controllers
+   - both controllers are fed from the same unified account-level strategy signal
+
+### Choosing a Signal Mode
+
+`pside` is the better default in most cases:
+
+1. long HSL reacts to long deterioration
+2. short HSL reacts to short deterioration
+3. one profitable `pside` cannot hide a weak one
+4. side-specific `*_hsl_long` and `*_hsl_short` metrics are easier to interpret
+
+Use `pside` when:
+
+1. long and short are tuned differently
+2. one `pside` should be allowed to halt while the other continues
+3. you want clearer side-local diagnostics and optimization feedback
+
+`unified` is better when you want whole-account awareness:
+
+1. long and short still keep separate thresholds, cooldowns, and halts
+2. both controllers see the same combined account-level strategy signal
+3. one profitable `pside` can offset stress on the other in the HSL trigger signal
+
+Use `unified` when:
+
+1. the strategy is intended to behave as one combined book
+2. long and short naturally hedge or subsidize each other
+3. older configs were tuned around account-level HSL behavior and become too harsh under `pside`
+
 This is separate from auto-unstuck and the realized-loss gate:
 
 1. Auto-unstuck gradually trims stuck positions while continuing to trade.
@@ -23,9 +59,9 @@ See also:
 
 HSL uses a collateral-FX-robust drawdown metric based on reconstructed strategy PnL rather than raw exchange equity peaks.
 
-High level for each `pside`:
+High level for each `pside` controller:
 
-1. Reconstruct `strategy_pnl_pside = realized_pnl_pside + unrealized_pnl_pside`
+1. Reconstruct the HSL signal according to `live.hsl_signal_mode`
 2. Track a rolling rebased `peak_strategy_equity_pside`
 3. Compute raw drawdown and an EMA-smoothed drawdown
 4. Use `drawdown_score = min(drawdown_raw, drawdown_ema)` as the trigger metric

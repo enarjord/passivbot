@@ -14,10 +14,13 @@ See also:
 2. Config lives under:
    - `bot.long.hsl_*`
    - `bot.short.hsl_*`
-3. Live and backtest use the same reconstructed strategy-drawdown concept for each `pside`.
-4. RED can halt permanently or restart after cooldown, per `pside`.
-5. Live startup behavior is reconstructed from exchange-derived history rather than depending on a local latch file.
-6. Backtests retain:
+3. `live.hsl_signal_mode` selects whether those `pside` runtimes use:
+   - `pside` signals
+   - one shared `unified` signal
+4. Live and backtest use the same reconstructed strategy-drawdown concept for each `pside`.
+5. RED can halt permanently or restart after cooldown, per `pside`.
+6. Live startup behavior is reconstructed from exchange-derived history rather than depending on a local latch file.
+7. Backtests retain:
    - global account-level HSL metrics under `*_hsl`
    - side-specific HSL metrics under `*_hsl_long` / `*_hsl_short`
 

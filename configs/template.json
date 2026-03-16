@@ -322,6 +322,7 @@
         "forced_mode_long": "",
         "forced_mode_short": "",
         "hedge_mode": true,
+        "hsl_signal_mode": "pside",
         "ignored_coins": {
             "long": [],
             "short": []

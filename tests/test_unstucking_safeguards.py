@@ -869,6 +869,93 @@ def test_hard_stop_apply_sample_rolling_peak_prunes_by_lookback():
     assert m1["drawdown_raw"] == pytest.approx(0.0)
 
 
+def test_hard_stop_apply_sample_unified_uses_total_signal(monkeypatch):
+    cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
+    bot = _make_dummy_bot(cfg)
+
+    _hsl_state(bot)["runtime"]._initialized = True
+    _hsl_state(bot)["runtime"]._tier = "green"
+
+    captured = {}
+
+    def fake_apply_sample(**kwargs):
+        captured.update(kwargs)
+        return {
+            "initialized": True,
+            "red_latched": False,
+            "peak_strategy_equity": kwargs["peak_strategy_equity"],
+            "rolling_peak_strategy_equity": kwargs["peak_strategy_equity"],
+            "drawdown_ema": 0.05,
+            "tier": "yellow",
+            "drawdown_raw": 0.05,
+            "drawdown_score": 0.05,
+            "changed": True,
+            "span_samples": 60.0,
+            "alpha": 0.0327868852,
+        }
+
+    monkeypatch.setattr(_hsl_state(bot)["runtime"], "apply_sample", fake_apply_sample)
+
+    metrics = bot._equity_hard_stop_apply_sample(
+        "long",
+        1_700_000_000_000,
+        900.0,
+        25.0,
+        5.0,
+        50.0,
+        1.0,
+        unrealized_pnl_total=-75.0,
+    )
+
+    assert captured["equity"] == pytest.approx(825.0)
+    assert captured["peak_strategy_equity"] == pytest.approx(825.0)
+    assert metrics["signal_mode"] == "unified"
+    assert metrics["realized_pnl"] == pytest.approx(25.0)
+    assert metrics["unrealized_pnl"] == pytest.approx(-75.0)
+    assert metrics["strategy_equity"] == pytest.approx(825.0)
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_compute_stop_event_unified_uses_total_signal(monkeypatch):
+    cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
+    bot = _make_dummy_bot(cfg)
+
+    _hsl_state(bot)["runtime"]._peak_strategy_equity = 130.0
+    _hsl_state(bot)["last_metrics"] = {"peak_strategy_pnl": 15.0}
+
+    monkeypatch.setattr(bot, "get_raw_balance", lambda: 100.0)
+
+    def fake_realized(pside=None):
+        if pside is None:
+            return 20.0
+        if pside == "long":
+            return 5.0
+        return 15.0
+
+    async def fake_upnl(pside=None):
+        if pside is None:
+            return -30.0
+        if pside == "long":
+            return -10.0
+        return -20.0
+
+    monkeypatch.setattr(bot, "_equity_hard_stop_realized_pnl_now", fake_realized)
+    monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+
+    stop_event = await bot._equity_hard_stop_compute_stop_event("long", 123_456)
+
+    assert stop_event["signal_mode"] == "unified"
+    assert stop_event["realized_pnl_total"] == pytest.approx(20.0)
+    assert stop_event["realized_pnl"] == pytest.approx(20.0)
+    assert stop_event["unrealized_pnl"] == pytest.approx(-30.0)
+    assert stop_event["strategy_pnl"] == pytest.approx(-10.0)
+    assert stop_event["strategy_equity"] == pytest.approx(70.0)
+    assert stop_event["peak_strategy_equity"] == pytest.approx(95.0)
+    assert stop_event["drawdown_raw"] == pytest.approx(1.0 - 70.0 / 95.0)
+
+
 def test_hard_stop_status_logging_is_throttled(caplog):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)

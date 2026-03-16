@@ -50,6 +50,7 @@ from config_utils import (
     get_optional_config_value,
     strip_config_metadata,
     HSL_PSIDE_KEYS,
+    normalize_hsl_signal_mode,
 )
 from analysis_visibility import filter_analysis_for_visibility
 from utils import (
@@ -269,6 +270,12 @@ def _resolve_backtest_hsl_configs(config: dict) -> tuple[dict, dict]:
         return _convert(long_cfg), _convert(short_cfg)
     legacy = require_config_value(config, "bot.common.equity_hard_stop_loss")
     return deepcopy(legacy), deepcopy(legacy)
+
+
+def _resolve_backtest_hsl_signal_mode(config: dict) -> str:
+    return normalize_hsl_signal_mode(
+        get_optional_config_value(config, "live.hsl_signal_mode", "pside")
+    )
 
 
 def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
@@ -1339,6 +1346,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
         ]
     if backtest_params is None:
         hard_stop_cfg_long, hard_stop_cfg_short = _resolve_backtest_hsl_configs(config)
+        hsl_signal_mode = _resolve_backtest_hsl_signal_mode(config)
         if not isinstance(hard_stop_cfg_long, dict) or not isinstance(hard_stop_cfg_short, dict):
             raise TypeError(
                 "HSL pside configs must be dicts"
@@ -1386,6 +1394,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                 raise ValueError(f"{path_prefix}.panic_close_order_type must be one of {{market, limit}}")
             return {
                 "enabled": enabled,
+                "signal_mode": hsl_signal_mode,
                 "red_threshold": red_threshold,
                 "ema_span_minutes": ema_span_minutes,
                 "cooldown_minutes_after_red": cooldown_minutes_after_red,
@@ -1750,6 +1759,7 @@ async def main():
     keep_live_keys = {
         "approved_coins",
         "hedge_mode",
+        "hsl_signal_mode",
         "ignored_coins",
         "max_realized_loss_pct",
         "minimum_coin_age_days",

@@ -132,7 +132,7 @@ impl HlcvsBundle {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ExchangeParams {
     pub qty_step: f64,
     pub price_step: f64,
@@ -175,6 +175,7 @@ impl Default for EquityHardStopLossTierRatios {
 #[derive(Clone, Debug, PartialEq)]
 pub struct EquityHardStopLossConfig {
     pub enabled: bool,
+    pub signal_mode: String,
     pub red_threshold: f64,
     pub ema_span_minutes: f64,
     pub cooldown_minutes_after_red: f64,
@@ -190,6 +191,7 @@ impl Default for EquityHardStopLossConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            signal_mode: "pside".to_string(),
             red_threshold: 0.25,
             ema_span_minutes: 60.0,
             cooldown_minutes_after_red: 0.0,
@@ -292,6 +294,42 @@ pub struct BotParamsPair {
     pub short: BotParams,
 }
 
+fn default_hsl_enabled() -> bool {
+    false
+}
+
+fn default_hsl_red_threshold() -> f64 {
+    0.25
+}
+
+fn default_hsl_ema_span_minutes() -> f64 {
+    60.0
+}
+
+fn default_hsl_cooldown_minutes_after_red() -> f64 {
+    0.0
+}
+
+fn default_hsl_no_restart_drawdown_threshold() -> f64 {
+    1.0
+}
+
+fn default_hsl_tier_ratio_yellow() -> f64 {
+    0.5
+}
+
+fn default_hsl_tier_ratio_orange() -> f64 {
+    0.75
+}
+
+fn default_hsl_orange_tier_mode() -> String {
+    "tp_only_with_active_entry_cancellation".to_string()
+}
+
+fn default_hsl_panic_close_order_type() -> String {
+    "market".to_string()
+}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BotParams {
@@ -323,14 +361,23 @@ pub struct BotParams {
     pub filter_volume_drop_pct: f64,
     pub ema_span_0: f64,
     pub ema_span_1: f64,
+    #[serde(default = "default_hsl_enabled")]
     pub hsl_enabled: bool,
+    #[serde(default = "default_hsl_red_threshold")]
     pub hsl_red_threshold: f64,
+    #[serde(default = "default_hsl_ema_span_minutes")]
     pub hsl_ema_span_minutes: f64,
+    #[serde(default = "default_hsl_cooldown_minutes_after_red")]
     pub hsl_cooldown_minutes_after_red: f64,
+    #[serde(default = "default_hsl_no_restart_drawdown_threshold")]
     pub hsl_no_restart_drawdown_threshold: f64,
+    #[serde(default = "default_hsl_tier_ratio_yellow")]
     pub hsl_tier_ratio_yellow: f64,
+    #[serde(default = "default_hsl_tier_ratio_orange")]
     pub hsl_tier_ratio_orange: f64,
+    #[serde(default = "default_hsl_orange_tier_mode")]
     pub hsl_orange_tier_mode: String,
+    #[serde(default = "default_hsl_panic_close_order_type")]
     pub hsl_panic_close_order_type: String,
     pub n_positions: usize,
     pub total_wallet_exposure_limit: f64,
