@@ -1275,14 +1275,21 @@ class Passivbot:
                 self._equity_hard_stop_clear_runtime_forced_modes(pside)
                 continue
             state = self._hsl_state(pside)
-            if not state["halted"]:
-                self._equity_hard_stop_clear_runtime_forced_modes(pside)
-                continue
             forced = {}
-            for symbol in symbols:
-                size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
-                forced[symbol] = "panic" if size != 0.0 else "graceful_stop"
-            self._runtime_forced_modes[pside] = forced
+            if state["halted"]:
+                for symbol in symbols:
+                    size = float(
+                        self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0
+                    )
+                    forced[symbol] = "panic" if size != 0.0 else "graceful_stop"
+                self._runtime_forced_modes[pside] = forced
+                continue
+            if self._equity_hard_stop_runtime_red_latched(pside):
+                for symbol in symbols:
+                    forced[symbol] = "panic"
+                self._runtime_forced_modes[pside] = forced
+                continue
+            self._equity_hard_stop_clear_runtime_forced_modes(pside)
 
     async def _equity_hard_stop_initialize_from_history(self) -> None:
         if not self._equity_hard_stop_enabled():
@@ -5431,9 +5438,16 @@ class Passivbot:
             "total_wallet_exposure_limit",
             "risk_twel_enforcer_threshold",
             "unstuck_loss_allowance_pct",
+            "hsl_enabled",
+            "hsl_red_threshold",
+            "hsl_ema_span_minutes",
+            "hsl_cooldown_minutes_after_red",
+            "hsl_no_restart_drawdown_threshold",
+            "hsl_orange_tier_mode",
+            "hsl_panic_close_order_type",
         }
         # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
-        fields = [
+        numeric_fields = [
             "close_grid_markup_end",
             "close_grid_markup_start",
             "close_grid_qty_pct",
@@ -5462,8 +5476,10 @@ class Passivbot:
             "filter_volume_drop_pct",
             "ema_span_0",
             "ema_span_1",
-            "n_positions",
-            "total_wallet_exposure_limit",
+            "hsl_red_threshold",
+            "hsl_ema_span_minutes",
+            "hsl_cooldown_minutes_after_red",
+            "hsl_no_restart_drawdown_threshold",
             "wallet_exposure_limit",
             "risk_wel_enforcer_threshold",
             "risk_twel_enforcer_threshold",
@@ -5473,16 +5489,25 @@ class Passivbot:
             "unstuck_loss_allowance_pct",
             "unstuck_threshold",
         ]
-        out: dict[str, float | int] = {}
-        for key in fields:
+        out: dict[str, float | int | bool | str] = {}
+        for key in numeric_fields:
             if key in global_keys:
                 val = self.bot_value(pside, key)
             else:
                 val = self.bp(pside, key, symbol) if symbol is not None else self.bp(pside, key)
-            if key == "n_positions":
-                out[key] = int(round(val or 0.0))
-            else:
-                out[key] = float(val or 0.0)
+            out[key] = float(val or 0.0)
+        out["n_positions"] = int(round(self.bot_value(pside, "n_positions") or 0.0))
+        out["total_wallet_exposure_limit"] = float(
+            self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+        )
+        out["hsl_enabled"] = bool(self.bot_value(pside, "hsl_enabled"))
+        tier_ratios = self.bot_value(pside, "hsl_tier_ratios") or {}
+        out["hsl_tier_ratio_yellow"] = float(tier_ratios.get("yellow", 0.0) or 0.0)
+        out["hsl_tier_ratio_orange"] = float(tier_ratios.get("orange", 0.0) or 0.0)
+        out["hsl_orange_tier_mode"] = str(self.bot_value(pside, "hsl_orange_tier_mode") or "")
+        out["hsl_panic_close_order_type"] = str(
+            self.bot_value(pside, "hsl_panic_close_order_type") or ""
+        )
         return out
 
     def _pb_mode_to_orchestrator_mode(self, mode: str) -> str:
@@ -7706,6 +7731,10 @@ def setup_bot(config):
         from exchanges.paradex import ParadexBot
 
         bot = ParadexBot(config)
+    elif user_info["exchange"] == "fake":
+        from exchanges.fake import FakeBot
+
+        bot = FakeBot(config)
     else:
         # Generic CCXTBot for any CCXT-supported exchange
         from exchanges.ccxt_bot import CCXTBot

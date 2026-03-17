@@ -493,10 +493,11 @@ async def load_markets(
     # Denormalize to use canonical form for cache paths (e.g., "binance" not "binanceusdm")
     ex = to_standard_exchange_name(getattr(cc, "id", None) or exchange or "")
     markets_path = os.path.join("caches", ex, "markets.json")
+    skip_disk_cache = bool(getattr(cc, "id", None) == "fake")
 
     # Try cache first
     try:
-        if os.path.exists(markets_path):
+        if (not skip_disk_cache) and os.path.exists(markets_path):
             if utc_ms() - get_file_mod_ms(markets_path) < max_age_ms:
                 with open(markets_path, "r") as f:
                     markets = json.load(f)
@@ -526,11 +527,12 @@ async def load_markets(
 
     # Dump to cache
     try:
-        path = make_get_filepath(markets_path)
-        with open(path, "w") as f:
-            json.dump(markets, f)
-        if verbose:
-            logging.info(f"{ex} Dumped markets to cache")
+        if not skip_disk_cache:
+            path = make_get_filepath(markets_path)
+            with open(path, "w") as f:
+                json.dump(markets, f)
+            if verbose:
+                logging.info(f"{ex} Dumped markets to cache")
     except Exception as e:
         logging.error("Error dumping markets to cache at %s: %s", markets_path, e)
     create_coin_symbol_map_cache(ex, markets, quote=quote, verbose=verbose)

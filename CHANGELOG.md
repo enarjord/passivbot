@@ -10,6 +10,7 @@ All notable user-facing changes will be documented in this file.
 - **Optimizer provenance + replay diagnostics** - Optimizer results now include runtime provenance for the active Rust extension and related evaluation context, and `src/repro_harness.py` can compare stored metrics against current optimizer-path and backtest-path replays in one command.
 - **HSL events per-year metrics** - Backtest HSL analysis now also exports `hard_stop_triggers_per_year` and `hard_stop_restarts_per_year` so runs with different date ranges can be compared more directly without losing the absolute trigger/restart counts.
 - **Long/share of net profit metric** - Backtest analysis now also exposes `long_short_profit_ratio`, a clearer alias for the long-side share of total net realized PnL (`1.0` = all net profit from longs, `0.0` = all from shorts, `0.6` = 60/40 long/short split).
+- **Fake live exchange harness scaffolding** - Added a new `fake` exchange adapter, fill-event fetcher, and `src/tools/run_fake_live.py` runner for deterministic dry-run live-bot scenarios driven by local HJSON/JSON timeline files.
 
 ### Fixed
 - **Optimizer initial-seed memory spike** - Starting-config evaluation no longer queues the entire seed pool at once. Initial evaluations are now bounded by `optimize.max_pending_starting_evals_per_cpu * n_cpus`, which reduces RAM spikes on large seeded runs, especially in suite mode.
