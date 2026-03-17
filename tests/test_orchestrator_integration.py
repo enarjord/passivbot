@@ -47,9 +47,13 @@ def bot_params(**overrides):
         "entry_trailing_threshold_we_weight": 0.0,
         "entry_trailing_threshold_volatility_weight": 0.0,
         "filter_volatility_ema_span": 10.0,
-        "filter_volatility_drop_pct": 0.0,
         "filter_volume_ema_span": 10.0,
-        "filter_volume_drop_pct": 0.0,
+        "forager_volume_drop_pct": 0.0,
+        "forager_score_weights": {
+            "volume": 0.0,
+            "ema_readiness": 0.0,
+            "volatility": 1.0,
+        },
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
         "n_positions": 1,
@@ -549,7 +553,11 @@ class TestOrchestratorMultiSymbol:
                         m1_log_range=[[1.0, 0.001]],  # Very low volatility
                     ),
                     long_bp={
-                        "filter_volatility_drop_pct": 0.5,  # Filter if < 50% of avg
+                        "forager_score_weights": {
+                            "volume": 0.0,
+                            "ema_readiness": 0.0,
+                            "volatility": 1.0,
+                        },
                         "filter_volatility_ema_span": 1.0,
                     },
                 )
@@ -578,7 +586,7 @@ class TestOrchestratorMultiSymbol:
                         m1_volume=[[10.0, 100.0]],  # Low volume
                     ),
                     long_bp={
-                        "filter_volume_drop_pct": 0.5,  # Filter if < 50% of avg
+                        "forager_volume_drop_pct": 0.5,
                         "filter_volume_ema_span": 10.0,
                     },
                 )

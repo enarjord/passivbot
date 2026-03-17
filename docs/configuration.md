@@ -283,14 +283,17 @@ If a position is stuck, the bot uses profits from other positions to realize los
 
 ### Filter Parameters
 
-Coins selected for trading are filtered by volume and log range. First, filter coins by volume, dropping a percentage of the lowest volume coins. Then, sort eligible coins by log range and select the most volatile coins for trading.
+Forager coin selection now uses a two-stage model: coarse volume pruning, then weighted ranking across volume, EMA readiness, and volatility.
 
-- **filter_volume_drop_pct**: Volume filter. Disapproves the lowest relative volume coins.
-  - Example: `filter_volume_drop_pct = 0.1` drops the 10% lowest volume coins. Set to `0` to allow all.
+- **forager_volume_drop_pct**: Coarse low-volume prune. Drops the lowest relative-volume fraction before final ranking, while still retaining enough candidates to fill the configured slots.
+  - Example: `forager_volume_drop_pct = 0.1` drops the bottom 10% by relative volume. Set to `0` to skip the prune stage.
+- **forager_score_weights**: Final weighted forager ranking weights.
+  - Required keys: `volume`, `ema_readiness`, `volatility`.
+  - Default: `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}`.
+  - `ema_readiness` ranks by distance to the actual offset initial-entry threshold, not raw EMA bands.
 - **filter_volatility_ema_span / filter_volume_ema_span**: Number of minutes to look into the past to compute the volatility (log-range) and volume EMAs used for dynamic coin selection in forager mode.
-- **filter_volatility_drop_pct**: Volatility clip. Drops the highest-volatility fraction after volume filtering. Example: `0.2` drops the top 20% most volatile coins, forcing the selector to choose among the calmer 80%.
   - Log range is computed from 1m OHLCVs as `mean(ln(high / low))`.
-  - In forager mode, the bot selects coins with the highest log-range values for opening positions.
+  - In forager mode, volatility remains part of the final weighted score.
 
 ## Coin Overrides
 - **coin_overrides**:

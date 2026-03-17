@@ -1655,20 +1655,24 @@ impl<'a> Backtest<'a> {
             n_coins,
             ema_alphas,
             emas: initial_emas,
-            needs_volume_ema_long: bot_params
-                .iter()
-                .any(|bp| bp.long.filter_volume_drop_pct != 0.0),
-            needs_volume_ema_short: bot_params
-                .iter()
-                .any(|bp| bp.short.filter_volume_drop_pct != 0.0),
+            needs_volume_ema_long: bot_params.iter().any(|bp| {
+                bp.long.forager_volume_drop_pct != 0.0
+                    || bp.long.forager_score_weights.volume != 0.0
+            }),
+            needs_volume_ema_short: bot_params.iter().any(|bp| {
+                bp.short.forager_volume_drop_pct != 0.0
+                    || bp.short.forager_score_weights.volume != 0.0
+            }),
             needs_log_range_long: bot_params.iter().any(|bp| {
-                bp.long.entry_grid_spacing_volatility_weight != 0.0
+                bp.long.forager_score_weights.volatility != 0.0
+                    || bp.long.entry_grid_spacing_volatility_weight != 0.0
                     || bp.long.entry_trailing_threshold_volatility_weight != 0.0
                     || bp.long.entry_trailing_retracement_volatility_weight != 0.0
                     || bp.long.entry_trailing_grid_ratio != 0.0
             }),
             needs_log_range_short: bot_params.iter().any(|bp| {
-                bp.short.entry_grid_spacing_volatility_weight != 0.0
+                bp.short.forager_score_weights.volatility != 0.0
+                    || bp.short.entry_grid_spacing_volatility_weight != 0.0
                     || bp.short.entry_trailing_threshold_volatility_weight != 0.0
                     || bp.short.entry_trailing_retracement_volatility_weight != 0.0
                     || bp.short.entry_trailing_grid_ratio != 0.0

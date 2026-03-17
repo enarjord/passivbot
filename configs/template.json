@@ -243,10 +243,14 @@
             "entry_trailing_threshold_volatility_weight": 76.0,
             "entry_trailing_threshold_we_weight": 1.31,
             "entry_volatility_ema_span_hours": 1690.0,
-            "filter_volatility_drop_pct": 0.0,
             "filter_volatility_ema_span": 225.0,
-            "filter_volume_drop_pct": 0.57,
             "filter_volume_ema_span": 520.0,
+            "forager_volume_drop_pct": 0.57,
+            "forager_score_weights": {
+                "volume": 0.0,
+                "ema_readiness": 0.0,
+                "volatility": 1.0
+            },
             "n_positions": 10.0,
             "risk_twel_enforcer_threshold": 1.0,
             "risk_we_excess_allowance_pct": 0.37,
@@ -293,10 +297,14 @@
             "entry_trailing_threshold_volatility_weight": 1,
             "entry_trailing_threshold_we_weight": 0,
             "entry_volatility_ema_span_hours": 672,
-            "filter_volatility_drop_pct": 0,
             "filter_volatility_ema_span": 10,
-            "filter_volume_drop_pct": 0.5,
             "filter_volume_ema_span": 360,
+            "forager_volume_drop_pct": 0.5,
+            "forager_score_weights": {
+                "volume": 0.0,
+                "ema_readiness": 0.0,
+                "volatility": 1.0
+            },
             "n_positions": 10,
             "risk_twel_enforcer_threshold": 0.95,
             "risk_we_excess_allowance_pct": 0,
@@ -494,16 +502,12 @@
                 2016,
                 1
             ],
-            "long_filter_volatility_drop_pct": [
-                0,
-                0
-            ],
             "long_filter_volatility_ema_span": [
                 10,
                 720,
                 1
             ],
-            "long_filter_volume_drop_pct": [
+            "long_forager_volume_drop_pct": [
                 0.4,
                 1,
                 0.01
@@ -677,16 +681,12 @@
                 2016,
                 1
             ],
-            "short_filter_volatility_drop_pct": [
-                0,
-                0
-            ],
             "short_filter_volatility_ema_span": [
                 10,
                 720,
                 1
             ],
-            "short_filter_volume_drop_pct": [
+            "short_forager_volume_drop_pct": [
                 0.4,
                 1,
                 0.01

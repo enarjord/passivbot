@@ -278,6 +278,46 @@ def test_format_config_preserves_legacy_derivations_before_hydration():
         assert f"{pside}_close_grid_min_markup" not in out["optimize"]["bounds"]
 
 
+def test_format_config_migrates_legacy_forager_volume_key():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["filter_volume_drop_pct"] = 0.42
+    current["optimize"]["bounds"]["long_filter_volume_drop_pct"] = [0.1, 0.9]
+    current["bot"]["long"].pop("forager_volume_drop_pct", None)
+    current["optimize"]["bounds"].pop("long_forager_volume_drop_pct", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["forager_volume_drop_pct"] == pytest.approx(0.42)
+    assert "filter_volume_drop_pct" not in out["bot"]["long"]
+    assert out["optimize"]["bounds"]["long_forager_volume_drop_pct"] == [0.1, 0.9]
+    assert "long_filter_volume_drop_pct" not in out["optimize"]["bounds"]
+
+
+def test_format_config_adds_missing_forager_score_weights():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"].pop("forager_score_weights", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["forager_score_weights"] == {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 1.0,
+    }
+
+
+def test_format_config_rejects_all_zero_forager_weights():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["forager_score_weights"] = {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
+
+    with pytest.raises(ValueError, match="forager_score_weights"):
+        format_config(current, verbose=False, live_only=True)
+
+
 def test_format_config_is_idempotent_for_lean_live_config():
     tmpl = _template()
     lean_live = {"bot": copy.deepcopy(tmpl["bot"]), "live": copy.deepcopy(tmpl["live"])}

@@ -4032,14 +4032,13 @@ class Passivbot:
     async def get_filtered_coins(
         self, pside: str, *, max_network_fetches: Optional[int] = None
     ) -> List[str]:
-        """Select ideal coins for a side using EMA-based volume and log-range filters.
+        """Select ideal coins for a side using forager volume pruning and weighted ranking.
 
         Steps (for forager mode):
         - Filter by age and effective min cost
-        - Rank by 1m EMA quote volume
-        - Drop the lowest filter_volume_drop_pct fraction
-        - Rank remaining by 1m EMA log range
-        - Return up to n_positions most volatile symbols
+        - Rank by weighted normalized volume, EMA readiness, and log range
+        - Apply coarse low-volume pruning via forager_volume_drop_pct
+        - Return up to n_positions top-ranked symbols
         For non-forager mode, returns all approved candidates.
         """
         # filter coins by age
@@ -4060,9 +4059,8 @@ class Passivbot:
         except Exception:
             slots_open = False
         if self.is_forager_mode(pside):
-            # filter coins by relative volume and log range
-            clip_pct = self.bot_value(pside, "filter_volume_drop_pct")
-            volatility_drop = self.bot_value(pside, "filter_volatility_drop_pct")
+            clip_pct = self.bot_value(pside, "forager_volume_drop_pct")
+            score_weights = self.bot_value(pside, "forager_score_weights")
             max_n_positions = self.get_max_n_positions(pside)
             # Apply max_ohlcv_fetches_per_minute in all cases (slots open or full).
             max_calls = get_optional_live_value(self.config, "max_ohlcv_fetches_per_minute", 0)
@@ -4085,29 +4083,24 @@ class Passivbot:
                     fetch_budget = max(0, int(max_network_fetches))
                 except Exception:
                     fetch_budget = 0
-            if clip_pct > 0.0:
-                volumes, log_ranges = await self.calc_volumes_and_log_ranges(
-                    pside,
-                    symbols=candidates,
-                    max_age_ms=max_age_ms,
-                    max_network_fetches=fetch_budget,
-                )
-            else:
-                volumes = {
-                    symbol: float(len(candidates) - idx) for idx, symbol in enumerate(candidates)
-                }
-                log_ranges = await self.calc_log_range(
-                    pside,
-                    eligible_symbols=candidates,
-                    max_age_ms=max_age_ms,
-                    max_network_fetches=fetch_budget,
-                )
+            volumes, log_ranges = await self.calc_volumes_and_log_ranges(
+                pside,
+                symbols=candidates,
+                max_age_ms=max_age_ms,
+                max_network_fetches=fetch_budget,
+            )
+            ema_readiness = await self.calc_forager_ema_readiness(
+                pside,
+                candidates,
+                max_age_ms=max_age_ms,
+            )
             features = [
                 {
                     "index": idx,
                     "enabled": min_cost_flags.get(symbol, True),
                     "volume_score": volumes.get(symbol, 0.0),
                     "volatility_score": log_ranges.get(symbol, 0.0),
+                    "ema_readiness_score": ema_readiness.get(symbol, float("inf")),
                 }
                 for idx, symbol in enumerate(candidates)
             ]
@@ -4115,7 +4108,7 @@ class Passivbot:
                 features,
                 max_n_positions,
                 clip_pct,
-                volatility_drop,
+                score_weights,
                 True,
             )
             ideal_coins = [candidates[i] for i in selected]
@@ -4131,6 +4124,54 @@ class Passivbot:
             # all approved coins are selected, no filtering by volume and log range
             ideal_coins = sorted(eligible)
         return ideal_coins
+
+    async def calc_forager_ema_readiness(
+        self,
+        pside: str,
+        symbols: Iterable[str],
+        *,
+        max_age_ms: Optional[int] = 60_000,
+    ) -> Dict[str, float]:
+        """Compute EMA-readiness distance to the actual initial-entry threshold per symbol."""
+        syms = list(symbols)
+        if not syms:
+            return {}
+        try:
+            span_0 = float(self.bot_value(pside, "ema_span_0"))
+            span_1 = float(self.bot_value(pside, "ema_span_1"))
+            entry_initial_ema_dist = float(self.bot_value(pside, "entry_initial_ema_dist"))
+        except Exception:
+            return {sym: float("inf") for sym in syms}
+
+        try:
+            bounds = await self.cm.get_ema_bounds_many(
+                [(sym, span_0, span_1) for sym in syms],
+                max_age_ms=max_age_ms,
+            )
+            prices = await self.cm.get_last_prices(
+                syms,
+                max_age_ms=int(max_age_ms) if max_age_ms is not None else 60_000,
+            )
+        except Exception:
+            return {sym: float("inf") for sym in syms}
+
+        out: Dict[str, float] = {}
+        for sym in syms:
+            lower, upper = bounds.get(sym, (0.0, 0.0))
+            market_price = float(prices.get(sym, 0.0) or 0.0)
+            if pside == "long":
+                entry_threshold = float(lower) * (1.0 - entry_initial_ema_dist)
+                if market_price > 0.0 and entry_threshold > 0.0:
+                    out[sym] = market_price / entry_threshold - 1.0
+                else:
+                    out[sym] = float("inf")
+            else:
+                entry_threshold = float(upper) * (1.0 + entry_initial_ema_dist)
+                if market_price > 0.0 and entry_threshold > 0.0:
+                    out[sym] = 1.0 - market_price / entry_threshold
+                else:
+                    out[sym] = float("inf")
+        return out
 
     async def calc_volumes_and_log_ranges(
         self,
@@ -5550,9 +5591,9 @@ class Passivbot:
             "entry_trailing_threshold_we_weight",
             "entry_trailing_threshold_volatility_weight",
             "filter_volatility_ema_span",
-            "filter_volatility_drop_pct",
             "filter_volume_ema_span",
-            "filter_volume_drop_pct",
+            "forager_volume_drop_pct",
+            "forager_score_weights",
             "ema_span_0",
             "ema_span_1",
             "n_positions",

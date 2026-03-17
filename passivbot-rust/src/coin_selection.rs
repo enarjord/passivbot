@@ -1,3 +1,4 @@
+use crate::types::ForagerScoreWeights;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3::FromPyObject;
@@ -9,13 +10,14 @@ pub struct CoinFeature {
     pub enabled: bool,
     pub volume_score: f64,
     pub volatility_score: f64,
+    pub ema_readiness_score: f64,
 }
 
 #[derive(Debug, Clone)]
 pub struct SelectionConfig {
-    pub max_positions: usize,
+    pub slots_to_fill: usize,
     pub volume_drop_pct: f64,
-    pub volatility_drop_pct: f64,
+    pub weights: ForagerScoreWeights,
     pub require_forager: bool,
 }
 
@@ -31,14 +33,9 @@ impl SelectionConfig {
     fn volume_drop(&self) -> f64 {
         Self::clamp_pct(self.volume_drop_pct)
     }
-
-    fn volatility_drop(&self) -> f64 {
-        Self::clamp_pct(self.volatility_drop_pct)
-    }
 }
 
 pub fn select_coins(features: &[CoinFeature], cfg: &SelectionConfig) -> Vec<usize> {
-    // Work on positions within the `features` slice to avoid assuming contiguity of `CoinFeature.index`.
     let mut enabled_pos: Vec<usize> = Vec::new();
     enabled_pos.reserve(features.len());
     for (pos, f) in features.iter().enumerate() {
@@ -51,36 +48,33 @@ pub fn select_coins(features: &[CoinFeature], cfg: &SelectionConfig) -> Vec<usiz
     }
 
     if !cfg.require_forager {
-        // Preserve deterministic ordering matching the input slice.
         return enabled_pos.iter().map(|&p| features[p].index).collect();
     }
 
-    let max_positions = cfg.max_positions.max(1);
-    select_by_volume(features, &mut enabled_pos, cfg, max_positions);
-    select_by_volatility(features, &mut enabled_pos, cfg, max_positions)
+    let slots_to_fill = cfg.slots_to_fill.max(1);
+    prune_low_volume_tail(features, &mut enabled_pos, cfg.volume_drop(), slots_to_fill);
+    score_forager_candidates(features, &enabled_pos, cfg, slots_to_fill)
 }
 
-fn select_by_volume(
+fn prune_low_volume_tail(
     features: &[CoinFeature],
     positions: &mut Vec<usize>,
-    cfg: &SelectionConfig,
-    max_positions: usize,
+    volume_drop_pct: f64,
+    slots_to_fill: usize,
 ) {
     if positions.is_empty() {
         return;
     }
 
-    let drop = cfg.volume_drop();
-    let mut keep = ((positions.len() as f64) * (1.0 - drop)).round() as usize;
+    let mut keep = ((positions.len() as f64) * (1.0 - volume_drop_pct)).round() as usize;
     if keep == 0 {
         keep = 1;
     }
-    keep = keep.max(max_positions).min(positions.len());
+    keep = keep.max(slots_to_fill).min(positions.len());
     if keep >= positions.len() {
         return;
     }
 
-    // Select the top `keep` by volume score using a deterministic comparator (score desc, idx asc).
     let cmp_volume = |pa: &usize, pb: &usize| {
         let a = &features[*pa];
         let b = &features[*pb];
@@ -90,59 +84,120 @@ fn select_by_volume(
     positions.truncate(keep);
 }
 
-fn select_by_volatility(
+fn score_forager_candidates(
     features: &[CoinFeature],
-    positions: &mut Vec<usize>,
+    positions: &[usize],
     cfg: &SelectionConfig,
-    max_positions: usize,
+    slots_to_fill: usize,
 ) -> Vec<usize> {
     if positions.is_empty() {
         return Vec::new();
     }
 
-    let drop = cfg.volatility_drop();
-    let mut keep = ((positions.len() as f64) * (1.0 - drop)).round() as usize;
-    if keep == 0 {
-        keep = 1;
-    }
-    keep = keep.max(max_positions).min(positions.len());
+    let volume_scores = normalize_higher_is_better(
+        &positions
+            .iter()
+            .map(|&pos| features[pos].volume_score)
+            .collect::<Vec<f64>>(),
+    );
+    let ema_readiness_scores = normalize_lower_is_better(
+        &positions
+            .iter()
+            .map(|&pos| features[pos].ema_readiness_score)
+            .collect::<Vec<f64>>(),
+    );
+    let volatility_scores = normalize_higher_is_better(
+        &positions
+            .iter()
+            .map(|&pos| features[pos].volatility_score)
+            .collect::<Vec<f64>>(),
+    );
 
-    let cmp_vol = |pa: &usize, pb: &usize| {
-        let a = &features[*pa];
-        let b = &features[*pb];
-        compare_desc(a.volatility_score, b.volatility_score, a.index, b.index)
-    };
+    let mut scored: Vec<(usize, f64)> = positions
+        .iter()
+        .enumerate()
+        .map(|(i, &pos)| {
+            let score = cfg.weights.volume * volume_scores[i]
+                + cfg.weights.ema_readiness * ema_readiness_scores[i]
+                + cfg.weights.volatility * volatility_scores[i];
+            (pos, score)
+        })
+        .collect();
 
-    // Match legacy behavior:
-    // 1) sort by volatility (desc)
-    // 2) drop the first `drop_count` entries
-    // 3) return the next `max_positions`
-    //
-    // We avoid a full sort by:
-    // - partitioning at `drop_count` to discard the top segment
-    // - selecting the top `max_positions` within the retained tail
-    // - sorting only that small subset for deterministic order
-    let drop_count = positions.len().saturating_sub(keep);
-    if drop_count > 0 && drop_count < positions.len() {
-        positions.select_nth_unstable_by(drop_count, cmp_vol);
-    }
-    let tail_start = drop_count.min(positions.len());
-    let tail_len = positions.len().saturating_sub(tail_start);
-    if tail_len == 0 {
+    scored.sort_unstable_by(|a, b| {
+        let fa = &features[a.0];
+        let fb = &features[b.0];
+        compare_desc(a.1, b.1, fa.index, fb.index)
+    });
+
+    scored
+        .into_iter()
+        .take(slots_to_fill)
+        .map(|(pos, _)| features[pos].index)
+        .collect()
+}
+
+fn normalize_higher_is_better(values: &[f64]) -> Vec<f64> {
+    if values.is_empty() {
         return Vec::new();
     }
-
-    let take = max_positions.min(tail_len);
-    {
-        let tail = &mut positions[tail_start..];
-        if take < tail.len() {
-            tail.select_nth_unstable_by(take.saturating_sub(1), cmp_vol);
-        }
-        tail[..take].sort_unstable_by(cmp_vol);
-    }
-    positions[tail_start..tail_start + take]
+    let finite: Vec<f64> = values
         .iter()
-        .map(|&p| features[p].index)
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect();
+    if finite.is_empty() {
+        return vec![1.0; values.len()];
+    }
+    let min = finite.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = finite.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if (max - min).abs() <= f64::EPSILON {
+        return values
+            .iter()
+            .map(|value| if value.is_finite() { 1.0 } else { 0.0 })
+            .collect();
+    }
+    values
+        .iter()
+        .map(|value| {
+            if value.is_finite() {
+                (value - min) / (max - min)
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+fn normalize_lower_is_better(values: &[f64]) -> Vec<f64> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    let finite: Vec<f64> = values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect();
+    if finite.is_empty() {
+        return vec![1.0; values.len()];
+    }
+    let min = finite.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = finite.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if (max - min).abs() <= f64::EPSILON {
+        return values
+            .iter()
+            .map(|value| if value.is_finite() { 1.0 } else { 0.0 })
+            .collect();
+    }
+    values
+        .iter()
+        .map(|value| {
+            if value.is_finite() {
+                (max - value) / (max - min)
+            } else {
+                0.0
+            }
+        })
         .collect()
 }
 
@@ -158,6 +213,7 @@ pub struct CoinFeatureInput {
     pub enabled: bool,
     pub volume_score: f64,
     pub volatility_score: f64,
+    pub ema_readiness_score: f64,
 }
 
 impl<'source> FromPyObject<'source> for CoinFeatureInput {
@@ -166,11 +222,13 @@ impl<'source> FromPyObject<'source> for CoinFeatureInput {
         let enabled = ob.get_item("enabled")?.extract::<bool>()?;
         let volume_score = ob.get_item("volume_score")?.extract::<f64>()?;
         let volatility_score = ob.get_item("volatility_score")?.extract::<f64>()?;
+        let ema_readiness_score = ob.get_item("ema_readiness_score")?.extract::<f64>()?;
         Ok(CoinFeatureInput {
             index,
             enabled,
             volume_score,
             volatility_score,
+            ema_readiness_score,
         })
     }
 }
@@ -182,23 +240,40 @@ impl From<CoinFeatureInput> for CoinFeature {
             enabled: value.enabled,
             volume_score: value.volume_score,
             volatility_score: value.volatility_score,
+            ema_readiness_score: value.ema_readiness_score,
         }
+    }
+}
+
+impl<'source> FromPyObject<'source> for ForagerScoreWeights {
+    fn extract(ob: &'source PyAny) -> PyResult<Self> {
+        Ok(Self {
+            volume: ob.get_item("volume")?.extract::<f64>()?,
+            ema_readiness: ob.get_item("ema_readiness")?.extract::<f64>()?,
+            volatility: ob.get_item("volatility")?.extract::<f64>()?,
+        })
     }
 }
 
 #[pyfunction]
 pub fn select_coin_indices_py(
     py_features: Vec<CoinFeatureInput>,
-    max_positions: usize,
+    slots_to_fill: usize,
     volume_drop_pct: f64,
-    volatility_drop_pct: f64,
+    weights: ForagerScoreWeights,
     require_forager: bool,
 ) -> PyResult<Vec<usize>> {
+    let total_weight = weights.volume + weights.ema_readiness + weights.volatility;
+    if !total_weight.is_finite() || total_weight <= 0.0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "forager_score_weights must contain at least one positive finite weight",
+        ));
+    }
     let features: Vec<CoinFeature> = py_features.into_iter().map(Into::into).collect();
     let cfg = SelectionConfig {
-        max_positions,
+        slots_to_fill,
         volume_drop_pct,
-        volatility_drop_pct,
+        weights,
         require_forager,
     };
     Ok(select_coins(&features, &cfg))
@@ -208,20 +283,21 @@ pub fn select_coin_indices_py(
 mod tests {
     use super::*;
 
-    fn make_feature(index: usize, volume: f64, volatility: f64) -> CoinFeature {
+    fn make_feature(index: usize, volume: f64, volatility: f64, ema_readiness: f64) -> CoinFeature {
         CoinFeature {
             index,
             enabled: true,
             volume_score: volume,
             volatility_score: volatility,
+            ema_readiness_score: ema_readiness,
         }
     }
 
     fn default_config() -> SelectionConfig {
         SelectionConfig {
-            max_positions: 3,
+            slots_to_fill: 3,
             volume_drop_pct: 0.0,
-            volatility_drop_pct: 0.0,
+            weights: ForagerScoreWeights::default(),
             require_forager: true,
         }
     }
@@ -234,18 +310,21 @@ mod tests {
                 enabled: true,
                 volume_score: 0.1,
                 volatility_score: 0.1,
+                ema_readiness_score: 0.1,
             },
             CoinFeature {
                 index: 1,
                 enabled: false,
                 volume_score: 1.0,
                 volatility_score: 1.0,
+                ema_readiness_score: 1.0,
             },
             CoinFeature {
                 index: 2,
                 enabled: true,
                 volume_score: 0.2,
                 volatility_score: 0.2,
+                ema_readiness_score: 0.2,
             },
         ];
         let cfg = SelectionConfig {
@@ -256,50 +335,65 @@ mod tests {
     }
 
     #[test]
-    fn respects_volume_drop_percentage() {
+    fn respects_volume_drop_percentage_but_keeps_enough_candidates() {
         let features = vec![
-            make_feature(0, 0.1, 0.1),
-            make_feature(1, 0.3, 0.3),
-            make_feature(2, 0.2, 0.2),
-            make_feature(3, 0.4, 0.4),
-            make_feature(4, 0.5, 0.5),
+            make_feature(0, 0.1, 0.1, 0.1),
+            make_feature(1, 0.2, 0.2, 0.2),
+            make_feature(2, 0.3, 0.3, 0.3),
+            make_feature(3, 0.4, 0.4, 0.4),
         ];
         let cfg = SelectionConfig {
-            max_positions: 2,
-            volume_drop_pct: 0.4,
-            ..default_config()
-        };
-        // After dropping top 40% by volume we keep 3 coins -> indices [4,3,1]
-        // Volatility drop default 0.0, so pick highest two -> [4,3]
-        assert_eq!(select_coins(&features, &cfg), vec![4, 3]);
-    }
-
-    #[test]
-    fn applies_volatility_drop_percentage() {
-        let features = vec![
-            make_feature(0, 1.0, 0.9),
-            make_feature(1, 1.0, 0.8),
-            make_feature(2, 1.0, 0.7),
-            make_feature(3, 1.0, 0.6),
-        ];
-        let cfg = SelectionConfig {
-            max_positions: 2,
-            volatility_drop_pct: 0.5,
-            ..default_config()
-        };
-        // Drop top 50% volatility (indices 0 & 1), select from remaining highest -> [2,3]
-        assert_eq!(select_coins(&features, &cfg), vec![2, 3]);
-    }
-
-    #[test]
-    fn ensures_min_positions_even_with_high_drop() {
-        let features = vec![make_feature(0, 0.1, 0.1), make_feature(1, 0.2, 0.2)];
-        let cfg = SelectionConfig {
-            max_positions: 2,
+            slots_to_fill: 3,
             volume_drop_pct: 0.9,
-            volatility_drop_pct: 0.9,
             ..default_config()
         };
-        assert_eq!(select_coins(&features, &cfg), vec![1, 0]);
+        assert_eq!(select_coins(&features, &cfg), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn ema_readiness_can_override_volatility_when_weighted() {
+        let features = vec![
+            make_feature(0, 1.0, 1.0, -0.01),
+            make_feature(1, 1.0, 1.0, 0.20),
+        ];
+        let cfg = SelectionConfig {
+            slots_to_fill: 1,
+            weights: ForagerScoreWeights {
+                volume: 0.0,
+                ema_readiness: 1.0,
+                volatility: 0.0,
+            },
+            ..default_config()
+        };
+        assert_eq!(select_coins(&features, &cfg), vec![0]);
+    }
+
+    #[test]
+    fn legacy_like_default_prefers_highest_volatility() {
+        let features = vec![
+            make_feature(0, 1.0, 0.2, 0.0),
+            make_feature(1, 1.0, 0.8, 0.0),
+            make_feature(2, 1.0, 0.5, 0.0),
+        ];
+        assert_eq!(select_coins(&features, &default_config()), vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn ties_are_deterministic_by_index() {
+        let features = vec![
+            make_feature(2, 1.0, 1.0, 0.0),
+            make_feature(1, 1.0, 1.0, 0.0),
+            make_feature(0, 1.0, 1.0, 0.0),
+        ];
+        let cfg = SelectionConfig {
+            slots_to_fill: 2,
+            weights: ForagerScoreWeights {
+                volume: 1.0,
+                ema_readiness: 0.0,
+                volatility: 0.0,
+            },
+            ..default_config()
+        };
+        assert_eq!(select_coins(&features, &cfg), vec![0, 1]);
     }
 }

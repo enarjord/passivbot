@@ -40,9 +40,13 @@ def bot_params(**overrides):
         "entry_trailing_threshold_we_weight": 0.0,
         "entry_trailing_threshold_volatility_weight": 0.0,
         "filter_volatility_ema_span": 10.0,
-        "filter_volatility_drop_pct": 0.0,
         "filter_volume_ema_span": 10.0,
-        "filter_volume_drop_pct": 0.0,
+        "forager_volume_drop_pct": 0.0,
+        "forager_score_weights": {
+            "volume": 0.0,
+            "ema_readiness": 0.0,
+            "volatility": 1.0,
+        },
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
         "n_positions": 1,
@@ -291,8 +295,7 @@ def test_forager_respects_n_positions_selects_one_coin():
         long_overrides={
             "n_positions": 1,
             "total_wallet_exposure_limit": 1.0,
-            "filter_volume_drop_pct": 0.5,
-            "filter_volatility_drop_pct": 0.0,
+            "forager_volume_drop_pct": 0.5,
             "filter_volume_ema_span": 10.0,
             "filter_volatility_ema_span": 10.0,
         }
@@ -312,8 +315,7 @@ def test_forager_respects_n_positions_selects_one_coin():
             m1_log_range=[[10.0, 0.1]],
         ),
         long_bp={
-            "filter_volume_drop_pct": 0.5,
-            "filter_volatility_drop_pct": 0.0,
+            "forager_volume_drop_pct": 0.5,
             "filter_volume_ema_span": 10.0,
             "filter_volatility_ema_span": 10.0,
         },
@@ -332,8 +334,7 @@ def test_forager_respects_n_positions_selects_one_coin():
             m1_log_range=[[10.0, 0.2]],
         ),
         long_bp={
-            "filter_volume_drop_pct": 0.5,
-            "filter_volatility_drop_pct": 0.0,
+            "forager_volume_drop_pct": 0.5,
             "filter_volume_ema_span": 10.0,
             "filter_volatility_ema_span": 10.0,
         },
@@ -343,6 +344,69 @@ def test_forager_respects_n_positions_selects_one_coin():
     out = compute(pbr, inp)
     assert out["orders"], "expected at least one order"
     assert {o["symbol_idx"] for o in out["orders"]} == {1}
+
+
+def test_forager_ema_readiness_prefers_ready_coin_when_weighted():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={
+            "n_positions": 1,
+            "total_wallet_exposure_limit": 1.0,
+            "forager_volume_drop_pct": 0.0,
+            "forager_score_weights": {
+                "volume": 0.0,
+                "ema_readiness": 1.0,
+                "volatility": 0.0,
+            },
+            "entry_initial_ema_dist": 0.0,
+        }
+    )
+
+    ready = make_symbol(
+        0,
+        bid=99.0,
+        ask=99.0,
+        emas=ema_bundle(
+            m1_close=[[10.0, 100.0], [20.0, 100.0], [math.sqrt(10.0 * 20.0), 100.0]],
+            m1_volume=[[10.0, 10.0]],
+            m1_log_range=[[10.0, 0.5]],
+        ),
+    )
+    far = make_symbol(
+        1,
+        bid=120.0,
+        ask=120.0,
+        emas=ema_bundle(
+            m1_close=[[10.0, 100.0], [20.0, 100.0], [math.sqrt(10.0 * 20.0), 100.0]],
+            m1_volume=[[10.0, 10.0]],
+            m1_log_range=[[10.0, 0.5]],
+        ),
+    )
+
+    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=[ready, far]))
+    assert out["orders"], "expected at least one order"
+    assert {o["symbol_idx"] for o in out["orders"]} == {0}
+
+
+def test_json_rejects_all_zero_forager_weights():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            long_overrides={
+                "forager_score_weights": {
+                    "volume": 0.0,
+                    "ema_readiness": 0.0,
+                    "volatility": 0.0,
+                }
+            }
+        ),
+        symbols=[make_symbol(0, bid=100.0, ask=100.0)],
+    )
+    with pytest.raises(ValueError, match="forager_score_weights"):
+        compute(pbr, inp)
 
 
 def test_json_output_is_deterministic():

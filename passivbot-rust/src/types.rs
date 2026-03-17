@@ -330,6 +330,24 @@ fn default_hsl_panic_close_order_type() -> String {
     "market".to_string()
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ForagerScoreWeights {
+    pub volume: f64,
+    pub ema_readiness: f64,
+    pub volatility: f64,
+}
+
+impl Default for ForagerScoreWeights {
+    fn default() -> Self {
+        Self {
+            volume: 0.0,
+            ema_readiness: 0.0,
+            volatility: 1.0,
+        }
+    }
+}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BotParams {
@@ -356,9 +374,9 @@ pub struct BotParams {
     pub entry_trailing_threshold_we_weight: f64,
     pub entry_trailing_threshold_volatility_weight: f64,
     pub filter_volatility_ema_span: f64,
-    pub filter_volatility_drop_pct: f64,
     pub filter_volume_ema_span: f64,
-    pub filter_volume_drop_pct: f64,
+    pub forager_volume_drop_pct: f64,
+    pub forager_score_weights: ForagerScoreWeights,
     pub ema_span_0: f64,
     pub ema_span_1: f64,
     #[serde(default = "default_hsl_enabled")]

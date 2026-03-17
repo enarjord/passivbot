@@ -10,9 +10,10 @@ class CoinFilterHarness(Passivbot):
         approved_by_side,
         volumes,
         log_ranges,
+        ema_readiness=None,
         max_positions,
         clip_pct=0.0,
-        volatility_drop_pct=0.0,
+        score_weights=None,
         forager=True,
         min_cost_ok=None,
         age_ok=None,
@@ -22,9 +23,14 @@ class CoinFilterHarness(Passivbot):
         self.approved_coins_minus_ignored_coins = approved_by_side
         self._volumes = volumes
         self._log_ranges = log_ranges
+        self._ema_readiness = ema_readiness or {}
         self._max_positions = max_positions
         self._clip_pct = clip_pct
-        self._volatility_drop_pct = volatility_drop_pct
+        self._score_weights = score_weights or {
+            "volume": 0.0,
+            "ema_readiness": 0.0,
+            "volatility": 1.0,
+        }
         self._forager = forager
         self._min_cost_ok = min_cost_ok or {}
         self._age_ok = age_ok or {}
@@ -51,10 +57,10 @@ class CoinFilterHarness(Passivbot):
         return self._forager
 
     def bot_value(self, pside, key):
-        if key == "filter_volume_drop_pct":
+        if key == "forager_volume_drop_pct":
             return self._clip_pct
-        if key == "filter_volatility_drop_pct":
-            return self._volatility_drop_pct
+        if key == "forager_score_weights":
+            return self._score_weights
         if key == "n_positions":
             return float(self._max_positions[pside])
         return 0.0
@@ -72,6 +78,17 @@ class CoinFilterHarness(Passivbot):
         self, _pside, eligible_symbols, max_age_ms=None, max_network_fetches=None
     ):
         return {sym: self._log_ranges[sym] for sym in eligible_symbols}
+
+    async def calc_volumes_and_log_ranges(
+        self, _pside, symbols=None, *, max_age_ms=None, max_network_fetches=None
+    ):
+        return (
+            {sym: self._volumes[sym] for sym in symbols},
+            {sym: self._log_ranges[sym] for sym in symbols},
+        )
+
+    async def calc_forager_ema_readiness(self, _pside, symbols, max_age_ms=None):
+        return {sym: self._ema_readiness.get(sym, 0.0) for sym in symbols}
 
     def is_pside_enabled(self, _pside):
         return True
@@ -110,20 +127,21 @@ async def test_volume_clip_applied_before_volatility_sort():
 
 
 @pytest.mark.asyncio
-async def test_volatility_drop_pct_discards_top_tail():
+async def test_ema_readiness_can_override_volatility_when_weighted():
     approved = {"long": ["AAA", "BBB", "CCC", "DDD"], "short": []}
     volumes = {"AAA": 10.0, "BBB": 10.0, "CCC": 10.0, "DDD": 10.0}
     log_ranges = {"AAA": 0.9, "BBB": 0.8, "CCC": 0.7, "DDD": 0.6}
+    ema_readiness = {"AAA": 0.4, "BBB": 0.3, "CCC": 0.2, "DDD": -0.01}
     bot = CoinFilterHarness(
         approved_by_side=approved,
         volumes=volumes,
         log_ranges=log_ranges,
+        ema_readiness=ema_readiness,
         max_positions={"long": 2, "short": 0},
-        volatility_drop_pct=0.5,
+        score_weights={"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0},
     )
     coins = await bot.get_filtered_coins("long")
-    # drops top 50% => keep CCC,DDD and pick highest among them => [CCC, DDD]
-    assert coins == ["CCC", "DDD"]
+    assert coins == ["DDD", "CCC"]
 
 
 @pytest.mark.asyncio

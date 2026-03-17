@@ -451,6 +451,49 @@ mod core {
         Ok(v)
     }
 
+    fn compute_ema_readiness_raw(
+        symbol_idx: usize,
+        order_book: &OrderBook,
+        emas: &EmaBundle,
+        bot: &BotParams,
+        pside: PositionSide,
+    ) -> Result<f64, OrchestratorError> {
+        let ema_bands = derive_ema_bands(symbol_idx, emas, bot)?;
+        let readiness = match pside {
+            PositionSide::Long => {
+                let market_price = order_book.bid;
+                let entry_threshold = ema_bands.lower * (1.0 - bot.entry_initial_ema_dist);
+                if !(market_price.is_finite()
+                    && market_price > 0.0
+                    && entry_threshold.is_finite()
+                    && entry_threshold > 0.0)
+                {
+                    return Err(OrchestratorError::NonFiniteInput {
+                        field: "forager_ema_readiness",
+                        symbol_idx: Some(symbol_idx),
+                    });
+                }
+                market_price / entry_threshold - 1.0
+            }
+            PositionSide::Short => {
+                let market_price = order_book.ask;
+                let entry_threshold = ema_bands.upper * (1.0 + bot.entry_initial_ema_dist);
+                if !(market_price.is_finite()
+                    && market_price > 0.0
+                    && entry_threshold.is_finite()
+                    && entry_threshold > 0.0)
+                {
+                    return Err(OrchestratorError::NonFiniteInput {
+                        field: "forager_ema_readiness",
+                        symbol_idx: Some(symbol_idx),
+                    });
+                }
+                1.0 - market_price / entry_threshold
+            }
+        };
+        Ok(readiness)
+    }
+
     fn effective_min_cost_is_low_enough(
         balance: f64,
         filter_enabled: bool,
@@ -955,8 +998,9 @@ mod core {
         span_volatility: f64,
         filter_enabled: bool,
         balance: f64,
+        active_flags: Option<&[bool]>,
         out: &mut Vec<CoinFeature>,
-    ) {
+    ) -> Result<(), OrchestratorError> {
         out.clear();
         out.reserve(symbols.len());
         for s in symbols {
@@ -969,7 +1013,12 @@ mod core {
             // - We exclude modes which categorically block initial entries when `psize == 0.0`.
             let mode_no_pos = effective_mode(side.mode, false);
             let can_open_initial = should_generate_entries(mode_no_pos, false, true);
+            let already_active = active_flags
+                .and_then(|flags| flags.get(s.symbol_idx))
+                .copied()
+                .unwrap_or(false);
             let enabled = s.tradable
+                && !already_active
                 && one_way_allows_initial_slot(symbols, s.symbol_idx, pside, hedge_mode)
                 && can_open_initial
                 && effective_min_cost_is_low_enough(
@@ -980,13 +1029,22 @@ mod core {
                 );
             let volume_score = ema_lookup(&s.emas.m1.volume, span_volume).unwrap_or(0.0);
             let volatility_score = ema_lookup(&s.emas.m1.log_range, span_volatility).unwrap_or(0.0);
+            let ema_readiness_score = compute_ema_readiness_raw(
+                s.symbol_idx,
+                &s.order_book,
+                &s.emas,
+                &side.bot_params,
+                pside,
+            )?;
             out.push(CoinFeature {
                 index: s.symbol_idx,
                 enabled,
                 volume_score,
                 volatility_score,
+                ema_readiness_score,
             });
         }
+        Ok(())
     }
 
     fn calc_panic_close(
@@ -1476,8 +1534,6 @@ mod core {
                 }
             }
             if actives_long_count < enp_long {
-                // Preferred coin ordering for filling remaining empty slots (volume -> clip -> volatility),
-                // matching the legacy backtest selection.
                 build_forager_features_into(
                     &input.symbols,
                     PositionSide::Long,
@@ -1490,16 +1546,18 @@ mod core {
                         .filter_volatility_ema_span,
                     input.global.filter_by_min_effective_cost,
                     input.balance,
+                    Some(actives_long),
                     &mut workspace.features,
-                );
+                )?;
                 let cfg = SelectionConfig {
-                    max_positions: enp_long,
-                    volume_drop_pct: input.global.global_bot_params.long.filter_volume_drop_pct,
-                    volatility_drop_pct: input
+                    slots_to_fill: enp_long.saturating_sub(actives_long_count),
+                    volume_drop_pct: input.global.global_bot_params.long.forager_volume_drop_pct,
+                    weights: input
                         .global
                         .global_bot_params
                         .long
-                        .filter_volatility_drop_pct,
+                        .forager_score_weights
+                        .clone(),
                     require_forager: true,
                 };
                 for idx in select_coins(&workspace.features, &cfg) {
@@ -1556,16 +1614,18 @@ mod core {
                         .filter_volatility_ema_span,
                     input.global.filter_by_min_effective_cost,
                     input.balance,
+                    Some(actives_short),
                     &mut workspace.features,
-                );
+                )?;
                 let cfg = SelectionConfig {
-                    max_positions: enp_short,
-                    volume_drop_pct: input.global.global_bot_params.short.filter_volume_drop_pct,
-                    volatility_drop_pct: input
+                    slots_to_fill: enp_short.saturating_sub(actives_short_count),
+                    volume_drop_pct: input.global.global_bot_params.short.forager_volume_drop_pct,
+                    weights: input
                         .global
                         .global_bot_params
                         .short
-                        .filter_volatility_drop_pct,
+                        .forager_score_weights
+                        .clone(),
                     require_forager: true,
                 };
                 for idx in select_coins(&workspace.features, &cfg) {
@@ -2927,8 +2987,7 @@ mod core {
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 1.0;
             global_bp.long.n_positions = 1;
-            global_bp.long.filter_volume_drop_pct = 0.0;
-            global_bp.long.filter_volatility_drop_pct = 0.0;
+            global_bp.long.forager_volume_drop_pct = 0.0;
 
             let input = OrchestratorInput {
                 balance: 1000.0,
@@ -3062,10 +3121,8 @@ mod core {
             global_bp.long.n_positions = 1;
             global_bp.short.total_wallet_exposure_limit = 1.0;
             global_bp.short.n_positions = 1;
-            global_bp.long.filter_volume_drop_pct = 0.0;
-            global_bp.long.filter_volatility_drop_pct = 0.0;
-            global_bp.short.filter_volume_drop_pct = 0.0;
-            global_bp.short.filter_volatility_drop_pct = 0.0;
+            global_bp.long.forager_volume_drop_pct = 0.0;
+            global_bp.short.forager_volume_drop_pct = 0.0;
 
             let input = OrchestratorInput {
                 balance: 1000.0,
@@ -3117,10 +3174,8 @@ mod core {
             global_bp.long.n_positions = 1;
             global_bp.short.total_wallet_exposure_limit = 1.0;
             global_bp.short.n_positions = 1;
-            global_bp.long.filter_volume_drop_pct = 0.0;
-            global_bp.long.filter_volatility_drop_pct = 0.0;
-            global_bp.short.filter_volume_drop_pct = 0.0;
-            global_bp.short.filter_volatility_drop_pct = 0.0;
+            global_bp.long.forager_volume_drop_pct = 0.0;
+            global_bp.short.forager_volume_drop_pct = 0.0;
 
             let input = OrchestratorInput {
                 balance: 1000.0,
@@ -3272,8 +3327,7 @@ mod core {
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 1000.0;
             global_bp.long.n_positions = 4;
-            global_bp.long.filter_volume_drop_pct = 0.0;
-            global_bp.long.filter_volatility_drop_pct = 0.0;
+            global_bp.long.forager_volume_drop_pct = 0.0;
             global_bp.long.filter_volume_ema_span = 10.0;
             global_bp.long.filter_volatility_ema_span = 10.0;
             // disable short for this test

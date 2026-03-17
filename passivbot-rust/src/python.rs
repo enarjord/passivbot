@@ -18,8 +18,8 @@ use crate::trailing::{
 use crate::types::OrderType;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, EquityHardStopLossConfig,
-    EquityHardStopLossTierRatios, ExchangeParams, HlcvsBundle, HlcvsMeta, OrderBook, Position,
-    StateParams, TrailingPriceBundle,
+    EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights, HlcvsBundle, HlcvsMeta,
+    OrderBook, Position, StateParams, TrailingPriceBundle,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -1387,8 +1387,8 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
             "filter_log_range_ema_span",
         )?,
         filter_volume_ema_span: extract_value(dict, "filter_volume_ema_span")?,
-        filter_volume_drop_pct: extract_value(dict, "filter_volume_drop_pct")?,
-        filter_volatility_drop_pct: extract_value(dict, "filter_volatility_drop_pct")?,
+        forager_volume_drop_pct: extract_value(dict, "forager_volume_drop_pct")?,
+        forager_score_weights: extract_forager_score_weights(dict)?,
         ema_span_0: extract_value(dict, "ema_span_0")?,
         ema_span_1: extract_value(dict, "ema_span_1")?,
         hsl_enabled,
@@ -1411,6 +1411,46 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
         unstuck_threshold: extract_value(dict, "unstuck_threshold")?,
     })
+}
+
+fn extract_forager_score_weights(dict: &PyDict) -> PyResult<ForagerScoreWeights> {
+    let weights_dict = dict
+        .get_item("forager_score_weights")
+        .map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyKeyError, _>("Key 'forager_score_weights' not found")
+        })?
+        .ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Value for key 'forager_score_weights' is None",
+            )
+        })?
+        .downcast::<PyDict>()?;
+    let weights = ForagerScoreWeights {
+        volume: extract_value(weights_dict, "volume")?,
+        ema_readiness: extract_value(weights_dict, "ema_readiness")?,
+        volatility: extract_value(weights_dict, "volatility")?,
+    };
+    let total_weight = weights.volume + weights.ema_readiness + weights.volatility;
+    if !total_weight.is_finite() || total_weight <= 0.0 {
+        return Err(PyValueError::new_err(
+            "forager_score_weights must contain at least one positive finite weight",
+        ));
+    }
+    Ok(weights)
+}
+
+fn validate_forager_score_weights_pair(bot_params: &BotParamsPair) -> PyResult<()> {
+    for (pside, params) in [("long", &bot_params.long), ("short", &bot_params.short)] {
+        let total_weight = params.forager_score_weights.volume
+            + params.forager_score_weights.ema_readiness
+            + params.forager_score_weights.volatility;
+        if !total_weight.is_finite() || total_weight <= 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "bot.{pside}.forager_score_weights must contain at least one positive finite weight"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> PyResult<T> {
@@ -2325,6 +2365,7 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
                 e
             ))
         })?;
+    validate_forager_score_weights_pair(&input.global.global_bot_params)?;
 
     let out = crate::orchestrator::compute_ideal_orders(&input).map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!(

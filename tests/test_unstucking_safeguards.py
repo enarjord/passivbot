@@ -431,8 +431,12 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "risk_twel_enforcer_threshold": 0.0,
                 "filter_volume_ema_span": 0.0,
                 "filter_volatility_ema_span": 0.0,
-                "filter_volume_drop_pct": 0.0,
-                "filter_volatility_drop_pct": 0.0,
+                "forager_volume_drop_pct": 0.0,
+                "forager_score_weights": {
+                    "volume": 0.0,
+                    "ema_readiness": 0.0,
+                    "volatility": 1.0,
+                },
                 "unstuck_loss_allowance_pct": 0.0,
             }
             self._live_values = {

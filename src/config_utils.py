@@ -720,6 +720,10 @@ LEGACY_FILTER_KEYS = {
     "filter_volume_rolling_window": "filter_volume_ema_span",
 }
 
+LEGACY_FORAGER_KEYS = {
+    "filter_volume_drop_pct": "forager_volume_drop_pct",
+}
+
 LEGACY_ENTRY_GRID_KEYS = {
     "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
     "entry_grid_spacing_log_span_hours": "entry_volatility_ema_span_hours",
@@ -738,6 +742,8 @@ LEGACY_BOUNDS_KEYS = {
     "short_filter_noisiness_ema_span": "short_filter_volatility_ema_span",
     "short_filter_volume_rolling_window": "short_filter_volume_ema_span",
     "short_filter_log_range_ema_span": "short_filter_volatility_ema_span",
+    "long_filter_volume_drop_pct": "long_forager_volume_drop_pct",
+    "short_filter_volume_drop_pct": "short_forager_volume_drop_pct",
     "long_entry_grid_spacing_weight": "long_entry_grid_spacing_we_weight",
     "short_entry_grid_spacing_weight": "short_entry_grid_spacing_we_weight",
     "long_entry_grid_spacing_log_span_hours": "long_entry_volatility_ema_span_hours",
@@ -762,6 +768,21 @@ def _apply_backward_compatibility_renames(
         if not isinstance(bot_cfg, dict):
             continue
         for old, new in LEGACY_FILTER_KEYS.items():
+            if old in bot_cfg:
+                moved_value = bot_cfg[old]
+                if new not in bot_cfg:
+                    bot_cfg[new] = moved_value
+                    _log_config(
+                        verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new
+                    )
+                    if tracker is not None:
+                        tracker.rename(
+                            ["bot", pside, old],
+                            ["bot", pside, new],
+                            moved_value,
+                        )
+                del bot_cfg[old]
+        for old, new in LEGACY_FORAGER_KEYS.items():
             if old in bot_cfg:
                 moved_value = bot_cfg[old]
                 if new not in bot_cfg:
@@ -1081,13 +1102,8 @@ def _ensure_bot_defaults_and_bounds(
                 bounds.get(f"{pside}_close_grid_min_markup", [0.001, 0.03]),
             ),
             (
-                "filter_volume_drop_pct",
+                "forager_volume_drop_pct",
                 result["live"].get("filter_relative_volume_clip_pct", 0.5),
-                [0.0, 1.0],
-            ),
-            (
-                "filter_volatility_drop_pct",
-                0.0,
                 [0.0, 1.0],
             ),
         ]:
@@ -1116,6 +1132,64 @@ def _ensure_bot_defaults_and_bounds(
                 )
                 if tracker is not None:
                     tracker.add(["optimize", "bounds", opt_key], v_opt)
+        if "forager_score_weights" not in result["bot"][pside]:
+            weights = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
+            result["bot"][pside]["forager_score_weights"] = weights
+            _log_config(
+                verbose,
+                logging.INFO,
+                "adding missing backtest parameter %s forager_score_weights: %s",
+                pside,
+                weights,
+            )
+            if tracker is not None:
+                tracker.add(["bot", pside, "forager_score_weights"], weights)
+
+
+def _validate_forager_config(result: dict) -> None:
+    required_weight_keys = {"volume", "ema_readiness", "volatility"}
+    for pside in ("long", "short"):
+        bot_cfg = result["bot"][pside]
+        drop_pct = bot_cfg["forager_volume_drop_pct"]
+        try:
+            drop_pct = float(drop_pct)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"bot.{pside}.forager_volume_drop_pct must be numeric") from exc
+        if not math.isfinite(drop_pct) or not (0.0 <= drop_pct <= 1.0):
+            raise ValueError(f"bot.{pside}.forager_volume_drop_pct must be within [0.0, 1.0]")
+        bot_cfg["forager_volume_drop_pct"] = drop_pct
+
+        weights = bot_cfg["forager_score_weights"]
+        if not isinstance(weights, dict):
+            raise TypeError(f"bot.{pside}.forager_score_weights must be a dict")
+        missing = sorted(required_weight_keys - set(weights))
+        if missing:
+            raise ValueError(
+                f"bot.{pside}.forager_score_weights missing required keys: {', '.join(missing)}"
+            )
+        extra = sorted(set(weights) - required_weight_keys)
+        if extra:
+            raise ValueError(
+                f"bot.{pside}.forager_score_weights has unsupported keys: {', '.join(extra)}"
+            )
+        normalized = {}
+        total = 0.0
+        for key in ("volume", "ema_readiness", "volatility"):
+            try:
+                value = float(weights[key])
+            except (TypeError, ValueError) as exc:
+                raise TypeError(f"bot.{pside}.forager_score_weights.{key} must be numeric") from exc
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    f"bot.{pside}.forager_score_weights.{key} must be finite and non-negative"
+                )
+            normalized[key] = value
+            total += value
+        if total <= 0.0:
+            raise ValueError(
+                f"bot.{pside}.forager_score_weights must contain at least one positive weight"
+            )
+        bot_cfg["forager_score_weights"] = normalized
 
 
 def _rename_config_keys(
@@ -1489,6 +1563,7 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     _migrate_bot_common_hsl(result, verbose=verbose, tracker=tracker)
 
     _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
+    _validate_forager_config(result)
 
     _normalize_position_counts(result, tracker=tracker)
     if coin_sources_input is not None:
@@ -2445,10 +2520,14 @@ def get_template_config():
                 "entry_trailing_threshold_volatility_weight": 0.0,
                 "entry_trailing_threshold_we_weight": 0.0,
                 "entry_volatility_ema_span_hours": 72,
-                "filter_volatility_drop_pct": 0.0,
                 "filter_volatility_ema_span": 60.0,
-                "filter_volume_drop_pct": 0.95,
                 "filter_volume_ema_span": 60.0,
+                "forager_volume_drop_pct": 0.95,
+                "forager_score_weights": {
+                    "volume": 0.0,
+                    "ema_readiness": 0.0,
+                    "volatility": 1.0,
+                },
                 "n_positions": 10.0,
                 "risk_twel_enforcer_threshold": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
@@ -2492,10 +2571,14 @@ def get_template_config():
                 "entry_trailing_threshold_volatility_weight": 0.0,
                 "entry_trailing_threshold_we_weight": 0.0,
                 "entry_volatility_ema_span_hours": 72,
-                "filter_volatility_drop_pct": 0.0,
                 "filter_volatility_ema_span": 60.0,
-                "filter_volume_drop_pct": 0.95,
                 "filter_volume_ema_span": 60.0,
+                "forager_volume_drop_pct": 0.95,
+                "forager_score_weights": {
+                    "volume": 0.0,
+                    "ema_readiness": 0.0,
+                    "volatility": 1.0,
+                },
                 "n_positions": 10.0,
                 "risk_twel_enforcer_threshold": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
@@ -2581,10 +2664,9 @@ def get_template_config():
                 "long_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
                 "long_entry_trailing_threshold_we_weight": [0.0, 20.0],
                 "long_entry_volatility_ema_span_hours": [24.0, 336.0],
-                "long_filter_volatility_drop_pct": [0.0, 1.0],
                 "long_filter_volatility_ema_span": [10.0, 1440.0],
-                "long_filter_volume_drop_pct": [0.0, 1.0],
                 "long_filter_volume_ema_span": [10.0, 1440.0],
+                "long_forager_volume_drop_pct": [0.0, 1.0],
                 "long_n_positions": [1.0, 20.0],
                 "long_risk_twel_enforcer_threshold": [0.9, 1.01],
                 "long_risk_we_excess_allowance_pct": [0.0, 0.5],
@@ -2618,10 +2700,9 @@ def get_template_config():
                 "short_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
                 "short_entry_trailing_threshold_we_weight": [0.0, 20.0],
                 "short_entry_volatility_ema_span_hours": [24.0, 336.0],
-                "short_filter_volatility_drop_pct": [0.0, 1.0],
                 "short_filter_volatility_ema_span": [10.0, 1440.0],
-                "short_filter_volume_drop_pct": [0.0, 1.0],
                 "short_filter_volume_ema_span": [10.0, 1440.0],
+                "short_forager_volume_drop_pct": [0.0, 1.0],
                 "short_hsl_cooldown_minutes_after_red": [0.0, 0.0],
                 "short_hsl_ema_span_minutes": [60.0, 60.0],
                 "short_hsl_red_threshold": [0.25, 0.25],
