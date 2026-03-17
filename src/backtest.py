@@ -81,6 +81,7 @@ from pathlib import Path
 from plotting import (
     create_forager_balance_figures,
     create_forager_coin_figures,
+    create_forager_hard_stop_drawdown_figure,
     create_forager_pnl_figure,
     create_forager_twe_figure,
     save_figures,
@@ -127,7 +128,7 @@ ANALYSIS_SHARED_KEYS = {
     "hard_stop_triggers_per_year",
     "hard_stop_restarts_per_year",
 }
-PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl"}
+PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl", "hard_stop"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
 
 
@@ -156,7 +157,7 @@ def parse_disabled_plot_groups(value) -> set[str]:
             disabled.add(token)
         else:
             raise ValueError(
-                "disable_plotting must be one of all, summary, balance, twe, pnl, coin_fills"
+                "disable_plotting must be one of all, summary, balance, twe, pnl, hard_stop, coin_fills"
             )
     return disabled
 
@@ -403,6 +404,7 @@ class BacktestPayload:
     bot_params_list: list
     exchange_params: list
     backtest_params: dict
+    hard_stop_plot_data: dict | None = None
 
 
 def build_backtest_payload(
@@ -591,6 +593,7 @@ def execute_backtest(payload: BacktestPayload, config: dict):
         equities_array,
         analysis_usd,
         analysis_btc,
+        hard_stop_plot_data,
     ) = pbr.run_backtest_bundle(
         payload.bundle,
         payload.bot_params_list,
@@ -599,6 +602,7 @@ def execute_backtest(payload: BacktestPayload, config: dict):
     )
 
     equities_array = np.asarray(equities_array)
+    payload.hard_stop_plot_data = dict(hard_stop_plot_data or {})
     analysis = expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config)
     if float(analysis.get("drawdown_worst", 0.0) or 0.0) >= _liquidation_drawdown_threshold(
         config
@@ -1464,6 +1468,7 @@ def post_process(
     exchange,
     label=None,
     plot_hlcvs=None,
+    hard_stop_plot_data=None,
 ):
     sts = utc_ms()
     disabled_plot_groups = parse_disabled_plot_groups(config.get("disable_plotting"))
@@ -1517,6 +1522,16 @@ def post_process(
             return_figures=True,
         )
         save_figures(pnl_figs, results_path)
+    if "hard_stop" not in disabled_plot_groups:
+        hard_stop_figs = create_forager_hard_stop_drawdown_figure(
+            bal_eq,
+            config,
+            hard_stop_plot_data=hard_stop_plot_data,
+            autoplot=False,
+            return_figures=True,
+        )
+        if hard_stop_figs:
+            save_figures(hard_stop_figs, results_path)
     if "coin_fills" not in disabled_plot_groups:
         try:
             coins = require_config_value(config, f"backtest.coins.{exchange}")
@@ -1816,6 +1831,7 @@ async def main():
             results_path,
             exchange,
             plot_hlcvs=np.asarray(payload.bundle.hlcvs),
+            hard_stop_plot_data=payload.hard_stop_plot_data,
         )
     else:
         # Single exchange mode
@@ -1850,6 +1866,7 @@ async def main():
                 results_path,
                 exchange,
                 plot_hlcvs=np.asarray(payload.bundle.hlcvs),
+                hard_stop_plot_data=payload.hard_stop_plot_data,
             )
 
 

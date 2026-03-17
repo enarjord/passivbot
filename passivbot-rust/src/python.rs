@@ -31,7 +31,7 @@ use serde::Serialize;
 use serde_json;
 use std::str::FromStr;
 
-type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, Py<PyDict>);
+type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, Py<PyDict>, PyObject);
 
 #[pyclass(name = "HlcvsBundle", module = "passivbot_rust", unsendable)]
 pub struct HlcvsBundlePy {
@@ -960,12 +960,24 @@ fn run_backtest_core<'py>(
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
         let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
+        let hard_stop_plot_data = backtest.hard_stop_plot_data();
+        let py_hard_stop_plot = PyDict::new_bound(py);
+        py_hard_stop_plot.set_item("timestamps_ms", hard_stop_plot_data.timestamps_ms)?;
+        py_hard_stop_plot.set_item("drawdown_raw", hard_stop_plot_data.drawdown_raw)?;
+        py_hard_stop_plot.set_item("timestamps_ms_long", hard_stop_plot_data.timestamps_ms_long)?;
+        py_hard_stop_plot.set_item("drawdown_raw_long", hard_stop_plot_data.drawdown_raw_long)?;
+        py_hard_stop_plot.set_item(
+            "timestamps_ms_short",
+            hard_stop_plot_data.timestamps_ms_short,
+        )?;
+        py_hard_stop_plot.set_item("drawdown_raw_short", hard_stop_plot_data.drawdown_raw_short)?;
         if metrics_only {
             return Ok((
                 py.None().into_py(py),
                 py.None().into_py(py),
                 py_analysis_usd,
                 py_analysis_btc,
+                py_hard_stop_plot.into_py(py),
             ));
         }
         let mut py_fills = Array2::from_elem((fills.len(), 19), py.None());
@@ -1006,6 +1018,7 @@ fn run_backtest_core<'py>(
             equities_array.into_py(py),
             py_analysis_usd,
             py_analysis_btc,
+            py_hard_stop_plot.into_py(py),
         ))
     })
 }

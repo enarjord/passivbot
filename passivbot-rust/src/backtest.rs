@@ -269,6 +269,16 @@ struct HardStopStopSnapshot {
     peak_strategy_equity: f64,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct HardStopPlotData {
+    pub timestamps_ms: Vec<u64>,
+    pub drawdown_raw: Vec<f64>,
+    pub timestamps_ms_long: Vec<u64>,
+    pub drawdown_raw_long: Vec<f64>,
+    pub timestamps_ms_short: Vec<u64>,
+    pub drawdown_raw_short: Vec<f64>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct OrderFillExecution {
     price: f64,
@@ -354,6 +364,8 @@ pub struct Backtest<'a> {
     hard_stop_n_restarts: u32,
     hard_stop_total_panic_loss: f64,
     hard_stop_equity_at_halt: f64,
+    hard_stop_drawdown_samples: Vec<f64>,
+    hard_stop_drawdown_timestamps_ms: Vec<u64>,
     hard_stop_no_restart_peak_strategy_equity: f64,
 }
 
@@ -1610,6 +1622,8 @@ impl<'a> Backtest<'a> {
             hard_stop_n_restarts: 0,
             hard_stop_total_panic_loss: 0.0,
             hard_stop_equity_at_halt: 0.0,
+            hard_stop_drawdown_samples: Vec::new(),
+            hard_stop_drawdown_timestamps_ms: Vec::new(),
             hard_stop_no_restart_peak_strategy_equity: 0.0,
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
@@ -2089,6 +2103,10 @@ impl<'a> Backtest<'a> {
             .hard_stop_no_restart_peak_strategy_equity
             .max(peak_strategy_equity)
             .max(equity);
+        let drawdown_raw =
+            (1.0 - equity / peak_strategy_equity.max(f64::EPSILON)).max(0.0);
+        self.hard_stop_drawdown_samples.push(drawdown_raw);
+        self.hard_stop_drawdown_timestamps_ms.push(timestamp_ms);
 
         let cfg = &self.backtest_params.equity_hard_stop_loss;
         if !(cfg.no_restart_drawdown_threshold.is_finite()
@@ -3319,6 +3337,17 @@ impl<'a> Backtest<'a> {
             self.hard_stop_n_restarts as f64 * per_year_scale,
             self.backtest_params.starting_balance,
         )
+    }
+
+    pub fn hard_stop_plot_data(&self) -> HardStopPlotData {
+        HardStopPlotData {
+            timestamps_ms: self.hard_stop_drawdown_timestamps_ms.clone(),
+            drawdown_raw: self.hard_stop_drawdown_samples.clone(),
+            timestamps_ms_long: Vec::new(),
+            drawdown_raw_long: Vec::new(),
+            timestamps_ms_short: Vec::new(),
+            drawdown_raw_short: Vec::new(),
+        }
     }
 }
 
