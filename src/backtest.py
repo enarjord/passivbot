@@ -549,6 +549,7 @@ class BacktestPayload:
     bot_params_list: list
     exchange_params: list
     backtest_params: dict
+    hard_stop_plot_data: dict | None = None
 
 
 def build_backtest_payload(
@@ -747,6 +748,7 @@ def execute_backtest(payload: BacktestPayload, config: dict):
         equities_array,
         analysis_usd,
         analysis_btc,
+        hard_stop_plot_data,
     ) = pbr.run_backtest_bundle(
         payload.bundle,
         payload.bot_params_list,
@@ -755,6 +757,7 @@ def execute_backtest(payload: BacktestPayload, config: dict):
     )
 
     equities_array = np.asarray(equities_array)
+    payload.hard_stop_plot_data = dict(hard_stop_plot_data or {})
     analysis = expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config)
     analysis["backtest_completion_ratio"] = _compute_backtest_completion_ratio(
         payload, equities_array, config
@@ -1590,6 +1593,7 @@ def post_process(
     exchange,
     label=None,
     plot_hlcvs=None,
+    hard_stop_plot_data=None,
 ):
     sts = utc_ms()
     disabled_plot_groups = parse_disabled_plot_groups(config.get("disable_plotting"))
@@ -1654,6 +1658,7 @@ def post_process(
         hard_stop_figs = create_forager_hard_stop_drawdown_figure(
             bal_eq,
             config,
+            hard_stop_plot_data=hard_stop_plot_data,
             autoplot=False,
             return_figures=True,
         )
@@ -1895,6 +1900,7 @@ async def main():
             results_path,
             exchange,
             plot_hlcvs=np.asarray(payload.bundle.hlcvs),
+            hard_stop_plot_data=payload.hard_stop_plot_data,
         )
     else:
         # Single exchange mode
@@ -1929,6 +1935,7 @@ async def main():
                 results_path,
                 exchange,
                 plot_hlcvs=np.asarray(payload.bundle.hlcvs),
+                hard_stop_plot_data=payload.hard_stop_plot_data,
             )
 
 

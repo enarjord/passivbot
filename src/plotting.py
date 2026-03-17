@@ -938,106 +938,140 @@ def create_forager_hard_stop_drawdown_figure(
     config: dict,
     figsize=(21, 10),
     *,
+    hard_stop_plot_data: Optional[dict] = None,
     autoplot: bool | None = None,
     return_figures: bool | None = None,
 ) -> dict:
     figures: dict = {}
-    hard_stop_cfg = (((config or {}).get("bot") or {}).get("common") or {}).get(
-        "equity_hard_stop_loss", {}
-    )
-    if not isinstance(hard_stop_cfg, dict) or not bool(hard_stop_cfg.get("enabled", False)):
-        return figures
-    if bal_eq.empty or "usd_total_equity" not in bal_eq.columns:
+
+    def _resolve_pside_cfg(pside: str) -> dict:
+        bot = ((config or {}).get("bot") or {})
+        pside_cfg = (bot.get(pside) or {})
+        if isinstance(pside_cfg, dict) and "hsl_enabled" in pside_cfg:
+            return {
+                "enabled": bool(pside_cfg.get("hsl_enabled", False)),
+                "red_threshold": float(pside_cfg.get("hsl_red_threshold", 0.0) or 0.0),
+                "ema_span_minutes": float(pside_cfg.get("hsl_ema_span_minutes", 0.0) or 0.0),
+                "tier_ratios": pside_cfg.get("hsl_tier_ratios", {}) or {},
+            }
+        legacy = (((bot or {}).get("common") or {}).get("equity_hard_stop_loss", {})) or {}
+        if isinstance(legacy, dict):
+            return legacy
+        return {}
+
+    def _trace_df(timestamps_ms, drawdown_raw) -> pd.DataFrame:
+        if not timestamps_ms or not drawdown_raw:
+            return pd.DataFrame()
+        sample_count = min(len(timestamps_ms), len(drawdown_raw))
+        if sample_count <= 0:
+            return pd.DataFrame()
+        idx = pd.to_datetime(np.asarray(timestamps_ms[:sample_count], dtype=np.int64), unit="ms")
+        df = pd.DataFrame(
+            {"drawdown_raw": pd.to_numeric(np.asarray(drawdown_raw[:sample_count]), errors="coerce")},
+            index=idx,
+        )
+        df = df.dropna()
+        return df[~df.index.duplicated(keep="first")].sort_index()
+
+    pside_cfgs = {pside: _resolve_pside_cfg(pside) for pside in ("long", "short")}
+    enabled_psides = [
+        pside
+        for pside, cfg in pside_cfgs.items()
+        if isinstance(cfg, dict) and bool(cfg.get("enabled", False))
+    ]
+    if not enabled_psides:
         return figures
 
     autoplot = (_ipy_display is not None) if autoplot is None else autoplot
     if return_figures is None:
         return_figures = not autoplot
 
-    red_threshold = float(hard_stop_cfg.get("red_threshold", 0.0) or 0.0)
-    if red_threshold <= 0.0:
-        return figures
-    ema_span_minutes = float(hard_stop_cfg.get("ema_span_minutes", 0.0) or 0.0)
-    if ema_span_minutes <= 0.0:
-        return figures
-    pnls_max_lookback_days = float(
-        (((config or {}).get("live") or {}).get("pnls_max_lookback_days", 30.0) or 30.0)
-    )
-
-    df = bal_eq[["usd_total_equity"]].copy()
-    df["usd_total_equity"] = pd.to_numeric(df["usd_total_equity"], errors="coerce")
-    df = df.dropna()
-    if df.empty:
-        return figures
-    df = df[~df.index.duplicated(keep="first")].sort_index()
-
-    if len(df.index) >= 2:
-        sample_minutes = max(
-            1.0,
-            float((df.index[1] - df.index[0]).total_seconds() / 60.0),
+    traces: dict[str, pd.DataFrame] = {}
+    if isinstance(hard_stop_plot_data, dict):
+        traces["long"] = _trace_df(
+            hard_stop_plot_data.get("timestamps_ms_long", []),
+            hard_stop_plot_data.get("drawdown_raw_long", []),
         )
-    else:
-        sample_minutes = 1.0
-    lookback_window = pd.Timedelta(days=max(pnls_max_lookback_days, sample_minutes / (24.0 * 60.0)))
-    peak_strategy_equity = df["usd_total_equity"].rolling(lookback_window, min_periods=1).max()
-    drawdown_raw = (
-        1.0 - (df["usd_total_equity"] / peak_strategy_equity.clip(lower=np.finfo(float).eps))
-    ).clip(lower=0.0)
-    span_samples = max(1.0, ema_span_minutes / sample_minutes)
-    alpha = 2.0 / (span_samples + 1.0)
-    drawdown_ema = drawdown_raw.ewm(alpha=alpha, adjust=False).mean()
-    drawdown_score = pd.concat([drawdown_raw, drawdown_ema], axis=1).min(axis=1)
-    proximity_to_red = drawdown_score / red_threshold
-    proximity_pct = proximity_to_red * 100.0
+        traces["short"] = _trace_df(
+            hard_stop_plot_data.get("timestamps_ms_short", []),
+            hard_stop_plot_data.get("drawdown_raw_short", []),
+        )
 
-    tier_ratios = hard_stop_cfg.get("tier_ratios", {}) or {}
-    yellow_threshold = float(tier_ratios.get("yellow", 0.5) or 0.5) * red_threshold
-    orange_threshold = float(tier_ratios.get("orange", 0.75) or 0.75) * red_threshold
+    if not any(not traces.get(pside, pd.DataFrame()).empty for pside in enabled_psides):
+        if bal_eq.empty or "usd_total_equity" not in bal_eq.columns:
+            return figures
+        df = bal_eq[["usd_total_equity"]].copy()
+        df["usd_total_equity"] = pd.to_numeric(df["usd_total_equity"], errors="coerce")
+        df = df.dropna()
+        if df.empty:
+            return figures
+        df = df[~df.index.duplicated(keep="first")].sort_index()
+        pnls_max_lookback_days = float(
+            (((config or {}).get("live") or {}).get("pnls_max_lookback_days", 30.0) or 30.0)
+        )
+        if len(df.index) >= 2:
+            sample_minutes = max(1.0, float((df.index[1] - df.index[0]).total_seconds() / 60.0))
+        else:
+            sample_minutes = 1.0
+        lookback_window = pd.Timedelta(
+            days=max(pnls_max_lookback_days, sample_minutes / (24.0 * 60.0))
+        )
+        peak_strategy_equity = df["usd_total_equity"].rolling(lookback_window, min_periods=1).max()
+        drawdown_raw = (
+            1.0 - (df["usd_total_equity"] / peak_strategy_equity.clip(lower=np.finfo(float).eps))
+        ).clip(lower=0.0)
+        for pside in enabled_psides:
+            traces[pside] = pd.DataFrame({"drawdown_raw": drawdown_raw}, index=df.index)
 
-    fig, axes = plt.subplots(
-        2, 1, sharex=True, figsize=figsize, gridspec_kw={"height_ratios": [3, 1]}
-    )
-    x = df.index.to_numpy()
+    plot_psides = [pside for pside in enabled_psides if not traces.get(pside, pd.DataFrame()).empty]
+    if not plot_psides:
+        return figures
 
-    axes[0].plot(x, drawdown_raw.to_numpy(), linewidth=1.0, label="Raw Strategy Drawdown")
-    axes[0].plot(x, drawdown_ema.to_numpy(), linewidth=1.0, label="EMA Drawdown")
-    axes[0].plot(x, drawdown_score.to_numpy(), linewidth=1.2, linestyle="--", label="Trigger Score")
-    axes[0].axhline(
-        yellow_threshold, color="#d4a017", linestyle=":", linewidth=1.0, label="Yellow Threshold"
-    )
-    axes[0].axhline(
-        orange_threshold, color="#d95f02", linestyle=":", linewidth=1.0, label="Orange Threshold"
-    )
-    axes[0].axhline(
-        red_threshold, color="#b22222", linestyle="--", linewidth=1.2, label="RED Threshold"
-    )
-    axes[0].set_title("Equity Hard Stop Drawdown")
-    axes[0].set_ylabel("Drawdown")
-    axes[0].grid(True, linestyle="--", alpha=0.3)
-    axes[0].legend(loc="upper left", ncol=3)
+    fig, axes = plt.subplots(len(plot_psides), 1, sharex=True, figsize=figsize)
+    if not isinstance(axes, (list, np.ndarray)):
+        axes = [axes]
 
-    axes[1].plot(x, proximity_pct.to_numpy(), color="#2a9d8f", linewidth=1.1, label="RED Proximity")
-    axes[1].fill_between(
-        x,
-        0.0,
-        proximity_pct.to_numpy(),
-        where=(proximity_pct.to_numpy() < 100.0),
-        color="#2a9d8f",
-        alpha=0.2,
-    )
-    axes[1].fill_between(
-        x,
-        100.0,
-        proximity_pct.to_numpy(),
-        where=(proximity_pct.to_numpy() >= 100.0),
-        color="#b22222",
-        alpha=0.25,
-    )
-    axes[1].axhline(100.0, color="#b22222", linestyle="--", linewidth=1.2, label="RED Hit")
-    axes[1].set_ylabel("% of RED")
-    axes[1].set_xlabel("Time")
-    axes[1].grid(True, linestyle="--", alpha=0.3)
-    axes[1].legend(loc="upper left")
+    for axis, pside in zip(axes, plot_psides):
+        cfg = pside_cfgs[pside]
+        red_threshold = float(cfg.get("red_threshold", 0.0) or 0.0)
+        ema_span_minutes = float(cfg.get("ema_span_minutes", 0.0) or 0.0)
+        if red_threshold <= 0.0 or ema_span_minutes <= 0.0:
+            continue
+        trace_df = traces[pside]
+        if len(trace_df.index) >= 2:
+            sample_minutes = max(
+                1.0, float((trace_df.index[1] - trace_df.index[0]).total_seconds() / 60.0)
+            )
+        else:
+            sample_minutes = 1.0
+        span_samples = max(1.0, ema_span_minutes / sample_minutes)
+        alpha = 2.0 / (span_samples + 1.0)
+        drawdown_raw = trace_df["drawdown_raw"].clip(lower=0.0)
+        drawdown_ema = drawdown_raw.ewm(alpha=alpha, adjust=False).mean()
+        drawdown_score = pd.concat([drawdown_raw, drawdown_ema], axis=1).min(axis=1)
+        x = trace_df.index.to_numpy()
+        tier_ratios = cfg.get("tier_ratios", {}) or {}
+        yellow_threshold = float(tier_ratios.get("yellow", 0.5) or 0.5) * red_threshold
+        orange_threshold = float(tier_ratios.get("orange", 0.75) or 0.75) * red_threshold
+
+        axis.plot(x, drawdown_raw.to_numpy(), linewidth=1.0, label="Raw Drawdown")
+        axis.plot(x, drawdown_ema.to_numpy(), linewidth=1.0, label="EMA Drawdown")
+        axis.plot(x, drawdown_score.to_numpy(), linewidth=1.2, linestyle="--", label="Trigger Score")
+        axis.axhline(
+            yellow_threshold, color="#d4a017", linestyle=":", linewidth=1.0, label="Yellow Threshold"
+        )
+        axis.axhline(
+            orange_threshold, color="#d95f02", linestyle=":", linewidth=1.0, label="Orange Threshold"
+        )
+        axis.axhline(
+            red_threshold, color="#b22222", linestyle="--", linewidth=1.2, label="RED Threshold"
+        )
+        axis.set_title(f"Equity Hard Stop Drawdown ({pside.capitalize()})")
+        axis.set_ylabel("Drawdown")
+        axis.grid(True, linestyle="--", alpha=0.3)
+        axis.legend(loc="upper left", ncol=3)
+
+    axes[-1].set_xlabel("Time")
 
     fig.tight_layout()
 

@@ -290,6 +290,16 @@ struct HardStopPsideRuntime {
     no_restart_peak_strategy_equity: f64,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct HardStopPlotData {
+    pub timestamps_ms: Vec<u64>,
+    pub drawdown_raw: Vec<f64>,
+    pub timestamps_ms_long: Vec<u64>,
+    pub drawdown_raw_long: Vec<f64>,
+    pub timestamps_ms_short: Vec<u64>,
+    pub drawdown_raw_short: Vec<f64>,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HardStopMetrics {
     pub triggers: u32,
@@ -471,6 +481,8 @@ pub struct Backtest<'a> {
     hard_stop_restart_retrigger_count: u32,
     hard_stop_drawdown_samples: Vec<f64>,
     hard_stop_drawdown_samples_pside: [Vec<f64>; 2],
+    hard_stop_drawdown_timestamps_ms: Vec<u64>,
+    hard_stop_drawdown_timestamps_ms_pside: [Vec<u64>; 2],
     strategy_equity_series: Vec<f64>,
     strategy_equity_series_pside: [Vec<f64>; 2],
     peak_strategy_equity_series: Vec<f64>,
@@ -1774,6 +1786,8 @@ impl<'a> Backtest<'a> {
             hard_stop_restart_retrigger_count: 0,
             hard_stop_drawdown_samples: Vec::new(),
             hard_stop_drawdown_samples_pside: [Vec::new(), Vec::new()],
+            hard_stop_drawdown_timestamps_ms: Vec::new(),
+            hard_stop_drawdown_timestamps_ms_pside: [Vec::new(), Vec::new()],
             strategy_equity_series: Vec::new(),
             strategy_equity_series_pside: [Vec::new(), Vec::new()],
             peak_strategy_equity_series: Vec::new(),
@@ -2430,6 +2444,7 @@ impl<'a> Backtest<'a> {
         self.hard_stop_no_restart_peak_strategy_equity = self
             .hard_stop_no_restart_peak_strategy_equity
             .max(peak_strategy_equity);
+        self.hard_stop_drawdown_timestamps_ms.push(timestamp_ms);
         self.hard_stop_drawdown_samples.push(drawdown_raw);
     }
 
@@ -2499,6 +2514,7 @@ impl<'a> Backtest<'a> {
         let has_blocking_open_orders = self.has_blocking_open_orders_pside(pside);
         self.strategy_equity_series_pside[pside].push(strategy_equity);
         self.peak_strategy_equity_series_pside[pside].push(peak_strategy_equity);
+        self.hard_stop_drawdown_timestamps_ms_pside[pside].push(timestamp_ms);
         self.hard_stop_drawdown_samples_pside[pside].push(step.drawdown_raw);
         let runtime = &mut self.hard_stop_pside[pside];
         let prev_tier = runtime.tier;
@@ -4079,6 +4095,17 @@ impl<'a> Backtest<'a> {
                 .calmar_ratio_strategy_pnl_rebased_w,
             sterling_ratio_strategy_pnl_rebased_w: strategy_metrics
                 .sterling_ratio_strategy_pnl_rebased_w,
+        }
+    }
+
+    pub fn hard_stop_plot_data(&self) -> HardStopPlotData {
+        HardStopPlotData {
+            timestamps_ms: self.hard_stop_drawdown_timestamps_ms.clone(),
+            drawdown_raw: self.hard_stop_drawdown_samples.clone(),
+            timestamps_ms_long: self.hard_stop_drawdown_timestamps_ms_pside[LONG].clone(),
+            drawdown_raw_long: self.hard_stop_drawdown_samples_pside[LONG].clone(),
+            timestamps_ms_short: self.hard_stop_drawdown_timestamps_ms_pside[SHORT].clone(),
+            drawdown_raw_short: self.hard_stop_drawdown_samples_pside[SHORT].clone(),
         }
     }
 }

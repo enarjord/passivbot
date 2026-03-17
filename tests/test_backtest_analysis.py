@@ -611,18 +611,32 @@ def test_create_forager_hard_stop_drawdown_figure_returns_plot_when_enabled(monk
     config = {
         "live": {"pnls_max_lookback_days": 30.0},
         "bot": {
-            "common": {
-                "equity_hard_stop_loss": {
-                    "enabled": True,
-                    "red_threshold": 0.1,
-                    "ema_span_minutes": 60.0,
-                    "tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                }
-            }
+            "long": {
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.1,
+                "hsl_ema_span_minutes": 60.0,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+            },
+            "short": {
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.12,
+                "hsl_ema_span_minutes": 90.0,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+            },
         },
+    }
+    hard_stop_plot_data = {
+        "timestamps_ms_long": (idx.view("int64") // 10**6).tolist(),
+        "drawdown_raw_long": [0.0, 0.01, 0.05, 0.06, 0.02, 0.01],
+        "timestamps_ms_short": (idx.view("int64") // 10**6).tolist(),
+        "drawdown_raw_short": [0.0, 0.0, 0.01, 0.015, 0.01, 0.0],
     }
 
     figs = create_forager_hard_stop_drawdown_figure(
-        bal_eq, config, autoplot=False, return_figures=True
+        bal_eq,
+        config,
+        hard_stop_plot_data=hard_stop_plot_data,
+        autoplot=False,
+        return_figures=True,
     )
     assert "hard_stop_drawdown" in figs
