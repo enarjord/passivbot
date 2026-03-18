@@ -81,15 +81,13 @@ def _make_mock_pbr():
             timestamp_ms,
             equity,
             peak_strategy_equity,
-            sample_minutes,
             red_threshold,
             ema_span_minutes,
             tier_ratio_yellow,
             tier_ratio_orange,
         ):
             self._last_rolling_peak = float(peak_strategy_equity)
-            span_samples = ema_span_minutes / sample_minutes
-            alpha = 2.0 / (span_samples + 1.0)
+            alpha = 2.0 / (ema_span_minutes + 1.0)
             prev_tier = self._tier
 
             if not self._initialized:
@@ -107,7 +105,7 @@ def _make_mock_pbr():
                     "drawdown_raw": 0.0,
                     "drawdown_score": 0.0,
                     "changed": self._tier != prev_tier,
-                    "span_samples": float(span_samples),
+                    "elapsed_minutes": 0,
                     "alpha": float(alpha),
                 }
 
@@ -134,7 +132,7 @@ def _make_mock_pbr():
                 "drawdown_raw": float(drawdown_raw),
                 "drawdown_score": float(drawdown_score),
                 "changed": self._tier != prev_tier,
-                "span_samples": float(span_samples),
+                "elapsed_minutes": 1,
                 "alpha": float(alpha),
             }
 
@@ -179,10 +177,10 @@ def _make_mock_pbr():
         tier_ratio_orange,
         equity,
         peak_strategy_equity,
-        sample_minutes,
+        timestamp_ms,
+        last_timestamp_ms,
     ):
-        span_samples = ema_span_minutes / sample_minutes
-        alpha = 2.0 / (span_samples + 1.0)
+        alpha = 2.0 / (ema_span_minutes + 1.0)
         if not initialized:
             out_tier = "red" if red_latched else "green"
             return {
@@ -194,7 +192,7 @@ def _make_mock_pbr():
                 "drawdown_raw": 0.0,
                 "drawdown_score": 0.0,
                 "changed": out_tier != tier,
-                "span_samples": float(span_samples),
+                "elapsed_minutes": 0,
                 "alpha": float(alpha),
             }
         drawdown_raw = max(0.0, 1.0 - equity / max(peak_strategy_equity, 1e-12))
@@ -209,6 +207,7 @@ def _make_mock_pbr():
             out_tier = "yellow"
         else:
             out_tier = "green"
+        elapsed = max(0, (timestamp_ms // 60_000) - (last_timestamp_ms // 60_000))
         return {
             "initialized": True,
             "red_latched": bool(red_latched),
@@ -218,7 +217,7 @@ def _make_mock_pbr():
             "drawdown_raw": float(drawdown_raw),
             "drawdown_score": float(drawdown_score),
             "changed": out_tier != tier,
-            "span_samples": float(span_samples),
+            "elapsed_minutes": int(elapsed),
             "alpha": float(alpha),
         }
 
@@ -841,22 +840,21 @@ def test_hard_stop_apply_sample_delegates_to_rust(monkeypatch):
             "drawdown_raw": 0.19,
             "drawdown_score": 0.13,
             "changed": True,
-            "span_samples": 1800.0,
+            "elapsed_minutes": 1,
             "alpha": 0.001110493,
         }
 
     monkeypatch.setattr(_hsl_state(bot)["runtime"], "apply_sample", fake_apply_sample)
 
     metrics = bot._equity_hard_stop_apply_sample(
-        "long", 1_700_000_000_000, 900.0, 25.0, 25.0, 50.0, 1.0
+        "long", 1_700_000_000_000, 900.0, 25.0, 25.0, 50.0
     )
 
-    assert captured["sample_minutes"] == 1.0
     assert captured["equity"] == 950.0
     assert captured["peak_strategy_equity"] == pytest.approx(950.0)
     assert captured["timestamp_ms"] == 1_700_000_000_000
     assert metrics["tier"] == "orange"
-    assert metrics["span_samples"] == pytest.approx(1800.0)
+    assert metrics["elapsed_minutes"] == 1
 
 
 def test_hard_stop_apply_sample_rolling_peak_prunes_by_lookback():
@@ -864,8 +862,8 @@ def test_hard_stop_apply_sample_rolling_peak_prunes_by_lookback():
     cfg["live"]["pnls_max_lookback_days"] = 0.0
     bot = _make_dummy_bot(cfg)
 
-    m0 = bot._equity_hard_stop_apply_sample("long", 1_000, 100.0, 0.0, 0.0, 0.0, 1.0)
-    m1 = bot._equity_hard_stop_apply_sample("long", 2_000, 95.0, 0.0, 0.0, 0.0, 1.0)
+    m0 = bot._equity_hard_stop_apply_sample("long", 1_000, 100.0, 0.0, 0.0, 0.0)
+    m1 = bot._equity_hard_stop_apply_sample("long", 2_000, 95.0, 0.0, 0.0, 0.0)
 
     assert m0["peak_strategy_equity"] == pytest.approx(100.0)
     assert m1["peak_strategy_equity"] == pytest.approx(95.0)
@@ -895,7 +893,7 @@ def test_hard_stop_apply_sample_unified_uses_total_signal(monkeypatch):
             "drawdown_raw": 0.05,
             "drawdown_score": 0.05,
             "changed": True,
-            "span_samples": 60.0,
+            "elapsed_minutes": 1,
             "alpha": 0.0327868852,
         }
 
@@ -908,7 +906,6 @@ def test_hard_stop_apply_sample_unified_uses_total_signal(monkeypatch):
         25.0,
         5.0,
         50.0,
-        1.0,
         unrealized_pnl_total=-75.0,
     )
 

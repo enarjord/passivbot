@@ -179,7 +179,6 @@ impl EquityHardStopRuntimePy {
         timestamp_ms,
         equity,
         peak_strategy_equity,
-        sample_minutes,
         red_threshold,
         ema_span_minutes,
         tier_ratio_yellow,
@@ -191,13 +190,11 @@ impl EquityHardStopRuntimePy {
         timestamp_ms: u64,
         equity: f64,
         peak_strategy_equity: f64,
-        sample_minutes: f64,
         red_threshold: f64,
         ema_span_minutes: f64,
         tier_ratio_yellow: f64,
         tier_ratio_orange: f64,
     ) -> PyResult<Py<PyDict>> {
-        let _ = timestamp_ms;
         self.last_rolling_peak = peak_strategy_equity;
         let cfg = ehsl::HardStopConfig {
             red_threshold,
@@ -212,7 +209,7 @@ impl EquityHardStopRuntimePy {
             cfg,
             equity,
             peak_strategy_equity,
-            sample_minutes,
+            timestamp_ms,
         )
         .map_err(PyValueError::new_err)?;
 
@@ -226,7 +223,7 @@ impl EquityHardStopRuntimePy {
         out.set_item("drawdown_raw", step.drawdown_raw)?;
         out.set_item("drawdown_score", step.drawdown_score)?;
         out.set_item("changed", step.changed)?;
-        out.set_item("span_samples", step.span_samples)?;
+        out.set_item("elapsed_minutes", step.elapsed_minutes)?;
         out.set_item("alpha", step.alpha)?;
         Ok(out.unbind())
     }
@@ -455,7 +452,8 @@ fn hard_stop_tier_to_str(tier: ehsl::HardStopTier) -> &'static str {
     tier_ratio_orange,
     equity,
     peak_strategy_equity,
-    sample_minutes
+    timestamp_ms,
+    last_timestamp_ms
 ))]
 pub fn equity_hard_stop_step_py(
     py: Python<'_>,
@@ -469,7 +467,8 @@ pub fn equity_hard_stop_step_py(
     tier_ratio_orange: f64,
     equity: f64,
     peak_strategy_equity: f64,
-    sample_minutes: f64,
+    timestamp_ms: u64,
+    last_timestamp_ms: u64,
 ) -> PyResult<Py<PyDict>> {
     let mut state = ehsl::HardStopState {
         peak_strategy_equity,
@@ -477,6 +476,12 @@ pub fn equity_hard_stop_step_py(
         tier: hard_stop_tier_from_str(tier).map_err(PyValueError::new_err)?,
         red_latched,
         initialized,
+        last_minute: if initialized {
+            Some(last_timestamp_ms / 60_000)
+        } else {
+            None
+        },
+        cached_step: None,
     };
     let cfg = ehsl::HardStopConfig {
         red_threshold,
@@ -491,7 +496,7 @@ pub fn equity_hard_stop_step_py(
         cfg,
         equity,
         peak_strategy_equity,
-        sample_minutes,
+        timestamp_ms,
     )
     .map_err(PyValueError::new_err)?;
 
@@ -504,7 +509,7 @@ pub fn equity_hard_stop_step_py(
     out.set_item("drawdown_raw", step.drawdown_raw)?;
     out.set_item("drawdown_score", step.drawdown_score)?;
     out.set_item("changed", step.changed)?;
-    out.set_item("span_samples", step.span_samples)?;
+    out.set_item("elapsed_minutes", step.elapsed_minutes)?;
     out.set_item("alpha", step.alpha)?;
     Ok(out.unbind())
 }

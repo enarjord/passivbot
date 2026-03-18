@@ -2498,7 +2498,6 @@ impl<'a> Backtest<'a> {
                 orange: hsl_tier_ratio_orange,
             },
         };
-        let sample_minutes = self.backtest_params.candle_interval_minutes.max(1) as f64;
         let step = ehsl::step_with_peak_strategy_equity(
             self.hard_stop_pside[pside]
                 .state
@@ -2506,7 +2505,7 @@ impl<'a> Backtest<'a> {
             hs_cfg,
             strategy_equity,
             peak_strategy_equity,
-            sample_minutes,
+            timestamp_ms,
         )
         .map_err(|e| {
             format!(
@@ -5073,6 +5072,8 @@ mod tests {
             peak_strategy_equity: 123.0,
             drawdown_ema: 0.2,
             tier: ehsl::HardStopTier::Red,
+            last_minute: Some(0),
+            cached_step: None,
         });
         bt.hard_stop_rolling_peak_strategy_pnl.push_back((0, 123.0));
 
@@ -5326,6 +5327,8 @@ mod tests {
             peak_strategy_equity: 100.0,
             drawdown_ema: 0.2,
             tier: ehsl::HardStopTier::Red,
+            last_minute: Some(0),
+            cached_step: None,
         });
         bt.hard_stop_tier = ehsl::HardStopTier::Red;
         bt.open_orders.long.insert(

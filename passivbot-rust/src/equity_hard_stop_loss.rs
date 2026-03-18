@@ -65,6 +65,11 @@ pub struct HardStopState {
     pub tier: HardStopTier,
     pub red_latched: bool,
     pub initialized: bool,
+    /// Minute number of the last processed sample (timestamp_ms / 60_000).
+    /// `None` until the first sample is processed.
+    pub last_minute: Option<u64>,
+    /// Cached step result returned on intra-minute re-calls.
+    pub cached_step: Option<HardStopStep>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,8 +78,10 @@ pub struct HardStopStep {
     pub drawdown_score: f64,
     pub tier: HardStopTier,
     pub changed: bool,
-    pub span_samples: f64,
     pub alpha: f64,
+    /// Number of whole-minute steps applied in this call.
+    /// 0 for intra-minute cached returns.
+    pub elapsed_minutes: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -134,22 +141,13 @@ impl RollingPeakTracker {
     }
 }
 
-pub fn span_samples(ema_span_minutes: f64, sample_minutes: f64) -> Result<f64, String> {
-    if !ema_span_minutes.is_finite() || ema_span_minutes <= 0.0 {
-        return Err("ema_span_minutes must be finite and > 0".to_string());
-    }
-    if !sample_minutes.is_finite() || sample_minutes <= 0.0 {
-        return Err("sample_minutes must be finite and > 0".to_string());
-    }
-    Ok(ema_span_minutes / sample_minutes)
-}
-
-#[allow(dead_code)] // Kept as a convenience helper for callers that want internal peak tracking.
+/// Convenience helper that tracks peak internally (peak = max of all equity seen).
+#[allow(dead_code)]
 pub fn step(
     state: &mut HardStopState,
     config: HardStopConfig,
     equity: f64,
-    sample_minutes: f64,
+    timestamp_ms: u64,
 ) -> Result<HardStopStep, String> {
     let next_peak_strategy_equity = if !state.initialized {
         equity
@@ -161,16 +159,28 @@ pub fn step(
         config,
         equity,
         next_peak_strategy_equity,
-        sample_minutes,
+        timestamp_ms,
     )
 }
 
+/// Core minute-quantized HSL step.
+///
+/// Timing is derived from `timestamp_ms`:
+/// - Quantized to whole minutes (`timestamp_ms / 60_000`).
+/// - If the minute has not advanced since the last call, returns a cached
+///   result with `elapsed_minutes = 0` and no state mutation.
+/// - If N >= 1 minutes have elapsed, applies the EMA update using a
+///   closed-form multi-step formula: `decay = (1 - alpha).powf(N)`.
+///
+/// This gives exact parity with the backtester (which calls once per candle
+/// with candle-aligned timestamps) regardless of how often the live bot
+/// invokes this function.
 pub fn step_with_peak_strategy_equity(
     state: &mut HardStopState,
     config: HardStopConfig,
     equity: f64,
     peak_strategy_equity: f64,
-    sample_minutes: f64,
+    timestamp_ms: u64,
 ) -> Result<HardStopStep, String> {
     config.validate()?;
     if !equity.is_finite() || equity <= 0.0 {
@@ -182,35 +192,63 @@ pub fn step_with_peak_strategy_equity(
     if peak_strategy_equity + f64::EPSILON < equity {
         return Err("peak_strategy_equity must be >= equity".to_string());
     }
-    let span_samples = span_samples(config.ema_span_minutes, sample_minutes)?.max(1.0);
-    let alpha = 2.0 / (span_samples + 1.0);
-    if !alpha.is_finite() || !(0.0 < alpha && alpha <= 1.0) {
+    let alpha = (2.0 / (config.ema_span_minutes + 1.0)).min(1.0);
+    if !alpha.is_finite() || alpha <= 0.0 {
         return Err("computed alpha is invalid".to_string());
     }
+
+    let current_minute = timestamp_ms / 60_000;
 
     let prev_tier = state.tier;
     if !state.initialized {
         state.initialized = true;
         state.peak_strategy_equity = peak_strategy_equity;
         state.drawdown_ema = 0.0;
+        state.last_minute = Some(current_minute);
         state.tier = if state.red_latched {
             HardStopTier::Red
         } else {
             HardStopTier::Green
         };
-        return Ok(HardStopStep {
+        let step = HardStopStep {
             drawdown_raw: 0.0,
             drawdown_score: 0.0,
             tier: state.tier,
             changed: state.tier != prev_tier,
-            span_samples,
             alpha,
-        });
+            elapsed_minutes: 0,
+        };
+        state.cached_step = Some(step);
+        return Ok(step);
     }
 
+    // Enforce monotonic timestamps (at minute resolution).
+    let last_minute = state.last_minute.ok_or_else(|| {
+        "invariant violation: initialized but last_minute is None".to_string()
+    })?;
+    if current_minute < last_minute {
+        return Err(format!(
+            "timestamp must be non-decreasing: minute {} < last {}",
+            current_minute, last_minute
+        ));
+    }
+    let elapsed_minutes = current_minute - last_minute;
+
+    // Intra-minute re-call: return cached result, no state mutation.
+    if elapsed_minutes == 0 {
+        let mut cached = state.cached_step.ok_or_else(|| {
+            "invariant violation: initialized but cached_step is None".to_string()
+        })?;
+        cached.elapsed_minutes = 0;
+        return Ok(cached);
+    }
+
+    // --- Minute boundary crossed: full update ---
     state.peak_strategy_equity = peak_strategy_equity;
     let drawdown_raw = (1.0 - (equity / state.peak_strategy_equity.max(f64::EPSILON))).max(0.0);
-    state.drawdown_ema = alpha * drawdown_raw + (1.0 - alpha) * state.drawdown_ema;
+    // Closed-form N-step EMA: equivalent to applying alpha N times with constant input.
+    let decay = (1.0 - alpha).powf(elapsed_minutes as f64);
+    state.drawdown_ema = drawdown_raw + (state.drawdown_ema - drawdown_raw) * decay;
     // Effective trigger metric: min(raw, EMA).
     // Prevents false RED after recovery (stale EMA) and flash-crash bottom exits (raw spike).
     let drawdown_score = drawdown_raw.min(state.drawdown_ema);
@@ -237,19 +275,24 @@ pub fn step_with_peak_strategy_equity(
     } else {
         next_tier
     };
-    Ok(HardStopStep {
+    state.last_minute = Some(current_minute);
+    let step = HardStopStep {
         drawdown_raw,
         drawdown_score,
         tier: state.tier,
         changed: state.tier != prev_tier,
-        span_samples,
         alpha,
-    })
+        elapsed_minutes,
+    };
+    state.cached_step = Some(step);
+    Ok(step)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MIN_MS: u64 = 60_000;
 
     fn cfg() -> HardStopConfig {
         HardStopConfig {
@@ -263,47 +306,41 @@ mod tests {
     }
 
     #[test]
-    fn minutes_to_samples_keeps_float_precision() {
-        let samples = span_samples(47.5, 2.0).unwrap();
-        assert!((samples - 23.75).abs() < 1e-12);
-    }
-
-    #[test]
     fn tier_boundaries_follow_configurable_ratios() {
         let mut state = HardStopState::default();
         let config = HardStopConfig {
             red_threshold: 0.2,
-            ema_span_minutes: 1.0, // one-sample EMA for direct red_threshold checks
+            ema_span_minutes: 1.0, // alpha=1.0 → EMA tracks raw exactly
             tier_ratios: HardStopTierRatios {
                 yellow: 0.4,
                 orange: 0.8,
             },
         };
-        // initialize at equity peak
-        let _ = step(&mut state, config, 100.0, 1.0).unwrap();
+        // initialize at minute 0
+        let _ = step(&mut state, config, 100.0, 0).unwrap();
         // 8% dd => yellow (0.4 * 0.2 = 0.08)
-        let s1 = step(&mut state, config, 92.0, 1.0).unwrap();
+        let s1 = step(&mut state, config, 92.0, MIN_MS).unwrap();
         assert_eq!(s1.tier, HardStopTier::Yellow);
         // 16% dd => orange (0.8 * 0.2 = 0.16)
-        let s2 = step(&mut state, config, 84.0, 1.0).unwrap();
+        let s2 = step(&mut state, config, 84.0, 2 * MIN_MS).unwrap();
         assert_eq!(s2.tier, HardStopTier::Orange);
         // 20% dd => red
-        let s3 = step(&mut state, config, 80.0, 1.0).unwrap();
+        let s3 = step(&mut state, config, 80.0, 3 * MIN_MS).unwrap();
         assert_eq!(s3.tier, HardStopTier::Red);
     }
 
     #[test]
-    fn sub_sample_ema_span_disables_smoothing() {
+    fn small_ema_span_clamps_alpha_to_one() {
         let mut state = HardStopState::default();
         let config = HardStopConfig {
             red_threshold: 0.2,
-            ema_span_minutes: 1.0,
+            ema_span_minutes: 0.5, // alpha = 2/1.5 = 1.33 → clamped to 1.0
             tier_ratios: HardStopTierRatios::default(),
         };
-        let _ = step(&mut state, config, 100.0, 5.0).unwrap();
-        let s = step(&mut state, config, 90.0, 5.0).unwrap();
-        assert!((s.span_samples - 1.0).abs() < 1e-12);
+        let _ = step(&mut state, config, 100.0, 0).unwrap();
+        let s = step(&mut state, config, 90.0, MIN_MS).unwrap();
         assert!((s.alpha - 1.0).abs() < 1e-12);
+        // With alpha=1.0, EMA = raw immediately
         assert!((state.drawdown_ema - s.drawdown_raw).abs() < 1e-12);
         assert!((s.drawdown_score - s.drawdown_raw).abs() < 1e-12);
     }
@@ -316,8 +353,8 @@ mod tests {
             ema_span_minutes: 15.0,
             tier_ratios: HardStopTierRatios::default(),
         };
-        let _ = step(&mut state, config, 100.0, 1.0).unwrap();
-        let s = step(&mut state, config, 90.0, 1.0).unwrap();
+        let _ = step(&mut state, config, 100.0, 0).unwrap();
+        let s = step(&mut state, config, 90.0, MIN_MS).unwrap();
         let expected = s.drawdown_raw.min(state.drawdown_ema);
         assert!((s.drawdown_score - expected).abs() < 1e-12);
     }
@@ -325,18 +362,17 @@ mod tests {
     #[test]
     fn score_uses_raw_when_ema_is_stale_after_recovery() {
         let mut state = HardStopState::default();
-        // Use 1-sample EMA so EMA tracks raw closely on drawdown
         let config = HardStopConfig {
             red_threshold: 0.5,
             ema_span_minutes: 60.0,
             tier_ratios: HardStopTierRatios::default(),
         };
-        let _ = step(&mut state, config, 100.0, 1.0).unwrap();
+        let _ = step(&mut state, config, 100.0, 0).unwrap();
         // Large drawdown to push EMA up
-        let _ = step(&mut state, config, 80.0, 1.0).unwrap();
-        let _ = step(&mut state, config, 80.0, 1.0).unwrap();
+        let _ = step(&mut state, config, 80.0, MIN_MS).unwrap();
+        let _ = step(&mut state, config, 80.0, 2 * MIN_MS).unwrap();
         // Now recover — raw goes to 0 but EMA is still elevated
-        let s = step(&mut state, config, 100.0, 1.0).unwrap();
+        let s = step(&mut state, config, 100.0, 3 * MIN_MS).unwrap();
         assert!(
             s.drawdown_raw < state.drawdown_ema,
             "raw should be lower after recovery"
@@ -355,11 +391,11 @@ mod tests {
             ema_span_minutes: 1.0,
             tier_ratios: HardStopTierRatios::default(),
         };
-        let _ = step(&mut state, config, 100.0, 1.0).unwrap();
-        let red = step(&mut state, config, 60.0, 1.0).unwrap();
+        let _ = step(&mut state, config, 100.0, 0).unwrap();
+        let red = step(&mut state, config, 60.0, MIN_MS).unwrap();
         assert_eq!(red.tier, HardStopTier::Red);
         assert!(state.red_latched);
-        let after_recovery = step(&mut state, config, 100.0, 1.0).unwrap();
+        let after_recovery = step(&mut state, config, 100.0, 2 * MIN_MS).unwrap();
         assert_eq!(after_recovery.tier, HardStopTier::Red);
         assert!(state.red_latched);
     }
@@ -372,9 +408,11 @@ mod tests {
             ema_span_minutes: 1.0,
             tier_ratios: HardStopTierRatios::default(),
         };
-        let _ = step_with_peak_strategy_equity(&mut state, config, 100.0, 100.0, 1.0).unwrap();
+        let _ =
+            step_with_peak_strategy_equity(&mut state, config, 100.0, 100.0, 0).unwrap();
         // Simulate old peaks aged out from lookback: peak now 90, equity 90.
-        let s = step_with_peak_strategy_equity(&mut state, config, 90.0, 90.0, 1.0).unwrap();
+        let s =
+            step_with_peak_strategy_equity(&mut state, config, 90.0, 90.0, MIN_MS).unwrap();
         assert!((s.drawdown_raw - 0.0).abs() < 1e-12);
         assert!((state.peak_strategy_equity - 90.0).abs() < 1e-12);
     }
@@ -386,10 +424,108 @@ mod tests {
             red_latched: true,
             ..Default::default()
         };
-        let first = step(&mut state, config, 100.0, 1.0).unwrap();
+        let first = step(&mut state, config, 100.0, 0).unwrap();
         assert_eq!(first.tier, HardStopTier::Red);
         assert!(state.red_latched);
     }
+
+    // --- Minute-quantization tests ---
+
+    #[test]
+    fn intra_minute_returns_cached_result() {
+        let mut state = HardStopState::default();
+        let config = cfg();
+        let _ = step(&mut state, config, 100.0, 0).unwrap();
+        let s1 = step(&mut state, config, 90.0, MIN_MS).unwrap();
+        assert!(s1.elapsed_minutes == 1);
+        let ema_after_s1 = state.drawdown_ema;
+        // Call again within the same minute — different equity, but should be cached
+        let s2 = step(&mut state, config, 80.0, MIN_MS + 30_000).unwrap();
+        assert_eq!(s2.elapsed_minutes, 0);
+        assert!((s2.drawdown_raw - s1.drawdown_raw).abs() < 1e-12);
+        assert!((s2.drawdown_score - s1.drawdown_score).abs() < 1e-12);
+        // State should not have changed
+        assert!((state.drawdown_ema - ema_after_s1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn gap_filling_uses_closed_form() {
+        let mut state = HardStopState::default();
+        let config = HardStopConfig {
+            red_threshold: 0.5,
+            ema_span_minutes: 60.0,
+            tier_ratios: HardStopTierRatios::default(),
+        };
+        let _ = step(&mut state, config, 100.0, 0).unwrap();
+        // Skip 5 minutes at once
+        let s = step(&mut state, config, 90.0, 5 * MIN_MS).unwrap();
+        assert_eq!(s.elapsed_minutes, 5);
+        let alpha: f64 = 2.0 / (60.0 + 1.0);
+        let decay = (1.0_f64 - alpha).powf(5.0);
+        let expected_ema = 0.1 + (0.0 - 0.1) * decay; // raw=0.1, old_ema=0
+        assert!((state.drawdown_ema - expected_ema).abs() < 1e-12);
+    }
+
+    #[test]
+    fn gap_filling_matches_sequential_steps() {
+        let config = HardStopConfig {
+            red_threshold: 0.5,
+            ema_span_minutes: 60.0,
+            tier_ratios: HardStopTierRatios::default(),
+        };
+        // Sequential: 5 individual 1-minute steps
+        let mut state_seq = HardStopState::default();
+        let _ = step(&mut state_seq, config, 100.0, 0).unwrap();
+        for i in 1..=5u64 {
+            let _ = step(&mut state_seq, config, 90.0, i * MIN_MS).unwrap();
+        }
+        // Batch: one 5-minute gap
+        let mut state_batch = HardStopState::default();
+        let _ = step(&mut state_batch, config, 100.0, 0).unwrap();
+        let _ = step(&mut state_batch, config, 90.0, 5 * MIN_MS).unwrap();
+        assert!(
+            (state_seq.drawdown_ema - state_batch.drawdown_ema).abs() < 1e-12,
+            "sequential ({}) != batch ({})",
+            state_seq.drawdown_ema,
+            state_batch.drawdown_ema
+        );
+    }
+
+    #[test]
+    fn timestamp_regression_rejected() {
+        let mut state = HardStopState::default();
+        let config = cfg();
+        let _ = step(&mut state, config, 100.0, 2 * MIN_MS).unwrap();
+        let err = step(&mut state, config, 100.0, MIN_MS).unwrap_err();
+        assert!(err.contains("non-decreasing"));
+    }
+
+    #[test]
+    fn large_gap_converges_ema_to_raw() {
+        let mut state = HardStopState::default();
+        let config = HardStopConfig {
+            red_threshold: 0.5,
+            ema_span_minutes: 60.0,
+            tier_ratios: HardStopTierRatios::default(),
+        };
+        let _ = step(&mut state, config, 100.0, 0).unwrap();
+        // 100,000 minutes gap (~69 days) with 10% drawdown
+        let s = step(&mut state, config, 90.0, 100_000 * MIN_MS).unwrap();
+        assert_eq!(s.elapsed_minutes, 100_000);
+        // EMA should have fully converged to drawdown_raw
+        assert!((state.drawdown_ema - s.drawdown_raw).abs() < 1e-12);
+    }
+
+    #[test]
+    fn first_sample_reports_zero_elapsed() {
+        let mut state = HardStopState::default();
+        let config = cfg();
+        let s = step(&mut state, config, 100.0, 5 * MIN_MS).unwrap();
+        assert_eq!(s.elapsed_minutes, 0);
+        assert!((s.drawdown_raw - 0.0).abs() < 1e-12);
+    }
+
+    // --- RollingPeakTracker tests (unchanged) ---
 
     #[test]
     fn rolling_peak_tracker_enforces_lookback_window() {

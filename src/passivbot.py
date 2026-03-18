@@ -942,13 +942,8 @@ class Passivbot:
     def _equity_hard_stop_runtime_tier(self, pside: str) -> str:
         return str(self._hsl_state(pside)["runtime"].tier())
 
-    def _equity_hard_stop_sample_minutes(self) -> float:
-        sample_minutes = float(self.live_value("execution_delay_seconds")) / 60.0
-        if not math.isfinite(sample_minutes) or sample_minutes <= 0.0:
-            raise ValueError(
-                f"execution_delay_seconds must be finite and > 0 for hard stop; got {sample_minutes}"
-            )
-        return sample_minutes
+    # _equity_hard_stop_sample_minutes removed: Rust now derives timing from
+    # timestamp_ms using minute-quantized EMA (see docs/plans/ema_timing_parity_bug.md).
 
     @staticmethod
     def _equity_hard_stop_fill_pside(fill: Any) -> str:
@@ -1071,7 +1066,6 @@ class Passivbot:
         realized_pnl_total: float,
         realized_pnl_pside: float,
         unrealized_pnl_pside: float,
-        sample_minutes: float,
         unrealized_pnl_total: Optional[float] = None,
     ) -> dict:
         if not math.isfinite(balance) or balance <= 0.0:
@@ -1082,8 +1076,6 @@ class Passivbot:
             raise ValueError(f"realized_pnl_pside must be finite, got {realized_pnl_pside}")
         if not math.isfinite(unrealized_pnl_pside):
             raise ValueError(f"unrealized_pnl_pside must be finite, got {unrealized_pnl_pside}")
-        if not math.isfinite(sample_minutes) or sample_minutes <= 0.0:
-            raise ValueError(f"sample_minutes must be finite and > 0, got {sample_minutes}")
 
         signal_mode, realized_pnl_signal, unrealized_pnl_signal = (
             self._equity_hard_stop_signal_values(
@@ -1118,7 +1110,6 @@ class Passivbot:
             timestamp_ms=int(timestamp_ms),
             equity=float(strategy_equity),
             peak_strategy_equity=float(peak_strategy_equity),
-            sample_minutes=float(sample_minutes),
             red_threshold=red_threshold,
             ema_span_minutes=ema_span_minutes,
             tier_ratio_yellow=ratio_yellow,
@@ -1151,8 +1142,7 @@ class Passivbot:
             "red_threshold": red_threshold,
             "tier": str(step["tier"]),
             "changed": bool(step["changed"]) or str(step["tier"]) != prev_tier,
-            "sample_minutes": float(sample_minutes),
-            "span_samples": float(step["span_samples"]),
+            "elapsed_minutes": int(step["elapsed_minutes"]),
             "alpha": float(step["alpha"]),
         }
         state["last_metrics"] = metrics
@@ -1422,7 +1412,6 @@ class Passivbot:
                     float(row["realized_pnl"]),
                     row_realized_pside,
                     row_unrealized_pside,
-                    1.0,
                     unrealized_pnl_total=row_upnl_total,
                 )
                 n_rows[pside] += 1
@@ -1494,7 +1483,6 @@ class Passivbot:
                 current_realized_total,
                 float(self._equity_hard_stop_realized_pnl_now(pside)),
                 current_upnl_by_pside[pside],
-                self._equity_hard_stop_sample_minutes(),
                 unrealized_pnl_total=current_upnl_total,
             )
             logging.info(
@@ -1605,7 +1593,6 @@ class Passivbot:
                 float(realized_pnl_total),
                 float(self._equity_hard_stop_realized_pnl_now(pside)),
                 float(unrealized_pnl_by_pside[pside]),
-                self._equity_hard_stop_sample_minutes(),
                 unrealized_pnl_total=unrealized_pnl_total,
             )
             if metrics["changed"]:
