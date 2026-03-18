@@ -156,7 +156,7 @@ For each candidate close order, the bot projects realized PnL if filled and bloc
 Behavior by value:
 * `max_realized_loss_pct <= 0.0`: block all lossy closes.
 * `0.0 < max_realized_loss_pct < 1.0`: allow losses only down to the configured fraction below peak balance.
-* `max_realized_loss_pct >= 1.0`: disabled (legacy behavior).
+* `max_realized_loss_pct >= 1.0`: disabled.
 
 Operational notes:
 * Live bot logs visible warnings whenever an order is blocked by this gate.

@@ -393,7 +393,7 @@ def test_forager_ema_readiness_prefers_ready_coin_when_weighted():
     assert {o["symbol_idx"] for o in out["orders"]} == {0}
 
 
-def test_json_rejects_all_zero_forager_weights():
+def test_json_maps_all_zero_forager_weights_to_volume_only():
     import passivbot_rust as pbr
 
     inp = make_input(
@@ -407,10 +407,37 @@ def test_json_rejects_all_zero_forager_weights():
                 }
             }
         ),
-        symbols=[make_symbol(0, bid=100.0, ask=100.0)],
-    )
-    with pytest.raises(ValueError, match="forager_score_weights"):
-        compute(pbr, inp)
+        symbols=[
+                make_symbol(
+                    0,
+                    bid=100.0,
+                    ask=100.0,
+                    long_bp={
+                        "forager_score_weights": {
+                            "volume": 0.0,
+                            "ema_readiness": 0.0,
+                            "volatility": 0.0,
+                        }
+                    },
+                    emas=ema_bundle(m1_volume=[[10.0, 1_000.0]], m1_log_range=[[10.0, 0.01]]),
+                ),
+                make_symbol(
+                    1,
+                    bid=100.0,
+                    ask=100.0,
+                    long_bp={
+                        "forager_score_weights": {
+                            "volume": 0.0,
+                            "ema_readiness": 0.0,
+                            "volatility": 0.0,
+                        }
+                    },
+                    emas=ema_bundle(m1_volume=[[10.0, 2_000.0]], m1_log_range=[[10.0, 0.01]]),
+                ),
+            ],
+        )
+    out = compute(pbr, inp)
+    assert out["orders"], "expected at least one order"
 
 
 def test_json_output_is_deterministic():

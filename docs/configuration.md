@@ -8,7 +8,7 @@ This document provides an overview of the parameters found in `config/template.j
 - **compress_cache**: Set to `true` to save disk space. Set to `false` for faster loading.
 - **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
 - **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. Supported exchanges include `binance`, `bybit`, `gateio`, and `bitget`. The template ships with `['binance', 'bybit', 'gateio', 'bitget']`.  
-  **GateIO note:** If you have existing `caches/ohlcv/gateio` data from older builds, delete it so fresh data (normalized to base volume) is fetched.
+  **GateIO note:** If you already have `caches/ohlcv/gateio` data on disk, delete it before a fresh run so Passivbot rebuilds the cache with base-volume-normalized data.
 - **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic exchange selection when multiple exchanges are configured. Scenarios may add more overrides; conflicting assignments raise an error.
 - **market_settings_sources**: Optional mapping of `coin -> exchange` used specifically for exchange metadata such as `price_step`, `qty_step`, fees, and min-size rules. This is separate from `coin_sources`: you may source candles from one exchange while borrowing market settings from another.
 - **ohlcv_source_dir**: Optional path to a pre-populated OHLCV directory to use before hitting exchange archives. Expected structure: `<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz` or `.npy`. Coin keys are normalized to base coins, but CCXT-style symbol folder names are accepted (e.g., `ETH_USDC:USDC`).
@@ -30,7 +30,7 @@ This document provides an overview of the parameters found in `config/template.j
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
   `balance_and_equity.csv` and related plots. `1` keeps full per-minute resolution; higher values
   thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes.
-- **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` mirrors the legacy 100% BTC mode; values `>1` allow leveraged BTC collateral, accepting negative USD balances.
+- **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` targets fully-BTC collateral; values `>1` allow leveraged BTC collateral, accepting negative USD balances.
 - **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
 - **visible_metrics**: Controls which metrics are printed to the terminal after a standalone backtest. `null` shows the metrics implied by `optimize.scoring` and `optimize.limits`, `[]` shows all metrics, and an explicit list adds extra named metrics to the default view. This affects CLI visibility only; the full metric set is still computed and persisted. See [Metrics reference](metrics.md).
 
@@ -70,7 +70,7 @@ Example per-metric aggregation:
   - The CLI flag `--debug-level`/`--log-level` on `src/passivbot.py` and `src/backtest.py` overrides the configured value for a single run.
   - Components such as the CandlestickManager inherit this level, so EMA warm-up and candle maintenance logs follow the same verbosity.
 - **memory_snapshot_interval_minutes**: Interval between `_log_memory_snapshot` telemetry entries (RSS, cache footprint, asyncio task counts). Default `30`; lower values surface leaks sooner, higher values reduce noise.
-- **volume_refresh_info_threshold_seconds**: Minimum duration a bulk volume-EMA refresh must take before it is promoted to an INFO log. Runs that finish faster emit only DEBUG output (when debug logging is enabled). Set `0` to keep the previous always-INFO behaviour.
+- **volume_refresh_info_threshold_seconds**: Minimum duration a bulk volume-EMA refresh must take before it is promoted to an INFO log. Runs that finish faster emit only DEBUG output (when debug logging is enabled). Set `0` to log every refresh at INFO.
 
 ## Bot Settings
 
@@ -186,7 +186,7 @@ Passivbot can be configured to create a grid of entry orders, with prices and qu
   - Quantity of the next grid entry is position size times the double down factor.
   - Example: If position size is `1.4` and `double_down_factor` is `0.9`, then the next entry quantity is `1.4 * 0.9 = 1.26`.
   - Also applies to trailing entries.
-- **entry_grid_spacing_pct**, **entry_grid_spacing_we_weight** *(formerly `entry_grid_spacing_weight`)*:
+- **entry_grid_spacing_pct**, **entry_grid_spacing_we_weight**:
   - Grid re-entry prices are determined as follows:
     - `next_reentry_price_long = pos_price * (1 - entry_grid_spacing_pct * multiplier)`
     - `next_reentry_price_short = pos_price * (1 + entry_grid_spacing_pct * multiplier)`
@@ -295,6 +295,8 @@ Forager coin selection now uses a two-stage model: coarse volume pruning, then w
 - **forager_score_weights**: Final weighted forager ranking weights.
   - Required keys: `volume`, `ema_readiness`, `volatility`.
   - Default: `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}`.
+  - Weights are relative. Positive weights are normalized to unit sum before use.
+  - If all three are `0.0`, Passivbot interprets that as volume-only ranking.
   - `ema_readiness` ranks by distance to the actual offset initial-entry threshold, not raw EMA bands.
 
 See [docs/forager.md](forager.md) for a full description of motivation, ranking rules, caveats, and usage examples.
@@ -524,7 +526,7 @@ Any metric listed above (and its `btc_` prefixed counterpart when `backtest.use_
 - `value`: numeric threshold for `<`/`>` modes.
 - `range`: two-value list `[low, high]` for the range modes.
 - Optional `enabled`: set to `false` to disable a default limit without deleting it. This prevents config normalization from re-adding that metric's default limit later.
-- Optional `stat`: when you want to compare against a specific statistic (`min`, `max`, `mean`, `std`). Defaults mirror the legacy behaviour (`>` checks use `_max`, `<` checks use `_min`, range checks use `_mean`).
+- Optional `stat`: when you want to compare against a specific statistic (`min`, `max`, `mean`, `std`). The default is `_max` for `>` checks, `_min` for `<` checks, and `_mean` for range checks.
 
 #### Format
 
@@ -552,7 +554,7 @@ For quick CLI overrides you can pass the JSON/HJSON string directly:
 python3 src/optimize.py --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
 
-The legacy syntax (`--penalize_if_greater_than_*`) is still accepted for backwards compatibility; it is normalized into the list form at runtime.
+Passivbot also accepts the shorthand CLI syntax (`--penalize_if_greater_than_*`) and normalizes it into the list form at runtime.
 
 ## Configuration Internals
 

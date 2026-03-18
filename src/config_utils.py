@@ -726,6 +726,10 @@ LEGACY_FORAGER_KEYS = {
     "filter_volume_drop_pct": "forager_volume_drop_pct",
 }
 
+OBSOLETE_BOT_KEYS = {
+    "filter_volatility_drop_pct",
+}
+
 LEGACY_ENTRY_GRID_KEYS = {
     "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
     "entry_grid_spacing_log_span_hours": "entry_volatility_ema_span_hours",
@@ -762,6 +766,11 @@ LEGACY_BOUNDS_KEYS = {
     "short_entry_trailing_retracement_log_weight": "short_entry_trailing_retracement_volatility_weight",
     "long_entry_trailing_threshold_log_weight": "long_entry_trailing_threshold_volatility_weight",
     "short_entry_trailing_threshold_log_weight": "short_entry_trailing_threshold_volatility_weight",
+}
+
+OBSOLETE_BOUND_KEYS = {
+    "long_filter_volatility_drop_pct",
+    "short_filter_volatility_drop_pct",
 }
 
 FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
@@ -830,6 +839,18 @@ def _apply_backward_compatibility_renames(
                             moved_value,
                         )
                 del bot_cfg[old]
+        for old in OBSOLETE_BOT_KEYS:
+            if old in bot_cfg:
+                removed_value = bot_cfg.pop(old)
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "dropping obsolete parameter bot.%s.%s",
+                    pside,
+                    old,
+                )
+                if tracker is not None:
+                    tracker.remove(["bot", pside, old], removed_value)
 
     bounds = result.get("optimize", {}).get("bounds", {})
     for old, new in LEGACY_BOUNDS_KEYS.items():
@@ -847,6 +868,17 @@ def _apply_backward_compatibility_renames(
                         moved_value,
                     )
             del bounds[old]
+    for old in OBSOLETE_BOUND_KEYS:
+        if old in bounds:
+            removed_value = bounds.pop(old)
+            _log_config(
+                verbose,
+                logging.INFO,
+                "dropping obsolete parameter optimize.bounds.%s",
+                old,
+            )
+            if tracker is not None:
+                tracker.remove(["optimize", "bounds", old], removed_value)
 
     live_cfg = result.get("live")
     logging_cfg = result.setdefault("logging", {})
@@ -1201,7 +1233,44 @@ def _apply_forager_internal_aliases(result: dict) -> None:
             bounds[internal_key] = deepcopy(bounds[canonical_key])
 
 
-def _validate_forager_config(result: dict) -> None:
+def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
+    required_weight_keys = {"volume", "ema_readiness", "volatility"}
+    if not isinstance(weights, dict):
+        raise TypeError(f"{path} must be a dict")
+    missing = sorted(required_weight_keys - set(weights))
+    if missing:
+        raise ValueError(f"{path} missing required keys: {', '.join(missing)}")
+    extra = sorted(set(weights) - required_weight_keys)
+    if extra:
+        raise ValueError(f"{path} has unsupported keys: {', '.join(extra)}")
+
+    normalized = {}
+    total = 0.0
+    for key in ("volume", "ema_readiness", "volatility"):
+        try:
+            value = float(weights[key])
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{path}.{key} must be numeric") from exc
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"{path}.{key} must be finite and non-negative")
+        normalized[key] = value
+        total += value
+
+    if total <= 0.0:
+        return {
+            "volume": 1.0,
+            "ema_readiness": 0.0,
+            "volatility": 0.0,
+        }
+
+    return {key: normalized[key] / total for key in ("volume", "ema_readiness", "volatility")}
+
+
+def _validate_forager_config(
+    result: dict,
+    verbose: bool = True,
+    tracker: Optional[ConfigTransformTracker] = None,
+) -> None:
     required_weight_keys = {"volume", "ema_readiness", "volatility"}
     for pside in ("long", "short"):
         bot_cfg = result["bot"][pside]
@@ -1215,35 +1284,36 @@ def _validate_forager_config(result: dict) -> None:
         bot_cfg["forager_volume_drop_pct"] = drop_pct
 
         weights = bot_cfg["forager_score_weights"]
-        if not isinstance(weights, dict):
-            raise TypeError(f"bot.{pside}.forager_score_weights must be a dict")
-        missing = sorted(required_weight_keys - set(weights))
-        if missing:
-            raise ValueError(
-                f"bot.{pside}.forager_score_weights missing required keys: {', '.join(missing)}"
-            )
-        extra = sorted(set(weights) - required_weight_keys)
-        if extra:
-            raise ValueError(
-                f"bot.{pside}.forager_score_weights has unsupported keys: {', '.join(extra)}"
-            )
-        normalized = {}
-        total = 0.0
-        for key in ("volume", "ema_readiness", "volatility"):
-            try:
-                value = float(weights[key])
-            except (TypeError, ValueError) as exc:
-                raise TypeError(f"bot.{pside}.forager_score_weights.{key} must be numeric") from exc
-            if not math.isfinite(value) or value < 0.0:
-                raise ValueError(
-                    f"bot.{pside}.forager_score_weights.{key} must be finite and non-negative"
+        normalized = normalize_forager_score_weights(
+            weights,
+            path=f"bot.{pside}.forager_score_weights",
+        )
+        if normalized != weights:
+            raw_total = 0.0
+            if isinstance(weights, dict):
+                for key in required_weight_keys:
+                    try:
+                        raw_total += float(weights[key])
+                    except (TypeError, ValueError, KeyError):
+                        raw_total = math.nan
+                        break
+            if raw_total <= 0.0:
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "normalizing bot.%s.forager_score_weights all-zero vector to volume-only",
+                    pside,
                 )
-            normalized[key] = value
-            total += value
-        if total <= 0.0:
-            raise ValueError(
-                f"bot.{pside}.forager_score_weights must contain at least one positive weight"
-            )
+            else:
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "normalizing bot.%s.forager_score_weights to relative unit-sum weights: %s",
+                    pside,
+                    normalized,
+                )
+            if tracker is not None:
+                tracker.update(["bot", pside, "forager_score_weights"], weights, normalized)
         bot_cfg["forager_score_weights"] = normalized
 
 
@@ -1339,12 +1409,14 @@ def _migrate_bot_common_hsl(
 ) -> None:
     live = result.setdefault("live", {})
     bot = result.setdefault("bot", {})
-    common = bot.setdefault("common", {})
+    common = bot.get("common")
     live_hsl = live.get("equity_hard_stop_loss")
-    common_hsl = common.get("equity_hard_stop_loss")
+    common_hsl = common.get("equity_hard_stop_loss") if isinstance(common, dict) else None
     if live_hsl is None:
         return
     if common_hsl is None:
+        if not isinstance(common, dict):
+            common = bot.setdefault("common", {})
         common["equity_hard_stop_loss"] = deepcopy(live_hsl)
         _log_config(
             verbose,
@@ -1374,8 +1446,8 @@ def _migrate_bot_common_hsl(
             for key, value in defaults.items():
                 if key not in pside_cfg:
                     pside_cfg[key] = deepcopy(value)
-                    if tracker is not None:
-                        tracker.add(["bot", pside, key], pside_cfg[key])
+                if tracker is not None:
+                    tracker.add(["bot", pside, key], pside_cfg[key])
     if common_hsl is None:
         pside_legacy_cfgs = []
         for pside in BOT_POSITION_SIDES:
@@ -1383,6 +1455,8 @@ def _migrate_bot_common_hsl(
             if _has_pside_hsl_config(pside_cfg):
                 pside_legacy_cfgs.append(_pside_hsl_to_legacy_fields(pside_cfg))
         if pside_legacy_cfgs and all(cfg == pside_legacy_cfgs[0] for cfg in pside_legacy_cfgs[1:]):
+            if not isinstance(common, dict):
+                common = bot.setdefault("common", {})
             common["equity_hard_stop_loss"] = deepcopy(pside_legacy_cfgs[0])
             if tracker is not None:
                 tracker.add(["bot", "common", "equity_hard_stop_loss"], common["equity_hard_stop_loss"])
@@ -1618,7 +1692,7 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     _migrate_bot_common_hsl(result, verbose=verbose, tracker=tracker)
 
     _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
-    _validate_forager_config(result)
+    _validate_forager_config(result, verbose=verbose, tracker=tracker)
     _apply_forager_internal_aliases(result)
 
     _normalize_position_counts(result, tracker=tracker)

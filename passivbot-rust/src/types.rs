@@ -348,6 +348,31 @@ impl Default for ForagerScoreWeights {
     }
 }
 
+impl ForagerScoreWeights {
+    pub fn canonicalize(&self) -> Result<Self, String> {
+        let values = [self.volume, self.ema_readiness, self.volatility];
+        if values
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err("forager_score_weights must be finite and non-negative".to_string());
+        }
+        let total = self.volume + self.ema_readiness + self.volatility;
+        if total <= 0.0 {
+            return Ok(Self {
+                volume: 1.0,
+                ema_readiness: 0.0,
+                volatility: 0.0,
+            });
+        }
+        Ok(Self {
+            volume: self.volume / total,
+            ema_readiness: self.ema_readiness / total,
+            volatility: self.volatility / total,
+        })
+    }
+}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BotParams {

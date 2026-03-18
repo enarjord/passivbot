@@ -67,6 +67,7 @@ from config_utils import (
     load_hjson_config,
     load_config,
     format_config,
+    normalize_forager_score_weights,
     add_config_arguments,
     update_config_with_args,
     recursive_config_update,
@@ -748,6 +749,14 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
         if pside == "common":
             continue
         config = optimizer_overrides(overrides_list, config, pside)
+    for pside in ("long", "short"):
+        pside_cfg = config.get("bot", {}).get(pside, {})
+        if not isinstance(pside_cfg, dict) or "forager_score_weights" not in pside_cfg:
+            continue
+        pside_cfg["forager_score_weights"] = normalize_forager_score_weights(
+            pside_cfg["forager_score_weights"],
+            path=f"bot.{pside}.forager_score_weights",
+        )
 
     return config
 

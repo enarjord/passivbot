@@ -1,4 +1,5 @@
 import copy
+import logging
 import pytest
 
 from config_utils import (
@@ -306,7 +307,7 @@ def test_format_config_adds_missing_forager_score_weights():
     }
 
 
-def test_format_config_rejects_all_zero_forager_weights():
+def test_format_config_maps_all_zero_forager_weights_to_volume_only():
     current = copy.deepcopy(_template())
     current["bot"]["long"]["forager_score_weights"] = {
         "volume": 0.0,
@@ -314,8 +315,30 @@ def test_format_config_rejects_all_zero_forager_weights():
         "volatility": 0.0,
     }
 
-    with pytest.raises(ValueError, match="forager_score_weights"):
-        format_config(current, verbose=False, live_only=True)
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["forager_score_weights"] == {
+        "volume": 1.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
+
+
+def test_format_config_normalizes_positive_forager_weights_to_unit_sum():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["forager_score_weights"] = {
+        "volume": 2.0,
+        "ema_readiness": 1.0,
+        "volatility": 1.0,
+    }
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["forager_score_weights"] == {
+        "volume": pytest.approx(0.5),
+        "ema_readiness": pytest.approx(0.25),
+        "volatility": pytest.approx(0.25),
+    }
 
 
 def test_get_template_config_uses_canonical_forager_span_keys_and_weight_bounds():
@@ -371,3 +394,36 @@ def test_format_config_is_idempotent_for_lean_live_config():
 
     for key in ("backtest", "bot", "coin_overrides", "live", "logging", "optimize"):
         assert first[key] == second[key]
+
+
+def test_format_config_drops_obsolete_forager_keys_without_misleading_unused_logs(caplog):
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["filter_volatility_drop_pct"] = 0.0
+    current["bot"]["short"]["filter_volatility_drop_pct"] = 0.0
+    current["optimize"]["bounds"]["long_filter_volatility_drop_pct"] = [0.0, 1.0]
+    current["optimize"]["bounds"]["short_filter_volatility_drop_pct"] = [0.0, 1.0]
+
+    with caplog.at_level(logging.INFO):
+        out = format_config(current, verbose=True, live_only=True)
+
+    assert "common" not in out["bot"]
+    assert "filter_volatility_drop_pct" not in out["bot"]["long"]
+    assert "filter_volatility_drop_pct" not in out["bot"]["short"]
+    assert "long_filter_volatility_drop_pct" not in out["optimize"]["bounds"]
+    assert "short_filter_volatility_drop_pct" not in out["optimize"]["bounds"]
+
+    messages = [record.message for record in caplog.records]
+    assert any("dropping obsolete parameter bot.long.filter_volatility_drop_pct" in msg for msg in messages)
+    assert any(
+        "dropping obsolete parameter optimize.bounds.long_filter_volatility_drop_pct" in msg
+        for msg in messages
+    )
+    assert not any("Removed unused key from config: bot.common" in msg for msg in messages)
+    assert not any(
+        "Removed unused key from config: bot.long.filter_volatility_drop_pct" in msg
+        for msg in messages
+    )
+    assert not any(
+        "Removed unused key from config: optimize.bounds.long_filter_volatility_drop_pct" in msg
+        for msg in messages
+    )

@@ -1439,24 +1439,13 @@ fn extract_forager_score_weights(dict: &PyDict) -> PyResult<ForagerScoreWeights>
         ema_readiness: extract_value(weights_dict, "ema_readiness")?,
         volatility: extract_value(weights_dict, "volatility")?,
     };
-    let total_weight = weights.volume + weights.ema_readiness + weights.volatility;
-    if !total_weight.is_finite() || total_weight <= 0.0 {
-        return Err(PyValueError::new_err(
-            "forager_score_weights must contain at least one positive finite weight",
-        ));
-    }
-    Ok(weights)
+    weights.canonicalize().map_err(PyValueError::new_err)
 }
 
 fn validate_forager_score_weights_pair(bot_params: &BotParamsPair) -> PyResult<()> {
     for (pside, params) in [("long", &bot_params.long), ("short", &bot_params.short)] {
-        let total_weight = params.forager_score_weights.volume
-            + params.forager_score_weights.ema_readiness
-            + params.forager_score_weights.volatility;
-        if !total_weight.is_finite() || total_weight <= 0.0 {
-            return Err(PyValueError::new_err(format!(
-                "bot.{pside}.forager_score_weights must contain at least one positive finite weight"
-            )));
+        if let Err(err) = params.forager_score_weights.canonicalize() {
+            return Err(PyValueError::new_err(format!("bot.{pside}.{err}")));
         }
     }
     Ok(())

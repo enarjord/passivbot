@@ -99,15 +99,31 @@ impl ForagerSelectionConfig {
     }
 }
 
-fn validate_forager_weights(weights: &ForagerScoreWeights) -> Result<(), ForagerSelectionError> {
-    let total_weight = weights.volume + weights.ema_readiness + weights.volatility;
-    if !total_weight.is_finite() || total_weight <= 0.0 {
+fn canonicalize_forager_weights(
+    weights: &ForagerScoreWeights,
+) -> Result<ForagerScoreWeights, ForagerSelectionError> {
+    weights
+        .canonicalize()
+        .map_err(|_| ForagerSelectionError::NonFiniteInput {
+            field: "forager_score_weights",
+            index: 0,
+        })
+}
+
+fn validate_forager_weights(
+    weights: &ForagerScoreWeights,
+) -> Result<ForagerScoreWeights, ForagerSelectionError> {
+    let normalized = canonicalize_forager_weights(weights)?;
+    if !(normalized.volume.is_finite()
+        && normalized.ema_readiness.is_finite()
+        && normalized.volatility.is_finite())
+    {
         return Err(ForagerSelectionError::NonFiniteInput {
             field: "forager_score_weights",
             index: 0,
         });
     }
-    Ok(())
+    Ok(normalized)
 }
 
 fn validate_required_score(
@@ -211,12 +227,12 @@ pub fn select_forager_candidates(
     candidates: &[ForagerCandidate],
     cfg: &ForagerSelectionConfig,
 ) -> Result<Vec<usize>, ForagerSelectionError> {
-    validate_forager_weights(&cfg.weights)?;
+    let normalized_weights = validate_forager_weights(&cfg.weights)?;
     let features = build_coin_features(candidates, cfg)?;
     let selection_cfg = SelectionConfig {
         slots_to_fill: cfg.slots_to_fill,
         volume_drop_pct: cfg.volume_drop_pct,
-        weights: cfg.weights.clone(),
+        weights: normalized_weights,
         require_forager: cfg.require_forager,
     };
     Ok(select_coins(&features, &selection_cfg))
@@ -466,9 +482,9 @@ pub fn select_coin_indices_py(
     weights: ForagerScoreWeights,
     require_forager: bool,
 ) -> PyResult<Vec<usize>> {
-    validate_forager_weights(&weights).map_err(|_| {
+    let weights = validate_forager_weights(&weights).map_err(|_| {
         pyo3::exceptions::PyValueError::new_err(
-            "forager_score_weights must contain at least one positive finite weight",
+            "forager_score_weights must be finite and non-negative",
         )
     })?;
     let features: Vec<CoinFeature> = py_features.into_iter().map(Into::into).collect();
@@ -501,7 +517,11 @@ pub fn select_forager_candidates_py(
     let cfg = ForagerSelectionConfig {
         slots_to_fill,
         volume_drop_pct,
-        weights,
+        weights: validate_forager_weights(&weights).map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err(
+                "forager_score_weights must be finite and non-negative",
+            )
+        })?,
         require_forager,
         position_side,
     };

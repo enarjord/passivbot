@@ -437,6 +437,54 @@ class TestIndividualToConfig:
         assert result["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
         assert template == original_template
 
+    def test_normalizes_forager_weights_from_optimizer_candidate(self):
+        from config_utils import get_template_config
+
+        template = get_template_config()
+        key_paths = optimize.get_optimization_key_paths(template)
+        individual = []
+        for bound_key, _ in key_paths:
+            if bound_key == "long_forager_score_weights_volume":
+                individual.append(2.0)
+            elif bound_key == "long_forager_score_weights_ema_readiness":
+                individual.append(1.0)
+            elif bound_key == "long_forager_score_weights_volatility":
+                individual.append(1.0)
+            else:
+                individual.append(template["optimize"]["bounds"][bound_key][0])
+
+        result = individual_to_config(individual, lambda x, y, z: y, [], template)
+
+        assert result["bot"]["long"]["forager_score_weights"] == {
+            "volume": pytest.approx(0.5),
+            "ema_readiness": pytest.approx(0.25),
+            "volatility": pytest.approx(0.25),
+        }
+
+    def test_zero_forager_weights_from_optimizer_candidate_map_to_volume_only(self):
+        from config_utils import get_template_config
+
+        template = get_template_config()
+        key_paths = optimize.get_optimization_key_paths(template)
+        individual = []
+        for bound_key, _ in key_paths:
+            if bound_key in {
+                "long_forager_score_weights_volume",
+                "long_forager_score_weights_ema_readiness",
+                "long_forager_score_weights_volatility",
+            }:
+                individual.append(0.0)
+            else:
+                individual.append(template["optimize"]["bounds"][bound_key][0])
+
+        result = individual_to_config(individual, lambda x, y, z: y, [], template)
+
+        assert result["bot"]["long"]["forager_score_weights"] == {
+            "volume": 1.0,
+            "ema_readiness": 0.0,
+            "volatility": 0.0,
+        }
+
 
 class TestConfigToIndividual:
     """Test config_to_individual function."""

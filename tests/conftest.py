@@ -171,19 +171,21 @@ def _install_passivbot_rust_stub():
             return [1.0 if math.isfinite(float(v)) else 0.0 for v in values]
         return [((hi - float(v)) / (hi - lo)) if math.isfinite(float(v)) else 0.0 for v in values]
 
-    def _validate_weights(weights):
-        total = (
-            float(weights["volume"])
-            + float(weights["ema_readiness"])
-            + float(weights["volatility"])
-        )
-        if not math.isfinite(total) or total <= 0.0:
-            raise ValueError(
-                "forager_score_weights must contain at least one positive finite weight"
-            )
+    def _canonicalize_weights(weights):
+        normalized = {
+            "volume": float(weights["volume"]),
+            "ema_readiness": float(weights["ema_readiness"]),
+            "volatility": float(weights["volatility"]),
+        }
+        if any((not math.isfinite(value)) or value < 0.0 for value in normalized.values()):
+            raise ValueError("forager_score_weights must be finite and non-negative")
+        total = sum(normalized.values())
+        if total <= 0.0:
+            return {"volume": 1.0, "ema_readiness": 0.0, "volatility": 0.0}
+        return {key: value / total for key, value in normalized.items()}
 
     def _select_coin_indices_py(py_features, slots_to_fill, volume_drop_pct, weights, require_forager):
-        _validate_weights(weights)
+        weights = _canonicalize_weights(weights)
         enabled_positions = [i for i, feature in enumerate(py_features) if feature["enabled"]]
         if not enabled_positions:
             return []

@@ -8,13 +8,13 @@ Forager mode exists to answer one question:
 
 Which symbols should be allowed to occupy the limited entry slots right now?
 
-The old approach was effectively a fixed pipeline dominated by volume and volatility filters. The current model keeps the same spirit, but makes the last-stage selection explicit and configurable:
+Forager answers that question in a simple sequence:
 
 1. prune obviously weak candidates by volume
 2. rank the survivors by a weighted score
 3. fill the available shortlist slots from that ranking
 
-This makes the tradeoff between liquidity, volatility, and entry readiness visible in config instead of being hardcoded.
+This lets you control the tradeoff between liquidity, volatility, and entry readiness directly in config.
 
 ## Inputs
 
@@ -98,13 +98,14 @@ Interpretation:
 Rules:
 
 - each value must be finite and non-negative
-- at least one weight must be positive
 - weights are relative; only their proportions matter
+- positive weights are normalized to unit sum before scoring
+- if all three weights are zero, Passivbot interprets that as volume-only ranking
 
 Examples:
 
 - `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}`
-  - classic volatility-driven forager behavior
+  - prioritize the most volatile candidates
 - `{"volume": 1.0, "ema_readiness": 0.0, "volatility": 0.0}`
   - maximize liquidity after coarse pruning
 - `{"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0}`
@@ -132,17 +133,16 @@ That means:
 - fetch-budget exhaustion should raise if it prevents building required shortlist inputs
 - neutral defaults like `0.0`, `(0.0, 0.0)`, or `inf` are not acceptable for required shortlist inputs
 
-The only fallback philosophy accepted in Passivbot for critical indicator paths is the explicitly reviewed and bounded previous-EMA fallback used in approved EMA paths. Forager should not invent local substitute values.
+The only fallback philosophy accepted in Passivbot for critical indicator paths is the explicitly reviewed and bounded EMA fallback used in approved EMA paths. Forager should not invent local substitute values.
 
 ## Caveats
 
 - Live currently uses the latest available market price as both bid and ask in the Python-collected payload. The shortlist math itself is side-aware in Rust, so moving to real order-book bid/ask later does not require changing the ranking definition.
-- If all three score weights are zero, config is invalid.
 - If a feature weight is zero and no other part of the selection requires that feature, the feature may be skipped entirely.
 
 ## Practical Tuning Notes
 
-- Start with volatility-only if you want behavior close to older configs.
+- Start with volatility-only if you want the shortlist to favor active, moving symbols.
 - Add `ema_readiness` when you want empty slots to favor symbols closer to producing a real initial entry.
 - Keep some volume pruning or volume weight if your candidate universe contains many illiquid tails.
 - If rankings look noisy, first widen the forager EMA spans before changing entry parameters.
@@ -151,4 +151,4 @@ The only fallback philosophy accepted in Passivbot for critical indicator paths 
 
 - Canonical shortlist scoring and selection live in Rust.
 - Python is responsible for gathering market data, building payloads, and calling Rust.
-- Legacy config names like `filter_volume_ema_span` and `filter_volatility_ema_span` are migrated centrally, but the canonical config names are `forager_volume_ema_span` and `forager_volatility_ema_span`.
+- The canonical config names are `forager_volume_ema_span` and `forager_volatility_ema_span`.

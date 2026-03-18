@@ -12,7 +12,7 @@ Pass `--run optimize_results/<timestamp>/` to load a specific run or point it at
 
 ## Pareto transformations / static plots
 
-`src/tools/pareto_transform.py` converts `all_results.bin` or individual Pareto JSON entries into CSV/JSON summaries for external analysis. The legacy `src/pareto_store.py` still produces quick matplotlib scatter plots if you prefer static images.
+`src/tools/pareto_transform.py` converts `all_results.bin` or individual Pareto JSON entries into CSV/JSON summaries for external analysis. `src/pareto_store.py` produces quick matplotlib scatter plots if you prefer static images.
 
 ```shell
 python3 src/tools/pareto_transform.py optimize_results/.../all_results.bin --out summary.csv

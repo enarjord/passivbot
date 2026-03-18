@@ -41,7 +41,7 @@ Use `unified` when:
 
 1. the strategy is intended to behave as one combined book
 2. long and short naturally hedge or subsidize each other
-3. older configs were tuned around account-level HSL behavior and become too harsh under `pside`
+3. you want account-level stress on one side to influence the HSL trigger signal on the other side
 
 This is separate from auto-unstuck and the realized-loss gate:
 

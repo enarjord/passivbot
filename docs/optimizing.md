@@ -204,8 +204,7 @@ python3 src/pareto_store.py optimize_results/.../pareto/
 - CSV export of the current run's dataset for offline analysis
 
 Install the dependencies via `pip install dash plotly` if they are not already present.
-The legacy `pareto_store.py` script still supports quick 2D/3D matplotlib plots if a GUI
-isn't needed.
+`pareto_store.py` is also available for quick 2D/3D matplotlib plots when you do not need the interactive dashboard.
 
 ## Optimization Limits
 
@@ -218,7 +217,7 @@ objects. Each object describes when to penalize a result:
 - `value`: numeric threshold for `<`/`>` limits.
 - `range`: `[low, high]` for the range-based operators.
 - Optional `stat`: override the statistic to compare against (`min`, `max`, `mean`, `std`).
-  Defaults mirror the legacy behaviour (`>` checks use `_max`, `<` checks use `_min`, range checks use `_mean`).
+  The default is `_max` for `>` checks, `_min` for `<` checks, and `_mean` for range checks.
 
 Example:
 
@@ -236,7 +235,7 @@ CLI overrides accept the same JSON/HJSON payload:
 python3 src/optimize.py --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
 
-For quick-and-dirty tweaks, the legacy format (`--penalize_if_greater_than_drawdown_worst 0.3`) is still recognized and converted to the new schema at runtime.
+For quick CLI tweaks, Passivbot also accepts shorthand flags such as `--penalize_if_greater_than_drawdown_worst 0.3` and converts them to the structured schema at runtime.
 
 Penalties are added to every objective as a positive modifier; they do not disqualify a config but will push it far from the Pareto front when violated. Metric names may include `_usd` / `_btc` suffixes to lock a denomination; when omitted, USD is assumed.
 
