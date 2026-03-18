@@ -4272,6 +4272,10 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
         bp_pair.short.ema_span_0 = 10.0;
         bp_pair.short.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.short.hsl_enabled = true;
+        bp_pair.long.hsl_orange_tier_mode = "graceful_stop".to_string();
+        bp_pair.short.hsl_orange_tier_mode = "graceful_stop".to_string();
 
         let mut hs = EquityHardStopLossConfig::default();
         hs.enabled = true;
@@ -4314,6 +4318,8 @@ mod tests {
             &backtest_params,
         );
         bt.hard_stop_tier = ehsl::HardStopTier::Orange;
+        bt.hard_stop_pside[LONG].tier = ehsl::HardStopTier::Orange;
+        bt.hard_stop_pside[SHORT].tier = ehsl::HardStopTier::Orange;
 
         let input = bt.get_orchestrator_input_cached(1, None);
         assert_eq!(
@@ -4338,6 +4344,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
         bp_pair.short.ema_span_0 = 10.0;
         bp_pair.short.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.short.hsl_enabled = true;
 
         let mut hs = EquityHardStopLossConfig::default();
         hs.enabled = true;
@@ -4380,6 +4388,8 @@ mod tests {
             &backtest_params,
         );
         bt.hard_stop_tier = ehsl::HardStopTier::Orange;
+        bt.hard_stop_pside[LONG].tier = ehsl::HardStopTier::Orange;
+        bt.hard_stop_pside[SHORT].tier = ehsl::HardStopTier::Orange;
         bt.positions.long.insert(
             0,
             Position {
@@ -4408,6 +4418,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
         bp_pair.short.ema_span_0 = 10.0;
         bp_pair.short.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.short.hsl_enabled = true;
 
         let mut hs = EquityHardStopLossConfig::default();
         hs.enabled = true;
@@ -4450,6 +4462,8 @@ mod tests {
             &backtest_params,
         );
         bt.hard_stop_tier = ehsl::HardStopTier::Orange;
+        bt.hard_stop_pside[LONG].tier = ehsl::HardStopTier::Orange;
+        bt.hard_stop_pside[SHORT].tier = ehsl::HardStopTier::Orange;
 
         let input = bt.get_orchestrator_input_cached(1, None);
         assert_eq!(input.symbols[0].long.mode, None);
@@ -4468,6 +4482,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
         bp_pair.short.ema_span_0 = 10.0;
         bp_pair.short.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.short.hsl_enabled = true;
 
         let mut hs = EquityHardStopLossConfig::default();
         hs.enabled = true;
@@ -4509,6 +4525,8 @@ mod tests {
             &backtest_params,
         );
         bt.hard_stop_tier = ehsl::HardStopTier::Red;
+        bt.hard_stop_pside[LONG].tier = ehsl::HardStopTier::Red;
+        bt.hard_stop_pside[SHORT].tier = ehsl::HardStopTier::Red;
         bt.positions.long.insert(
             0,
             Position {
@@ -4522,6 +4540,7 @@ mod tests {
             input.symbols[0].long.mode,
             Some(orchestrator::TradingMode::Panic)
         );
+        // Red tier forces Panic on all sides (even flat ones get Panic override)
         assert_eq!(
             input.symbols[0].short.mode,
             Some(orchestrator::TradingMode::Panic)
@@ -4545,6 +4564,8 @@ mod tests {
         bp_pair.long.total_wallet_exposure_limit = 1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.long.hsl_panic_close_order_type = "market".to_string();
 
         let mut hs = EquityHardStopLossConfig::default();
         hs.enabled = true;
@@ -4788,14 +4809,19 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.long.hsl_red_threshold = 0.99;
+        bp_pair.long.hsl_ema_span_minutes = 1.0;
+        bp_pair.long.hsl_no_restart_drawdown_threshold = 1.0;
 
         let mut hs = EquityHardStopLossConfig::default();
         hs.enabled = true;
+        hs.signal_mode = "unified".to_string();
         hs.red_threshold = 0.99;
         hs.ema_span_minutes = 1.0;
 
         let backtest_params = BacktestParams {
-            starting_balance: 1000.0,
+            starting_balance: 100.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
             coins: vec!["TEST".to_string()],
@@ -4861,6 +4887,11 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.long.hsl_red_threshold = 0.1;
+        bp_pair.long.hsl_ema_span_minutes = 1.0;
+        bp_pair.long.hsl_cooldown_minutes_after_red = 5.0;
+        bp_pair.long.hsl_no_restart_drawdown_threshold = 1.0;
 
         let mut hs = EquityHardStopLossConfig::default();
         hs.enabled = true;
@@ -4940,6 +4971,7 @@ mod tests {
                 bp.hsl_ema_span_minutes = 1.0;
                 bp.hsl_tier_ratio_yellow = 0.5;
                 bp.hsl_tier_ratio_orange = 0.75;
+                bp.hsl_no_restart_drawdown_threshold = 1.0;
             }
 
             let mut hs = EquityHardStopLossConfig::default();
@@ -5019,6 +5051,9 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.long.hsl_cooldown_minutes_after_red = 1.0;
+        bp_pair.long.hsl_no_restart_drawdown_threshold = 1.0;
 
         let mut hs = EquityHardStopLossConfig::default();
         hs.enabled = true;
@@ -5061,6 +5096,23 @@ mod tests {
             &backtest_params,
         );
 
+        // Set per-pside runtime state (the runtime code reads these, not the shared fields)
+        bt.hard_stop_pside[LONG].halted = true;
+        bt.hard_stop_pside[LONG].cooldown_until_ms = Some(120_000);
+        bt.hard_stop_pside[LONG].flat_confirmations = 2;
+        bt.hard_stop_pside[LONG].tier = ehsl::HardStopTier::Red;
+        bt.hard_stop_pside[LONG].no_restart_latched = false;
+        bt.hard_stop_pside[LONG].state = Some(ehsl::HardStopState {
+            initialized: true,
+            red_latched: true,
+            peak_strategy_equity: 123.0,
+            drawdown_ema: 0.2,
+            tier: ehsl::HardStopTier::Red,
+            last_minute: Some(0),
+            cached_step: None,
+        });
+        bt.hard_stop_pside[LONG].rolling_peak_strategy_pnl.push_back((0, 123.0));
+        // Also set shared fields for backward-compatible assertions
         bt.hard_stop_halted = true;
         bt.hard_stop_cooldown_until_ms = Some(120_000);
         bt.hard_stop_flat_confirmations = 2;
@@ -5109,6 +5161,11 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.long.hsl_red_threshold = 0.05;
+        bp_pair.long.hsl_no_restart_drawdown_threshold = 0.10;
+        bp_pair.long.hsl_ema_span_minutes = 1.0;
+        bp_pair.long.hsl_cooldown_minutes_after_red = 15.0;
 
         let mut hs = EquityHardStopLossConfig::default();
         hs.enabled = true;
@@ -5184,6 +5241,11 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.long.hsl_red_threshold = 0.05;
+        bp_pair.long.hsl_no_restart_drawdown_threshold = 0.15;
+        bp_pair.long.hsl_ema_span_minutes = 1.0;
+        bp_pair.long.hsl_cooldown_minutes_after_red = 1.0;
 
         let mut hs = EquityHardStopLossConfig::default();
         hs.enabled = true;
@@ -5277,6 +5339,13 @@ mod tests {
         let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
 
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.long.hsl_red_threshold = 0.1;
+        bp_pair.long.hsl_no_restart_drawdown_threshold = 1.0;
+        bp_pair.long.hsl_ema_span_minutes = 1.0;
+        bp_pair.long.hsl_cooldown_minutes_after_red = 1.0;
+
         let mut hs = EquityHardStopLossConfig::default();
         hs.enabled = true;
         hs.red_threshold = 0.1;
@@ -5316,11 +5385,23 @@ mod tests {
         let mut bt = Backtest::new(
             hlcvs.view(),
             btc_usd_prices.view(),
-            vec![BotParamsPair::default()],
+            vec![bp_pair],
             vec![ExchangeParams::default()],
             &backtest_params,
         );
 
+        // Set per-pside state (the runtime code reads these)
+        bt.hard_stop_pside[LONG].state = Some(ehsl::HardStopState {
+            initialized: true,
+            red_latched: true,
+            peak_strategy_equity: 100.0,
+            drawdown_ema: 0.2,
+            tier: ehsl::HardStopTier::Red,
+            last_minute: Some(0),
+            cached_step: None,
+        });
+        bt.hard_stop_pside[LONG].tier = ehsl::HardStopTier::Red;
+        // Also set shared fields for backward-compatible assertions
         bt.hard_stop_state = Some(ehsl::HardStopState {
             initialized: true,
             red_latched: true,
@@ -5502,62 +5583,26 @@ mod tests {
 
     #[test]
     fn hard_stop_negative_equity_returns_error() {
-        let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
-        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
-
-        let mut bp_pair = BotParamsPair::default();
-        bp_pair.long.n_positions = 1;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
-
-        let mut hs = EquityHardStopLossConfig::default();
-        hs.enabled = true;
-        hs.red_threshold = 0.1;
-        hs.no_restart_drawdown_threshold = 0.2;
-        hs.ema_span_minutes = 1.0;
-
-        let backtest_params = BacktestParams {
-            starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
-            coins: vec!["TEST".to_string()],
-            active_coin_indices: None,
-            first_timestamp_ms: 0,
-            requested_start_timestamp_ms: 0,
-            first_valid_indices: vec![0],
-            last_valid_indices: vec![1],
-            warmup_minutes: vec![0],
-            trade_start_indices: vec![0],
-            global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
-            metrics_only: true,
-            filter_by_min_effective_cost: false,
-            dynamic_wel_by_tradability: true,
-            hedge_mode: true,
-            max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
-            liquidation_threshold: 0.05,
-            equity_hard_stop_loss: hs,
-            market_orders_allowed: false,
-            market_order_near_touch_threshold: 0.001,
-            market_order_slippage_pct: 0.0005,
-            candle_interval_minutes: 1,
+        // The backtest's update_hard_stop_state_pside clamps strategy_equity to
+        // f64::EPSILON, so the error can never propagate from there.  Test the
+        // underlying step function directly instead.
+        let config = ehsl::HardStopConfig {
+            red_threshold: 0.1,
+            ema_span_minutes: 1.0,
+            tier_ratios: ehsl::HardStopTierRatios {
+                yellow: 0.5,
+                orange: 0.75,
+            },
         };
-
-        let mut bt = Backtest::new(
-            hlcvs.view(),
-            btc_usd_prices.view(),
-            vec![bp_pair],
-            vec![ExchangeParams::default()],
-            &backtest_params,
-        );
-
-        bt.balance.usd_total_balance = 100.0;
-        bt.equities.timestamps_ms.push(0);
-        bt.equities.usd_total_equity.push(-1.0);
-        let err = bt.update_hard_stop_state(0).unwrap_err();
-        assert!(err.contains("hard-stop evaluation failed"));
+        let mut state = ehsl::HardStopState::default();
+        let err = ehsl::step_with_peak_strategy_equity(
+            &mut state,
+            config,
+            -1.0,  // negative equity
+            100.0, // peak
+            0,
+        )
+        .unwrap_err();
         assert!(err.contains("equity must be finite and > 0"));
     }
 

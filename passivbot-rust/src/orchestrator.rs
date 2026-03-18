@@ -2754,6 +2754,8 @@ mod core {
             bp.n_positions = 1;
             bp.wallet_exposure_limit = 1.0;
             bp.entry_initial_qty_pct = 1.0;
+            bp.filter_volatility_ema_span = 10.0;
+            bp.filter_volume_ema_span = 10.0;
 
             SymbolInput {
                 symbol_idx: idx,
@@ -3138,10 +3140,10 @@ mod core {
                 size: 1.0,
                 price: 100.0,
             };
-            sym0.emas.m1.volume = vec![(1.0, 10.0)];
-            sym0.emas.m1.log_range = vec![(1.0, 10.0)];
-            sym1.emas.m1.volume = vec![(1.0, 5.0)];
-            sym1.emas.m1.log_range = vec![(1.0, 5.0)];
+            sym0.emas.m1.volume = vec![(10.0, 10.0)];
+            sym0.emas.m1.log_range = vec![(10.0, 10.0)];
+            sym1.emas.m1.volume = vec![(10.0, 5.0)];
+            sym1.emas.m1.log_range = vec![(10.0, 5.0)];
 
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 0.0;
@@ -3191,10 +3193,10 @@ mod core {
                 size: -1.0,
                 price: 100.0,
             };
-            sym0.emas.m1.volume = vec![(1.0, 10.0)];
-            sym0.emas.m1.log_range = vec![(1.0, 10.0)];
-            sym1.emas.m1.volume = vec![(1.0, 5.0)];
-            sym1.emas.m1.log_range = vec![(1.0, 5.0)];
+            sym0.emas.m1.volume = vec![(10.0, 10.0)];
+            sym0.emas.m1.log_range = vec![(10.0, 10.0)];
+            sym1.emas.m1.volume = vec![(10.0, 5.0)];
+            sym1.emas.m1.log_range = vec![(10.0, 5.0)];
 
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 1.0;

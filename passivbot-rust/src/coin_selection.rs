@@ -690,6 +690,12 @@ mod tests {
 
     #[test]
     fn select_forager_candidates_uses_ask_for_short_readiness() {
+        // For shorts, a lower ema_readiness_score means the ask price is further
+        // above the entry threshold (ema_upper * (1 + ema_dist)), i.e. more ready
+        // to enter.  With ema_upper=100 and ema_dist=0.1 the threshold is 110.
+        //   candidate 0 ask=109 -> score = 1 - 109/110 =  0.0091 (below threshold)
+        //   candidate 1 ask=111 -> score = 1 - 111/110 = -0.0091 (above threshold)
+        // normalize_lower_is_better ranks candidate 1 highest.
         let candidates = vec![
             make_candidate(0, 1.0, 1.0, 109.0, 109.0),
             make_candidate(1, 1.0, 1.0, 111.0, 111.0),
@@ -705,7 +711,7 @@ mod tests {
         };
         assert_eq!(
             select_forager_candidates(&candidates, &cfg).unwrap(),
-            vec![0]
+            vec![1]
         );
     }
 
