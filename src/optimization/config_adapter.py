@@ -70,26 +70,30 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
     bot_config = config.get("bot")
     if bot_config is None:
         bot_config = get_template_config()["bot"]
+    pside_enabled = {}
     for pside in ("long", "short"):
-        is_enabled = all(
-            [
-                Bound.from_config(k, optimize_bounds[k]).high > 0.0
-                for k in [f"{pside}_n_positions", f"{pside}_total_wallet_exposure_limit"]
-            ]
+        pside_enabled[pside] = all(
+            Bound.from_config(k, optimize_bounds[k]).high > 0.0
+            for k in [f"{pside}_n_positions", f"{pside}_total_wallet_exposure_limit"]
         )
-        for bound_key, path in key_paths:
-            if path[:2] != ("bot", pside):
-                continue
-            assert bound_key in optimize_bounds, f"bound {bound_key} missing from optimize.bounds"
-            bound_vals = Bound.from_config(bound_key, optimize_bounds[bound_key])
-            if is_enabled:
+
+    for bound_key, path in key_paths:
+        assert bound_key in optimize_bounds, f"bound {bound_key} missing from optimize.bounds"
+        bound_vals = Bound.from_config(bound_key, optimize_bounds[bound_key])
+        if len(path) >= 2 and path[:2] == ("bot", "common"):
+            bounds.append(bound_vals)
+            continue
+        if len(path) >= 2 and path[:2] == ("bot", "long"):
+            if pside_enabled["long"]:
                 bounds.append(bound_vals)
             else:
-                # Disabled: fix to low value, preserve step for consistency
                 bounds.append(Bound(bound_vals.low, bound_vals.low, bound_vals.step))
-    for bound_key, path in key_paths:
-        if path[:2] != ("bot", "common"):
             continue
-        assert bound_key in optimize_bounds, f"bound {bound_key} missing from optimize.bounds"
-        bounds.append(Bound.from_config(bound_key, optimize_bounds[bound_key]))
+        if len(path) >= 2 and path[:2] == ("bot", "short"):
+            if pside_enabled["short"]:
+                bounds.append(bound_vals)
+            else:
+                bounds.append(Bound(bound_vals.low, bound_vals.low, bound_vals.step))
+            continue
+        bounds.append(bound_vals)
     return bounds

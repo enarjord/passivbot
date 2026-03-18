@@ -8,8 +8,8 @@ use crate::orchestrator::{
 };
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
-    BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Fill,
-    Order, OrderBook, OrderType, Position, Positions, TrailingPriceBundle,
+    BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams,
+    Fill, Order, OrderBook, OrderType, Position, Positions, TrailingPriceBundle,
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
@@ -555,7 +555,6 @@ impl<'a> Backtest<'a> {
             btc_total_balance: self.balance.btc_total_balance,
         }
     }
-
     fn debug_dump_unstuck_calc(&self, k: usize, idx: usize, side: usize) {
         if !DEBUG_DUMP_UNSTUCK_CALC {
             return;
@@ -816,7 +815,7 @@ impl<'a> Backtest<'a> {
     }
 
     fn build_orchestrator_input_iter<I>(
-        &self,
+        &mut self,
         k: usize,
         peek_hints: Option<EntryPeekHints>,
         indices: I,
@@ -1989,7 +1988,6 @@ impl<'a> Backtest<'a> {
             (self.pnl_cumsum_max, self.pnl_cumsum_running)
         }
     }
-
     #[inline(always)]
     fn hard_stop_orange_target_mode(&self) -> orchestrator::TradingMode {
         if self
@@ -2127,7 +2125,6 @@ impl<'a> Backtest<'a> {
                 orange: cfg.tier_ratios.orange,
             },
         };
-        let sample_minutes = self.backtest_params.candle_interval_minutes.max(1) as f64;
         let state = self
             .hard_stop_state
             .get_or_insert_with(ehsl::HardStopState::default);
@@ -2136,7 +2133,7 @@ impl<'a> Backtest<'a> {
             hs_cfg,
             equity,
             peak_strategy_equity,
-            sample_minutes,
+            timestamp_ms,
         )
         .unwrap_or_else(|e| {
             panic!(
@@ -4145,6 +4142,7 @@ mod tests {
             peak_strategy_equity: 123.0,
             drawdown_ema: 0.2,
             tier: ehsl::HardStopTier::Red,
+            ..Default::default()
         });
         bt.hard_stop_rolling_peak_strategy_pnl.push_back((0, 123.0));
 
@@ -4384,10 +4382,16 @@ mod tests {
             candle_interval_minutes: 1,
         };
 
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
         let mut bt = Backtest::new(
             hlcvs.view(),
             btc_usd_prices.view(),
-            vec![BotParamsPair::default()],
+            vec![bp_pair],
             vec![ExchangeParams::default()],
             &backtest_params,
         );
@@ -4398,6 +4402,7 @@ mod tests {
             peak_strategy_equity: 100.0,
             drawdown_ema: 0.2,
             tier: ehsl::HardStopTier::Red,
+            ..Default::default()
         });
         bt.hard_stop_tier = ehsl::HardStopTier::Red;
         bt.open_orders.long.insert(
@@ -4424,7 +4429,6 @@ mod tests {
         assert!(bt.hard_stop_pending_stop.is_some());
     }
 
-    #[test]
     fn hard_stop_negative_equity_returns_error() {
         let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);

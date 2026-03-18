@@ -62,6 +62,56 @@ Behind the scenes the optimizer sets every unlisted bound to `[value, value]`, s
 can mutate only the parameters you specified. Bounds for the listed parameters remain as
 configured.
 
+`optimize.fixed_params` provides the config-file equivalent: list `optimize.bounds` keys that
+should always be fixed to their current config values. Internally, `--fine_tune_params` and
+`optimize.fixed_params` are merged into one effective fixed-parameter set before bounds are
+collapsed.
+
+`optimize.fixed_runtime_overrides` is different: it overrides runtime config values only during
+optimize evaluations, without changing the stored/live config value. This is useful for
+operator-risk settings such as:
+
+```json
+"optimize": {
+  "fixed_runtime_overrides": {
+    "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold": 1.0
+  }
+}
+```
+
+That default override disables terminal no-restart during optimizer evaluations so candidates can
+be constrained through `drawdown_worst_hsl`, `drawdown_worst_mean_1pct_hsl`, and
+`peak_recovery_hours_hsl` instead of being prematurely truncated.
+
+When you provide many starting configs, optimizer now also bounds how many seed evaluations may be
+in flight at once:
+
+```json
+"optimize": {
+  "max_pending_starting_evals_per_cpu": 1
+}
+```
+
+Effective cap:
+
+- `max_pending = n_cpus * max_pending_starting_evals_per_cpu`
+
+This is mainly a memory-control knob for large seed pools, especially in suite mode where each
+candidate returns a larger metrics payload. Lower it first if the VPS spikes RAM during initial
+seed evaluation.
+
+You can also ask the optimizer to try lower-TWE seed variants of each provided starting config:
+
+```json
+"optimize": {
+  "starting_config_twe_multiplier": 0.75
+}
+```
+
+For each loaded starting config, the optimizer attempts an extra variant where both
+`bot.long.total_wallet_exposure_limit` and `bot.short.total_wallet_exposure_limit` are multiplied
+by this factor before deduplication. Default `0.75`. Set it to `1.0` to disable the extra
+variants entirely.
 ### Optimizer Suites
 
 The optimizer reuses the backtest suite configuration and allows every candidate to

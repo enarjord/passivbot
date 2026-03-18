@@ -179,7 +179,6 @@ impl EquityHardStopRuntimePy {
         timestamp_ms,
         equity,
         peak_strategy_equity,
-        sample_minutes,
         red_threshold,
         ema_span_minutes,
         tier_ratio_yellow,
@@ -191,13 +190,11 @@ impl EquityHardStopRuntimePy {
         timestamp_ms: u64,
         equity: f64,
         peak_strategy_equity: f64,
-        sample_minutes: f64,
         red_threshold: f64,
         ema_span_minutes: f64,
         tier_ratio_yellow: f64,
         tier_ratio_orange: f64,
     ) -> PyResult<Py<PyDict>> {
-        let _ = timestamp_ms;
         self.last_rolling_peak = peak_strategy_equity;
         let cfg = ehsl::HardStopConfig {
             red_threshold,
@@ -207,8 +204,14 @@ impl EquityHardStopRuntimePy {
                 orange: tier_ratio_orange,
             },
         };
-        let step = ehsl::step_with_peak_strategy_equity(&mut self.state, cfg, equity, peak_strategy_equity, sample_minutes)
-            .map_err(PyValueError::new_err)?;
+        let step = ehsl::step_with_peak_strategy_equity(
+            &mut self.state,
+            cfg,
+            equity,
+            peak_strategy_equity,
+            timestamp_ms,
+        )
+        .map_err(PyValueError::new_err)?;
 
         let out = PyDict::new_bound(py);
         out.set_item("initialized", self.state.initialized)?;
@@ -220,8 +223,8 @@ impl EquityHardStopRuntimePy {
         out.set_item("drawdown_raw", step.drawdown_raw)?;
         out.set_item("drawdown_score", step.drawdown_score)?;
         out.set_item("changed", step.changed)?;
-        out.set_item("span_samples", step.span_samples)?;
         out.set_item("alpha", step.alpha)?;
+        out.set_item("elapsed_minutes", step.elapsed_minutes)?;
         Ok(out.unbind())
     }
 }
@@ -449,7 +452,7 @@ fn hard_stop_tier_to_str(tier: ehsl::HardStopTier) -> &'static str {
     tier_ratio_orange,
     equity,
     peak_strategy_equity,
-    sample_minutes
+    timestamp_ms
 ))]
 pub fn equity_hard_stop_step_py(
     py: Python<'_>,
@@ -463,7 +466,7 @@ pub fn equity_hard_stop_step_py(
     tier_ratio_orange: f64,
     equity: f64,
     peak_strategy_equity: f64,
-    sample_minutes: f64,
+    timestamp_ms: u64,
 ) -> PyResult<Py<PyDict>> {
     let mut state = ehsl::HardStopState {
         peak_strategy_equity,
@@ -471,6 +474,7 @@ pub fn equity_hard_stop_step_py(
         tier: hard_stop_tier_from_str(tier).map_err(PyValueError::new_err)?,
         red_latched,
         initialized,
+        ..Default::default()
     };
     let cfg = ehsl::HardStopConfig {
         red_threshold,
@@ -480,8 +484,14 @@ pub fn equity_hard_stop_step_py(
             orange: tier_ratio_orange,
         },
     };
-    let step = ehsl::step_with_peak_strategy_equity(&mut state, cfg, equity, peak_strategy_equity, sample_minutes)
-        .map_err(PyValueError::new_err)?;
+    let step = ehsl::step_with_peak_strategy_equity(
+        &mut state,
+        cfg,
+        equity,
+        peak_strategy_equity,
+        timestamp_ms,
+    )
+    .map_err(PyValueError::new_err)?;
 
     let out = PyDict::new_bound(py);
     out.set_item("initialized", state.initialized)?;
@@ -492,8 +502,8 @@ pub fn equity_hard_stop_step_py(
     out.set_item("drawdown_raw", step.drawdown_raw)?;
     out.set_item("drawdown_score", step.drawdown_score)?;
     out.set_item("changed", step.changed)?;
-    out.set_item("span_samples", step.span_samples)?;
     out.set_item("alpha", step.alpha)?;
+    out.set_item("elapsed_minutes", step.elapsed_minutes)?;
     Ok(out.unbind())
 }
 

@@ -892,14 +892,6 @@ class Passivbot:
     def _equity_hard_stop_runtime_tier(self) -> str:
         return str(self._equity_hard_stop_runtime.tier())
 
-    def _equity_hard_stop_sample_minutes(self) -> float:
-        sample_minutes = float(self.live_value("execution_delay_seconds")) / 60.0
-        if not math.isfinite(sample_minutes) or sample_minutes <= 0.0:
-            raise ValueError(
-                f"execution_delay_seconds must be finite and > 0 for hard stop; got {sample_minutes}"
-            )
-        return sample_minutes
-
     async def _calc_upnl_sum_strict(self) -> float:
         if not self.fetched_positions:
             return 0.0
@@ -972,7 +964,6 @@ class Passivbot:
         balance: float,
         realized_pnl: float,
         unrealized_pnl: float,
-        sample_minutes: float,
     ) -> dict:
         if not math.isfinite(balance) or balance <= 0.0:
             raise ValueError(f"balance must be finite and > 0, got {balance}")
@@ -980,9 +971,14 @@ class Passivbot:
             raise ValueError(f"realized_pnl must be finite, got {realized_pnl}")
         if not math.isfinite(unrealized_pnl):
             raise ValueError(f"unrealized_pnl must be finite, got {unrealized_pnl}")
-        if not math.isfinite(sample_minutes) or sample_minutes <= 0.0:
-            raise ValueError(f"sample_minutes must be finite and > 0, got {sample_minutes}")
-
+        last_metrics = self._equity_hard_stop_last_metrics
+        current_minute = int(timestamp_ms) // 60_000
+        if last_metrics is not None and int(last_metrics["timestamp_ms"]) // 60_000 == current_minute:
+            cached = dict(last_metrics)
+            cached["changed"] = False
+            cached["elapsed_minutes"] = 0
+            self._equity_hard_stop_last_metrics = cached
+            return cached
         lookback_ms = self._equity_hard_stop_lookback_ms()
         prev_tier = self._equity_hard_stop_runtime_tier()
         red_threshold = float(self.equity_hard_stop_loss["red_threshold"])
@@ -1002,7 +998,6 @@ class Passivbot:
             timestamp_ms=int(timestamp_ms),
             equity=float(equity),
             peak_strategy_equity=float(peak_strategy_equity),
-            sample_minutes=float(sample_minutes),
             red_threshold=red_threshold,
             ema_span_minutes=ema_span_minutes,
             tier_ratio_yellow=ratio_yellow,
@@ -1031,9 +1026,8 @@ class Passivbot:
             "red_threshold": red_threshold,
             "tier": str(step["tier"]),
             "changed": bool(step["changed"]) or str(step["tier"]) != prev_tier,
-            "sample_minutes": float(sample_minutes),
-            "span_samples": float(step["span_samples"]),
             "alpha": float(step["alpha"]),
+            "elapsed_minutes": int(step["elapsed_minutes"]),
         }
         self._equity_hard_stop_last_metrics = metrics
         return metrics
@@ -1185,7 +1179,9 @@ class Passivbot:
             )
 
         cooldown_minutes = float(self.equity_hard_stop_loss["cooldown_minutes_after_red"])
-        no_restart_drawdown_threshold = float(self.equity_hard_stop_loss["no_restart_drawdown_threshold"])
+        no_restart_drawdown_threshold = float(
+            self.equity_hard_stop_loss["no_restart_drawdown_threshold"]
+        )
         cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
         cooldown_until_ms = None
         pending_red = False
@@ -1210,7 +1206,7 @@ class Passivbot:
                 pending_red = False
 
             current_metrics = self._equity_hard_stop_apply_sample(
-                int(ts), balance, realized_pnl, unrealized_pnl, 1.0
+                int(ts), balance, realized_pnl, unrealized_pnl
             )
             n_rows += 1
 
@@ -1252,7 +1248,9 @@ class Passivbot:
                         drawdown_raw=float(current_metrics["drawdown_raw"]),
                         drawdown_ema=float(current_metrics["drawdown_ema"]),
                         drawdown_score=float(current_metrics["drawdown_score"]),
-                        no_restart_latched=bool(stop_drawdown_raw >= no_restart_drawdown_threshold),
+                        no_restart_latched=bool(
+                            stop_drawdown_raw >= no_restart_drawdown_threshold
+                        ),
                         cooldown_until_ms=None,
                     )
                     self._equity_hard_stop_last_stop_event = payload
@@ -1300,7 +1298,6 @@ class Passivbot:
             float(current_balance),
             float(current_realized),
             float(current_upnl),
-            self._equity_hard_stop_sample_minutes(),
         )
         logging.info(
             "[risk] hard-stop initialized from equity history | rows=%d tier=%s equity=%.6f "
@@ -1334,7 +1331,6 @@ class Passivbot:
             float(balance),
             float(realized_pnl),
             float(unrealized_pnl),
-            self._equity_hard_stop_sample_minutes(),
         )
         if metrics["changed"]:
             self._equity_hard_stop_log_transition(metrics, prev_tier)
@@ -5179,7 +5175,17 @@ class Passivbot:
                 val = self.bot_value(pside, key)
             else:
                 val = self.bp(pside, key, symbol) if symbol is not None else self.bp(pside, key)
-            if key == "n_positions":
+            if key == "forager_score_weights":
+                if not isinstance(val, dict):
+                    raise TypeError(
+                        f"bot.{pside}.forager_score_weights must be a dict, got {type(val).__name__}"
+                    )
+                out[key] = {
+                    "volume": float(val["volume"]),
+                    "ema_readiness": float(val["ema_readiness"]),
+                    "volatility": float(val["volatility"]),
+                }
+            elif key == "n_positions":
                 out[key] = int(round(val or 0.0))
             else:
                 out[key] = float(val or 0.0)

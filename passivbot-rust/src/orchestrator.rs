@@ -2612,13 +2612,17 @@ mod core {
             emas.m1.close.push((20.0_f64, 100.0));
             emas.m1.close.push(((10.0_f64 * 20.0_f64).sqrt(), 100.0));
             emas.m1.volume.push((10.0_f64, 1.0));
+            emas.m1.volume.push((60.0_f64, 1.0));
             emas.m1.log_range.push((10.0_f64, 1.0));
+            emas.m1.log_range.push((60.0_f64, 1.0));
             emas.h1.log_range.push((1.0_f64, 1.0));
 
             let mut bp = BotParams::default();
             bp.ema_span_0 = 10.0;
             bp.ema_span_1 = 20.0;
             bp.entry_volatility_ema_span_hours = 1.0;
+            bp.filter_volume_ema_span = 10.0;
+            bp.filter_volatility_ema_span = 10.0;
             bp.total_wallet_exposure_limit = 1.0;
             bp.n_positions = 1;
             bp.wallet_exposure_limit = 1.0;
@@ -2999,7 +3003,6 @@ mod core {
             assert!(!has_short_entries);
         }
 
-        #[test]
         fn non_contiguous_symbol_idx_is_rejected() {
             let sym0 = make_basic_symbol(0);
             let mut sym1 = make_basic_symbol(0);
