@@ -46,6 +46,8 @@ def _make_mock_pbr():
             self._peak_strategy_equity = 0.0
             self._rolling_peak = _EquityHardStopRollingPeak()
             self._last_rolling_peak = 0.0
+            self._last_minute = None
+            self._cached_step = None
 
         def reset(self):
             self._state_reset()
@@ -81,23 +83,23 @@ def _make_mock_pbr():
             timestamp_ms,
             equity,
             peak_strategy_equity,
-            sample_minutes,
             red_threshold,
             ema_span_minutes,
             tier_ratio_yellow,
             tier_ratio_orange,
         ):
-            self._last_rolling_peak = float(peak_strategy_equity)
-            span_samples = ema_span_minutes / sample_minutes
-            alpha = 2.0 / (span_samples + 1.0)
+            current_minute = int(timestamp_ms) // 60_000
+            alpha = 2.0 / (ema_span_minutes + 1.0)
             prev_tier = self._tier
 
             if not self._initialized:
                 self._initialized = True
+                self._last_minute = current_minute
+                self._last_rolling_peak = float(peak_strategy_equity)
                 self._peak_strategy_equity = float(peak_strategy_equity)
                 self._drawdown_ema = 0.0
                 self._tier = "red" if self._red_latched else "green"
-                return {
+                self._cached_step = {
                     "initialized": True,
                     "red_latched": bool(self._red_latched),
                     "peak_strategy_equity": float(self._peak_strategy_equity),
@@ -107,13 +109,25 @@ def _make_mock_pbr():
                     "drawdown_raw": 0.0,
                     "drawdown_score": 0.0,
                     "changed": self._tier != prev_tier,
-                    "span_samples": float(span_samples),
                     "alpha": float(alpha),
+                    "elapsed_minutes": 0,
                 }
+                return dict(self._cached_step)
 
+            if current_minute < self._last_minute:
+                raise ValueError("timestamp minute must be non-decreasing")
+            elapsed_minutes = current_minute - self._last_minute
+            if elapsed_minutes == 0:
+                cached = dict(self._cached_step)
+                cached["changed"] = False
+                cached["elapsed_minutes"] = 0
+                return cached
+
+            self._last_rolling_peak = float(peak_strategy_equity)
             self._peak_strategy_equity = float(peak_strategy_equity)
             drawdown_raw = max(0.0, 1.0 - equity / max(self._peak_strategy_equity, 1e-12))
-            self._drawdown_ema = alpha * drawdown_raw + (1.0 - alpha) * self._drawdown_ema
+            decay = (1.0 - alpha) ** float(elapsed_minutes)
+            self._drawdown_ema = drawdown_raw + (self._drawdown_ema - drawdown_raw) * decay
             drawdown_score = min(drawdown_raw, self._drawdown_ema)
             if self._red_latched or drawdown_score >= red_threshold:
                 self._tier = "red"
@@ -124,7 +138,8 @@ def _make_mock_pbr():
                 self._tier = "yellow"
             else:
                 self._tier = "green"
-            return {
+            self._last_minute = current_minute
+            self._cached_step = {
                 "initialized": True,
                 "red_latched": bool(self._red_latched),
                 "peak_strategy_equity": float(self._peak_strategy_equity),
@@ -134,9 +149,10 @@ def _make_mock_pbr():
                 "drawdown_raw": float(drawdown_raw),
                 "drawdown_score": float(drawdown_score),
                 "changed": self._tier != prev_tier,
-                "span_samples": float(span_samples),
                 "alpha": float(alpha),
+                "elapsed_minutes": int(elapsed_minutes),
             }
+            return dict(self._cached_step)
 
     module.EquityHardStopRuntime = _EquityHardStopRuntime
     module.calc_auto_unstuck_allowance = (
@@ -179,10 +195,10 @@ def _make_mock_pbr():
         tier_ratio_orange,
         equity,
         peak_strategy_equity,
-        sample_minutes,
+        timestamp_ms,
     ):
-        span_samples = ema_span_minutes / sample_minutes
-        alpha = 2.0 / (span_samples + 1.0)
+        del timestamp_ms
+        alpha = 2.0 / (ema_span_minutes + 1.0)
         if not initialized:
             out_tier = "red" if red_latched else "green"
             return {
@@ -194,8 +210,8 @@ def _make_mock_pbr():
                 "drawdown_raw": 0.0,
                 "drawdown_score": 0.0,
                 "changed": out_tier != tier,
-                "span_samples": float(span_samples),
                 "alpha": float(alpha),
+                "elapsed_minutes": 0,
             }
         drawdown_raw = max(0.0, 1.0 - equity / max(peak_strategy_equity, 1e-12))
         drawdown_ema_next = alpha * drawdown_raw + (1.0 - alpha) * drawdown_ema
@@ -218,8 +234,8 @@ def _make_mock_pbr():
             "drawdown_raw": float(drawdown_raw),
             "drawdown_score": float(drawdown_score),
             "changed": out_tier != tier,
-            "span_samples": float(span_samples),
             "alpha": float(alpha),
+            "elapsed_minutes": 1,
         }
 
     module.equity_hard_stop_step_py = _equity_hard_stop_step_py
@@ -420,6 +436,11 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "close_trailing_qty_pct": 0.0,
                 "close_trailing_retracement_pct": 0.0,
                 "close_trailing_threshold_pct": 0.0,
+                "forager_score_weights": {
+                    "volume": 0.0,
+                    "ema_readiness": 0.0,
+                    "volatility": 1.0,
+                },
                 "risk_wel_enforcer_threshold": 0.0,
                 "unstuck_threshold": 0.0,
                 "unstuck_close_pct": 0.0,
@@ -841,22 +862,19 @@ def test_hard_stop_apply_sample_delegates_to_rust(monkeypatch):
             "drawdown_raw": 0.19,
             "drawdown_score": 0.13,
             "changed": True,
-            "span_samples": 1800.0,
             "alpha": 0.001110493,
+            "elapsed_minutes": 1,
         }
 
     monkeypatch.setattr(_hsl_state(bot)["runtime"], "apply_sample", fake_apply_sample)
 
-    metrics = bot._equity_hard_stop_apply_sample(
-        "long", 1_700_000_000_000, 900.0, 25.0, 25.0, 50.0, 1.0
-    )
+    metrics = bot._equity_hard_stop_apply_sample("long", 1_700_000_000_000, 900.0, 25.0, 25.0, 50.0)
 
-    assert captured["sample_minutes"] == 1.0
     assert captured["equity"] == 950.0
     assert captured["peak_strategy_equity"] == pytest.approx(950.0)
     assert captured["timestamp_ms"] == 1_700_000_000_000
     assert metrics["tier"] == "orange"
-    assert metrics["span_samples"] == pytest.approx(1800.0)
+    assert metrics["elapsed_minutes"] == 1
 
 
 def test_hard_stop_apply_sample_rolling_peak_prunes_by_lookback():
@@ -864,8 +882,8 @@ def test_hard_stop_apply_sample_rolling_peak_prunes_by_lookback():
     cfg["live"]["pnls_max_lookback_days"] = 0.0
     bot = _make_dummy_bot(cfg)
 
-    m0 = bot._equity_hard_stop_apply_sample("long", 1_000, 100.0, 0.0, 0.0, 0.0, 1.0)
-    m1 = bot._equity_hard_stop_apply_sample("long", 2_000, 95.0, 0.0, 0.0, 0.0, 1.0)
+    m0 = bot._equity_hard_stop_apply_sample("long", 1_000, 100.0, 0.0, 0.0, 0.0)
+    m1 = bot._equity_hard_stop_apply_sample("long", 61_000, 95.0, 0.0, 0.0, 0.0)
 
     assert m0["peak_strategy_equity"] == pytest.approx(100.0)
     assert m1["peak_strategy_equity"] == pytest.approx(95.0)
@@ -895,8 +913,8 @@ def test_hard_stop_apply_sample_unified_uses_total_signal(monkeypatch):
             "drawdown_raw": 0.05,
             "drawdown_score": 0.05,
             "changed": True,
-            "span_samples": 60.0,
             "alpha": 0.0327868852,
+            "elapsed_minutes": 1,
         }
 
     monkeypatch.setattr(_hsl_state(bot)["runtime"], "apply_sample", fake_apply_sample)
@@ -908,7 +926,6 @@ def test_hard_stop_apply_sample_unified_uses_total_signal(monkeypatch):
         25.0,
         5.0,
         50.0,
-        1.0,
         unrealized_pnl_total=-75.0,
     )
 
@@ -918,6 +935,21 @@ def test_hard_stop_apply_sample_unified_uses_total_signal(monkeypatch):
     assert metrics["realized_pnl"] == pytest.approx(25.0)
     assert metrics["unrealized_pnl"] == pytest.approx(-75.0)
     assert metrics["strategy_equity"] == pytest.approx(825.0)
+
+
+def test_hard_stop_apply_sample_same_minute_returns_cached_metrics_without_recomputing_peak():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+
+    first = bot._equity_hard_stop_apply_sample("long", 60_000, 100.0, 0.0, 0.0, 0.0)
+    second = bot._equity_hard_stop_apply_sample("long", 60_500, 90.0, 0.0, 0.0, 0.0)
+
+    assert first["timestamp_ms"] == 60_000
+    assert second["timestamp_ms"] == 60_000
+    assert second["changed"] is False
+    assert second["elapsed_minutes"] == 0
+    assert second["peak_strategy_equity"] == pytest.approx(first["peak_strategy_equity"])
+    assert second["drawdown_raw"] == pytest.approx(first["drawdown_raw"])
 
 
 @pytest.mark.asyncio

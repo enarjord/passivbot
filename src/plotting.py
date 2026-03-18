@@ -973,6 +973,28 @@ def create_forager_hard_stop_drawdown_figure(
         df = df.dropna()
         return df[~df.index.duplicated(keep="first")].sort_index()
 
+    def _minute_quantized_drawdown_ema(trace_df: pd.DataFrame, ema_span_minutes: float) -> pd.Series:
+        drawdown_raw = trace_df["drawdown_raw"].clip(lower=0.0).astype(float)
+        if drawdown_raw.empty:
+            return drawdown_raw
+        alpha = 2.0 / (ema_span_minutes + 1.0)
+        ema_values = []
+        prev_ema = 0.0
+        minutes = (trace_df.index.view("int64") // 60_000_000_000).astype(np.int64)
+        last_minute = int(minutes[0])
+        for idx, raw in enumerate(drawdown_raw.to_numpy()):
+            current_minute = int(minutes[idx])
+            if idx == 0:
+                ema_values.append(prev_ema)
+                continue
+            elapsed_minutes = max(0, current_minute - last_minute)
+            if elapsed_minutes > 0:
+                decay = (1.0 - alpha) ** float(elapsed_minutes)
+                prev_ema = float(raw) + (prev_ema - float(raw)) * decay
+            ema_values.append(prev_ema)
+            last_minute = current_minute
+        return pd.Series(ema_values, index=trace_df.index, dtype=float)
+
     pside_cfgs = {pside: _resolve_pside_cfg(pside) for pside in ("long", "short")}
     enabled_psides = [
         pside
@@ -1038,16 +1060,8 @@ def create_forager_hard_stop_drawdown_figure(
         if red_threshold <= 0.0 or ema_span_minutes <= 0.0:
             continue
         trace_df = traces[pside]
-        if len(trace_df.index) >= 2:
-            sample_minutes = max(
-                1.0, float((trace_df.index[1] - trace_df.index[0]).total_seconds() / 60.0)
-            )
-        else:
-            sample_minutes = 1.0
-        span_samples = max(1.0, ema_span_minutes / sample_minutes)
-        alpha = 2.0 / (span_samples + 1.0)
         drawdown_raw = trace_df["drawdown_raw"].clip(lower=0.0)
-        drawdown_ema = drawdown_raw.ewm(alpha=alpha, adjust=False).mean()
+        drawdown_ema = _minute_quantized_drawdown_ema(trace_df, ema_span_minutes)
         drawdown_score = pd.concat([drawdown_raw, drawdown_ema], axis=1).min(axis=1)
         x = trace_df.index.to_numpy()
         tier_ratios = cfg.get("tier_ratios", {}) or {}

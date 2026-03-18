@@ -183,6 +183,60 @@ Useful global HSL backtest metrics include:
 14. `hard_stop_post_restart_retrigger_pct`
 15. `hard_stop_halt_to_restart_equity_loss_pct`
 
+## Interpreting HSL Metrics
+
+The shared HSL metrics are account-level summaries. They are not split into `_usd` and `_btc`, and
+the tier-time metrics are based on the worst active tier across long and short at each sampled
+moment.
+
+### Tier-time metrics
+
+1. `hard_stop_time_in_yellow_pct`
+   - Fraction of sampled runtime where the account-level HSL tier was YELLOW.
+   - Useful as an early-warning “stress frequency” metric.
+   - High values mean the bot spends a lot of time near the danger zone even if RED is rare.
+2. `hard_stop_time_in_orange_pct`
+   - Fraction of sampled runtime where the worst active HSL tier was ORANGE.
+   - High values mean the bot often spends time in reduced-risk behavior such as graceful stop or
+     TP-only-with-entry-cancellation.
+3. `hard_stop_time_in_red_pct`
+   - Fraction of sampled runtime where the worst active HSL tier was RED.
+   - This is usually the clearest “how often was the system in emergency mode” metric.
+   - In practice, you normally want this close to zero. Even small values can be meaningful because
+     RED includes forced flattening and halted time.
+
+### Trigger and halt metrics
+
+1. `hard_stop_trigger_drawdown_mean`
+   - Mean drawdown score at the moment RED triggers fired.
+   - Use this to see whether triggers happen barely above threshold or only after deeper damage.
+2. `hard_stop_duration_minutes_mean`
+   - Average elapsed minutes from RED halt start until that halt fully ends.
+   - Includes flattening and, when enabled, cooldown waiting before restart.
+3. `hard_stop_duration_minutes_max`
+   - Longest single halt duration observed during the run.
+   - Useful for spotting rare but operationally painful stalls.
+4. `hard_stop_flatten_time_minutes_mean`
+   - Average time from RED trigger to fully flat position state.
+   - This isolates execution/exit latency from the later cooldown portion of the halt.
+
+### Restart quality metrics
+
+1. `hard_stop_post_restart_retrigger_pct`
+   - Fraction of cooldown restarts that later retriggered RED.
+   - High values usually mean cooldowns are too short, thresholds are too permissive, or the
+     strategy tends to restart into the same adverse regime.
+2. `hard_stop_halt_to_restart_equity_loss_pct`
+   - Panic-close loss accumulated across HSL events, normalized by starting balance.
+   - This estimates how expensive HSL-triggered emergency exits were over the whole run.
+
+As a rule of thumb:
+
+1. `hard_stop_time_in_red_pct` and `hard_stop_post_restart_retrigger_pct` are often the most
+   actionable first-pass stability metrics.
+2. `hard_stop_trigger_drawdown_mean` helps tune thresholds.
+3. `hard_stop_flatten_time_minutes_mean` helps compare `market` vs `limit` panic-close behavior.
+
 ## Optimizer Support
 
 Some HSL parameters can be optimized through `optimize.bounds` using side-specific prefixes:

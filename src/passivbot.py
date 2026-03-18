@@ -942,14 +942,6 @@ class Passivbot:
     def _equity_hard_stop_runtime_tier(self, pside: str) -> str:
         return str(self._hsl_state(pside)["runtime"].tier())
 
-    def _equity_hard_stop_sample_minutes(self) -> float:
-        sample_minutes = float(self.live_value("execution_delay_seconds")) / 60.0
-        if not math.isfinite(sample_minutes) or sample_minutes <= 0.0:
-            raise ValueError(
-                f"execution_delay_seconds must be finite and > 0 for hard stop; got {sample_minutes}"
-            )
-        return sample_minutes
-
     @staticmethod
     def _equity_hard_stop_fill_pside(fill: Any) -> str:
         if isinstance(fill, dict):
@@ -1071,7 +1063,6 @@ class Passivbot:
         realized_pnl_total: float,
         realized_pnl_pside: float,
         unrealized_pnl_pside: float,
-        sample_minutes: float,
         unrealized_pnl_total: Optional[float] = None,
     ) -> dict:
         if not math.isfinite(balance) or balance <= 0.0:
@@ -1082,8 +1073,16 @@ class Passivbot:
             raise ValueError(f"realized_pnl_pside must be finite, got {realized_pnl_pside}")
         if not math.isfinite(unrealized_pnl_pside):
             raise ValueError(f"unrealized_pnl_pside must be finite, got {unrealized_pnl_pside}")
-        if not math.isfinite(sample_minutes) or sample_minutes <= 0.0:
-            raise ValueError(f"sample_minutes must be finite and > 0, got {sample_minutes}")
+
+        state = self._hsl_state(pside)
+        last_metrics = state["last_metrics"]
+        current_minute = int(timestamp_ms) // 60_000
+        if last_metrics is not None and int(last_metrics["timestamp_ms"]) // 60_000 == current_minute:
+            cached = dict(last_metrics)
+            cached["changed"] = False
+            cached["elapsed_minutes"] = 0
+            state["last_metrics"] = cached
+            return cached
 
         signal_mode, realized_pnl_signal, unrealized_pnl_signal = (
             self._equity_hard_stop_signal_values(
@@ -1094,7 +1093,6 @@ class Passivbot:
                 unrealized_pnl_total=unrealized_pnl_total,
             )
         )
-        state = self._hsl_state(pside)
         cfg = self.hsl[pside]
         lookback_ms = self._equity_hard_stop_lookback_ms()
         prev_tier = self._equity_hard_stop_runtime_tier(pside)
@@ -1118,7 +1116,6 @@ class Passivbot:
             timestamp_ms=int(timestamp_ms),
             equity=float(strategy_equity),
             peak_strategy_equity=float(peak_strategy_equity),
-            sample_minutes=float(sample_minutes),
             red_threshold=red_threshold,
             ema_span_minutes=ema_span_minutes,
             tier_ratio_yellow=ratio_yellow,
@@ -1151,9 +1148,8 @@ class Passivbot:
             "red_threshold": red_threshold,
             "tier": str(step["tier"]),
             "changed": bool(step["changed"]) or str(step["tier"]) != prev_tier,
-            "sample_minutes": float(sample_minutes),
-            "span_samples": float(step["span_samples"]),
             "alpha": float(step["alpha"]),
+            "elapsed_minutes": int(step["elapsed_minutes"]),
         }
         state["last_metrics"] = metrics
         return metrics
@@ -1422,7 +1418,6 @@ class Passivbot:
                     float(row["realized_pnl"]),
                     row_realized_pside,
                     row_unrealized_pside,
-                    1.0,
                     unrealized_pnl_total=row_upnl_total,
                 )
                 n_rows[pside] += 1
@@ -1494,7 +1489,6 @@ class Passivbot:
                 current_realized_total,
                 float(self._equity_hard_stop_realized_pnl_now(pside)),
                 current_upnl_by_pside[pside],
-                self._equity_hard_stop_sample_minutes(),
                 unrealized_pnl_total=current_upnl_total,
             )
             logging.info(
@@ -1605,7 +1599,6 @@ class Passivbot:
                 float(realized_pnl_total),
                 float(self._equity_hard_stop_realized_pnl_now(pside)),
                 float(unrealized_pnl_by_pside[pside]),
-                self._equity_hard_stop_sample_minutes(),
                 unrealized_pnl_total=unrealized_pnl_total,
             )
             if metrics["changed"]:
@@ -5695,7 +5688,17 @@ class Passivbot:
                 val = self.bot_value(pside, key)
             else:
                 val = self.bp(pside, key, symbol) if symbol is not None else self.bp(pside, key)
-            if key == "n_positions":
+            if key == "forager_score_weights":
+                if not isinstance(val, dict):
+                    raise TypeError(
+                        f"bot.{pside}.forager_score_weights must be a dict, got {type(val).__name__}"
+                    )
+                out[key] = {
+                    "volume": float(val["volume"]),
+                    "ema_readiness": float(val["ema_readiness"]),
+                    "volatility": float(val["volatility"]),
+                }
+            elif key == "n_positions":
                 out[key] = int(round(val or 0.0))
             else:
                 out[key] = float(val or 0.0)

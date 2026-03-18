@@ -2743,13 +2743,17 @@ mod core {
             emas.m1.close.push((20.0_f64, 100.0));
             emas.m1.close.push(((10.0_f64 * 20.0_f64).sqrt(), 100.0));
             emas.m1.volume.push((10.0_f64, 1.0));
+            emas.m1.volume.push((60.0_f64, 1.0));
             emas.m1.log_range.push((10.0_f64, 1.0));
+            emas.m1.log_range.push((60.0_f64, 1.0));
             emas.h1.log_range.push((1.0_f64, 1.0));
 
             let mut bp = BotParams::default();
             bp.ema_span_0 = 10.0;
             bp.ema_span_1 = 20.0;
             bp.entry_volatility_ema_span_hours = 1.0;
+            bp.filter_volume_ema_span = 10.0;
+            bp.filter_volatility_ema_span = 10.0;
             bp.total_wallet_exposure_limit = 1.0;
             bp.n_positions = 1;
             bp.wallet_exposure_limit = 1.0;
@@ -3138,10 +3142,10 @@ mod core {
                 size: 1.0,
                 price: 100.0,
             };
-            sym0.emas.m1.volume = vec![(1.0, 10.0)];
-            sym0.emas.m1.log_range = vec![(1.0, 10.0)];
-            sym1.emas.m1.volume = vec![(1.0, 5.0)];
-            sym1.emas.m1.log_range = vec![(1.0, 5.0)];
+            sym0.emas.m1.volume = vec![(10.0, 10.0)];
+            sym0.emas.m1.log_range = vec![(10.0, 10.0)];
+            sym1.emas.m1.volume = vec![(10.0, 5.0)];
+            sym1.emas.m1.log_range = vec![(10.0, 5.0)];
 
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 0.0;
@@ -3191,10 +3195,10 @@ mod core {
                 size: -1.0,
                 price: 100.0,
             };
-            sym0.emas.m1.volume = vec![(1.0, 10.0)];
-            sym0.emas.m1.log_range = vec![(1.0, 10.0)];
-            sym1.emas.m1.volume = vec![(1.0, 5.0)];
-            sym1.emas.m1.log_range = vec![(1.0, 5.0)];
+            sym0.emas.m1.volume = vec![(10.0, 10.0)];
+            sym0.emas.m1.log_range = vec![(10.0, 10.0)];
+            sym1.emas.m1.volume = vec![(10.0, 5.0)];
+            sym1.emas.m1.log_range = vec![(10.0, 5.0)];
 
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 1.0;

@@ -113,9 +113,11 @@ def ema_bundle(
 ):
     return {
         "m1": {
-            "close": m1_close or [],
-            "volume": m1_volume or [],
-            "log_range": m1_log_range or [],
+            "close": m1_close
+            if m1_close is not None
+            else [[10.0, 100.0], [20.0, 100.0], [math.sqrt(10.0 * 20.0), 100.0]],
+            "volume": m1_volume if m1_volume is not None else [[10.0, 1_000.0]],
+            "log_range": m1_log_range if m1_log_range is not None else [[10.0, 0.01]],
         },
         "h1": {
             "close": h1_close or [],
@@ -155,7 +157,9 @@ def make_symbol(
                 [10.0, bid],
                 [20.0, bid],
                 [math.sqrt(10.0 * 20.0), bid],
-            ]
+            ],
+            m1_volume=[[10.0, 1_000.0]],
+            m1_log_range=[[10.0, 0.01]],
         ),
         "long": {
             "mode": long_mode,

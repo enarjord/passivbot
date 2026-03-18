@@ -95,6 +95,19 @@ This is mainly a memory-control knob for large seed pools, especially in suite m
 candidate returns a larger metrics payload. Lower it first if the VPS spikes RAM during initial
 seed evaluation.
 
+You can also ask the optimizer to try lower-TWE seed variants of each provided starting config:
+
+```json
+"optimize": {
+  "starting_config_twe_multiplier": 0.75
+}
+```
+
+For each loaded starting config, the optimizer attempts an extra variant where both
+`bot.long.total_wallet_exposure_limit` and `bot.short.total_wallet_exposure_limit` are multiplied
+by this factor before deduplication. Default `0.75`. Set it to `1.0` to disable the extra
+variants entirely.
+
 ### Optimizer Suites
 
 The optimizer reuses the backtest suite configuration and allows every candidate to

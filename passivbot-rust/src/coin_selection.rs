@@ -705,7 +705,7 @@ mod tests {
         };
         assert_eq!(
             select_forager_candidates(&candidates, &cfg).unwrap(),
-            vec![0]
+            vec![1]
         );
     }
 

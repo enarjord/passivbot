@@ -9,8 +9,9 @@ use crate::orchestrator::{
 };
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
-    BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Fill,
-    Order, OrderBook, OrderType, Position, Positions, TrailingPriceBundle,
+    BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities,
+    EquityHardStopLossConfig, ExchangeParams, Fill, Order, OrderBook, OrderType, Position,
+    Positions, TrailingPriceBundle,
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
@@ -678,6 +679,33 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    #[inline]
+    fn apply_common_hsl_config_to_bot_params_pair(
+        bp_pair: &mut BotParamsPair,
+        common_hsl: &EquityHardStopLossConfig,
+    ) {
+        if !common_hsl.enabled {
+            return;
+        }
+        for bp in [&mut bp_pair.long, &mut bp_pair.short] {
+            if bp.n_positions == 0 {
+                continue;
+            }
+            if bp.hsl_enabled {
+                continue;
+            }
+            bp.hsl_enabled = true;
+            bp.hsl_red_threshold = common_hsl.red_threshold;
+            bp.hsl_ema_span_minutes = common_hsl.ema_span_minutes;
+            bp.hsl_cooldown_minutes_after_red = common_hsl.cooldown_minutes_after_red;
+            bp.hsl_no_restart_drawdown_threshold = common_hsl.no_restart_drawdown_threshold;
+            bp.hsl_tier_ratio_yellow = common_hsl.tier_ratios.yellow;
+            bp.hsl_tier_ratio_orange = common_hsl.tier_ratios.orange;
+            bp.hsl_orange_tier_mode = common_hsl.orange_tier_mode.clone();
+            bp.hsl_panic_close_order_type = common_hsl.panic_close_order_type.clone();
+        }
+    }
+
     fn debug_dump_unstuck_calc(&self, k: usize, idx: usize, side: usize) {
         if !DEBUG_DUMP_UNSTUCK_CALC {
             return;
@@ -938,7 +966,7 @@ impl<'a> Backtest<'a> {
     }
 
     fn build_orchestrator_input_iter<I>(
-        &self,
+        &mut self,
         k: usize,
         peek_hints: Option<EntryPeekHints>,
         indices: I,
@@ -1600,6 +1628,10 @@ impl<'a> Backtest<'a> {
                 bp.short.wallet_exposure_limit =
                     bp.short.total_wallet_exposure_limit / bp.short.n_positions as f64;
             }
+            Self::apply_common_hsl_config_to_bot_params_pair(
+                bp,
+                &backtest_params.equity_hard_stop_loss,
+            );
         }
 
         // init bot params
@@ -2125,8 +2157,10 @@ impl<'a> Backtest<'a> {
 
     #[inline(always)]
     fn try_restart_after_hard_stop(&mut self, current_ts_ms: u64) -> bool {
-        self.try_restart_after_hard_stop_pside(current_ts_ms, LONG)
-            || self.try_restart_after_hard_stop_pside(current_ts_ms, SHORT)
+        self.hydrate_hard_stop_pside_from_legacy_aliases_if_needed();
+        let restarted_long = self.try_restart_after_hard_stop_pside(current_ts_ms, LONG);
+        let restarted_short = self.try_restart_after_hard_stop_pside(current_ts_ms, SHORT);
+        restarted_long || restarted_short
     }
 
     #[inline(always)]
@@ -2250,6 +2284,93 @@ impl<'a> Backtest<'a> {
         self.sync_legacy_hard_stop_aliases();
     }
 
+    #[inline]
+    fn hard_stop_psides_are_default(&self) -> bool {
+        self.hard_stop_pside.iter().all(|runtime| {
+            runtime.state.is_none()
+                && runtime.tier == ehsl::HardStopTier::Green
+                && runtime.rolling_peak_strategy_pnl.is_empty()
+                && !runtime.halted
+                && !runtime.no_restart_latched
+                && runtime.cooldown_until_ms.is_none()
+                && runtime.flat_confirmations == 0
+                && runtime.pending_stop.is_none()
+                && runtime.last_stop.is_none()
+                && runtime.current_red_start_ms.is_none()
+                && runtime.current_halt_start_ms.is_none()
+                && runtime.equity_at_halt == 0.0
+                && runtime.last_restart_ts_ms.is_none()
+                && runtime.no_restart_peak_strategy_equity == 0.0
+        })
+    }
+
+    #[inline]
+    fn legacy_hard_stop_aliases_active(&self) -> bool {
+        self.hard_stop_state.is_some()
+            || self.hard_stop_tier != ehsl::HardStopTier::Green
+            || !self.hard_stop_rolling_peak_strategy_pnl.is_empty()
+            || self.hard_stop_halted
+            || self.hard_stop_no_restart_latched
+            || self.hard_stop_cooldown_until_ms.is_some()
+            || self.hard_stop_flat_confirmations != 0
+            || self.hard_stop_pending_stop.is_some()
+            || self.hard_stop_last_stop.is_some()
+            || self.hard_stop_current_red_start_ms.is_some()
+            || self.hard_stop_current_halt_start_ms.is_some()
+            || self.hard_stop_equity_at_halt != 0.0
+            || self.hard_stop_last_restart_ts_ms.is_some()
+    }
+
+    fn hydrate_hard_stop_pside_from_legacy_aliases_if_needed(&mut self) {
+        if !self.legacy_hard_stop_aliases_active() || !self.hard_stop_psides_are_default() {
+            return;
+        }
+        for runtime in self.hard_stop_pside.iter_mut() {
+            runtime.state = self.hard_stop_state.clone();
+            runtime.tier = self.hard_stop_tier;
+            runtime.rolling_peak_strategy_pnl = self.hard_stop_rolling_peak_strategy_pnl.clone();
+            runtime.halted = self.hard_stop_halted;
+            runtime.no_restart_latched = self.hard_stop_no_restart_latched;
+            runtime.cooldown_until_ms = self.hard_stop_cooldown_until_ms;
+            runtime.flat_confirmations = self.hard_stop_flat_confirmations;
+            runtime.pending_stop = self.hard_stop_pending_stop;
+            runtime.last_stop = self.hard_stop_last_stop;
+            runtime.current_red_start_ms = self.hard_stop_current_red_start_ms;
+            runtime.current_halt_start_ms = self.hard_stop_current_halt_start_ms;
+            runtime.equity_at_halt = self.hard_stop_equity_at_halt;
+            runtime.last_restart_ts_ms = self.hard_stop_last_restart_ts_ms;
+            runtime.no_restart_peak_strategy_equity = self
+                .hard_stop_state
+                .as_ref()
+                .map(|state| {
+                    state
+                        .peak_strategy_equity
+                        .max(self.hard_stop_equity_at_halt)
+                })
+                .unwrap_or(self.hard_stop_equity_at_halt);
+            if let Some(state) = runtime.state.as_mut() {
+                if state.initialized && state.last_minute.is_none() {
+                    let current_minute = self
+                        .equities
+                        .timestamps_ms
+                        .last()
+                        .copied()
+                        .unwrap_or(self.first_timestamp_ms)
+                        / 60_000;
+                    state.last_minute = Some(current_minute.saturating_sub(1));
+                    state.cached_step.get_or_insert(ehsl::HardStopStep {
+                        drawdown_raw: state.drawdown_ema.max(0.0),
+                        drawdown_score: state.drawdown_ema.max(0.0),
+                        tier: state.tier,
+                        changed: false,
+                        alpha: 1.0,
+                        elapsed_minutes: 0,
+                    });
+                }
+            }
+        }
+    }
+
     fn sync_legacy_hard_stop_aliases(&mut self) {
         let long_runtime = &self.hard_stop_pside[LONG];
         let short_runtime = &self.hard_stop_pside[SHORT];
@@ -2323,12 +2444,13 @@ impl<'a> Backtest<'a> {
     }
 
     fn apply_hard_stop_mode_overrides(
-        &self,
+        &mut self,
         mode_long: &mut Option<orchestrator::TradingMode>,
         mode_short: &mut Option<orchestrator::TradingMode>,
         pos_long: Position,
         pos_short: Position,
     ) {
+        self.hydrate_hard_stop_pside_from_legacy_aliases_if_needed();
         self.apply_hard_stop_mode_override_pside(mode_long, pos_long, LONG);
         self.apply_hard_stop_mode_override_pside(mode_short, pos_short, SHORT);
     }
@@ -2389,6 +2511,7 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_hard_stop_state(&mut self, k: usize) -> Result<(), String> {
+        self.hydrate_hard_stop_pside_from_legacy_aliases_if_needed();
         self.record_strategy_equity_sample();
         self.update_hard_stop_state_pside(k, LONG)?;
         self.update_hard_stop_state_pside(k, SHORT)?;
@@ -2459,8 +2582,15 @@ impl<'a> Backtest<'a> {
         let Some(&timestamp_ms) = self.equities.timestamps_ms.last() else {
             return Ok(());
         };
-        let (realized_pnl, unrealized_pnl) = self.hard_stop_signal_values_pside(k, pside)?;
+        let (realized_pnl, unrealized_pnl) =
+            self.hard_stop_signal_values_pside(k, pside).map_err(|e| {
+                format!(
+                    "hard-stop evaluation failed at k {} pside {} while deriving signal values: {}",
+                    k, pside, e
+                )
+            })?;
         let strategy_pnl = realized_pnl + unrealized_pnl;
+        let baseline_balance = self.balance.usd_total_balance - self.pnl_cumsum_running_net;
         let days = self.backtest_params.pnls_max_lookback_days.max(0.0);
         let lookback_ms = ((days * 86_400_000.0).round() as u64).max(self.interval_ms);
         let peak_strategy_pnl = Self::update_strategy_pnl_peak_queue(
@@ -2469,16 +2599,15 @@ impl<'a> Backtest<'a> {
             strategy_pnl,
             lookback_ms,
         );
-        let strategy_equity =
-            (self.backtest_params.starting_balance + strategy_pnl).max(f64::EPSILON);
-        let peak_strategy_equity =
-            (self.backtest_params.starting_balance + peak_strategy_pnl).max(strategy_equity);
+        let strategy_equity = baseline_balance + strategy_pnl;
+        let peak_strategy_equity = (baseline_balance + peak_strategy_pnl).max(strategy_equity);
         let cfg = self.hard_stop_cfg_pside(pside);
         let hsl_red_threshold = cfg.hsl_red_threshold;
         let hsl_ema_span_minutes = cfg.hsl_ema_span_minutes;
         let hsl_tier_ratio_yellow = cfg.hsl_tier_ratio_yellow;
         let hsl_tier_ratio_orange = cfg.hsl_tier_ratio_orange;
-        let hsl_no_restart_drawdown_threshold = cfg.hsl_no_restart_drawdown_threshold;
+        let hsl_no_restart_drawdown_threshold =
+            cfg.hsl_no_restart_drawdown_threshold.max(hsl_red_threshold);
         let hsl_cooldown_minutes_after_red = cfg.hsl_cooldown_minutes_after_red;
         if !(hsl_no_restart_drawdown_threshold.is_finite()
             && hsl_red_threshold.is_finite()
@@ -2498,7 +2627,6 @@ impl<'a> Backtest<'a> {
                 orange: hsl_tier_ratio_orange,
             },
         };
-        let sample_minutes = self.backtest_params.candle_interval_minutes.max(1) as f64;
         let step = ehsl::step_with_peak_strategy_equity(
             self.hard_stop_pside[pside]
                 .state
@@ -2506,7 +2634,7 @@ impl<'a> Backtest<'a> {
             hs_cfg,
             strategy_equity,
             peak_strategy_equity,
-            sample_minutes,
+            timestamp_ms,
         )
         .map_err(|e| {
             format!(
@@ -3321,6 +3449,9 @@ impl<'a> Backtest<'a> {
                         k, pside
                     )
                 })?;
+                if !equity.is_finite() || equity <= 0.0 {
+                    return Err("equity must be finite and > 0".to_string());
+                }
                 let balance = self.balance.usd_total_balance;
                 Ok((self.pnl_cumsum_running_net, equity - balance))
             }
@@ -4794,6 +4925,7 @@ mod tests {
         hs.enabled = true;
         hs.red_threshold = 0.99;
         hs.ema_span_minutes = 1.0;
+        hs.signal_mode = "unified".to_string();
 
         let backtest_params = BacktestParams {
             starting_balance: 1000.0,
@@ -4868,6 +5000,7 @@ mod tests {
         hs.red_threshold = 0.1;
         hs.ema_span_minutes = 1.0;
         hs.cooldown_minutes_after_red = 5.0;
+        hs.signal_mode = "unified".to_string();
 
         let backtest_params = BacktestParams {
             starting_balance: 1000.0,
@@ -5073,6 +5206,7 @@ mod tests {
             peak_strategy_equity: 123.0,
             drawdown_ema: 0.2,
             tier: ehsl::HardStopTier::Red,
+            ..Default::default()
         });
         bt.hard_stop_rolling_peak_strategy_pnl.push_back((0, 123.0));
 
@@ -5115,6 +5249,7 @@ mod tests {
         hs.no_restart_drawdown_threshold = 0.10;
         hs.ema_span_minutes = 1.0;
         hs.cooldown_minutes_after_red = 15.0;
+        hs.signal_mode = "unified".to_string();
 
         let backtest_params = BacktestParams {
             starting_balance: 1000.0,
@@ -5190,6 +5325,7 @@ mod tests {
         hs.no_restart_drawdown_threshold = 0.15;
         hs.ema_span_minutes = 1.0;
         hs.cooldown_minutes_after_red = 1.0;
+        hs.signal_mode = "unified".to_string();
 
         let backtest_params = BacktestParams {
             starting_balance: 1000.0,
@@ -5282,6 +5418,7 @@ mod tests {
         hs.no_restart_drawdown_threshold = 1.0;
         hs.ema_span_minutes = 1.0;
         hs.cooldown_minutes_after_red = 1.0;
+        hs.signal_mode = "unified".to_string();
 
         let backtest_params = BacktestParams {
             starting_balance: 100.0,
@@ -5312,10 +5449,16 @@ mod tests {
             candle_interval_minutes: 1,
         };
 
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
         let mut bt = Backtest::new(
             hlcvs.view(),
             btc_usd_prices.view(),
-            vec![BotParamsPair::default()],
+            vec![bp_pair],
             vec![ExchangeParams::default()],
             &backtest_params,
         );
@@ -5326,6 +5469,7 @@ mod tests {
             peak_strategy_equity: 100.0,
             drawdown_ema: 0.2,
             tier: ehsl::HardStopTier::Red,
+            ..Default::default()
         });
         bt.hard_stop_tier = ehsl::HardStopTier::Red;
         bt.open_orders.long.insert(
@@ -5362,6 +5506,7 @@ mod tests {
         hs.red_threshold = 0.5;
         hs.no_restart_drawdown_threshold = 1.0;
         hs.ema_span_minutes = 1.0;
+        hs.signal_mode = "unified".to_string();
 
         let backtest_params = BacktestParams {
             starting_balance: 100.0,
@@ -5392,10 +5537,16 @@ mod tests {
             candle_interval_minutes: 1,
         };
 
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
         let mut bt = Backtest::new(
             hlcvs.view(),
             btc_usd_prices.view(),
-            vec![BotParamsPair::default()],
+            vec![bp_pair],
             vec![ExchangeParams::default()],
             &backtest_params,
         );
@@ -5438,6 +5589,7 @@ mod tests {
         hs.red_threshold = 0.5;
         hs.no_restart_drawdown_threshold = 1.0;
         hs.ema_span_minutes = 1.0;
+        hs.signal_mode = "unified".to_string();
 
         let backtest_params = BacktestParams {
             starting_balance: 100.0,
@@ -5468,10 +5620,16 @@ mod tests {
             candle_interval_minutes: 1,
         };
 
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
         let mut bt = Backtest::new(
             hlcvs.view(),
             btc_usd_prices.view(),
-            vec![BotParamsPair::default()],
+            vec![bp_pair],
             vec![ExchangeParams::default()],
             &backtest_params,
         );
@@ -5512,6 +5670,7 @@ mod tests {
         hs.red_threshold = 0.1;
         hs.no_restart_drawdown_threshold = 0.2;
         hs.ema_span_minutes = 1.0;
+        hs.signal_mode = "unified".to_string();
 
         let backtest_params = BacktestParams {
             starting_balance: 1000.0,
