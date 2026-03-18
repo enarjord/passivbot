@@ -65,6 +65,35 @@ divergence but still not match backtest behavior, because:
 2. Intra-minute calls would still jitter the EMA with sub-minute alpha values
    that no backtest ever produces.
 
+### Additional parity issue: loop-rate-dependent rolling peak
+
+The current live HSL path is not only wrong in its EMA timing. It is also
+still partially loop-rate-dependent before the Rust HSL step runs.
+
+In `passivbot.py`, `_equity_hard_stop_apply_sample()` updates
+`state["strategy_pnl_peak"]` on every live call before calling the Rust HSL
+runtime. That means:
+
+1. rolling peak updates can occur multiple times within the same minute in live
+2. backtests only advance on candle timestamps
+3. even if EMA timing is fixed, the upstream peak signal can still diverge
+
+This creates a second parity leak:
+
+- Python may advance `rolling_peak_strategy_equity` intra-minute
+- Rust may return a cached same-minute HSL result
+- the resulting metric bundle can mix "new" rolling peak data with "old"
+  drawdown/tier data
+
+So the clean target is broader than "fix EMA timing":
+
+- minute-quantize the entire HSL decision sample, not only the EMA accumulator
+- ideally move the rolling-peak tracker into Rust so Rust owns timestamp
+  handling, peak tracking, raw drawdown, drawdown EMA, and tier classification
+
+That keeps HSL behavior aligned with the general Passivbot rule that
+trading-critical behavior should be defined once in Rust.
+
 ## Design: Minute-Quantized EMA
 
 ### Core principle
@@ -78,6 +107,19 @@ function owns the timing:
    mutation
 4. If `elapsed_minutes >= 1`: applies closed-form multi-step EMA update, caches
    result
+
+Recommended widening:
+
+The same minute quantization should govern the entire HSL sample path, not just
+the EMA state update.  The cleanest end state is:
+
+1. caller passes `timestamp_ms`, equity inputs, and static config
+2. Rust decides whether this timestamp advances the HSL clock
+3. if not, Rust returns a same-minute no-op/cached result
+4. if yes, Rust advances both rolling peak state and HSL state on that minute
+
+This avoids mixing Python-side same-minute peak changes with Rust-side cached
+drawdown outputs.
 
 ### The closed-form update
 
@@ -140,6 +182,12 @@ pub struct HardStopState {
 `last_minute` is `None` until the first sample.  `cached_step` holds the
 result returned on intra-minute re-calls.
 
+Recommended widening:
+
+If the rolling peak tracker is also moved into Rust, this state should also own
+the rolling-peak runtime or an adjacent Rust-owned state object should do so.
+Otherwise a residual Python-side timing dependency remains.
+
 ### Step 2: Change `step_with_peak_strategy_equity` signature
 
 Replace `sample_minutes: f64` with `timestamp_ms: u64`:
@@ -200,6 +248,16 @@ state.cached_step = Some(step);
 Ok(step)
 ```
 
+Important detail:
+
+For same-minute cached returns, `elapsed_minutes` should not misleadingly
+repeat the previous nonzero value.  The returned step should either:
+
+- report `elapsed_minutes = 0` for same-minute cache hits, or
+- avoid exposing the field on cached returns
+
+Otherwise observability becomes confusing.
+
 ### Step 3: Remove `span_samples()` function
 
 No longer needed.  Alpha is always `2 / (ema_span_minutes + 1)`.  Remove the
@@ -224,6 +282,8 @@ pub struct HardStopStep {
 }
 ```
 
+For cached same-minute calls, `elapsed_minutes` should be `0`.
+
 ### Step 6: Update PyO3 binding `apply_sample()` (python.rs)
 
 - Remove `sample_minutes` parameter
@@ -240,6 +300,16 @@ pub struct HardStopStep {
   - `_equity_hard_stop_check()` line 1608 (ongoing live)
 - Remove `sample_minutes` and `span_samples` from metrics dict
 - Add `elapsed_minutes` to metrics dict (for observability)
+
+Recommended widening:
+
+Do not leave rolling-peak timing ownership split across Python and Rust if the
+goal is strict live/backtest parity.  Either:
+
+1. move rolling peak tracking into Rust in this same change, or
+2. explicitly minute-quantize the Python rolling-peak update path too
+
+Option 1 is cleaner and more consistent with Passivbot architecture.
 
 ### Step 8: Update backtester call site (backtest.rs)
 
@@ -258,6 +328,36 @@ let step = ehsl::step_with_peak_strategy_equity(
 
 For a 5m backtest, consecutive timestamps are 300,000ms apart.
 `elapsed_minutes = 5`, and the closed form applies 5 one-minute steps.
+
+## Behavioral Impact
+
+This is not only an internal bug fix.  It also changes live HSL behavior:
+
+- live HSL will no longer react to sub-minute loop cadence
+- same-minute repeated live calls will not keep nudging the drawdown EMA
+- 5m and other coarse-interval backtests will use the same 1-minute EMA basis
+  as live, advanced in closed form over elapsed whole minutes
+
+This is the correct tradeoff if parity is the goal, but it should be treated as
+an intentional behavior change.
+
+## Recommended Scope Adjustment
+
+The minimum fix is:
+
+1. remove `sample_minutes` from the HSL step API
+2. use `timestamp_ms` in Rust
+3. minute-quantize the EMA update
+
+The better fix is:
+
+1. Rust owns HSL timing entirely
+2. Rust also owns rolling peak timing for the HSL path
+3. live and backtest both call the same minute-quantized Rust state machine
+4. Python acts only as orchestrator/data plumbing
+
+The broader version is more aligned with the repo's stated architecture and
+avoids leaving a second parity bug behind while fixing the first one.
 
 ### Step 9: Update standalone `equity_hard_stop_step_py` (python.rs)
 
