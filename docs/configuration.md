@@ -287,13 +287,15 @@ Forager coin selection now uses a two-stage model: coarse volume pruning, then w
 
 - **forager_volume_drop_pct**: Coarse low-volume prune. Drops the lowest relative-volume fraction before final ranking, while still retaining enough candidates to fill the configured slots.
   - Example: `forager_volume_drop_pct = 0.1` drops the bottom 10% by relative volume. Set to `0` to skip the prune stage.
+- **forager_volatility_ema_span / forager_volume_ema_span**: Number of minutes to look into the past to compute the 1m volatility (log-range) and quote-volume EMAs used by forager mode.
+  - Log range is computed from 1m OHLCVs as `mean(ln(high / low))`.
+  - These spans control the raw inputs to forager ranking; they are separate from `entry_volatility_ema_span_hours`, which is used for entry logic.
 - **forager_score_weights**: Final weighted forager ranking weights.
   - Required keys: `volume`, `ema_readiness`, `volatility`.
   - Default: `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}`.
   - `ema_readiness` ranks by distance to the actual offset initial-entry threshold, not raw EMA bands.
-- **filter_volatility_ema_span / filter_volume_ema_span**: Number of minutes to look into the past to compute the volatility (log-range) and volume EMAs used for dynamic coin selection in forager mode.
-  - Log range is computed from 1m OHLCVs as `mean(ln(high / low))`.
-  - In forager mode, volatility remains part of the final weighted score.
+
+See [docs/forager.md](forager.md) for a full description of motivation, ranking rules, caveats, and usage examples.
 
 ## Coin Overrides
 - **coin_overrides**:

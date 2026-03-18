@@ -1047,7 +1047,7 @@ fn run_backtest_core<'py>(
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
         let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
         let hard_stop_plot_data = backtest.hard_stop_plot_data();
-        let py_hard_stop_plot = PyDict::new(py);
+        let py_hard_stop_plot = PyDict::new_bound(py);
         py_hard_stop_plot.set_item("timestamps_ms", hard_stop_plot_data.timestamps_ms)?;
         py_hard_stop_plot.set_item("drawdown_raw", hard_stop_plot_data.drawdown_raw)?;
         py_hard_stop_plot.set_item("timestamps_ms_long", hard_stop_plot_data.timestamps_ms_long)?;
@@ -1383,10 +1383,21 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         )?,
         filter_volatility_ema_span: extract_value_with_fallback(
             dict,
+            "forager_volatility_ema_span",
             "filter_volatility_ema_span",
-            "filter_log_range_ema_span",
+        )
+        .or_else(|_| {
+            extract_value_with_fallback(
+                dict,
+                "filter_volatility_ema_span",
+                "filter_log_range_ema_span",
+            )
+        })?,
+        filter_volume_ema_span: extract_value_with_fallback(
+            dict,
+            "forager_volume_ema_span",
+            "filter_volume_ema_span",
         )?,
-        filter_volume_ema_span: extract_value(dict, "filter_volume_ema_span")?,
         forager_volume_drop_pct: extract_value(dict, "forager_volume_drop_pct")?,
         forager_score_weights: extract_forager_score_weights(dict)?,
         ema_span_0: extract_value(dict, "ema_span_0")?,

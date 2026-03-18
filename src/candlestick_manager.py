@@ -6029,25 +6029,41 @@ class CandlestickManager:
             return nan, nan
         return float(min(vals)), float(max(vals))
 
-    async def get_last_prices(self, symbols: List[str], max_age_ms: int = 10_000) -> Dict[str, float]:
+    async def get_last_prices(
+        self,
+        symbols: List[str],
+        max_age_ms: int = 10_000,
+        *,
+        strict: bool = False,
+    ) -> Dict[str, float]:
         """Return latest close for current minute per symbol.
 
-        Uses get_current_close per symbol with TTL. Returns 0.0 on failure.
+        Uses get_current_close per symbol with TTL.
+        In strict mode, any failure or non-finite value raises.
+        Otherwise failures return 0.0.
         """
         out: Dict[str, float] = {}
         if not symbols:
             return out
 
         async def one(sym: str) -> float:
-            try:
-                val = await self.get_current_close(sym, max_age_ms=max_age_ms)
-                return float(val) if isinstance(val, (int, float)) else 0.0
-            except Exception:
-                return 0.0
+            val = await self.get_current_close(sym, max_age_ms=max_age_ms)
+            if not isinstance(val, (int, float)):
+                raise TypeError(f"get_current_close returned non-numeric value for {sym}")
+            val = float(val)
+            if not np.isfinite(val):
+                raise ValueError(f"non-finite current close for {sym}")
+            return val
 
         tasks = {s: asyncio.create_task(one(s)) for s in symbols}
         for s, t in tasks.items():
-            out[s] = await t
+            if strict:
+                out[s] = await t
+            else:
+                try:
+                    out[s] = await t
+                except Exception:
+                    out[s] = 0.0
         return out
 
     async def get_ema_bounds_many(
@@ -6057,31 +6073,37 @@ class CandlestickManager:
         max_age_ms: Optional[int] = 60_000,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
+        strict: bool = False,
     ) -> Dict[str, Tuple[float, float]]:
         """Return EMA bounds per symbol for a list of (symbol, span_0, span_1).
 
         Returns mapping symbol -> (lower, upper), using get_ema_bounds per symbol.
+        In strict mode, any failure or non-finite value raises.
+        Otherwise failures return (0.0, 0.0).
         """
         out: Dict[str, Tuple[float, float]] = {}
         if not items:
             return out
 
         async def one(sym: str, s0: float, s1: float) -> Tuple[float, float]:
-            try:
-                lo, hi = await self.get_ema_bounds(
-                    sym, s0, s1, max_age_ms=max_age_ms, timeframe=timeframe, tf=tf
-                )
-                lo = float(lo) if isinstance(lo, (int, float)) else float("nan")
-                hi = float(hi) if isinstance(hi, (int, float)) else float("nan")
-                if not (np.isfinite(lo) and np.isfinite(hi)):
-                    return (0.0, 0.0)
-                return (lo, hi)
-            except Exception:
-                return (0.0, 0.0)
+            lo, hi = await self.get_ema_bounds(
+                sym, s0, s1, max_age_ms=max_age_ms, timeframe=timeframe, tf=tf
+            )
+            lo = float(lo) if isinstance(lo, (int, float)) else float("nan")
+            hi = float(hi) if isinstance(hi, (int, float)) else float("nan")
+            if not (np.isfinite(lo) and np.isfinite(hi)):
+                raise ValueError(f"non-finite EMA bounds for {sym}")
+            return (lo, hi)
 
         tasks = {sym: asyncio.create_task(one(sym, s0, s1)) for (sym, s0, s1) in items}
         for sym, t in tasks.items():
-            out[sym] = await t
+            if strict:
+                out[sym] = await t
+            else:
+                try:
+                    out[sym] = await t
+                except Exception:
+                    out[sym] = (0.0, 0.0)
         return out
 
     async def get_latest_ema_log_range_many(

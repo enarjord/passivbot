@@ -37,6 +37,35 @@ OPTIMIZABLE_COMMON_KEY_PATHS = {
     ),
 }
 
+OPTIMIZABLE_BOT_KEY_PATHS = {
+    "long_forager_score_weights_volume": ("bot", "long", "forager_score_weights", "volume"),
+    "long_forager_score_weights_ema_readiness": (
+        "bot",
+        "long",
+        "forager_score_weights",
+        "ema_readiness",
+    ),
+    "long_forager_score_weights_volatility": (
+        "bot",
+        "long",
+        "forager_score_weights",
+        "volatility",
+    ),
+    "short_forager_score_weights_volume": ("bot", "short", "forager_score_weights", "volume"),
+    "short_forager_score_weights_ema_readiness": (
+        "bot",
+        "short",
+        "forager_score_weights",
+        "ema_readiness",
+    ),
+    "short_forager_score_weights_volatility": (
+        "bot",
+        "short",
+        "forager_score_weights",
+        "volatility",
+    ),
+}
+
 
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     key_paths: List[Tuple[str, Tuple[str, ...]]] = []
@@ -59,6 +88,9 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
         if bound_key in OPTIMIZABLE_COMMON_KEY_PATHS:
             key_paths.append((bound_key, OPTIMIZABLE_COMMON_KEY_PATHS[bound_key]))
             continue
+        if bound_key in OPTIMIZABLE_BOT_KEY_PATHS:
+            key_paths.append((bound_key, OPTIMIZABLE_BOT_KEY_PATHS[bound_key]))
+            continue
         if "_" not in bound_key:
             continue
         pside, key = bound_key.split("_", 1)
@@ -66,6 +98,8 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
             continue
         if key not in bot_config[pside]:
             raise KeyError(f"optimize bound {bound_key} does not map to bot.{pside}.{key}")
+        if isinstance(bot_config[pside][key], dict):
+            raise KeyError(f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}")
         key_paths.append((bound_key, ("bot", pside, key)))
     return key_paths
 

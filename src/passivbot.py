@@ -4083,29 +4083,16 @@ class Passivbot:
                     fetch_budget = max(0, int(max_network_fetches))
                 except Exception:
                     fetch_budget = 0
-            volumes, log_ranges = await self.calc_volumes_and_log_ranges(
+            candidate_payload = await self.build_forager_candidate_payload(
                 pside,
-                symbols=candidates,
+                candidates,
+                min_cost_flags,
                 max_age_ms=max_age_ms,
                 max_network_fetches=fetch_budget,
             )
-            ema_readiness = await self.calc_forager_ema_readiness(
+            selected = pbr.select_forager_candidates_py(
+                candidate_payload,
                 pside,
-                candidates,
-                max_age_ms=max_age_ms,
-            )
-            features = [
-                {
-                    "index": idx,
-                    "enabled": min_cost_flags.get(symbol, True),
-                    "volume_score": volumes.get(symbol, 0.0),
-                    "volatility_score": log_ranges.get(symbol, 0.0),
-                    "ema_readiness_score": ema_readiness.get(symbol, float("inf")),
-                }
-                for idx, symbol in enumerate(candidates)
-            ]
-            selected = pbr.select_coin_indices_py(
-                features,
                 max_n_positions,
                 clip_pct,
                 score_weights,
@@ -4116,7 +4103,7 @@ class Passivbot:
                 if any(not flag for flag in min_cost_flags.values()):
                     self.warn_on_high_effective_min_cost(pside)
         else:
-            eligible = [s for s in candidates if min_cost_flags.get(s, True)]
+            eligible = [s for s in candidates if min_cost_flags[s]]
             if not eligible:
                 if self.live_value("filter_by_min_effective_cost"):
                     self.warn_on_high_effective_min_cost(pside)
@@ -4125,53 +4112,148 @@ class Passivbot:
             ideal_coins = sorted(eligible)
         return ideal_coins
 
-    async def calc_forager_ema_readiness(
+    def _compute_ema_window_candles(self, spans: Iterable[float]) -> int:
+        finite_spans = []
+        for span in spans:
+            span_f = float(span)
+            if math.isfinite(span_f) and span_f > 0.0:
+                finite_spans.append(span_f)
+        max_span = max(finite_spans, default=1.0)
+        try:
+            warmup_ratio = float(get_optional_live_value(self.config, "warmup_ratio", 0.0))
+        except Exception:
+            warmup_ratio = 0.0
+        try:
+            max_warmup_minutes = int(
+                get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0
+            )
+        except Exception:
+            max_warmup_minutes = 0
+        span_buffer = 1.0 + max(0.0, warmup_ratio)
+        window_candles = max(1, int(math.ceil(max_span * span_buffer)))
+        if max_warmup_minutes > 0:
+            window_candles = min(window_candles, int(max_warmup_minutes))
+        return window_candles
+
+    def _require_finite_forager_value(self, symbol: str, field: str, value: float) -> float:
+        value_f = float(value)
+        if not np.isfinite(value_f):
+            raise ValueError(f"missing required forager input {field} for {symbol}")
+        return value_f
+
+    def _resolve_forager_symbol_ttl(
+        self,
+        symbol: str,
+        per_sym_ttl: Dict[str, int],
+        max_age_ms: Optional[int],
+    ) -> int:
+        ttl = per_sym_ttl.get(symbol)
+        if ttl is not None and ttl != 0:
+            return int(ttl)
+        if max_age_ms is not None:
+            return int(max_age_ms)
+        has_pos = self.has_position(symbol=symbol)
+        has_oo = bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
+        return 60_000 if (has_pos or has_oo) else int(self.inactive_coin_candle_ttl_ms)
+
+    async def build_forager_candidate_payload(
         self,
         pside: str,
         symbols: Iterable[str],
+        min_cost_flags: Dict[str, bool],
         *,
-        max_age_ms: Optional[int] = 60_000,
-    ) -> Dict[str, float]:
-        """Compute EMA-readiness distance to the actual initial-entry threshold per symbol."""
+        max_age_ms: Optional[int],
+        max_network_fetches: Optional[int],
+    ) -> List[Dict[str, float]]:
         syms = list(symbols)
         if not syms:
-            return {}
-        try:
-            span_0 = float(self.bot_value(pside, "ema_span_0"))
-            span_1 = float(self.bot_value(pside, "ema_span_1"))
-            entry_initial_ema_dist = float(self.bot_value(pside, "entry_initial_ema_dist"))
-        except Exception:
-            return {sym: float("inf") for sym in syms}
+            return []
 
-        try:
-            bounds = await self.cm.get_ema_bounds_many(
-                [(sym, span_0, span_1) for sym in syms],
-                max_age_ms=max_age_ms,
-            )
-            prices = await self.cm.get_last_prices(
-                syms,
-                max_age_ms=int(max_age_ms) if max_age_ms is not None else 60_000,
-            )
-        except Exception:
-            return {sym: float("inf") for sym in syms}
+        clip_pct = float(self.bot_value(pside, "forager_volume_drop_pct"))
+        score_weights = self.bot_value(pside, "forager_score_weights")
+        volume_required = clip_pct > 0.0 or float(score_weights["volume"]) != 0.0
+        volatility_required = float(score_weights["volatility"]) != 0.0
+        ema_readiness_required = float(score_weights["ema_readiness"]) != 0.0
 
-        out: Dict[str, float] = {}
-        for sym in syms:
-            lower, upper = bounds.get(sym, (0.0, 0.0))
-            market_price = float(prices.get(sym, 0.0) or 0.0)
-            if pside == "long":
-                entry_threshold = float(lower) * (1.0 - entry_initial_ema_dist)
-                if market_price > 0.0 and entry_threshold > 0.0:
-                    out[sym] = market_price / entry_threshold - 1.0
-                else:
-                    out[sym] = float("inf")
-            else:
-                entry_threshold = float(upper) * (1.0 + entry_initial_ema_dist)
-                if market_price > 0.0 and entry_threshold > 0.0:
-                    out[sym] = 1.0 - market_price / entry_threshold
-                else:
-                    out[sym] = float("inf")
-        return out
+        per_sym_ttl, cache_only_never_fetched = self._compute_fetch_budget_ttls(
+            syms, max_age_ms, max_network_fetches
+        )
+
+        async def one(index: int, symbol: str) -> Dict[str, float]:
+            if symbol in cache_only_never_fetched:
+                raise RuntimeError(
+                    f"forager feature build cannot refresh cold symbol {symbol} within fetch budget"
+                )
+
+            ttl = self._resolve_forager_symbol_ttl(symbol, per_sym_ttl, max_age_ms)
+            volume_score = 0.0
+            volatility_score = 0.0
+            bid = 0.0
+            ask = 0.0
+            ema_lower = 0.0
+            ema_upper = 0.0
+            entry_initial_ema_dist = 0.0
+
+            metric_spans = {}
+            if volume_required:
+                metric_spans["qv"] = float(self.bp(pside, "filter_volume_ema_span", symbol))
+            if volatility_required:
+                metric_spans["log_range"] = float(self.bp(pside, "filter_volatility_ema_span", symbol))
+            if metric_spans:
+                metrics = await self.cm.get_latest_ema_metrics(
+                    symbol,
+                    metric_spans,
+                    max_age_ms=ttl,
+                    window_candles=self._compute_ema_window_candles(metric_spans.values()),
+                    timeframe=None,
+                )
+                if volume_required:
+                    volume_score = self._require_finite_forager_value(
+                        symbol, "forager_volume_score", metrics["qv"]
+                    )
+                if volatility_required:
+                    volatility_score = self._require_finite_forager_value(
+                        symbol, "forager_volatility_score", metrics["log_range"]
+                    )
+
+            if ema_readiness_required:
+                span_0 = float(self.bp(pside, "ema_span_0", symbol))
+                span_1 = float(self.bp(pside, "ema_span_1", symbol))
+                entry_initial_ema_dist = float(self.bp(pside, "entry_initial_ema_dist", symbol))
+                ema_lower_raw, ema_upper_raw = await self.cm.get_ema_bounds(
+                    symbol,
+                    span_0,
+                    span_1,
+                    max_age_ms=ttl,
+                    timeframe=None,
+                )
+                ema_lower = self._require_finite_forager_value(
+                    symbol, "forager_ema_lower", ema_lower_raw
+                )
+                ema_upper = self._require_finite_forager_value(
+                    symbol, "forager_ema_upper", ema_upper_raw
+                )
+                market_price = self._require_finite_forager_value(
+                    symbol,
+                    "forager_market_price",
+                    await self.cm.get_current_close(symbol, max_age_ms=ttl),
+                )
+                bid = market_price
+                ask = market_price
+
+            return {
+                "index": index,
+                "enabled": bool(min_cost_flags[symbol]),
+                "volume_score": volume_score,
+                "volatility_score": volatility_score,
+                "bid": bid,
+                "ask": ask,
+                "ema_lower": ema_lower,
+                "ema_upper": ema_upper,
+                "entry_initial_ema_dist": entry_initial_ema_dist,
+            }
+
+        return await asyncio.gather(*(one(idx, sym) for idx, sym in enumerate(syms)))
 
     async def calc_volumes_and_log_ranges(
         self,

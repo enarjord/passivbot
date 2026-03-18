@@ -22,7 +22,10 @@ mod core {
     use crate::closes::{
         calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
     };
-    use crate::coin_selection::{select_coins, CoinFeature, SelectionConfig};
+    use crate::coin_selection::{
+        select_forager_candidates, ForagerCandidate, ForagerPositionSide, ForagerSelectionConfig,
+        ForagerSelectionError,
+    };
     use crate::constants::{LONG, SHORT};
     use crate::entries::{
         calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
@@ -451,47 +454,33 @@ mod core {
         Ok(v)
     }
 
-    fn compute_ema_readiness_raw(
+    fn map_forager_selection_error(err: ForagerSelectionError) -> OrchestratorError {
+        match err {
+            ForagerSelectionError::InvalidPositionSide(_) => OrchestratorError::NonFiniteInput {
+                field: "forager_position_side",
+                symbol_idx: None,
+            },
+            ForagerSelectionError::NonFiniteInput { field, index } => {
+                OrchestratorError::NonFiniteInput {
+                    field,
+                    symbol_idx: Some(index),
+                }
+            }
+        }
+    }
+
+    fn require_forager_input(
         symbol_idx: usize,
-        order_book: &OrderBook,
-        emas: &EmaBundle,
-        bot: &BotParams,
-        pside: PositionSide,
+        field: &'static str,
+        value: f64,
     ) -> Result<f64, OrchestratorError> {
-        let ema_bands = derive_ema_bands(symbol_idx, emas, bot)?;
-        let readiness = match pside {
-            PositionSide::Long => {
-                let market_price = order_book.bid;
-                let entry_threshold = ema_bands.lower * (1.0 - bot.entry_initial_ema_dist);
-                if !(market_price.is_finite()
-                    && market_price > 0.0
-                    && entry_threshold.is_finite()
-                    && entry_threshold > 0.0)
-                {
-                    return Err(OrchestratorError::NonFiniteInput {
-                        field: "forager_ema_readiness",
-                        symbol_idx: Some(symbol_idx),
-                    });
-                }
-                market_price / entry_threshold - 1.0
-            }
-            PositionSide::Short => {
-                let market_price = order_book.ask;
-                let entry_threshold = ema_bands.upper * (1.0 + bot.entry_initial_ema_dist);
-                if !(market_price.is_finite()
-                    && market_price > 0.0
-                    && entry_threshold.is_finite()
-                    && entry_threshold > 0.0)
-                {
-                    return Err(OrchestratorError::NonFiniteInput {
-                        field: "forager_ema_readiness",
-                        symbol_idx: Some(symbol_idx),
-                    });
-                }
-                1.0 - market_price / entry_threshold
-            }
-        };
-        Ok(readiness)
+        if !value.is_finite() {
+            return Err(OrchestratorError::NonFiniteInput {
+                field,
+                symbol_idx: Some(symbol_idx),
+            });
+        }
+        Ok(value)
     }
 
     fn effective_min_cost_is_low_enough(
@@ -990,17 +979,19 @@ mod core {
         }
     }
 
-    fn build_forager_features_into(
+    fn build_forager_candidates_into(
         symbols: &[SymbolInput],
         pside: PositionSide,
         hedge_mode: bool,
-        span_volume: f64,
-        span_volatility: f64,
         filter_enabled: bool,
         balance: f64,
         active_flags: Option<&[bool]>,
-        out: &mut Vec<CoinFeature>,
+        cfg: &ForagerSelectionConfig,
+        out: &mut Vec<ForagerCandidate>,
     ) -> Result<(), OrchestratorError> {
+        let volume_required = cfg.volume_drop_pct > 0.0 || cfg.weights.volume != 0.0;
+        let volatility_required = cfg.weights.volatility != 0.0;
+        let ema_readiness_required = cfg.weights.ema_readiness != 0.0;
         out.clear();
         out.reserve(symbols.len());
         for s in symbols {
@@ -1027,21 +1018,61 @@ mod core {
                     s.effective_min_cost,
                     &side.bot_params,
                 );
-            let volume_score = ema_lookup(&s.emas.m1.volume, span_volume).unwrap_or(0.0);
-            let volatility_score = ema_lookup(&s.emas.m1.log_range, span_volatility).unwrap_or(0.0);
-            let ema_readiness_score = compute_ema_readiness_raw(
-                s.symbol_idx,
-                &s.order_book,
-                &s.emas,
-                &side.bot_params,
-                pside,
-            )?;
-            out.push(CoinFeature {
+            let volume_score = if volume_required {
+                require_forager_input(
+                    s.symbol_idx,
+                    "forager_volume_score",
+                    ema_lookup(&s.emas.m1.volume, side.bot_params.filter_volume_ema_span).ok_or(
+                        OrchestratorError::MissingEma {
+                            symbol_idx: s.symbol_idx,
+                        },
+                    )?,
+                )?
+            } else {
+                0.0
+            };
+            let volatility_score = if volatility_required {
+                require_forager_input(
+                    s.symbol_idx,
+                    "forager_volatility_score",
+                    ema_lookup(
+                        &s.emas.m1.log_range,
+                        side.bot_params.filter_volatility_ema_span,
+                    )
+                    .ok_or(OrchestratorError::MissingEma {
+                        symbol_idx: s.symbol_idx,
+                    })?,
+                )?
+            } else {
+                0.0
+            };
+            let (bid, ask, ema_lower, ema_upper, entry_initial_ema_dist) = if ema_readiness_required
+            {
+                let ema_bands = derive_ema_bands(s.symbol_idx, &s.emas, &side.bot_params)?;
+                (
+                    require_forager_input(s.symbol_idx, "forager_market_bid", s.order_book.bid)?,
+                    require_forager_input(s.symbol_idx, "forager_market_ask", s.order_book.ask)?,
+                    ema_bands.lower,
+                    ema_bands.upper,
+                    require_forager_input(
+                        s.symbol_idx,
+                        "entry_initial_ema_dist",
+                        side.bot_params.entry_initial_ema_dist,
+                    )?,
+                )
+            } else {
+                (0.0, 0.0, 0.0, 0.0, 0.0)
+            };
+            out.push(ForagerCandidate {
                 index: s.symbol_idx,
                 enabled,
                 volume_score,
                 volatility_score,
-                ema_readiness_score,
+                bid,
+                ask,
+                ema_lower,
+                ema_upper,
+                entry_initial_ema_dist,
             });
         }
         Ok(())
@@ -1129,7 +1160,7 @@ mod core {
         per_short: Vec<Option<PerSymbolOrders>>,
         forced_long: Vec<usize>,
         forced_short: Vec<usize>,
-        features: Vec<CoinFeature>,
+        features: Vec<ForagerCandidate>,
         gate_positions_long: Vec<GateEntriesPosition>,
         gate_positions_short: Vec<GateEntriesPosition>,
         twel_positions: Vec<TwelEnforcerInputPosition>,
@@ -1534,22 +1565,7 @@ mod core {
                 }
             }
             if actives_long_count < enp_long {
-                build_forager_features_into(
-                    &input.symbols,
-                    PositionSide::Long,
-                    input.global.hedge_mode,
-                    input.global.global_bot_params.long.filter_volume_ema_span,
-                    input
-                        .global
-                        .global_bot_params
-                        .long
-                        .filter_volatility_ema_span,
-                    input.global.filter_by_min_effective_cost,
-                    input.balance,
-                    Some(actives_long),
-                    &mut workspace.features,
-                )?;
-                let cfg = SelectionConfig {
+                let cfg = ForagerSelectionConfig {
                     slots_to_fill: enp_long.saturating_sub(actives_long_count),
                     volume_drop_pct: input.global.global_bot_params.long.forager_volume_drop_pct,
                     weights: input
@@ -1559,8 +1575,21 @@ mod core {
                         .forager_score_weights
                         .clone(),
                     require_forager: true,
+                    position_side: ForagerPositionSide::Long,
                 };
-                for idx in select_coins(&workspace.features, &cfg) {
+                build_forager_candidates_into(
+                    &input.symbols,
+                    PositionSide::Long,
+                    input.global.hedge_mode,
+                    input.global.filter_by_min_effective_cost,
+                    input.balance,
+                    Some(actives_long),
+                    &cfg,
+                    &mut workspace.features,
+                )?;
+                for idx in select_forager_candidates(&workspace.features, &cfg)
+                    .map_err(map_forager_selection_error)?
+                {
                     if actives_long_count >= enp_long {
                         break;
                     }
@@ -1602,22 +1631,7 @@ mod core {
                 }
             }
             if actives_short_count < enp_short {
-                build_forager_features_into(
-                    &input.symbols,
-                    PositionSide::Short,
-                    input.global.hedge_mode,
-                    input.global.global_bot_params.short.filter_volume_ema_span,
-                    input
-                        .global
-                        .global_bot_params
-                        .short
-                        .filter_volatility_ema_span,
-                    input.global.filter_by_min_effective_cost,
-                    input.balance,
-                    Some(actives_short),
-                    &mut workspace.features,
-                )?;
-                let cfg = SelectionConfig {
+                let cfg = ForagerSelectionConfig {
                     slots_to_fill: enp_short.saturating_sub(actives_short_count),
                     volume_drop_pct: input.global.global_bot_params.short.forager_volume_drop_pct,
                     weights: input
@@ -1627,8 +1641,21 @@ mod core {
                         .forager_score_weights
                         .clone(),
                     require_forager: true,
+                    position_side: ForagerPositionSide::Short,
                 };
-                for idx in select_coins(&workspace.features, &cfg) {
+                build_forager_candidates_into(
+                    &input.symbols,
+                    PositionSide::Short,
+                    input.global.hedge_mode,
+                    input.global.filter_by_min_effective_cost,
+                    input.balance,
+                    Some(actives_short),
+                    &cfg,
+                    &mut workspace.features,
+                )?;
+                for idx in select_forager_candidates(&workspace.features, &cfg)
+                    .map_err(map_forager_selection_error)?
+                {
                     if actives_short_count >= enp_short {
                         break;
                     }

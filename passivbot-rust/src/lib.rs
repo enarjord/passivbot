@@ -12,7 +12,7 @@ mod trailing;
 mod types;
 mod utils;
 
-use coin_selection::select_coin_indices_py;
+use coin_selection::{select_coin_indices_py, select_forager_candidates_py};
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use python::*;
@@ -66,6 +66,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(update_trailing_bundle_py, m)?)?;
     m.add_function(wrap_pyfunction!(equity_hard_stop_step_py, m)?)?;
     m.add_function(wrap_pyfunction!(select_coin_indices_py, m)?)?;
+    m.add_function(wrap_pyfunction!(select_forager_candidates_py, m)?)?;
 
     Ok(())
 }

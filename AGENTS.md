@@ -26,10 +26,12 @@ python3 src/main.py -u {account_name}
 
 1. Rust is source of truth for order behavior.
 - Behavior changes in entries/closes/risk/unstuck belong in `passivbot-rust/src/`, not Python patches.
+- Coin selection, forager shortlist construction, and slot-filling behavior are trading-critical and belong in Rust.
 2. Stateless behavior is required.
 - Bot behavior must be reproducible after restart from exchange state + config.
 3. Fail loudly in trading-critical paths.
 - Default is hard-fail for exchange data, EMA inputs, risk gates, and order construction.
+- Coin-selection / shortlist inputs are trading-critical inputs.
 - Fallbacks are exceptions, not defaults.
 - See `docs/ai/error_contract.md` for the full fallback matrix.
 4. Keep terminology and signed-qty conventions exact.
@@ -38,7 +40,11 @@ python3 src/main.py -u {account_name}
 - `qty` and `pos_size` are signed in internal logic.
 5. EMA spans are floats.
 - Do not round derived spans like `sqrt(span0 * span1)`.
-6. Avoid scope creep.
+6. Config correctness is centralized.
+- Config hydration, migration, renaming, and default insertion belong in `format_config()` and related config-formatting code.
+- Downstream consumers must assume required config keys exist and are valid.
+- Do not add downstream `dict.get(required_key, default)`, ad hoc fallback defaults, or on-the-fly config repair for required params.
+7. Avoid scope creep.
 - Make only requested or strictly necessary changes.
 
 ## Before Coding

@@ -21,6 +21,52 @@ pub struct SelectionConfig {
     pub require_forager: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForagerPositionSide {
+    Long,
+    Short,
+}
+
+impl ForagerPositionSide {
+    fn from_str(value: &str) -> Result<Self, ForagerSelectionError> {
+        match value {
+            "long" => Ok(Self::Long),
+            "short" => Ok(Self::Short),
+            other => Err(ForagerSelectionError::InvalidPositionSide(
+                other.to_string(),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ForagerCandidate {
+    pub index: usize,
+    pub enabled: bool,
+    pub volume_score: f64,
+    pub volatility_score: f64,
+    pub bid: f64,
+    pub ask: f64,
+    pub ema_lower: f64,
+    pub ema_upper: f64,
+    pub entry_initial_ema_dist: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForagerSelectionConfig {
+    pub slots_to_fill: usize,
+    pub volume_drop_pct: f64,
+    pub weights: ForagerScoreWeights,
+    pub require_forager: bool,
+    pub position_side: ForagerPositionSide,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForagerSelectionError {
+    InvalidPositionSide(String),
+    NonFiniteInput { field: &'static str, index: usize },
+}
+
 impl SelectionConfig {
     fn clamp_pct(value: f64) -> f64 {
         if value.is_finite() {
@@ -33,6 +79,147 @@ impl SelectionConfig {
     fn volume_drop(&self) -> f64 {
         Self::clamp_pct(self.volume_drop_pct)
     }
+}
+
+impl ForagerSelectionConfig {
+    fn volume_drop(&self) -> f64 {
+        SelectionConfig::clamp_pct(self.volume_drop_pct)
+    }
+
+    fn volume_required(&self) -> bool {
+        self.volume_drop() > 0.0 || self.weights.volume != 0.0
+    }
+
+    fn volatility_required(&self) -> bool {
+        self.weights.volatility != 0.0
+    }
+
+    fn ema_readiness_required(&self) -> bool {
+        self.weights.ema_readiness != 0.0
+    }
+}
+
+fn validate_forager_weights(weights: &ForagerScoreWeights) -> Result<(), ForagerSelectionError> {
+    let total_weight = weights.volume + weights.ema_readiness + weights.volatility;
+    if !total_weight.is_finite() || total_weight <= 0.0 {
+        return Err(ForagerSelectionError::NonFiniteInput {
+            field: "forager_score_weights",
+            index: 0,
+        });
+    }
+    Ok(())
+}
+
+fn validate_required_score(
+    value: f64,
+    field: &'static str,
+    index: usize,
+) -> Result<f64, ForagerSelectionError> {
+    if !value.is_finite() {
+        return Err(ForagerSelectionError::NonFiniteInput { field, index });
+    }
+    Ok(value)
+}
+
+fn compute_ema_readiness_score(
+    candidate: &ForagerCandidate,
+    cfg: &ForagerSelectionConfig,
+) -> Result<f64, ForagerSelectionError> {
+    let entry_initial_ema_dist = validate_required_score(
+        candidate.entry_initial_ema_dist,
+        "entry_initial_ema_dist",
+        candidate.index,
+    )?;
+    match cfg.position_side {
+        ForagerPositionSide::Long => {
+            let market_price =
+                validate_required_score(candidate.bid, "forager_market_bid", candidate.index)?;
+            let ema_lower =
+                validate_required_score(candidate.ema_lower, "forager_ema_lower", candidate.index)?;
+            let entry_threshold = ema_lower * (1.0 - entry_initial_ema_dist);
+            if !(market_price > 0.0 && entry_threshold.is_finite() && entry_threshold > 0.0) {
+                return Err(ForagerSelectionError::NonFiniteInput {
+                    field: "forager_ema_readiness",
+                    index: candidate.index,
+                });
+            }
+            Ok(market_price / entry_threshold - 1.0)
+        }
+        ForagerPositionSide::Short => {
+            let market_price =
+                validate_required_score(candidate.ask, "forager_market_ask", candidate.index)?;
+            let ema_upper =
+                validate_required_score(candidate.ema_upper, "forager_ema_upper", candidate.index)?;
+            let entry_threshold = ema_upper * (1.0 + entry_initial_ema_dist);
+            if !(market_price > 0.0 && entry_threshold.is_finite() && entry_threshold > 0.0) {
+                return Err(ForagerSelectionError::NonFiniteInput {
+                    field: "forager_ema_readiness",
+                    index: candidate.index,
+                });
+            }
+            Ok(1.0 - market_price / entry_threshold)
+        }
+    }
+}
+
+fn build_coin_features(
+    candidates: &[ForagerCandidate],
+    cfg: &ForagerSelectionConfig,
+) -> Result<Vec<CoinFeature>, ForagerSelectionError> {
+    let require_volume = cfg.volume_required();
+    let require_volatility = cfg.volatility_required();
+    let require_ema_readiness = cfg.ema_readiness_required();
+
+    candidates
+        .iter()
+        .map(|candidate| {
+            let volume_score = if require_volume {
+                validate_required_score(
+                    candidate.volume_score,
+                    "forager_volume_score",
+                    candidate.index,
+                )?
+            } else {
+                candidate.volume_score
+            };
+            let volatility_score = if require_volatility {
+                validate_required_score(
+                    candidate.volatility_score,
+                    "forager_volatility_score",
+                    candidate.index,
+                )?
+            } else {
+                candidate.volatility_score
+            };
+            let ema_readiness_score = if require_ema_readiness {
+                compute_ema_readiness_score(candidate, cfg)?
+            } else {
+                0.0
+            };
+            Ok(CoinFeature {
+                index: candidate.index,
+                enabled: candidate.enabled,
+                volume_score,
+                volatility_score,
+                ema_readiness_score,
+            })
+        })
+        .collect()
+}
+
+pub fn select_forager_candidates(
+    candidates: &[ForagerCandidate],
+    cfg: &ForagerSelectionConfig,
+) -> Result<Vec<usize>, ForagerSelectionError> {
+    validate_forager_weights(&cfg.weights)?;
+    let features = build_coin_features(candidates, cfg)?;
+    let selection_cfg = SelectionConfig {
+        slots_to_fill: cfg.slots_to_fill,
+        volume_drop_pct: cfg.volume_drop_pct,
+        weights: cfg.weights.clone(),
+        require_forager: cfg.require_forager,
+    };
+    Ok(select_coins(&features, &selection_cfg))
 }
 
 pub fn select_coins(features: &[CoinFeature], cfg: &SelectionConfig) -> Vec<usize> {
@@ -255,6 +442,22 @@ impl<'source> FromPyObject<'source> for ForagerScoreWeights {
     }
 }
 
+impl<'source> FromPyObject<'source> for ForagerCandidate {
+    fn extract(ob: &'source PyAny) -> PyResult<Self> {
+        Ok(Self {
+            index: ob.get_item("index")?.extract::<usize>()?,
+            enabled: ob.get_item("enabled")?.extract::<bool>()?,
+            volume_score: ob.get_item("volume_score")?.extract::<f64>()?,
+            volatility_score: ob.get_item("volatility_score")?.extract::<f64>()?,
+            bid: ob.get_item("bid")?.extract::<f64>()?,
+            ask: ob.get_item("ask")?.extract::<f64>()?,
+            ema_lower: ob.get_item("ema_lower")?.extract::<f64>()?,
+            ema_upper: ob.get_item("ema_upper")?.extract::<f64>()?,
+            entry_initial_ema_dist: ob.get_item("entry_initial_ema_dist")?.extract::<f64>()?,
+        })
+    }
+}
+
 #[pyfunction]
 pub fn select_coin_indices_py(
     py_features: Vec<CoinFeatureInput>,
@@ -263,12 +466,11 @@ pub fn select_coin_indices_py(
     weights: ForagerScoreWeights,
     require_forager: bool,
 ) -> PyResult<Vec<usize>> {
-    let total_weight = weights.volume + weights.ema_readiness + weights.volatility;
-    if !total_weight.is_finite() || total_weight <= 0.0 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
+    validate_forager_weights(&weights).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(
             "forager_score_weights must contain at least one positive finite weight",
-        ));
-    }
+        )
+    })?;
     let features: Vec<CoinFeature> = py_features.into_iter().map(Into::into).collect();
     let cfg = SelectionConfig {
         slots_to_fill,
@@ -279,9 +481,67 @@ pub fn select_coin_indices_py(
     Ok(select_coins(&features, &cfg))
 }
 
+#[pyfunction]
+pub fn select_forager_candidates_py(
+    py_candidates: Vec<ForagerCandidate>,
+    pside: &str,
+    slots_to_fill: usize,
+    volume_drop_pct: f64,
+    weights: ForagerScoreWeights,
+    require_forager: bool,
+) -> PyResult<Vec<usize>> {
+    let position_side = ForagerPositionSide::from_str(pside).map_err(|err| match err {
+        ForagerSelectionError::InvalidPositionSide(value) => {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "invalid forager position side: {value}"
+            ))
+        }
+        _ => pyo3::exceptions::PyValueError::new_err("invalid forager position side"),
+    })?;
+    let cfg = ForagerSelectionConfig {
+        slots_to_fill,
+        volume_drop_pct,
+        weights,
+        require_forager,
+        position_side,
+    };
+    select_forager_candidates(&py_candidates, &cfg).map_err(|err| match err {
+        ForagerSelectionError::InvalidPositionSide(value) => {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "invalid forager position side: {value}"
+            ))
+        }
+        ForagerSelectionError::NonFiniteInput { field, index } => {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "invalid forager candidate input '{field}' at index {index}"
+            ))
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_candidate(
+        index: usize,
+        volume: f64,
+        volatility: f64,
+        bid: f64,
+        ask: f64,
+    ) -> ForagerCandidate {
+        ForagerCandidate {
+            index,
+            enabled: true,
+            volume_score: volume,
+            volatility_score: volatility,
+            bid,
+            ask,
+            ema_lower: 100.0,
+            ema_upper: 100.0,
+            entry_initial_ema_dist: 0.1,
+        }
+    }
 
     fn make_feature(index: usize, volume: f64, volatility: f64, ema_readiness: f64) -> CoinFeature {
         CoinFeature {
@@ -299,6 +559,16 @@ mod tests {
             volume_drop_pct: 0.0,
             weights: ForagerScoreWeights::default(),
             require_forager: true,
+        }
+    }
+
+    fn default_forager_config(pside: ForagerPositionSide) -> ForagerSelectionConfig {
+        ForagerSelectionConfig {
+            slots_to_fill: 3,
+            volume_drop_pct: 0.0,
+            weights: ForagerScoreWeights::default(),
+            require_forager: true,
+            position_side: pside,
         }
     }
 
@@ -395,5 +665,71 @@ mod tests {
             ..default_config()
         };
         assert_eq!(select_coins(&features, &cfg), vec![0, 1]);
+    }
+
+    #[test]
+    fn select_forager_candidates_uses_bid_for_long_readiness() {
+        let candidates = vec![
+            make_candidate(0, 1.0, 1.0, 88.2, 88.2),
+            make_candidate(1, 1.0, 1.0, 90.9, 90.9),
+        ];
+        let cfg = ForagerSelectionConfig {
+            slots_to_fill: 1,
+            weights: ForagerScoreWeights {
+                volume: 0.0,
+                ema_readiness: 1.0,
+                volatility: 0.0,
+            },
+            ..default_forager_config(ForagerPositionSide::Long)
+        };
+        assert_eq!(
+            select_forager_candidates(&candidates, &cfg).unwrap(),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn select_forager_candidates_uses_ask_for_short_readiness() {
+        let candidates = vec![
+            make_candidate(0, 1.0, 1.0, 109.0, 109.0),
+            make_candidate(1, 1.0, 1.0, 111.0, 111.0),
+        ];
+        let cfg = ForagerSelectionConfig {
+            slots_to_fill: 1,
+            weights: ForagerScoreWeights {
+                volume: 0.0,
+                ema_readiness: 1.0,
+                volatility: 0.0,
+            },
+            ..default_forager_config(ForagerPositionSide::Short)
+        };
+        assert_eq!(
+            select_forager_candidates(&candidates, &cfg).unwrap(),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn select_forager_candidates_rejects_missing_required_input() {
+        let candidates = vec![ForagerCandidate {
+            ema_lower: f64::NAN,
+            ..make_candidate(0, 1.0, 1.0, 90.0, 90.0)
+        }];
+        let cfg = ForagerSelectionConfig {
+            slots_to_fill: 1,
+            weights: ForagerScoreWeights {
+                volume: 0.0,
+                ema_readiness: 1.0,
+                volatility: 0.0,
+            },
+            ..default_forager_config(ForagerPositionSide::Long)
+        };
+        assert_eq!(
+            select_forager_candidates(&candidates, &cfg),
+            Err(ForagerSelectionError::NonFiniteInput {
+                field: "forager_ema_lower",
+                index: 0,
+            })
+        );
     }
 }

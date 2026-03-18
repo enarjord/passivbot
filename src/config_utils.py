@@ -632,8 +632,8 @@ PB_MULTI_FIELD_MAP = {
     "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_we_weight",
     "ema_span_0": "ema_span_0",
     "ema_span_1": "ema_span_1",
-    "filter_noisiness_rolling_window": "filter_volatility_ema_span",
-    "filter_volume_rolling_window": "filter_volume_ema_span",
+    "filter_noisiness_rolling_window": "forager_volatility_ema_span",
+    "filter_volume_rolling_window": "forager_volume_ema_span",
 }
 PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
 
@@ -714,10 +714,12 @@ def _build_from_live_only(config: dict, template: dict) -> dict:
 
 
 LEGACY_FILTER_KEYS = {
-    "filter_noisiness_rolling_window": "filter_volatility_ema_span",
-    "filter_noisiness_ema_span": "filter_volatility_ema_span",
-    "filter_log_range_ema_span": "filter_volatility_ema_span",
-    "filter_volume_rolling_window": "filter_volume_ema_span",
+    "filter_noisiness_rolling_window": "forager_volatility_ema_span",
+    "filter_noisiness_ema_span": "forager_volatility_ema_span",
+    "filter_log_range_ema_span": "forager_volatility_ema_span",
+    "filter_volatility_ema_span": "forager_volatility_ema_span",
+    "filter_volume_rolling_window": "forager_volume_ema_span",
+    "filter_volume_ema_span": "forager_volume_ema_span",
 }
 
 LEGACY_FORAGER_KEYS = {
@@ -734,14 +736,18 @@ LEGACY_ENTRY_GRID_KEYS = {
 }
 
 LEGACY_BOUNDS_KEYS = {
-    "long_filter_noisiness_rolling_window": "long_filter_volatility_ema_span",
-    "long_filter_noisiness_ema_span": "long_filter_volatility_ema_span",
-    "long_filter_volume_rolling_window": "long_filter_volume_ema_span",
-    "long_filter_log_range_ema_span": "long_filter_volatility_ema_span",
-    "short_filter_noisiness_rolling_window": "short_filter_volatility_ema_span",
-    "short_filter_noisiness_ema_span": "short_filter_volatility_ema_span",
-    "short_filter_volume_rolling_window": "short_filter_volume_ema_span",
-    "short_filter_log_range_ema_span": "short_filter_volatility_ema_span",
+    "long_filter_noisiness_rolling_window": "long_forager_volatility_ema_span",
+    "long_filter_noisiness_ema_span": "long_forager_volatility_ema_span",
+    "long_filter_volume_rolling_window": "long_forager_volume_ema_span",
+    "long_filter_log_range_ema_span": "long_forager_volatility_ema_span",
+    "long_filter_volatility_ema_span": "long_forager_volatility_ema_span",
+    "long_filter_volume_ema_span": "long_forager_volume_ema_span",
+    "short_filter_noisiness_rolling_window": "short_forager_volatility_ema_span",
+    "short_filter_noisiness_ema_span": "short_forager_volatility_ema_span",
+    "short_filter_volume_rolling_window": "short_forager_volume_ema_span",
+    "short_filter_log_range_ema_span": "short_forager_volatility_ema_span",
+    "short_filter_volatility_ema_span": "short_forager_volatility_ema_span",
+    "short_filter_volume_ema_span": "short_forager_volume_ema_span",
     "long_filter_volume_drop_pct": "long_forager_volume_drop_pct",
     "short_filter_volume_drop_pct": "short_forager_volume_drop_pct",
     "long_entry_grid_spacing_weight": "long_entry_grid_spacing_we_weight",
@@ -756,6 +762,18 @@ LEGACY_BOUNDS_KEYS = {
     "short_entry_trailing_retracement_log_weight": "short_entry_trailing_retracement_volatility_weight",
     "long_entry_trailing_threshold_log_weight": "long_entry_trailing_threshold_volatility_weight",
     "short_entry_trailing_threshold_log_weight": "short_entry_trailing_threshold_volatility_weight",
+}
+
+FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
+    "forager_volatility_ema_span": "filter_volatility_ema_span",
+    "forager_volume_ema_span": "filter_volume_ema_span",
+}
+
+FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
+    "long_forager_volatility_ema_span": "long_filter_volatility_ema_span",
+    "long_forager_volume_ema_span": "long_filter_volume_ema_span",
+    "short_forager_volatility_ema_span": "short_filter_volatility_ema_span",
+    "short_forager_volume_ema_span": "short_filter_volume_ema_span",
 }
 
 
@@ -1069,23 +1087,29 @@ def _ensure_bot_defaults_and_bounds(
                 [0.01, 3.0],
             ),
             (
-                "filter_volatility_ema_span",
+                "forager_volatility_ema_span",
                 result["bot"][pside].get(
-                    "filter_volatility_ema_span",
+                    "forager_volatility_ema_span",
                     result["bot"][pside].get(
+                        "filter_volatility_ema_span",
+                        result["bot"][pside].get(
                         "filter_rolling_window",
                         result["live"].get("ohlcv_rolling_window", 60.0),
+                    ),
                     ),
                 ),
                 [10.0, 1440.0],
             ),
             (
-                "filter_volume_ema_span",
+                "forager_volume_ema_span",
                 result["bot"][pside].get(
-                    "filter_volume_ema_span",
+                    "forager_volume_ema_span",
                     result["bot"][pside].get(
+                        "filter_volume_ema_span",
+                        result["bot"][pside].get(
                         "filter_rolling_window",
                         result["live"].get("ohlcv_rolling_window", 60.0),
+                    ),
                     ),
                 ),
                 [10.0, 1440.0],
@@ -1144,6 +1168,37 @@ def _ensure_bot_defaults_and_bounds(
             )
             if tracker is not None:
                 tracker.add(["bot", pside, "forager_score_weights"], weights)
+        for weight_key in ("volume", "ema_readiness", "volatility"):
+            opt_key = f"{pside}_forager_score_weights_{weight_key}"
+            if opt_key not in bounds:
+                bounds[opt_key] = [0.0, 1.0]
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "adding missing optimize parameter %s %s: %s",
+                    pside,
+                    opt_key,
+                    bounds[opt_key],
+                )
+                if tracker is not None:
+                    tracker.add(["optimize", "bounds", opt_key], bounds[opt_key])
+
+
+def _apply_forager_internal_aliases(result: dict) -> None:
+    for pside in BOT_POSITION_SIDES:
+        bot_cfg = result.get("bot", {}).get(pside, {})
+        if not isinstance(bot_cfg, dict):
+            continue
+        for canonical_key, internal_key in FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS.items():
+            if canonical_key in bot_cfg and internal_key not in bot_cfg:
+                bot_cfg[internal_key] = deepcopy(bot_cfg[canonical_key])
+
+    bounds = result.get("optimize", {}).get("bounds", {})
+    if not isinstance(bounds, dict):
+        return
+    for canonical_key, internal_key in FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS.items():
+        if canonical_key in bounds and internal_key not in bounds:
+            bounds[internal_key] = deepcopy(bounds[canonical_key])
 
 
 def _validate_forager_config(result: dict) -> None:
@@ -1564,6 +1619,7 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
 
     _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
     _validate_forager_config(result)
+    _apply_forager_internal_aliases(result)
 
     _normalize_position_counts(result, tracker=tracker)
     if coin_sources_input is not None:
@@ -2520,8 +2576,8 @@ def get_template_config():
                 "entry_trailing_threshold_volatility_weight": 0.0,
                 "entry_trailing_threshold_we_weight": 0.0,
                 "entry_volatility_ema_span_hours": 72,
-                "filter_volatility_ema_span": 60.0,
-                "filter_volume_ema_span": 60.0,
+                "forager_volatility_ema_span": 60.0,
+                "forager_volume_ema_span": 60.0,
                 "forager_volume_drop_pct": 0.95,
                 "forager_score_weights": {
                     "volume": 0.0,
@@ -2571,8 +2627,8 @@ def get_template_config():
                 "entry_trailing_threshold_volatility_weight": 0.0,
                 "entry_trailing_threshold_we_weight": 0.0,
                 "entry_volatility_ema_span_hours": 72,
-                "filter_volatility_ema_span": 60.0,
-                "filter_volume_ema_span": 60.0,
+                "forager_volatility_ema_span": 60.0,
+                "forager_volume_ema_span": 60.0,
                 "forager_volume_drop_pct": 0.95,
                 "forager_score_weights": {
                     "volume": 0.0,
@@ -2664,9 +2720,12 @@ def get_template_config():
                 "long_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
                 "long_entry_trailing_threshold_we_weight": [0.0, 20.0],
                 "long_entry_volatility_ema_span_hours": [24.0, 336.0],
-                "long_filter_volatility_ema_span": [10.0, 1440.0],
-                "long_filter_volume_ema_span": [10.0, 1440.0],
+                "long_forager_volatility_ema_span": [10.0, 1440.0],
+                "long_forager_volume_ema_span": [10.0, 1440.0],
                 "long_forager_volume_drop_pct": [0.0, 1.0],
+                "long_forager_score_weights_volume": [0.0, 1.0],
+                "long_forager_score_weights_ema_readiness": [0.0, 1.0],
+                "long_forager_score_weights_volatility": [0.0, 1.0],
                 "long_n_positions": [1.0, 20.0],
                 "long_risk_twel_enforcer_threshold": [0.9, 1.01],
                 "long_risk_we_excess_allowance_pct": [0.0, 0.5],
@@ -2700,9 +2759,12 @@ def get_template_config():
                 "short_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
                 "short_entry_trailing_threshold_we_weight": [0.0, 20.0],
                 "short_entry_volatility_ema_span_hours": [24.0, 336.0],
-                "short_filter_volatility_ema_span": [10.0, 1440.0],
-                "short_filter_volume_ema_span": [10.0, 1440.0],
+                "short_forager_volatility_ema_span": [10.0, 1440.0],
+                "short_forager_volume_ema_span": [10.0, 1440.0],
                 "short_forager_volume_drop_pct": [0.0, 1.0],
+                "short_forager_score_weights_volume": [0.0, 1.0],
+                "short_forager_score_weights_ema_readiness": [0.0, 1.0],
+                "short_forager_score_weights_volatility": [0.0, 1.0],
                 "short_hsl_cooldown_minutes_after_red": [0.0, 0.0],
                 "short_hsl_ema_span_minutes": [60.0, 60.0],
                 "short_hsl_red_threshold": [0.25, 0.25],

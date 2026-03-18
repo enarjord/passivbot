@@ -318,6 +318,50 @@ def test_format_config_rejects_all_zero_forager_weights():
         format_config(current, verbose=False, live_only=True)
 
 
+def test_get_template_config_uses_canonical_forager_span_keys_and_weight_bounds():
+    template = _template()
+
+    assert "forager_volatility_ema_span" in template["bot"]["long"]
+    assert "forager_volume_ema_span" in template["bot"]["long"]
+    assert "filter_volatility_ema_span" not in template["bot"]["long"]
+    assert "filter_volume_ema_span" not in template["bot"]["long"]
+
+    bounds = template["optimize"]["bounds"]
+    assert "long_forager_volatility_ema_span" in bounds
+    assert "long_forager_volume_ema_span" in bounds
+    assert "short_forager_volatility_ema_span" in bounds
+    assert "short_forager_volume_ema_span" in bounds
+    assert "long_forager_score_weights_volume" in bounds
+    assert "long_forager_score_weights_ema_readiness" in bounds
+    assert "long_forager_score_weights_volatility" in bounds
+    assert "short_forager_score_weights_volume" in bounds
+    assert "short_forager_score_weights_ema_readiness" in bounds
+    assert "short_forager_score_weights_volatility" in bounds
+
+
+def test_format_config_adds_internal_forager_aliases_for_runtime_compatibility():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"].pop("filter_volatility_ema_span", None)
+    current["bot"]["long"].pop("filter_volume_ema_span", None)
+    current["optimize"]["bounds"].pop("long_filter_volatility_ema_span", None)
+    current["optimize"]["bounds"].pop("long_filter_volume_ema_span", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["filter_volatility_ema_span"] == out["bot"]["long"][
+        "forager_volatility_ema_span"
+    ]
+    assert out["bot"]["long"]["filter_volume_ema_span"] == out["bot"]["long"][
+        "forager_volume_ema_span"
+    ]
+    assert out["optimize"]["bounds"]["long_filter_volatility_ema_span"] == out["optimize"][
+        "bounds"
+    ]["long_forager_volatility_ema_span"]
+    assert out["optimize"]["bounds"]["long_filter_volume_ema_span"] == out["optimize"]["bounds"][
+        "long_forager_volume_ema_span"
+    ]
+
+
 def test_format_config_is_idempotent_for_lean_live_config():
     tmpl = _template()
     lean_live = {"bot": copy.deepcopy(tmpl["bot"]), "live": copy.deepcopy(tmpl["live"])}
