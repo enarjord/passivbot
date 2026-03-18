@@ -9,7 +9,7 @@
         "coin_sources": {},
         "compress_cache": true,
         "dynamic_wel_by_tradability": true,
-        "end_date": "2026-03-16",
+        "end_date": "now",
         "exchanges": ["binance","bybit"],
         "filter_by_min_effective_cost": false,
         "gap_tolerance_ohlcvs_minutes": 120,
