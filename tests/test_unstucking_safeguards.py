@@ -635,6 +635,87 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    import passivbot_rust as pbr
+
+    bot.coin_overrides = {}
+    bot.PB_mode_stop = {"long": "manual", "short": "manual"}
+    bot.markets_dict = {symbol: {"active": True}}
+    bot.effective_min_cost = {symbol: 1.0}
+    bot.trailing_prices = {
+        symbol: {
+            "long": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+            "short": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+        }
+    }
+    _hsl_cfg(bot, "long")["enabled"] = True
+    _hsl_cfg(bot, "short")["enabled"] = False
+    state = _hsl_state(bot, "long")
+    state["runtime"]._initialized = True
+    state["runtime"]._red_latched = True
+    state["runtime"]._tier = "red"
+    state["halted"] = False
+
+    async def fake_update_effective_min_cost(self):
+        return None
+
+    async def fake_get_filtered_coins(self, pside, max_network_fetches=None):
+        return []
+
+    async def fake_update_trailing_data(self):
+        return None
+
+    async def fake_load_bundle(self, symbols, modes):
+        m1_close = {symbol: {1.0: 100.0, 2.0: 100.0}}
+        m1_volume = {symbol: {10.0: 1_000.0}}
+        m1_log_range = {symbol: {10.0: 0.01}}
+        h1_log_range = {symbol: {10.0: 0.01}}
+        return m1_close, m1_volume, m1_log_range, h1_log_range, {}, {}
+
+    captured = {}
+
+    def fake_compute(input_json: str) -> str:
+        captured["input"] = json.loads(input_json)
+        return '{"orders": [], "diagnostics": {"warnings": []}}'
+
+    monkeypatch.setattr(bot, "update_effective_min_cost", types.MethodType(fake_update_effective_min_cost, bot))
+    monkeypatch.setattr(bot, "refresh_approved_ignored_coins_lists", lambda: None)
+    monkeypatch.setattr(bot, "set_wallet_exposure_limits", lambda: None)
+    monkeypatch.setattr(bot, "is_forager_mode", lambda pside: False)
+    monkeypatch.setattr(bot, "get_max_n_positions", lambda pside: 1 if pside == "long" else 0)
+    monkeypatch.setattr(bot, "get_current_n_positions", lambda pside: 1 if pside == "long" else 0)
+    monkeypatch.setattr(bot, "get_filtered_coins", types.MethodType(fake_get_filtered_coins, bot))
+    monkeypatch.setattr(bot, "update_trailing_data", types.MethodType(fake_update_trailing_data, bot))
+    monkeypatch.setattr(bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot))
+    monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
+
+    bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
+    assert bot._runtime_forced_modes["long"][symbol] == "panic"
+
+    await bot.execution_cycle()
+    assert bot.PB_modes["long"][symbol] == "panic"
+
+    _orders, snapshot = await bot.calc_ideal_orders_orchestrator(return_snapshot=True)
+
+    rust_symbol = captured["input"]["symbols"][0]
+    assert rust_symbol["long"]["mode"] == "panic"
+    assert snapshot["orchestrator_input"]["symbols"][0]["long"]["mode"] == "panic"
+
+
+@pytest.mark.asyncio
 async def test_manual_mode_skips_side_orders(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)

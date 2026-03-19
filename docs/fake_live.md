@@ -77,6 +77,48 @@ Scenarios also define:
 - symbol metadata such as `price_step`, `qty_step`, `min_qty`, `min_cost`
 - optional assertions for end-to-end validation
 
+Minimal top-level fields:
+
+- `name`
+- `exchange: fake`
+- `symbols`
+- one of `timeline` or `replay`
+
+Common optional fields:
+
+- `start_time`
+- `tick_interval_seconds`
+- `boot_index`
+- `run_initial_cycle`
+- `account`
+- `assertions`
+
+Minimal shape example:
+
+```hjson
+{
+  name: my_fake_case
+  exchange: fake
+  boot_index: 0
+  account: {
+    balance: 1000.0
+  }
+  symbols: {
+    "BTC/USDT:USDT": {
+      price_step: 0.1
+      qty_step: 0.001
+      min_qty: 0.001
+      min_cost: 5.0
+    }
+  }
+  timeline: [
+    {t: 0, prices: {"BTC/USDT:USDT": 100.0}}
+    {t: 1, prices: {"BTC/USDT:USDT": 99.0}}
+    {t: 2, prices: {"BTC/USDT:USDT": 101.0}}
+  ]
+}
+```
+
 See:
 
 - [hsl_long_red_restart.hjson](/Users/eiriknarjord/passivbot/scenarios/fake_live/hsl_long_red_restart.hjson)
@@ -109,6 +151,21 @@ The fake exchange can be selected through `api-keys.json` style user info:
 ```
 
 An example entry is included in [api-keys.json.example](/Users/eiriknarjord/passivbot/api-keys.json.example).
+
+## Troubleshooting
+
+Common issues:
+
+- `Config user resolved to exchange '...' expected 'fake'`
+  Use `--user <fake_user>` or point `live.user` at a fake entry from [api-keys.json.example](/Users/eiriknarjord/passivbot/api-keys.json.example).
+- `Fake exchange requires live.fake_scenario_path or api-keys fake_scenario_path`
+  Pass a scenario on the command line and make sure the fake user resolves to `exchange: "fake"`.
+- `Fake scenario must define timeline rows or replay candles`
+  Add either `timeline` rows or `replay.symbols.<symbol>.candles` / `.file`.
+- Unexpected fills or no fills
+  Check symbol metadata such as `price_step`, `qty_step`, `min_qty`, and `min_cost`, and inspect `snapshots/step_*.json`.
+- HSL replay does not do what you expect
+  Inspect `hsl_trace.json` and `fake_live.log` first. The harness uses scenario time, not wall-clock time.
 
 ## When To Use It
 
