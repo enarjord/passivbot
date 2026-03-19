@@ -28,6 +28,20 @@ python3 src/tools/iterative_backtester.py --config configs/your_config.json --sy
 python3 src/tools/iterative_history_plot.py backtests/.../fills.csv
 ```
 
+## Fake live harness
+
+`src/tools/run_fake_live.py` runs the live bot against a deterministic local `fake` exchange. This is useful for reproducing live issues, replaying HSL scenarios, and inspecting step-by-step live-bot behavior without touching a real exchange.
+
+```shell
+PYTHONPATH=src python3 src/tools/run_fake_live.py \
+  configs/fake_live_hsl_btc.hjson \
+  scenarios/fake_live/hsl_long_red_restart.hjson \
+  --user fake_hsl_restart_test \
+  --snapshot-each-step
+```
+
+See [fake_live.md](/Users/eiriknarjord/passivbot/docs/fake_live.md) for scenario structure, outputs, and included examples.
+
 ## Historical data helpers
 
 - `src/tools/pad_historical_daily.py` – Ensures daily OHLCV shards are present for the downloader when new coins are added.

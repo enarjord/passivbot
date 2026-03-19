@@ -1340,6 +1340,10 @@ class Passivbot:
                 self._equity_hard_stop_clear_runtime_forced_modes(pside)
                 continue
             state = self._hsl_state(pside)
+            if self._equity_hard_stop_runtime_red_latched(pside) and not state["halted"]:
+                # Active RED supervisor must keep symbols in panic until flatness is confirmed.
+                self._equity_hard_stop_set_red_runtime_forced_modes(pside)
+                continue
             if not state["halted"]:
                 self._equity_hard_stop_clear_runtime_forced_modes(pside)
                 continue
@@ -7946,6 +7950,10 @@ def setup_bot(config):
         from exchanges.paradex import ParadexBot
 
         bot = ParadexBot(config)
+    elif user_info["exchange"] == "fake":
+        from exchanges.fake import FakeBot
+
+        bot = FakeBot(config)
     else:
         # Generic CCXTBot for any CCXT-supported exchange
         from exchanges.ccxt_bot import CCXTBot
