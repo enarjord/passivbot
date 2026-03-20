@@ -295,10 +295,11 @@
     "logging": {
         "level": 1,
         "memory_snapshot_interval_minutes": 30,
+        "silence_watchdog_seconds": 60,
         "volume_refresh_info_threshold_seconds": 30
     },
     "monitor": {
-        "enabled": false,
+        "enabled": true,
         "root_dir": "monitor",
         "snapshot_interval_seconds": 1,
         "checkpoint_interval_minutes": 10,

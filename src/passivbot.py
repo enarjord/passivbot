@@ -36,7 +36,11 @@ from fill_events_manager import (
 )
 from monitor_publisher import MonitorPublisher
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
-from logging_setup import configure_logging, resolve_log_level
+from logging_setup import (
+    configure_logging,
+    get_last_log_activity_monotonic,
+    resolve_log_level,
+)
 from utils import (
     load_markets,
     coin_to_symbol,
@@ -546,6 +550,7 @@ class Passivbot:
         self._last_action_summary: dict[tuple[str, str], str] = {}
         self.start_time_ms = utc_ms()
         self._monitor_last_equity = float(self.balance_raw)
+        self._monitor_stop_emitted = False
         self.monitor_publisher: Optional[MonitorPublisher] = None
         self.monitor_enabled = bool(require_config_value(config, "monitor.enabled"))
         if self.monitor_enabled:
@@ -733,6 +738,30 @@ class Passivbot:
         self._health_rate_limits = 0
         self._health_last_summary_ms = 0
         self._health_summary_interval_ms = 15 * 60 * 1000  # 15 minutes
+        self._last_loop_duration_ms = 0
+
+        raw_silence_watchdog = get_optional_config_value(
+            config, "logging.silence_watchdog_seconds", 60.0
+        )
+        try:
+            silence_watchdog_seconds = float(raw_silence_watchdog)
+        except Exception:
+            logging.warning(
+                "Unable to parse logging.silence_watchdog_seconds=%r; using fallback 60",
+                raw_silence_watchdog,
+            )
+            silence_watchdog_seconds = 60.0
+        if silence_watchdog_seconds < 0:
+            logging.warning(
+                "logging.silence_watchdog_seconds=%r is negative; disabling",
+                raw_silence_watchdog,
+            )
+            silence_watchdog_seconds = 0.0
+        self._log_silence_watchdog_seconds = float(silence_watchdog_seconds)
+        self._log_silence_watchdog_phase = "boot"
+        self._log_silence_watchdog_stage = "idle"
+        self._log_silence_watchdog_task: Optional[asyncio.Task] = None
+        self._bot_ready = False
 
         # Unstuck logging throttle
         self._unstuck_last_log_ms = 0
@@ -1530,160 +1559,173 @@ class Passivbot:
     async def _equity_hard_stop_initialize_from_history(self) -> None:
         if not self._equity_hard_stop_enabled():
             return
-        self._equity_hard_stop_reset_state()
-        signal_mode = self._equity_hard_stop_signal_mode()
-        history = await self.get_balance_equity_history(current_balance=self.get_raw_balance())
-        if "timeline" not in history:
-            raise ValueError("get_balance_equity_history() missing required key: timeline")
-        timeline = history["timeline"]
-        if not isinstance(timeline, list):
-            raise TypeError(
-                f"get_balance_equity_history()['timeline'] must be a list, got {type(timeline).__name__}"
+        prev_phase = getattr(self, "_log_silence_watchdog_phase", "runtime")
+        prev_stage = getattr(self, "_log_silence_watchdog_stage", "idle")
+        self._set_log_silence_watchdog_context(
+            phase=prev_phase, stage="equity_hard_stop_initialize_from_history"
+        )
+        try:
+            self._equity_hard_stop_reset_state()
+            signal_mode = self._equity_hard_stop_signal_mode()
+            logging.info(
+                "[risk] HSL history replay starting | lookback_days=%.3f signal_mode=%s",
+                float(self.live_value("pnls_max_lookback_days")),
+                signal_mode,
             )
-        now_ms = int(self.get_exchange_time())
-        current_balance = float(self.get_raw_balance())
-        current_realized_total = float(self._equity_hard_stop_realized_pnl_now())
-        current_upnl_by_pside = {
-            pside: float(await self._calc_upnl_sum_strict(pside)) for pside in self._hsl_psides()
-        }
-        current_upnl_total = float(sum(current_upnl_by_pside.values()))
-        n_rows = {pside: 0 for pside in self._hsl_psides()}
-        for pside in self._hsl_psides():
-            if not self._equity_hard_stop_enabled(pside):
-                continue
-            state = self._hsl_state(pside)
-            cfg = self.hsl[pside]
-            cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
-            no_restart_drawdown_threshold = float(cfg["no_restart_drawdown_threshold"])
-            cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
-            pending_red = False
-            for row in timeline:
-                if not isinstance(row, dict):
+            history = await self.get_balance_equity_history(current_balance=self.get_raw_balance())
+            if "timeline" not in history:
+                raise ValueError("get_balance_equity_history() missing required key: timeline")
+            timeline = history["timeline"]
+            if not isinstance(timeline, list):
+                raise TypeError(
+                    f"get_balance_equity_history()['timeline'] must be a list, got {type(timeline).__name__}"
+                )
+            now_ms = int(self.get_exchange_time())
+            current_balance = float(self.get_raw_balance())
+            current_realized_total = float(self._equity_hard_stop_realized_pnl_now())
+            current_upnl_by_pside = {
+                pside: float(await self._calc_upnl_sum_strict(pside)) for pside in self._hsl_psides()
+            }
+            current_upnl_total = float(sum(current_upnl_by_pside.values()))
+            n_rows = {pside: 0 for pside in self._hsl_psides()}
+            for pside in self._hsl_psides():
+                if not self._equity_hard_stop_enabled(pside):
                     continue
-                required = (
-                    "timestamp",
-                    "balance",
-                    "realized_pnl",
-                )
-                if signal_mode == "pside":
-                    required += (f"realized_pnl_{pside}", f"unrealized_pnl_{pside}")
-                else:
-                    required += ("unrealized_pnl_long", "unrealized_pnl_short")
-                if any(key not in row for key in required):
-                    continue
-                row_upnl_total = (
-                    float(row["unrealized_pnl_long"]) + float(row["unrealized_pnl_short"])
-                    if signal_mode == "unified"
-                    else None
-                )
-                row_realized_pside = (
-                    float(row[f"realized_pnl_{pside}"]) if signal_mode == "pside" else 0.0
-                )
-                row_unrealized_pside = (
-                    float(row[f"unrealized_pnl_{pside}"]) if signal_mode == "pside" else 0.0
-                )
-                ts = int(row["timestamp"])
+                state = self._hsl_state(pside)
+                cfg = self.hsl[pside]
+                cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
+                no_restart_drawdown_threshold = float(cfg["no_restart_drawdown_threshold"])
+                cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
+                pending_red = False
+                for row in timeline:
+                    if not isinstance(row, dict):
+                        continue
+                    required = (
+                        "timestamp",
+                        "balance",
+                        "realized_pnl",
+                    )
+                    if signal_mode == "pside":
+                        required += (f"realized_pnl_{pside}", f"unrealized_pnl_{pside}")
+                    else:
+                        required += ("unrealized_pnl_long", "unrealized_pnl_short")
+                    if any(key not in row for key in required):
+                        continue
+                    row_upnl_total = (
+                        float(row["unrealized_pnl_long"]) + float(row["unrealized_pnl_short"])
+                        if signal_mode == "unified"
+                        else None
+                    )
+                    row_realized_pside = (
+                        float(row[f"realized_pnl_{pside}"]) if signal_mode == "pside" else 0.0
+                    )
+                    row_unrealized_pside = (
+                        float(row[f"unrealized_pnl_{pside}"]) if signal_mode == "pside" else 0.0
+                    )
+                    ts = int(row["timestamp"])
+                    if state["halted"] and not state["no_restart_latched"]:
+                        cooldown_until_ms = state["cooldown_until_ms"]
+                        if cooldown_until_ms is not None and ts >= cooldown_until_ms:
+                            self._equity_hard_stop_reset_after_restart(pside)
+                        elif cooldown_until_ms is not None and ts < cooldown_until_ms:
+                            continue
+                    current_metrics = self._equity_hard_stop_apply_sample(
+                        pside,
+                        int(ts),
+                        float(row["balance"]),
+                        float(row["realized_pnl"]),
+                        row_realized_pside,
+                        row_unrealized_pside,
+                        unrealized_pnl_total=row_upnl_total,
+                    )
+                    n_rows[pside] += 1
+                    if self._equity_hard_stop_runtime_tier(pside) == "red":
+                        pending_red = True
+                        state["pending_red_since_ms"] = int(ts)
+                    is_flat = bool(row.get(f"is_flat_{pside}", False))
+                    if pending_red and is_flat:
+                        stop_drawdown_raw = float(current_metrics["drawdown_raw"])
+                        cooldown_until_ms = None
+                        if stop_drawdown_raw < no_restart_drawdown_threshold and cooldown_ms > 0:
+                            cooldown_until_ms = ts + cooldown_ms
+                        payload = self._equity_hard_stop_build_latch_payload(
+                            pside,
+                            stop_event_timestamp_ms=ts,
+                            balance=float(row["balance"]),
+                            realized_pnl_total=float(row["realized_pnl"]),
+                            realized_pnl=float(row[f"realized_pnl_{pside}"]),
+                            unrealized_pnl=float(row[f"unrealized_pnl_{pside}"]),
+                            strategy_pnl=float(current_metrics["strategy_pnl"]),
+                            peak_strategy_pnl=float(current_metrics["peak_strategy_pnl"]),
+                            strategy_equity=float(current_metrics["strategy_equity"]),
+                            peak_strategy_equity=float(current_metrics["peak_strategy_equity"]),
+                            trigger_peak_strategy_equity=float(current_metrics["peak_strategy_equity"]),
+                            drawdown_raw=float(current_metrics["drawdown_raw"]),
+                            drawdown_ema=float(current_metrics["drawdown_ema"]),
+                            drawdown_score=float(current_metrics["drawdown_score"]),
+                            no_restart_latched=bool(stop_drawdown_raw >= no_restart_drawdown_threshold),
+                            cooldown_until_ms=cooldown_until_ms,
+                        )
+                        state["last_stop_event"] = payload
+                        state["halted"] = True
+                        state["no_restart_latched"] = bool(
+                            stop_drawdown_raw >= no_restart_drawdown_threshold
+                        )
+                        state["cooldown_until_ms"] = cooldown_until_ms
+                        state["pending_red_since_ms"] = None
+                        latch_path = self._equity_hard_stop_write_latch(pside, payload)
+                        logging.critical(
+                            "[risk] HSL[%s] replay found finalized RED stop in exchange-derived history | stop_ts=%s drawdown_raw=%.6f no_restart_latched=%s cooldown_until_ms=%s diagnostic=%s",
+                            pside,
+                            ts,
+                            stop_drawdown_raw,
+                            state["no_restart_latched"],
+                            cooldown_until_ms if cooldown_until_ms is not None else "none",
+                            latch_path,
+                        )
+                        pending_red = False
+                        if state["no_restart_latched"]:
+                            break
                 if state["halted"] and not state["no_restart_latched"]:
                     cooldown_until_ms = state["cooldown_until_ms"]
-                    if cooldown_until_ms is not None and ts >= cooldown_until_ms:
+                    if cooldown_until_ms is not None and now_ms >= cooldown_until_ms:
                         self._equity_hard_stop_reset_after_restart(pside)
-                    elif cooldown_until_ms is not None and ts < cooldown_until_ms:
-                        continue
+                        self._equity_hard_stop_remove_latch_file(pside)
+                        logging.info("[risk] HSL[%s] replayed cooldown already elapsed; resumed", pside)
+                    elif cooldown_until_ms is not None:
+                        logging.critical(
+                            "[risk] HSL[%s] reconstructed active RED cooldown from exchange-derived history | remaining_seconds=%.1f",
+                            pside,
+                            (cooldown_until_ms - now_ms) / 1000.0,
+                        )
+                if state["halted"]:
+                    continue
                 current_metrics = self._equity_hard_stop_apply_sample(
                     pside,
-                    int(ts),
-                    float(row["balance"]),
-                    float(row["realized_pnl"]),
-                    row_realized_pside,
-                    row_unrealized_pside,
-                    unrealized_pnl_total=row_upnl_total,
+                    now_ms,
+                    current_balance,
+                    current_realized_total,
+                    float(self._equity_hard_stop_realized_pnl_now(pside)),
+                    current_upnl_by_pside[pside],
+                    unrealized_pnl_total=current_upnl_total,
                 )
-                n_rows[pside] += 1
-                if self._equity_hard_stop_runtime_tier(pside) == "red":
-                    pending_red = True
-                    state["pending_red_since_ms"] = int(ts)
-                is_flat = bool(row.get(f"is_flat_{pside}", False))
-                if pending_red and is_flat:
-                    stop_drawdown_raw = float(current_metrics["drawdown_raw"])
-                    cooldown_until_ms = None
-                    if stop_drawdown_raw < no_restart_drawdown_threshold and cooldown_ms > 0:
-                        cooldown_until_ms = ts + cooldown_ms
-                    payload = self._equity_hard_stop_build_latch_payload(
-                        pside,
-                        stop_event_timestamp_ms=ts,
-                        balance=float(row["balance"]),
-                        realized_pnl_total=float(row["realized_pnl"]),
-                        realized_pnl=float(row[f"realized_pnl_{pside}"]),
-                        unrealized_pnl=float(row[f"unrealized_pnl_{pside}"]),
-                        strategy_pnl=float(current_metrics["strategy_pnl"]),
-                        peak_strategy_pnl=float(current_metrics["peak_strategy_pnl"]),
-                        strategy_equity=float(current_metrics["strategy_equity"]),
-                        peak_strategy_equity=float(current_metrics["peak_strategy_equity"]),
-                        trigger_peak_strategy_equity=float(current_metrics["peak_strategy_equity"]),
-                        drawdown_raw=float(current_metrics["drawdown_raw"]),
-                        drawdown_ema=float(current_metrics["drawdown_ema"]),
-                        drawdown_score=float(current_metrics["drawdown_score"]),
-                        no_restart_latched=bool(stop_drawdown_raw >= no_restart_drawdown_threshold),
-                        cooldown_until_ms=cooldown_until_ms,
-                    )
-                    state["last_stop_event"] = payload
-                    state["halted"] = True
-                    state["no_restart_latched"] = bool(
-                        stop_drawdown_raw >= no_restart_drawdown_threshold
-                    )
-                    state["cooldown_until_ms"] = cooldown_until_ms
-                    state["pending_red_since_ms"] = None
-                    latch_path = self._equity_hard_stop_write_latch(pside, payload)
-                    logging.critical(
-                        "[risk] HSL[%s] replay found finalized RED stop in exchange-derived history | stop_ts=%s drawdown_raw=%.6f no_restart_latched=%s cooldown_until_ms=%s diagnostic=%s",
-                        pside,
-                        ts,
-                        stop_drawdown_raw,
-                        state["no_restart_latched"],
-                        cooldown_until_ms if cooldown_until_ms is not None else "none",
-                        latch_path,
-                    )
-                    pending_red = False
-                    if state["no_restart_latched"]:
-                        break
-            if state["halted"] and not state["no_restart_latched"]:
-                cooldown_until_ms = state["cooldown_until_ms"]
-                if cooldown_until_ms is not None and now_ms >= cooldown_until_ms:
-                    self._equity_hard_stop_reset_after_restart(pside)
-                    self._equity_hard_stop_remove_latch_file(pside)
-                    logging.info("[risk] HSL[%s] replayed cooldown already elapsed; resumed", pside)
-                elif cooldown_until_ms is not None:
-                    logging.critical(
-                        "[risk] HSL[%s] reconstructed active RED cooldown from exchange-derived history | remaining_seconds=%.1f",
-                        pside,
-                        (cooldown_until_ms - now_ms) / 1000.0,
-                    )
-            if state["halted"]:
-                continue
-            current_metrics = self._equity_hard_stop_apply_sample(
-                pside,
-                now_ms,
-                current_balance,
-                current_realized_total,
-                float(self._equity_hard_stop_realized_pnl_now(pside)),
-                current_upnl_by_pside[pside],
-                unrealized_pnl_total=current_upnl_total,
-            )
-            logging.info(
-                "[risk] HSL[%s] initialized from equity history | rows=%d tier=%s strategy_equity=%.6f peak_strategy_equity=%.6f rolling_peak_strategy_equity=%.6f drawdown_raw=%.6f drawdown_ema=%.6f drawdown_score=%.6f",
-                pside,
-                n_rows[pside],
-                current_metrics["tier"],
-                current_metrics["strategy_equity"],
-                current_metrics["peak_strategy_equity"],
-                current_metrics["rolling_peak_strategy_equity"],
-                current_metrics["drawdown_raw"],
-                current_metrics["drawdown_ema"],
-                current_metrics["drawdown_score"],
-            )
-            if current_metrics["tier"] == "red":
-                state["pending_red_since_ms"] = int(current_metrics["timestamp_ms"])
-        self._equity_hard_stop_refresh_halted_runtime_forced_modes()
+                logging.info(
+                    "[risk] HSL[%s] initialized from equity history | rows=%d tier=%s strategy_equity=%.6f peak_strategy_equity=%.6f rolling_peak_strategy_equity=%.6f drawdown_raw=%.6f drawdown_ema=%.6f drawdown_score=%.6f",
+                    pside,
+                    n_rows[pside],
+                    current_metrics["tier"],
+                    current_metrics["strategy_equity"],
+                    current_metrics["peak_strategy_equity"],
+                    current_metrics["rolling_peak_strategy_equity"],
+                    current_metrics["drawdown_raw"],
+                    current_metrics["drawdown_ema"],
+                    current_metrics["drawdown_score"],
+                )
+                if current_metrics["tier"] == "red":
+                    state["pending_red_since_ms"] = int(current_metrics["timestamp_ms"])
+            self._equity_hard_stop_refresh_halted_runtime_forced_modes()
+        finally:
+            self._set_log_silence_watchdog_context(phase=prev_phase, stage=prev_stage)
 
     def _equity_hard_stop_log_status(self, pside: str, metrics: dict) -> None:
         state = self._hsl_state(pside)
@@ -2185,6 +2227,69 @@ class Passivbot:
             int(summary["rate_limits"]),
             f" | {mem_str}" if mem_str else "",
         )
+
+    def _set_log_silence_watchdog_context(
+        self, *, phase: Optional[str] = None, stage: Optional[str] = None
+    ) -> None:
+        if phase is not None:
+            self._log_silence_watchdog_phase = str(phase)
+        if stage is not None:
+            self._log_silence_watchdog_stage = str(stage)
+
+    def _maybe_log_silence_watchdog(self, *, now_monotonic: Optional[float] = None) -> bool:
+        threshold = float(getattr(self, "_log_silence_watchdog_seconds", 0.0) or 0.0)
+        if threshold <= 0.0:
+            return False
+        if now_monotonic is None:
+            now_monotonic = time.monotonic()
+        silent_for_s = max(0.0, now_monotonic - float(get_last_log_activity_monotonic()))
+        if silent_for_s < threshold:
+            return False
+        phase = str(getattr(self, "_log_silence_watchdog_phase", "runtime") or "runtime")
+        stage = str(getattr(self, "_log_silence_watchdog_stage", "unknown") or "unknown")
+        uptime_ms = max(0, utc_ms() - int(getattr(self, "_health_start_ms", utc_ms())))
+        loop_ms = int(getattr(self, "_last_loop_duration_ms", 0) or 0)
+        loop_str = f"{loop_ms / 1000:.1f}s" if loop_ms > 0 else "n/a"
+        logging.info(
+            "[health] silence watchdog: no logs for %.0fs | phase=%s | stage=%s | uptime=%s | loop=%s",
+            silent_for_s,
+            phase,
+            stage,
+            self._format_duration(uptime_ms),
+            loop_str,
+        )
+        return True
+
+    async def _run_log_silence_watchdog(self) -> None:
+        threshold = float(getattr(self, "_log_silence_watchdog_seconds", 0.0) or 0.0)
+        if threshold <= 0.0:
+            return
+        poll_seconds = min(5.0, max(1.0, threshold / 4.0))
+        while not self.stop_signal_received:
+            await asyncio.sleep(poll_seconds)
+            if self.stop_signal_received:
+                break
+            self._maybe_log_silence_watchdog()
+
+    def _start_log_silence_watchdog(self) -> None:
+        threshold = float(getattr(self, "_log_silence_watchdog_seconds", 0.0) or 0.0)
+        if threshold <= 0.0:
+            return
+        task = getattr(self, "_log_silence_watchdog_task", None)
+        if task is not None and not task.done():
+            return
+        self._log_silence_watchdog_task = asyncio.create_task(self._run_log_silence_watchdog())
+
+    async def _stop_log_silence_watchdog(self) -> None:
+        task = getattr(self, "_log_silence_watchdog_task", None)
+        self._log_silence_watchdog_task = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
         self._monitor_record_event("health.summary", ("health", "summary"), summary, ts=now_ms)
 
     def _calc_unstuck_allowance_for_logging(self, pside: str) -> dict:
@@ -2257,72 +2362,121 @@ class Passivbot:
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
         self._log_startup_banner()
+        self._bot_ready = False
+        self._set_log_silence_watchdog_context(phase="startup", stage="start")
+        self._start_log_silence_watchdog()
         logging.info("[boot] starting bot %s...", self.exchange)
-        self._monitor_record_event(
-            "bot.start",
-            ("bot", "lifecycle", "start"),
-            {
-                "exchange": self.exchange,
-                "user": self.user,
-                "pid": os.getpid(),
-                "quote": self.quote,
-                "start_time_ms": self.start_time_ms,
-            },
-            ts=self.start_time_ms,
-        )
-
-        # Random boot stagger to spread API load when multiple bots start simultaneously.
-        # Applies BEFORE init_markets() so even the first API calls are staggered.
-        boot_stagger = get_optional_live_value(self.config, "boot_stagger_seconds", None)
-        if boot_stagger is None:
-            exchange_lower = (self.exchange or "").lower()
-            if exchange_lower == "hyperliquid":
-                boot_stagger = 30.0
-            else:
-                boot_stagger = 0.0
+        boot_stage = "start"
         try:
-            boot_stagger = float(boot_stagger)
-        except Exception:
-            boot_stagger = 0.0
-        if boot_stagger > 0:
-            delay = random.uniform(0, boot_stagger)
-            logging.info(
-                "[boot] stagger delay: waiting %.1fs before init (max=%.0fs)...",
-                delay,
-                boot_stagger,
+            self._monitor_record_event(
+                "bot.start",
+                ("bot", "lifecycle", "start"),
+                {
+                    "exchange": self.exchange,
+                    "user": self.user,
+                    "pid": os.getpid(),
+                    "quote": self.quote,
+                    "start_time_ms": int(self.start_time_ms),
+                },
+                ts=int(self.start_time_ms),
             )
-            await asyncio.sleep(delay)
 
-        await format_approved_ignored_coins(self.config, self.user_info["exchange"], quote=self.quote)
-        await self.init_markets()
-        # Staggered warmup of candles for approved symbols (large sets handled gracefully)
-        try:
-            await self.warmup_candles_staggered()
-        except Exception as e:
-            logging.info("[boot] warmup skipped due to: %s", e)
-        if self._equity_hard_stop_enabled():
-            await self._equity_hard_stop_initialize_from_history()
-            if self.stop_signal_received:
-                return
-        await asyncio.sleep(1)
-        self._log_memory_snapshot()
-        logging.info("[boot] starting data maintainers...")
-        await self.start_data_maintainers()
+            # Random boot stagger to spread API load when multiple bots start simultaneously.
+            # Applies BEFORE init_markets() so even the first API calls are staggered.
+            boot_stage = "boot_stagger"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            boot_stagger = get_optional_live_value(self.config, "boot_stagger_seconds", None)
+            if boot_stagger is None:
+                exchange_lower = (self.exchange or "").lower()
+                if exchange_lower == "hyperliquid":
+                    boot_stagger = 30.0
+                else:
+                    boot_stagger = 0.0
+            try:
+                boot_stagger = float(boot_stagger)
+            except Exception:
+                boot_stagger = 0.0
+            if boot_stagger > 0:
+                delay = random.uniform(0, boot_stagger)
+                logging.info(
+                    "[boot] stagger delay: waiting %.1fs before init (max=%.0fs)...",
+                    delay,
+                    boot_stagger,
+                )
+                await asyncio.sleep(delay)
 
-        logging.info("[boot] starting execution loop...")
-        logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
-        logging.info("[boot] READY - Bot initialization complete, entering main trading loop")
-        logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
-        ready_ts = utc_ms()
-        self._monitor_record_event(
-            "bot.ready",
-            ("bot", "lifecycle", "ready"),
-            {"debug_mode": bool(self.debug_mode)},
-            ts=ready_ts,
-        )
-        await self._monitor_flush_snapshot(force=True, ts=ready_ts)
-        if not self.debug_mode:
-            await self.run_execution_loop()
+            boot_stage = "format_approved_ignored_coins"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            await format_approved_ignored_coins(
+                self.config, self.user_info["exchange"], quote=self.quote
+            )
+            boot_stage = "init_markets"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            await self.init_markets()
+            init_snapshot_ts = utc_ms()
+            await self._monitor_flush_snapshot(force=True, ts=init_snapshot_ts)
+            # Staggered warmup of candles for approved symbols (large sets handled gracefully)
+            boot_stage = "warmup_candles_staggered"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            try:
+                await self.warmup_candles_staggered()
+            except Exception as e:
+                logging.info("[boot] warmup skipped due to: %s", e)
+            if self._equity_hard_stop_enabled():
+                boot_stage = "equity_hard_stop_initialize_from_history"
+                self._set_log_silence_watchdog_context(stage=boot_stage)
+                await self._equity_hard_stop_initialize_from_history()
+                if self.stop_signal_received:
+                    self._monitor_emit_stop(
+                        "startup_aborted",
+                        ts=utc_ms(),
+                        payload={"stage": boot_stage, "stop_signal_received": True},
+                    )
+                    return
+            boot_stage = "post_init_sleep"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            await asyncio.sleep(1)
+            self._log_memory_snapshot()
+            logging.info("[boot] starting data maintainers...")
+            boot_stage = "start_data_maintainers"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            await self.start_data_maintainers()
+
+            logging.info("[boot] starting execution loop...")
+            logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
+            logging.info("[boot] READY - Bot initialization complete, entering main trading loop")
+            logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
+            self._bot_ready = True
+            self._set_log_silence_watchdog_context(phase="runtime", stage="run_execution_loop")
+            ready_ts = utc_ms()
+            self._monitor_record_event(
+                "bot.ready",
+                ("bot", "lifecycle", "ready"),
+                {"debug_mode": bool(self.debug_mode)},
+                ts=ready_ts,
+            )
+            await self._monitor_flush_snapshot(force=True, ts=ready_ts)
+            if not self.debug_mode:
+                boot_stage = "run_execution_loop"
+                await self.run_execution_loop()
+        except Exception as exc:
+            error_ts = utc_ms()
+            self._monitor_record_error(
+                "error.bot",
+                exc,
+                tags=("error", "bot", "startup"),
+                payload={"source": "start_bot", "stage": boot_stage},
+                ts=error_ts,
+            )
+            await self._monitor_flush_snapshot(force=True, ts=error_ts)
+            self._monitor_emit_stop(
+                "startup_error",
+                ts=error_ts,
+                payload={"stage": boot_stage, "error_type": type(exc).__name__},
+            )
+            raise
+        finally:
+            await self._stop_log_silence_watchdog()
 
     async def init_markets(self, verbose=True):
         """Load exchange market metadata and refresh approval lists."""
@@ -2510,6 +2664,22 @@ class Passivbot:
             ts=ts,
             symbol=symbol,
             pside=pside,
+        )
+
+    def _monitor_emit_stop(
+        self, reason: str, *, ts: Optional[int] = None, payload: Optional[dict] = None
+    ) -> Optional[dict]:
+        if getattr(self, "_monitor_stop_emitted", False):
+            return None
+        self._monitor_stop_emitted = True
+        stop_payload = {"reason": str(reason)}
+        if payload:
+            stop_payload.update(payload)
+        return self._monitor_record_event(
+            "bot.stop",
+            ("bot", "lifecycle", "stop"),
+            stop_payload,
+            ts=ts,
         )
 
     def _monitor_hsl_payload(self, pside: str) -> dict:
@@ -3448,6 +3618,9 @@ class Passivbot:
                 loop_start_ms = utc_ms()
                 self.execution_scheduled = False
                 self.state_change_detected_by_symbol = set()
+                self._set_log_silence_watchdog_context(
+                    phase="runtime", stage="update_pos_oos_pnls_ohlcvs"
+                )
                 if not await self.update_pos_oos_pnls_ohlcvs():
                     await asyncio.sleep(0.5)
                     failed_update_pos_oos_pnls_ohlcvs_count += 1
@@ -3465,6 +3638,7 @@ class Passivbot:
                     ):
                         await self._equity_hard_stop_run_red_supervisor()
                         continue
+                self._set_log_silence_watchdog_context(phase="runtime", stage="execute_to_exchange")
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
                     return res
@@ -3473,9 +3647,12 @@ class Passivbot:
                 # Periodic health summary
                 self._maybe_log_health_summary()
                 self._maybe_log_unstuck_status()
+                self._set_log_silence_watchdog_context(phase="runtime", stage="flush_snapshot")
                 await self._monitor_flush_snapshot()
+                self._set_log_silence_watchdog_context(phase="runtime", stage="execution_delay")
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
                 sleep_duration = 30
+                self._set_log_silence_watchdog_context(phase="runtime", stage="scheduled_wait")
                 for i in range(sleep_duration * 10):
                     if self.execution_scheduled:
                         break
@@ -3513,12 +3690,7 @@ class Passivbot:
         self._shutdown_in_progress = True
         self.stop_signal_received = True
         stop_ts = utc_ms()
-        self._monitor_record_event(
-            "bot.stop",
-            ("bot", "lifecycle", "stop"),
-            {"reason": "shutdown_gracefully"},
-            ts=stop_ts,
-        )
+        self._monitor_emit_stop("shutdown_gracefully", ts=stop_ts)
         logging.info("[shutdown] shutdown requested; closing background tasks and sessions")
         try:
             self.stop_data_maintainers(verbose=False)
@@ -5170,8 +5342,11 @@ class Passivbot:
         """Initialize FillEventsManager for PnL tracking."""
         if self._pnls_initialized:
             return
+        prev_phase = getattr(self, "_log_silence_watchdog_phase", "runtime")
+        prev_stage = getattr(self, "_log_silence_watchdog_stage", "idle")
 
         try:
+            self._set_log_silence_watchdog_context(phase=prev_phase, stage="init_pnls")
             logging.info("[fills] initializing FillEventsManager")
 
             # Extract symbol pool from config
@@ -5224,22 +5399,27 @@ class Passivbot:
             logging.error("Failed to initialize FillEventsManager: %s", e)
             traceback.print_exc()
             raise
+        finally:
+            self._set_log_silence_watchdog_context(phase=prev_phase, stage=prev_stage)
 
     async def update_pnls(self):
         """Fetch latest fills using FillEventsManager and update the cache."""
         if self.stop_signal_received:
             return False
+        prev_phase = getattr(self, "_log_silence_watchdog_phase", "runtime")
+        prev_stage = getattr(self, "_log_silence_watchdog_stage", "idle")
 
+        self._set_log_silence_watchdog_context(phase=prev_phase, stage="init_pnls")
         await self.init_pnls()  # will do nothing if already initiated
 
         if self._pnls_manager is None:
             return False
 
         try:
+            self._set_log_silence_watchdog_context(phase=prev_phase, stage="refresh_fill_events")
             # Use the same lookback window
-            age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
-                self.live_value("pnls_max_lookback_days")
-            )
+            lookback_days = float(self.live_value("pnls_max_lookback_days"))
+            age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * lookback_days
 
             # Get existing event IDs and source IDs before refresh
             existing_ids: set[str] = set()
@@ -5256,25 +5436,23 @@ class Passivbot:
             # Check if we need a full refresh (cache empty or too old)
             events = self._pnls_manager.get_events()
             needs_full_refresh = not events
+            full_refresh_reason = "cache_empty"
             if events:
                 oldest_event_ts = events[0].timestamp
                 if oldest_event_ts > age_limit + 1000 * 60 * 60 * 24:  # > 1 day newer than limit
                     needs_full_refresh = True
-                    # Log once per session to avoid spam
-                    cache_key = "_fills_full_refresh_logged"
-                    if not getattr(self, cache_key, False):
-                        setattr(self, cache_key, True)
-                        logging.debug(
-                            "[fills] Cache oldest event (%s) is newer than lookback (%s), doing full refresh",
-                            ts_to_date(oldest_event_ts)[:19],
-                            ts_to_date(age_limit)[:19],
-                        )
+                    full_refresh_reason = "cache_newer_than_lookback"
 
             if needs_full_refresh:
                 # Full refresh with proper lookback window
                 if not getattr(self, "_fills_full_refresh_logged", False):
-                    logging.debug(
-                        "[fills] Performing full refresh from %s", ts_to_date(age_limit)[:19]
+                    self._fills_full_refresh_logged = True
+                    logging.info(
+                        "[fills] full refresh in progress from %s (reason=%s, lookback_days=%.3f, cached_events=%d); live loop may stay quiet until this completes",
+                        ts_to_date(age_limit)[:19],
+                        full_refresh_reason,
+                        lookback_days,
+                        len(events),
                     )
                 await self._pnls_manager.refresh(start_ms=int(age_limit), end_ms=None)
             else:
@@ -5324,6 +5502,8 @@ class Passivbot:
             if self.logging_level >= 2:
                 traceback.print_exc()
             return False
+        finally:
+            self._set_log_silence_watchdog_context(phase=prev_phase, stage=prev_stage)
 
     # -------------------------------------------------------------------------
     # FillEventsManager Helpers
@@ -5493,7 +5673,9 @@ class Passivbot:
         self, fill_events: Optional[List[dict]] = None, current_balance: Optional[float] = None
     ) -> Dict[str, Any]:
         """Replay canonical fill events to produce historical balance/equity curves."""
-
+        prev_phase = getattr(self, "_log_silence_watchdog_phase", "runtime")
+        prev_stage = getattr(self, "_log_silence_watchdog_stage", "idle")
+        self._set_log_silence_watchdog_context(phase=prev_phase, stage="equity_history_init_pnls")
         await self.init_pnls()
 
         def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -5610,280 +5792,297 @@ class Passivbot:
                 )
             return sorted(out, key=lambda x: x["timestamp"])
 
-        if fill_events is None:
-            # Use FillEventsManager events converted to dict format
-            if self._pnls_manager:
-                fill_events = [ev.to_dict() for ev in self._pnls_manager.get_events()]
-            else:
-                fill_events = []
+        try:
+            if fill_events is None:
+                # Use FillEventsManager events converted to dict format
+                if self._pnls_manager:
+                    fill_events = [ev.to_dict() for ev in self._pnls_manager.get_events()]
+                else:
+                    fill_events = []
 
-        events = _extract_events(fill_events)
-        if not events:
+            events = _extract_events(fill_events)
+            if not events:
+                ts_now = self.get_exchange_time()
+                balance_now = (
+                    float(current_balance) if current_balance is not None else self.get_raw_balance()
+                )
+                point = {
+                    "timestamp": ts_now,
+                    "balance": balance_now,
+                    "equity": balance_now,
+                    "unrealized_pnl": 0.0,
+                    "realized_pnl": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "is_flat": True,
+                    "is_flat_long": True,
+                    "is_flat_short": True,
+                    "panic_fill_count": 0,
+                }
+                return {
+                    "timeline": [point],
+                    "balances": [{"timestamp": point["timestamp"], "balance": balance_now}],
+                    "equities": [
+                        {
+                            "timestamp": point["timestamp"],
+                            "equity": balance_now,
+                            "unrealized_pnl": 0.0,
+                        }
+                    ],
+                    "metadata": {
+                        "lookback_days": float(self.live_value("pnls_max_lookback_days")),
+                        "resolution_ms": ONE_MIN_MS,
+                        "events_used": 0,
+                        "symbols_covered": [],
+                        "missing_price_symbols": [],
+                    },
+                }
+
+            lookback_days = float(self.live_value("pnls_max_lookback_days"))
             ts_now = self.get_exchange_time()
+            lookback_ms = max(lookback_days, 0.0) * 24 * 60 * 60 * 1000
+            lookback_start = ts_now - lookback_ms
+
             balance_now = (
                 float(current_balance) if current_balance is not None else self.get_raw_balance()
             )
-            point = {
-                "timestamp": ts_now,
-                "balance": balance_now,
-                "equity": balance_now,
-                "unrealized_pnl": 0.0,
-                "realized_pnl": 0.0,
-                "unrealized_pnl_long": 0.0,
-                "unrealized_pnl_short": 0.0,
-                "realized_pnl_long": 0.0,
-                "realized_pnl_short": 0.0,
-                "is_flat": True,
-                "is_flat_long": True,
-                "is_flat_short": True,
-                "panic_fill_count": 0,
+            balance_now = max(balance_now, 0.0)
+            total_realised = sum(
+                evt["pnl"] + evt.get("fee", 0.0) for evt in events if evt["timestamp"] <= ts_now
+            )
+            baseline_balance = balance_now - total_realised
+
+            start_ts = min(ensure_millis(events[0]["timestamp"]), lookback_start)
+            start_minute = int(math.floor(start_ts / ONE_MIN_MS) * ONE_MIN_MS)
+            record_start_minute = int(math.floor(lookback_start / ONE_MIN_MS) * ONE_MIN_MS)
+            end_minute = int(math.floor(ts_now / ONE_MIN_MS) * ONE_MIN_MS)
+            if end_minute < record_start_minute:
+                end_minute = record_start_minute
+
+            symbols = {evt["symbol"] for evt in events if evt["symbol"]}
+            price_lookup: Dict[str, Dict[int, float]] = {}
+            approximate_price_sources: Dict[str, Dict[str, int]] = {}
+            if symbols and getattr(self, "cm", None) is not None:
+                self._set_log_silence_watchdog_context(
+                    phase=prev_phase, stage="equity_history_fetch_candles"
+                )
+                tasks = {
+                    sym: asyncio.create_task(
+                        self.cm.get_candles(sym, start_ts=start_minute, end_ts=end_minute, strict=False)
+                    )
+                    for sym in symbols
+                }
+                for sym, task in tasks.items():
+                    try:
+                        arr = await task
+                    except Exception as exc:
+                        logging.error(f"error fetching candles for {sym} {exc}")
+                        arr = np.empty((0,), dtype=CANDLE_DTYPE)
+                    price_lookup[sym] = {
+                        int(row["ts"]): float(row["c"]) for row in arr if float(row["c"]) > 0.0
+                    }
+                is_hyperliquid = str(getattr(self, "exchange", "")).lower() == "hyperliquid"
+                if is_hyperliquid:
+                    lookback_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
+                    tf_plan: list[tuple[str, int]] = []
+                    if lookback_minutes > 5000:
+                        tf_plan.append(("5m", 5))
+                    if lookback_minutes > 5000 * 5:
+                        tf_plan.append(("15m", 15))
+                    for timeframe, tf_minutes in tf_plan:
+                        tf_tasks = {
+                            sym: asyncio.create_task(
+                                self.cm.get_candles(
+                                    sym,
+                                    start_ts=start_minute,
+                                    end_ts=end_minute,
+                                    strict=False,
+                                    timeframe=timeframe,
+                                )
+                            )
+                            for sym in symbols
+                        }
+                        for sym, task in tf_tasks.items():
+                            try:
+                                arr = await task
+                            except Exception as exc:
+                                logging.error(
+                                    "error fetching %s candles for %s during equity history replay: %s",
+                                    timeframe,
+                                    sym,
+                                    exc,
+                                )
+                                continue
+                            if arr is None or arr.size == 0:
+                                continue
+                            synth = synthesize_1m_from_higher_tf(arr, tf_minutes)
+                            if synth.size == 0:
+                                continue
+                            added = 0
+                            lookup = price_lookup.setdefault(sym, {})
+                            for row in synth:
+                                ts = int(row["ts"])
+                                close = float(row["c"])
+                                if ts < start_minute or ts > end_minute:
+                                    continue
+                                if ts in lookup:
+                                    continue
+                                lookup[ts] = float(close)
+                                added += 1
+                            if added > 0:
+                                approximate_price_sources.setdefault(sym, {})[timeframe] = added
+            else:
+                price_lookup = {sym: {} for sym in symbols}
+
+            positions: Dict[str, Dict[str, Dict[str, float]]] = {}
+            active_symbols: set[str] = set()
+            timeline: List[Dict[str, float]] = []
+            missing_price_symbols: set[str] = set()
+            realized_pnl_pside_running = {"long": 0.0, "short": 0.0}
+
+            def _apply_event(evt: dict):
+                slot = _ensure_slot(positions, evt["symbol"])[evt["pside"]]
+                qty = evt["qty"]
+                price = evt["price"]
+                if evt["action"] == "increase":
+                    old_size = slot["size"]
+                    new_size = old_size + qty
+                    if new_size <= 0.0:
+                        slot["size"], slot["price"] = 0.0, 0.0
+                    elif old_size <= 0.0:
+                        slot["size"], slot["price"] = new_size, price
+                    else:
+                        slot["price"] = max(
+                            (old_size * slot["price"] + qty * price) / new_size, 0.0
+                        )
+                        slot["size"] = new_size
+                else:
+                    slot["size"] = max(slot["size"] - qty, 0.0)
+                    if slot["size"] <= 0.0:
+                        slot["price"] = 0.0
+                has_pos = slot["size"] > 1e-12
+                if has_pos:
+                    active_symbols.add(evt["symbol"])
+                elif not any(
+                    positions[evt["symbol"]][ps]["size"] > 1e-12 for ps in ("long", "short")
+                ):
+                    active_symbols.discard(evt["symbol"])
+
+            self._set_log_silence_watchdog_context(
+                phase=prev_phase, stage="equity_history_replay_timeline"
+            )
+            balance = baseline_balance
+            event_idx = 0
+            last_price: Dict[str, float] = {}
+
+            minute = start_minute
+            while minute <= end_minute:
+                boundary = minute + ONE_MIN_MS
+                panic_fill_count = 0
+                while event_idx < len(events) and events[event_idx]["timestamp"] < boundary:
+                    evt = events[event_idx]
+                    _apply_event(evt)
+                    realized_delta = evt["pnl"] + evt.get("fee", 0.0)
+                    balance += realized_delta
+                    realized_pnl_pside_running[evt["pside"]] += realized_delta
+                    if "panic" in str(evt.get("pb_order_type") or ""):
+                        panic_fill_count += 1
+                    event_idx += 1
+                upnl = 0.0
+                upnl_by_pside = {"long": 0.0, "short": 0.0}
+                for symbol in list(active_symbols):
+                    price = price_lookup.get(symbol, {}).get(minute)
+                    if price is None:
+                        price = last_price.get(symbol)
+                    else:
+                        last_price[symbol] = price
+                    if price is None or price <= 0.0:
+                        missing_price_symbols.add(symbol)
+                        continue
+                    slot = positions.get(symbol)
+                    if not slot:
+                        continue
+                    for pside in ("long", "short"):
+                        size = slot[pside]["size"]
+                        if size <= 0.0:
+                            continue
+                        avg_price = slot[pside]["price"]
+                        if avg_price <= 0.0:
+                            continue
+                        c_mult = self.c_mults.get(symbol, 1.0)
+                        pside_upnl = calc_pnl(pside, avg_price, price, size, self.inverse, c_mult)
+                        upnl += pside_upnl
+                        upnl_by_pside[pside] += pside_upnl
+                if minute >= record_start_minute:
+                    timeline.append(
+                        {
+                            "timestamp": minute,
+                            "balance": balance,
+                            "equity": balance + upnl,
+                            "unrealized_pnl": upnl,
+                            "realized_pnl": balance - baseline_balance,
+                            "unrealized_pnl_long": upnl_by_pside["long"],
+                            "unrealized_pnl_short": upnl_by_pside["short"],
+                            "realized_pnl_long": realized_pnl_pside_running["long"],
+                            "realized_pnl_short": realized_pnl_pside_running["short"],
+                            "is_flat": len(active_symbols) == 0,
+                            "is_flat_long": not any(
+                                positions.get(sym, {}).get("long", {}).get("size", 0.0) > 1e-12
+                                for sym in positions
+                            ),
+                            "is_flat_short": not any(
+                                positions.get(sym, {}).get("short", {}).get("size", 0.0) > 1e-12
+                                for sym in positions
+                            ),
+                            "panic_fill_count": int(panic_fill_count),
+                        }
+                    )
+                minute += ONE_MIN_MS
+
+            if not timeline:
+                point = {
+                    "timestamp": ts_now,
+                    "balance": balance_now,
+                    "equity": balance_now,
+                    "unrealized_pnl": 0.0,
+                    "realized_pnl": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "is_flat": True,
+                    "is_flat_long": True,
+                    "is_flat_short": True,
+                }
+                timeline = [point]
+
+            balances = [{"timestamp": row["timestamp"], "balance": row["balance"]} for row in timeline]
+            equities = [
+                {
+                    "timestamp": row["timestamp"],
+                    "equity": row["equity"],
+                    "unrealized_pnl": row["unrealized_pnl"],
+                }
+                for row in timeline
+            ]
+            metadata = {
+                "lookback_days": lookback_days,
+                "resolution_ms": ONE_MIN_MS,
+                "events_used": len(events),
+                "symbols_covered": sorted(symbols),
+                "missing_price_symbols": sorted(missing_price_symbols),
+                "approximate_price_sources": approximate_price_sources,
             }
             return {
-                "timeline": [point],
-                "balances": [{"timestamp": point["timestamp"], "balance": balance_now}],
-                "equities": [
-                    {"timestamp": point["timestamp"], "equity": balance_now, "unrealized_pnl": 0.0}
-                ],
-                "metadata": {
-                    "lookback_days": float(self.live_value("pnls_max_lookback_days")),
-                    "resolution_ms": ONE_MIN_MS,
-                    "events_used": 0,
-                    "symbols_covered": [],
-                    "missing_price_symbols": [],
-                },
+                "timeline": timeline,
+                "balances": balances,
+                "equities": equities,
+                "metadata": metadata,
             }
-
-        lookback_days = float(self.live_value("pnls_max_lookback_days"))
-        ts_now = self.get_exchange_time()
-        lookback_ms = max(lookback_days, 0.0) * 24 * 60 * 60 * 1000
-        lookback_start = ts_now - lookback_ms
-
-        balance_now = (
-            float(current_balance) if current_balance is not None else self.get_raw_balance()
-        )
-        balance_now = max(balance_now, 0.0)
-        total_realised = sum(
-            evt["pnl"] + evt.get("fee", 0.0) for evt in events if evt["timestamp"] <= ts_now
-        )
-        baseline_balance = balance_now - total_realised
-
-        start_ts = min(ensure_millis(events[0]["timestamp"]), lookback_start)
-        start_minute = int(math.floor(start_ts / ONE_MIN_MS) * ONE_MIN_MS)
-        record_start_minute = int(math.floor(lookback_start / ONE_MIN_MS) * ONE_MIN_MS)
-        end_minute = int(math.floor(ts_now / ONE_MIN_MS) * ONE_MIN_MS)
-        if end_minute < record_start_minute:
-            end_minute = record_start_minute
-
-        symbols = {evt["symbol"] for evt in events if evt["symbol"]}
-        price_lookup: Dict[str, Dict[int, float]] = {}
-        approximate_price_sources: Dict[str, Dict[str, int]] = {}
-        if symbols and getattr(self, "cm", None) is not None:
-            tasks = {
-                sym: asyncio.create_task(
-                    self.cm.get_candles(sym, start_ts=start_minute, end_ts=end_minute, strict=False)
-                )
-                for sym in symbols
-            }
-            for sym, task in tasks.items():
-                try:
-                    arr = await task
-                except Exception as exc:
-                    logging.error(f"error fetching candles for {sym} {exc}")
-                    arr = np.empty((0,), dtype=CANDLE_DTYPE)
-                price_lookup[sym] = {
-                    int(row["ts"]): float(row["c"]) for row in arr if float(row["c"]) > 0.0
-                }
-            is_hyperliquid = str(getattr(self, "exchange", "")).lower() == "hyperliquid"
-            if is_hyperliquid:
-                lookback_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
-                tf_plan: list[tuple[str, int]] = []
-                if lookback_minutes > 5000:
-                    tf_plan.append(("5m", 5))
-                if lookback_minutes > 5000 * 5:
-                    tf_plan.append(("15m", 15))
-                for timeframe, tf_minutes in tf_plan:
-                    tf_tasks = {
-                        sym: asyncio.create_task(
-                            self.cm.get_candles(
-                                sym,
-                                start_ts=start_minute,
-                                end_ts=end_minute,
-                                strict=False,
-                                timeframe=timeframe,
-                            )
-                        )
-                        for sym in symbols
-                    }
-                    for sym, task in tf_tasks.items():
-                        try:
-                            arr = await task
-                        except Exception as exc:
-                            logging.error(
-                                "error fetching %s candles for %s during equity history replay: %s",
-                                timeframe,
-                                sym,
-                                exc,
-                            )
-                            continue
-                        if arr is None or arr.size == 0:
-                            continue
-                        synth = synthesize_1m_from_higher_tf(arr, tf_minutes)
-                        if synth.size == 0:
-                            continue
-                        added = 0
-                        lookup = price_lookup.setdefault(sym, {})
-                        for row in synth:
-                            ts = int(row["ts"])
-                            close = float(row["c"])
-                            if ts < start_minute or ts > end_minute:
-                                continue
-                            if ts in lookup:
-                                continue
-                            lookup[ts] = float(close)
-                            added += 1
-                        if added > 0:
-                            approximate_price_sources.setdefault(sym, {})[timeframe] = added
-        else:
-            price_lookup = {sym: {} for sym in symbols}
-
-        positions: Dict[str, Dict[str, Dict[str, float]]] = {}
-        active_symbols: set[str] = set()
-        timeline: List[Dict[str, float]] = []
-        missing_price_symbols: set[str] = set()
-        realized_pnl_pside_running = {"long": 0.0, "short": 0.0}
-
-        def _apply_event(evt: dict):
-            slot = _ensure_slot(positions, evt["symbol"])[evt["pside"]]
-            qty = evt["qty"]
-            price = evt["price"]
-            if evt["action"] == "increase":
-                old_size = slot["size"]
-                new_size = old_size + qty
-                if new_size <= 0.0:
-                    slot["size"], slot["price"] = 0.0, 0.0
-                elif old_size <= 0.0:
-                    slot["size"], slot["price"] = new_size, price
-                else:
-                    slot["price"] = max((old_size * slot["price"] + qty * price) / new_size, 0.0)
-                    slot["size"] = new_size
-            else:
-                slot["size"] = max(slot["size"] - qty, 0.0)
-                if slot["size"] <= 0.0:
-                    slot["price"] = 0.0
-            has_pos = slot["size"] > 1e-12
-            if has_pos:
-                active_symbols.add(evt["symbol"])
-            elif not any(positions[evt["symbol"]][ps]["size"] > 1e-12 for ps in ("long", "short")):
-                active_symbols.discard(evt["symbol"])
-
-        balance = baseline_balance
-        event_idx = 0
-        last_price: Dict[str, float] = {}
-
-        minute = start_minute
-        while minute <= end_minute:
-            boundary = minute + ONE_MIN_MS
-            panic_fill_count = 0
-            while event_idx < len(events) and events[event_idx]["timestamp"] < boundary:
-                evt = events[event_idx]
-                _apply_event(evt)
-                realized_delta = evt["pnl"] + evt.get("fee", 0.0)
-                balance += realized_delta
-                realized_pnl_pside_running[evt["pside"]] += realized_delta
-                if "panic" in str(evt.get("pb_order_type") or ""):
-                    panic_fill_count += 1
-                event_idx += 1
-            upnl = 0.0
-            upnl_by_pside = {"long": 0.0, "short": 0.0}
-            for symbol in list(active_symbols):
-                price = price_lookup.get(symbol, {}).get(minute)
-                if price is None:
-                    price = last_price.get(symbol)
-                else:
-                    last_price[symbol] = price
-                if price is None or price <= 0.0:
-                    missing_price_symbols.add(symbol)
-                    continue
-                slot = positions.get(symbol)
-                if not slot:
-                    continue
-                for pside in ("long", "short"):
-                    size = slot[pside]["size"]
-                    if size <= 0.0:
-                        continue
-                    avg_price = slot[pside]["price"]
-                    if avg_price <= 0.0:
-                        continue
-                    c_mult = self.c_mults.get(symbol, 1.0)
-                    pside_upnl = calc_pnl(pside, avg_price, price, size, self.inverse, c_mult)
-                    upnl += pside_upnl
-                    upnl_by_pside[pside] += pside_upnl
-            if minute >= record_start_minute:
-                timeline.append(
-                    {
-                        "timestamp": minute,
-                        "balance": balance,
-                        "equity": balance + upnl,
-                        "unrealized_pnl": upnl,
-                        "realized_pnl": balance - baseline_balance,
-                        "unrealized_pnl_long": upnl_by_pside["long"],
-                        "unrealized_pnl_short": upnl_by_pside["short"],
-                        "realized_pnl_long": realized_pnl_pside_running["long"],
-                        "realized_pnl_short": realized_pnl_pside_running["short"],
-                        "is_flat": len(active_symbols) == 0,
-                        "is_flat_long": not any(
-                            positions.get(sym, {}).get("long", {}).get("size", 0.0) > 1e-12
-                            for sym in positions
-                        ),
-                        "is_flat_short": not any(
-                            positions.get(sym, {}).get("short", {}).get("size", 0.0) > 1e-12
-                            for sym in positions
-                        ),
-                        "panic_fill_count": int(panic_fill_count),
-                    }
-                )
-            minute += ONE_MIN_MS
-
-        if not timeline:
-            point = {
-                "timestamp": ts_now,
-                "balance": balance_now,
-                "equity": balance_now,
-                "unrealized_pnl": 0.0,
-                "realized_pnl": 0.0,
-                "unrealized_pnl_long": 0.0,
-                "unrealized_pnl_short": 0.0,
-                "realized_pnl_long": 0.0,
-                "realized_pnl_short": 0.0,
-                "is_flat": True,
-                "is_flat_long": True,
-                "is_flat_short": True,
-            }
-            timeline = [point]
-
-        balances = [{"timestamp": row["timestamp"], "balance": row["balance"]} for row in timeline]
-        equities = [
-            {
-                "timestamp": row["timestamp"],
-                "equity": row["equity"],
-                "unrealized_pnl": row["unrealized_pnl"],
-            }
-            for row in timeline
-        ]
-        metadata = {
-            "lookback_days": lookback_days,
-            "resolution_ms": ONE_MIN_MS,
-            "events_used": len(events),
-            "symbols_covered": sorted(symbols),
-            "missing_price_symbols": sorted(missing_price_symbols),
-            "approximate_price_sources": approximate_price_sources,
-        }
-        return {
-            "timeline": timeline,
-            "balances": balances,
-            "equities": equities,
-            "metadata": metadata,
-        }
+        finally:
+            self._set_log_silence_watchdog_context(phase=prev_phase, stage=prev_stage)
 
     async def update_open_orders(self):
         """Refresh open orders from the exchange and reconcile the local cache."""

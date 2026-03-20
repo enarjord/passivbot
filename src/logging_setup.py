@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,7 @@ TRACE_LEVEL_NAME = "TRACE"
 DEFAULT_FORMAT = "%(asctime)s %(levelname)-8s %(message)s"
 DEFAULT_FORMAT_WITH_PREFIX = "%(asctime)s %(levelname)-8s [%(log_prefix)s] %(message)s"
 DEFAULT_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+_LAST_LOG_ACTIVITY_MONOTONIC = time.monotonic()
 
 
 class PrefixFilter(logging.Filter):
@@ -25,6 +27,23 @@ class PrefixFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.log_prefix = self.prefix
         return True
+
+
+class ActivityFilter(logging.Filter):
+    """Filter that tracks the most recent emitted log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        mark_log_activity()
+        return True
+
+
+def mark_log_activity() -> None:
+    global _LAST_LOG_ACTIVITY_MONOTONIC
+    _LAST_LOG_ACTIVITY_MONOTONIC = time.monotonic()
+
+
+def get_last_log_activity_monotonic() -> float:
+    return _LAST_LOG_ACTIVITY_MONOTONIC
 
 
 _LOG_LEVEL_ALIASES = {
@@ -141,11 +160,13 @@ def configure_logging(
 
     # Create prefix filter if needed
     prefix_filter = PrefixFilter(prefix or "") if prefix else None
+    activity_filter = ActivityFilter()
 
     if stream:
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
         stream_handler.setLevel(numeric_level)
+        stream_handler.addFilter(activity_filter)
         if prefix_filter:
             stream_handler.addFilter(prefix_filter)
         handlers.append(stream_handler)
@@ -159,6 +180,7 @@ def configure_logging(
             file_handler = logging.FileHandler(path)
         file_handler.setFormatter(formatter)
         file_handler.setLevel(numeric_level)
+        file_handler.addFilter(activity_filter)
         if prefix_filter:
             file_handler.addFilter(prefix_filter)
         handlers.append(file_handler)

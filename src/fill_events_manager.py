@@ -2295,6 +2295,14 @@ class FillEventsManager:
             _format_ms(end_ms),
             len(self._events),
         )
+        log_progress = start_ms is not None and end_ms is None
+        progress_started_at = time.monotonic()
+        progress_last_log_at = progress_started_at
+        progress_batches = 0
+        progress_fetched_events = 0
+        progress_oldest_ts: Optional[int] = None
+        progress_newest_ts: Optional[int] = None
+        progress_log_interval_s = 5.0
         detail_cache = {
             ev.id: (ev.client_order_id, ev.pb_order_type) for ev in self._events if ev.client_order_id
         }
@@ -2307,6 +2315,11 @@ class FillEventsManager:
         all_days_persisted: set[str] = set()
 
         def handle_batch(batch: List[Dict[str, object]]) -> None:
+            nonlocal progress_batches
+            nonlocal progress_fetched_events
+            nonlocal progress_oldest_ts
+            nonlocal progress_newest_ts
+            nonlocal progress_last_log_at
             ensure_qty_signage(batch)
             days_touched: set[str] = set()
             for raw in batch:
@@ -2342,6 +2355,37 @@ class FillEventsManager:
             day_payload = self._events_for_days(updated_map.values(), days_touched)
             self.cache.save_days(day_payload)
             all_days_persisted.update(days_touched)
+            if log_progress:
+                timestamps = [int(raw.get("timestamp") or 0) for raw in batch if raw.get("timestamp")]
+                progress_batches += 1
+                progress_fetched_events += len(batch)
+                if timestamps:
+                    batch_oldest = min(timestamps)
+                    batch_newest = max(timestamps)
+                    progress_oldest_ts = (
+                        batch_oldest
+                        if progress_oldest_ts is None
+                        else min(progress_oldest_ts, batch_oldest)
+                    )
+                    progress_newest_ts = (
+                        batch_newest
+                        if progress_newest_ts is None
+                        else max(progress_newest_ts, batch_newest)
+                    )
+                now = time.monotonic()
+                should_log = now - progress_last_log_at >= progress_log_interval_s
+                if should_log:
+                    elapsed = now - progress_started_at
+                    logger.info(
+                        "[fills] refresh progress: batches=%d fetched=%d unique=%d range=%s → %s elapsed=%.1fs",
+                        progress_batches,
+                        progress_fetched_events,
+                        len(updated_map),
+                        _format_ms(progress_oldest_ts),
+                        _format_ms(progress_newest_ts),
+                        elapsed,
+                    )
+                    progress_last_log_at = now
 
         try:
             await self.fetcher.fetch(start_ms, end_ms, detail_cache, on_batch=handle_batch)
@@ -2370,7 +2414,6 @@ class FillEventsManager:
             if all_days_persisted:
                 day_payload = self._events_for_days(self._events, all_days_persisted)
                 self.cache.save_days(day_payload)
-
         # Update cache metadata with timestamps
         if self._events:
             self.cache.update_metadata_from_events(self._events)
@@ -2386,13 +2429,28 @@ class FillEventsManager:
             days_preview = ", ".join(days_list[:5])
             if len(days_list) > 5:
                 days_preview += f", ... ({len(days_list)} total)"
-            logger.info(
-                "[fills] refresh: events=%d (+%d) | persisted %d days (%s)",
-                len(self._events),
-                len(added_ids),
-                len(all_days_persisted),
-                days_preview,
-            )
+            elapsed = time.monotonic() - progress_started_at
+            if log_progress:
+                logger.info(
+                    "[fills] refresh: events=%d (+%d) | persisted %d days (%s) | batches=%d fetched=%d range=%s → %s elapsed=%.1fs",
+                    len(self._events),
+                    len(added_ids),
+                    len(all_days_persisted),
+                    days_preview,
+                    progress_batches,
+                    progress_fetched_events,
+                    _format_ms(progress_oldest_ts),
+                    _format_ms(progress_newest_ts),
+                    elapsed,
+                )
+            else:
+                logger.info(
+                    "[fills] refresh: events=%d (+%d) | persisted %d days (%s)",
+                    len(self._events),
+                    len(added_ids),
+                    len(all_days_persisted),
+                    days_preview,
+                )
         else:
             logger.debug("[fills] refresh: events=%d (no changes)", len(self._events))
 
