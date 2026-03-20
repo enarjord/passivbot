@@ -56,3 +56,17 @@ def test_enable_archive_candle_fetch_preserved():
     cfg["live"]["enable_archive_candle_fetch"] = True
     out = format_config(copy.deepcopy(cfg), verbose=False)
     assert out["live"]["enable_archive_candle_fetch"] is True
+
+
+def test_margin_mode_preference_in_template():
+    """margin_mode_preference should be present in live template."""
+    template = get_template_config()
+    assert template["live"]["margin_mode_preference"] == "auto"
+
+
+def test_margin_mode_preference_preserved():
+    """margin_mode_preference should be preserved during format_config."""
+    cfg = _base_config()
+    cfg["live"]["margin_mode_preference"] = "auto_isolated"
+    out = format_config(copy.deepcopy(cfg), verbose=False)
+    assert out["live"]["margin_mode_preference"] == "auto_isolated"

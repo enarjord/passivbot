@@ -12,6 +12,7 @@ Tests cover:
 import importlib
 import sys
 import types
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -143,23 +144,24 @@ class TestHyperliquidBotHIP3:
         """Test HIP-3 max leverage constant is 10."""
         assert bot_class.HIP3_MAX_LEVERAGE == 10
 
-    def test_requires_isolated_margin_by_prefix(self, bot_class):
-        """Test isolated margin detection by xyz: prefix."""
+    def test_hip3_prefix_detects_symbol_without_forcing_isolated(self, bot_class):
+        """HIP-3 prefix identifies the market family, but margin mode now comes from metadata."""
         # Create minimal bot instance for method testing
         bot = object.__new__(bot_class)
         bot.markets_dict = {}
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
 
-        # Test prefix detection
-        assert bot._requires_isolated_margin("xyz:TSLA/USDC:USDC") is True
-        assert bot._requires_isolated_margin("xyz:NVDA/USDC:USDC") is True
+        assert bot._is_hip3_symbol("xyz:TSLA/USDC:USDC") is True
+        assert bot._is_hip3_symbol("XYZ-TSLA/USDC:USDC") is True
+        assert bot._requires_isolated_margin("xyz:TSLA/USDC:USDC") is False
         assert bot._requires_isolated_margin("BTC/USDC:USDC") is False
-        assert bot._requires_isolated_margin("ETH/USDC:USDC") is False
 
     def test_requires_isolated_margin_by_flag(self, bot_class):
         """Test isolated margin detection by onlyIsolated flag."""
         bot = object.__new__(bot_class)
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
         bot.markets_dict = {
             "NEWSTOCK/USDC:USDC": {"info": {"onlyIsolated": True}},
             "BTC/USDC:USDC": {"info": {"onlyIsolated": False}},
@@ -170,6 +172,156 @@ class TestHyperliquidBotHIP3:
 
         # Market with onlyIsolated=False should not require isolated margin
         assert bot._requires_isolated_margin("BTC/USDC:USDC") is False
+
+    def test_cross_capable_hip3_is_not_forced_isolated(self, bot_class):
+        """Cross-capable HIP-3 symbols should not be treated as isolated-only."""
+        bot = object.__new__(bot_class)
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.markets_dict = {
+            "XYZ-XYZ100/USDC:USDC": {
+                "baseName": "xyz:XYZ100",
+                "info": {"marginMode": "normal"},
+            }
+        }
+
+        assert bot._requires_isolated_margin("XYZ-XYZ100/USDC:USDC") is False
+
+    def test_live_isolated_position_overrides_auto_cross_preference_for_state_management(
+        self, bot_class
+    ):
+        """Live isolated HIP-3 state must remain manageable after restart."""
+        bot = object.__new__(bot_class)
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.config = {"live": {"margin_mode_preference": "auto_cross"}}
+        bot.markets_dict = {
+            "XYZ-XYZ100/USDC:USDC": {
+                "baseName": "xyz:XYZ100",
+                "info": {"marginMode": "normal"},
+            }
+        }
+        bot.positions = {
+            "XYZ-XYZ100/USDC:USDC": {
+                "long": {"size": 0.0013, "price": 24888.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+        }
+        bot.open_orders = {}
+        bot._hl_live_margin_modes = {"XYZ-XYZ100/USDC:USDC": "isolated"}
+
+        policy = bot._resolve_margin_policy_for_symbol("XYZ-XYZ100/USDC:USDC")
+
+        assert policy["mode"] == "isolated"
+        assert policy["blocked"] is False
+        assert policy["live_margin_mode"] == "isolated"
+
+    @pytest.mark.asyncio
+    async def test_fetch_positions_and_balance_queries_approved_hip3_symbols_on_cold_restart(
+        self, bot_class
+    ):
+        """Cold restart must still discover existing HIP-3 positions before active_symbols is built."""
+        bot = object.__new__(bot_class)
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot._hl_live_margin_modes = {}
+        bot.active_symbols = []
+        bot.open_orders = {}
+        bot.positions = {}
+        bot.coin_overrides = {}
+        bot.approved_coins = {"long": set(), "short": set()}
+        bot.approved_coins_minus_ignored_coins = {
+            "long": {"XYZ-XYZ100/USDC:USDC"},
+            "short": set(),
+        }
+        bot.config = {
+            "live": {
+                "approved_coins": {"long": ["XYZ100"], "short": []},
+                "empty_means_all_approved": False,
+            }
+        }
+        bot.markets_dict = {
+            "XYZ-XYZ100/USDC:USDC": {"baseName": "xyz:XYZ100", "info": {}},
+        }
+        bot.coin_to_symbol = lambda coin: f"{coin}/USDC:USDC"
+        bot.cca = MagicMock()
+        bot.cca.fetch_balance = AsyncMock(
+            return_value={
+                "info": {
+                    "assetPositions": [],
+                    "marginSummary": {"accountValue": "1000.0"},
+                }
+            }
+        )
+        bot.cca.fetch_positions = AsyncMock(
+            return_value=[
+                {
+                    "symbol": "XYZ-XYZ100/USDC:USDC",
+                    "side": "long",
+                    "contracts": 0.0013,
+                    "entryPrice": 24888.0,
+                    "marginMode": "isolated",
+                }
+            ]
+        )
+
+        positions, balance = await bot._fetch_positions_and_balance()
+
+        assert balance == 1000.0
+        assert positions[0]["symbol"] == "XYZ-XYZ100/USDC:USDC"
+        assert positions[0]["margin_mode"] == "isolated"
+        bot.cca.fetch_positions.assert_awaited_once_with(symbols=["XYZ-XYZ100/USDC:USDC"])
+
+    @pytest.mark.asyncio
+    async def test_fetch_open_orders_queries_approved_hip3_symbols_on_cold_restart(self, bot_class):
+        """Cold restart must also query HIP-3 open orders for approved symbols."""
+        bot = object.__new__(bot_class)
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.active_symbols = []
+        bot.open_orders = {}
+        bot.positions = {}
+        bot.coin_overrides = {}
+        bot.approved_coins = {"long": set(), "short": set()}
+        bot.approved_coins_minus_ignored_coins = {
+            "long": {"XYZ-XYZ100/USDC:USDC"},
+            "short": set(),
+        }
+        bot.config = {
+            "live": {
+                "approved_coins": {"long": ["XYZ100"], "short": []},
+                "empty_means_all_approved": False,
+            }
+        }
+        bot.markets_dict = {
+            "XYZ-XYZ100/USDC:USDC": {"baseName": "xyz:XYZ100", "info": {}},
+        }
+        bot.determine_pos_side = lambda order: "long"
+        bot.cca = MagicMock()
+
+        async def fetch_open_orders(symbol=None):
+            if symbol is None:
+                return []
+            return [
+                {
+                    "id": "abc123",
+                    "symbol": symbol,
+                    "side": "buy",
+                    "amount": 0.0013,
+                    "price": 24888.0,
+                    "timestamp": 1000,
+                }
+            ]
+
+        bot.cca.fetch_open_orders = AsyncMock(side_effect=fetch_open_orders)
+
+        orders = await bot.fetch_open_orders()
+
+        assert orders[0]["symbol"] == "XYZ-XYZ100/USDC:USDC"
+        assert bot.cca.fetch_open_orders.await_args_list[0].kwargs == {"symbol": None}
+        assert bot.cca.fetch_open_orders.await_args_list[1].kwargs == {
+            "symbol": "XYZ-XYZ100/USDC:USDC"
+        }
 
 
 class TestIsolatedMarginLeverageCapping:

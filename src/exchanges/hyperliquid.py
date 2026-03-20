@@ -28,12 +28,14 @@ class HyperliquidBot(CCXTBot):
     HIP3_MAX_LEVERAGE = 10
     # HIP-3 symbols use "xyz:" prefix (TradeXYZ builder)
     HIP3_PREFIX = "xyz:"
+    HIP3_ALT_PREFIXES = ("XYZ-", "XYZ:")
 
     def __init__(self, config: dict):
         super().__init__(config)
         self.quote = "USDC"
         self.hedge_mode = False
         self.significant_digits = {}
+        self._hl_live_margin_modes = {}
         if "is_vault" not in self.user_info or self.user_info["is_vault"] == "":
             logging.info(
                 f"parameter 'is_vault' missing from api-keys.json for user {self.user}. Setting to false"
@@ -79,6 +81,7 @@ class HyperliquidBot(CCXTBot):
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
         isolated_count = 0
+        hip3_count = 0
         for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
@@ -94,51 +97,172 @@ class HyperliquidBot(CCXTBot):
             )
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
+            market_max_leverage = (
+                int(elm["info"]["maxLeverage"]) if "maxLeverage" in elm["info"] else 0
+            )
 
-            # For isolated-only markets (HIP-3), cap at 10x leverage
+            if self._is_hip3_symbol(symbol):
+                hip3_count += 1
             if self._requires_isolated_margin(symbol):
                 isolated_count += 1
                 self.max_leverage[symbol] = min(
                     self.HIP3_MAX_LEVERAGE,
-                    (
-                        int(elm["info"]["maxLeverage"])
-                        if "maxLeverage" in elm["info"]
-                        else self.HIP3_MAX_LEVERAGE
-                    ),
+                    market_max_leverage or self.HIP3_MAX_LEVERAGE,
                 )
             else:
-                self.max_leverage[symbol] = (
-                    int(elm["info"]["maxLeverage"]) if "maxLeverage" in elm["info"] else 0
-                )
+                self.max_leverage[symbol] = market_max_leverage
         self.n_decimal_places = 6
         self.n_significant_figures = 5
-        if isolated_count:
+        if hip3_count:
             logging.info(
-                f"Detected {isolated_count} isolated-margin-only symbols (HIP-3/stock perps)"
+                "Detected %s HIP-3 symbols (%s isolated-only by exchange metadata)",
+                hip3_count,
+                isolated_count,
             )
 
-    def _requires_isolated_margin(self, symbol: str) -> bool:
-        """Check if a symbol requires isolated margin mode.
-
-        On Hyperliquid, this includes:
-        1. Symbols with xyz: prefix (HIP-3 stock perps from TradeXYZ)
-        2. Markets with onlyIsolated=True flag
-
-        Args:
-            symbol: CCXT-style symbol (e.g., "xyz:TSLA/USDC:USDC")
-
-        Returns:
-            True if this symbol requires isolated margin mode
-        """
-        # Check for xyz: prefix in symbol or base
-        if symbol.startswith(self.HIP3_PREFIX):
+    def _is_hip3_symbol(self, symbol: str) -> bool:
+        """Return True if the symbol is a HIP-3 builder-deployed perp."""
+        prefixes = (self.HIP3_PREFIX,) + tuple(self.HIP3_ALT_PREFIXES)
+        if symbol.startswith(prefixes):
             return True
         base = symbol.split("/")[0] if "/" in symbol else symbol
-        if base.startswith(self.HIP3_PREFIX):
+        if base.startswith(prefixes):
             return True
+        if self._get_hl_dex_for_symbol(symbol):
+            return True
+        return False
+
+    def _hip3_margin_metadata(self, symbol: str) -> dict:
+        market = getattr(self, "markets_dict", {}).get(symbol, {})
+        info = market.get("info", {})
+        margin_modes = market.get("marginModes", {})
+        raw_mode = str(info.get("marginMode") or "").strip()
+        raw_mode_l = raw_mode.lower()
+        only_isolated = bool(info.get("onlyIsolated") or info.get("isolatedOnly"))
+        cross_capable = not only_isolated and raw_mode_l not in {"strictisolated", "nocross"}
+        if isinstance(margin_modes, dict) and margin_modes.get("cross") is False:
+            cross_capable = False
+        reason = raw_mode or ("onlyIsolated" if only_isolated else "metadata_allows_cross")
+        return {
+            "cross_capable": cross_capable,
+            "reason": reason,
+            "raw_margin_mode": raw_mode,
+            "only_isolated": only_isolated,
+        }
+
+    def _requires_isolated_margin(self, symbol: str) -> bool:
+        """Return True only when exchange metadata marks the symbol isolated-only."""
+        if self._is_hip3_symbol(symbol):
+            return not self._hip3_margin_metadata(symbol)["cross_capable"]
 
         # Fall back to base class check (onlyIsolated flag, etc.)
         return super()._requires_isolated_margin(symbol)
+
+    def _get_hl_dex_for_symbol(self, symbol: str) -> str | None:
+        """Return HIP-3 dex name for a symbol if available."""
+        market = getattr(self, "markets_dict", {}).get(symbol, {})
+        base_name = market.get("baseName") or market.get("info", {}).get("baseName", "")
+        if isinstance(base_name, str) and ":" in base_name:
+            dex_name = base_name.split(":", 1)[0]
+            if dex_name:
+                return dex_name
+        return None
+
+    def _get_hl_hip3_state_symbols(self) -> list[str]:
+        """Return tracked HIP-3 symbols that need dex-scoped state queries."""
+        tracked = set(getattr(self, "active_symbols", []) or [])
+        tracked.update(getattr(self, "open_orders", {}).keys())
+        tracked.update(getattr(self, "positions", {}).keys())
+        approved = getattr(self, "approved_coins_minus_ignored_coins", {}) or {}
+        for pside in ("long", "short"):
+            tracked.update(approved.get(pside, set()) or set())
+        approved_raw = getattr(self, "approved_coins", {}) or {}
+        for pside in ("long", "short"):
+            tracked.update(approved_raw.get(pside, set()) or set())
+        cfg_live = getattr(self, "config", {}).get("live", {}) if hasattr(self, "config") else {}
+        cfg_approved = cfg_live.get("approved_coins", {}) if isinstance(cfg_live, dict) else {}
+        if isinstance(cfg_approved, dict):
+            for pside in ("long", "short"):
+                vals = cfg_approved.get(pside, [])
+                if isinstance(vals, (list, tuple, set)):
+                    tracked.update(str(x) for x in vals if x)
+        if not tracked and cfg_live.get("empty_means_all_approved"):
+            tracked.update(getattr(self, "eligible_symbols", set()) or set())
+        tracked.update(
+            symbol
+            for symbol in getattr(self, "coin_overrides", {}) or {}
+            if symbol in getattr(self, "markets_dict", {})
+        )
+        return sorted(
+            symbol
+            for symbol in tracked
+            if symbol in getattr(self, "markets_dict", {}) and self._get_hl_dex_for_symbol(symbol)
+        )
+
+    def _normalize_ccxt_position(self, position: dict) -> dict:
+        side = position.get("side")
+        contracts = float(position.get("contracts") or 0.0)
+        if side == "short":
+            contracts = -contracts
+        margin_mode = position.get("marginMode")
+        if margin_mode is None and isinstance(position.get("info"), dict):
+            leverage = position["info"].get("position", {}).get("leverage", {})
+            if isinstance(leverage, dict):
+                margin_mode = leverage.get("type")
+        if margin_mode is None and position.get("isolated") is not None:
+            margin_mode = "isolated" if position.get("isolated") else "cross"
+        return {
+            "symbol": position["symbol"],
+            "position_side": side,
+            "size": contracts,
+            "price": float(position.get("entryPrice") or 0.0),
+            "margin_mode": str(margin_mode).lower() if margin_mode else None,
+        }
+
+    def _record_hl_live_margin_mode(self, symbol: str, margin_mode: str | None) -> None:
+        if not symbol or not margin_mode:
+            return
+        normalized = str(margin_mode).lower()
+        if normalized in {"cross", "isolated"}:
+            if not hasattr(self, "_hl_live_margin_modes") or self._hl_live_margin_modes is None:
+                self._hl_live_margin_modes = {}
+            self._hl_live_margin_modes[symbol] = normalized
+
+    def _has_live_symbol_state(self, symbol: str) -> bool:
+        pos = getattr(self, "positions", {}).get(symbol, {})
+        if abs(float(pos.get("long", {}).get("size", 0.0) or 0.0)) > 0.0:
+            return True
+        if abs(float(pos.get("short", {}).get("size", 0.0) or 0.0)) > 0.0:
+            return True
+        if symbol in getattr(self, "open_orders", {}) and self.open_orders.get(symbol):
+            return True
+        return False
+
+    def _resolve_margin_policy_for_symbol(self, symbol: str) -> dict:
+        policy = super()._resolve_margin_policy_for_symbol(symbol)
+        live_margin_mode = getattr(self, "_hl_live_margin_modes", {}).get(symbol)
+        if self._has_live_symbol_state(symbol) and live_margin_mode in {"cross", "isolated"}:
+            return {
+                **policy,
+                "mode": live_margin_mode,
+                "blocked": False,
+                "live_margin_mode": live_margin_mode,
+            }
+        return policy
+
+    async def _fetch_hip3_positions(self) -> list[dict]:
+        """Fetch HIP-3 positions via dex-scoped CCXT routes."""
+        positions_by_key = {}
+        for symbol in self._get_hl_hip3_state_symbols():
+            fetched = await self.cca.fetch_positions(symbols=[symbol])
+            for position in fetched:
+                normalized = self._normalize_ccxt_position(position)
+                self._record_hl_live_margin_mode(
+                    normalized["symbol"], normalized.get("margin_mode")
+                )
+                key = (normalized["symbol"], normalized["position_side"])
+                positions_by_key[key] = normalized
+        return list(positions_by_key.values())
 
     async def watch_orders(self):
         res = None
@@ -202,7 +326,31 @@ class HyperliquidBot(CCXTBot):
         return self.determine_pos_side(order)
 
     async def fetch_open_orders(self, symbol: str = None):
-        fetched = await self.cca.fetch_open_orders()
+        fetched = []
+        seen_ids = set()
+        query_symbols = [symbol] if symbol is not None else self._get_hl_hip3_state_symbols()
+
+        if symbol is None or not self._get_hl_dex_for_symbol(symbol):
+            for order in await self.cca.fetch_open_orders(symbol=symbol):
+                if order["id"] in seen_ids:
+                    continue
+                seen_ids.add(order["id"])
+                fetched.append(order)
+
+        if symbol is None:
+            hip3_symbols = query_symbols
+        elif self._get_hl_dex_for_symbol(symbol):
+            hip3_symbols = query_symbols
+        else:
+            hip3_symbols = []
+
+        for hip3_symbol in hip3_symbols:
+            for order in await self.cca.fetch_open_orders(symbol=hip3_symbol):
+                if order["id"] in seen_ids:
+                    continue
+                seen_ids.add(order["id"])
+                fetched.append(order)
+
         for elm in fetched:
             elm["position_side"] = self.determine_pos_side(elm)
             elm["qty"] = elm["amount"]
@@ -210,19 +358,25 @@ class HyperliquidBot(CCXTBot):
 
     async def _fetch_positions_and_balance(self):
         info = await self.cca.fetch_balance()
-        positions = [
-            {
+        positions = {}
+        for x in info["info"]["assetPositions"]:
+            size = float(x["position"]["szi"])
+            elm = {
                 "symbol": self.coin_to_symbol(x["position"]["coin"]),
-                "position_side": ("long" if (size := float(x["position"]["szi"])) > 0.0 else "short"),
+                "position_side": ("long" if size > 0.0 else "short"),
                 "size": size,
                 "price": float(x["position"]["entryPx"]),
             }
-            for x in info["info"]["assetPositions"]
-        ]
+            leverage = x.get("position", {}).get("leverage", {})
+            if isinstance(leverage, dict):
+                self._record_hl_live_margin_mode(elm["symbol"], leverage.get("type"))
+            positions[(elm["symbol"], elm["position_side"])] = elm
+        for position in await self._fetch_hip3_positions():
+            positions[(position["symbol"], position["position_side"])] = position
         balance = float(info["info"]["marginSummary"]["accountValue"]) - sum(
             [float(x["position"]["unrealizedPnl"]) for x in info["info"]["assetPositions"]]
         )
-        return positions, balance
+        return list(positions.values()), balance
 
     async def _get_positions_and_balance_cached(self, my_gen: int = 0):
         """Fetch positions+balance with dedup: concurrent callers share one API call.
