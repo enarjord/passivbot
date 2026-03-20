@@ -326,6 +326,15 @@ def test_format_config_adds_monitor_defaults():
     }
 
 
+def test_format_config_adds_logging_silence_watchdog_default():
+    current = copy.deepcopy(_template())
+    current["logging"].pop("silence_watchdog_seconds", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["logging"]["silence_watchdog_seconds"] == 60.0
+
+
 def test_format_config_rejects_invalid_monitor_snapshot_interval():
     current = copy.deepcopy(_template())
     current["monitor"]["snapshot_interval_seconds"] = 0.0

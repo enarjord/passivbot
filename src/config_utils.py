@@ -3128,6 +3128,7 @@ def get_template_config():
         "logging": {
             "level": 1,
             "memory_snapshot_interval_minutes": 30.0,
+            "silence_watchdog_seconds": 60.0,
             "volume_refresh_info_threshold_seconds": 30.0,
         },
         "monitor": {
