@@ -205,6 +205,8 @@ Useful global HSL backtest metrics include:
 2. `hard_stop_restarts`
 3. `hard_stop_triggers_per_year`
 4. `hard_stop_restarts_per_year`
+5. `hard_stop_restarts_per_year_long`
+6. `hard_stop_restarts_per_year_short`
 5. `hard_stop_time_in_yellow_pct`
 6. `hard_stop_time_in_orange_pct`
 7. `hard_stop_time_in_red_pct`

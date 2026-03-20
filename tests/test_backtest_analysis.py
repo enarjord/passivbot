@@ -148,6 +148,8 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
             "hard_stop_triggers_short": 1,
             "hard_stop_restarts": 2,
             "hard_stop_restarts_per_year": 24.3333333333,
+            "hard_stop_restarts_per_year_long": 12.16666666665,
+            "hard_stop_restarts_per_year_short": 12.16666666665,
             "hard_stop_restarts_long": 1,
             "hard_stop_restarts_short": 1,
             "hard_stop_halt_to_restart_equity_loss_pct": 0.125,
@@ -171,6 +173,8 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
             "hard_stop_triggers_short": 1,
             "hard_stop_restarts": 2,
             "hard_stop_restarts_per_year": 24.3333333333,
+            "hard_stop_restarts_per_year_long": 12.16666666665,
+            "hard_stop_restarts_per_year_short": 12.16666666665,
             "hard_stop_restarts_long": 1,
             "hard_stop_restarts_short": 1,
             "hard_stop_halt_to_restart_equity_loss_pct": 0.125,
@@ -207,6 +211,8 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
     assert result["hard_stop_triggers_short"] == 1
     assert result["hard_stop_restarts"] == 2
     assert result["hard_stop_restarts_per_year"] == 24.3333333333
+    assert result["hard_stop_restarts_per_year_long"] == 12.16666666665
+    assert result["hard_stop_restarts_per_year_short"] == 12.16666666665
     assert result["hard_stop_restarts_long"] == 1
     assert result["hard_stop_restarts_short"] == 1
     assert result["hard_stop_halt_to_restart_equity_loss_pct"] == 0.125

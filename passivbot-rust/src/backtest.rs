@@ -310,6 +310,8 @@ pub struct HardStopMetrics {
     pub halt_to_restart_equity_loss_pct: f64,
     pub restarts: u32,
     pub restarts_per_year: f64,
+    pub restarts_per_year_long: f64,
+    pub restarts_per_year_short: f64,
     pub restarts_long: u32,
     pub restarts_short: u32,
     pub time_in_yellow_pct: f64,
@@ -4187,6 +4189,8 @@ impl<'a> Backtest<'a> {
             halt_to_restart_equity_loss_pct: self.hard_stop_total_panic_loss / starting_balance,
             restarts: self.hard_stop_n_restarts,
             restarts_per_year: self.hard_stop_n_restarts as f64 * per_year_scale,
+            restarts_per_year_long: self.hard_stop_n_restarts_pside[LONG] as f64 * per_year_scale,
+            restarts_per_year_short: self.hard_stop_n_restarts_pside[SHORT] as f64 * per_year_scale,
             restarts_long: self.hard_stop_n_restarts_pside[LONG],
             restarts_short: self.hard_stop_n_restarts_pside[SHORT],
             time_in_yellow_pct,
@@ -5567,6 +5571,8 @@ mod tests {
         bt.update_hard_stop_state(2).unwrap();
         bt.hard_stop_n_triggers = 3;
         bt.hard_stop_n_restarts = 2;
+        bt.hard_stop_n_restarts_pside[LONG] = 1;
+        bt.hard_stop_n_restarts_pside[SHORT] = 1;
 
         let hs_metrics = bt.hard_stop_metrics();
         assert!((hs_metrics.drawdown_worst_hsl - 0.25).abs() < 1e-12);
@@ -5577,6 +5583,8 @@ mod tests {
         );
         assert!((hs_metrics.triggers_per_year - 547.875).abs() < 1e-12);
         assert!((hs_metrics.restarts_per_year - 365.25).abs() < 1e-12);
+        assert!((hs_metrics.restarts_per_year_long - 182.625).abs() < 1e-12);
+        assert!((hs_metrics.restarts_per_year_short - 182.625).abs() < 1e-12);
     }
 
     #[test]

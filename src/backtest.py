@@ -150,6 +150,8 @@ ANALYSIS_SHARED_KEYS = {
     "peak_recovery_hours_hsl_short",
     "hard_stop_triggers_per_year",
     "hard_stop_restarts_per_year",
+    "hard_stop_restarts_per_year_long",
+    "hard_stop_restarts_per_year_short",
     "hard_stop_triggers_long",
     "hard_stop_triggers_short",
     "hard_stop_restarts_long",

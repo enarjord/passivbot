@@ -65,6 +65,8 @@ and more stable across collateral caps.
 - `hard_stop_restarts`: Absolute count of cooldown restarts after RED halts.
 - `hard_stop_triggers_per_year`: `hard_stop_triggers / n_days * 365.25`.
 - `hard_stop_restarts_per_year`: `hard_stop_restarts / n_days * 365.25`.
+- `hard_stop_restarts_per_year_long`: `hard_stop_restarts_long / n_days * 365.25`.
+- `hard_stop_restarts_per_year_short`: `hard_stop_restarts_short / n_days * 365.25`.
 
 ## Exposure, volume, and timing
 - `total_wallet_exposure_max/mean/median`: Stats over recorded wallet exposure values.

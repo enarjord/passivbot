@@ -955,6 +955,8 @@ fn run_backtest_core<'py>(
         analysis_usd.hard_stop_halt_to_restart_equity_loss_pct = hs.halt_to_restart_equity_loss_pct;
         analysis_usd.hard_stop_restarts = hs.restarts;
         analysis_usd.hard_stop_restarts_per_year = hs.restarts_per_year;
+        analysis_usd.hard_stop_restarts_per_year_long = hs.restarts_per_year_long;
+        analysis_usd.hard_stop_restarts_per_year_short = hs.restarts_per_year_short;
         analysis_usd.hard_stop_restarts_long = hs.restarts_long;
         analysis_usd.hard_stop_restarts_short = hs.restarts_short;
         analysis_usd.hard_stop_time_in_yellow_pct = hs.time_in_yellow_pct;
@@ -1001,6 +1003,8 @@ fn run_backtest_core<'py>(
         analysis_btc.hard_stop_halt_to_restart_equity_loss_pct = hs.halt_to_restart_equity_loss_pct;
         analysis_btc.hard_stop_restarts = hs.restarts;
         analysis_btc.hard_stop_restarts_per_year = hs.restarts_per_year;
+        analysis_btc.hard_stop_restarts_per_year_long = hs.restarts_per_year_long;
+        analysis_btc.hard_stop_restarts_per_year_short = hs.restarts_per_year_short;
         analysis_btc.hard_stop_restarts_long = hs.restarts_long;
         analysis_btc.hard_stop_restarts_short = hs.restarts_short;
         analysis_btc.hard_stop_time_in_yellow_pct = hs.time_in_yellow_pct;
