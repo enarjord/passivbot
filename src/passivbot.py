@@ -6788,9 +6788,9 @@ def setup_bot(config):
 
         bot = GateIOBot(config)
     elif user_info["exchange"] == "defx":
-        from exchanges.defx import DefxBot
-
-        bot = DefxBot(config)
+        raise NotImplementedError(
+            "exchange 'defx' is temporarily disabled in this dev branch pending resumed support work"
+        )
     elif user_info["exchange"] == "kucoin":
         from exchanges.kucoin import KucoinBot
 
@@ -6799,6 +6799,10 @@ def setup_bot(config):
         from exchanges.paradex import ParadexBot
 
         bot = ParadexBot(config)
+    elif user_info["exchange"] == "fake":
+        from exchanges.fake import FakeBot
+
+        bot = FakeBot(config)
     else:
         # Generic CCXTBot for any CCXT-supported exchange
         from exchanges.ccxt_bot import CCXTBot

@@ -50,3 +50,20 @@ def test_setup_bot_known_exchange_uses_specific_bot():
 
             mock_binance_bot.assert_called_once_with(config)
             assert result == mock_bot
+
+
+@pytest.mark.parametrize("exchange", ["defx", "paradex"])
+def test_setup_bot_rejects_temporarily_disabled_exchange(exchange):
+    """Unsupported dev-branch exchanges should fail loudly at setup time."""
+    from passivbot import setup_bot
+
+    config = {"live": {"user": "test_user"}}
+    mock_user_info = {
+        "exchange": exchange,
+        "key": "test_key",
+        "secret": "test_secret",
+    }
+
+    with patch("passivbot.load_user_info", return_value=mock_user_info):
+        with pytest.raises(NotImplementedError, match=exchange):
+            setup_bot(config)

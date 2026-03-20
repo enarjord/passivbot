@@ -398,6 +398,105 @@ class TestCCXTBotUpdateExchangeConfigBySymbols:
         with pytest.raises(Exception, match="Margin API error"):
             await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
 
+    def test_margin_mode_preference_aliases(self):
+        """Margin preference aliases should normalize to canonical values."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.config = {"live": {"margin_mode_preference": "auto"}}
+        assert bot._get_margin_mode_preference() == "auto_cross_preferred"
+
+        bot.config = {"live": {"margin_mode_preference": "auto_cross"}}
+        assert bot._get_margin_mode_preference() == "auto_cross_preferred"
+
+        bot.config = {"live": {"margin_mode_preference": "auto_isolated"}}
+        assert bot._get_margin_mode_preference() == "auto_isolated_preferred"
+
+    def test_cross_preference_blocks_isolated_only_symbol_for_entries(self, caplog):
+        """Strict cross preference should block isolated-only symbols from new entries."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot.markets_dict = {
+            "ISO/USDT:USDT": {
+                "info": {"onlyIsolated": True},
+                "marginModes": {"cross": False, "isolated": True},
+            }
+        }
+
+        with caplog.at_level("WARNING"):
+            filtered = bot._filter_approved_symbols("long", {"ISO/USDT:USDT"})
+
+        assert filtered == set()
+        assert bot._get_margin_mode_for_symbol("ISO/USDT:USDT") == "isolated"
+        assert "margin_mode_preference=cross" in caplog.text
+        assert "isolated-only" in caplog.text
+
+    def test_isolated_preference_blocks_cross_only_symbol_for_entries(self, caplog):
+        """Strict isolated preference should block cross-only symbols from new entries."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
+        bot.config = {"live": {"margin_mode_preference": "isolated"}}
+        bot.markets_dict = {
+            "X/USDT:USDT": {
+                "info": {},
+                "marginModes": {"cross": True, "isolated": False},
+            }
+        }
+
+        with caplog.at_level("WARNING"):
+            filtered = bot._filter_approved_symbols("long", {"X/USDT:USDT"})
+
+        assert filtered == set()
+        assert bot._get_margin_mode_for_symbol("X/USDT:USDT") == "cross"
+        assert "cross-only" in caplog.text
+
+    def test_auto_isolated_prefers_isolated_when_both_supported(self):
+        """auto_isolated should choose isolated on both-capable symbols."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.config = {"live": {"margin_mode_preference": "auto_isolated"}}
+        bot.markets_dict = {
+            "BOTH/USDT:USDT": {
+                "info": {},
+                "marginModes": {"cross": True, "isolated": True},
+            }
+        }
+
+        assert bot._get_margin_mode_for_symbol("BOTH/USDT:USDT") == "isolated"
+
+    def test_live_margin_mode_is_preserved_when_symbol_has_existing_state(self):
+        """Existing live positions/orders must keep their actual margin mode after restart."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot.markets_dict = {
+            "ISO/USDT:USDT": {
+                "marginModes": {"cross": True, "isolated": True},
+                "info": {},
+            }
+        }
+        bot.positions = {
+            "ISO/USDT:USDT": {
+                "long": {"size": 1.0, "price": 100.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+        }
+        bot.open_orders = {}
+        bot._live_margin_modes = {"ISO/USDT:USDT": "isolated"}
+
+        policy = bot._resolve_margin_policy_for_symbol("ISO/USDT:USDT")
+
+        assert policy["mode"] == "isolated"
+        assert policy["blocked"] is False
+        assert policy["live_margin_mode"] == "isolated"
+
 
 class TestCCXTBotSetMarketSpecificSettings:
     """Tests for set_market_specific_settings."""
