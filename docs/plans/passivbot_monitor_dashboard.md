@@ -2,7 +2,26 @@
 
 ## Status
 
-Draft implementation spec.
+Phase 1 bot-side publisher is partially implemented.
+
+Implemented now:
+
+1. `monitor.*` config surface and validation
+2. `src/monitor_publisher.py`
+3. `manifest.json`
+4. atomic `state.latest.json`
+5. `events/current.ndjson`
+6. checkpoint snapshots
+7. basic event rotation and retention pruning
+8. targeted tests
+
+Still pending:
+
+1. dashboard/TUI reader
+2. history streams under `history/`
+3. tick and completed-candle publication
+4. richer snapshot sections beyond the minimal Phase 1 set
+5. publisher self-reporting via `error.publisher`
 
 ## Goal
 
@@ -54,6 +73,12 @@ Responsibilities:
 
 The publisher should be the only component writing monitor files.
 
+Current implementation status:
+
+1. this module now exists as `src/monitor_publisher.py`
+2. manifest, event append, atomic snapshot writes, checkpoints, and basic retention are implemented
+3. history-stream publication is not implemented yet
+
 ### Bot Integration
 
 `Passivbot` should publish through a narrow interface, for example:
@@ -63,6 +88,12 @@ The publisher should be the only component writing monitor files.
 - `publisher.flush_snapshot_if_due()`
 
 The live bot should not perform ad hoc file writes across many methods.
+
+Current implementation status:
+
+1. publisher init is wired in `Passivbot.__init__`
+2. startup, ready, shutdown, health, balance, position, order, fill, mode, and HSL hooks emit monitor events
+3. minimal snapshot rebuild/flush is wired from startup, loop cadence, and shutdown
 
 ## Monitor Data Root
 

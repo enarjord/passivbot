@@ -185,6 +185,12 @@ For more detailed information about Passivbot, see documentation files here: [do
 - Installation details: [docs/installation.md](docs/installation.md)
 - Common setup and CLI issues: [docs/troubleshooting.md](docs/troubleshooting.md)
 
+Useful entry points:
+- [Backtesting](docs/backtesting.md)
+- [Optimizing](docs/optimizing.md)
+- [Metrics reference](docs/metrics.md)
+- [Monitor output](docs/monitor.md)
+
 ## Support
 
 [![Discord](https://img.shields.io/badge/Discord-7289DA?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/QAF2H2UmzZ)

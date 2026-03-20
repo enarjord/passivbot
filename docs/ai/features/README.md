@@ -9,6 +9,7 @@ Open these only when touching the relevant subsystem.
 | Fill events manager | `fill_events_manager.md` | Fill/PnL ingestion and pagination |
 | Balance routing | `balance_routing.md` | Raw vs snapped balance semantics |
 | Trailing diagnostics | `trailing_diagnostics.md` | Standalone trailing-logic exploration tool and pure diagnostic helpers |
+| Monitor publisher | `monitor_publisher.md` | Monitor snapshot/event publication, schema boundaries, dashboard handoff work |
 
 ## Authoring Rule
 

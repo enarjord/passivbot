@@ -37,6 +37,7 @@ from fill_events_manager import (
     _build_fetcher_for_bot,
     _extract_symbol_pool,
 )
+from monitor_publisher import MonitorPublisher
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
 from logging_setup import configure_logging, resolve_log_level
 from utils import (
@@ -545,6 +546,19 @@ class Passivbot:
         self._last_plan_detail: dict[str, tuple[int, int, int]] = {}
         self._last_action_summary: dict[tuple[str, str], str] = {}
         self.start_time_ms = utc_ms()
+        self._monitor_last_equity = float(self.balance_raw)
+        self.monitor_publisher: Optional[MonitorPublisher] = None
+        self.monitor_enabled = bool(require_config_value(config, "monitor.enabled"))
+        if self.monitor_enabled:
+            try:
+                self.monitor_publisher = MonitorPublisher.from_config(
+                    exchange=self.exchange,
+                    user=self.user,
+                    config=require_config_value(config, "monitor"),
+                )
+            except Exception as exc:
+                logging.error("[monitor] failed to initialize monitor publisher: %s", exc)
+                self.monitor_publisher = None
         # CandlestickManager settings from config.live
         # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
         cm_kwargs = {
@@ -837,67 +851,42 @@ class Passivbot:
     def _log_health_summary(self) -> None:
         """Log a health summary with uptime and counters."""
         now_ms = utc_ms()
-        uptime_ms = now_ms - self._health_start_ms
+        summary = self._build_health_summary_payload(now_ms=now_ms)
+        uptime_ms = int(summary["uptime_ms"])
         uptime_str = self._format_duration(uptime_ms)
-
-        # Count current positions
-        n_long = 0
-        n_short = 0
-        for symbol, pos_data in self.positions.items():
-            if pos_data.get("long", {}).get("size", 0.0) != 0.0:
-                n_long += 1
-            if pos_data.get("short", {}).get("size", 0.0) != 0.0:
-                n_short += 1
-
-        balance_raw = self.get_raw_balance()
-        balance_snapped = self.get_hysteresis_snapped_balance()
+        balance_raw = float(summary["balance_raw"])
+        balance_snapped = float(summary["balance_snapped"])
         balance_str = f"{balance_raw:.2f} {self.quote}"
         if abs(balance_raw - balance_snapped) > 1e-9:
             balance_str += f" (snap {balance_snapped:.2f})"
-
-        # Build fills string with PnL if fills > 0
-        if self._health_fills > 0:
-            pnl_sign = "+" if self._health_pnl >= 0 else ""
-            fills_str = f"fills={self._health_fills} (pnl={pnl_sign}{self._health_pnl:.2f})"
+        if int(summary["fills"]) > 0:
+            pnl_sign = "+" if float(summary["pnl"]) >= 0 else ""
+            fills_str = f"fills={int(summary['fills'])} (pnl={pnl_sign}{float(summary['pnl']):.2f})"
         else:
             fills_str = "fills=0"
-
-        # Loop timing
-        loop_ms = getattr(self, "_last_loop_duration_ms", 0)
+        loop_ms = int(summary["last_loop_duration_ms"])
         loop_str = f"{loop_ms / 1000:.1f}s" if loop_ms > 0 else "n/a"
-
-        # Error budget: count of errors in last hour vs max
-        error_counts = getattr(self, "error_counts", [])
-        now = utc_ms()
-        recent_errors = len([x for x in error_counts if x > now - 1000 * 60 * 60])
-        max_errors = 10
-        error_budget_str = f"{recent_errors}/{max_errors}"
-
-        # Memory usage
-        try:
-            import resource
-
-            rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 / 1024
-            mem_str = f"rss={rss_mb:.0f}MB"
-        except Exception:
-            mem_str = ""
+        error_budget_str = f"{int(summary['errors_last_hour'])}/10"
+        rss_bytes = summary.get("rss_bytes")
+        mem_str = f"rss={float(rss_bytes) / (1024 * 1024):.0f}MB" if rss_bytes is not None else ""
 
         logging.info(
             "[health] uptime=%s | loop=%s | positions=%d long, %d short | balance=%s | "
             "orders=+%d/-%d | %s | errors=%s | ws_reconnects=%d | rate_limits=%d%s",
             uptime_str,
             loop_str,
-            n_long,
-            n_short,
+            int(summary["positions_long"]),
+            int(summary["positions_short"]),
             balance_str,
-            self._health_orders_placed,
-            self._health_orders_cancelled,
+            int(summary["orders_placed"]),
+            int(summary["orders_cancelled"]),
             fills_str,
             error_budget_str,
-            self._health_ws_reconnects,
-            self._health_rate_limits,
+            int(summary["ws_reconnects"]),
+            int(summary["rate_limits"]),
             f" | {mem_str}" if mem_str else "",
         )
+        self._monitor_record_event("health.summary", ("health", "summary"), summary, ts=now_ms)
 
     def _calc_unstuck_allowance_for_logging(self, pside: str) -> dict:
         """Calculate raw unstuck allowance values for logging (including negative)."""
@@ -970,6 +959,18 @@ class Passivbot:
         """Initialise state, warm cached data, and launch background loops."""
         self._log_startup_banner()
         logging.info("[boot] starting bot %s...", self.exchange)
+        self._monitor_record_event(
+            "bot.start",
+            ("bot", "lifecycle", "start"),
+            {
+                "exchange": self.exchange,
+                "user": self.user,
+                "pid": os.getpid(),
+                "quote": self.quote,
+                "start_time_ms": self.start_time_ms,
+            },
+            ts=self.start_time_ms,
+        )
 
         # Random boot stagger to spread API load when multiple bots start simultaneously.
         # Applies BEFORE init_markets() so even the first API calls are staggered.
@@ -1008,6 +1009,14 @@ class Passivbot:
         logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
         logging.info("[boot] READY - Bot initialization complete, entering main trading loop")
         logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
+        ready_ts = utc_ms()
+        self._monitor_record_event(
+            "bot.ready",
+            ("bot", "lifecycle", "ready"),
+            {"debug_mode": bool(self.debug_mode)},
+            ts=ready_ts,
+        )
+        await self._monitor_flush_snapshot(force=True, ts=ready_ts)
         if not self.debug_mode:
             await self.run_execution_loop()
 
@@ -1160,6 +1169,241 @@ class Passivbot:
         """Emit debug output only when the instance is in debug mode."""
         if hasattr(self, "debug_mode") and self.debug_mode:
             print(*args)
+
+    def _monitor_record_event(
+        self,
+        kind: str,
+        tags: Iterable[str],
+        payload: Optional[dict] = None,
+        *,
+        symbol: Optional[str] = None,
+        pside: Optional[str] = None,
+        ts: Optional[int] = None,
+    ) -> Optional[dict]:
+        publisher = getattr(self, "monitor_publisher", None)
+        if publisher is None:
+            return None
+        return publisher.record_event(kind, tags, payload, ts=ts, symbol=symbol, pside=pside)
+
+    def _monitor_record_error(
+        self,
+        kind: str,
+        error: Exception,
+        *,
+        tags: Optional[Iterable[str]] = None,
+        payload: Optional[dict] = None,
+        symbol: Optional[str] = None,
+        pside: Optional[str] = None,
+        ts: Optional[int] = None,
+    ) -> Optional[dict]:
+        publisher = getattr(self, "monitor_publisher", None)
+        if publisher is None:
+            return None
+        return publisher.record_error(
+            kind,
+            error,
+            tags=tags,
+            payload=payload,
+            ts=ts,
+            symbol=symbol,
+            pside=pside,
+        )
+
+    def _monitor_hsl_payload(self, pside: str) -> dict:
+        enabled = self._equity_hard_stop_enabled(pside)
+        state = self._hsl_state(pside)
+        last_metrics = state.get("last_metrics") or {}
+        payload = {
+            "enabled": bool(enabled),
+            "tier": str(last_metrics.get("tier", "disabled" if not enabled else "unknown")),
+            "halted": bool(state.get("halted", False)),
+            "no_restart_latched": bool(state.get("no_restart_latched", False)),
+            "pending_red_since_ms": state.get("pending_red_since_ms"),
+            "cooldown_until_ms": state.get("cooldown_until_ms"),
+            "cooldown_intervention_active": bool(state.get("cooldown_intervention_active", False)),
+            "cooldown_repanic_reset_pending": bool(
+                state.get("cooldown_repanic_reset_pending", False)
+            ),
+            "last_metrics": dict(last_metrics) if isinstance(last_metrics, dict) else {},
+        }
+        return {k: v for k, v in payload.items() if v is not None}
+
+    def _monitor_order_payload(self, order: dict, *, source: str) -> dict:
+        payload = {
+            "id": order.get("id"),
+            "custom_id": order.get("custom_id"),
+            "side": order.get("side"),
+            "position_side": order.get("position_side"),
+            "qty": abs(float(order.get("qty", 0.0) or 0.0)),
+            "price": float(order.get("price", 0.0) or 0.0),
+            "reduce_only": bool(
+                order.get("reduce_only")
+                or (
+                    order.get("position_side") == "long" and order.get("side") == "sell"
+                )
+                or (
+                    order.get("position_side") == "short" and order.get("side") == "buy"
+                )
+            ),
+            "pb_order_type": self._resolve_pb_order_type(order),
+            "source": source,
+        }
+        if order.get("_context"):
+            payload["context"] = str(order["_context"])
+        if order.get("_reason"):
+            payload["reason"] = str(order["_reason"])
+        if isinstance(order.get("_delta"), dict):
+            payload["delta"] = dict(order["_delta"])
+        return {k: v for k, v in payload.items() if v is not None}
+
+    def _monitor_fill_payload(self, event) -> dict:
+        payload = {
+            "id": getattr(event, "id", None),
+            "timestamp": int(getattr(event, "timestamp", 0) or 0),
+            "symbol": getattr(event, "symbol", None),
+            "side": str(getattr(event, "side", "") or "").lower(),
+            "position_side": str(getattr(event, "position_side", "") or "").lower(),
+            "qty": float(getattr(event, "qty", 0.0) or 0.0),
+            "price": float(getattr(event, "price", 0.0) or 0.0),
+            "pnl": float(getattr(event, "pnl", 0.0) or 0.0),
+            "fee": float(getattr(event, "fee", 0.0) or 0.0),
+            "pb_order_type": str(getattr(event, "pb_order_type", "") or "").lower(),
+            "client_order_id": getattr(event, "client_order_id", None),
+            "source_ids": list(getattr(event, "source_ids", []) or []),
+        }
+        return {k: v for k, v in payload.items() if v is not None}
+
+    def _build_health_summary_payload(self, *, now_ms: Optional[int] = None) -> dict:
+        now_ms = utc_ms() if now_ms is None else int(now_ms)
+        n_long = 0
+        n_short = 0
+        for _, pos_data in self.positions.items():
+            if pos_data.get("long", {}).get("size", 0.0) != 0.0:
+                n_long += 1
+            if pos_data.get("short", {}).get("size", 0.0) != 0.0:
+                n_short += 1
+        balance_raw = float(self.get_raw_balance())
+        balance_snapped = float(self.get_hysteresis_snapped_balance())
+        error_counts = getattr(self, "error_counts", [])
+        recent_errors = len([x for x in error_counts if x > now_ms - 1000 * 60 * 60])
+        payload = {
+            "uptime_ms": max(0, now_ms - self._health_start_ms),
+            "last_loop_duration_ms": int(getattr(self, "_last_loop_duration_ms", 0) or 0),
+            "positions_long": n_long,
+            "positions_short": n_short,
+            "balance_raw": balance_raw,
+            "balance_snapped": balance_snapped,
+            "equity": float(getattr(self, "_monitor_last_equity", balance_raw) or balance_raw),
+            "orders_placed": int(self._health_orders_placed),
+            "orders_cancelled": int(self._health_orders_cancelled),
+            "fills": int(self._health_fills),
+            "pnl": float(self._health_pnl),
+            "errors_last_hour": recent_errors,
+            "ws_reconnects": int(self._health_ws_reconnects),
+            "rate_limits": int(self._health_rate_limits),
+        }
+        rss = _get_process_rss_bytes()
+        if rss is not None:
+            payload["rss_bytes"] = int(rss)
+        return payload
+
+    async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict:
+        now_ms = utc_ms() if now_ms is None else int(now_ms)
+        balance_raw = float(self.get_raw_balance())
+        balance_snapped = float(self.get_hysteresis_snapped_balance())
+        equity = float(getattr(self, "_monitor_last_equity", balance_raw) or balance_raw)
+        if abs(equity) < 1e-18 and balance_raw != 0.0:
+            equity = balance_raw
+        account = {
+            "balance_raw": balance_raw,
+            "balance_snapped": balance_snapped,
+            "equity": equity,
+        }
+        try:
+            account["realized_pnl_cumsum"] = {
+                "current": float(self._equity_hard_stop_realized_pnl_now()),
+            }
+        except Exception:
+            pass
+
+        positions: dict[str, dict] = {}
+        for symbol in sorted(self.positions):
+            pos = self.positions[symbol]
+            long_pos = pos.get("long", {})
+            short_pos = pos.get("short", {})
+            positions[symbol] = {
+                "long": {
+                    "size": float(long_pos.get("size", 0.0) or 0.0),
+                    "price": float(long_pos.get("price", 0.0) or 0.0),
+                },
+                "short": {
+                    "size": float(short_pos.get("size", 0.0) or 0.0),
+                    "price": float(short_pos.get("price", 0.0) or 0.0),
+                },
+            }
+
+        open_orders: dict[str, list[dict]] = {}
+        for symbol in sorted(self.open_orders):
+            symbol_orders = []
+            for order in self.open_orders.get(symbol, []):
+                try:
+                    symbol_orders.append(
+                        {
+                            "id": order.get("id"),
+                            "custom_id": order.get("custom_id"),
+                            "side": order["side"],
+                            "position_side": order["position_side"],
+                            "qty": abs(float(order["qty"])),
+                            "price": float(order["price"]),
+                            "reduce_only": bool(
+                                (order["position_side"] == "long" and order["side"] == "sell")
+                                or (
+                                    order["position_side"] == "short" and order["side"] == "buy"
+                                )
+                            ),
+                            "pb_order_type": self._resolve_pb_order_type(order),
+                        }
+                    )
+                except Exception:
+                    continue
+            open_orders[symbol] = symbol_orders
+
+        return {
+            "meta": {
+                "exchange": self.exchange,
+                "user": self.user,
+                "quote": self.quote,
+                "pid": os.getpid(),
+                "bot_start_ts_ms": self.start_time_ms,
+                "current_cycle_ts_ms": now_ms,
+            },
+            "account": account,
+            "health": self._build_health_summary_payload(now_ms=now_ms),
+            "positions": positions,
+            "open_orders": open_orders,
+            "modes": {
+                "effective": {
+                    "long": dict(self.PB_modes.get("long", {})),
+                    "short": dict(self.PB_modes.get("short", {})),
+                },
+                "runtime_forced": {
+                    "long": dict(self._runtime_forced_modes.get("long", {})),
+                    "short": dict(self._runtime_forced_modes.get("short", {})),
+                },
+            },
+            "hsl": {pside: self._monitor_hsl_payload(pside) for pside in ("long", "short")},
+        }
+
+    async def _monitor_flush_snapshot(self, *, force: bool = False, ts: Optional[int] = None) -> bool:
+        publisher = getattr(self, "monitor_publisher", None)
+        if publisher is None:
+            return False
+        try:
+            snapshot = await self._build_monitor_snapshot(now_ms=ts)
+            return publisher.write_snapshot(snapshot, ts=ts, force=force)
+        except Exception as exc:
+            logging.error("[monitor] failed building monitor snapshot: %s", exc)
+            return False
 
     def _log_memory_snapshot(self, *, now_ms: Optional[int] = None) -> None:
         """Log process RSS and key cache metrics for observability."""
@@ -1910,6 +2154,7 @@ class Passivbot:
                 # Periodic health summary
                 self._maybe_log_health_summary()
                 self._maybe_log_unstuck_status()
+                await self._monitor_flush_snapshot()
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
                 sleep_duration = 30
                 for i in range(sleep_duration * 10):
@@ -1921,11 +2166,23 @@ class Passivbot:
             except RateLimitExceeded as e:
                 self._health_errors += 1
                 self._health_rate_limits += 1
+                self._monitor_record_error(
+                    "error.exchange",
+                    e,
+                    tags=("error", "exchange", "rate_limit"),
+                    payload={"source": "run_execution_loop"},
+                )
                 logging.warning("[rate] execution loop hit rate limit; backing off 5s...")
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(5.0)
             except Exception as e:
                 self._health_errors += 1
+                self._monitor_record_error(
+                    "error.bot",
+                    e,
+                    tags=("error", "bot"),
+                    payload={"source": "run_execution_loop"},
+                )
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
                 await self.restart_bot_on_too_many_errors()
@@ -1936,6 +2193,13 @@ class Passivbot:
             return
         self._shutdown_in_progress = True
         self.stop_signal_received = True
+        stop_ts = utc_ms()
+        self._monitor_record_event(
+            "bot.stop",
+            ("bot", "lifecycle", "stop"),
+            {"reason": "shutdown_gracefully"},
+            ts=stop_ts,
+        )
         logging.info("[shutdown] shutdown requested; closing background tasks and sessions")
         try:
             self.stop_data_maintainers(verbose=False)
@@ -1952,6 +2216,10 @@ class Passivbot:
                 await self.cca.close()
         except Exception as e:
             logging.error("[shutdown] error closing public ccxt session: %s", e)
+        await self._monitor_flush_snapshot(force=True)
+        publisher = getattr(self, "monitor_publisher", None)
+        if publisher is not None:
+            publisher.close()
         logging.info("[shutdown] cleanup complete")
 
     async def update_pos_oos_pnls_ohlcvs(self) -> bool:
@@ -2133,6 +2401,13 @@ class Passivbot:
         if to_return:
             for elm in to_return:
                 self.add_new_order(elm, source="POST")
+                self._monitor_record_event(
+                    "order.opened",
+                    ("order", "open"),
+                    self._monitor_order_payload(elm, source="POST"),
+                    symbol=elm.get("symbol"),
+                    pside=elm.get("position_side"),
+                )
             self._health_orders_placed += len(to_return)
         return to_return
 
@@ -2193,6 +2468,13 @@ class Passivbot:
         if to_return:
             for elm in to_return:
                 self.remove_order(elm, source="POST")
+                self._monitor_record_event(
+                    "order.canceled",
+                    ("order", "cancel"),
+                    self._monitor_order_payload(elm, source="POST"),
+                    symbol=elm.get("symbol"),
+                    pside=elm.get("position_side"),
+                )
             self._health_orders_cancelled += len(to_return)
         return to_return
 
@@ -2830,6 +3112,11 @@ class Passivbot:
             for elm in changes:
                 # Always log at DEBUG (full detail)
                 logging.debug("[mode] %s %s", change_type, elm)
+                pside = None
+                symbol = None
+                if "." in elm:
+                    pside, remainder = elm.split(".", 1)
+                    symbol = remainder.split(":", 1)[0] or None
 
                 # Determine if this should be logged at INFO
                 should_log_info = False
@@ -2838,8 +3125,8 @@ class Passivbot:
                 try:
                     # Parse element: "long.XRP/USDT:USDT: normal" or "long.XRP/USDT:USDT: old -> new"
                     parts = elm.split(".")
-                    pside = parts[0] if parts else "long"
-                    pside_info = slot_info.get(pside, {"max": 0, "current": 0, "open": False})
+                    parsed_pside = parts[0] if parts else "long"
+                    pside_info = slot_info.get(parsed_pside, {"max": 0, "current": 0, "open": False})
 
                     if change_type == "added":
                         # New coin entering mode system
@@ -2889,6 +3176,17 @@ class Passivbot:
                     except Exception:
                         pass
                     logging.info("[mode] %s %s%s", change_type, elm, info_suffix)
+                self._monitor_record_event(
+                    "mode.changed",
+                    ("mode", "change"),
+                    {
+                        "change_type": change_type,
+                        "detail": elm,
+                        "info_suffix": info_suffix,
+                    },
+                    symbol=symbol,
+                    pside=pside,
+                )
 
     async def get_filtered_coins(
         self, pside: str, *, max_network_fetches: Optional[int] = None
@@ -3269,8 +3567,9 @@ class Passivbot:
             now = time.time()
             should_log = snap_changed or (now - self._last_raw_only_log_time >= 900.0)
             try:
+                equity = balance_raw + (await self.calc_upnl_sum())
+                self._monitor_last_equity = float(equity)
                 if should_log:
-                    equity = balance_raw + (await self.calc_upnl_sum())
                     logging.info(
                         "[balance] raw %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
                         self._previous_balance_raw,
@@ -3282,6 +3581,18 @@ class Passivbot:
                     )
                     if raw_only:
                         self._last_raw_only_log_time = now
+                self._monitor_record_event(
+                    "account.balance",
+                    ("account", "balance"),
+                    {
+                        "previous_balance_raw": float(self._previous_balance_raw),
+                        "balance_raw": float(balance_raw),
+                        "previous_balance_snapped": float(self._previous_balance_snapped),
+                        "balance_snapped": float(balance_snapped),
+                        "equity": float(equity),
+                        "source": str(source),
+                    },
+                )
             except Exception as e:
                 logging.error(f"error with handle_balance_update {e}")
                 traceback.print_exc()
@@ -3454,9 +3765,20 @@ class Passivbot:
 
         except RateLimitExceeded:
             self._health_rate_limits += 1
+            self._monitor_record_event(
+                "error.exchange",
+                ("error", "exchange", "rate_limit"),
+                {"source": "update_pnls", "message": "rate limit exceeded"},
+            )
             logging.warning("[rate] hit rate limit while fetching fill events; retrying next cycle")
             return False
         except Exception as e:
+            self._monitor_record_error(
+                "error.exchange",
+                e,
+                tags=("error", "exchange"),
+                payload={"source": "update_pnls"},
+            )
             logging.error("[fills] Failed to update FillEventsManager: %s", e)
             if self.logging_level >= 2:
                 traceback.print_exc()
@@ -3536,6 +3858,15 @@ class Passivbot:
             # Log each event
             for event in sorted(new_events, key=lambda e: e.timestamp):
                 logging.info(self._log_fill_event(event))
+        for event in sorted(new_events, key=lambda e: e.timestamp):
+            self._monitor_record_event(
+                "order.filled",
+                ("order", "fill"),
+                self._monitor_fill_payload(event),
+                symbol=getattr(event, "symbol", None),
+                pside=str(getattr(event, "position_side", "") or "").lower() or None,
+                ts=int(getattr(event, "timestamp", 0) or 0) or None,
+            )
 
     def _calc_unstuck_allowances(self, allow_new_unstuck: bool) -> dict[str, float]:
         """Calculate unstuck allowances using FillEventsManager data."""
@@ -4134,6 +4465,30 @@ class Passivbot:
         # Print aligned table with [pos] prefix
         for line in table.get_string().splitlines():
             logging.info("[pos] %s", line)
+        for symbol, pside in changed:
+            old = psold[(symbol, pside)]
+            new = psnew[(symbol, pside)]
+            if old["size"] == 0.0 and new["size"] != 0.0:
+                action = "new"
+            elif new["size"] == 0.0:
+                action = "closed"
+            elif new["size"] > old["size"]:
+                action = "added"
+            elif new["size"] < old["size"]:
+                action = "reduced"
+            else:
+                action = "changed"
+            self._monitor_record_event(
+                "position.changed",
+                ("position", "change"),
+                {
+                    "action": action,
+                    "old": {"size": float(old["size"]), "price": float(old["price"])},
+                    "new": {"size": float(new["size"]), "price": float(new["price"])},
+                },
+                symbol=symbol,
+                pside=pside,
+            )
 
     async def _fetch_and_apply_positions(self):
         """Fetch raw positions, apply them to local state and return snapshots.

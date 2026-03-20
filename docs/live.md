@@ -1,5 +1,40 @@
 # Running the bot live
 
+## Fake Live Replay
+
+Passivbot also includes a deterministic local `fake` exchange for replaying live-bot behavior without touching a real exchange.
+
+Use it when you want to:
+
+- reproduce a live issue with fixed candles and fills
+- inspect HSL and mode transitions step by step
+- regression-test the live loop locally after changing orchestration or exchange-facing code
+
+Quick example:
+
+```sh
+PYTHONPATH=src python3 src/tools/run_fake_live.py \
+  configs/fake_live_hsl_btc.hjson \
+  scenarios/fake_live/hsl_long_red_restart.hjson \
+  --user fake_hsl_restart_test \
+  --snapshot-each-step
+```
+
+See [docs/fake_live.md](docs/fake_live.md) for scenario structure, included examples, outputs, and troubleshooting.
+
+## Monitor Output
+
+Passivbot can publish a disk-backed monitor root for external readers such as a future TUI/dashboard.
+
+Current scope:
+
+1. atomic current snapshot publication
+2. structured NDJSON event stream
+3. periodic compressed checkpoints
+
+See [docs/monitor.md](docs/monitor.md) for config, output layout, and the currently emitted event kinds.
+
+
 ## Custom Exchange Endpoints
 
 Some integrations require routing REST traffic through an intermediate service

@@ -113,6 +113,67 @@ TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
     *tuple(PARTIALLY_OPEN_CONFIG_PATHS),
 )
 
+MONITOR_BOOL_KEYS = (
+    "enabled",
+    "retain_price_ticks",
+    "retain_candles",
+    "retain_fills",
+    "compress_rotated_segments",
+    "emit_completed_candles",
+    "include_raw_fill_payloads",
+)
+
+
+def normalize_hsl_signal_mode(value, path: str = "live.hsl_signal_mode") -> str:
+    mode = str(value)
+    if mode not in HSL_SIGNAL_MODES:
+        allowed = ", ".join(HSL_SIGNAL_MODES)
+        raise ValueError(f"{path} must be one of {{{allowed}}}, got {mode!r}")
+    return mode
+
+
+def normalize_hsl_cooldown_position_policy(
+    value, path: str = "live.hsl_position_during_cooldown_policy"
+) -> str:
+    policy = str(value)
+    if policy not in HSL_COOLDOWN_POSITION_POLICIES:
+        allowed = ", ".join(HSL_COOLDOWN_POSITION_POLICIES)
+        raise ValueError(f"{path} must be one of {{{allowed}}}, got {policy!r}")
+    return policy
+
+
+def _normalize_monitor_config(config: dict) -> None:
+    monitor_cfg = require_config_dict(config, "monitor")
+
+    root_dir = str(monitor_cfg["root_dir"]).strip()
+    if not root_dir:
+        raise ValueError("config.monitor.root_dir must be a non-empty string")
+    monitor_cfg["root_dir"] = root_dir
+
+    for key in MONITOR_BOOL_KEYS:
+        monitor_cfg[key] = bool(monitor_cfg[key])
+
+    numeric_rules = (
+        ("snapshot_interval_seconds", float, lambda x: x > 0.0, "must be > 0"),
+        ("checkpoint_interval_minutes", float, lambda x: x >= 0.0, "must be >= 0"),
+        ("event_rotation_mb", float, lambda x: x > 0.0, "must be > 0"),
+        ("event_rotation_minutes", float, lambda x: x > 0.0, "must be > 0"),
+        ("retain_days", float, lambda x: x >= 0.0, "must be >= 0"),
+        ("max_total_bytes", int, lambda x: x > 0, "must be > 0"),
+        ("price_tick_min_interval_ms", int, lambda x: x >= 0, "must be >= 0"),
+    )
+    for key, caster, predicate, message in numeric_rules:
+        try:
+            value = caster(monitor_cfg[key])
+        except Exception as exc:
+            raise ValueError(f"config.monitor.{key} {message}") from exc
+        if not predicate(value):
+            raise ValueError(f"config.monitor.{key} {message}")
+        monitor_cfg[key] = value
+
+
+
+
 
 def load_hjson_config(config_path: str) -> dict:
     try:
@@ -1473,6 +1534,8 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     _rename_config_keys(result, verbose=verbose, tracker=tracker)
 
     _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
+    require_config_dict(result, "monitor")
+    _normalize_monitor_config(result)
 
     _normalize_position_counts(result, tracker=tracker)
     if coin_sources_input is not None:
@@ -3064,6 +3127,23 @@ def get_template_config():
             "level": 1,
             "memory_snapshot_interval_minutes": 30.0,
             "volume_refresh_info_threshold_seconds": 30.0,
+        },
+        "monitor": {
+            "enabled": False,
+            "root_dir": "monitor",
+            "snapshot_interval_seconds": 1.0,
+            "checkpoint_interval_minutes": 10.0,
+            "event_rotation_mb": 128.0,
+            "event_rotation_minutes": 60.0,
+            "retain_days": 7.0,
+            "max_total_bytes": 1073741824,
+            "retain_price_ticks": True,
+            "retain_candles": True,
+            "retain_fills": True,
+            "compress_rotated_segments": True,
+            "price_tick_min_interval_ms": 500,
+            "emit_completed_candles": True,
+            "include_raw_fill_payloads": False,
         },
         "optimize": {
             "bounds": {
