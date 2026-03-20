@@ -40,7 +40,7 @@ from passivbot import Passivbot, logging, custom_id_to_snake
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 from procedures import assert_correct_ccxt_version
-from config_utils import require_live_value
+from config_utils import require_live_value, get_optional_live_value
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
@@ -508,85 +508,6 @@ class CCXTBot(Passivbot):
             self._margin_mode_preference_warned = True
         return "auto_cross_preferred"
 
-    def _normalize_margin_mode(self, value) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return "isolated" if value else "cross"
-        text = str(value).strip().lower()
-        if not text:
-            return None
-        if text in {"0", "cross", "crossed", "cross_margin", "cross margin"}:
-            return "cross"
-        if text in {"1", "isolated", "isolate", "isolated_margin", "isolated margin"}:
-            return "isolated"
-        if "isol" in text:
-            return "isolated"
-        if "cross" in text:
-            return "cross"
-        return None
-
-    def _extract_live_margin_mode(self, payload: dict | None) -> str | None:
-        if not isinstance(payload, dict):
-            return None
-        candidates = [
-            payload.get("margin_mode"),
-            payload.get("marginMode"),
-            payload.get("marginType"),
-            payload.get("tradeMode"),
-            payload.get("tdMode"),
-            payload.get("mgnMode"),
-        ]
-        info = payload.get("info")
-        if isinstance(info, dict):
-            candidates.extend(
-                [
-                    info.get("margin_mode"),
-                    info.get("marginMode"),
-                    info.get("marginType"),
-                    info.get("tradeMode"),
-                    info.get("tdMode"),
-                    info.get("mgnMode"),
-                ]
-            )
-            position = info.get("position")
-            if isinstance(position, dict):
-                leverage = position.get("leverage")
-                if isinstance(leverage, dict):
-                    candidates.append(leverage.get("type"))
-        for candidate in candidates:
-            normalized = self._normalize_margin_mode(candidate)
-            if normalized is not None:
-                return normalized
-        if payload.get("isolated") is not None:
-            return self._normalize_margin_mode(bool(payload.get("isolated")))
-        if isinstance(info, dict) and info.get("isolated") is not None:
-            return self._normalize_margin_mode(bool(info.get("isolated")))
-        return None
-
-    def _record_live_margin_mode(self, symbol: str | None, margin_mode: str | None) -> None:
-        if not symbol or not margin_mode:
-            return
-        normalized = self._normalize_margin_mode(margin_mode)
-        if normalized in {"cross", "isolated"}:
-            self._live_margin_modes[str(symbol)] = normalized
-
-    def _record_live_margin_mode_from_payload(self, payload: dict | None, symbol: str | None = None) -> None:
-        if not isinstance(payload, dict):
-            return
-        target_symbol = symbol or payload.get("symbol")
-        self._record_live_margin_mode(target_symbol, self._extract_live_margin_mode(payload))
-
-    def _has_live_symbol_state(self, symbol: str) -> bool:
-        pos = getattr(self, "positions", {}).get(symbol, {})
-        if abs(float(pos.get("long", {}).get("size", 0.0) or 0.0)) > 0.0:
-            return True
-        if abs(float(pos.get("short", {}).get("size", 0.0) or 0.0)) > 0.0:
-            return True
-        if symbol in getattr(self, "open_orders", {}) and self.open_orders.get(symbol):
-            return True
-        return False
-
     def _get_margin_capability(self, symbol: str) -> str:
         """Return one of: both, cross_only, isolated_only."""
         if self._requires_isolated_margin(symbol):
@@ -609,15 +530,6 @@ class CCXTBot(Passivbot):
 
     def _resolve_margin_policy_for_symbol(self, symbol: str) -> dict:
         """Resolve actual mode to apply plus whether new entries must be blocked."""
-        live_margin_mode = getattr(self, "_live_margin_modes", {}).get(symbol)
-        if self._has_live_symbol_state(symbol) and live_margin_mode in {"cross", "isolated"}:
-            capability = self._get_margin_capability(symbol)
-            return {
-                "mode": live_margin_mode,
-                "blocked": False,
-                "capability": capability,
-                "live_margin_mode": live_margin_mode,
-            }
         capability = self._get_margin_capability(symbol)
         preference = self._get_margin_mode_preference()
 
@@ -672,9 +584,7 @@ class CCXTBot(Passivbot):
         Returns:
             "isolated" or "cross"
         """
-        if self._requires_isolated_margin(symbol):
-            return "isolated"
-        return "cross"
+        return self._resolve_margin_policy_for_symbol(symbol)["mode"]
 
     def _calc_min_isolated_leverage(self) -> int:
         """Calculate minimum leverage required for isolated margin positions.
@@ -713,7 +623,7 @@ class CCXTBot(Passivbot):
         configured = int(self.config_get(["live", "leverage"], symbol=symbol))
         max_lev = getattr(self, "max_leverage", {}).get(symbol, configured)
 
-        if self._requires_isolated_margin(symbol):
+        if self._get_margin_mode_for_symbol(symbol) == "isolated":
             min_lev = self._calc_min_isolated_leverage()
             leverage = max(configured, min_lev)
 
@@ -732,6 +642,38 @@ class CCXTBot(Passivbot):
             return leverage
 
         return min(configured, max_lev)
+
+    def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
+        symbols = super()._filter_approved_symbols(pside, symbols)
+        kept = set()
+        for symbol in symbols:
+            policy = self._resolve_margin_policy_for_symbol(symbol)
+            if not policy["blocked"]:
+                kept.add(symbol)
+                continue
+            warn_key = (pside, symbol, policy["capability"], self._get_margin_mode_preference())
+            if not hasattr(self, "_blocked_margin_symbols_warned"):
+                self._blocked_margin_symbols_warned = set()
+            if warn_key in self._blocked_margin_symbols_warned:
+                continue
+            self._blocked_margin_symbols_warned.add(warn_key)
+            blocked_reason = (
+                "isolated-only" if policy["capability"] == "isolated_only" else "cross-only"
+            )
+            supported_mode = "isolated" if policy["capability"] == "isolated_only" else "cross"
+            logging.warning(
+                "[margin] disabling %s %s for new entries: live.margin_mode_preference=%s "
+                "but this symbol is %s on %s. Existing positions/orders remain manageable. "
+                "To trade it, set live.margin_mode_preference to %s, auto, or an auto_* mode compatible with %s symbols.",
+                pside,
+                symbol,
+                self._get_margin_mode_preference(),
+                blocked_reason,
+                getattr(self, "exchange", "this exchange"),
+                supported_mode,
+                blocked_reason,
+            )
+        return kept
 
     async def update_exchange_config_by_symbols(self, symbols: list):
         """Set leverage and margin mode for each symbol.

@@ -23,7 +23,7 @@ The primary stock perps provider on Hyperliquid is **TradeXYZ** (trade.xyz), whi
 | Aspect | Stock Perps | Crypto Perps |
 |--------|-------------|--------------|
 | Symbol format | `xyz:TSLA/USDC:USDC` | `BTC/USDC:USDC` |
-| Margin mode | Exchange metadata decides; Passivbot currently supports cross-only live trading | Cross or Isolated |
+| Margin mode | Exchange metadata decides: some are isolated-only, some support cross | Cross or Isolated |
 | Max leverage | 10x | Up to 50x |
 | Trading hours | 24/7 | 24/7 |
 | Fees | 2x standard Hyperliquid fees | Standard fees |
@@ -44,14 +44,14 @@ Other HIP-3 builders (FLX, KM, CASH, VNTL, HYNA, ABCD) also offer various perps.
 
 ### How Isolated Margin Works
 
-HIP-3 stock perps may be either **isolated-only** or **cross-capable**, depending on exchange metadata. Many still use isolated margin, which is fundamentally different from cross margin used by most crypto perps. Passivbot currently avoids that isolated live path and treats HIP-3 as cross-only when possible.
+HIP-3 stock perps may be either **isolated-only** or **cross-capable**, depending on the builder market metadata exposed by Hyperliquid. Many still use isolated margin, which is fundamentally different from cross margin used by most crypto perps.
 
 | Cross Margin (HL crypto perps) | Isolated Margin (HIP-3/XYZ perps) |
 |-------------------------------|-----------------------------------|
 | Entire balance backs all positions | Each position has dedicated margin |
 | One liquidation can cascade to others | Liquidations are contained per-position |
 | More capital efficient | Safer but requires more upfront margin |
-| Default for BTC, ETH, etc. | Unsupported in Passivbot live trading for now |
+| Default for BTC, ETH, etc. | Required for isolated-only HIP-3 markets; optional on cross-capable HIP-3 markets |
 
 ### Balance Display Differences
 
@@ -157,7 +157,7 @@ Passivbot automatically maps `TSLA` to `XYZ-TSLA/USDC:USDC` on Hyperliquid.
 
 ### Mixing Crypto and Stock Perps
 
-You can run both crypto perps and supported stock perps in the same bot:
+You can run both crypto perps and stock perps in the same bot:
 
 ```json
 {
@@ -168,13 +168,22 @@ You can run both crypto perps and supported stock perps in the same bot:
 ```
 
 Passivbot automatically sets the correct margin mode for each symbol:
-- **Crypto perps** (BTC, ETH, SOL, etc.) → cross margin
-- **Stock perps** (TSLA, NVDA, AAPL, etc.) → cross only when the market is cross-capable; isolated-only markets are skipped
+- **Crypto perps** (BTC, ETH, SOL, etc.) → typically cross margin
+- **Stock perps** (TSLA, NVDA, AAPL, etc.) → isolated or cross depending on exchange metadata and `live.margin_mode_preference`
 
 ```
 BTC/USDC:USDC: margin=ok (cross)
 XYZ-XYZ100/USDC:USDC: margin=ok (cross)
 ```
+
+`live.margin_mode_preference` controls what Passivbot prefers when a symbol supports both modes:
+
+- `auto` / `auto_cross`: prefer cross
+- `auto_isolated`: prefer isolated
+- `cross`: trade only cross-capable symbols for new entries
+- `isolated`: trade only isolated-capable symbols for new entries
+
+If a symbol already has a live position or open orders, Passivbot preserves the symbol's live margin mode for state management after restart. It does not intentionally "flip" an existing position from isolated to cross or vice versa mid-position.
 
 **How balance works in mixed mode:**
 
@@ -196,13 +205,13 @@ Passivbot automatically detects stock perps by:
 
 ### Leverage and Margin
 
-Stock perps do not all share the same margin capabilities. Passivbot currently:
+Stock perps do not all share the same margin capabilities. Passivbot handles this automatically:
 
 1. Detects whether a HIP-3 market is isolated-only or cross-capable from exchange metadata
-2. Uses cross mode on cross-capable HIP-3 markets
-3. Ignores isolated-only HIP-3 markets for new entries
-4. Hard-fails if existing isolated HIP-3 live state is detected at startup
-5. Retains the isolated-margin code for possible future support work
+2. Applies `live.margin_mode_preference` when both modes are available
+3. Keeps existing live positions/orders on their actual live margin mode after restart
+4. Calculates minimum leverage when isolated mode is in effect
+5. Caps isolated-only HIP-3 markets at 10x (HIP-3 maximum)
 
 **Leverage calculation for isolated margin:**
 

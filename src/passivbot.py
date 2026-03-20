@@ -731,6 +731,9 @@ class Passivbot:
         """Hook: exchange-specific filtering for approved symbols used for new entries."""
         return symbols
 
+    def _hsl_psides(self) -> tuple[str, str]:
+        return ("long", "short")
+
     def _assert_supported_live_state(self) -> None:
         """Hook: exchange-specific startup/runtime validation for unsupported live state."""
         return None
@@ -6614,8 +6617,9 @@ class Passivbot:
                 if self.live_value("empty_means_all_approved") and not self.approved_coins[pside]:
                     # if approved_coins is empty, all coins are approved
                     self.approved_coins[pside] = self.eligible_symbols
+                filtered = self.approved_coins[pside] - self.ignored_coins[pside]
                 self.approved_coins_minus_ignored_coins[pside] = self._filter_approved_symbols(
-                    pside, self.approved_coins[pside] - self.ignored_coins[pside]
+                    pside, filtered
                 )
             # aggregate add/remove logs for readability
             for k, summary in (("added", added_summary.get("approved_coins", {})),):
