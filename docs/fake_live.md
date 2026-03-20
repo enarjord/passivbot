@@ -141,6 +141,10 @@ The fake harness supports HSL RED replay cases, including:
 - RED finalization
 - cooldown-and-restart flows
 - terminal no-restart flows
+- manual-entry-during-cooldown flows for all supported live policies:
+  `repanic_reset_cooldown`, `repanic_keep_original_cooldown`,
+  `resume_normal_reset_drawdown`, `graceful_stop_keep_cooldown`, and
+  `manual_quarantine`
 
 The harness uses fake exchange time from the scenario, not wall-clock time.
 

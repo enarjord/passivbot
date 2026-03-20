@@ -356,13 +356,21 @@ def test_refresh_halted_runtime_forced_modes_keeps_halted_pside_in_panic_or_grac
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("scenario_rel", "user", "expected_steps", "expected_log_fragment", "cooldown_override"),
+    (
+        "scenario_rel",
+        "user",
+        "expected_steps",
+        "expected_log_fragment",
+        "cooldown_override",
+        "policy_override",
+    ),
     [
         (
             "scenarios/fake_live/hsl_long_red_restart.hjson",
             "fake_hsl_restart_test",
             4,
             "RED cooldown elapsed; trading resumed",
+            None,
             None,
         ),
         (
@@ -371,6 +379,7 @@ def test_refresh_halted_runtime_forced_modes_keeps_halted_pside_in_panic_or_grac
             3,
             "RED stop finalized (terminal)",
             None,
+            None,
         ),
         (
             "scenarios/fake_live/hsl_long_cooldown_manual_entry_repanic_reset.hjson",
@@ -378,11 +387,50 @@ def test_refresh_halted_runtime_forced_modes_keeps_halted_pside_in_panic_or_grac
             5,
             "cooldown violation repanic flattened; cooldown reset",
             2.0,
+            "repanic_reset_cooldown",
+        ),
+        (
+            "scenarios/fake_live/hsl_long_cooldown_manual_entry_repanic_keep_original.hjson",
+            "fake_hsl_manual_keep_original_test",
+            5,
+            "cooldown intervention ended flat; policy=repanic_keep_original_cooldown",
+            2.0,
+            "repanic_keep_original_cooldown",
+        ),
+        (
+            "scenarios/fake_live/hsl_long_cooldown_manual_entry_resume_normal.hjson",
+            "fake_hsl_manual_resume_normal_test",
+            5,
+            "operator override during RED cooldown: resumed normal operation and reset drawdown tracker",
+            2.0,
+            "resume_normal_reset_drawdown",
+        ),
+        (
+            "scenarios/fake_live/hsl_long_cooldown_manual_entry_graceful_stop.hjson",
+            "fake_hsl_manual_graceful_stop_test",
+            5,
+            "detected non-flat position during RED cooldown | policy=graceful_stop_keep_cooldown",
+            2.0,
+            "graceful_stop_keep_cooldown",
+        ),
+        (
+            "scenarios/fake_live/hsl_long_cooldown_manual_entry_manual_quarantine.hjson",
+            "fake_hsl_manual_quarantine_test",
+            5,
+            "detected non-flat position during RED cooldown | policy=manual_quarantine",
+            2.0,
+            "manual_quarantine",
         ),
     ],
 )
 async def test_hsl_replay_scenarios_run_end_to_end(
-    tmp_path, scenario_rel, user, expected_steps, expected_log_fragment, cooldown_override
+    tmp_path,
+    scenario_rel,
+    user,
+    expected_steps,
+    expected_log_fragment,
+    cooldown_override,
+    policy_override,
 ):
     import passivbot_rust as pbr
 
@@ -393,6 +441,8 @@ async def test_hsl_replay_scenarios_run_end_to_end(
     if cooldown_override is not None:
         cfg = load_config(str(config_path), verbose=False)
         cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = float(cooldown_override)
+        if policy_override is not None:
+            cfg["live"]["hsl_position_during_cooldown_policy"] = str(policy_override)
         config_path = tmp_path / "fake_live_hsl_btc_override.json"
         config_path.write_text(json.dumps(cfg), encoding="utf-8")
 
