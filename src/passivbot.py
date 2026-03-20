@@ -8808,17 +8808,17 @@ def setup_bot(config):
 
         bot = GateIOBot(config)
     elif user_info["exchange"] == "defx":
-        from exchanges.defx import DefxBot
-
-        bot = DefxBot(config)
+        raise NotImplementedError(
+            "exchange 'defx' is temporarily disabled in this dev branch pending resumed support work"
+        )
     elif user_info["exchange"] == "kucoin":
         from exchanges.kucoin import KucoinBot
 
         bot = KucoinBot(config)
     elif user_info["exchange"] == "paradex":
-        from exchanges.paradex import ParadexBot
-
-        bot = ParadexBot(config)
+        raise NotImplementedError(
+            "exchange 'paradex' is temporarily disabled in this dev branch pending resumed support work"
+        )
     elif user_info["exchange"] == "fake":
         from exchanges.fake import FakeBot
 

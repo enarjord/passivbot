@@ -470,6 +470,33 @@ class TestCCXTBotUpdateExchangeConfigBySymbols:
 
         assert bot._get_margin_mode_for_symbol("BOTH/USDT:USDT") == "isolated"
 
+    def test_live_margin_mode_is_preserved_when_symbol_has_existing_state(self):
+        """Existing live positions/orders must keep their actual margin mode after restart."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot.markets_dict = {
+            "ISO/USDT:USDT": {
+                "marginModes": {"cross": True, "isolated": True},
+                "info": {},
+            }
+        }
+        bot.positions = {
+            "ISO/USDT:USDT": {
+                "long": {"size": 1.0, "price": 100.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+        }
+        bot.open_orders = {}
+        bot._live_margin_modes = {"ISO/USDT:USDT": "isolated"}
+
+        policy = bot._resolve_margin_policy_for_symbol("ISO/USDT:USDT")
+
+        assert policy["mode"] == "isolated"
+        assert policy["blocked"] is False
+        assert policy["live_margin_mode"] == "isolated"
+
 
 class TestCCXTBotSetMarketSpecificSettings:
     """Tests for set_market_specific_settings."""

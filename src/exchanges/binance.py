@@ -88,14 +88,17 @@ class BinanceBot(CCXTBot):
         positions = []
         for elm in fetched:
             if float(elm["positionAmt"]) != 0.0:
-                positions.append(
-                    {
-                        "symbol": self.get_symbol_id_inv(elm["symbol"]),
-                        "position_side": elm["positionSide"].lower(),
-                        "size": float(elm["positionAmt"]),
-                        "price": float(elm["entryPrice"]),
-                    }
-                )
+                normalized = {
+                    "symbol": self.get_symbol_id_inv(elm["symbol"]),
+                    "position_side": elm["positionSide"].lower(),
+                    "size": float(elm["positionAmt"]),
+                    "price": float(elm["entryPrice"]),
+                }
+                margin_mode = self._extract_live_margin_mode(elm)
+                if margin_mode is not None:
+                    normalized["margin_mode"] = margin_mode
+                    self._record_live_margin_mode(normalized["symbol"], margin_mode)
+                positions.append(normalized)
         return positions
 
     def _get_balance(self, fetched: dict) -> float:
@@ -126,6 +129,7 @@ class BinanceBot(CCXTBot):
         for elm in fetched:
             elm["position_side"] = elm["info"]["positionSide"].lower()
             elm["qty"] = elm["amount"]
+            self._record_live_margin_mode_from_payload(elm)
             open_orders[elm["id"]] = elm
         return sorted(open_orders.values(), key=lambda x: x["timestamp"])
 
@@ -353,12 +357,13 @@ class BinanceBot(CCXTBot):
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
         for symbol in symbols:
+            margin_mode = self._get_margin_mode_for_symbol(symbol)
             coros_to_call_margin_mode[symbol] = asyncio.create_task(
-                self.cca.set_margin_mode("cross", symbol=symbol)
+                self.cca.set_margin_mode(margin_mode, symbol=symbol)
             )
             coros_to_call_lev[symbol] = asyncio.create_task(
                 self.cca.set_leverage(
-                    int(self.config_get(["live", "leverage"], symbol=symbol)), symbol=symbol
+                    self._calc_leverage_for_symbol(symbol), symbol=symbol
                 )
             )
         for symbol in symbols:

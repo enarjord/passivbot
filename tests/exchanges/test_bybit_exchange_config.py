@@ -24,6 +24,11 @@ class DummyCCA:
 async def test_bybit_exchange_config_updates_symbol_without_create_task(monkeypatch):
     bot = BybitBot.__new__(BybitBot)
     bot.cca = DummyCCA()
+    bot.config = {"live": {"margin_mode_preference": "auto_isolated"}}
+    bot.max_leverage = {"BTC/USDT:USDT": 20}
+    bot.markets_dict = {
+        "BTC/USDT:USDT": {"marginModes": {"cross": True, "isolated": True}, "info": {}}
+    }
 
     def config_get(path, *, symbol=None):
         assert path == ["live", "leverage"]
@@ -31,6 +36,7 @@ async def test_bybit_exchange_config_updates_symbol_without_create_task(monkeypa
         return 10
 
     bot.config_get = config_get
+    bot.bot_value = lambda pside, key: 1.0 if key == "total_wallet_exposure_limit" else 0.0
 
     def fail_create_task(_coro):
         raise AssertionError("update_exchange_config_by_symbols should not create detached tasks")
@@ -39,5 +45,5 @@ async def test_bybit_exchange_config_updates_symbol_without_create_task(monkeypa
 
     await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
 
-    assert bot.cca.margin_calls == [("cross", "BTC/USDT:USDT", {"leverage": 10})]
+    assert bot.cca.margin_calls == [("isolated", "BTC/USDT:USDT", {"leverage": 10})]
     assert bot.cca.leverage_calls == [(10, "BTC/USDT:USDT")]

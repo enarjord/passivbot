@@ -39,6 +39,7 @@ class BybitBot(CCXTBot):
             for elm in fetched:
                 elm["position_side"] = self._get_position_side_for_order(elm)
                 elm["qty"] = elm["amount"]
+                self._record_live_margin_mode_from_payload(elm)
                 open_orders[elm["id"]] = elm
                 if "nextPageCursor" in elm.get("info", {}):
                     next_page_cursor = elm["info"]["nextPageCursor"]
@@ -62,12 +63,17 @@ class BybitBot(CCXTBot):
             next_page_cursor = None
             for elm in fetched:
                 key = elm["symbol"] + elm["side"]
-                positions[key] = {
+                normalized = {
                     "symbol": elm["symbol"],
                     "position_side": elm.get("side", "long").lower(),
                     "size": float(elm["contracts"]),
                     "price": float(elm["entryPrice"]),
                 }
+                margin_mode = self._extract_live_margin_mode(elm)
+                if margin_mode is not None:
+                    normalized["margin_mode"] = margin_mode
+                self._record_live_margin_mode(elm["symbol"], margin_mode)
+                positions[key] = normalized
                 if "nextPageCursor" in elm.get("info", {}):
                     next_page_cursor = elm["info"]["nextPageCursor"]
             if len(fetched) < limit or next_page_cursor is None:
@@ -447,10 +453,11 @@ class BybitBot(CCXTBot):
     async def update_exchange_config_by_symbols(self, symbols):
         for symbol in symbols:
             to_print = ""
-            leverage = int(self.config_get(["live", "leverage"], symbol=symbol))
+            leverage = self._calc_leverage_for_symbol(symbol)
+            margin_mode = self._get_margin_mode_for_symbol(symbol)
             try:
                 res = await self.cca.set_margin_mode(
-                    "cross",
+                    margin_mode,
                     symbol=symbol,
                     params={"leverage": leverage},
                 )
