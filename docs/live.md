@@ -22,6 +22,18 @@ PYTHONPATH=src python3 src/tools/run_fake_live.py \
 
 See [fake_live.md](/Users/eiriknarjord/passivbot/docs/fake_live.md) for scenario structure, included examples, outputs, and troubleshooting.
 
+## Monitor Output
+
+Passivbot can publish a disk-backed monitor root for external readers such as a future TUI/dashboard.
+
+Current scope:
+
+1. atomic current snapshot publication
+2. structured NDJSON event stream
+3. periodic compressed checkpoints
+
+See [monitor.md](/Users/eiriknarjord/repos/passivbot-3/docs/monitor.md) for config, output layout, and the currently emitted event kinds.
+
 ## Custom Exchange Endpoints
 
 Some integrations require routing REST traffic through an intermediate service

@@ -297,6 +297,23 @@
         "memory_snapshot_interval_minutes": 30,
         "volume_refresh_info_threshold_seconds": 30
     },
+    "monitor": {
+        "enabled": false,
+        "root_dir": "monitor",
+        "snapshot_interval_seconds": 1,
+        "checkpoint_interval_minutes": 10,
+        "event_rotation_mb": 128,
+        "event_rotation_minutes": 60,
+        "retain_days": 7,
+        "max_total_bytes": 1073741824,
+        "retain_price_ticks": true,
+        "retain_candles": true,
+        "retain_fills": true,
+        "compress_rotated_segments": true,
+        "price_tick_min_interval_ms": 500,
+        "emit_completed_candles": true,
+        "include_raw_fill_payloads": false
+    },
     "optimize": {
         "bounds": {
             "long_close_grid_markup_end": [-0.1,0.012,1e-05],

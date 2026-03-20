@@ -8,6 +8,7 @@ Open these only when touching the relevant subsystem.
 | Candlestick manager | `candlestick_manager.md` | OHLCV fetch/cache/synthetic candle behavior |
 | Fill events manager | `fill_events_manager.md` | Fill/PnL ingestion and pagination |
 | Balance routing | `balance_routing.md` | Raw vs snapped balance semantics |
+| Monitor publisher | `monitor_publisher.md` | Monitor snapshot/event publication, schema boundaries, dashboard handoff work |
 
 ## Authoring Rule
 

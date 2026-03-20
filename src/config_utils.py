@@ -151,6 +151,15 @@ HSL_COOLDOWN_POSITION_POLICIES = (
     "graceful_stop_keep_cooldown",
     "manual_quarantine",
 )
+MONITOR_BOOL_KEYS = (
+    "enabled",
+    "retain_price_ticks",
+    "retain_candles",
+    "retain_fills",
+    "compress_rotated_segments",
+    "emit_completed_candles",
+    "include_raw_fill_payloads",
+)
 
 
 def normalize_hsl_signal_mode(value, path: str = "live.hsl_signal_mode") -> str:
@@ -169,6 +178,36 @@ def normalize_hsl_cooldown_position_policy(
         allowed = ", ".join(HSL_COOLDOWN_POSITION_POLICIES)
         raise ValueError(f"{path} must be one of {{{allowed}}}, got {policy!r}")
     return policy
+
+
+def _normalize_monitor_config(config: dict) -> None:
+    monitor_cfg = require_config_dict(config, "monitor")
+
+    root_dir = str(monitor_cfg["root_dir"]).strip()
+    if not root_dir:
+        raise ValueError("config.monitor.root_dir must be a non-empty string")
+    monitor_cfg["root_dir"] = root_dir
+
+    for key in MONITOR_BOOL_KEYS:
+        monitor_cfg[key] = bool(monitor_cfg[key])
+
+    numeric_rules = (
+        ("snapshot_interval_seconds", float, lambda x: x > 0.0, "must be > 0"),
+        ("checkpoint_interval_minutes", float, lambda x: x >= 0.0, "must be >= 0"),
+        ("event_rotation_mb", float, lambda x: x > 0.0, "must be > 0"),
+        ("event_rotation_minutes", float, lambda x: x > 0.0, "must be > 0"),
+        ("retain_days", float, lambda x: x >= 0.0, "must be >= 0"),
+        ("max_total_bytes", int, lambda x: x > 0, "must be > 0"),
+        ("price_tick_min_interval_ms", int, lambda x: x >= 0, "must be >= 0"),
+    )
+    for key, caster, predicate, message in numeric_rules:
+        try:
+            value = caster(monitor_cfg[key])
+        except Exception as exc:
+            raise ValueError(f"config.monitor.{key} {message}") from exc
+        if not predicate(value):
+            raise ValueError(f"config.monitor.{key} {message}")
+        monitor_cfg[key] = value
 
 
 def _legacy_hsl_to_pside_fields(hsl_cfg: dict) -> dict:
@@ -1731,10 +1770,13 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     _migrate_bot_common_hsl(result, verbose=verbose, tracker=tracker)
 
     _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
+    require_config_dict(result, "logging")
+    require_config_dict(result, "monitor")
     result["live"]["hsl_signal_mode"] = normalize_hsl_signal_mode(result["live"]["hsl_signal_mode"])
     result["live"]["hsl_position_during_cooldown_policy"] = normalize_hsl_cooldown_position_policy(
         result["live"]["hsl_position_during_cooldown_policy"]
     )
+    _normalize_monitor_config(result)
     _validate_forager_config(result, verbose=verbose, tracker=tracker)
     _apply_forager_internal_aliases(result)
 
@@ -2808,6 +2850,23 @@ def get_template_config():
             "level": 1,
             "memory_snapshot_interval_minutes": 30.0,
             "volume_refresh_info_threshold_seconds": 30.0,
+        },
+        "monitor": {
+            "enabled": False,
+            "root_dir": "monitor",
+            "snapshot_interval_seconds": 1.0,
+            "checkpoint_interval_minutes": 10.0,
+            "event_rotation_mb": 128.0,
+            "event_rotation_minutes": 60.0,
+            "retain_days": 7.0,
+            "max_total_bytes": 1073741824,
+            "retain_price_ticks": True,
+            "retain_candles": True,
+            "retain_fills": True,
+            "compress_rotated_segments": True,
+            "price_tick_min_interval_ms": 500,
+            "emit_completed_candles": True,
+            "include_raw_fill_payloads": False,
         },
         "optimize": {
             "bounds": {

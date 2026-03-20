@@ -72,6 +72,26 @@ Example per-metric aggregation:
 - **memory_snapshot_interval_minutes**: Interval between `_log_memory_snapshot` telemetry entries (RSS, cache footprint, asyncio task counts). Default `30`; lower values surface leaks sooner, higher values reduce noise.
 - **volume_refresh_info_threshold_seconds**: Minimum duration a bulk volume-EMA refresh must take before it is promoted to an INFO log. Runs that finish faster emit only DEBUG output (when debug logging is enabled). Set `0` to log every refresh at INFO.
 
+## Monitor
+
+The monitor publisher writes a read-only dashboard data root to disk when enabled.
+
+- **enabled**: Master switch for monitor publication. Default `false`.
+- **root_dir**: Base directory for monitor output. Per-bot data is written under `root_dir/{exchange}/{user}`.
+- **snapshot_interval_seconds**: Best-effort minimum interval between `state.latest.json` writes.
+- **checkpoint_interval_minutes**: Interval between compressed checkpoint snapshots. Set `0` to disable checkpoints.
+- **event_rotation_mb**: Rotate `events/current.ndjson` after it exceeds this size.
+- **event_rotation_minutes**: Rotate `events/current.ndjson` after this elapsed time even if size threshold is not reached.
+- **retain_days**: Age-based retention for rotated event/checkpoint files.
+- **max_total_bytes**: Global byte cap for the monitor root. Old rotated/checkpoint files are pruned first.
+- **retain_price_ticks**, **retain_candles**, **retain_fills**: Reserved for future history-stream retention behavior. Currently validated but not yet used by the publisher.
+- **compress_rotated_segments**: If `true`, gzip rotated event segments and checkpoints.
+- **price_tick_min_interval_ms**: Reserved for future tick throttling. Currently validated but not yet used.
+- **emit_completed_candles**: Reserved for future completed-candle streams. Currently validated but not yet used.
+- **include_raw_fill_payloads**: Reserved for future optional raw fill emission. Current default behavior is still normalized fill payloads only.
+
+See [monitor.md](/Users/eiriknarjord/repos/passivbot-3/docs/monitor.md) for current output files and event kinds.
+
 ## Bot Settings
 
 ### Side-Specific HSL Parameters

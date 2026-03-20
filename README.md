@@ -174,6 +174,7 @@ Useful entry points:
 - [Optimizing](docs/optimizing.md)
 - [Metrics reference](docs/metrics.md)
 - [Equity Hard Stop Loss](docs/equity_hard_stop_loss.md)
+- [Monitor output](docs/monitor.md)
 
 ## Support
 

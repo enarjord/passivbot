@@ -4,13 +4,11 @@
 
 This file is a handoff for another Codex instance to continue the monitor/dashboard work in a cleaner worktree.
 
-The actual implementation work has **not** started yet in this worktree.
-
 What exists so far:
 
 1. a concrete design/spec in `docs/plans/passivbot_monitor_dashboard.md`
-2. exploration of the main integration seams in `src/passivbot.py` and `src/config_utils.py`
-3. agreement with the user on the initial architecture and scope
+2. implemented Phase 1 bot-side publisher groundwork
+3. targeted tests for config, publisher behavior, and narrow `Passivbot` hook coverage
 
 ## Branch / Context
 
@@ -20,17 +18,16 @@ What exists so far:
   - `552128da` Pace exchange config updates and retry per symbol
   - `1a733cc5` Add fake-live coverage for HSL cooldown policies
 
+Implementation state after this pass:
+
+1. `src/config_utils.py` now contains `monitor.*` defaults and validation
+2. `src/monitor_publisher.py` now exists
+3. `src/passivbot.py` now publishes the minimal Phase 1 snapshot and event set
+4. no dashboard reader/UI has been implemented
+
 ## Important Worktree Warning
 
-This worktree is dirty and contains many unrelated local/untracked files.
-
-Known unrelated noise includes:
-
-1. `configs/hsl.json` modified
-2. `configs/template.json` modified
-3. many untracked docs, notebooks, logs, helper scripts, and local binaries
-
-The next Codex instance should work in a clean worktree if possible.
+This worktree may still contain unrelated local/untracked files. Check `git status` before broad edits.
 
 ## What Was Decided With The User
 
@@ -201,15 +198,28 @@ Do **not** try to implement the full dashboard UI yet.
 
 Phase 1 should only build the bot-side publisher and minimal monitor output.
 
+Current status:
+
+1. this scope is mostly complete for the publisher side
+2. remaining work is on schema expansion, history streams, and reader/dashboard code
+
 ### Deliverables
 
-1. `monitor.enabled` config surface
+1. `monitor.*` config surface
 2. `src/monitor_publisher.py`
 3. `state.latest.json`
 4. `events/current.ndjson`
 5. minimal event types
 6. minimal snapshot sections
 7. tests
+
+Delivered now:
+
+1. config defaults/validation
+2. publisher module
+3. snapshot + event files
+4. checkpoints + basic rotation/retention
+5. targeted tests
 
 ### Minimal snapshot sections for Phase 1
 
@@ -220,6 +230,10 @@ Phase 1 should only build the bot-side publisher and minimal monitor output.
 5. `open_orders`
 6. `modes`
 7. `hsl`
+
+Implemented now:
+
+1. all seven sections above
 
 ### Minimal event kinds for Phase 1
 
@@ -238,6 +252,10 @@ Phase 1 should only build the bot-side publisher and minimal monitor output.
 13. `hsl.transition`
 14. `hsl.cooldown_started`
 15. `hsl.cooldown_ended`
+
+Implemented now:
+
+1. all event kinds above except there is not yet a separate `error.publisher` path because publisher failures are only logged
 
 Price ticks and completed candles can be added in the next increment once the publication contract is stable.
 
@@ -322,18 +340,18 @@ Fake-live integration is explicitly worth doing later, but not required for the 
 4. avoid writing arbitrary internal Python objects as monitor schema
 5. prefer canonical normalized forms already used by bot logic
 
-## Suggested First Concrete Steps For The Next Codex Instance
+## Suggested Next Concrete Steps
 
-1. commit the spec doc if not already committed
-2. in a clean worktree, add `monitor` config defaults in `src/config_utils.py`
-3. create `src/monitor_publisher.py`
-4. wire only startup + periodic snapshot + error events first
-5. add tests before adding more event kinds
+1. add `history/` streams for normalized fills, price ticks, and completed candles
+2. expand snapshot coverage to market, exchange-config, forager, unstuck, and recent sections
+3. add `error.publisher` visibility for publisher-side failures
+4. build the first reader/TUI against the existing monitor root
+5. add fake-live integration coverage once the publication contract stabilizes
 
 ## Notes On This Worktree
 
-At the time of handoff:
+At the time of this updated handoff:
 
-1. no dashboard/publisher code changes were applied in this worktree
-2. only the spec doc exists for this effort
-3. this worktree contains unrelated local dirt and should not be trusted as the implementation base
+1. the bot-side Phase 1 publisher groundwork has been applied
+2. the implementation base is now the code, not just the spec doc
+3. the next work should extend the publication contract or add a consumer, not re-lay the foundation
