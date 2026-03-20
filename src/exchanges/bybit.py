@@ -445,42 +445,33 @@ class BybitBot(CCXTBot):
         }
 
     async def update_exchange_config_by_symbols(self, symbols):
-        coros_to_call_lev, coros_to_call_margin_mode = {}, {}
-        for symbol in symbols:
-            coros_to_call_margin_mode[symbol] = asyncio.create_task(
-                self.cca.set_margin_mode(
-                    "cross",
-                    symbol=symbol,
-                    params={"leverage": int(self.config_get(["live", "leverage"], symbol=symbol))},
-                )
-            )
-            coros_to_call_lev[symbol] = asyncio.create_task(
-                self.cca.set_leverage(
-                    int(self.config_get(["live", "leverage"], symbol=symbol)), symbol=symbol
-                )
-            )
         for symbol in symbols:
             to_print = ""
-            # Handle leverage setting - ignore "not modified" errors (retCode 110043)
+            leverage = int(self.config_get(["live", "leverage"], symbol=symbol))
             try:
-                res = await coros_to_call_lev[symbol]
-                to_print += f"leverage={format_exchange_config_response(res)} "
+                res = await self.cca.set_margin_mode(
+                    "cross",
+                    symbol=symbol,
+                    params={"leverage": leverage},
+                )
+                to_print += f"margin={format_exchange_config_response(res)} "
             except ccxt.BadRequest as e:
-                if "110043" in str(e) or "not modified" in str(e).lower():
-                    logging.debug(f"{symbol}: leverage already set (not modified)")
-                else:
-                    logging.warning(f"{symbol}: leverage set failed: {e}")
-            # Handle margin mode setting - ignore "not modified" errors
-            try:
-                res = await coros_to_call_margin_mode[symbol]
-                to_print += f"margin={format_exchange_config_response(res)}"
-            except ccxt.BadRequest as e:
-                if "110026" in str(e) or "not modified" in str(e).lower():
+                err_str = str(e).lower()
+                if "110026" in err_str or "not modified" in err_str:
                     logging.debug(f"{symbol}: margin mode already set (not modified)")
                 else:
-                    logging.warning(f"{symbol}: margin mode set failed: {e}")
+                    raise
+            try:
+                res = await self.cca.set_leverage(leverage, symbol=symbol)
+                to_print += f"leverage={format_exchange_config_response(res)}"
+            except ccxt.BadRequest as e:
+                err_str = str(e).lower()
+                if "110043" in err_str or "not modified" in err_str:
+                    logging.debug(f"{symbol}: leverage already set (not modified)")
+                else:
+                    raise
             if to_print:
-                logging.info(f"{symbol}: {to_print}")
+                logging.info(f"{symbol}: {to_print.strip()}")
 
     async def update_exchange_config(self):
         res = await self.cca.set_position_mode(True)

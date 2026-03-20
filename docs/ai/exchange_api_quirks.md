@@ -48,3 +48,7 @@ Handling:
 1. Check raw exchange payloads when CCXT abstraction is insufficient.
 2. Treat intra-page gaps and inter-page gaps differently.
 3. For missing data incidents, verify source data before changing logic.
+4. Treat startup exchange-config writes (`set_leverage`, `set_margin_mode`) as rate-limit-sensitive control-plane calls.
+5. Pace exchange-config updates per symbol, track success per symbol, and retry failed symbols with backoff instead of treating startup config as all-or-nothing.
+6. Do not fan out detached config tasks and partially await them; unhandled background failures create misleading `Task exception was never retrieved` noise and can hide which symbols still need configuration.
+7. Benign exchange responses like "not modified" / "unchanged" should be handled explicitly and not logged as operational errors.
