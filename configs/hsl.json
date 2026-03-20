@@ -166,7 +166,9 @@
             "adg_btc",
             "adg_usd",
             "adg_pnl",
-            "pnl_ratio_long_short"
+            "pnl_ratio_long_short",
+            "hard_stop_restarts_per_year_long",
+            "hard_stop_restarts_per_year_short"
         ],
         "volume_normalization": true
     },
@@ -517,12 +519,12 @@
             {
                 "metric": "drawdown_worst_hsl",
                 "penalize_if": "greater_than",
-                "value": 0.9
+                "value": 0.6
             },
             {
                 "metric": "drawdown_worst_mean_1pct_hsl",
                 "penalize_if": "greater_than",
-                "value": 0.9
+                "value": 0.6
             },
             {
                 "metric": "loss_profit_ratio",
@@ -532,17 +534,17 @@
             {
                 "metric": "high_exposure_hours_max_long",
                 "penalize_if": "greater_than",
-                "value": 20000
+                "value": 3000
             },
             {
                 "metric": "peak_recovery_hours_hsl",
                 "penalize_if": "greater_than",
-                "value": 20000
+                "value": 3000
             },
             {
                 "metric": "position_held_hours_max",
                 "penalize_if": "greater_than",
-                "value": 20000
+                "value": 3000
             },
             {
                 "metric": "backtest_completion_ratio",
