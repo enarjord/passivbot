@@ -181,7 +181,12 @@ See also https://pbconfigdb.scud.dedyn.io/
 ## Documentation:
 
 For more detailed information about Passivbot, see documentation files here: [docs/](docs/)
-
+Useful entry points:
+- [Backtesting](docs/backtesting.md)
+- [Optimizing](docs/optimizing.md)
+- [Metrics reference](docs/metrics.md)
+- [Equity Hard Stop Loss](docs/equity_hard_stop_loss.md)
+- [Monitor output](docs/monitor.md)
 ## Support
 
 [![Discord](https://img.shields.io/badge/Discord-7289DA?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/QAF2H2UmzZ)

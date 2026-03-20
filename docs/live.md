@@ -1,5 +1,17 @@
 # Running the bot live
 
+## Monitor Output
+
+Passivbot can publish a disk-backed monitor root for external readers such as a future TUI/dashboard.
+
+Current scope:
+
+1. atomic current snapshot publication
+2. structured NDJSON event stream
+3. periodic compressed checkpoints
+
+See [monitor.md](monitor.md) for config, output layout, and the currently emitted event kinds.
+
 ## Custom Exchange Endpoints
 
 Some integrations require routing REST traffic through an intermediate service
