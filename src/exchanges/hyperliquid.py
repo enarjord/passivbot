@@ -33,6 +33,7 @@ class HyperliquidBot(CCXTBot):
         self.quote = "USDC"
         self.hedge_mode = False
         self.significant_digits = {}
+        self._hl_live_margin_modes = {}
         if "is_vault" not in self.user_info or self.user_info["is_vault"] == "":
             logging.info(
                 f"parameter 'is_vault' missing from api-keys.json for user {self.user}. Setting to false"
@@ -163,6 +164,26 @@ class HyperliquidBot(CCXTBot):
         tracked = set(getattr(self, "active_symbols", []) or [])
         tracked.update(getattr(self, "open_orders", {}).keys())
         tracked.update(getattr(self, "positions", {}).keys())
+        approved = getattr(self, "approved_coins_minus_ignored_coins", {}) or {}
+        for pside in ("long", "short"):
+            tracked.update(approved.get(pside, set()) or set())
+        approved_raw = getattr(self, "approved_coins", {}) or {}
+        for pside in ("long", "short"):
+            tracked.update(approved_raw.get(pside, set()) or set())
+        cfg_live = getattr(self, "config", {}).get("live", {}) if hasattr(self, "config") else {}
+        cfg_approved = cfg_live.get("approved_coins", {}) if isinstance(cfg_live, dict) else {}
+        if isinstance(cfg_approved, dict):
+            for pside in ("long", "short"):
+                vals = cfg_approved.get(pside, [])
+                if isinstance(vals, (list, tuple, set)):
+                    tracked.update(str(x) for x in vals if x)
+        if not tracked and cfg_live.get("empty_means_all_approved"):
+            tracked.update(getattr(self, "eligible_symbols", set()) or set())
+        tracked.update(
+            symbol
+            for symbol in getattr(self, "coin_overrides", {}) or {}
+            if symbol in getattr(self, "markets_dict", {})
+        )
         return sorted(
             symbol
             for symbol in tracked
@@ -174,12 +195,51 @@ class HyperliquidBot(CCXTBot):
         contracts = float(position.get("contracts") or 0.0)
         if side == "short":
             contracts = -contracts
+        margin_mode = position.get("marginMode")
+        if margin_mode is None and isinstance(position.get("info"), dict):
+            leverage = position["info"].get("position", {}).get("leverage", {})
+            if isinstance(leverage, dict):
+                margin_mode = leverage.get("type")
+        if margin_mode is None and position.get("isolated") is not None:
+            margin_mode = "isolated" if position.get("isolated") else "cross"
         return {
             "symbol": position["symbol"],
             "position_side": side,
             "size": contracts,
             "price": float(position.get("entryPrice") or 0.0),
+            "margin_mode": str(margin_mode).lower() if margin_mode else None,
         }
+
+    def _record_hl_live_margin_mode(self, symbol: str, margin_mode: str | None) -> None:
+        if not symbol or not margin_mode:
+            return
+        normalized = str(margin_mode).lower()
+        if normalized in {"cross", "isolated"}:
+            if not hasattr(self, "_hl_live_margin_modes") or self._hl_live_margin_modes is None:
+                self._hl_live_margin_modes = {}
+            self._hl_live_margin_modes[symbol] = normalized
+
+    def _has_live_symbol_state(self, symbol: str) -> bool:
+        pos = getattr(self, "positions", {}).get(symbol, {})
+        if abs(float(pos.get("long", {}).get("size", 0.0) or 0.0)) > 0.0:
+            return True
+        if abs(float(pos.get("short", {}).get("size", 0.0) or 0.0)) > 0.0:
+            return True
+        if symbol in getattr(self, "open_orders", {}) and self.open_orders.get(symbol):
+            return True
+        return False
+
+    def _resolve_margin_policy_for_symbol(self, symbol: str) -> dict:
+        policy = super()._resolve_margin_policy_for_symbol(symbol)
+        live_margin_mode = getattr(self, "_hl_live_margin_modes", {}).get(symbol)
+        if self._has_live_symbol_state(symbol) and live_margin_mode in {"cross", "isolated"}:
+            return {
+                **policy,
+                "mode": live_margin_mode,
+                "blocked": False,
+                "live_margin_mode": live_margin_mode,
+            }
+        return policy
 
     async def _fetch_hip3_positions(self) -> list[dict]:
         """Fetch HIP-3 positions via dex-scoped CCXT routes."""
@@ -188,6 +248,9 @@ class HyperliquidBot(CCXTBot):
             fetched = await self.cca.fetch_positions(symbols=[symbol])
             for position in fetched:
                 normalized = self._normalize_ccxt_position(position)
+                self._record_hl_live_margin_mode(
+                    normalized["symbol"], normalized.get("margin_mode")
+                )
                 key = (normalized["symbol"], normalized["position_side"])
                 positions_by_key[key] = normalized
         return list(positions_by_key.values())
@@ -296,6 +359,9 @@ class HyperliquidBot(CCXTBot):
                 "size": size,
                 "price": float(x["position"]["entryPx"]),
             }
+            leverage = x.get("position", {}).get("leverage", {})
+            if isinstance(leverage, dict):
+                self._record_hl_live_margin_mode(elm["symbol"], leverage.get("type"))
             positions[(elm["symbol"], elm["position_side"])] = elm
         for position in await self._fetch_hip3_positions():
             positions[(position["symbol"], position["position_side"])] = position
