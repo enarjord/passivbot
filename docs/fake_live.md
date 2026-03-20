@@ -60,6 +60,12 @@ Each run writes a timestamped directory containing:
 
 This makes it easy to inspect the exact replay state at each step.
 
+Regression philosophy:
+
+- scenario files under `scenarios/fake_live/` are the durable in-repo behavioral regression specs
+- generated artifact directories are debug evidence and local inspection output, not committed golden files
+- the authoritative behavior contract lives in the scenario assertions plus the passing test run
+
 ## Scenario Structure
 
 A scenario may define either:
@@ -137,6 +143,28 @@ The fake harness supports HSL RED replay cases, including:
 - terminal no-restart flows
 
 The harness uses fake exchange time from the scenario, not wall-clock time.
+
+## Speeding Up Scenarios Safely
+
+Fake-live scenarios should be fast, but they should not change the logic being tested.
+
+Good accelerations:
+
+- choose short replay windows and only the candles needed to hit the target state transition
+- use small test-only config values such as short cooldowns
+- script direct timeline actions when you need a specific live-state event, such as a manual fill during cooldown
+- use 30s or 60s step sizes when the behavior is minute-sensitive
+
+Avoid these shortcuts:
+
+- skipping execution cycles that would exist in the real live loop
+- changing minute-quantized HSL semantics just to make a scenario finish faster
+- collapsing multiple meaningful state transitions into one artificial instant when the state machine depends on ordering
+
+Rule of thumb:
+
+- shorten scenario duration
+- do not distort the live state-machine contract
 
 ## Fake User Config
 

@@ -66,6 +66,10 @@ def _extract_hsl_trace(bot) -> Dict[str, dict]:
             "cooldown_until_ms": state.get("cooldown_until_ms"),
             "pending_red_since_ms": state.get("pending_red_since_ms"),
             "red_flat_confirmations": state.get("red_flat_confirmations"),
+            "cooldown_intervention_active": bool(state.get("cooldown_intervention_active", False)),
+            "cooldown_repanic_reset_pending": bool(
+                state.get("cooldown_repanic_reset_pending", False)
+            ),
             "last_metrics": state.get("last_metrics"),
             "last_stop_event": state.get("last_stop_event"),
         }

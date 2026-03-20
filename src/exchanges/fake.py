@@ -273,6 +273,7 @@ class FakeCCXTClient:
                     "datetime": ts_to_date(timestamp),
                     "prices": dict(prices),
                     "candles": step_candles,
+                    "actions": copy.deepcopy(row.get("actions") or []),
                 }
             )
             prev_prices = prices
@@ -355,6 +356,7 @@ class FakeCCXTClient:
                     "datetime": ts_to_date(int(timestamp)),
                     "prices": prices,
                     "candles": step_candles,
+                    "actions": [],
                 }
             )
 
@@ -786,9 +788,81 @@ class FakeCCXTClient:
                 break
             self.current_index += 1
             self.now_ms = int(self.timeline[self.current_index]["timestamp"])
+            self._apply_step_actions(self.get_current_step())
             self._process_resting_orders_for_current_step()
             advanced = True
         return advanced
+
+    def _apply_step_actions(self, step: dict) -> None:
+        for action in step.get("actions") or []:
+            if not isinstance(action, dict):
+                raise TypeError(f"Fake step action must be a mapping, got {type(action).__name__}")
+            action_type = str(action.get("type") or "").strip().lower()
+            if action_type == "manual_fill":
+                self._apply_manual_fill(action)
+                continue
+            if action_type == "cancel_open_orders":
+                self._cancel_matching_orders(action)
+                continue
+            raise ValueError(f"Unsupported fake step action type: {action_type!r}")
+
+    def _apply_manual_fill(self, action: dict) -> None:
+        symbol = str(action["symbol"])
+        side = str(action["side"]).lower()
+        position_side = str(action.get("position_side") or "long").lower()
+        qty = abs(float(action["qty"]))
+        price = float(action.get("price") or self.get_current_step()["prices"][symbol])
+        reduce_only = bool(action.get("reduce_only") or action.get("reduceOnly"))
+        client_order_id = str(action.get("clientOrderId") or action.get("client_order_id") or "")
+        order = {
+            "id": str(action.get("id") or f"manual_{self._next_order_id}"),
+            "symbol": symbol,
+            "type": "market",
+            "side": side,
+            "amount": qty,
+            "price": price,
+            "timestamp": self.now_ms,
+            "datetime": ts_to_date(self.now_ms),
+            "clientOrderId": client_order_id,
+            "status": "open",
+            "filled": 0.0,
+            "remaining": qty,
+            "reduceOnly": reduce_only,
+            "info": {
+                "positionSide": position_side.upper(),
+                "reduceOnly": reduce_only,
+                "manualIntervention": True,
+            },
+        }
+        self._next_order_id += 1
+        self._fill_order(order, fill_price=price, liquidity="taker")
+
+    def _cancel_matching_orders(self, action: dict) -> None:
+        symbol = action.get("symbol")
+        position_side = action.get("position_side")
+        side = action.get("side")
+        reduce_only = action.get("reduce_only")
+        client_order_id = action.get("clientOrderId") or action.get("client_order_id")
+        to_cancel = []
+        for order_id, order in self.open_orders.items():
+            if symbol is not None and order["symbol"] != symbol:
+                continue
+            if side is not None and str(order["side"]).lower() != str(side).lower():
+                continue
+            if position_side is not None:
+                order_pside = str(order.get("info", {}).get("positionSide") or "").lower()
+                if order_pside != str(position_side).lower():
+                    continue
+            if reduce_only is not None and bool(order.get("reduceOnly")) != bool(reduce_only):
+                continue
+            if client_order_id is not None and str(order.get("clientOrderId") or "") != str(
+                client_order_id
+            ):
+                continue
+            to_cancel.append(order_id)
+        for order_id in to_cancel:
+            order = self.open_orders.pop(order_id)
+            order["status"] = "canceled"
 
     def get_fill_events(self, since_ms: Optional[int], until_ms: Optional[int]) -> List[dict]:
         events = []

@@ -142,6 +142,13 @@ HSL_PSIDE_KEYS = (
     "hsl_tier_ratios",
 )
 HSL_SIGNAL_MODES = ("pside", "unified")
+HSL_COOLDOWN_POSITION_POLICIES = (
+    "repanic_reset_cooldown",
+    "repanic_keep_original_cooldown",
+    "resume_normal_reset_drawdown",
+    "graceful_stop_keep_cooldown",
+    "manual_quarantine",
+)
 
 
 def normalize_hsl_signal_mode(value, path: str = "live.hsl_signal_mode") -> str:
@@ -150,6 +157,16 @@ def normalize_hsl_signal_mode(value, path: str = "live.hsl_signal_mode") -> str:
         allowed = ", ".join(HSL_SIGNAL_MODES)
         raise ValueError(f"{path} must be one of {{{allowed}}}, got {mode!r}")
     return mode
+
+
+def normalize_hsl_cooldown_position_policy(
+    value, path: str = "live.hsl_position_during_cooldown_policy"
+) -> str:
+    policy = str(value)
+    if policy not in HSL_COOLDOWN_POSITION_POLICIES:
+        allowed = ", ".join(HSL_COOLDOWN_POSITION_POLICIES)
+        raise ValueError(f"{path} must be one of {{{allowed}}}, got {policy!r}")
+    return policy
 
 
 def _legacy_hsl_to_pside_fields(hsl_cfg: dict) -> dict:
@@ -1282,6 +1299,10 @@ def _validate_forager_config(
         if not math.isfinite(drop_pct) or not (0.0 <= drop_pct <= 1.0):
             raise ValueError(f"bot.{pside}.forager_volume_drop_pct must be within [0.0, 1.0]")
         bot_cfg["forager_volume_drop_pct"] = drop_pct
+        pside_enabled = (
+            float(bot_cfg["total_wallet_exposure_limit"]) > 0.0
+            and int(round(float(bot_cfg["n_positions"]))) > 0
+        )
 
         weights = bot_cfg["forager_score_weights"]
         normalized = normalize_forager_score_weights(
@@ -1315,6 +1336,22 @@ def _validate_forager_config(
             if tracker is not None:
                 tracker.update(["bot", pside, "forager_score_weights"], weights, normalized)
         bot_cfg["forager_score_weights"] = normalized
+
+        if pside_enabled and (normalized["volume"] > 0.0 or drop_pct > 0.0):
+            volume_span = float(bot_cfg["forager_volume_ema_span"])
+            if not math.isfinite(volume_span) or volume_span <= 0.0:
+                raise ValueError(
+                    f"bot.{pside}.forager_volume_ema_span must be > 0 when "
+                    "forager volume ranking or volume pruning is enabled"
+                )
+
+        if pside_enabled and normalized["volatility"] > 0.0:
+            volatility_span = float(bot_cfg["forager_volatility_ema_span"])
+            if not math.isfinite(volatility_span) or volatility_span <= 0.0:
+                raise ValueError(
+                    f"bot.{pside}.forager_volatility_ema_span must be > 0 when "
+                    "forager volatility ranking is enabled"
+                )
 
 
 def _rename_config_keys(
@@ -1692,6 +1729,10 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     _migrate_bot_common_hsl(result, verbose=verbose, tracker=tracker)
 
     _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
+    result["live"]["hsl_signal_mode"] = normalize_hsl_signal_mode(result["live"]["hsl_signal_mode"])
+    result["live"]["hsl_position_during_cooldown_policy"] = normalize_hsl_cooldown_position_policy(
+        result["live"]["hsl_position_during_cooldown_policy"]
+    )
     _validate_forager_config(result, verbose=verbose, tracker=tracker)
     _apply_forager_internal_aliases(result)
 
@@ -2734,6 +2775,7 @@ def get_template_config():
             "forced_mode_long": "",
             "forced_mode_short": "",
             "hedge_mode": True,
+            "hsl_position_during_cooldown_policy": "repanic_reset_cooldown",
             "hsl_signal_mode": "pside",
             "ignored_coins": {"long": [], "short": []},
             "inactive_coin_candle_ttl_minutes": 10.0,

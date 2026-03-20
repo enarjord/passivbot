@@ -1,8 +1,10 @@
 {
-  name: hsl_long_red_restart
+  name: hsl_long_cooldown_manual_entry_repanic_reset
   exchange: fake
+  start_time: "2026-01-01T00:00:00Z"
   boot_index: 1
   run_initial_cycle: false
+  tick_interval_seconds: 30
   account: {
     balance: 200.0
     positions: [
@@ -29,7 +31,7 @@
       {
         id: "11"
         order: "11"
-        timestamp: "2026-01-01T00:01:00Z"
+        timestamp: "2026-01-01T00:00:30Z"
         symbol: "BTC/USDT:USDT"
         position_side: long
         side: sell
@@ -42,7 +44,7 @@
       {
         id: "12"
         order: "12"
-        timestamp: "2026-01-01T00:01:00Z"
+        timestamp: "2026-01-01T00:00:30Z"
         symbol: "BTC/USDT:USDT"
         position_side: long
         side: buy
@@ -63,42 +65,49 @@
       taker_fee: 0.0
     }
   }
-  replay: {
-    symbols: {
-      "BTC/USDT:USDT": {
-        candles: [
-          ["2026-01-01T00:00:00Z", 100.0, 100.5, 99.5, 100.0, 10.0]
-          ["2026-01-01T00:01:00Z", 100.0, 100.2, 99.8, 100.0, 9.0]
-          ["2026-01-01T00:02:00Z", 100.0, 100.0, 96.5, 97.0, 12.0]
-          ["2026-01-01T00:03:00Z", 97.0, 97.5, 96.8, 97.0, 11.0]
-          ["2026-01-01T00:04:00Z", 97.0, 98.5, 96.8, 98.0, 8.0]
-          ["2026-01-01T00:05:00Z", 98.0, 99.0, 97.8, 98.5, 8.0]
-        ]
-      }
+  timeline: [
+    {t: 0, prices: {"BTC/USDT:USDT": 100.0}}
+    {t: 1, prices: {"BTC/USDT:USDT": 100.0}}
+    {t: 2, prices: {"BTC/USDT:USDT": 97.0}}
+    {t: 3, prices: {"BTC/USDT:USDT": 97.0}}
+    {t: 4, prices: {"BTC/USDT:USDT": 97.0}}
+    {
+      t: 5
+      prices: {"BTC/USDT:USDT": 97.0}
+      actions: [
+        {
+          type: manual_fill
+          symbol: "BTC/USDT:USDT"
+          position_side: long
+          side: buy
+          qty: 1.0
+          price: 97.0
+          clientOrderId: manual_cooldown_entry
+        }
+      ]
     }
-  }
+    {t: 6, prices: {"BTC/USDT:USDT": 97.0}}
+  ]
   assertions: {
-    fill_count: 5
+    fill_count: 6
     final_balance: 185.0
-    last_prices: {
-      "BTC/USDT:USDT": 98.5
-    }
     final_positions: {
-      "BTC/USDT:USDT|long": {min: 0.9, max: 1.0}
+      "BTC/USDT:USDT|long": 0.0
     }
     hsl_paths: {
-      long.halted: false
+      long.halted: true
       long.no_restart_latched: false
-      long.last_stop_event.auto_restart_eligible: true
-      long.last_stop_event.drawdown_raw: {min: 0.07, max: 0.08}
+      long.cooldown_intervention_active: false
+      long.cooldown_repanic_reset_pending: false
     }
     summary_paths: {
-      step_count: 4
-      last.step_index: 5
+      step_count: 5
+      last.step_index: 6
     }
     log_contains: [
       "RED stop finalized (auto-restart eligible)"
-      "RED cooldown elapsed; trading resumed"
+      "detected non-flat position during RED cooldown"
+      "cooldown violation repanic flattened; cooldown reset"
     ]
   }
 }

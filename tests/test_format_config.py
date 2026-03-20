@@ -177,6 +177,20 @@ def test_format_config_preserves_live_optimize_bounds():
     ]
 
 
+def test_format_config_normalizes_hsl_position_during_cooldown_policy():
+    current = copy.deepcopy(_template())
+    current["live"]["hsl_position_during_cooldown_policy"] = "manual_quarantine"
+    out = format_config(current, verbose=False, live_only=True)
+    assert out["live"]["hsl_position_during_cooldown_policy"] == "manual_quarantine"
+
+
+def test_format_config_rejects_invalid_hsl_position_during_cooldown_policy():
+    current = copy.deepcopy(_template())
+    current["live"]["hsl_position_during_cooldown_policy"] = "bad_policy"
+    with pytest.raises(ValueError, match="live.hsl_position_during_cooldown_policy"):
+        format_config(current, verbose=False, live_only=True)
+
+
 def test_format_config_current_with_empty_optimize_adds_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
@@ -339,6 +353,22 @@ def test_format_config_normalizes_positive_forager_weights_to_unit_sum():
         "ema_readiness": pytest.approx(0.25),
         "volatility": pytest.approx(0.25),
     }
+
+
+def test_format_config_requires_positive_forager_volume_span_when_volume_weight_enabled():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["forager_score_weights"] = {
+        "volume": 1.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
+    current["bot"]["long"]["forager_volume_ema_span"] = 0.0
+
+    with pytest.raises(
+        ValueError,
+        match="bot.long.forager_volume_ema_span must be > 0 when forager volume ranking or volume pruning is enabled",
+    ):
+        format_config(current, verbose=False, live_only=True)
 
 
 def test_get_template_config_uses_canonical_forager_span_keys_and_weight_bounds():

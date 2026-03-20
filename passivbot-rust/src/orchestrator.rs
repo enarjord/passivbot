@@ -156,6 +156,8 @@ mod core {
         pub warnings: Vec<OrchestratorWarning>,
         #[serde(default)]
         pub loss_gate_blocks: Vec<LossGateBlock>,
+        #[serde(default)]
+        pub symbol_states: Vec<SymbolStateDiagnostic>,
     }
 
     #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -163,6 +165,23 @@ mod core {
     pub struct OrchestratorOutput {
         pub orders: Vec<ExecutableOrder>,
         pub diagnostics: OrchestratorDiagnostics,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct SymbolSideStateDiagnostic {
+        pub input_mode: Option<TradingMode>,
+        pub effective_mode: TradingMode,
+        pub active: bool,
+        pub allow_initial: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct SymbolStateDiagnostic {
+        pub symbol_idx: usize,
+        pub long: SymbolSideStateDiagnostic,
+        pub short: SymbolSideStateDiagnostic,
     }
 
     /// EMA values keyed by span (same numeric spans as used in config/bot params).
@@ -1018,6 +1037,20 @@ mod core {
                     s.effective_min_cost,
                     &side.bot_params,
                 );
+            if !enabled {
+                out.push(ForagerCandidate {
+                    index: s.symbol_idx,
+                    enabled: false,
+                    volume_score: 0.0,
+                    volatility_score: 0.0,
+                    bid: 0.0,
+                    ask: 0.0,
+                    ema_lower: 0.0,
+                    ema_upper: 0.0,
+                    entry_initial_ema_dist: 0.0,
+                });
+                continue;
+            }
             let volume_score = if volume_required {
                 require_forager_input(
                     s.symbol_idx,
@@ -1048,17 +1081,54 @@ mod core {
             };
             let (bid, ask, ema_lower, ema_upper, entry_initial_ema_dist) = if ema_readiness_required
             {
-                let ema_bands = derive_ema_bands(s.symbol_idx, &s.emas, &side.bot_params)?;
+                let ema_bands = match derive_ema_bands(s.symbol_idx, &s.emas, &side.bot_params) {
+                    Ok(v) => v,
+                    Err(OrchestratorError::MissingEma { .. })
+                    | Err(OrchestratorError::NonFiniteInput {
+                        field: "ema_bands", ..
+                    }) => {
+                        out.push(ForagerCandidate {
+                            index: s.symbol_idx,
+                            enabled: false,
+                            volume_score: 0.0,
+                            volatility_score: 0.0,
+                            bid: 0.0,
+                            ask: 0.0,
+                            ema_lower: 0.0,
+                            ema_upper: 0.0,
+                            entry_initial_ema_dist: 0.0,
+                        });
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                };
+                let entry_initial_ema_dist = match require_forager_input(
+                    s.symbol_idx,
+                    "entry_initial_ema_dist",
+                    side.bot_params.entry_initial_ema_dist,
+                ) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        out.push(ForagerCandidate {
+                            index: s.symbol_idx,
+                            enabled: false,
+                            volume_score: 0.0,
+                            volatility_score: 0.0,
+                            bid: 0.0,
+                            ask: 0.0,
+                            ema_lower: 0.0,
+                            ema_upper: 0.0,
+                            entry_initial_ema_dist: 0.0,
+                        });
+                        continue;
+                    }
+                };
                 (
                     require_forager_input(s.symbol_idx, "forager_market_bid", s.order_book.bid)?,
                     require_forager_input(s.symbol_idx, "forager_market_ask", s.order_book.ask)?,
                     ema_bands.lower,
                     ema_bands.upper,
-                    require_forager_input(
-                        s.symbol_idx,
-                        "entry_initial_ema_dist",
-                        side.bot_params.entry_initial_ema_dist,
-                    )?,
+                    entry_initial_ema_dist,
                 )
             } else {
                 (0.0, 0.0, 0.0, 0.0, 0.0)
@@ -2726,6 +2796,52 @@ mod core {
             })
             .collect();
 
+        diagnostics.symbol_states = input
+            .symbols
+            .iter()
+            .map(|s| {
+                let long_mode = per_long[s.symbol_idx]
+                    .as_ref()
+                    .map(|state| state.mode)
+                    .unwrap_or_else(|| effective_mode(s.long.mode, s.long.position.size != 0.0));
+                let short_mode = per_short[s.symbol_idx]
+                    .as_ref()
+                    .map(|state| state.mode)
+                    .unwrap_or_else(|| effective_mode(s.short.mode, s.short.position.size != 0.0));
+                let long_allow_initial = workspace.actives_long[s.symbol_idx]
+                    && !workspace.one_way_block_initial_long[s.symbol_idx]
+                    && effective_min_cost_is_low_enough(
+                        input.balance,
+                        input.global.filter_by_min_effective_cost,
+                        s.effective_min_cost,
+                        &s.long.bot_params,
+                    );
+                let short_allow_initial = workspace.actives_short[s.symbol_idx]
+                    && !workspace.one_way_block_initial_short[s.symbol_idx]
+                    && effective_min_cost_is_low_enough(
+                        input.balance,
+                        input.global.filter_by_min_effective_cost,
+                        s.effective_min_cost,
+                        &s.short.bot_params,
+                    );
+                SymbolStateDiagnostic {
+                    symbol_idx: s.symbol_idx,
+                    long: SymbolSideStateDiagnostic {
+                        input_mode: s.long.mode,
+                        effective_mode: long_mode,
+                        active: workspace.actives_long[s.symbol_idx],
+                        allow_initial: long_allow_initial,
+                    },
+                    short: SymbolSideStateDiagnostic {
+                        input_mode: s.short.mode,
+                        effective_mode: short_mode,
+                        active: workspace.actives_short[s.symbol_idx],
+                        allow_initial: short_allow_initial,
+                    },
+                }
+            })
+            .collect();
+
         Ok(OrchestratorOutput {
             orders,
             diagnostics,
@@ -3224,6 +3340,58 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
+                },
+                symbols: vec![sym0, sym1],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            let long_entry_symbol_idxs: Vec<usize> = out
+                .orders
+                .iter()
+                .filter(|o| o.pside == PositionSide::Long && !is_close_order_type(o.order_type))
+                .map(|o| o.symbol_idx)
+                .collect();
+            assert_eq!(long_entry_symbol_idxs, vec![1]);
+        }
+
+        #[test]
+        fn forager_readiness_invalid_candidate_is_skipped_instead_of_panicking() {
+            let mut sym0 = make_basic_symbol(0);
+            let mut sym1 = make_basic_symbol(1);
+
+            sym0.emas.m1.close = vec![(10.0, 0.0), (14.142135623730951, 0.0), (20.0, 0.0)];
+            sym0.emas.m1.volume = vec![(10.0, 10.0)];
+            sym0.emas.m1.log_range = vec![(10.0, 1.0)];
+
+            sym1.emas.m1.close = vec![(10.0, 100.0), (14.142135623730951, 100.0), (20.0, 100.0)];
+            sym1.emas.m1.volume = vec![(10.0, 9.0)];
+            sym1.emas.m1.log_range = vec![(10.0, 1.0)];
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 1.0;
+            global_bp.long.n_positions = 1;
+            global_bp.long.forager_volume_drop_pct = 0.0;
+            global_bp.long.forager_score_weights.ema_readiness = 1.0;
+            global_bp.long.forager_score_weights.volume = 0.0;
+            global_bp.long.forager_score_weights.volatility = 0.0;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,

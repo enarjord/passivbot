@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from config_utils import load_config
 from exchanges.fake import FakeCCXTClient
 from tools.run_fake_live import (
     _async_main,
@@ -204,7 +205,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "entry_trailing_threshold_we_weight": 0.0,
                 "entry_trailing_threshold_volatility_weight": 0.0,
                 "filter_volatility_ema_span": 0.0,
-                "filter_volume_ema_span": 0.0,
+                "filter_volume_ema_span": 1.0,
                 "forager_volume_drop_pct": 0.0,
                 "forager_score_weights": {
                     "volume": 1.0,
@@ -293,6 +294,10 @@ def test_refresh_halted_runtime_forced_modes_keeps_active_red_pside_in_panic():
         def _equity_hard_stop_set_red_runtime_forced_modes(self, pside):
             self._runtime_forced_modes[pside] = {"BTC/USDT:USDT": "panic"}
 
+        def _equity_hard_stop_halted_mode(self, pside, symbol):
+            del pside
+            return "panic" if symbol == "BTC/USDT:USDT" else "graceful_stop"
+
         def _equity_hard_stop_clear_runtime_forced_modes(self, pside=None):
             if pside is None:
                 self._runtime_forced_modes = {"long": {}, "short": {}}
@@ -339,6 +344,10 @@ def test_refresh_halted_runtime_forced_modes_keeps_halted_pside_in_panic_or_grac
         def _equity_hard_stop_set_red_runtime_forced_modes(self, pside):
             raise AssertionError("halted pside should use halted-mode mapping, not active RED panic map")
 
+        def _equity_hard_stop_halted_mode(self, pside, symbol):
+            del pside
+            return "panic" if symbol == "BTC/USDT:USDT" else "graceful_stop"
+
     stub = _Stub()
     Passivbot._equity_hard_stop_refresh_halted_runtime_forced_modes(stub)
     assert stub._runtime_forced_modes["long"]["BTC/USDT:USDT"] == "panic"
@@ -347,32 +356,48 @@ def test_refresh_halted_runtime_forced_modes_keeps_halted_pside_in_panic_or_grac
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("scenario_rel", "user", "expected_steps", "expected_log_fragment"),
+    ("scenario_rel", "user", "expected_steps", "expected_log_fragment", "cooldown_override"),
     [
         (
             "scenarios/fake_live/hsl_long_red_restart.hjson",
             "fake_hsl_restart_test",
             4,
             "RED cooldown elapsed; trading resumed",
+            None,
         ),
         (
             "scenarios/fake_live/hsl_long_terminal_no_restart.hjson",
             "fake_hsl_terminal_test",
             3,
             "RED stop finalized (terminal)",
+            None,
+        ),
+        (
+            "scenarios/fake_live/hsl_long_cooldown_manual_entry_repanic_reset.hjson",
+            "fake_hsl_manual_cooldown_test",
+            5,
+            "cooldown violation repanic flattened; cooldown reset",
+            2.0,
         ),
     ],
 )
 async def test_hsl_replay_scenarios_run_end_to_end(
-    tmp_path, scenario_rel, user, expected_steps, expected_log_fragment
+    tmp_path, scenario_rel, user, expected_steps, expected_log_fragment, cooldown_override
 ):
     import passivbot_rust as pbr
 
     if getattr(pbr, "__is_stub__", False):
         pytest.skip("requires real passivbot_rust extension")
 
+    config_path = REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"
+    if cooldown_override is not None:
+        cfg = load_config(str(config_path), verbose=False)
+        cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = float(cooldown_override)
+        config_path = tmp_path / "fake_live_hsl_btc_override.json"
+        config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
     args = argparse.Namespace(
-        config=str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"),
+        config=str(config_path),
         scenario=str(REPO_ROOT / scenario_rel),
         user=user,
         max_steps=None,

@@ -374,6 +374,8 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.trailing_prices = {}
             self.markets_dict = {}
             self.effective_min_cost = {}
+            self.coin_overrides = {}
+            self.ignored_coins = {"long": set(), "short": set()}
             hsl_cfg = {
                 "enabled": False,
                 "red_threshold": 0.25,
@@ -396,13 +398,16 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "red_flat_confirmations": 0,
                     "pending_red_since_ms": None,
                     "cooldown_until_ms": None,
-                    "pending_stop_event": None,
-                    "last_stop_event": None,
-                    "last_status_log_ms": 0,
-                    "last_cooldown_log_ms": 0,
-                }
-                for pside in ("long", "short")
+                "pending_stop_event": None,
+                "last_stop_event": None,
+                "last_status_log_ms": 0,
+                "last_cooldown_log_ms": 0,
+                "cooldown_intervention_active": False,
+                "cooldown_repanic_reset_pending": False,
+                "last_cooldown_intervention_log_ms": 0,
             }
+            for pside in ("long", "short")
+        }
             # Test-only aliases for concise fixtures.
             self.equity_hard_stop_loss = self.hsl["long"]
             self._equity_hard_stop_runtime = self._equity_hard_stop["long"]["runtime"]
@@ -465,6 +470,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "price_distance_threshold": 1.0,
                 "market_orders_allowed": False,
                 "order_match_tolerance_pct": 0.0,
+                "hsl_position_during_cooldown_policy": "repanic_reset_cooldown",
             }
 
             async def _get_last_prices(symbols, max_age_ms=None):
@@ -706,13 +712,179 @@ async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
     assert bot._runtime_forced_modes["long"][symbol] == "panic"
 
     await bot.execution_cycle()
-    assert bot.PB_modes["long"][symbol] == "panic"
+    assert symbol in bot.active_symbols
 
     _orders, snapshot = await bot.calc_ideal_orders_orchestrator(return_snapshot=True)
 
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["mode"] == "panic"
     assert snapshot["orchestrator_input"]["symbols"][0]["long"]["mode"] == "panic"
+
+
+def test_hsl_halted_universe_keeps_managed_symbols_and_blocks_flat_candidates():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    managed_symbol = _set_basic_state(bot)
+    flat_symbol = "ALT/USDT"
+
+    bot.coin_overrides = {}
+    bot.approved_coins_minus_ignored_coins = {"long": [managed_symbol, flat_symbol], "short": []}
+    bot.markets_dict = {managed_symbol: {"active": True}, flat_symbol: {"active": True}}
+    bot.PB_mode_stop = {"long": "manual", "short": "manual"}
+
+    _hsl_cfg(bot, "long")["enabled"] = True
+    _hsl_cfg(bot, "short")["enabled"] = False
+    state = _hsl_state(bot, "long")
+    state["runtime"]._initialized = True
+    state["runtime"]._red_latched = False
+    state["runtime"]._tier = "red"
+    state["halted"] = True
+    state["cooldown_until_ms"] = 999_999
+
+    universe = bot._build_live_symbol_universe()
+    assert managed_symbol in universe
+    assert flat_symbol not in universe
+
+    overrides = bot._build_orchestrator_mode_overrides([managed_symbol])
+    assert overrides["long"][managed_symbol] == "panic"
+
+
+@pytest.mark.asyncio
+async def test_hsl_cooldown_repanic_reset_cooldown_refreshes_anchor(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "repanic_reset_cooldown"
+    state = _hsl_state(bot)
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    bot.positions[symbol]["long"]["size"] = 1.0
+
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
+    assert changed is False
+    assert state["cooldown_intervention_active"] is True
+    assert state["cooldown_repanic_reset_pending"] is True
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "panic"
+
+    bot.positions[symbol]["long"]["size"] = 0.0
+    captured = {}
+
+    async def fake_compute(pside, ts_ms):
+        captured["compute"] = (pside, ts_ms)
+        return {
+            "balance": 100.0,
+            "realized_pnl_total": 0.0,
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "strategy_pnl": 0.0,
+            "peak_strategy_pnl": 0.0,
+            "strategy_equity": 100.0,
+            "peak_strategy_equity": 100.0,
+            "trigger_peak_strategy_equity": 100.0,
+            "drawdown_raw": 0.0,
+            "drawdown_ema": 0.0,
+            "drawdown_score": 0.0,
+        }
+
+    def fake_write(pside, payload):
+        captured["write"] = (pside, payload)
+        return "/tmp/hsl_long.json"
+
+    monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
+    monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
+
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 180_000)
+    assert changed is True
+    assert captured["compute"] == ("long", 180_000)
+    assert state["cooldown_until_ms"] == 240_000
+    assert state["cooldown_intervention_active"] is False
+    assert state["cooldown_repanic_reset_pending"] is False
+    assert captured["write"][1]["cooldown_until_ms"] == 240_000
+
+
+@pytest.mark.asyncio
+async def test_hsl_cooldown_repanic_keep_original_does_not_reset_anchor():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "repanic_keep_original_cooldown"
+    state = _hsl_state(bot)
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    bot.positions[symbol]["long"]["size"] = 1.0
+
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
+    assert changed is False
+    assert state["cooldown_intervention_active"] is True
+    assert state["cooldown_repanic_reset_pending"] is False
+    assert state["cooldown_until_ms"] == 200_000
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "panic"
+
+
+@pytest.mark.asyncio
+async def test_hsl_cooldown_resume_normal_resets_runtime_and_clears_halt(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "resume_normal_reset_drawdown"
+    state = _hsl_state(bot)
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    bot.positions[symbol]["long"]["size"] = 1.0
+    removed = {"count": 0}
+
+    monkeypatch.setattr(
+        bot,
+        "_equity_hard_stop_remove_latch_file",
+        lambda pside: removed.__setitem__("count", removed["count"] + 1),
+    )
+
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
+    assert changed is True
+    assert removed["count"] == 1
+    assert state["halted"] is False
+    assert state["cooldown_until_ms"] is None
+    assert state["runtime"].red_latched() is False
+
+
+@pytest.mark.asyncio
+async def test_hsl_cooldown_graceful_stop_keeps_cooldown_and_manages_position():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "graceful_stop_keep_cooldown"
+    state = _hsl_state(bot)
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    bot.positions[symbol]["long"]["size"] = 1.0
+
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
+    assert changed is False
+    assert state["cooldown_until_ms"] == 200_000
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "graceful_stop"
+
+
+@pytest.mark.asyncio
+async def test_hsl_cooldown_manual_quarantine_keeps_cooldown_and_leaves_position_manual():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "manual_quarantine"
+    state = _hsl_state(bot)
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    bot.positions[symbol]["long"]["size"] = 1.0
+
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
+    assert changed is False
+    assert state["cooldown_until_ms"] == 200_000
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "manual"
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,7 @@ All notable user-facing changes will be documented in this file.
 - **HSL events per-year metrics** - Backtest HSL analysis now also exports `hard_stop_triggers_per_year` and `hard_stop_restarts_per_year` so runs with different date ranges can be compared more directly without losing the absolute trigger/restart counts.
 - **Long/share of net profit metric** - Backtest analysis now also exposes `long_short_profit_ratio`, a clearer alias for the long-side share of total net realized PnL (`1.0` = all net profit from longs, `0.0` = all from shorts, `0.6` = 60/40 long/short split).
 - **Fake live exchange harness** - Added a new `fake` exchange adapter, fill-event fetcher, and `src/tools/run_fake_live.py` runner for deterministic live-bot replay scenarios driven by local HJSON/JSON timeline files. Included scenarios cover HSL RED trigger/restart and terminal no-restart flows, with per-step artifacts for logs, fills, positions, exchange state, and HSL trace inspection.
+- **Live HSL cooldown intervention policy** - Added `live.hsl_position_during_cooldown_policy` to define what the live bot should do when a position appears on a `pside` that is halted in RED cooldown. Supported behaviors are `repanic_reset_cooldown`, `repanic_keep_original_cooldown`, `resume_normal_reset_drawdown`, `graceful_stop_keep_cooldown`, and `manual_quarantine`.
 
 ### Fixed
 - **Optimizer initial-seed memory spike** - Starting-config evaluation no longer queues the entire seed pool at once. Initial evaluations are now bounded by `optimize.max_pending_starting_evals_per_cpu * n_cpus`, which reduces RAM spikes on large seeded runs, especially in suite mode.
@@ -27,6 +28,7 @@ All notable user-facing changes will be documented in this file.
 - **Backtest HSL analysis metrics expanded and clarified** - Added account-level HSL metrics for yellow/orange/red time share, RED halt duration, trigger drawdown, panic-close realized loss, flatten time, and restart-to-retrigger rate. Also renamed the old ambiguous halt-loss metric to `hard_stop_halt_to_restart_equity_loss_pct`.
 - **Optimizer constraint visibility** - Pareto logging now reports the top violated constraints and penalties instead of only the aggregate penalty number.
 - **One-way forager shortlist eligibility** - In `hedge_mode: false`, coins already occupied on one side no longer consume initial-entry shortlist slots on the opposite side before being blocked.
+- **Live HSL cooldown re-entry handling** - Live HSL cooldown now consistently enforces the configured intervention policy when a position appears during cooldown, including restart-safe latch updates and fake-live regression coverage for manual-entry scenarios.
 
 ### Changed
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.

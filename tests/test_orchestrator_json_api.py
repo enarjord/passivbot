@@ -288,7 +288,7 @@ def test_graceful_stop_blocks_initial_entries_only():
     )
     out_normal = compute(pbr, inp_normal)
     out_gs = compute(pbr, inp_gs)
-    assert out_normal == out_gs
+    assert out_normal["orders"] == out_gs["orders"]
     assert any(o["order_type"].startswith("close_") for o in out_gs["orders"])
 
 

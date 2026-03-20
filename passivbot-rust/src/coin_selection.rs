@@ -189,6 +189,15 @@ fn build_coin_features(
     candidates
         .iter()
         .map(|candidate| {
+            if !candidate.enabled {
+                return Ok(CoinFeature {
+                    index: candidate.index,
+                    enabled: false,
+                    volume_score: 0.0,
+                    volatility_score: 0.0,
+                    ema_readiness_score: 0.0,
+                });
+            }
             let volume_score = if require_volume {
                 validate_required_score(
                     candidate.volume_score,

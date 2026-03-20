@@ -238,3 +238,46 @@ async def test_fake_ccxt_client_supports_boot_fill_history_and_1h_aggregation():
     assert candles_1h == [
         [1_767_225_600_000.0, 100.0, 105.0, 98.0, 105.0, 0.0],
     ]
+
+
+@pytest.mark.asyncio
+async def test_fake_ccxt_client_applies_manual_fill_and_cancel_actions():
+    scenario = _scenario()
+    scenario["timeline"][1]["actions"] = [
+        {
+            "type": "manual_fill",
+            "symbol": "BTC/USDT:USDT",
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "clientOrderId": "manual_entry",
+        }
+    ]
+    scenario["timeline"][2]["actions"] = [
+        {
+            "type": "cancel_open_orders",
+            "symbol": "BTC/USDT:USDT",
+            "position_side": "long",
+            "side": "sell",
+            "clientOrderId": "resting_close",
+        }
+    ]
+    client = FakeCCXTClient(scenario, quote="USDT")
+
+    await client.create_order(
+        "BTC/USDT:USDT",
+        "limit",
+        "sell",
+        1.0,
+        price=110.0,
+        params={"positionSide": "LONG", "reduceOnly": True, "clientOrderId": "resting_close"},
+    )
+    assert len(await client.fetch_open_orders()) == 1
+
+    assert client.advance_time() is True
+    positions = await client.fetch_positions()
+    assert positions[0]["contracts"] == pytest.approx(1.0)
+    assert client.fills[-1]["clientOrderId"] == "manual_entry"
+
+    assert client.advance_time() is True
+    assert await client.fetch_open_orders() == []

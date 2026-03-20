@@ -78,6 +78,7 @@ from config_utils import (
     require_config_value,
     require_live_value,
     merge_negative_cli_values,
+    normalize_hsl_cooldown_position_policy,
     normalize_hsl_signal_mode,
 )
 from procedures import (
@@ -748,6 +749,9 @@ class Passivbot:
                 "last_stop_event": None,
                 "last_status_log_ms": 0,
                 "last_cooldown_log_ms": 0,
+                "cooldown_intervention_active": False,
+                "cooldown_repanic_reset_pending": False,
+                "last_cooldown_intervention_log_ms": 0,
             }
             for pside in ("long", "short")
         }
@@ -867,6 +871,31 @@ class Passivbot:
         config = getattr(self, "config", {})
         return normalize_hsl_signal_mode(get_optional_live_value(config, "hsl_signal_mode", "pside"))
 
+    def _equity_hard_stop_cooldown_position_policy(self) -> str:
+        config = getattr(self, "config", {})
+        return normalize_hsl_cooldown_position_policy(
+            get_optional_live_value(
+                config,
+                "hsl_position_during_cooldown_policy",
+                "repanic_reset_cooldown",
+            )
+        )
+
+    def _equity_hard_stop_halted_mode(self, pside: str, symbol: str | None) -> str:
+        policy = self._equity_hard_stop_cooldown_position_policy()
+        size = 0.0
+        if symbol is not None:
+            size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
+        if policy in {"repanic_reset_cooldown", "repanic_keep_original_cooldown"}:
+            return "panic" if size != 0.0 else "graceful_stop"
+        if policy == "graceful_stop_keep_cooldown":
+            return "graceful_stop"
+        if policy == "manual_quarantine":
+            return "manual" if size != 0.0 else "graceful_stop"
+        if policy == "resume_normal_reset_drawdown":
+            return "normal"
+        return "graceful_stop"
+
     def _equity_hard_stop_panic_close_order_type(self, pside: str) -> str:
         hsl_cfg = getattr(self, "hsl", None)
         if isinstance(hsl_cfg, dict) and pside in hsl_cfg and isinstance(hsl_cfg[pside], dict):
@@ -931,6 +960,9 @@ class Passivbot:
             state["last_stop_event"] = None
             state["last_status_log_ms"] = 0
             state["last_cooldown_log_ms"] = 0
+            state["cooldown_intervention_active"] = False
+            state["cooldown_repanic_reset_pending"] = False
+            state["last_cooldown_intervention_log_ms"] = 0
         self._runtime_forced_modes = {"long": {}, "short": {}}
 
     def _equity_hard_stop_runtime_initialized(self, pside: str) -> bool:
@@ -1317,6 +1349,113 @@ class Passivbot:
             remaining_seconds,
         )
 
+    def _equity_hard_stop_position_symbols(self, pside: str) -> list[str]:
+        out = []
+        for symbol, position in self.positions.items():
+            size = float(position.get(pside, {}).get("size", 0.0) or 0.0)
+            if size != 0.0:
+                out.append(symbol)
+        return sorted(out)
+
+    async def _equity_hard_stop_refresh_cooldown_after_repanic(
+        self, pside: str, now_ms: int
+    ) -> None:
+        state = self._hsl_state(pside)
+        cooldown_minutes = float(self.hsl[pside]["cooldown_minutes_after_red"])
+        cooldown_ms = (
+            max(0, int(round(cooldown_minutes * 60_000.0))) if cooldown_minutes > 0.0 else 0
+        )
+        cooldown_until_ms = now_ms + cooldown_ms if cooldown_ms > 0 else None
+        stop_event = await self._equity_hard_stop_compute_stop_event(pside, now_ms)
+        payload = self._equity_hard_stop_build_latch_payload(
+            pside,
+            stop_event_timestamp_ms=now_ms,
+            balance=float(stop_event["balance"]),
+            realized_pnl_total=float(stop_event["realized_pnl_total"]),
+            realized_pnl=float(stop_event["realized_pnl"]),
+            unrealized_pnl=float(stop_event["unrealized_pnl"]),
+            strategy_pnl=float(stop_event["strategy_pnl"]),
+            peak_strategy_pnl=float(stop_event["peak_strategy_pnl"]),
+            strategy_equity=float(stop_event["strategy_equity"]),
+            peak_strategy_equity=float(stop_event["peak_strategy_equity"]),
+            trigger_peak_strategy_equity=float(stop_event["trigger_peak_strategy_equity"]),
+            drawdown_raw=float(stop_event["drawdown_raw"]),
+            drawdown_ema=float(stop_event["drawdown_ema"]),
+            drawdown_score=float(stop_event["drawdown_score"]),
+            no_restart_latched=False,
+            cooldown_until_ms=cooldown_until_ms,
+        )
+        state["last_stop_event"] = payload
+        state["cooldown_until_ms"] = cooldown_until_ms
+        state["cooldown_intervention_active"] = False
+        state["cooldown_repanic_reset_pending"] = False
+        state["last_cooldown_intervention_log_ms"] = 0
+        latch_path = self._equity_hard_stop_write_latch(pside, payload)
+        logging.critical(
+            "[risk] HSL[%s] cooldown violation repanic flattened; cooldown reset from flat_ts=%s to cooldown_until_ms=%s latch=%s",
+            pside,
+            now_ms,
+            cooldown_until_ms if cooldown_until_ms is not None else "none",
+            latch_path,
+        )
+
+    async def _equity_hard_stop_handle_position_during_cooldown(
+        self, pside: str, now_ms: int
+    ) -> bool:
+        state = self._hsl_state(pside)
+        if not state["halted"] or state["no_restart_latched"]:
+            return False
+        cooldown_until_ms = state["cooldown_until_ms"]
+        if cooldown_until_ms is None or now_ms >= cooldown_until_ms:
+            return False
+
+        symbols = self._equity_hard_stop_position_symbols(pside)
+        policy = self._equity_hard_stop_cooldown_position_policy()
+        if not symbols:
+            if state["cooldown_repanic_reset_pending"]:
+                await self._equity_hard_stop_refresh_cooldown_after_repanic(pside, now_ms)
+                return True
+            if state["cooldown_intervention_active"]:
+                logging.info(
+                    "[risk] HSL[%s] cooldown intervention ended flat; policy=%s original_cooldown_until_ms=%s",
+                    pside,
+                    policy,
+                    cooldown_until_ms,
+                )
+            state["cooldown_intervention_active"] = False
+            state["cooldown_repanic_reset_pending"] = False
+            state["last_cooldown_intervention_log_ms"] = 0
+            return False
+
+        should_log = (
+            not state["cooldown_intervention_active"]
+            or state["last_cooldown_intervention_log_ms"] == 0
+            or now_ms - state["last_cooldown_intervention_log_ms"]
+            >= self._equity_hard_stop_cooldown_log_interval_ms
+        )
+        if should_log:
+            logging.critical(
+                "[risk] HSL[%s] detected non-flat position during RED cooldown | policy=%s symbols=%s cooldown_until_ms=%s",
+                pside,
+                policy,
+                ",".join(symbols),
+                cooldown_until_ms,
+            )
+            state["last_cooldown_intervention_log_ms"] = now_ms
+        state["cooldown_intervention_active"] = True
+
+        if policy == "resume_normal_reset_drawdown":
+            self._equity_hard_stop_reset_after_restart(pside)
+            self._equity_hard_stop_remove_latch_file(pside)
+            logging.critical(
+                "[risk] HSL[%s] operator override during RED cooldown: resumed normal operation and reset drawdown tracker",
+                pside,
+            )
+            return True
+
+        state["cooldown_repanic_reset_pending"] = policy == "repanic_reset_cooldown"
+        return False
+
     def _equity_hard_stop_reset_after_restart(self, pside: str) -> None:
         state = self._hsl_state(pside)
         state["runtime"].reset()
@@ -1331,6 +1470,9 @@ class Passivbot:
         state["pending_stop_event"] = None
         state["last_status_log_ms"] = 0
         state["last_cooldown_log_ms"] = 0
+        state["cooldown_intervention_active"] = False
+        state["cooldown_repanic_reset_pending"] = False
+        state["last_cooldown_intervention_log_ms"] = 0
         self._equity_hard_stop_clear_runtime_forced_modes(pside)
 
     def _equity_hard_stop_refresh_halted_runtime_forced_modes(self) -> None:
@@ -1349,8 +1491,7 @@ class Passivbot:
                 continue
             forced = {}
             for symbol in symbols:
-                size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
-                forced[symbol] = "panic" if size != 0.0 else "graceful_stop"
+                forced[symbol] = self._equity_hard_stop_halted_mode(pside, symbol)
             self._runtime_forced_modes[pside] = forced
 
     async def _equity_hard_stop_initialize_from_history(self) -> None:
@@ -1581,19 +1722,22 @@ class Passivbot:
                 continue
             state = self._hsl_state(pside)
             if state["halted"]:
-                cooldown_until_ms = state["cooldown_until_ms"]
-                if (
-                    not state["no_restart_latched"]
-                    and cooldown_until_ms is not None
-                    and ts_ms >= cooldown_until_ms
-                ):
-                    self._equity_hard_stop_reset_after_restart(pside)
-                    self._equity_hard_stop_remove_latch_file(pside)
-                    logging.info("[risk] HSL[%s] RED cooldown elapsed; trading resumed", pside)
+                if await self._equity_hard_stop_handle_position_during_cooldown(pside, ts_ms):
                     state = self._hsl_state(pside)
-                else:
-                    self._equity_hard_stop_log_cooldown_status(pside, ts_ms)
-                    continue
+                if state["halted"]:
+                    cooldown_until_ms = state["cooldown_until_ms"]
+                    if (
+                        not state["no_restart_latched"]
+                        and cooldown_until_ms is not None
+                        and ts_ms >= cooldown_until_ms
+                    ):
+                        self._equity_hard_stop_reset_after_restart(pside)
+                        self._equity_hard_stop_remove_latch_file(pside)
+                        logging.info("[risk] HSL[%s] RED cooldown elapsed; trading resumed", pside)
+                        state = self._hsl_state(pside)
+                    else:
+                        self._equity_hard_stop_log_cooldown_status(pside, ts_ms)
+                        continue
             prev_latched = self._equity_hard_stop_runtime_red_latched(pside)
             prev_tier = self._equity_hard_stop_runtime_tier(pside)
             metrics = self._equity_hard_stop_apply_sample(
@@ -3768,7 +3912,8 @@ class Passivbot:
         """Return True when a symbol is approved, not ignored, and old enough for trading."""
         if symbol not in self.approved_coins_minus_ignored_coins[pside]:
             return False
-        if symbol in self.ignored_coins[pside]:
+        ignored = getattr(self, "ignored_coins", {}).get(pside, set())
+        if symbol in ignored:
             return False
         if not self.is_old_enough(pside, symbol):
             return False
@@ -3833,93 +3978,13 @@ class Passivbot:
 
     async def execution_cycle(self):
         """Prepare bot state before talking to the exchange in an execution loop."""
-        # called before every execution to exchange
-        # assumes positions, open orders are up to date
-        # determine coins with position and open orders
-        # determine eligible/ineligible coins
-        # determine approved/ignored coins
-        #   from external ignored/approved coins files
-        #   from coin age
-        #   from effective min cost (only if has updated price info)
-        # determine and set special t,p,m modes and forced modes
-        # determine ideal coins from log range and volume
-        # determine coins with pos for normal or gs modes
-        # determine coins from ideal coins for normal modes
-
         await self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
         self.set_wallet_exposure_limits()
-        previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, "PB_modes") else None
-        self.PB_modes = {"long": {}, "short": {}}
-        # Compute a shared forager fetch budget once per cycle and split it fairly by side.
-        # This avoids deterministic long->short starvation when budget is tight.
-        side_fetch_budgets: Dict[str, int] = {}
-        max_calls = get_optional_live_value(self.config, "max_ohlcv_fetches_per_minute", 0)
-        try:
-            max_calls = int(max_calls) if max_calls is not None else 0
-        except Exception:
-            max_calls = 0
-        if max_calls > 0:
-            forager_sides = [pside for pside in ("long", "short") if self.is_forager_mode(pside)]
-            if forager_sides:
-                total_budget = self._forager_refresh_budget(max_calls)
-                side_fetch_budgets = self._split_forager_budget_by_side(total_budget, forager_sides)
-        for pside, other_pside in [("long", "short"), ("short", "long")]:
-            if self.is_forager_mode(pside):
-                await self.update_first_timestamps()
-            for symbol in self.coin_overrides:
-                if flag := self.get_forced_PB_mode(pside, symbol):
-                    self.PB_modes[pside][symbol] = flag
-            ideal_coins = await self.get_filtered_coins(
-                pside,
-                max_network_fetches=(
-                    side_fetch_budgets[pside] if pside in side_fetch_budgets else None
-                ),
-            )
-            slots_filled = {
-                k for k, v in self.PB_modes[pside].items() if v in ["normal", "graceful_stop"]
-            }
-            max_n_positions = self.get_max_n_positions(pside)
-            symbols_with_pos = self.get_symbols_with_pos(pside)
-            for symbol in symbols_with_pos:
-                if symbol in self.PB_modes[pside]:
-                    continue
-                elif forced_mode := self.get_forced_PB_mode(pside, symbol):
-                    self.PB_modes[pside][symbol] = forced_mode
-                else:
-                    if symbol in self.ineligible_symbols:
-                        if self.ineligible_symbols[symbol] == "not active":
-                            self.PB_modes[pside][symbol] = "tp_only"
-                        else:
-                            self.PB_modes[pside][symbol] = "manual"
-                    elif len(symbols_with_pos) > max_n_positions:
-                        self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
-                    elif symbol in ideal_coins:
-                        self.PB_modes[pside][symbol] = "normal"
-                    else:
-                        self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
-                    slots_filled.add(symbol)
-            for symbol in ideal_coins:
-                if len(slots_filled) >= max_n_positions:
-                    break
-                if symbol in self.PB_modes[pside]:
-                    continue
-                if not self.hedge_mode and self.has_position(other_pside, symbol):
-                    continue
-                self.PB_modes[pside][symbol] = "normal"
-                slots_filled.add(symbol)
-            for symbol in self.open_orders:
-                if symbol in self.PB_modes[pside]:
-                    continue
-                self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
-        self._apply_equity_hard_stop_orange_overlay()
-        self.active_symbols = sorted(
-            {s for subdict in self.PB_modes.values() for s in subdict.keys()}
-        )
+        if any(self.is_forager_mode(pside) for pside in ("long", "short")):
+            await self.update_first_timestamps()
+        self.active_symbols = self._build_live_symbol_universe()
         for symbol in self.active_symbols:
-            for pside in self.PB_modes:
-                if symbol not in self.PB_modes[pside]:
-                    self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
             if symbol not in self.positions:
                 self.positions[symbol] = {
                     "long": {"size": 0.0, "price": 0.0},
@@ -3929,8 +3994,6 @@ class Passivbot:
                 self.open_orders[symbol] = []
         self.set_wallet_exposure_limits()
         await self.update_trailing_data()
-        res = log_dict_changes(previous_PB_modes, self.PB_modes)
-        self._log_mode_changes(res, previous_PB_modes)
 
     def _log_mode_changes(self, res: dict, previous_PB_modes: dict) -> None:
         """Log mode changes with DEBUG for all details and INFO for user-relevant events.
@@ -4427,8 +4490,134 @@ class Passivbot:
                     n_positions += 1
         return n_positions
 
+    def _orchestrator_mode_override(self, pside: str, symbol: str) -> Optional[str]:
+        if self._equity_hard_stop_enabled(pside):
+            state = self._hsl_state(pside)
+            if self._equity_hard_stop_runtime_red_latched(pside) and not state["halted"]:
+                return "panic"
+            if state["halted"]:
+                return self._equity_hard_stop_halted_mode(pside, symbol)
+            if self._equity_hard_stop_runtime_tier(pside) == "orange":
+                orange_mode = str(self.hsl[pside]["orange_tier_mode"])
+                if orange_mode == "graceful_stop":
+                    return "graceful_stop"
+                if orange_mode == "tp_only_with_active_entry_cancellation":
+                    size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
+                    if size != 0.0:
+                        return "tp_only_with_active_entry_cancellation"
+
+        runtime_forced = getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
+        if runtime_forced:
+            return str(runtime_forced)
+
+        forced_mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
+        if forced_mode:
+            return expand_PB_mode(forced_mode)
+        if not self.markets_dict.get(symbol, {}).get("active", True):
+            return "tp_only"
+        ineligible_reason = getattr(self, "ineligible_symbols", {}).get(symbol)
+        if ineligible_reason is not None:
+            return "tp_only" if ineligible_reason == "not active" else "manual"
+        return None
+
+    def _pside_blocks_new_entries(self, pside: str) -> bool:
+        forced_mode = self.get_forced_PB_mode(pside)
+        return forced_mode in {
+            "panic",
+            "graceful_stop",
+            "tp_only",
+            "tp_only_with_active_entry_cancellation",
+            "manual",
+        }
+
+    def _build_live_symbol_universe(self) -> list[str]:
+        symbols: set[str] = set()
+        symbols |= set(getattr(self, "positions", {}))
+        symbols |= set(getattr(self, "open_orders", {}))
+        symbols |= set(getattr(self, "coin_overrides", {}))
+        for pside in ("long", "short"):
+            if self._pside_blocks_new_entries(pside):
+                continue
+            approved = self.approved_coins_minus_ignored_coins.get(pside, set())
+            for symbol in approved:
+                if self.is_approved(pside, symbol):
+                    symbols.add(symbol)
+        return sorted(symbols)
+
+    def _mode_override_to_orchestrator_mode(self, mode: Optional[str]) -> Optional[str]:
+        if mode is None:
+            return None
+        m = str(mode).strip().lower()
+        if m == "tp_only_with_active_entry_cancellation":
+            return "tp_only"
+        if m in {"normal", "panic", "graceful_stop", "tp_only", "manual"}:
+            return m
+        return "manual"
+
+    def _python_mode_from_orchestrator_state(
+        self,
+        pside: str,
+        symbol: str,
+        side_state: dict,
+        explicit_override: Optional[str],
+    ) -> str:
+        if explicit_override:
+            return str(explicit_override)
+        if bool(side_state.get("active", False)):
+            return "normal"
+        return self.PB_mode_stop[pside]
+
+    def _apply_orchestrator_symbol_states(
+        self,
+        diagnostics: dict,
+        idx_to_symbol: dict[int, str],
+        explicit_overrides: dict[str, dict[str, Optional[str]]],
+    ) -> None:
+        previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, "PB_modes") else None
+        symbol_states = diagnostics.get("symbol_states", []) if isinstance(diagnostics, dict) else []
+        if not symbol_states:
+            return
+        pb_modes = {"long": {}, "short": {}}
+        for row in symbol_states:
+            if not isinstance(row, dict):
+                continue
+            symbol = idx_to_symbol.get(int(row.get("symbol_idx", -1)))
+            if symbol is None:
+                continue
+            for pside in ("long", "short"):
+                side_state = row.get(pside, {})
+                explicit_override = explicit_overrides.get(pside, {}).get(symbol)
+                pb_modes[pside][symbol] = self._python_mode_from_orchestrator_state(
+                    pside,
+                    symbol,
+                    side_state if isinstance(side_state, dict) else {},
+                    explicit_override,
+                )
+
+        for symbol in set(self.positions) | set(self.open_orders) | set(pb_modes["long"]) | set(pb_modes["short"]):
+            for pside in ("long", "short"):
+                if symbol not in pb_modes[pside]:
+                    explicit_override = explicit_overrides.get(pside, {}).get(symbol)
+                    if explicit_override:
+                        pb_modes[pside][symbol] = str(explicit_override)
+                    else:
+                        pb_modes[pside][symbol] = self.PB_mode_stop[pside]
+
+        self.PB_modes = pb_modes
+        self.active_symbols = sorted(set(pb_modes["long"]) | set(pb_modes["short"]) | set(self.open_orders))
+        res = log_dict_changes(previous_PB_modes, self.PB_modes)
+        self._log_mode_changes(res, previous_PB_modes)
+
     def get_forced_PB_mode(self, pside, symbol=None):
         """Return an explicitly forced mode for the side or symbol, if configured."""
+        if self._equity_hard_stop_enabled(pside):
+            state = self._hsl_state(pside)
+            if self._equity_hard_stop_runtime_red_latched(pside) and not state["halted"]:
+                return "panic"
+            if state["halted"]:
+                if symbol is None:
+                    return "graceful_stop"
+                return self._equity_hard_stop_halted_mode(pside, symbol)
         if symbol is not None:
             runtime_forced = getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
             if runtime_forced:
@@ -5735,6 +5924,29 @@ class Passivbot:
             return m
         return "manual"
 
+    def _build_orchestrator_mode_overrides(
+        self, symbols: Iterable[str]
+    ) -> dict[str, dict[str, Optional[str]]]:
+        overrides: dict[str, dict[str, Optional[str]]] = {"long": {}, "short": {}}
+        for pside in ("long", "short"):
+            for symbol in symbols:
+                overrides[pside][symbol] = self._orchestrator_mode_override(pside, symbol)
+        return overrides
+
+    def _build_orchestrator_mode_overrides_fallback(
+        self, symbols: Iterable[str]
+    ) -> dict[str, dict[str, Optional[str]]]:
+        overrides: dict[str, dict[str, Optional[str]]] = {"long": {}, "short": {}}
+        pb_modes = getattr(self, "PB_modes", {})
+        for pside in ("long", "short"):
+            pside_modes = pb_modes.get(pside, {}) if isinstance(pb_modes, dict) else {}
+            for symbol in symbols:
+                mode = pside_modes.get(symbol)
+                overrides[pside][symbol] = (
+                    Passivbot._pb_mode_to_orchestrator_mode(self, mode) if mode else None
+                )
+        return overrides
+
     def _calc_unstuck_allowances_live(self, allow_new_unstuck: bool) -> dict[str, float]:
         """Calculate unstuck allowances using FillEventsManager."""
         return self._calc_unstuck_allowances(allow_new_unstuck)
@@ -5752,6 +5964,10 @@ class Passivbot:
         unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
         realized_pnl_cumsum = snapshot.get("realized_pnl_cumsum", {"max": 0.0, "last": 0.0})
         max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
+        if hasattr(self, "_build_orchestrator_mode_overrides"):
+            mode_overrides = self._build_orchestrator_mode_overrides(symbols)
+        else:
+            mode_overrides = Passivbot._build_orchestrator_mode_overrides_fallback(self, symbols)
 
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
@@ -5811,8 +6027,8 @@ class Passivbot:
                 )
 
             def side_input(pside: str) -> dict:
-                mode = self._pb_mode_to_orchestrator_mode(
-                    self.PB_modes.get(pside, {}).get(symbol, "manual")
+                mode = Passivbot._mode_override_to_orchestrator_mode(
+                    self, mode_overrides[pside].get(symbol)
                 )
                 pos = self.positions.get(symbol, {}).get(pside, {"size": 0.0, "price": 0.0})
                 trailing = self.trailing_prices.get(symbol, {}).get(pside)
@@ -5874,6 +6090,12 @@ class Passivbot:
             raise
         out = json.loads(out_json)
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
+        if hasattr(self, "_apply_orchestrator_symbol_states"):
+            self._apply_orchestrator_symbol_states(
+                out.get("diagnostics", {}),
+                idx_to_symbol,
+                mode_overrides,
+            )
         orders = out.get("orders", [])
 
         ideal_orders: dict[str, list] = {}
@@ -5928,7 +6150,7 @@ class Passivbot:
                 "ts_ms": int(utc_ms()),
                 "exchange": str(getattr(self, "exchange", "")),
                 "user": str(self.config_get(["live", "user"]) or ""),
-                "active_symbols": list(symbols),
+                "active_symbols": list(self.active_symbols),
                 "orchestrator_input": input_dict,
                 "orchestrator_output": out,
             }
@@ -5936,7 +6158,7 @@ class Passivbot:
         return ideal_orders_f, None
 
     async def _load_orchestrator_ema_bundle(
-        self, symbols: list[str], modes: dict[str, dict[str, str]]
+        self, symbols: list[str], modes: dict[str, dict[str, Optional[str]]]
     ) -> tuple[
         dict[str, dict[float, float]],
         dict[str, dict[float, float]],
@@ -5954,18 +6176,13 @@ class Passivbot:
         - h1_log_range_emas[symbol][span] = ema_log_range (1h)
         - volumes_long[symbol], log_ranges_long[symbol] (for convenience)
         """
-        # Determine which symbols/psides need full EMA context.
+        # Gather full EMA context for the live symbol universe.
+        # Python should provide the market-state bundle; Rust decides which branches use it.
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
 
         for pside in ["long", "short"]:
             for symbol in symbols:
-                mode = self._pb_mode_to_orchestrator_mode(modes.get(pside, {}).get(symbol, "manual"))
-                has_pos = self.has_position(pside, symbol)
-                if mode == "panic":
-                    continue
-                if mode == "manual" and not has_pos:
-                    continue
                 span0 = float(self.bp(pside, "ema_span_0", symbol))
                 span1 = float(self.bp(pside, "ema_span_1", symbol))
                 span2 = float((span0 * span1) ** 0.5) if span0 > 0.0 and span1 > 0.0 else 0.0
@@ -6191,10 +6408,10 @@ class Passivbot:
 
     async def calc_ideal_orders_orchestrator(self, *, return_snapshot: bool = False):
         """Compute desired orders using Rust orchestrator (JSON API)."""
-        # Use the same symbol universe as legacy live path (pre-selected in execution_cycle).
-        symbols = sorted(set(getattr(self, "active_symbols", []) or []))
+        symbols = sorted(set(getattr(self, "active_symbols", []) or self._build_live_symbol_universe()))
         if not symbols:
             return ({}, None) if return_snapshot else {}
+        mode_overrides = self._build_orchestrator_mode_overrides(symbols)
 
         # Get latest prices: prefer bulk allMids (1 API call for all symbols)
         # over per-symbol get_current_close (N API calls). Falls back to CM if unavailable.
@@ -6254,7 +6471,7 @@ class Passivbot:
             h1_log_range_emas,
             _volumes_long,
             _log_ranges_long,
-        ) = await self._load_orchestrator_ema_bundle(symbols, self.PB_modes)
+        ) = await self._load_orchestrator_ema_bundle(symbols, mode_overrides)
 
         unstuck_allowances = self._calc_unstuck_allowances_live(
             allow_new_unstuck=not self.has_open_unstuck_order()
@@ -6318,9 +6535,7 @@ class Passivbot:
                 )
 
             def side_input(pside: str) -> dict:
-                mode = self._pb_mode_to_orchestrator_mode(
-                    self.PB_modes.get(pside, {}).get(symbol, "manual")
-                )
+                mode = self._mode_override_to_orchestrator_mode(mode_overrides[pside].get(symbol))
                 pos = self.positions.get(symbol, {}).get(pside, {"size": 0.0, "price": 0.0})
                 trailing = self.trailing_prices.get(symbol, {}).get(pside)
                 if not trailing:
@@ -6382,6 +6597,11 @@ class Passivbot:
             raise
         out = json.loads(out_json)
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
+        self._apply_orchestrator_symbol_states(
+            out.get("diagnostics", {}),
+            idx_to_symbol,
+            mode_overrides,
+        )
         orders = out.get("orders", [])
 
         ideal_orders: dict[str, list] = {}
@@ -6436,7 +6656,7 @@ class Passivbot:
                 "ts_ms": int(utc_ms()),
                 "exchange": str(getattr(self, "exchange", "")),
                 "user": str(self.config_get(["live", "user"]) or ""),
-                "active_symbols": list(symbols),
+                "active_symbols": list(self.active_symbols),
                 "realized_pnl_cumsum": realized_pnl_cumsum,
                 "orchestrator_input": input_dict,
                 "orchestrator_output": out,

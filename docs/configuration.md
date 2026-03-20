@@ -352,6 +352,12 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **enable_archive_candle_fetch**: Enables the archive-candle fallback path in live mode. Keep `false` unless you specifically want the live bot to supplement its local candle state from exchange archive endpoints.
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
 - **hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
+- **hsl_position_during_cooldown_policy**: Live-only policy for a position that appears on a halted `pside` during HSL RED cooldown.
+  - `repanic_reset_cooldown`: panic-close it again and restart the cooldown from that new flatten.
+  - `repanic_keep_original_cooldown`: panic-close it again but keep the original cooldown deadline.
+  - `resume_normal_reset_drawdown`: treat it as an explicit operator override, clear the halt for that `pside`, and restart HSL drawdown tracking from the current state.
+  - `graceful_stop_keep_cooldown`: manage the existing position with `graceful_stop` semantics while keeping the original cooldown running and blocking fresh initials.
+  - `manual_quarantine`: leave that position in `manual` mode while keeping the original cooldown running and blocking fresh initials.
 - **hsl_signal_mode**: Selects whether HSL drawdown is tracked per-side (`"pside"`) or from one combined account-level strategy signal (`"unified"`). See [Equity Hard Stop Loss](equity_hard_stop_loss.md).
 - **max_memory_candles_per_symbol**: Maximum number of 1m candles retained in RAM per symbol. Older entries are trimmed once this cap is exceeded. Default (`20_000`) balances memory footprint with trailing-history visibility.
 - **max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
