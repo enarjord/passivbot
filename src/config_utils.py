@@ -2257,7 +2257,7 @@ def get_template_config():
             "price_distance_threshold": 0.002,
             "recv_window_ms": 5000,
             "time_in_force": "good_till_cancelled",
-            "user": "bybit_01",
+            "user": "bitget_01",
             "warmup_jitter_seconds": 30.0,
             "warmup_ratio": 0.2,
             "warmup_concurrency": 0,
