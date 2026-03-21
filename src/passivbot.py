@@ -3016,6 +3016,112 @@ class Passivbot:
             ),
         }
 
+    def _build_monitor_position_side_payload(
+        self,
+        symbol: str,
+        pside: str,
+        pos: dict[str, Any],
+        *,
+        balance_raw: float,
+        last_price: Optional[float],
+        total_we_by_pside: dict[str, float],
+    ) -> dict[str, Any]:
+        size = float(pos.get("size", 0.0) or 0.0)
+        price = float(pos.get("price", 0.0) or 0.0)
+        wallet_exposure = 0.0
+        if size != 0.0 and balance_raw > 0.0 and symbol in self.c_mults:
+            wallet_exposure = float(
+                pbr.qty_to_cost(size, price, self.c_mults[symbol]) / balance_raw
+            )
+        wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
+        allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
+        effective_wel = wel * (1.0 + max(0.0, allowance_pct))
+        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+
+        payload: dict[str, Any] = {
+            "size": size,
+            "price": price,
+            "wallet_exposure": wallet_exposure,
+            "wallet_exposure_limit": wel,
+            "effective_wallet_exposure_limit": effective_wel,
+            "wel_ratio": wallet_exposure / wel if wel > 0.0 else 0.0,
+            "wele_ratio": wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0,
+            "total_wallet_exposure": float(total_we_by_pside.get(pside, 0.0) or 0.0),
+            "total_wallet_exposure_limit": twel,
+            "twel_ratio": (
+                float(total_we_by_pside.get(pside, 0.0) or 0.0) / twel if twel > 0.0 else 0.0
+            ),
+        }
+        if last_price is None:
+            return payload
+
+        payload["last_price"] = float(last_price)
+        if size == 0.0 or price == 0.0 or symbol not in self.c_mults:
+            payload["price_action_distance"] = 0.0
+            payload["upnl"] = 0.0
+            return payload
+        payload["price_action_distance"] = float(
+            pbr.calc_pprice_diff_int(self.pside_int_map[pside], price, last_price)
+        )
+        payload["upnl"] = float(
+            calc_pnl(
+                pside,
+                price,
+                last_price,
+                size,
+                self.inverse,
+                self.c_mults[symbol],
+            )
+        )
+        return payload
+
+    def _build_monitor_positions_section(
+        self,
+        *,
+        balance_raw: float,
+        market: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        positions: dict[str, dict[str, Any]] = {}
+        total_we_by_pside = {"long": 0.0, "short": 0.0}
+        for symbol, pos in self.positions.items():
+            for pside in ("long", "short"):
+                side_pos = pos.get(pside, {})
+                if not isinstance(side_pos, dict):
+                    continue
+                size = float(side_pos.get("size", 0.0) or 0.0)
+                price = float(side_pos.get("price", 0.0) or 0.0)
+                if size != 0.0 and balance_raw > 0.0 and symbol in self.c_mults:
+                    total_we_by_pside[pside] += (
+                        pbr.qty_to_cost(size, price, self.c_mults[symbol]) / balance_raw
+                    )
+
+        for symbol in sorted(self.positions):
+            pos = self.positions[symbol]
+            market_entry = market.get(symbol, {}) if isinstance(market.get(symbol), dict) else {}
+            last_price_raw = market_entry.get("last_price")
+            last_price = float(last_price_raw) if last_price_raw is not None else None
+            long_pos = pos.get("long", {}) if isinstance(pos.get("long"), dict) else {}
+            short_pos = pos.get("short", {}) if isinstance(pos.get("short"), dict) else {}
+            positions[symbol] = {
+                "long": self._build_monitor_position_side_payload(
+                    symbol,
+                    "long",
+                    long_pos,
+                    balance_raw=balance_raw,
+                    last_price=last_price,
+                    total_we_by_pside=total_we_by_pside,
+                ),
+                "short": self._build_monitor_position_side_payload(
+                    symbol,
+                    "short",
+                    short_pos,
+                    balance_raw=balance_raw,
+                    last_price=last_price,
+                    total_we_by_pside=total_we_by_pside,
+                ),
+            }
+        return positions
+
     async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict:
         now_ms = utc_ms() if now_ms is None else int(now_ms)
         balance_raw = float(self.get_raw_balance())
@@ -3034,22 +3140,8 @@ class Passivbot:
             }
         except Exception:
             pass
-
-        positions: dict[str, dict] = {}
-        for symbol in sorted(self.positions):
-            pos = self.positions[symbol]
-            long_pos = pos.get("long", {})
-            short_pos = pos.get("short", {})
-            positions[symbol] = {
-                "long": {
-                    "size": float(long_pos.get("size", 0.0) or 0.0),
-                    "price": float(long_pos.get("price", 0.0) or 0.0),
-                },
-                "short": {
-                    "size": float(short_pos.get("size", 0.0) or 0.0),
-                    "price": float(short_pos.get("price", 0.0) or 0.0),
-                },
-            }
+        market = self._build_monitor_market_section()
+        positions = self._build_monitor_positions_section(balance_raw=balance_raw, market=market)
 
         open_orders: dict[str, list[dict]] = {}
         for symbol in sorted(self.open_orders):
@@ -3101,7 +3193,7 @@ class Passivbot:
                 },
             },
             "hsl": {pside: self._monitor_hsl_payload(pside) for pside in ("long", "short")},
-            "market": self._build_monitor_market_section(),
+            "market": market,
             "forager": self._build_monitor_forager_section(),
             "unstuck": self._build_monitor_unstuck_section(),
             "recent": self._build_monitor_recent_section(),
