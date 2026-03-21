@@ -11,4 +11,4 @@ cat > /app/api-keys.json <<EOF
 }
 EOF
 
-exec python src/main.py /app/runtime/configs/live.json
+exec python src/main.py /app/railway/configs/live.json
