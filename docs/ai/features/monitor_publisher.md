@@ -34,9 +34,9 @@ Implemented now:
    - `open_orders`
    - `modes`
    - `hsl`
-   - `market`
-   - `forager`
-   - `unstuck`
+   - `market` with cached EMA-band snapshots when available
+   - `forager` with current slots, selected symbols, pending symbols, and `next_symbol`
+   - `unstuck` with allowance state plus current planned unstuck symbol/target/EMA-trigger hints when available
    - `recent`
 
 ## Non-Obvious Details

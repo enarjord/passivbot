@@ -9,6 +9,7 @@ import termios
 import time
 import tty
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -94,6 +95,58 @@ def _truncate(value: str, width: int) -> str:
     return value[: width - 3] + "..."
 
 
+def _wrap_box(title: str, lines: list[str], width: int) -> list[str]:
+    width = max(12, width)
+    inner = max(1, width - 4)
+    out = [
+        "+" + "-" * (width - 2) + "+",
+        f"| {_truncate(title, inner):<{inner}} |",
+        "|" + "-" * (width - 2) + "|",
+    ]
+    if not lines:
+        lines = ["-"]
+    for line in lines:
+        out.append(f"| {_truncate(line, inner):<{inner}} |")
+    out.append("+" + "-" * (width - 2) + "+")
+    return out
+
+
+def _pad_lines(lines: list[str], height: int, width: int) -> list[str]:
+    padded = list(lines[:height])
+    while len(padded) < height:
+        padded.append(" " * width)
+    return [line.ljust(width)[:width] for line in padded]
+
+
+def _combine_columns(left: list[str], right: list[str], left_width: int, right_width: int) -> list[str]:
+    height = max(len(left), len(right))
+    left_padded = _pad_lines(left, height, left_width)
+    right_padded = _pad_lines(right, height, right_width)
+    return [f"{l} {r}" for l, r in zip(left_padded, right_padded)]
+
+
+def _render_screen_diff(previous: Optional[str], current: str) -> str:
+    current_lines = current.splitlines()
+    if previous is None:
+        return f"\x1b[2J\x1b[H{current}\x1b[J\x1b[{len(current_lines) + 1};1H"
+
+    previous_lines = previous.splitlines()
+    max_lines = max(len(previous_lines), len(current_lines))
+    out: list[str] = []
+    for idx in range(max_lines):
+        old_line = previous_lines[idx] if idx < len(previous_lines) else None
+        new_line = current_lines[idx] if idx < len(current_lines) else ""
+        if old_line == new_line:
+            continue
+        out.append(f"\x1b[{idx + 1};1H{new_line}\x1b[K")
+    if len(current_lines) < len(previous_lines):
+        out.append(f"\x1b[{len(current_lines) + 1};1H\x1b[J")
+    if not out:
+        return ""
+    out.append(f"\x1b[{len(current_lines) + 1};1H")
+    return "".join(out)
+
+
 def _fmt_pct_ratio(value: Any) -> str:
     if value is None:
         return "-"
@@ -109,6 +162,37 @@ def _account_realized_value(account: dict[str, Any]) -> Any:
     if isinstance(realized, dict):
         return realized.get("current")
     return realized
+
+
+def _fmt_pct_delta(value: Any, digits: int = 2) -> str:
+    if value is None:
+        return "-"
+    try:
+        pct = float(value) * 100.0
+    except (TypeError, ValueError):
+        return str(value)
+    sign = "+" if pct >= 0.0 else ""
+    return f"{sign}{pct:.{digits}f}%"
+
+
+def _capture_render_data(state: "MonitorTuiState") -> dict[str, Any]:
+    return {
+        "snapshot": deepcopy(state.snapshot),
+        "snapshot_seq": state.snapshot_seq,
+        "snapshot_ts_ms": state.snapshot_ts_ms,
+        "ws_connected": state.ws_connected,
+        "status_text": state.status_text,
+        "last_error": state.last_error,
+        "last_ws_message_ts_ms": state.last_ws_message_ts_ms,
+        "recent_events": deepcopy(list(state.recent_events)),
+        "recent_price_ticks": deepcopy(state.recent_price_ticks),
+        "recent_candles": deepcopy(state.recent_candles),
+        "recent_log_lines": deepcopy(list(state.recent_log_lines)),
+        "exchange": state.exchange,
+        "user": state.user,
+        "focus_symbol": state.focus_symbol,
+        "followed_log_file": state.followed_log_file,
+    }
 
 
 def _build_query_params(exchange: Optional[str], user: Optional[str]) -> dict[str, str]:
@@ -165,6 +249,9 @@ class MonitorTuiState:
     last_ws_message_ts_ms: Optional[int] = None
     command_buffer: str = ""
     command_status: str = "Type 'help' for commands."
+    paused: bool = False
+    paused_render_data: Optional[dict[str, Any]] = None
+    last_rendered_screen: Optional[str] = None
     followed_log_file: Optional[str] = None
     recent_events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=12))
     recent_price_ticks: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -278,10 +365,13 @@ def _format_event_line(message: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
-def _format_tick_line(symbol: str, message: dict[str, Any]) -> str:
+def _format_tick_line(symbol: str, message: dict[str, Any], market_entry: Optional[dict[str, Any]] = None) -> str:
     payload = message.get("payload", {}) if isinstance(message.get("payload"), dict) else {}
+    market_entry = market_entry if isinstance(market_entry, dict) else {}
     return (
-        f"{symbol:<18} last={_fmt_float(payload.get('last'), 4):>12} "
+        f"{symbol:<18} last={_fmt_float(payload.get('last'), 4):>11} "
+        f"L={_fmt_market_band_snapshot(market_entry, 'long'):<21} "
+        f"S={_fmt_market_band_snapshot(market_entry, 'short'):<21} "
         f"age={_fmt_age_ms(message.get('ts')):>6}"
     )
 
@@ -440,6 +530,111 @@ def _format_order_activity_line(entry: dict[str, Any]) -> str:
     )
 
 
+def _fmt_market_band_snapshot(
+    market_entry: dict[str, Any],
+    pside: str,
+    *,
+    include_trigger: bool = False,
+) -> str:
+    ema_bands = market_entry.get("ema_bands", {}) if isinstance(market_entry, dict) else {}
+    side_bands = ema_bands.get(pside, {}) if isinstance(ema_bands, dict) else {}
+    if not isinstance(side_bands, dict) or not side_bands:
+        return "-"
+    lower = _fmt_float(side_bands.get("lower"), 4)
+    upper = _fmt_float(side_bands.get("upper"), 4)
+    if include_trigger:
+        trigger = _fmt_float(side_bands.get("unstuck_trigger_price"), 4)
+        return f"{lower}..{upper} trg={trigger}"
+    return f"{lower}..{upper}"
+
+
+def _infer_total_wallet_exposure_limit(row: dict[str, Any], pside: str) -> Optional[float]:
+    pos = row.get(pside, {}) if isinstance(row.get(pside), dict) else {}
+    try:
+        wallet_exposure = abs(float(pos.get("wallet_exposure", 0.0) or 0.0))
+        twel_ratio = abs(float(pos.get("twel_ratio", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        return None
+    if wallet_exposure <= 0.0 or twel_ratio <= 0.0:
+        return None
+    return wallet_exposure / twel_ratio
+
+
+def _render_positions_twe_summary(rows: list[dict[str, Any]]) -> list[str]:
+    parts: list[str] = []
+    for pside in ("long", "short"):
+        total_exposure = 0.0
+        total_limit = None
+        for row in rows:
+            pos = row.get(pside, {}) if isinstance(row.get(pside), dict) else {}
+            try:
+                total_exposure += abs(float(pos.get("wallet_exposure", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                pass
+            if total_limit is None:
+                total_limit = _infer_total_wallet_exposure_limit(row, pside)
+        if total_limit is not None and total_limit > 0.0:
+            parts.append(
+                f"{pside}={_fmt_float(total_exposure, 4)}/{_fmt_float(total_limit, 4)}"
+                f" ({_fmt_pct_ratio(total_exposure / total_limit)})"
+            )
+        else:
+            parts.append(f"{pside}={_fmt_float(total_exposure, 4)}/- (-)")
+    return [f"TWE total | {' | '.join(parts)}"]
+
+
+def _render_forager_panel(snapshot: dict[str, Any]) -> list[str]:
+    forager = snapshot.get("forager", {}) if isinstance(snapshot, dict) else {}
+    if not isinstance(forager, dict):
+        return ["(no forager snapshot data)"]
+    lines: list[str] = []
+    for pside in ("long", "short"):
+        entry = forager.get(pside, {}) if isinstance(forager.get(pside), dict) else {}
+        slots = entry.get("slots", {}) if isinstance(entry.get("slots"), dict) else {}
+        selected = entry.get("selected_symbols", []) if isinstance(entry.get("selected_symbols"), list) else []
+        pending = entry.get("pending_symbols", []) if isinstance(entry.get("pending_symbols"), list) else []
+        next_symbol = entry.get("next_symbol")
+        lines.append(
+            f"{pside:<5} enabled={entry.get('enabled', '-')} forager={entry.get('forager_mode', '-')} "
+            f"slots={_fmt_int(slots.get('current'))}/{_fmt_int(slots.get('max'))} "
+            f"open={_fmt_int(slots.get('open'))} selected={len(selected)}"
+        )
+        lines.append(
+            f"      pending={len(pending)} next={_symbol_label(str(next_symbol)) if next_symbol else '-'} "
+            f"universe={len(entry.get('candidate_universe', [])) if isinstance(entry.get('candidate_universe'), list) else 0}"
+        )
+    return lines
+
+
+def _render_unstuck_panel(snapshot: dict[str, Any]) -> list[str]:
+    unstuck = snapshot.get("unstuck", {}) if isinstance(snapshot, dict) else {}
+    if not isinstance(unstuck, dict):
+        return ["(no unstuck snapshot data)"]
+    sides = unstuck.get("sides", {}) if isinstance(unstuck.get("sides"), dict) else {}
+    lines = [
+        f"open_order={unstuck.get('has_open_order', False)} "
+        f"open_orders={len(unstuck.get('open_orders', [])) if isinstance(unstuck.get('open_orders'), list) else 0}"
+    ]
+    for pside in ("long", "short"):
+        entry = sides.get(pside, {}) if isinstance(sides.get(pside), dict) else {}
+        next_symbol = entry.get("next_symbol")
+        lines.append(
+            f"{pside:<5} status={entry.get('status', '-')} "
+            f"allow={_fmt_float(entry.get('allowance'), 4)} "
+            f"live={_fmt_float(entry.get('allowance_live'), 4)} "
+            f"next={_symbol_label(str(next_symbol)) if next_symbol else '-'}"
+        )
+        ema_bands = entry.get("ema_bands", {}) if isinstance(entry.get("ema_bands"), dict) else {}
+        lines.append(
+            f"      EMA={_fmt_float(ema_bands.get('lower'), 4)}..{_fmt_float(ema_bands.get('upper'), 4)} "
+            f"trigger={_fmt_float(ema_bands.get('unstuck_trigger_price'), 4)} "
+            f"dist={_fmt_pct_delta(entry.get('next_unstuck_trigger_distance_ratio'))} "
+            f"target={_fmt_float(entry.get('next_target_price'), 4)} "
+            f"target_dist={_fmt_pct_delta(entry.get('next_target_distance_ratio'))}"
+        )
+    return lines
+
+
 def _format_position_side_line(row: dict[str, Any], pside: str) -> str:
     pos = row.get(pside, {}) if isinstance(row.get(pside), dict) else {}
     return (
@@ -448,8 +643,7 @@ def _format_position_side_line(row: dict[str, Any], pside: str) -> str:
         f"{_fmt_float(pos.get('size')):>9}@{_fmt_float(pos.get('price'), 4):<12} "
         f"WE={_fmt_float(pos.get('wallet_exposure'), 4):>7} | "
         f"{_fmt_pct_ratio(pos.get('wel_ratio')):>4} WEL "
-        f"{_fmt_pct_ratio(pos.get('wele_ratio')):>4} WELe "
-        f"{_fmt_pct_ratio(pos.get('twel_ratio')):>4} TWEL | "
+        f"{_fmt_pct_ratio(pos.get('wele_ratio')):>4} WELe | "
         f"PA={_fmt_float(pos.get('price_action_distance'), 4):>8} "
         f"uPnL={_fmt_float(pos.get('upnl'), 3):>9} "
         f"ord={int(row.get('orders', 0) or 0):>2}"
@@ -468,7 +662,7 @@ def _format_order_only_line(row: dict[str, Any]) -> str:
 
 def _render_focus_panel(snapshot: dict[str, Any], focus_symbol: Optional[str]) -> list[str]:
     if not focus_symbol:
-        return ["Focus", "(no focus symbol selected yet)"]
+        return ["symbol=-", "(no focus symbol selected yet)"]
     market = snapshot.get("market", {}) if isinstance(snapshot, dict) else {}
     positions = snapshot.get("positions", {}) if isinstance(snapshot, dict) else {}
     open_orders = snapshot.get("open_orders", {}) if isinstance(snapshot, dict) else {}
@@ -480,9 +674,8 @@ def _render_focus_panel(snapshot: dict[str, Any], focus_symbol: Optional[str]) -
     orders = open_orders.get(focus_symbol, []) if isinstance(open_orders.get(focus_symbol), list) else []
     long_forager = forager.get("long", {}) if isinstance(forager.get("long"), dict) else {}
     short_forager = forager.get("short", {}) if isinstance(forager.get("short"), dict) else {}
-    lines = [f"Focus | {focus_symbol}"]
+    lines = [f"symbol={focus_symbol}"]
     lines.append(
-        "  "
         f"last={_fmt_float(market_entry.get('last_price'), 4)} "
         f"age={_fmt_age_ms(market_entry.get('last_price_ts_ms'))} "
         f"tradable={market_entry.get('tradable', '-')} "
@@ -492,42 +685,35 @@ def _render_focus_panel(snapshot: dict[str, Any], focus_symbol: Optional[str]) -
     approved = market_entry.get("approved", {}) if isinstance(market_entry.get("approved"), dict) else {}
     ignored = market_entry.get("ignored", {}) if isinstance(market_entry.get("ignored"), dict) else {}
     lines.append(
-        "  "
         f"long={_fmt_float(long_pos.get('size'))}@{_fmt_float(long_pos.get('price'), 4)} "
         f"short={_fmt_float(short_pos.get('size'))}@{_fmt_float(short_pos.get('price'), 4)} "
         f"approved L/S={approved.get('long', '-')}:{approved.get('short', '-')} "
         f"ignored L/S={ignored.get('long', '-')}:{ignored.get('short', '-')}"
     )
-    for pside, pos in (("long", long_pos), ("short", short_pos)):
-        size = float(pos.get("size", 0.0) or 0.0)
-        if size == 0.0:
-            continue
-        lines.append(
-            "  "
-            f"{pside} WE={_fmt_float(pos.get('wallet_exposure'), 4)} | "
-            f"{_fmt_pct_ratio(pos.get('wel_ratio'))} WEL "
-            f"{_fmt_pct_ratio(pos.get('wele_ratio'))} WELe "
-            f"{_fmt_pct_ratio(pos.get('twel_ratio'))} TWEL | "
-            f"PA={_fmt_float(pos.get('price_action_distance'), 4)} "
-            f"uPnL={_fmt_float(pos.get('upnl'), 3)}"
-        )
     lines.append(
-        "  "
         f"min_qty={_fmt_float(market_entry.get('min_qty'), 4)} "
         f"min_cost={_fmt_float(market_entry.get('min_cost'), 4)} "
         f"eff_min_cost={_fmt_float(market_entry.get('effective_min_cost'), 4)} "
         f"1m_age={_fmt_age_ms(market_entry.get('last_final_candle_ts_ms'))}"
     )
     lines.append(
-        "  "
         f"forager selected L/S="
         f"{focus_symbol in (long_forager.get('selected_symbols') or [])}:"
         f"{focus_symbol in (short_forager.get('selected_symbols') or [])}"
     )
+    lines.append(
+        f"EMA L={_fmt_market_band_snapshot(market_entry, 'long')} "
+        f"S={_fmt_market_band_snapshot(market_entry, 'short')}"
+    )
     return lines
 
 
-def execute_tui_command(state: MonitorTuiState, raw_command: str) -> bool:
+def execute_tui_command(
+    state: MonitorTuiState,
+    raw_command: str,
+    *,
+    dump_dir: str | Path = "tmp",
+) -> bool:
     command = raw_command.strip()
     if not command:
         state.command_status = ""
@@ -538,11 +724,38 @@ def execute_tui_command(state: MonitorTuiState, raw_command: str) -> bool:
         return True
     if lowered == "help":
         state.command_status = (
-            "Commands: focus <coin|symbol>, focus auto, focus next, focus prev, clear, help, quit, exit"
+            "Commands: focus <coin|symbol>, focus auto, focus next, focus prev, pause, resume, dump, clear, help, quit, exit"
         )
         return False
     if lowered == "clear":
         state.command_status = ""
+        return False
+    if lowered == "pause":
+        if state.paused:
+            state.command_status = "Already paused."
+            return False
+        state.paused = True
+        state.paused_render_data = None
+        state.command_status = "Paused. Type 'resume' to refresh or 'dump' to save the current screen."
+        return False
+    if lowered == "resume":
+        if not state.paused:
+            state.command_status = "Not paused."
+            return False
+        state.paused = False
+        state.paused_render_data = None
+        state.command_status = "Resumed monitor TUI."
+        return False
+    if lowered == "dump":
+        base_dir = Path(dump_dir)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+        path = base_dir / f"monitor_tui_dump_{ts}.txt"
+        screen = state.last_rendered_screen or render_screen(
+            state, display_data=state.paused_render_data
+        )
+        path.write_text(screen + "\n", encoding="utf-8")
+        state.command_status = f"Dumped screen to {path}"
         return False
     parts = command.split()
     if parts[0].lower() == "focus":
@@ -583,89 +796,90 @@ def execute_tui_command(state: MonitorTuiState, raw_command: str) -> bool:
     return False
 
 
-def render_screen(state: MonitorTuiState, *, width: Optional[int] = None) -> str:
-    width = width or shutil.get_terminal_size((120, 40)).columns
-    snapshot = state.snapshot
+def render_screen(
+    state: MonitorTuiState,
+    *,
+    width: Optional[int] = None,
+    display_data: Optional[dict[str, Any]] = None,
+) -> str:
+    width = max(80, width or shutil.get_terminal_size((120, 40)).columns)
+    display_data = display_data or _capture_render_data(state)
+
+    view_state = MonitorTuiState(
+        relay_url=state.relay_url,
+        exchange=display_data.get("exchange"),
+        user=display_data.get("user"),
+        focus_symbol=state.focus_symbol,
+    )
+    view_state.snapshot = display_data.get("snapshot", {})
+    view_state.snapshot_seq = display_data.get("snapshot_seq")
+    view_state.snapshot_ts_ms = display_data.get("snapshot_ts_ms")
+    view_state.ws_connected = bool(display_data.get("ws_connected"))
+    view_state.status_text = str(display_data.get("status_text", "starting"))
+    view_state.last_error = display_data.get("last_error")
+    view_state.last_ws_message_ts_ms = display_data.get("last_ws_message_ts_ms")
+    view_state.recent_events = deque(display_data.get("recent_events", []), maxlen=12)
+    view_state.recent_price_ticks = dict(display_data.get("recent_price_ticks", {}))
+    view_state.recent_candles = dict(display_data.get("recent_candles", {}))
+    view_state.recent_log_lines = deque(display_data.get("recent_log_lines", []), maxlen=12)
+    view_state.followed_log_file = display_data.get("followed_log_file")
+
+    snapshot = view_state.snapshot
     meta = snapshot.get("meta", {}) if isinstance(snapshot, dict) else {}
     account = snapshot.get("account", {}) if isinstance(snapshot, dict) else {}
     health = snapshot.get("health", {}) if isinstance(snapshot, dict) else {}
     hsl = snapshot.get("hsl", {}) if isinstance(snapshot, dict) else {}
     forager = snapshot.get("forager", {}) if isinstance(snapshot, dict) else {}
     unstuck = snapshot.get("unstuck", {}) if isinstance(snapshot, dict) else {}
-    focus_symbol = _select_focus_symbol(state, snapshot)
+    focus_symbol = _select_focus_symbol(view_state, snapshot)
 
-    connection = "connected" if state.ws_connected else "disconnected"
-    bot_label = f"{state.exchange or meta.get('exchange') or '?'} / {state.user or meta.get('user') or '?'}"
-    lines = [
-        f"Passivbot Monitor TUI | {connection} | {bot_label} | relay={state.relay_url}",
+    connection = "connected" if view_state.ws_connected else "disconnected"
+    mode_label = "PAUSED" if state.paused else "LIVE"
+    bot_label = f"{view_state.exchange or meta.get('exchange') or '?'} / {view_state.user or meta.get('user') or '?'}"
+    header_lines = [
+        f"Passivbot Monitor TUI | {mode_label} | {connection} | {bot_label}",
         (
-            f"snapshot_seq={_fmt_int(state.snapshot_seq or meta.get('seq'))} "
-            f"snapshot_age={_fmt_age_ms(state.snapshot_ts_ms or meta.get('snapshot_ts_ms'))} "
-            f"ws_age={_fmt_age_ms(state.last_ws_message_ts_ms)} "
-            f"focus={focus_symbol or '-'} "
-            f"status={state.status_text}"
+            f"relay={state.relay_url} | seq={_fmt_int(view_state.snapshot_seq or meta.get('seq'))} "
+            f"| snapshot_age={_fmt_age_ms(view_state.snapshot_ts_ms or meta.get('snapshot_ts_ms'))} "
+            f"| ws_age={_fmt_age_ms(view_state.last_ws_message_ts_ms)} | focus={focus_symbol or '-'}"
         ),
+        f"status={view_state.status_text}",
     ]
-    if state.last_error:
-        lines.append(f"last_error={state.last_error}")
-    lines.append("")
-    lines.append(
-        "Account | "
-        f"raw={_fmt_float(account.get('balance_raw'), 2)} "
-        f"snapped={_fmt_float(account.get('balance_snapped'), 2)} "
-        f"equity={_fmt_float(account.get('equity'), 2)} "
-        f"realized={_fmt_float(_account_realized_value(account), 2)} "
-        f"pid={_fmt_int(meta.get('pid'))}"
-    )
-    lines.append(
-        "Health  | "
-        f"uptime={_fmt_uptime_ms(health.get('uptime_ms'))} "
-        f"loop={_fmt_float(health.get('last_loop_duration_ms'), 1)}ms "
-        f"fills={_fmt_int(health.get('fills'))} "
-        f"placed={_fmt_int(health.get('orders_placed'))} "
-        f"canceled={_fmt_int(health.get('orders_cancelled'))} "
-        f"errors={_fmt_int(health.get('errors_last_hour'))} "
-        f"limits={_fmt_int(health.get('rate_limits'))}"
-    )
+    if view_state.last_error:
+        header_lines.append(f"last_error={view_state.last_error}")
+
     long_hsl = hsl.get("long", {}) if isinstance(hsl.get("long"), dict) else {}
     short_hsl = hsl.get("short", {}) if isinstance(hsl.get("short"), dict) else {}
-    lines.append(
-        "HSL     | "
-        f"long={long_hsl.get('tier', '-')} halted={long_hsl.get('halted', False)} "
-        f"score={_fmt_float((long_hsl.get('last_metrics') or {}).get('drawdown_score'), 4)} | "
-        f"short={short_hsl.get('tier', '-')} halted={short_hsl.get('halted', False)} "
-        f"score={_fmt_float((short_hsl.get('last_metrics') or {}).get('drawdown_score'), 4)}"
-    )
-    long_forager = forager.get("long", {}) if isinstance(forager.get("long"), dict) else {}
-    short_forager = forager.get("short", {}) if isinstance(forager.get("short"), dict) else {}
-    lines.append(
-        "Forager | "
-        f"long slots={_fmt_int((long_forager.get('slots') or {}).get('current'))}/"
-        f"{_fmt_int((long_forager.get('slots') or {}).get('max'))} "
-        f"selected={len(long_forager.get('selected_symbols', [])) if isinstance(long_forager.get('selected_symbols'), list) else 0} | "
-        f"short slots={_fmt_int((short_forager.get('slots') or {}).get('current'))}/"
-        f"{_fmt_int((short_forager.get('slots') or {}).get('max'))} "
-        f"selected={len(short_forager.get('selected_symbols', [])) if isinstance(short_forager.get('selected_symbols'), list) else 0} "
-        f"active={_fmt_int(health.get('positions_long'))}:{_fmt_int(health.get('positions_short'))}"
-    )
-    unstuck_sides = unstuck.get("sides", {}) if isinstance(unstuck.get("sides"), dict) else {}
-    long_unstuck = unstuck_sides.get("long", {}) if isinstance(unstuck_sides.get("long"), dict) else {}
-    short_unstuck = unstuck_sides.get("short", {}) if isinstance(unstuck_sides.get("short"), dict) else {}
-    lines.append(
-        "Unstuck | "
-        f"open_order={unstuck.get('has_open_order', False)} "
-        f"long={long_unstuck.get('status', '-')} allowance_live={_fmt_float(long_unstuck.get('allowance_live'), 4)} | "
-        f"short={short_unstuck.get('status', '-')} allowance_live={_fmt_float(short_unstuck.get('allowance_live'), 4)}"
-    )
-    lines.append("")
-    lines.extend(_render_focus_panel(snapshot, focus_symbol))
-    lines.append("")
-    lines.append("Active Positions / Orders")
+
+    summary_lines = [
+        (
+            f"Account raw={_fmt_float(account.get('balance_raw'), 2)} "
+            f"snapped={_fmt_float(account.get('balance_snapped'), 2)} "
+            f"equity={_fmt_float(account.get('equity'), 2)} "
+            f"realized={_fmt_float(_account_realized_value(account), 2)} "
+            f"pid={_fmt_int(meta.get('pid'))}"
+        ),
+        (
+            f"Health  uptime={_fmt_uptime_ms(health.get('uptime_ms'))} "
+            f"loop={_fmt_float(health.get('last_loop_duration_ms'), 1)}ms "
+            f"fills={_fmt_int(health.get('fills'))} placed={_fmt_int(health.get('orders_placed'))} "
+            f"canceled={_fmt_int(health.get('orders_cancelled'))} "
+            f"errors={_fmt_int(health.get('errors_last_hour'))} limits={_fmt_int(health.get('rate_limits'))}"
+        ),
+        (
+            f"HSL     long={long_hsl.get('tier', '-')} halted={long_hsl.get('halted', False)} "
+            f"score={_fmt_float((long_hsl.get('last_metrics') or {}).get('drawdown_score'), 4)} | "
+            f"short={short_hsl.get('tier', '-')} halted={short_hsl.get('halted', False)} "
+            f"score={_fmt_float((short_hsl.get('last_metrics') or {}).get('drawdown_score'), 4)}"
+        ),
+    ]
+
     rows = _active_position_rows(snapshot)[:8]
+    positions_lines = _render_positions_twe_summary(rows)
+    positions_lines.append(
+        "symbol/quote  side      size@price            WE metrics                  PA dist / uPnL / orders"
+    )
     if rows:
-        lines.append(
-            "symbol/quote  side      size@price            WE metrics                         PA dist / uPnL / orders"
-        )
         emitted = 0
         for row in rows:
             rendered_position = False
@@ -673,7 +887,7 @@ def render_screen(state: MonitorTuiState, *, width: Optional[int] = None) -> str
                 pos = row.get(pside, {}) if isinstance(row.get(pside), dict) else {}
                 if float(pos.get("size", 0.0) or 0.0) == 0.0:
                     continue
-                lines.append(_format_position_side_line(row, pside))
+                positions_lines.append(_format_position_side_line(row, pside))
                 rendered_position = True
                 emitted += 1
                 if emitted >= 10:
@@ -681,49 +895,68 @@ def render_screen(state: MonitorTuiState, *, width: Optional[int] = None) -> str
             if emitted >= 10:
                 break
             if not rendered_position and int(row.get("orders", 0) or 0) > 0:
-                lines.append(_format_order_only_line(row))
+                positions_lines.append(_format_order_only_line(row))
                 emitted += 1
                 if emitted >= 10:
                     break
     else:
-        lines.append("(no active positions or open orders)")
-    lines.append("")
-    lines.append("Recent Events")
-    recent_events = _filtered_recent_events(state, focus_symbol)
-    if recent_events:
-        for message in recent_events:
-            lines.append(_format_event_line(message))
+        positions_lines.append("(no active positions or open orders)")
+
+    events_lines = [
+        _format_event_line(message) for message in _filtered_recent_events(view_state, focus_symbol)
+    ] or ["(no websocket events seen yet)"]
+    ticks_lines = [
+        _format_tick_line(
+            symbol,
+            message,
+            snapshot.get("market", {}).get(symbol, {}) if isinstance(snapshot.get("market", {}), dict) else {},
+        )
+        for symbol, message in _filtered_price_ticks(view_state, focus_symbol)
+    ] or ["(no price ticks seen yet)"]
+    orders_lines = [
+        _format_order_activity_line(entry)
+        for entry in _recent_order_activity(snapshot, focus_symbol)
+    ] or ["(no recent order activity in snapshot)"]
+    logs_lines = list(view_state.recent_log_lines)[-8:] or ["(no log file attached)"]
+
+    command_lines = [
+        f"Status: {state.command_status}",
+        f"Mode: {'paused (panels frozen)' if state.paused else 'live'}",
+        f"> {state.command_buffer}",
+    ]
+
+    output_lines = _wrap_box("Session", header_lines, width)
+    if width >= 120:
+        left_width = max(52, min(width - 38, int(width * 0.58)))
+        right_width = max(34, width - left_width - 1)
+        left_lines = (
+            _wrap_box("Summary", summary_lines, left_width)
+            + _wrap_box("Focus", _render_focus_panel(snapshot, focus_symbol), left_width)
+            + _wrap_box("Positions", positions_lines, left_width)
+        )
+        log_title = "Bot Log" + (f" | {view_state.followed_log_file}" if view_state.followed_log_file else "")
+        right_lines = (
+            _wrap_box("Forager", _render_forager_panel(snapshot), right_width)
+            + _wrap_box("Unstuck", _render_unstuck_panel(snapshot), right_width)
+            + _wrap_box("Recent Events", events_lines, right_width)
+            + _wrap_box("Price Ticks", ticks_lines, right_width)
+            + _wrap_box("Recent Orders", orders_lines, right_width)
+            + _wrap_box(log_title, logs_lines, right_width)
+        )
+        output_lines.extend(_combine_columns(left_lines, right_lines, left_width, right_width))
     else:
-        lines.append("(no websocket events seen yet)")
-    lines.append("")
-    lines.append("Recent Price Ticks")
-    tick_messages = _filtered_price_ticks(state, focus_symbol)
-    if tick_messages:
-        for symbol, message in tick_messages:
-            lines.append(_format_tick_line(symbol, message))
-    else:
-        lines.append("(no price ticks seen yet)")
-    lines.append("")
-    lines.append("Recent Orders")
-    recent_orders = _recent_order_activity(snapshot, focus_symbol)
-    if recent_orders:
-        for entry in recent_orders:
-            lines.append(_format_order_activity_line(entry))
-    else:
-        lines.append("(no recent order activity in snapshot)")
-    lines.append("")
-    lines.append(
-        f"Recent Bot Log{f' | {state.followed_log_file}' if state.followed_log_file else ''}"
-    )
-    if state.recent_log_lines:
-        for line in list(state.recent_log_lines)[-8:]:
-            lines.append(line)
-    else:
-        lines.append("(no log file attached)")
-    lines.append("")
-    lines.append(f"Cmd: {state.command_status}")
-    lines.append(f"> {state.command_buffer}")
-    return "\n".join(_truncate(line, width) for line in lines)
+        output_lines.extend(_wrap_box("Summary", summary_lines, width))
+        output_lines.extend(_wrap_box("Focus", _render_focus_panel(snapshot, focus_symbol), width))
+        output_lines.extend(_wrap_box("Positions", positions_lines, width))
+        output_lines.extend(_wrap_box("Forager", _render_forager_panel(snapshot), width))
+        output_lines.extend(_wrap_box("Unstuck", _render_unstuck_panel(snapshot), width))
+        output_lines.extend(_wrap_box("Recent Events", events_lines, width))
+        output_lines.extend(_wrap_box("Price Ticks", ticks_lines, width))
+        output_lines.extend(_wrap_box("Recent Orders", orders_lines, width))
+        log_title = "Bot Log" + (f" | {view_state.followed_log_file}" if view_state.followed_log_file else "")
+        output_lines.extend(_wrap_box(log_title, logs_lines, width))
+    output_lines.extend(_wrap_box("Command", command_lines, width))
+    return "\n".join(_truncate(line, width) for line in output_lines)
 
 
 class MonitorTuiClient:
@@ -752,6 +985,7 @@ class MonitorTuiClient:
         self.log_poll_interval_ms = max(100, int(log_poll_interval_ms))
         self.log_bootstrap_lines = max(0, int(log_bootstrap_lines))
         self._stop_event = asyncio.Event()
+        self._last_painted_screen: Optional[str] = None
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -835,11 +1069,20 @@ class MonitorTuiClient:
         sys.stdout.flush()
         try:
             while not self._stop_event.is_set():
-                screen = render_screen(self.state)
-                sys.stdout.write("\x1b[2J\x1b[H")
-                sys.stdout.write(screen)
-                sys.stdout.write("\n")
-                sys.stdout.flush()
+                if self.state.paused:
+                    if self.state.paused_render_data is None:
+                        self.state.paused_render_data = _capture_render_data(self.state)
+                    screen = render_screen(self.state, display_data=self.state.paused_render_data)
+                else:
+                    self.state.paused_render_data = None
+                    screen = render_screen(self.state)
+                self.state.last_rendered_screen = screen
+                if screen != self._last_painted_screen:
+                    patch = _render_screen_diff(self._last_painted_screen, screen)
+                    if patch:
+                        sys.stdout.write(patch)
+                        sys.stdout.flush()
+                    self._last_painted_screen = screen
                 try:
                     await asyncio.wait_for(
                         self._stop_event.wait(), timeout=self.render_interval_ms / 1000.0
@@ -847,6 +1090,9 @@ class MonitorTuiClient:
                 except asyncio.TimeoutError:
                     pass
         finally:
+            if self._last_painted_screen is not None:
+                line_count = len(self._last_painted_screen.splitlines())
+                sys.stdout.write(f"\x1b[{line_count + 1};1H")
             sys.stdout.write("\x1b[?25h")
             sys.stdout.flush()
 

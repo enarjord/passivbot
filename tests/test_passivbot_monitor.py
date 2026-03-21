@@ -400,6 +400,9 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
         _build_monitor_forager_section = pb_mod.Passivbot._build_monitor_forager_section
         _build_monitor_unstuck_section = pb_mod.Passivbot._build_monitor_unstuck_section
+        _build_monitor_runtime_market_hints = pb_mod.Passivbot._build_monitor_runtime_market_hints
+        _build_monitor_runtime_unstuck_hints = pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        _update_monitor_runtime_hints = pb_mod.Passivbot._update_monitor_runtime_hints
         _build_monitor_recent_section = pb_mod.Passivbot._build_monitor_recent_section
         _resolve_pb_order_type = pb_mod.Passivbot._resolve_pb_order_type
 
@@ -520,6 +523,14 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("short", "risk_we_excess_allowance_pct"): 0.5,
                 ("long", "total_wallet_exposure_limit"): 1.7,
                 ("short", "total_wallet_exposure_limit"): 0.0,
+                ("long", "ema_span_0"): 10.0,
+                ("long", "ema_span_1"): 20.0,
+                ("short", "ema_span_0"): 10.0,
+                ("short", "ema_span_1"): 20.0,
+                ("long", "entry_initial_ema_dist"): 0.01,
+                ("short", "entry_initial_ema_dist"): 0.01,
+                ("long", "unstuck_ema_dist"): 0.02,
+                ("short", "unstuck_ema_dist"): 0.02,
                 ("long", "unstuck_loss_allowance_pct"): 0.02,
                 ("short", "unstuck_loss_allowance_pct"): 0.0,
                 ("long", "unstuck_close_pct"): 0.5,
@@ -527,6 +538,28 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("long", "unstuck_threshold"): 0.8,
                 ("short", "unstuck_threshold"): 0.8,
             }
+            span2 = float((10.0 * 20.0) ** 0.5)
+            self._monitor_runtime_market_hints = {}
+            self._monitor_runtime_unstuck_hints = {}
+            self._update_monitor_runtime_hints(
+                symbols=["BTC/USDT:USDT"],
+                last_prices={"BTC/USDT:USDT": 100500.0},
+                m1_close_emas={
+                    "BTC/USDT:USDT": {
+                        10.0: 100200.0,
+                        20.0: 100600.0,
+                        span2: 100400.0,
+                    }
+                },
+                idx_to_symbol={0: "BTC/USDT:USDT"},
+                orders=[
+                    {
+                        "symbol_idx": 0,
+                        "order_type": "close_unstuck_long",
+                        "price": 101000.0,
+                    }
+                ],
+            )
 
         def get_raw_balance(self):
             return 1000.0
@@ -614,13 +647,24 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     )
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["upnl"] == pytest.approx(5.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["last_price"] == pytest.approx(100500.0)
+    assert snapshot["market"]["BTC/USDT:USDT"]["ema_bands"]["long"]["lower"] == pytest.approx(100200.0)
+    assert snapshot["market"]["BTC/USDT:USDT"]["ema_bands"]["long"]["upper"] == pytest.approx(100600.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["trailing"]["long"]["max_since_open"] == pytest.approx(
         100900.0
     )
     assert snapshot["forager"]["long"]["forager_mode"] is True
     assert snapshot["forager"]["long"]["selected_symbols"] == ["BTC/USDT:USDT"]
+    assert snapshot["forager"]["long"]["next_symbol"] is None
     assert snapshot["unstuck"]["has_open_order"] is True
     assert snapshot["unstuck"]["sides"]["long"]["allowance"] == pytest.approx(-20.0)
+    assert snapshot["unstuck"]["sides"]["long"]["next_symbol"] == "BTC/USDT:USDT"
+    assert snapshot["unstuck"]["sides"]["long"]["next_target_price"] == pytest.approx(101000.0)
+    assert snapshot["unstuck"]["sides"]["long"]["next_target_distance_ratio"] == pytest.approx(
+        101000.0 / 100500.0 - 1.0
+    )
+    assert snapshot["unstuck"]["sides"]["long"]["next_unstuck_trigger_distance_ratio"] == pytest.approx(
+        (100600.0 * 1.02) / 100500.0 - 1.0
+    )
     assert snapshot["recent"]["order_executions"][0]["execution_timestamp"] == 123456
     assert snapshot["recent"]["order_cancellations"][0]["pb_order_type"] == "close_unstuck_long"
 

@@ -61,8 +61,11 @@ Current behavior:
 2. refreshes `/snapshot` periodically for live state sections
 3. consumes `/ws` for recent events and recent price ticks
 4. can prioritize one symbol with `--focus-symbol`
-5. renders current summaries, focused-symbol detail, recent order activity, detailed per-side position exposure rows, recent events, recent ticks, and optional local log tailing without touching bot memory directly
-6. provides a bottom command prompt during runtime; current commands include `help`, `focus BTC`, `focus next`, `focus prev`, `focus auto`, `quit`, and `exit`
+5. renders a boxed terminal dashboard with current summaries, a focused-symbol detail box, a total-TWE positions box, dedicated forager and unstuck boxes, recent order activity, recent events, recent ticks, and optional local log tailing without touching bot memory directly
+6. uses a two-column layout on wider terminals so the right side is filled with recent activity panels instead of staying mostly empty
+7. redraws in place only when the rendered frame changes, and applies row-diff terminal updates instead of repainting the entire screen, which reduces visible flicker further
+8. provides a bottom command prompt during runtime; current commands include `help`, `focus BTC`, `focus next`, `focus prev`, `focus auto`, `pause`, `resume`, `dump`, `quit`, and `exit`
+9. `pause` freezes the data panels for copy/inspection while keeping the command line live, and `dump` writes the currently displayed screen to `tmp/monitor_tui_dump_*.txt`
 
 For local monitor development, there is also a one-command wrapper:
 
@@ -165,9 +168,9 @@ Important limits:
 Current expansion details:
 
 1. `positions` now includes per-side wallet-exposure metrics (`wallet_exposure`, `wel_ratio`, `wele_ratio`, `twel_ratio`) plus `price_action_distance`, `upnl`, and cached `last_price` when available
-2. `market` includes current cached last price, candle refresh/finalization timestamps, min-cost metadata, approval/ignore flags, open-order/position presence, and trailing state when available
-3. `forager` includes per-side candidate universe, selected symbols, slot counts, and current forager score-weight config
-4. `unstuck` includes per-side allowance status plus any currently open unstuck orders
+2. `market` includes current cached last price, candle refresh/finalization timestamps, min-cost metadata, approval/ignore flags, open-order/position presence, trailing state, and current per-side EMA band snapshots when available
+3. `forager` includes per-side candidate universe, selected symbols, slot counts, pending selected symbols, `next_symbol`, and current forager score-weight config
+4. `unstuck` includes per-side allowance status, any currently open unstuck orders, and the latest planned unstuck symbol/target/EMA-trigger context when available
 5. `recent` includes recent created and canceled orders retained by the live bot throttling caches
 
 ## Event Stream
