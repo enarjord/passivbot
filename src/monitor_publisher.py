@@ -53,6 +53,11 @@ class MonitorPublisher:
         retain_days: float,
         max_total_bytes: int,
         compress_rotated_segments: bool,
+        retain_price_ticks: bool,
+        retain_candles: bool,
+        retain_fills: bool,
+        price_tick_min_interval_ms: int,
+        emit_completed_candles: bool,
         include_raw_fill_payloads: bool,
     ):
         self.exchange = str(exchange)
@@ -72,6 +77,11 @@ class MonitorPublisher:
         self.retain_days = float(retain_days)
         self.max_total_bytes = int(max_total_bytes)
         self.compress_rotated_segments = bool(compress_rotated_segments)
+        self.retain_price_ticks = bool(retain_price_ticks)
+        self.retain_candles = bool(retain_candles)
+        self.retain_fills = bool(retain_fills)
+        self.price_tick_min_interval_ms = max(0, int(price_tick_min_interval_ms))
+        self.emit_completed_candles = bool(emit_completed_candles)
         self.include_raw_fill_payloads = bool(include_raw_fill_payloads)
         self.pid = os.getpid()
         self.created_ts_ms = self._now_ms()
@@ -79,6 +89,10 @@ class MonitorPublisher:
         self.last_checkpoint_ms = 0
         self.last_retention_ms = 0
         self.current_segment_started_ms = self.created_ts_ms
+        self.history_segment_started_ms: dict[str, int] = {}
+        self._current_history_paths: dict[str, Path] = {}
+        self._last_price_tick_emitted_ms: dict[str, int] = {}
+        self._last_candle_ts_by_key: dict[tuple[str, str], int] = {}
         self.seq = 0
         self._ensure_layout()
         self._load_manifest_state()
@@ -97,6 +111,11 @@ class MonitorPublisher:
             retain_days=float(config["retain_days"]),
             max_total_bytes=int(config["max_total_bytes"]),
             compress_rotated_segments=bool(config["compress_rotated_segments"]),
+            retain_price_ticks=bool(config["retain_price_ticks"]),
+            retain_candles=bool(config["retain_candles"]),
+            retain_fills=bool(config["retain_fills"]),
+            price_tick_min_interval_ms=int(config["price_tick_min_interval_ms"]),
+            emit_completed_candles=bool(config["emit_completed_candles"]),
             include_raw_fill_payloads=bool(config["include_raw_fill_payloads"]),
         )
 
@@ -132,9 +151,25 @@ class MonitorPublisher:
             )
         except Exception:
             pass
+        try:
+            raw_history_started = data.get("history_current_segment_started_ms", {})
+            if isinstance(raw_history_started, dict):
+                self.history_segment_started_ms = {
+                    str(stream): int(started_ms)
+                    for stream, started_ms in raw_history_started.items()
+                    if int(started_ms) > 0
+                }
+        except Exception:
+            self.history_segment_started_ms = {}
 
     def _build_manifest(self, now_ms: Optional[int] = None) -> dict:
         now_ms = self._now_ms() if now_ms is None else int(now_ms)
+        history_streams = {
+            "fills": self.retain_fills,
+            "price_ticks": self.retain_price_ticks,
+            "candles_1m": self.retain_candles and self.emit_completed_candles,
+            "candles_1h": self.retain_candles and self.emit_completed_candles,
+        }
         return {
             "schema_version": self.schema_version,
             "exchange": self.exchange,
@@ -144,11 +179,15 @@ class MonitorPublisher:
             "updated_ts_ms": now_ms,
             "last_seq": self.seq,
             "current_segment_started_ms": self.current_segment_started_ms,
+            "history_current_segment_started_ms": dict(self.history_segment_started_ms),
             "paths": {
                 "root": str(self.root),
                 "state_latest": str(self.state_latest_path),
                 "events_current": str(self.current_events_path),
                 "history_dir": str(self.history_dir),
+                "history_current": {
+                    stream: str(self._history_current_path(stream)) for stream in sorted(history_streams)
+                },
                 "checkpoints_dir": str(self.checkpoints_dir),
             },
             "config": {
@@ -159,12 +198,18 @@ class MonitorPublisher:
                 "retain_days": self.retain_days,
                 "max_total_bytes": self.max_total_bytes,
                 "compress_rotated_segments": self.compress_rotated_segments,
+                "retain_price_ticks": self.retain_price_ticks,
+                "retain_candles": self.retain_candles,
+                "retain_fills": self.retain_fills,
+                "price_tick_min_interval_ms": self.price_tick_min_interval_ms,
+                "emit_completed_candles": self.emit_completed_candles,
                 "include_raw_fill_payloads": self.include_raw_fill_payloads,
             },
             "capabilities": {
                 "snapshot": True,
                 "events": True,
-                "history": False,
+                "history": any(history_streams.values()),
+                "history_streams": history_streams,
                 "checkpoints": True,
             },
         }
@@ -195,7 +240,7 @@ class MonitorPublisher:
             for path in directory.iterdir():
                 if not path.is_file():
                     continue
-                if path == self.current_events_path:
+                if path == self.current_events_path or path in self._current_history_paths.values():
                     continue
                 files.append(path)
         return sorted(files, key=lambda path: path.stat().st_mtime)
@@ -225,7 +270,12 @@ class MonitorPublisher:
             if total_bytes <= self.max_total_bytes:
                 return
 
-            protected = {self.manifest_path, self.state_latest_path, self.current_events_path}
+            protected = {
+                self.manifest_path,
+                self.state_latest_path,
+                self.current_events_path,
+                *self._current_history_paths.values(),
+            }
             candidates = [path for path in self._rotatable_files() if path not in protected]
             for path in candidates:
                 if total_bytes <= self.max_total_bytes:
@@ -262,6 +312,180 @@ class MonitorPublisher:
             self._prune_retention(now_ms=now_ms)
         except Exception as exc:
             logging.error("[monitor] event rotation failed: %s", exc)
+
+    def _history_current_path(self, stream: str) -> Path:
+        path = self._current_history_paths.get(stream)
+        if path is None:
+            path = self.history_dir / f"{stream}.current.ndjson"
+            self._current_history_paths[stream] = path
+        return path
+
+    def _rotate_history_if_needed(self, stream: str, *, now_ms: int) -> None:
+        try:
+            current_path = self._history_current_path(stream)
+            started_ms = int(self.history_segment_started_ms.get(stream, self.created_ts_ms))
+            if not current_path.exists():
+                current_path.touch()
+                self.history_segment_started_ms[stream] = now_ms
+                return
+            size_bytes = current_path.stat().st_size
+            age_ms = now_ms - started_ms
+            if size_bytes <= 0:
+                return
+            if size_bytes < self.event_rotation_bytes and age_ms < self.event_rotation_interval_ms:
+                return
+            rotated = self.history_dir / f"{stream}.{self._segment_label(now_ms)}.ndjson"
+            os.replace(current_path, rotated)
+            if self.compress_rotated_segments:
+                rotated = self._gzip_file(rotated)
+            current_path.touch()
+            self.history_segment_started_ms[stream] = now_ms
+            self._write_manifest(now_ms=now_ms)
+            self._prune_retention(now_ms=now_ms)
+        except Exception as exc:
+            logging.error("[monitor] history rotation failed for %s: %s", stream, exc)
+
+    def record_history_entry(
+        self,
+        stream: str,
+        kind: str,
+        payload: dict,
+        *,
+        ts: Optional[int] = None,
+        symbol: Optional[str] = None,
+        pside: Optional[str] = None,
+        timeframe: Optional[str] = None,
+    ) -> Optional[dict]:
+        now_ms = self._now_ms() if ts is None else int(ts)
+        try:
+            self._rotate_history_if_needed(stream, now_ms=now_ms)
+            envelope = {
+                "ts": now_ms,
+                "kind": str(kind),
+                "stream": str(stream),
+                "exchange": self.exchange,
+                "user": self.user,
+                "payload": payload or {},
+            }
+            if symbol is not None:
+                envelope["symbol"] = str(symbol)
+            if pside is not None:
+                envelope["pside"] = str(pside)
+            if timeframe is not None:
+                envelope["timeframe"] = str(timeframe)
+            current_path = self._history_current_path(stream)
+            if not current_path.exists():
+                current_path.touch()
+                self.history_segment_started_ms[stream] = now_ms
+            line = json.dumps(envelope, separators=(",", ":"), sort_keys=True, default=_json_default)
+            with open(current_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+            self._write_manifest(now_ms=now_ms)
+            self._prune_retention(now_ms=now_ms)
+            return envelope
+        except Exception as exc:
+            logging.error("[monitor] failed recording history entry %s/%s: %s", stream, kind, exc)
+            return None
+
+    def record_fill(
+        self,
+        payload: dict,
+        *,
+        ts: Optional[int] = None,
+        symbol: Optional[str] = None,
+        pside: Optional[str] = None,
+        raw_payload: Any = None,
+    ) -> Optional[dict]:
+        if not self.retain_fills:
+            return None
+        entry_payload = dict(payload or {})
+        if self.include_raw_fill_payloads and raw_payload is not None:
+            entry_payload["raw"] = raw_payload
+        return self.record_history_entry(
+            "fills",
+            "fill",
+            entry_payload,
+            ts=ts,
+            symbol=symbol,
+            pside=pside,
+        )
+
+    def record_price_tick(
+        self,
+        symbol: str,
+        last: float,
+        *,
+        ts: Optional[int] = None,
+        bid: Optional[float] = None,
+        ask: Optional[float] = None,
+        source: Optional[str] = None,
+    ) -> Optional[dict]:
+        if not self.retain_price_ticks:
+            return None
+        now_ms = self._now_ms() if ts is None else int(ts)
+        symbol = str(symbol)
+        last_emitted_ms = int(self._last_price_tick_emitted_ms.get(symbol, 0))
+        if (
+            self.price_tick_min_interval_ms > 0
+            and last_emitted_ms
+            and now_ms - last_emitted_ms < self.price_tick_min_interval_ms
+        ):
+            return None
+        entry_payload = {"last": float(last)}
+        if bid is not None:
+            entry_payload["bid"] = float(bid)
+        if ask is not None:
+            entry_payload["ask"] = float(ask)
+        if source is not None:
+            entry_payload["source"] = str(source)
+        entry = self.record_history_entry(
+            "price_ticks",
+            "price_tick",
+            entry_payload,
+            ts=now_ms,
+            symbol=symbol,
+        )
+        if entry is not None:
+            self._last_price_tick_emitted_ms[symbol] = now_ms
+        return entry
+
+    def record_completed_candles(
+        self,
+        symbol: str,
+        timeframe: str,
+        candles: Iterable[dict],
+    ) -> list[dict]:
+        if not (self.retain_candles and self.emit_completed_candles):
+            return []
+        timeframe = str(timeframe)
+        stream = f"candles_{timeframe}"
+        candles_list = list(candles)
+        if not candles_list:
+            return []
+        key = (str(symbol), timeframe)
+        sorted_candles = sorted(candles_list, key=lambda candle: int(candle["ts"]))
+        last_known_ts = self._last_candle_ts_by_key.get(key)
+        if last_known_ts is None:
+            to_emit = [sorted_candles[-1]]
+        else:
+            to_emit = [candle for candle in sorted_candles if int(candle["ts"]) > last_known_ts]
+        if not to_emit:
+            self._last_candle_ts_by_key[key] = int(sorted_candles[-1]["ts"])
+            return []
+        emitted: list[dict] = []
+        for candle in to_emit:
+            entry = self.record_history_entry(
+                stream,
+                "completed_candle",
+                dict(candle),
+                ts=int(candle["ts"]),
+                symbol=symbol,
+                timeframe=timeframe,
+            )
+            if entry is not None:
+                emitted.append(entry)
+        self._last_candle_ts_by_key[key] = int(sorted_candles[-1]["ts"])
+        return emitted
 
     def record_event(
         self,

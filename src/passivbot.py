@@ -621,6 +621,8 @@ class Passivbot:
         archive_enabled = get_optional_live_value(config, "enable_archive_candle_fetch", False)
         cm_kwargs["archive_enabled"] = bool(archive_enabled)
         self.cm = CandlestickManager(**cm_kwargs)
+        if self.monitor_publisher is not None:
+            self.cm.set_persist_batch_observer(self._monitor_handle_candlestick_persist)
         # TTL (minutes) for EMA candles on non-traded symbols
         ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")
         self.inactive_coin_candle_ttl_ms = int(float(ttl_min) * 60_000)
@@ -1273,6 +1275,67 @@ class Passivbot:
         }
         return {k: v for k, v in payload.items() if v is not None}
 
+    def _monitor_record_fill_history(self, event) -> Optional[dict]:
+        publisher = getattr(self, "monitor_publisher", None)
+        if publisher is None:
+            return None
+        return publisher.record_fill(
+            self._monitor_fill_payload(event),
+            symbol=getattr(event, "symbol", None),
+            pside=str(getattr(event, "position_side", "") or "").lower() or None,
+            ts=int(getattr(event, "timestamp", 0) or 0) or None,
+            raw_payload=getattr(event, "raw", None),
+        )
+
+    def _monitor_record_price_ticks(
+        self,
+        last_prices: dict[str, float],
+        *,
+        ts: Optional[int] = None,
+        source: Optional[str] = None,
+    ) -> int:
+        publisher = getattr(self, "monitor_publisher", None)
+        if publisher is None:
+            return 0
+        emitted = 0
+        for symbol in sorted(last_prices):
+            try:
+                price = float(last_prices[symbol])
+            except Exception:
+                continue
+            if not math.isfinite(price) or price <= 0.0:
+                continue
+            if publisher.record_price_tick(symbol, price, ts=ts, source=source) is not None:
+                emitted += 1
+        return emitted
+
+    def _monitor_handle_candlestick_persist(
+        self,
+        symbol: str,
+        timeframe: str,
+        batch: np.ndarray,
+    ) -> None:
+        publisher = getattr(self, "monitor_publisher", None)
+        if publisher is None or not getattr(self, "_bot_ready", False):
+            return
+        timeframe = str(timeframe)
+        if timeframe not in ("1m", "1h"):
+            return
+        if not isinstance(batch, np.ndarray) or batch.size == 0:
+            return
+        candles = [
+            {
+                "ts": int(row["ts"]),
+                "o": float(row["o"]),
+                "h": float(row["h"]),
+                "l": float(row["l"]),
+                "c": float(row["c"]),
+                "bv": float(row["bv"]),
+            }
+            for row in batch
+        ]
+        publisher.record_completed_candles(symbol, timeframe, candles)
+
     def _build_health_summary_payload(self, *, now_ms: Optional[int] = None) -> dict:
         now_ms = utc_ms() if now_ms is None else int(now_ms)
         n_long = 0
@@ -1306,6 +1369,175 @@ class Passivbot:
         if rss is not None:
             payload["rss_bytes"] = int(rss)
         return payload
+
+    def _monitor_recent_orders_payload(
+        self,
+        orders: list[dict],
+        *,
+        limit: int = 20,
+    ) -> list[dict]:
+        trimmed = list(orders[-limit:]) if orders else []
+        payloads: list[dict] = []
+        for order in trimmed:
+            try:
+                payload = self._monitor_order_payload(order, source=str(order.get("source", "runtime")))
+            except Exception:
+                continue
+            execution_ts = order.get("execution_timestamp")
+            if execution_ts is not None:
+                try:
+                    payload["execution_timestamp"] = int(execution_ts)
+                except Exception:
+                    pass
+            payloads.append(payload)
+        return payloads
+
+    def _build_monitor_market_section(self) -> dict[str, dict]:
+        symbols = (
+            set(getattr(self, "active_symbols", []) or [])
+            | set(getattr(self, "positions", {}).keys())
+            | set(getattr(self, "open_orders", {}).keys())
+            | set(getattr(self, "trailing_prices", {}).keys())
+            | set(getattr(self, "effective_min_cost", {}).keys())
+        )
+        approved_minus_ignored = getattr(self, "approved_coins_minus_ignored_coins", {})
+        approved = getattr(self, "approved_coins", {})
+        ignored = getattr(self, "ignored_coins", {})
+        for pside in ("long", "short"):
+            symbols |= set(approved_minus_ignored.get(pside, set()) or set())
+            symbols |= set(approved.get(pside, set()) or set())
+            symbols |= set(ignored.get(pside, set()) or set())
+        current_close_cache = getattr(getattr(self, "cm", None), "_current_close_cache", {})
+        out: dict[str, dict] = {}
+        for symbol in sorted(symbols):
+            entry: dict[str, Any] = {
+                "active_symbol": symbol in set(getattr(self, "active_symbols", []) or []),
+                "tradable": bool(getattr(self, "markets_dict", {}).get(symbol, {}).get("active", True)),
+                "approved": {
+                    "long": symbol in set(approved_minus_ignored.get("long", set()) or set()),
+                    "short": symbol in set(approved_minus_ignored.get("short", set()) or set()),
+                },
+                "ignored": {
+                    "long": symbol in set(ignored.get("long", set()) or set()),
+                    "short": symbol in set(ignored.get("short", set()) or set()),
+                },
+                "effective_min_cost": float(
+                    getattr(self, "effective_min_cost", {}).get(symbol, 0.0) or 0.0
+                ),
+                "min_cost": float(getattr(self, "min_costs", {}).get(symbol, 0.0) or 0.0),
+                "min_qty": float(getattr(self, "min_qtys", {}).get(symbol, 0.0) or 0.0),
+                "price_step": float(getattr(self, "price_steps", {}).get(symbol, 0.0) or 0.0),
+                "qty_step": float(getattr(self, "qty_steps", {}).get(symbol, 0.0) or 0.0),
+                "has_open_orders": bool(getattr(self, "open_orders", {}).get(symbol)),
+                "has_position": bool(self.has_position(symbol=symbol)),
+            }
+            cached = current_close_cache.get(symbol)
+            if cached is not None:
+                try:
+                    entry["last_price"] = float(cached[0])
+                    entry["last_price_ts_ms"] = int(cached[1])
+                except Exception:
+                    pass
+            try:
+                entry["last_refresh_ms"] = int(self.cm.get_last_refresh_ms(symbol))
+                entry["last_final_candle_ts_ms"] = int(self.cm.get_last_final_ts(symbol))
+            except Exception:
+                pass
+            trailing = getattr(self, "trailing_prices", {}).get(symbol, {})
+            if trailing:
+                entry["trailing"] = {
+                    pside: {k: float(v) for k, v in trailing.get(pside, {}).items()}
+                    for pside in ("long", "short")
+                    if trailing.get(pside)
+                }
+            out[symbol] = entry
+        return out
+
+    def _build_monitor_forager_section(self) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        approved_minus_ignored = getattr(self, "approved_coins_minus_ignored_coins", {})
+        approved = getattr(self, "approved_coins", {})
+        ignored = getattr(self, "ignored_coins", {})
+        for pside in ("long", "short"):
+            candidate_universe = sorted(approved_minus_ignored.get(pside, set()) or set())
+            approved_symbols = sorted(approved.get(pside, set()) or set())
+            ignored_symbols = sorted(ignored.get(pside, set()) or set())
+            current_n = int(self.get_current_n_positions(pside))
+            max_n = int(self.get_max_n_positions(pside))
+            selected_symbols = sorted(
+                set(getattr(self, "PB_modes", {}).get(pside, {}).keys())
+                | {sym for sym in getattr(self, "positions", {}) if self.has_position(pside, sym)}
+            )
+            out[pside] = {
+                "enabled": bool(self.is_pside_enabled(pside)),
+                "forager_mode": bool(self.is_forager_mode(pside)),
+                "forced_mode": self.live_value(f"forced_mode_{pside}"),
+                "slots": {
+                    "current": current_n,
+                    "max": max_n,
+                    "open": max(0, max_n - current_n),
+                },
+                "approved_symbols": approved_symbols,
+                "ignored_symbols": ignored_symbols,
+                "candidate_universe": candidate_universe,
+                "selected_symbols": selected_symbols,
+                "active_symbols": sorted(
+                    sym
+                    for sym in set(getattr(self, "active_symbols", []) or [])
+                    if sym in candidate_universe or sym in selected_symbols
+                ),
+                "score_weights": dict(self.bot_value(pside, "forager_score_weights") or {}),
+                "volume_drop_pct": float(self.bot_value(pside, "forager_volume_drop_pct") or 0.0),
+            }
+        return out
+
+    def _build_monitor_unstuck_section(self) -> dict[str, Any]:
+        has_open = bool(self.has_open_unstuck_order())
+        allowances_live = self._calc_unstuck_allowances_live(allow_new_unstuck=not has_open)
+        out: dict[str, Any] = {
+            "has_open_order": has_open,
+            "open_orders": [],
+            "sides": {},
+        }
+        for symbol in sorted(getattr(self, "open_orders", {})):
+            for order in self.open_orders.get(symbol, []):
+                try:
+                    pb_order_type = str(order.get("custom_id", "")).lower()
+                except Exception:
+                    pb_order_type = ""
+                if "unstuck" not in pb_order_type and "unstuck" not in str(
+                    self._resolve_pb_order_type(order)
+                ):
+                    continue
+                payload = self._monitor_order_payload(order, source="REST")
+                payload["symbol"] = symbol
+                out["open_orders"].append(payload)
+        for pside in ("long", "short"):
+            info = self._calc_unstuck_allowance_for_logging(pside)
+            side_payload: dict[str, Any] = {
+                "status": info.get("status"),
+                "allowance_live": float(allowances_live.get(pside, 0.0) or 0.0),
+                "configured_loss_allowance_pct": float(
+                    self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0
+                ),
+                "configured_close_pct": float(self.bot_value(pside, "unstuck_close_pct") or 0.0),
+                "configured_threshold": float(self.bot_value(pside, "unstuck_threshold") or 0.0),
+            }
+            for key in ("allowance", "peak", "pct_from_peak"):
+                if key in info:
+                    side_payload[key] = float(info[key])
+            out["sides"][pside] = side_payload
+        return out
+
+    def _build_monitor_recent_section(self) -> dict[str, Any]:
+        return {
+            "order_executions": self._monitor_recent_orders_payload(
+                getattr(self, "recent_order_executions", [])
+            ),
+            "order_cancellations": self._monitor_recent_orders_payload(
+                getattr(self, "recent_order_cancellations", [])
+            ),
+        }
 
     async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict:
         now_ms = utc_ms() if now_ms is None else int(now_ms)
@@ -1392,6 +1624,10 @@ class Passivbot:
                 },
             },
             "hsl": {pside: self._monitor_hsl_payload(pside) for pside in ("long", "short")},
+            "market": self._build_monitor_market_section(),
+            "forager": self._build_monitor_forager_section(),
+            "unstuck": self._build_monitor_unstuck_section(),
+            "recent": self._build_monitor_recent_section(),
         }
 
     async def _monitor_flush_snapshot(self, *, force: bool = False, ts: Optional[int] = None) -> bool:
@@ -3859,6 +4095,7 @@ class Passivbot:
             for event in sorted(new_events, key=lambda e: e.timestamp):
                 logging.info(self._log_fill_event(event))
         for event in sorted(new_events, key=lambda e: e.timestamp):
+            self._monitor_record_fill_history(event)
             self._monitor_record_event(
                 "order.filled",
                 ("order", "fill"),
@@ -4597,10 +4834,16 @@ class Passivbot:
     async def update_positions_and_balance(self):
         """Convenience helper to refresh both positions and balance concurrently."""
         balance_task = asyncio.create_task(self.update_balance())
-        positions_ok, fetched_positions_old, fetched_positions_new = (
-            await self._fetch_and_apply_positions()
-        )
-        balance_ok = await balance_task
+        positions_task = asyncio.create_task(self._fetch_and_apply_positions())
+        try:
+            balance_ok, positions_res = await asyncio.gather(balance_task, positions_task)
+        except Exception:
+            for task in (balance_task, positions_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(balance_task, positions_task, return_exceptions=True)
+            raise
+        positions_ok, fetched_positions_old, fetched_positions_new = positions_res
         if positions_ok and fetched_positions_old is not None:
             try:
                 await self.log_position_changes(fetched_positions_old, fetched_positions_new)
@@ -4714,6 +4957,7 @@ class Passivbot:
     ):
         symbols = snapshot["symbols"]
         last_prices = snapshot["last_prices"]
+        self._monitor_record_price_ticks(last_prices, ts=utc_ms(), source="orchestrator_snapshot")
         m1_close_emas = snapshot["m1_close_emas"]
         m1_volume_emas = snapshot["m1_volume_emas"]
         m1_log_range_emas = snapshot["m1_log_range_emas"]
@@ -5206,6 +5450,7 @@ class Passivbot:
         if missing:
             cm_prices = await self.cm.get_last_prices(missing, max_age_ms=10_000)
             last_prices.update(cm_prices)
+        self._monitor_record_price_ticks(last_prices, ts=utc_ms(), source="orchestrator_live")
 
         # Ensure effective min cost is up to date.
         if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:

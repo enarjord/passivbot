@@ -5,7 +5,7 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 ### Added
-- **Monitor publisher groundwork** - Live configs now support a new `monitor.*` section, and the bot can publish a disk-backed monitor root with a manifest, atomic `state.latest.json` snapshots, and structured NDJSON events for lifecycle, balance, positions, orders, fills, modes, and structured bot/exchange errors.
+- **Monitor publisher groundwork** - Live configs now support a new `monitor.*` section, and the bot can publish a disk-backed monitor root with a manifest, atomic `state.latest.json` snapshots, structured NDJSON events for lifecycle, balance, positions, orders, fills, modes, and structured bot/exchange errors, plus `history/` streams for normalized fills, throttled price ticks, and completed 1m/1h candles. The current snapshot now also includes `market`, `forager`, `unstuck`, and `recent` sections for richer read-only bot state inspection.
 
 ### Changed
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.
