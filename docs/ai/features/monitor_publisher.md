@@ -12,7 +12,7 @@
 Implemented now:
 
 1. centralized `monitor.*` config defaults and validation in `src/config_utils.py`
-2. `src/monitor_publisher.py` with manifest, event append, atomic snapshot writes, checkpoints, basic event rotation, and retention pruning
+2. `src/monitor_publisher.py` with manifest, event append, atomic snapshot writes, checkpoints, event/history rotation, retention pruning, fill history, throttled price ticks, and completed-candle history streams
 3. live `Passivbot` hooks for:
    - lifecycle: `bot.start`, `bot.ready`, `bot.stop`
    - health: `health.summary`
@@ -22,6 +22,10 @@ Implemented now:
    - orders/fills: `order.opened`, `order.canceled`, `order.filled`
    - modes: `mode.changed`
    - HSL: `hsl.transition`, `hsl.cooldown_started`, `hsl.cooldown_ended`
+   - history streams:
+     - normalized fill history from the live fill path
+     - throttled price ticks from orchestrator price inputs
+     - completed 1m/1h candle publication via a single `CandlestickManager._persist_batch()` observer
 4. minimal snapshot sections:
    - `meta`
    - `account`
@@ -30,21 +34,25 @@ Implemented now:
    - `open_orders`
    - `modes`
    - `hsl`
+   - `market`
+   - `forager`
+   - `unstuck`
+   - `recent`
 
 ## Non-Obvious Details
 
-1. The config surface is intentionally larger than the current implementation. Some knobs are placeholders for the next increment and should not be removed casually.
+1. The config surface was intentionally added ahead of the implementation. The history-related knobs are now live and should keep their current semantics unless the contract is intentionally revised.
 2. Fill events should continue to use normalized fill semantics from the live fill path. Do not switch the monitor stream to raw CCXT payloads by default.
 3. The publisher owns all monitor file writes. Do not add scattered ad hoc writes elsewhere in `passivbot.py`.
 4. Snapshot cadence is best-effort from the execution loop. Exact wall-clock cadence is not guaranteed during restart/backoff paths.
+5. Completed-candle publication intentionally bootstraps with only the latest seen candle per `(symbol, timeframe)` and publishes only newer candles after that. This avoids flooding monitor history with startup warmup backfill.
+6. Candle history is gated on `Passivbot._bot_ready`; warmup/startup persistence should not leak large historical batches into monitor history.
 
 ## Gaps Still Open
 
-1. No `history/` streams yet for fills, ticks, or candles.
-2. No market tick or completed-candle publication yet.
-3. No dedicated `error.publisher` self-reporting path yet.
-4. Snapshot coverage is still intentionally narrow; market/forager/unstuck/exchange-config/recent are not published yet.
-5. No consumer/dashboard code has been added in-repo.
+1. No dedicated `error.publisher` self-reporting path yet.
+2. Snapshot coverage is still partial; `exchange_config` is not published yet, and richer market/decision detail can still be added later.
+3. No consumer/dashboard code has been added in-repo.
 
 ## Test Focus
 

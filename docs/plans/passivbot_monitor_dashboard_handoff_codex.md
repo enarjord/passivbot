@@ -7,7 +7,7 @@ This file is a handoff for another Codex instance to continue the monitor/dashbo
 What exists so far:
 
 1. a concrete design/spec in `docs/plans/passivbot_monitor_dashboard.md`
-2. implemented Phase 1 bot-side publisher groundwork
+2. implemented bot-side publisher groundwork plus Phase 2 history streams
 3. targeted tests for config, publisher behavior, and narrow `Passivbot` hook coverage
 
 ## Branch / Context
@@ -21,8 +21,8 @@ What exists so far:
 Implementation state after this pass:
 
 1. `src/config_utils.py` now contains `monitor.*` defaults and validation
-2. `src/monitor_publisher.py` now exists
-3. `src/passivbot.py` now publishes the minimal Phase 1 snapshot and event set
+2. `src/monitor_publisher.py` now publishes manifest, snapshot, events, checkpoints, and `history/` streams for normalized fills, throttled price ticks, and completed 1m/1h candles
+3. `src/passivbot.py` now publishes the minimal Phase 1 snapshot/event set plus the current Phase 2 history streams
 4. no dashboard reader/UI has been implemented
 
 ## Important Worktree Warning
@@ -200,8 +200,8 @@ Phase 1 should only build the bot-side publisher and minimal monitor output.
 
 Current status:
 
-1. this scope is mostly complete for the publisher side
-2. remaining work is on schema expansion, history streams, and reader/dashboard code
+1. this scope is complete for the initial publisher side
+2. remaining work is on `exchange_config` snapshot coverage, publisher self-reporting, and reader/dashboard code
 
 ### Deliverables
 
@@ -218,8 +218,10 @@ Delivered now:
 1. config defaults/validation
 2. publisher module
 3. snapshot + event files
-4. checkpoints + basic rotation/retention
-5. targeted tests
+4. history streams for fills, price ticks, and completed candles
+5. expanded snapshot sections for `market`, `forager`, `unstuck`, and `recent`
+6. checkpoints + basic rotation/retention
+7. targeted tests
 
 ### Minimal snapshot sections for Phase 1
 

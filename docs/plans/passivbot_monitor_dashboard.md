@@ -11,17 +11,16 @@ Implemented now:
 3. `manifest.json`
 4. atomic `state.latest.json`
 5. `events/current.ndjson`
-6. checkpoint snapshots
-7. basic event rotation and retention pruning
-8. targeted tests
+6. `history/*.current.ndjson` streams for normalized fills, throttled price ticks, and completed 1m/1h candles
+7. checkpoint snapshots
+8. event/history rotation and retention pruning
+9. targeted tests
 
 Still pending:
 
 1. dashboard/TUI reader
-2. history streams under `history/`
-3. tick and completed-candle publication
-4. richer snapshot sections beyond the minimal Phase 1 set
-5. publisher self-reporting via `error.publisher`
+2. `exchange_config` and any further snapshot/detail expansion beyond the current sections
+3. publisher self-reporting via `error.publisher`
 
 ## Goal
 
@@ -76,8 +75,8 @@ The publisher should be the only component writing monitor files.
 Current implementation status:
 
 1. this module now exists as `src/monitor_publisher.py`
-2. manifest, event append, atomic snapshot writes, checkpoints, and basic retention are implemented
-3. history-stream publication is not implemented yet
+2. manifest, event append, atomic snapshot writes, checkpoints, and retention are implemented
+3. history streams now cover normalized fills, throttled price ticks, and completed 1m/1h candles
 
 ### Bot Integration
 
@@ -93,7 +92,9 @@ Current implementation status:
 
 1. publisher init is wired in `Passivbot.__init__`
 2. startup, ready, shutdown, health, balance, position, order, fill, mode, and HSL hooks emit monitor events
-3. minimal snapshot rebuild/flush is wired from startup, loop cadence, and shutdown
+3. snapshot rebuild/flush is wired from startup, loop cadence, and shutdown
+4. fill history, price ticks, and completed candles are delegated through the publisher from narrow existing hooks
+5. snapshot sections now include `market`, `forager`, `unstuck`, and `recent` in addition to the original minimal set
 
 ## Monitor Data Root
 
@@ -109,10 +110,11 @@ monitor/
         current.ndjson
         2026-03-20T13.ndjson.gz
       history/
-        fills.ndjson
-        price_ticks.ndjson
-        candles_1m.ndjson
-        candles_1h.ndjson
+        fills.current.ndjson
+        fills.2026-03-20T13.ndjson.gz
+        price_ticks.current.ndjson
+        candles_1m.current.ndjson
+        candles_1h.current.ndjson
       checkpoints/
         state.2026-03-20T13-08-00.json.gz
 ```

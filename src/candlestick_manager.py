@@ -534,6 +534,9 @@ class CandlestickManager:
         self._progress_last_log: Dict[Tuple[str, str, str], float] = {}
         self._warning_last_log: Dict[str, float] = {}  # throttle repeated warnings
         self._warning_throttle_seconds: float = 300.0  # 5 minutes between repeated warnings
+        self._persist_batch_observer: Optional[
+            Callable[[str, str, np.ndarray], None]
+        ] = None
         # Summary tracking for strict gap warnings (logged once per 15 min instead of per-event)
         self._strict_gaps_summary: Dict[str, int] = {}  # symbol -> missing count
         self._strict_gaps_summary_last_log: float = 0.0
@@ -1107,6 +1110,12 @@ class CandlestickManager:
         except Exception:
             # Must never break the fetch path due to logging/progress UI.
             return
+
+    def set_persist_batch_observer(
+        self,
+        observer: Optional[Callable[[str, str, np.ndarray], None]],
+    ) -> None:
+        self._persist_batch_observer = observer
 
     # ----- Paths and index -----
 
@@ -1989,6 +1998,13 @@ class CandlestickManager:
             self._check_synthetic_replacement(symbol, arr)
 
         self._save_range_incremental(symbol, arr, timeframe=tf_norm, defer_index=defer_index)
+        observer = self._persist_batch_observer
+        if observer is not None:
+            try:
+                observer(symbol, tf_norm, arr)
+            except Exception:
+                # Observability hooks must never break persistence or trading.
+                return
 
     def _check_synthetic_replacement(self, symbol: str, real_data: np.ndarray) -> None:
         """Check if real data replaces previously synthetic timestamps and invalidate EMA cache if so."""

@@ -1,4 +1,8 @@
+import asyncio
 import logging
+from types import SimpleNamespace
+
+import numpy as np
 
 import pytest
 
@@ -7,6 +11,9 @@ class RecorderPublisher:
     def __init__(self):
         self.events = []
         self.errors = []
+        self.fills = []
+        self.price_ticks = []
+        self.completed_candles = []
         self.closed = False
 
     def record_event(self, kind, tags, payload=None, *, ts=None, symbol=None, pside=None):
@@ -33,6 +40,38 @@ class RecorderPublisher:
         }
         self.errors.append(event)
         return event
+
+    def record_fill(self, payload, *, ts=None, symbol=None, pside=None, raw_payload=None):
+        entry = {
+            "payload": payload,
+            "ts": ts,
+            "symbol": symbol,
+            "pside": pside,
+            "raw_payload": raw_payload,
+        }
+        self.fills.append(entry)
+        return entry
+
+    def record_price_tick(self, symbol, last, *, ts=None, bid=None, ask=None, source=None):
+        entry = {
+            "symbol": symbol,
+            "last": last,
+            "ts": ts,
+            "bid": bid,
+            "ask": ask,
+            "source": source,
+        }
+        self.price_ticks.append(entry)
+        return entry
+
+    def record_completed_candles(self, symbol, timeframe, candles):
+        entry = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "candles": list(candles),
+        }
+        self.completed_candles.append(entry)
+        return entry["candles"]
 
     def close(self):
         self.closed = True
@@ -227,3 +266,370 @@ def test_maybe_log_silence_watchdog_emits_phase_and_stage(monkeypatch, caplog):
     assert any("silence watchdog" in rec.message for rec in caplog.records)
     assert any("phase=startup" in rec.message for rec in caplog.records)
     assert any("stage=equity_hard_stop_initialize_from_history" in rec.message for rec in caplog.records)
+
+
+def test_log_new_fill_events_records_fill_history():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _log_new_fill_events = pb_mod.Passivbot._log_new_fill_events
+        _monitor_record_event = pb_mod.Passivbot._monitor_record_event
+        _monitor_fill_payload = pb_mod.Passivbot._monitor_fill_payload
+        _monitor_record_fill_history = pb_mod.Passivbot._monitor_record_fill_history
+
+        def __init__(self):
+            self.monitor_publisher = RecorderPublisher()
+            self._health_fills = 0
+            self._health_pnl = 0.0
+            self.quote = "USDT"
+
+        def _log_fill_event(self, event):
+            return f"fill {event.id}"
+
+    bot = FakeBot()
+    event = SimpleNamespace(
+        id="fill-1",
+        timestamp=1234,
+        symbol="BTC/USDT:USDT",
+        side="buy",
+        position_side="long",
+        qty=0.01,
+        price=100000.0,
+        pnl=1.25,
+        fee=0.1,
+        pb_order_type="entry_grid_normal_long",
+        client_order_id="cid-1",
+        source_ids=["src-1"],
+        raw={"exchange_fill_id": "ex-1"},
+    )
+
+    bot._log_new_fill_events([event])
+
+    assert bot.monitor_publisher.fills[-1]["symbol"] == "BTC/USDT:USDT"
+    assert bot.monitor_publisher.fills[-1]["payload"]["id"] == "fill-1"
+    assert bot.monitor_publisher.events[-1]["kind"] == "order.filled"
+    assert bot._health_fills == 1
+    assert bot._health_pnl == pytest.approx(1.25)
+
+
+def test_monitor_record_price_ticks_delegates_valid_prices_only():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _monitor_record_price_ticks = pb_mod.Passivbot._monitor_record_price_ticks
+
+        def __init__(self):
+            self.monitor_publisher = RecorderPublisher()
+
+    bot = FakeBot()
+
+    emitted = bot._monitor_record_price_ticks(
+        {
+            "BTC/USDT:USDT": 100000.0,
+            "ETH/USDT:USDT": 0.0,
+            "SOL/USDT:USDT": float("nan"),
+            "XRP/USDT:USDT": 2.5,
+        },
+        ts=1234,
+        source="test",
+    )
+
+    assert emitted == 2
+    assert [entry["symbol"] for entry in bot.monitor_publisher.price_ticks] == [
+        "BTC/USDT:USDT",
+        "XRP/USDT:USDT",
+    ]
+    assert all(entry["source"] == "test" for entry in bot.monitor_publisher.price_ticks)
+
+
+def test_monitor_handle_candlestick_persist_requires_ready_bot():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _monitor_handle_candlestick_persist = pb_mod.Passivbot._monitor_handle_candlestick_persist
+
+        def __init__(self):
+            self.monitor_publisher = RecorderPublisher()
+            self._bot_ready = False
+
+    bot = FakeBot()
+    batch = np.array(
+        [
+            (60_000, 1.0, 2.0, 0.5, 1.5, 10.0),
+            (120_000, 1.5, 2.5, 1.0, 2.0, 11.0),
+        ],
+        dtype=pb_mod.CANDLE_DTYPE,
+    )
+
+    bot._monitor_handle_candlestick_persist("BTC/USDT:USDT", "1m", batch)
+    assert bot.monitor_publisher.completed_candles == []
+
+    bot._bot_ready = True
+    bot._monitor_handle_candlestick_persist("BTC/USDT:USDT", "1m", batch)
+
+    assert len(bot.monitor_publisher.completed_candles) == 1
+    entry = bot.monitor_publisher.completed_candles[0]
+    assert entry["symbol"] == "BTC/USDT:USDT"
+    assert entry["timeframe"] == "1m"
+    assert entry["candles"][0]["ts"] == 60_000
+    assert entry["candles"][1]["bv"] == pytest.approx(11.0)
+
+
+@pytest.mark.asyncio
+async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent():
+    import passivbot as pb_mod
+
+    class FakeCM:
+        def __init__(self):
+            self._current_close_cache = {"BTC/USDT:USDT": (100500.0, 123450)}
+
+        def get_last_refresh_ms(self, symbol):
+            return 123400
+
+        def get_last_final_ts(self, symbol):
+            return 123000
+
+    class FakeBot:
+        _build_monitor_snapshot = pb_mod.Passivbot._build_monitor_snapshot
+        _build_health_summary_payload = pb_mod.Passivbot._build_health_summary_payload
+        _monitor_hsl_payload = pb_mod.Passivbot._monitor_hsl_payload
+        _monitor_order_payload = pb_mod.Passivbot._monitor_order_payload
+        _monitor_recent_orders_payload = pb_mod.Passivbot._monitor_recent_orders_payload
+        _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
+        _build_monitor_forager_section = pb_mod.Passivbot._build_monitor_forager_section
+        _build_monitor_unstuck_section = pb_mod.Passivbot._build_monitor_unstuck_section
+        _build_monitor_recent_section = pb_mod.Passivbot._build_monitor_recent_section
+        _resolve_pb_order_type = pb_mod.Passivbot._resolve_pb_order_type
+
+        def __init__(self):
+            self.exchange = "bitget"
+            self.user = "bitget_01"
+            self.quote = "USDT"
+            self.start_time_ms = 123000
+            self._health_start_ms = 100000
+            self._last_loop_duration_ms = 250
+            self._health_orders_placed = 2
+            self._health_orders_cancelled = 1
+            self._health_fills = 3
+            self._health_pnl = 1.5
+            self._health_ws_reconnects = 1
+            self._health_rate_limits = 0
+            self._monitor_last_equity = 1005.0
+            self.error_counts = [250000]
+            self.positions = {
+                "BTC/USDT:USDT": {
+                    "long": {"size": 0.01, "price": 100000.0},
+                    "short": {"size": 0.0, "price": 0.0},
+                }
+            }
+            self.open_orders = {
+                "BTC/USDT:USDT": [
+                    {
+                        "symbol": "BTC/USDT:USDT",
+                        "side": "buy",
+                        "position_side": "long",
+                        "qty": 0.01,
+                        "price": 99000.0,
+                        "custom_id": "entry_grid_normal_long",
+                        "pb_order_type": "entry_grid_normal_long",
+                    },
+                    {
+                        "symbol": "BTC/USDT:USDT",
+                        "side": "sell",
+                        "position_side": "long",
+                        "qty": 0.005,
+                        "price": 101000.0,
+                        "custom_id": "close_unstuck_long",
+                        "pb_order_type": "close_unstuck_long",
+                    },
+                ]
+            }
+            self.PB_modes = {"long": {"BTC/USDT:USDT": "normal"}, "short": {}}
+            self._runtime_forced_modes = {"long": {"BTC/USDT:USDT": "normal"}, "short": {}}
+            self.trailing_prices = {
+                "BTC/USDT:USDT": {
+                    "long": {
+                        "min_since_open": 99500.0,
+                        "max_since_min": 100800.0,
+                        "max_since_open": 100900.0,
+                        "min_since_max": 100100.0,
+                    }
+                }
+            }
+            self.active_symbols = ["BTC/USDT:USDT"]
+            self.approved_coins = {"long": {"BTC/USDT:USDT"}, "short": set()}
+            self.ignored_coins = {"long": set(), "short": {"ETH/USDT:USDT"}}
+            self.approved_coins_minus_ignored_coins = {
+                "long": {"BTC/USDT:USDT"},
+                "short": set(),
+            }
+            self.effective_min_cost = {"BTC/USDT:USDT": 5.0}
+            self.min_costs = {"BTC/USDT:USDT": 1.0}
+            self.min_qtys = {"BTC/USDT:USDT": 0.001}
+            self.price_steps = {"BTC/USDT:USDT": 0.1}
+            self.qty_steps = {"BTC/USDT:USDT": 0.001}
+            self.markets_dict = {"BTC/USDT:USDT": {"active": True}}
+            self.recent_order_executions = [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "buy",
+                    "position_side": "long",
+                    "qty": 0.01,
+                    "price": 99000.0,
+                    "custom_id": "entry_grid_normal_long",
+                    "pb_order_type": "entry_grid_normal_long",
+                    "execution_timestamp": 123456,
+                    "source": "POST",
+                }
+            ]
+            self.recent_order_cancellations = [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "sell",
+                    "position_side": "long",
+                    "qty": 0.005,
+                    "price": 101000.0,
+                    "custom_id": "close_unstuck_long",
+                    "pb_order_type": "close_unstuck_long",
+                    "execution_timestamp": 123460,
+                    "source": "REST",
+                }
+            ]
+            self.cm = FakeCM()
+            self.pside_int_map = {"long": 0, "short": 1}
+            self._coin_bot_values = {
+                ("long", "forager_score_weights"): {
+                    "volume": 1.0,
+                    "volatility": 0.5,
+                    "ema_readiness": 0.25,
+                },
+                ("short", "forager_score_weights"): {
+                    "volume": 1.0,
+                    "volatility": 0.5,
+                    "ema_readiness": 0.25,
+                },
+                ("long", "forager_volume_drop_pct"): 0.1,
+                ("short", "forager_volume_drop_pct"): 0.1,
+                ("long", "total_wallet_exposure_limit"): 1.7,
+                ("short", "total_wallet_exposure_limit"): 0.0,
+                ("long", "unstuck_loss_allowance_pct"): 0.02,
+                ("short", "unstuck_loss_allowance_pct"): 0.0,
+                ("long", "unstuck_close_pct"): 0.5,
+                ("short", "unstuck_close_pct"): 0.5,
+                ("long", "unstuck_threshold"): 0.8,
+                ("short", "unstuck_threshold"): 0.8,
+            }
+
+        def get_raw_balance(self):
+            return 1000.0
+
+        def get_hysteresis_snapped_balance(self):
+            return 995.0
+
+        def _equity_hard_stop_realized_pnl_now(self):
+            return 12.5
+
+        def _equity_hard_stop_enabled(self, pside):
+            return pside == "long"
+
+        def _hsl_state(self, pside):
+            return {
+                "halted": False,
+                "no_restart_latched": False,
+                "last_metrics": {"tier": "green"},
+            }
+
+        def has_position(self, pside=None, symbol=None):
+            if pside is None:
+                return any(self.has_position(side, symbol) for side in ("long", "short"))
+            if symbol is None:
+                return any(self.has_position(pside, sym) for sym in self.positions)
+            return abs(float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0))) > 0.0
+
+        def get_current_n_positions(self, pside):
+            return sum(1 for sym in self.positions if self.has_position(pside, sym))
+
+        def get_max_n_positions(self, pside):
+            return 5 if pside == "long" else 0
+
+        def is_pside_enabled(self, pside):
+            return pside == "long"
+
+        def is_forager_mode(self, pside=None):
+            if pside is None:
+                return True
+            return pside == "long"
+
+        def live_value(self, key):
+            if key == "forced_mode_long":
+                return ""
+            if key == "forced_mode_short":
+                return ""
+            raise KeyError(key)
+
+        def bot_value(self, pside, key):
+            return self._coin_bot_values[(pside, key)]
+
+        def has_open_unstuck_order(self):
+            return True
+
+        def _calc_unstuck_allowance_for_logging(self, pside):
+            if pside == "long":
+                return {"status": "ok", "allowance": -20.0, "peak": 1100.0, "pct_from_peak": -9.1}
+            return {"status": "disabled"}
+
+        def _calc_unstuck_allowances_live(self, allow_new_unstuck):
+            return {"long": 0.0 if not allow_new_unstuck else 1.0, "short": 0.0}
+
+    bot = FakeBot()
+
+    snapshot = await bot._build_monitor_snapshot(now_ms=300000)
+
+    assert "market" in snapshot
+    assert "forager" in snapshot
+    assert "unstuck" in snapshot
+    assert "recent" in snapshot
+    assert snapshot["market"]["BTC/USDT:USDT"]["last_price"] == pytest.approx(100500.0)
+    assert snapshot["market"]["BTC/USDT:USDT"]["trailing"]["long"]["max_since_open"] == pytest.approx(
+        100900.0
+    )
+    assert snapshot["forager"]["long"]["forager_mode"] is True
+    assert snapshot["forager"]["long"]["selected_symbols"] == ["BTC/USDT:USDT"]
+    assert snapshot["unstuck"]["has_open_order"] is True
+    assert snapshot["unstuck"]["sides"]["long"]["allowance"] == pytest.approx(-20.0)
+    assert snapshot["recent"]["order_executions"][0]["execution_timestamp"] == 123456
+    assert snapshot["recent"]["order_cancellations"][0]["pb_order_type"] == "close_unstuck_long"
+
+
+@pytest.mark.asyncio
+async def test_update_positions_and_balance_cancels_balance_task_when_positions_fail():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        update_positions_and_balance = pb_mod.Passivbot.update_positions_and_balance
+
+        def __init__(self):
+            self.balance_cancelled = False
+
+        async def update_balance(self):
+            try:
+                await asyncio.sleep(60.0)
+            except asyncio.CancelledError:
+                self.balance_cancelled = True
+                raise
+
+        async def _fetch_and_apply_positions(self):
+            raise RuntimeError("positions failed")
+
+        async def log_position_changes(self, fetched_positions_old, fetched_positions_new):
+            raise AssertionError("should not be called")
+
+        async def handle_balance_update(self, source="REST"):
+            raise AssertionError("should not be called")
+
+    bot = FakeBot()
+
+    with pytest.raises(RuntimeError, match="positions failed"):
+        await bot.update_positions_and_balance()
+
+    assert bot.balance_cancelled is True

@@ -82,15 +82,15 @@ The monitor publisher writes a read-only dashboard data root to disk when enable
 - **checkpoint_interval_minutes**: Interval between compressed checkpoint snapshots. Set `0` to disable checkpoints.
 - **event_rotation_mb**: Rotate `events/current.ndjson` after it exceeds this size.
 - **event_rotation_minutes**: Rotate `events/current.ndjson` after this elapsed time even if size threshold is not reached.
-- **retain_days**: Age-based retention for rotated event/checkpoint files.
-- **max_total_bytes**: Global byte cap for the monitor root. Old rotated/checkpoint files are pruned first.
-- **retain_price_ticks**, **retain_candles**, **retain_fills**: Reserved for future history-stream retention behavior. Currently validated but not yet used by the publisher.
+- **retain_days**: Age-based retention for rotated event/history/checkpoint files.
+- **max_total_bytes**: Global byte cap for the monitor root. Old rotated event/history/checkpoint files are pruned first.
+- **retain_price_ticks**, **retain_candles**, **retain_fills**: Enable or disable the current history streams for price ticks, completed candles, and normalized fills.
 - **compress_rotated_segments**: If `true`, gzip rotated event segments and checkpoints.
-- **price_tick_min_interval_ms**: Reserved for future tick throttling. Currently validated but not yet used.
-- **emit_completed_candles**: Reserved for future completed-candle streams. Currently validated but not yet used.
-- **include_raw_fill_payloads**: Reserved for future optional raw fill emission. Current default behavior is still normalized fill payloads only.
+- **price_tick_min_interval_ms**: Minimum per-symbol interval for emitting `history/price_ticks.current.ndjson` entries.
+- **emit_completed_candles**: Enable or disable completed 1m/1h candle history publication.
+- **include_raw_fill_payloads**: If `true`, include exchange/raw fill payloads alongside the normalized fill history payload.
 
-See [monitor.md](/Users/eiriknarjord/repos/passivbot-3/docs/monitor.md) for current output files and event kinds.
+See [monitor.md](monitor.md) for current output files and event kinds.
 
 ## Bot Settings
 
