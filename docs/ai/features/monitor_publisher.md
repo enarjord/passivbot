@@ -30,7 +30,7 @@ Implemented now:
    - `meta`
    - `account`
    - `health`
-   - `positions`
+   - `positions` with per-side exposure metrics, cached last price, price-action distance, and uPnL
    - `open_orders`
    - `modes`
    - `hsl`

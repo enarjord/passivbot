@@ -2,7 +2,7 @@
 
 Passivbot can now publish a read-only monitor data root to disk for external tools such as a future TUI/dashboard.
 
-This is a bot-side publisher only. No built-in dashboard UI has been added yet.
+An initial read-only relay server is also available for local/remote consumers. No built-in dashboard UI has been added yet.
 
 ## Purpose
 
@@ -14,6 +14,69 @@ The monitor publisher gives you:
 4. periodic compressed checkpoints of the latest snapshot
 
 The dashboard/process consuming this data must read only from the monitor root on disk. It should not inspect live bot memory directly.
+
+## Relay Server
+
+The repo now includes a small read-only relay:
+
+```bash
+python3 src/tools/monitor_relay.py --monitor-root monitor --host 127.0.0.1 --port 8765
+```
+
+Current endpoints:
+
+1. `GET /health`
+2. `GET /snapshot`
+3. `GET /ws`
+
+Current behavior:
+
+1. `/snapshot` returns the current `state.latest.json` envelope for one bot
+2. `/ws` sends one snapshot first, then live `event` and `history` messages as current files advance
+3. when multiple monitor roots exist, clients must pass both `exchange` and `user` query params
+4. the relay reads only from the monitor root on disk; it does not attach to bot memory
+5. the relay currently tails only `*.current.ndjson` files and does not yet serve rotated-history replay over HTTP
+
+## Minimal TUI
+
+The repo now also includes a minimal terminal reader against the relay:
+
+```bash
+python3 src/tools/monitor_tui.py --relay-url http://127.0.0.1:8765
+```
+
+When multiple monitor roots are available on the relay, select one bot explicitly:
+
+```bash
+python3 src/tools/monitor_tui.py \
+  --relay-url http://127.0.0.1:8765 \
+  --exchange bitget \
+  --user bitget_01 \
+  --focus-symbol BTC/USDT:USDT
+```
+
+Current behavior:
+
+1. bootstraps current-state panels from `/snapshot`
+2. refreshes `/snapshot` periodically for live state sections
+3. consumes `/ws` for recent events and recent price ticks
+4. can prioritize one symbol with `--focus-symbol`
+5. renders current summaries, focused-symbol detail, recent order activity, detailed per-side position exposure rows, recent events, recent ticks, and optional local log tailing without touching bot memory directly
+6. provides a bottom command prompt during runtime; current commands include `help`, `focus BTC`, `focus next`, `focus prev`, `focus auto`, `quit`, and `exit`
+
+For local monitor development, there is also a one-command wrapper:
+
+```bash
+python3 src/tools/monitor_dev.py --exchange bitget --user bitget_01
+```
+
+Current behavior:
+
+1. reuses an existing relay if one is already healthy at the target `--relay-url`
+2. otherwise launches the relay automatically
+3. selects the newest `logs/*.log` file by default unless `--log-file` is provided
+4. passes through `--focus-symbol` when you want to center the screen on one market
+5. shows recent bot log lines inside the TUI so you do not need a separate `tail -f` terminal during iteration
 
 ## Enable It
 
@@ -101,10 +164,11 @@ Important limits:
 
 Current expansion details:
 
-1. `market` includes current cached last price, candle refresh/finalization timestamps, min-cost metadata, approval/ignore flags, open-order/position presence, and trailing state when available
-2. `forager` includes per-side candidate universe, selected symbols, slot counts, and current forager score-weight config
-3. `unstuck` includes per-side allowance status plus any currently open unstuck orders
-4. `recent` includes recent created and canceled orders retained by the live bot throttling caches
+1. `positions` now includes per-side wallet-exposure metrics (`wallet_exposure`, `wel_ratio`, `wele_ratio`, `twel_ratio`) plus `price_action_distance`, `upnl`, and cached `last_price` when available
+2. `market` includes current cached last price, candle refresh/finalization timestamps, min-cost metadata, approval/ignore flags, open-order/position presence, and trailing state when available
+3. `forager` includes per-side candidate universe, selected symbols, slot counts, and current forager score-weight config
+4. `unstuck` includes per-side allowance status plus any currently open unstuck orders
+5. `recent` includes recent created and canceled orders retained by the live bot throttling caches
 
 ## Event Stream
 
@@ -165,9 +229,10 @@ Current behavior:
 
 Not implemented yet:
 
-1. built-in dashboard/TUI reader
-2. `exchange_config` snapshot coverage
-3. publisher-originated `error.publisher` events
+1. richer browser/mobile dashboard reader
+2. relay auth, filtering/subscriptions, and replay/history HTTP endpoints
+3. `exchange_config` snapshot coverage
+4. publisher-originated `error.publisher` events
 
 ## Related Docs
 

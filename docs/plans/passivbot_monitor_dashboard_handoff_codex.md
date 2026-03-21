@@ -8,7 +8,9 @@ What exists so far:
 
 1. a concrete design/spec in `docs/plans/passivbot_monitor_dashboard.md`
 2. implemented bot-side publisher groundwork plus Phase 2 history streams
-3. targeted tests for config, publisher behavior, and narrow `Passivbot` hook coverage
+3. an initial read-only relay server for snapshot + live-forward streaming
+4. an initial minimal TUI reader consuming the relay
+5. targeted tests for config, publisher behavior, relay behavior, TUI behavior, and narrow `Passivbot` hook coverage
 
 ## Branch / Context
 
@@ -23,7 +25,8 @@ Implementation state after this pass:
 1. `src/config_utils.py` now contains `monitor.*` defaults and validation
 2. `src/monitor_publisher.py` now publishes manifest, snapshot, events, checkpoints, and `history/` streams for normalized fills, throttled price ticks, and completed 1m/1h candles
 3. `src/passivbot.py` now publishes the minimal Phase 1 snapshot/event set plus the current Phase 2 history streams
-4. no dashboard reader/UI has been implemented
+4. `src/monitor_relay.py` plus `src/tools/monitor_relay.py` now provide a read-only relay with `GET /health`, `GET /snapshot`, and `GET /ws`
+5. `src/monitor_tui.py` plus `src/tools/monitor_tui.py` now provide an initial minimal terminal reader against the relay
 
 ## Important Worktree Warning
 
@@ -201,7 +204,9 @@ Phase 1 should only build the bot-side publisher and minimal monitor output.
 Current status:
 
 1. this scope is complete for the initial publisher side
-2. remaining work is on `exchange_config` snapshot coverage, publisher self-reporting, and reader/dashboard code
+2. an initial relay server is also in place for snapshot + live-forward consumers
+3. an initial minimal TUI reader is also in place for end-to-end validation
+4. remaining work is on relay auth/replay/filtering, `exchange_config` snapshot coverage, publisher self-reporting, and richer reader/dashboard UX
 
 ### Deliverables
 

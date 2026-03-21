@@ -395,6 +395,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         _monitor_hsl_payload = pb_mod.Passivbot._monitor_hsl_payload
         _monitor_order_payload = pb_mod.Passivbot._monitor_order_payload
         _monitor_recent_orders_payload = pb_mod.Passivbot._monitor_recent_orders_payload
+        _build_monitor_position_side_payload = pb_mod.Passivbot._build_monitor_position_side_payload
+        _build_monitor_positions_section = pb_mod.Passivbot._build_monitor_positions_section
         _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
         _build_monitor_forager_section = pb_mod.Passivbot._build_monitor_forager_section
         _build_monitor_unstuck_section = pb_mod.Passivbot._build_monitor_unstuck_section
@@ -496,6 +498,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 }
             ]
             self.cm = FakeCM()
+            self.inverse = False
+            self.c_mults = {"BTC/USDT:USDT": 1.0}
             self.pside_int_map = {"long": 0, "short": 1}
             self._coin_bot_values = {
                 ("long", "forager_score_weights"): {
@@ -510,6 +514,10 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 },
                 ("long", "forager_volume_drop_pct"): 0.1,
                 ("short", "forager_volume_drop_pct"): 0.1,
+                ("long", "wallet_exposure_limit"): 0.2,
+                ("short", "wallet_exposure_limit"): 0.2,
+                ("long", "risk_we_excess_allowance_pct"): 0.5,
+                ("short", "risk_we_excess_allowance_pct"): 0.5,
                 ("long", "total_wallet_exposure_limit"): 1.7,
                 ("short", "total_wallet_exposure_limit"): 0.0,
                 ("long", "unstuck_loss_allowance_pct"): 0.02,
@@ -570,6 +578,9 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         def bot_value(self, pside, key):
             return self._coin_bot_values[(pside, key)]
 
+        def bp(self, pside, key, symbol=None):
+            return self._coin_bot_values[(pside, key)]
+
         def has_open_unstuck_order(self):
             return True
 
@@ -589,6 +600,19 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert "forager" in snapshot
     assert "unstuck" in snapshot
     assert "recent" in snapshot
+    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["last_price"] == pytest.approx(100500.0)
+    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["wallet_exposure"] == pytest.approx(1.0)
+    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["wel_ratio"] == pytest.approx(5.0)
+    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["wele_ratio"] == pytest.approx(
+        1.0 / 0.3
+    )
+    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["twel_ratio"] == pytest.approx(
+        1.0 / 1.7
+    )
+    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["price_action_distance"] == pytest.approx(
+        -0.005
+    )
+    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["upnl"] == pytest.approx(5.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["last_price"] == pytest.approx(100500.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["trailing"]["long"]["max_since_open"] == pytest.approx(
         100900.0
