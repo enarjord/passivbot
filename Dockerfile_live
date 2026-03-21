@@ -42,6 +42,7 @@ COPY requirements-rust.txt requirements-rust.txt
 COPY requirements-live.txt requirements-live.txt
 COPY broker_codes.hjson broker_codes.hjson
 COPY src src
+COPY railway railway
 
 # Copy prebuilt wheel from the builder stage
 COPY --from=builder /app/passivbot-rust/target/wheels/*.whl /tmp/
@@ -49,7 +50,8 @@ COPY --from=builder /app/passivbot-rust/target/wheels/*.whl /tmp/
 # Install Python packages (including Rust extension wheel)
 RUN pip install --no-cache-dir /tmp/*.whl \
     && pip install --no-cache-dir -r requirements-live.txt \
+    && chmod +x /app/railway/entrypoint.sh \
     && rm -rf /tmp/* ~/.cache/pip
 
 # Default command
-CMD ["python", "src/main.py"]
+CMD ["/app/railway/entrypoint.sh"]
