@@ -82,6 +82,10 @@ async def test_missing_ema_raises_from_snapshot(monkeypatch):
         effective_min_cost = {}
         _config_hedge_mode = False
         hedge_mode = False
+        _monitor_record_price_ticks = pb_mod.Passivbot._monitor_record_price_ticks
+        _build_monitor_runtime_market_hints = pb_mod.Passivbot._build_monitor_runtime_market_hints
+        _build_monitor_runtime_unstuck_hints = pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        _update_monitor_runtime_hints = pb_mod.Passivbot._update_monitor_runtime_hints
 
         def config_get(self, keys):
             return None
@@ -134,6 +138,10 @@ async def test_missing_ema_raises_from_snapshot_with_return(monkeypatch):
         effective_min_cost = {}
         _config_hedge_mode = False
         hedge_mode = False
+        _monitor_record_price_ticks = pb_mod.Passivbot._monitor_record_price_ticks
+        _build_monitor_runtime_market_hints = pb_mod.Passivbot._build_monitor_runtime_market_hints
+        _build_monitor_runtime_unstuck_hints = pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        _update_monitor_runtime_hints = pb_mod.Passivbot._update_monitor_runtime_hints
 
         def config_get(self, keys):
             return None
