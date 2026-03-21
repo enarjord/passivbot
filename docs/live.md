@@ -20,7 +20,7 @@ PYTHONPATH=src python3 src/tools/run_fake_live.py \
   --snapshot-each-step
 ```
 
-See [docs/fake_live.md](docs/fake_live.md) for scenario structure, included examples, outputs, and troubleshooting.
+See [fake_live.md](fake_live.md) for scenario structure, included examples, outputs, and troubleshooting.
 
 ## Monitor Output
 
@@ -32,8 +32,7 @@ Current scope:
 2. structured NDJSON event stream
 3. periodic compressed checkpoints
 
-See [docs/monitor.md](docs/monitor.md) for config, output layout, and the currently emitted event kinds.
-
+See [monitor.md](monitor.md) for config, output layout, and the currently emitted event kinds.
 
 ## Custom Exchange Endpoints
 
