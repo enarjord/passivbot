@@ -6,7 +6,8 @@ All notable user-facing changes will be documented in this file.
 
 ### Added
 - **Monitor publisher groundwork** - Live configs now support a new `monitor.*` section, and the bot can publish a disk-backed monitor root with a manifest, atomic `state.latest.json` snapshots, structured NDJSON events for lifecycle, balance, positions, orders, fills, modes, and structured bot/exchange errors, plus `history/` streams for normalized fills, throttled price ticks, and completed 1m/1h candles.
-- **Read-only monitor relay and TUI** - Added a separate relay process that reads the disk-backed monitor root and serves snapshot/history data over HTTP + WebSocket, plus a terminal UI and companion tool entrypoints built on that relay.
+- **Read-only monitor relay server** - Added a separate relay process that reads the disk-backed monitor root and serves snapshot/history data over HTTP + WebSocket.
+- **Monitor TUI reader** - Added a first terminal dashboard and companion tool entrypoints on top of the relay.
 
 ### Changed
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.

@@ -541,6 +541,9 @@ class Passivbot:
         self._last_action_summary: dict[tuple[str, str], str] = {}
         self.start_time_ms = utc_ms()
         self._monitor_last_equity = float(self.balance_raw)
+        self._monitor_stop_emitted = False
+        self._monitor_runtime_market_hints: dict[str, dict[str, Any]] = {}
+        self._monitor_runtime_unstuck_hints: dict[str, dict[str, Any]] = {}
         self.monitor_publisher: Optional[MonitorPublisher] = None
         self.monitor_enabled = bool(require_config_value(config, "monitor.enabled"))
         if self.monitor_enabled:
@@ -1408,6 +1411,7 @@ class Passivbot:
             symbols |= set(approved.get(pside, set()) or set())
             symbols |= set(ignored.get(pside, set()) or set())
         current_close_cache = getattr(getattr(self, "cm", None), "_current_close_cache", {})
+        runtime_hints = getattr(self, "_monitor_runtime_market_hints", {})
         out: dict[str, dict] = {}
         for symbol in sorted(symbols):
             entry: dict[str, Any] = {
@@ -1450,6 +1454,11 @@ class Passivbot:
                     for pside in ("long", "short")
                     if trailing.get(pside)
                 }
+            hint = runtime_hints.get(symbol, {})
+            if isinstance(hint, dict):
+                ema_bands = hint.get("ema_bands")
+                if isinstance(ema_bands, dict):
+                    entry["ema_bands"] = deepcopy(ema_bands)
             out[symbol] = entry
         return out
 
@@ -1468,6 +1477,26 @@ class Passivbot:
                 set(getattr(self, "PB_modes", {}).get(pside, {}).keys())
                 | {sym for sym in getattr(self, "positions", {}) if self.has_position(pside, sym)}
             )
+            held_symbols = {
+                sym for sym in getattr(self, "positions", {}) if self.has_position(pside, sym)
+            }
+            entry_order_symbols = set()
+            for symbol in getattr(self, "open_orders", {}):
+                for order in self.open_orders.get(symbol, []):
+                    if str(order.get("position_side", "")) != pside:
+                        continue
+                    side = str(order.get("side", ""))
+                    reduce_only = (pside == "long" and side == "sell") or (
+                        pside == "short" and side == "buy"
+                    )
+                    if not reduce_only:
+                        entry_order_symbols.add(symbol)
+                        break
+            pending_symbols = [
+                sym
+                for sym in selected_symbols
+                if sym not in held_symbols and sym not in entry_order_symbols
+            ]
             out[pside] = {
                 "enabled": bool(self.is_pside_enabled(pside)),
                 "forager_mode": bool(self.is_forager_mode(pside)),
@@ -1486,6 +1515,8 @@ class Passivbot:
                     for sym in set(getattr(self, "active_symbols", []) or [])
                     if sym in candidate_universe or sym in selected_symbols
                 ),
+                "pending_symbols": pending_symbols,
+                "next_symbol": pending_symbols[0] if pending_symbols else None,
                 "score_weights": dict(self.bot_value(pside, "forager_score_weights") or {}),
                 "volume_drop_pct": float(self.bot_value(pside, "forager_volume_drop_pct") or 0.0),
             }
@@ -1499,6 +1530,7 @@ class Passivbot:
             "open_orders": [],
             "sides": {},
         }
+        runtime_hints = getattr(self, "_monitor_runtime_unstuck_hints", {})
         for symbol in sorted(getattr(self, "open_orders", {})):
             for order in self.open_orders.get(symbol, []):
                 try:
@@ -1526,8 +1558,132 @@ class Passivbot:
             for key in ("allowance", "peak", "pct_from_peak"):
                 if key in info:
                     side_payload[key] = float(info[key])
+            hint = runtime_hints.get(pside, {})
+            if isinstance(hint, dict):
+                for key in (
+                    "next_symbol",
+                    "next_target_price",
+                    "next_target_distance_ratio",
+                    "next_unstuck_trigger_distance_ratio",
+                ):
+                    if key in hint and hint[key] is not None:
+                        side_payload[key] = hint[key]
+                ema_bands = hint.get("ema_bands")
+                if isinstance(ema_bands, dict):
+                    side_payload["ema_bands"] = deepcopy(ema_bands)
             out["sides"][pside] = side_payload
         return out
+
+    def _build_monitor_runtime_market_hints(
+        self,
+        symbols: Iterable[str],
+        last_prices: dict[str, float],
+        m1_close_emas: dict[str, dict[float, float]],
+    ) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for symbol in symbols:
+            hint: dict[str, Any] = {}
+            per_side: dict[str, dict[str, float]] = {}
+            last_price = last_prices.get(symbol)
+            for pside in ("long", "short"):
+                try:
+                    span0 = float(self.bp(pside, "ema_span_0", symbol))
+                    span1 = float(self.bp(pside, "ema_span_1", symbol))
+                    entry_dist = float(self.bp(pside, "entry_initial_ema_dist", symbol))
+                    unstuck_ema_dist = float(self.bp(pside, "unstuck_ema_dist", symbol))
+                except Exception:
+                    continue
+                if span0 <= 0.0 or span1 <= 0.0:
+                    continue
+                span2 = (span0 * span1) ** 0.5
+                emas = m1_close_emas.get(symbol, {})
+                ema0 = float(emas.get(span0, 0.0) or 0.0)
+                ema1 = float(emas.get(span1, 0.0) or 0.0)
+                ema2 = float(emas.get(span2, 0.0) or 0.0)
+                if min(ema0, ema1, ema2) <= 0.0:
+                    continue
+                ema_lower = min(ema0, ema1, ema2)
+                ema_upper = max(ema0, ema1, ema2)
+                side_hint: dict[str, float] = {
+                    "lower": float(ema_lower),
+                    "upper": float(ema_upper),
+                    "entry_trigger_price": float(
+                        ema_lower * (1.0 - entry_dist)
+                        if pside == "long"
+                        else ema_upper * (1.0 + entry_dist)
+                    ),
+                    "unstuck_trigger_price": float(
+                        ema_upper * (1.0 + unstuck_ema_dist)
+                        if pside == "long"
+                        else ema_lower * (1.0 - unstuck_ema_dist)
+                    ),
+                }
+                if last_price is not None and float(last_price) > 0.0:
+                    side_hint["last_price"] = float(last_price)
+                per_side[pside] = side_hint
+            if per_side:
+                hint["ema_bands"] = per_side
+                out[symbol] = hint
+        return out
+
+    def _build_monitor_runtime_unstuck_hints(
+        self,
+        idx_to_symbol: dict[int, str],
+        orders: list[dict[str, Any]],
+        last_prices: dict[str, float],
+        market_hints: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {"long": {}, "short": {}}
+        for order in orders:
+            order_type_str = str(order.get("order_type", ""))
+            if "close_unstuck" not in order_type_str:
+                continue
+            symbol = idx_to_symbol.get(int(order.get("symbol_idx", -1)))
+            if symbol is None:
+                continue
+            pside = "long" if "long" in order_type_str else "short"
+            target_price = float(order.get("price", 0.0) or 0.0)
+            current_price = float(last_prices.get(symbol, 0.0) or 0.0)
+            distance_ratio = None
+            if current_price > 0.0 and target_price > 0.0:
+                distance_ratio = float(target_price / current_price - 1.0)
+            hint = {
+                "next_symbol": symbol,
+                "next_target_price": target_price,
+                "next_target_distance_ratio": distance_ratio,
+            }
+            market_hint = market_hints.get(symbol, {})
+            if isinstance(market_hint, dict):
+                ema_bands = market_hint.get("ema_bands", {})
+                if isinstance(ema_bands, dict) and isinstance(ema_bands.get(pside), dict):
+                    side_ema_bands = deepcopy(ema_bands.get(pside))
+                    hint["ema_bands"] = side_ema_bands
+                    trigger_price = float(side_ema_bands.get("unstuck_trigger_price", 0.0) or 0.0)
+                    if current_price > 0.0 and trigger_price > 0.0:
+                        hint["next_unstuck_trigger_distance_ratio"] = float(
+                            trigger_price / current_price - 1.0
+                        )
+            out[pside] = hint
+            break
+        return out
+
+    def _update_monitor_runtime_hints(
+        self,
+        *,
+        symbols: Iterable[str],
+        last_prices: dict[str, float],
+        m1_close_emas: dict[str, dict[float, float]],
+        idx_to_symbol: dict[int, str],
+        orders: list[dict[str, Any]],
+    ) -> None:
+        market_hints = self._build_monitor_runtime_market_hints(symbols, last_prices, m1_close_emas)
+        self._monitor_runtime_market_hints = market_hints
+        self._monitor_runtime_unstuck_hints = self._build_monitor_runtime_unstuck_hints(
+            idx_to_symbol,
+            orders,
+            last_prices,
+            market_hints,
+        )
 
     def _build_monitor_recent_section(self) -> dict[str, Any]:
         return {
@@ -5176,6 +5332,13 @@ class Passivbot:
         out = json.loads(out_json)
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         orders = out.get("orders", [])
+        self._update_monitor_runtime_hints(
+            symbols=symbols,
+            last_prices=last_prices,
+            m1_close_emas=m1_close_emas,
+            idx_to_symbol=idx_to_symbol,
+            orders=orders,
+        )
 
         ideal_orders: dict[str, list] = {}
         for o in orders:
@@ -5679,6 +5842,13 @@ class Passivbot:
         out = json.loads(out_json)
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         orders = out.get("orders", [])
+        self._update_monitor_runtime_hints(
+            symbols=symbols,
+            last_prices=last_prices,
+            m1_close_emas=m1_close_emas,
+            idx_to_symbol=idx_to_symbol,
+            orders=orders,
+        )
 
         ideal_orders: dict[str, list] = {}
         for o in orders:

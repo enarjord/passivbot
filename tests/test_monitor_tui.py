@@ -1,4 +1,12 @@
-from monitor_tui import MonitorTuiState, execute_tui_command, render_screen, resolve_focus_symbol_alias
+from pathlib import Path
+
+from monitor_tui import (
+    MonitorTuiState,
+    _render_screen_diff,
+    execute_tui_command,
+    render_screen,
+    resolve_focus_symbol_alias,
+)
 
 
 def test_monitor_tui_state_tracks_snapshot_events_and_history():
@@ -123,7 +131,14 @@ def test_monitor_tui_prefers_focus_symbol_in_rendering():
                 "forager": {"long": {"selected_symbols": ["ETH/USDT:USDT"]}, "short": {"selected_symbols": []}},
                 "unstuck": {},
                 "market": {
-                    "BTC/USDT:USDT": {"last_price": 70500.0, "tradable": True},
+                    "BTC/USDT:USDT": {
+                        "last_price": 70500.0,
+                        "tradable": True,
+                        "ema_bands": {
+                            "long": {"lower": 70000.0, "upper": 70600.0},
+                            "short": {"lower": 69900.0, "upper": 70500.0},
+                        },
+                    },
                     "ETH/USDT:USDT": {
                         "last_price": 3550.0,
                         "tradable": True,
@@ -133,6 +148,10 @@ def test_monitor_tui_prefers_focus_symbol_in_rendering():
                         "min_qty": 0.001,
                         "min_cost": 5.0,
                         "effective_min_cost": 5.1,
+                        "ema_bands": {
+                            "long": {"lower": 3490.0, "upper": 3560.0},
+                            "short": {"lower": 3480.0, "upper": 3550.0},
+                        },
                     },
                 },
                 "recent": {
@@ -180,8 +199,11 @@ def test_monitor_tui_prefers_focus_symbol_in_rendering():
     rendered = render_screen(state, width=160)
 
     assert "focus=ETH/USDT:USDT" in rendered
-    assert "Focus | ETH/USDT:USDT" in rendered
-    assert "long WE=1.7500" in rendered
+    assert "| Focus" in rendered
+    assert "symbol=ETH/USDT:USDT" in rendered
+    assert "long WE=1.7500" not in rendered
+    assert "| Forager" in rendered
+    assert "| Unstuck" in rendered
     assert "Recent Orders" in rendered
     assert "executed | ETH/USDT:USDT" in rendered
 
@@ -236,6 +258,29 @@ def test_execute_tui_command_supports_focus_aliases_and_exit():
 
     should_stop = execute_tui_command(state, "exit")
     assert should_stop
+
+
+def test_execute_tui_command_supports_pause_resume_and_dump(tmp_path: Path):
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765")
+    state.last_rendered_screen = "screen line one\nscreen line two"
+
+    should_stop = execute_tui_command(state, "pause")
+    assert not should_stop
+    assert state.paused is True
+    assert "Paused." in state.command_status
+
+    should_stop = execute_tui_command(state, "dump", dump_dir=tmp_path)
+    assert not should_stop
+    assert "Dumped screen to" in state.command_status
+    dumped = sorted(tmp_path.glob("monitor_tui_dump_*.txt"))
+    assert len(dumped) == 1
+    assert dumped[0].read_text(encoding="utf-8") == "screen line one\nscreen line two\n"
+
+    should_stop = execute_tui_command(state, "resume")
+    assert not should_stop
+    assert state.paused is False
+    assert state.paused_render_data is None
+    assert state.command_status == "Resumed monitor TUI."
 
 
 def test_monitor_tui_state_tracks_recent_log_lines():
@@ -302,17 +347,53 @@ def test_monitor_tui_render_screen_includes_core_panels():
                     "short": {"tier": "green", "halted": False, "last_metrics": {"drawdown_score": 0.0}},
                 },
                 "forager": {
-                    "long": {"slots": {"current": 4, "max": 10}, "selected_symbols": ["BTC/USDT:USDT"]},
-                    "short": {"slots": {"current": 0, "max": 10}, "selected_symbols": []},
+                    "long": {
+                        "enabled": True,
+                        "forager_mode": True,
+                        "slots": {"current": 4, "max": 10, "open": 6},
+                        "selected_symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+                        "pending_symbols": ["ETH/USDT:USDT"],
+                        "next_symbol": "ETH/USDT:USDT",
+                        "candidate_universe": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+                    },
+                    "short": {
+                        "enabled": False,
+                        "forager_mode": False,
+                        "slots": {"current": 0, "max": 0, "open": 0},
+                        "selected_symbols": [],
+                        "pending_symbols": [],
+                        "candidate_universe": [],
+                    },
                 },
                 "unstuck": {
                     "has_open_order": False,
                     "sides": {
-                        "long": {"status": "ok", "allowance_live": 0.0},
+                        "long": {
+                            "status": "ok",
+                            "allowance": -20.0,
+                            "allowance_live": 0.0,
+                            "next_symbol": "BTC/USDT:USDT",
+                            "next_target_price": 71000.0,
+                            "next_target_distance_ratio": 0.007,
+                            "next_unstuck_trigger_distance_ratio": 0.003,
+                            "ema_bands": {
+                                "lower": 70000.0,
+                                "upper": 70600.0,
+                                "unstuck_trigger_price": 70712.0,
+                            },
+                        },
                         "short": {"status": "disabled", "allowance_live": 0.0},
                     },
                 },
-                "market": {"BTC/USDT:USDT": {"last_price": 70500.0}},
+                "market": {
+                    "BTC/USDT:USDT": {
+                        "last_price": 70500.0,
+                        "ema_bands": {
+                            "long": {"lower": 70000.0, "upper": 70600.0},
+                            "short": {"lower": 69900.0, "upper": 70500.0},
+                        },
+                    }
+                },
             },
         }
     )
@@ -343,19 +424,27 @@ def test_monitor_tui_render_screen_includes_core_panels():
     state.set_log_file("logs/example.log")
     state.push_log_lines(["2026-03-21T12:00:00 INFO [bitget] READY"])
 
-    rendered = render_screen(state, width=140)
+    rendered = render_screen(state, width=118)
 
-    assert "Passivbot Monitor TUI | connected | bitget / bitget_01" in rendered
-    assert "Account | raw=1000.00 snapped=999.50 equity=1001.25 realized=12.00" in rendered
-    assert "Active Positions / Orders" in rendered
+    assert "Passivbot Monitor TUI | LIVE | connected | bitget / bitget_01" in rendered
+    assert "| Summary" in rendered
+    assert "Account raw=1000.00 snapped=999.50 equity=1001.25 realized=12.00" in rendered
+    assert "| Positions" in rendered
+    assert "TWE total | long=0.7000/1.7073 ( 41%) | short=0.0000/- (-)" in rendered
     assert "BTC/USDT" in rendered
     assert "WE= 0.7000" in rendered
     assert "PA=  0.0071" in rendered
-    assert "Recent Events" in rendered
+    assert "TWEL" not in rendered
+    assert "| Forager" in rendered
+    assert "pending=1 next=ETH/USDT" in rendered
+    assert "| Unstuck" in rendered
+    assert "next=BTC/USDT" in rendered
+    assert "| Recent Events" in rendered
     assert "order.opened" in rendered
-    assert "Recent Price Ticks" in rendered
-    assert "last=  70501.0000" in rendered
-    assert "Recent Bot Log | logs/example.log" in rendered
+    assert "| Price Ticks" in rendered
+    assert "last= 70501.0000" in rendered
+    assert "L=70000.0000..70600.0000" in rendered
+    assert "Bot Log | logs/example.log" in rendered
     assert "READY" in rendered
 
 
@@ -389,3 +478,60 @@ def test_monitor_tui_renders_account_realized_from_nested_payload():
     rendered = render_screen(state, width=140)
 
     assert "realized=-46.62" in rendered
+
+
+def test_monitor_tui_render_screen_shows_pause_state():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765", exchange="bitget", user="bitget_01")
+    state.paused = True
+    state.command_status = "Paused. Type 'resume' to refresh or 'dump' to save the current screen."
+
+    rendered = render_screen(state, width=120)
+
+    assert "Passivbot Monitor TUI | PAUSED | disconnected | bitget / bitget_01" in rendered
+    assert "Status: Paused. Type 'resume' to refresh or 'dump' to save the current screen." in rendered
+    assert "Mode: paused (panels frozen)" in rendered
+
+
+def test_monitor_tui_pause_can_freeze_panels_but_keep_command_line_live():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765", exchange="bitget", user="bitget_01")
+    state.snapshot = {"meta": {"exchange": "bitget", "user": "bitget_01"}, "account": {"equity": 1000.0}}
+    frozen = {
+        "snapshot": {"meta": {"exchange": "bitget", "user": "bitget_01"}, "account": {"equity": 900.0}},
+        "snapshot_seq": 1,
+        "snapshot_ts_ms": 1774057000000,
+        "ws_connected": True,
+        "status_text": "snapshot refreshed",
+        "last_error": None,
+        "last_ws_message_ts_ms": 1774057000000,
+        "recent_events": [],
+        "recent_price_ticks": {},
+        "recent_candles": {},
+        "recent_log_lines": [],
+        "exchange": "bitget",
+        "user": "bitget_01",
+        "focus_symbol": None,
+        "followed_log_file": None,
+    }
+    state.paused = True
+    state.command_buffer = "resume"
+    state.command_status = "Paused. Type 'resume' to refresh or 'dump' to save the current screen."
+
+    rendered = render_screen(state, width=120, display_data=frozen)
+
+    assert "equity=900.00" in rendered
+    assert "> resume" in rendered
+
+
+def test_render_screen_diff_uses_full_clear_only_for_first_frame():
+    patch = _render_screen_diff(None, "line one\nline two")
+
+    assert patch.startswith("\x1b[2J\x1b[Hline one\nline two")
+    assert patch.endswith("\x1b[3;1H")
+
+
+def test_render_screen_diff_updates_only_changed_lines():
+    patch = _render_screen_diff("line one\nline two", "line one\nline three")
+
+    assert "\x1b[2J" not in patch
+    assert "\x1b[2;1Hline three\x1b[K" in patch
+    assert "\x1b[3;1H" in patch
