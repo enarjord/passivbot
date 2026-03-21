@@ -19,8 +19,9 @@ Implemented now:
 Still pending:
 
 1. dashboard/TUI reader
-2. `exchange_config` and any further snapshot/detail expansion beyond the current sections
-3. publisher self-reporting via `error.publisher`
+2. monitor relay server for remote/browser/mobile/TUI consumers
+3. `exchange_config` and any further snapshot/detail expansion beyond the current sections
+4. publisher self-reporting via `error.publisher`
 
 ## Goal
 
@@ -32,6 +33,28 @@ Build a read-only live monitoring dashboard for Passivbot that:
 4. keeps Python live bot ownership limited to publishing state, not rendering UI
 
 The dashboard itself is a separate process. The live bot only publishes structured monitor data to disk.
+
+## Recommended Delivery Model
+
+Use a two-layer architecture:
+
+1. bot-side disk publisher
+2. separate read-only monitor relay server
+
+The publisher remains the source of truth.
+
+The relay server reads only from the monitor root on disk and serves:
+
+1. HTTP snapshot endpoints
+2. WebSocket live event streams
+
+This keeps:
+
+1. durable local observability and replay
+2. remote/mobile/web/TUI access
+3. strict separation between trading logic and UI/network serving
+
+The live bot should not serve dashboards directly from its own process.
 
 ## Core Design
 
@@ -45,6 +68,21 @@ The bot publishes:
 
 The dashboard does not access the live bot process memory directly.
 
+### Relay Server Layer
+
+Recommended shape:
+
+1. `state.latest.json` stays the bootstrap source
+2. `events/current.ndjson` plus rotated segments stay the event/history source
+3. a separate relay process tails these files and exposes a stable network protocol
+
+This relay should be:
+
+1. read-only
+2. restartable independently from the bot
+3. able to resync from disk after its own restart
+4. usable locally on the VPS and remotely via reverse proxy
+
 ## Non-Goals
 
 1. Do not make the dashboard part of the live bot execution loop UI.
@@ -52,6 +90,7 @@ The dashboard does not access the live bot process memory directly.
 3. Do not dump arbitrary `vars(self)` internals as the public monitor schema.
 4. Do not duplicate all historical caches into the monitor stream by default.
 5. Do not make the first version a web app.
+6. Do not replace the disk publisher with direct in-bot WebSocket serving.
 
 ## Architecture
 
@@ -77,6 +116,48 @@ Current implementation status:
 1. this module now exists as `src/monitor_publisher.py`
 2. manifest, event append, atomic snapshot writes, checkpoints, and retention are implemented
 3. history streams now cover normalized fills, throttled price ticks, and completed 1m/1h candles
+
+### Relay Server
+
+Recommended new component, separate from the bot:
+
+- `src/tools/monitor_relay.py` or similar
+
+Responsibilities:
+
+1. load `state.latest.json` on startup
+2. tail live event/history files
+3. maintain per-bot subscriber sets
+4. serve snapshot and stream APIs
+5. handle reconnect/resync without touching bot internals
+
+Transport recommendation:
+
+1. HTTP for current state/bootstrap
+2. WebSocket for live push
+
+Why:
+
+1. WebSocket works well for browser, mobile, and TUI clients
+2. HTTP makes debugging and initial bootstrap easy
+3. disk remains the source of truth even if clients disconnect
+
+Alternative transports considered:
+
+1. SSE
+   - acceptable for browser-only one-way streaming
+   - weaker fit for mobile/native/TUI variety
+2. polling HTTP
+   - simplest fallback
+   - weaker live UX and more waste
+3. broker systems (MQTT/NATS/etc.)
+   - likely overkill for current scope
+
+Recommendation:
+
+1. keep the disk-backed publisher
+2. add a read-only HTTP + WebSocket relay
+3. keep protocol stable and independent of file layout
 
 ### Bot Integration
 
@@ -120,6 +201,8 @@ monitor/
 ```
 
 The dashboard should only read from this root.
+
+The relay server should also read only from this root.
 
 ## Data Model
 
@@ -326,6 +409,50 @@ Recommendations:
 2. keep `tags` for human grouping and future filtering
 3. use dot-namespace style for `kind`
 4. keep payload schemas stable per `kind`
+
+### 2b. Network Protocol
+
+The relay server should not expose raw files directly as the primary client contract.
+
+Instead expose a stable protocol with two main message families:
+
+#### Snapshot message
+
+```json
+{
+  "type": "snapshot",
+  "seq": 12345,
+  "payload": {}
+}
+```
+
+#### Event message
+
+```json
+{
+  "type": "event",
+  "seq": 12346,
+  "kind": "position.changed",
+  "payload": {}
+}
+```
+
+Optional later:
+
+1. `history_batch`
+2. `heartbeat`
+3. `resync_required`
+4. `error`
+
+Client flow:
+
+1. connect
+2. receive current snapshot
+3. receive live event messages
+4. detect seq gaps
+5. request resync or reconnect and reload snapshot
+
+This makes the client contract independent from file segmentation/rotation details.
 
 ### Event Kinds
 
@@ -539,6 +666,33 @@ Rules:
 3. keep current segment uncompressed
 4. retention should be enforced separately for events and history streams
 
+## Relay API
+
+Recommended initial endpoints:
+
+1. `GET /snapshot`
+2. `GET /health`
+3. `GET /ws`
+
+Optional later:
+
+1. `GET /recent-events`
+2. `GET /history/fills`
+3. `GET /history/candles?symbol=...&timeframe=...`
+4. `GET /history/ticks?symbol=...`
+
+WebSocket behavior:
+
+1. send snapshot immediately after connect
+2. then send live event/history updates
+3. optionally support subscriptions later
+   - symbols
+   - streams
+   - sides
+   - event kinds
+
+The first version can broadcast the full stream to each client and add subscriptions later if needed.
+
 ## Performance and Safety Requirements
 
 1. Publisher must be non-blocking relative to live trading paths.
@@ -546,6 +700,24 @@ Rules:
 3. `state.latest.json` should be written atomically.
 4. If publisher fails, bot should log a monitor error event and continue unless explicitly configured otherwise.
 5. Publisher must never mutate trading decisions.
+6. Relay must remain read-only and must not expose trading control actions.
+
+## Security and Deployment
+
+Recommended assumptions for the relay:
+
+1. authenticated access only
+2. TLS via reverse proxy or equivalent
+3. read-only token/auth model
+4. one namespace per `{exchange}/{user}` monitor root
+
+Suggested deployment:
+
+1. bot writes to local monitor root on VPS
+2. relay process serves that root locally
+3. reverse proxy terminates TLS and forwards `/ws` and HTTP endpoints
+
+This keeps the bot isolated from network client complexity.
 
 ## Dashboard MVP
 
@@ -573,6 +745,14 @@ The dashboard should:
 1. resize with terminal size
 2. pre-allocate layout where practical
 3. avoid noisy layout shifts
+
+Future clients can include:
+
+1. local TUI
+2. browser dashboard
+3. mobile app
+
+All of them should consume the same relay protocol rather than custom per-client file readers.
 
 ## Bot Integration Points
 
@@ -607,6 +787,16 @@ Initial publisher hooks should likely be placed at:
 2. monitor output remains bounded under retention policy
 3. monitor publisher does not block trading loop
 
+### Relay tests
+
+When the relay is implemented:
+
+1. snapshot endpoint reflects current `state.latest.json`
+2. WebSocket sends snapshot first, then incremental events
+3. client reconnect after relay restart can recover from disk
+4. seq-gap handling forces clean resync
+5. auth failures are rejected cleanly
+
 ### Fake-live harness
 
 The fake-live harness should eventually emit the same monitor data.
@@ -618,6 +808,13 @@ This enables scenario assertions such as:
 3. manual intervention emits the correct `hsl.cooldown_intervention` and policy event
 4. no reopen before cooldown end
 5. forager selection changes appear when expected
+
+The fake-live harness should later also drive relay-level regression tests:
+
+1. run scenario
+2. emit monitor files
+3. start relay over those files
+4. assert snapshot + streamed events match expected behavioral transitions
 
 This should become an additional behavioral regression layer above unit tests.
 
