@@ -19,6 +19,14 @@ from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 import aiohttp
 
 
+ANSI_RESET = "\x1b[0m"
+ANSI_BOLD_CYAN = "\x1b[1;36m"
+ANSI_BOLD_GREEN = "\x1b[1;32m"
+ANSI_BOLD_YELLOW = "\x1b[1;33m"
+ANSI_BOLD_RED = "\x1b[1;31m"
+ANSI_DIM = "\x1b[2m"
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000.0)
 
@@ -31,6 +39,27 @@ def _fmt_float(value: Any, digits: int = 4) -> str:
     except (TypeError, ValueError):
         return str(value)
     return f"{number:.{digits}f}"
+
+
+def _fmt_compact_float(
+    value: Any,
+    *,
+    digits: int = 4,
+    zero: str = "0",
+    none: str = "-",
+) -> str:
+    if value is None:
+        return none
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if abs(number) < 10 ** (-digits):
+        return zero
+    text = f"{number:.{digits}f}".rstrip("0").rstrip(".")
+    if text in {"-0", "-0.0", "-0.00", "-0.000", "-0.0000"}:
+        return zero
+    return text
 
 
 def _fmt_int(value: Any) -> str:
@@ -93,6 +122,33 @@ def _truncate(value: str, width: int) -> str:
     if width <= 3:
         return value[:width]
     return value[: width - 3] + "..."
+
+
+def _wrap_text(text: str, width: int) -> list[str]:
+    if width <= 0:
+        return [text]
+    if not text:
+        return [""]
+    lines: list[str] = []
+    for chunk in text.splitlines() or [text]:
+        words = chunk.split()
+        if not words:
+            lines.append("")
+            continue
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}"
+            if len(candidate) <= width:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+    return lines
+
+
+def _style(text: str, ansi_code: str) -> str:
+    return f"{ansi_code}{text}{ANSI_RESET}"
 
 
 def _wrap_box(title: str, lines: list[str], width: int) -> list[str]:
@@ -248,6 +304,7 @@ class MonitorTuiState:
     last_error: Optional[str] = None
     last_ws_message_ts_ms: Optional[int] = None
     command_buffer: str = ""
+    last_submitted_command: str = ""
     command_status: str = "Type 'help' for commands."
     paused: bool = False
     paused_render_data: Optional[dict[str, Any]] = None
@@ -365,17 +422,6 @@ def _format_event_line(message: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
-def _format_tick_line(symbol: str, message: dict[str, Any], market_entry: Optional[dict[str, Any]] = None) -> str:
-    payload = message.get("payload", {}) if isinstance(message.get("payload"), dict) else {}
-    market_entry = market_entry if isinstance(market_entry, dict) else {}
-    return (
-        f"{symbol:<18} last={_fmt_float(payload.get('last'), 4):>11} "
-        f"L={_fmt_market_band_snapshot(market_entry, 'long'):<21} "
-        f"S={_fmt_market_band_snapshot(market_entry, 'short'):<21} "
-        f"age={_fmt_age_ms(message.get('ts')):>6}"
-    )
-
-
 def _parse_symbol_parts(symbol: str) -> tuple[str, str]:
     base = symbol
     quote = ""
@@ -473,11 +519,16 @@ def _select_focus_symbol(state: MonitorTuiState, snapshot: dict[str, Any]) -> Op
 
 def _filtered_recent_events(state: MonitorTuiState, focus_symbol: Optional[str]) -> list[dict[str, Any]]:
     events = list(state.recent_events)
-    if not focus_symbol:
-        return events[:8]
-    focused = [message for message in events if message.get("symbol") == focus_symbol]
-    others = [message for message in events if message.get("symbol") != focus_symbol]
-    return (focused + others)[:8]
+    if focus_symbol:
+        focused = [message for message in events if message.get("symbol") == focus_symbol]
+        others = [message for message in events if message.get("symbol") != focus_symbol]
+        events = focused + others
+    non_balance = [message for message in events if str(message.get("kind")) != "account.balance"]
+    balance = [message for message in events if str(message.get("kind")) == "account.balance"]
+    collapsed = non_balance[:7]
+    if balance:
+        collapsed.append(balance[0])
+    return collapsed[:8]
 
 
 def _filtered_price_ticks(state: MonitorTuiState, focus_symbol: Optional[str]) -> list[tuple[str, dict[str, Any]]]:
@@ -530,6 +581,17 @@ def _format_order_activity_line(entry: dict[str, Any]) -> str:
     )
 
 
+def _format_tick_line(symbol: str, message: dict[str, Any], market_entry: Optional[dict[str, Any]] = None) -> str:
+    payload = message.get("payload", {}) if isinstance(message.get("payload"), dict) else {}
+    market_entry = market_entry if isinstance(market_entry, dict) else {}
+    ema_lower, ema_upper = _market_outer_band_bounds(market_entry)
+    return (
+        f"{_symbol_label(symbol):<12} last={_fmt_float(payload.get('last'), 4):>11} "
+        f"lo={ema_lower:<10} hi={ema_upper:<10} "
+        f"age={_fmt_age_ms(message.get('ts')):>6}"
+    )
+
+
 def _fmt_market_band_snapshot(
     market_entry: dict[str, Any],
     pside: str,
@@ -547,32 +609,61 @@ def _fmt_market_band_snapshot(
         return f"{lower}..{upper} trg={trigger}"
     return f"{lower}..{upper}"
 
-
-def _infer_total_wallet_exposure_limit(row: dict[str, Any], pside: str) -> Optional[float]:
-    pos = row.get(pside, {}) if isinstance(row.get(pside), dict) else {}
-    try:
-        wallet_exposure = abs(float(pos.get("wallet_exposure", 0.0) or 0.0))
-        twel_ratio = abs(float(pos.get("twel_ratio", 0.0) or 0.0))
-    except (TypeError, ValueError):
-        return None
-    if wallet_exposure <= 0.0 or twel_ratio <= 0.0:
-        return None
-    return wallet_exposure / twel_ratio
+def _market_outer_band_bounds(market_entry: dict[str, Any]) -> tuple[str, str]:
+    ema_bands = market_entry.get("ema_bands", {}) if isinstance(market_entry, dict) else {}
+    if not isinstance(ema_bands, dict):
+        return "-", "-"
+    lowers: list[float] = []
+    uppers: list[float] = []
+    for side_bands in ema_bands.values():
+        if not isinstance(side_bands, dict):
+            continue
+        try:
+            lower = float(side_bands.get("lower"))
+            upper = float(side_bands.get("upper"))
+        except (TypeError, ValueError):
+            continue
+        lowers.append(lower)
+        uppers.append(upper)
+    if not lowers or not uppers:
+        return "-", "-"
+    return (
+        _fmt_compact_float(min(lowers), digits=4),
+        _fmt_compact_float(max(uppers), digits=4),
+    )
 
 
 def _render_positions_twe_summary(rows: list[dict[str, Any]]) -> list[str]:
     parts: list[str] = []
     for pside in ("long", "short"):
-        total_exposure = 0.0
+        total_exposure = None
         total_limit = None
         for row in rows:
             pos = row.get(pside, {}) if isinstance(row.get(pside), dict) else {}
             try:
-                total_exposure += abs(float(pos.get("wallet_exposure", 0.0) or 0.0))
+                if total_exposure is None and "total_wallet_exposure" in pos:
+                    total_exposure = abs(float(pos.get("total_wallet_exposure", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                pass
+            try:
+                if (
+                    total_limit is None
+                    and float(pos.get("total_wallet_exposure_limit", 0.0) or 0.0) > 0.0
+                ):
+                    total_limit = float(pos.get("total_wallet_exposure_limit", 0.0) or 0.0)
             except (TypeError, ValueError):
                 pass
             if total_limit is None:
-                total_limit = _infer_total_wallet_exposure_limit(row, pside)
+                try:
+                    total_we = abs(float(pos.get("total_wallet_exposure", 0.0) or 0.0))
+                    twel_ratio = abs(float(pos.get("twel_ratio", 0.0) or 0.0))
+                except (TypeError, ValueError):
+                    total_we = 0.0
+                    twel_ratio = 0.0
+                if total_we > 0.0 and twel_ratio > 0.0:
+                    total_limit = total_we / twel_ratio
+        if total_exposure is None:
+            total_exposure = 0.0
         if total_limit is not None and total_limit > 0.0:
             parts.append(
                 f"{pside}={_fmt_float(total_exposure, 4)}/{_fmt_float(total_limit, 4)}"
@@ -594,15 +685,64 @@ def _render_forager_panel(snapshot: dict[str, Any]) -> list[str]:
         selected = entry.get("selected_symbols", []) if isinstance(entry.get("selected_symbols"), list) else []
         pending = entry.get("pending_symbols", []) if isinstance(entry.get("pending_symbols"), list) else []
         next_symbol = entry.get("next_symbol")
+        universe = (
+            len(entry.get("candidate_universe", []))
+            if isinstance(entry.get("candidate_universe"), list)
+            else 0
+        )
+        enabled = bool(entry.get("enabled"))
+        max_slots = int(slots.get("max") or 0)
+        if not enabled and max_slots <= 0 and universe <= 0:
+            continue
+        ranking = entry.get("ranking", {}) if isinstance(entry.get("ranking"), dict) else {}
+        top_total = ranking.get("top_total", {}) if isinstance(ranking.get("top_total"), dict) else {}
+        top_volume = ranking.get("top_volume", {}) if isinstance(ranking.get("top_volume"), dict) else {}
+        top_volatility = (
+            ranking.get("top_volatility", {}) if isinstance(ranking.get("top_volatility"), dict) else {}
+        )
+        top_ema = (
+            ranking.get("top_ema_readiness", {})
+            if isinstance(ranking.get("top_ema_readiness"), dict)
+            else {}
+        )
         lines.append(
-            f"{pside:<5} enabled={entry.get('enabled', '-')} forager={entry.get('forager_mode', '-')} "
+            f"{pside:<5} {'on' if enabled else 'off'} "
             f"slots={_fmt_int(slots.get('current'))}/{_fmt_int(slots.get('max'))} "
-            f"open={_fmt_int(slots.get('open'))} selected={len(selected)}"
+            f"open={_fmt_int(slots.get('open'))} sel={len(selected)} pend={len(pending)}"
         )
-        lines.append(
-            f"      pending={len(pending)} next={_symbol_label(str(next_symbol)) if next_symbol else '-'} "
-            f"universe={len(entry.get('candidate_universe', [])) if isinstance(entry.get('candidate_universe'), list) else 0}"
-        )
+        next_parts = [
+            f"next={_symbol_label(str(next_symbol)) if next_symbol else '-'}",
+            f"dist={_fmt_pct_delta(entry.get('next_entry_distance_ratio'))}",
+            f"trg={_fmt_compact_float(entry.get('next_entry_trigger_price'), digits=4)}",
+            f"uni={universe}",
+        ]
+        lines.append(f"      {' | '.join(next_parts)}")
+        ranking_parts: list[str] = []
+        if top_total:
+            ranking_parts.append(
+                f"total={_symbol_label(str(top_total.get('symbol', '-')))}"
+                f"({_fmt_compact_float(top_total.get('total_score'), digits=3)})"
+            )
+        if top_volume:
+            ranking_parts.append(
+                f"vol={_symbol_label(str(top_volume.get('symbol', '-')))}"
+                f"({_fmt_compact_float(top_volume.get('raw_score'), digits=3)})"
+            )
+        if top_volatility:
+            ranking_parts.append(
+                f"vola={_symbol_label(str(top_volatility.get('symbol', '-')))}"
+                f"({_fmt_compact_float(top_volatility.get('raw_score'), digits=3)})"
+            )
+        if top_ema:
+            ranking_parts.append(
+                f"ema={_symbol_label(str(top_ema.get('symbol', '-')))}"
+                f"({_fmt_pct_delta(top_ema.get('raw_score'))})"
+            )
+        if ranking_parts:
+            lines.append("      ranking:")
+            lines.append(f"      {' | '.join(ranking_parts)}")
+    if not lines:
+        return ["(no forager snapshot data)"]
     return lines
 
 
@@ -613,50 +753,112 @@ def _render_unstuck_panel(snapshot: dict[str, Any]) -> list[str]:
     sides = unstuck.get("sides", {}) if isinstance(unstuck.get("sides"), dict) else {}
     lines = [
         f"open_order={unstuck.get('has_open_order', False)} "
-        f"open_orders={len(unstuck.get('open_orders', [])) if isinstance(unstuck.get('open_orders'), list) else 0}"
+        f"count={len(unstuck.get('open_orders', [])) if isinstance(unstuck.get('open_orders'), list) else 0}"
     ]
     for pside in ("long", "short"):
         entry = sides.get(pside, {}) if isinstance(sides.get(pside), dict) else {}
+        status = str(entry.get("status", "-"))
+        has_details = any(
+            entry.get(key) is not None
+            for key in (
+                "allowance",
+                "allowance_live",
+                "next_symbol",
+                "next_target_price",
+                "next_target_distance_ratio",
+                "next_unstuck_trigger_distance_ratio",
+            )
+        ) or bool(entry.get("ema_bands"))
+        if status == "disabled" and not has_details:
+            continue
         next_symbol = entry.get("next_symbol")
+        ema_bands = entry.get("ema_bands", {}) if isinstance(entry.get("ema_bands"), dict) else {}
+        ema_text = (
+            f"{_fmt_compact_float(ema_bands.get('lower'), digits=4)}..{_fmt_compact_float(ema_bands.get('upper'), digits=4)}"
+            if ema_bands
+            else "-"
+        )
         lines.append(
-            f"{pside:<5} status={entry.get('status', '-')} "
-            f"allow={_fmt_float(entry.get('allowance'), 4)} "
-            f"live={_fmt_float(entry.get('allowance_live'), 4)} "
+            f"{pside:<5} status={status} "
+            f"allow={_fmt_compact_float(entry.get('allowance'), digits=4)} "
+            f"live={_fmt_compact_float(entry.get('allowance_live'), digits=4)} "
             f"next={_symbol_label(str(next_symbol)) if next_symbol else '-'}"
         )
-        ema_bands = entry.get("ema_bands", {}) if isinstance(entry.get("ema_bands"), dict) else {}
         lines.append(
-            f"      EMA={_fmt_float(ema_bands.get('lower'), 4)}..{_fmt_float(ema_bands.get('upper'), 4)} "
-            f"trigger={_fmt_float(ema_bands.get('unstuck_trigger_price'), 4)} "
+            f"      band={ema_text} "
+            f"trigger={_fmt_compact_float(ema_bands.get('unstuck_trigger_price'), digits=4)} "
             f"dist={_fmt_pct_delta(entry.get('next_unstuck_trigger_distance_ratio'))} "
-            f"target={_fmt_float(entry.get('next_target_price'), 4)} "
+            f"target={_fmt_compact_float(entry.get('next_target_price'), digits=4)} "
             f"target_dist={_fmt_pct_delta(entry.get('next_target_distance_ratio'))}"
         )
     return lines
 
 
+def _render_trailing_panel(snapshot: dict[str, Any]) -> list[str]:
+    trailing = snapshot.get("trailing", {}) if isinstance(snapshot, dict) else {}
+    if not isinstance(trailing, dict) or not trailing:
+        return ["(no trailing entries/closes selected)"]
+    lines: list[str] = []
+    emitted = 0
+    for symbol, symbol_entry in sorted(trailing.items()):
+        if not isinstance(symbol_entry, dict):
+            continue
+        for pside in ("long", "short"):
+            side_entry = symbol_entry.get(pside, {}) if isinstance(symbol_entry.get(pside), dict) else {}
+            extrema = side_entry.get("extrema", {}) if isinstance(side_entry.get("extrema"), dict) else {}
+            for kind in ("entry", "close"):
+                entry = side_entry.get(kind, {}) if isinstance(side_entry.get(kind), dict) else {}
+                if not entry:
+                    continue
+                lines.append(
+                    f"{_symbol_label(symbol):<10} {pside:<5} {kind:<5} {entry.get('status', '-'):<18} "
+                    f"px={_fmt_compact_float(entry.get('price'), digits=4):>10} "
+                    f"qty={_fmt_compact_float(entry.get('qty'), digits=4):>8}"
+                )
+                lines.append(
+                    f"      cur={_fmt_compact_float(entry.get('current_price'), digits=4)} "
+                    f"thr={_fmt_compact_float(entry.get('threshold_price'), digits=4)} "
+                    f"met={entry.get('threshold_met', False)} "
+                    f"ret={_fmt_compact_float(entry.get('retracement_price'), digits=4)} "
+                    f"met={entry.get('retracement_met', False)}"
+                )
+                lines.append(
+                    f"      min_open={_fmt_compact_float(extrema.get('min_since_open'), digits=4)} "
+                    f"max_min={_fmt_compact_float(extrema.get('max_since_min'), digits=4)} "
+                    f"max_open={_fmt_compact_float(extrema.get('max_since_open'), digits=4)} "
+                    f"min_max={_fmt_compact_float(extrema.get('min_since_max'), digits=4)}"
+                )
+                emitted += 1
+                if emitted >= 4:
+                    return lines
+    if not lines:
+        return ["(no trailing entries/closes selected)"]
+    return lines
+
+
 def _format_position_side_line(row: dict[str, Any], pside: str) -> str:
     pos = row.get(pside, {}) if isinstance(row.get(pside), dict) else {}
+    size_text = _fmt_compact_float(pos.get("size"), digits=4)
+    price_text = _fmt_compact_float(pos.get("price"), digits=4)
     return (
-        f"{str(row.get('label', row.get('symbol', '?'))):<12} "
+        f"{str(row.get('label', row.get('symbol', '?'))):<10} "
         f"{pside:<5} "
-        f"{_fmt_float(pos.get('size')):>9}@{_fmt_float(pos.get('price'), 4):<12} "
-        f"WE={_fmt_float(pos.get('wallet_exposure'), 4):>7} | "
-        f"{_fmt_pct_ratio(pos.get('wel_ratio')):>4} WEL "
-        f"{_fmt_pct_ratio(pos.get('wele_ratio')):>4} WELe | "
-        f"PA={_fmt_float(pos.get('price_action_distance'), 4):>8} "
-        f"uPnL={_fmt_float(pos.get('upnl'), 3):>9} "
-        f"ord={int(row.get('orders', 0) or 0):>2}"
+        f"{size_text:>7}@{price_text:<9} "
+        f"WE={_fmt_compact_float(pos.get('wallet_exposure'), digits=4):>6} | "
+        f"{_fmt_pct_ratio(pos.get('wel_ratio')):>4}/{_fmt_pct_ratio(pos.get('wele_ratio')):<4} | "
+        f"PA={_fmt_compact_float(pos.get('price_action_distance'), digits=4):>7} "
+        f"uPnL={_fmt_compact_float(pos.get('upnl'), digits=3):>8} "
+        f"o{int(row.get('orders', 0) or 0)}"
     )
 
 
 def _format_order_only_line(row: dict[str, Any]) -> str:
     return (
-        f"{str(row.get('label', row.get('symbol', '?'))):<12} "
+        f"{str(row.get('label', row.get('symbol', '?'))):<10} "
         f"{'flat':<5} "
-        f"{'-':>22} "
-        f"last={_fmt_float(row.get('last_price'), 4):>12} "
-        f"orders={int(row.get('orders', 0) or 0):>2}"
+        f"{'-':>17} "
+        f"last={_fmt_compact_float(row.get('last_price'), digits=4):>10} "
+        f"o{int(row.get('orders', 0) or 0)}"
     )
 
 
@@ -708,6 +910,31 @@ def _render_focus_panel(snapshot: dict[str, Any], focus_symbol: Optional[str]) -
     return lines
 
 
+def _colorize_screen(screen: str) -> str:
+    plain_lines = screen.splitlines()
+    colored_lines: list[str] = []
+    for idx, line in enumerate(plain_lines):
+        if idx > 0 and idx + 1 < len(plain_lines):
+            if plain_lines[idx - 1].startswith("+") and plain_lines[idx + 1].startswith("|-"):
+                colored_lines.append(_style(line, ANSI_BOLD_CYAN))
+                continue
+        colored = line
+        colored = colored.replace(" | connected | ", _style(" | connected | ", ANSI_BOLD_GREEN))
+        colored = colored.replace(" | disconnected | ", _style(" | disconnected | ", ANSI_BOLD_RED))
+        colored = colored.replace(" | LIVE | ", _style(" | LIVE | ", ANSI_BOLD_GREEN))
+        colored = colored.replace(" | PAUSED | ", _style(" | PAUSED | ", ANSI_BOLD_YELLOW))
+        colored = colored.replace(" long=green ", _style(" long=green ", ANSI_BOLD_GREEN))
+        colored = colored.replace(" short=green ", _style(" short=green ", ANSI_BOLD_GREEN))
+        colored = colored.replace(" long=yellow ", _style(" long=yellow ", ANSI_BOLD_YELLOW))
+        colored = colored.replace(" short=yellow ", _style(" short=yellow ", ANSI_BOLD_YELLOW))
+        colored = colored.replace(" long=red ", _style(" long=red ", ANSI_BOLD_RED))
+        colored = colored.replace(" short=red ", _style(" short=red ", ANSI_BOLD_RED))
+        if line.startswith("+") or line.startswith("|-"):
+            colored = _style(colored, ANSI_DIM)
+        colored_lines.append(colored)
+    return "\n".join(colored_lines)
+
+
 def execute_tui_command(
     state: MonitorTuiState,
     raw_command: str,
@@ -718,13 +945,16 @@ def execute_tui_command(
     if not command:
         state.command_status = ""
         return False
+    state.last_submitted_command = command
     lowered = command.lower()
     if lowered in {"quit", "exit"}:
         state.command_status = "Exiting monitor TUI."
         return True
     if lowered == "help":
         state.command_status = (
-            "Commands: focus <coin|symbol>, focus auto, focus next, focus prev, pause, resume, dump, clear, help, quit, exit"
+            "Help:\n"
+            "focus <coin|symbol> | focus auto|next|prev\n"
+            "pause | resume | dump | clear | help | quit"
         )
         return False
     if lowered == "clear":
@@ -876,9 +1106,7 @@ def render_screen(
 
     rows = _active_position_rows(snapshot)[:8]
     positions_lines = _render_positions_twe_summary(rows)
-    positions_lines.append(
-        "symbol/quote  side      size@price            WE metrics                  PA dist / uPnL / orders"
-    )
+    positions_lines.append("symbol      side    size@price        WE | WEL/WELe | PA / uPnL / o")
     if rows:
         emitted = 0
         for row in rows:
@@ -919,11 +1147,12 @@ def render_screen(
     ] or ["(no recent order activity in snapshot)"]
     logs_lines = list(view_state.recent_log_lines)[-8:] or ["(no log file attached)"]
 
-    command_lines = [
-        f"Status: {state.command_status}",
-        f"Mode: {'paused (panels frozen)' if state.paused else 'live'}",
-        f"> {state.command_buffer}",
-    ]
+    command_lines = [f"Mode: {'paused (panels frozen)' if state.paused else 'live'}"]
+    for idx, line in enumerate(_wrap_text(state.command_status or "", max(20, width - 14))):
+        prefix = "Status:" if idx == 0 else "       "
+        command_lines.append(f"{prefix} {line}".rstrip())
+    prompt_text = state.command_buffer or state.last_submitted_command
+    command_lines.append(f"> {prompt_text}")
 
     output_lines = _wrap_box("Session", header_lines, width)
     if width >= 120:
@@ -938,6 +1167,7 @@ def render_screen(
         right_lines = (
             _wrap_box("Forager", _render_forager_panel(snapshot), right_width)
             + _wrap_box("Unstuck", _render_unstuck_panel(snapshot), right_width)
+            + _wrap_box("Trailing", _render_trailing_panel(snapshot), right_width)
             + _wrap_box("Recent Events", events_lines, right_width)
             + _wrap_box("Price Ticks", ticks_lines, right_width)
             + _wrap_box("Recent Orders", orders_lines, right_width)
@@ -950,6 +1180,7 @@ def render_screen(
         output_lines.extend(_wrap_box("Positions", positions_lines, width))
         output_lines.extend(_wrap_box("Forager", _render_forager_panel(snapshot), width))
         output_lines.extend(_wrap_box("Unstuck", _render_unstuck_panel(snapshot), width))
+        output_lines.extend(_wrap_box("Trailing", _render_trailing_panel(snapshot), width))
         output_lines.extend(_wrap_box("Recent Events", events_lines, width))
         output_lines.extend(_wrap_box("Price Ticks", ticks_lines, width))
         output_lines.extend(_wrap_box("Recent Orders", orders_lines, width))
@@ -1069,20 +1300,26 @@ class MonitorTuiClient:
         sys.stdout.flush()
         try:
             while not self._stop_event.is_set():
+                render_width = max(80, shutil.get_terminal_size((120, 40)).columns - 1)
                 if self.state.paused:
                     if self.state.paused_render_data is None:
                         self.state.paused_render_data = _capture_render_data(self.state)
-                    screen = render_screen(self.state, display_data=self.state.paused_render_data)
+                    screen = render_screen(
+                        self.state,
+                        width=render_width,
+                        display_data=self.state.paused_render_data,
+                    )
                 else:
                     self.state.paused_render_data = None
-                    screen = render_screen(self.state)
+                    screen = render_screen(self.state, width=render_width)
                 self.state.last_rendered_screen = screen
-                if screen != self._last_painted_screen:
-                    patch = _render_screen_diff(self._last_painted_screen, screen)
+                painted_screen = _colorize_screen(screen)
+                if painted_screen != self._last_painted_screen:
+                    patch = _render_screen_diff(self._last_painted_screen, painted_screen)
                     if patch:
                         sys.stdout.write(patch)
                         sys.stdout.flush()
-                    self._last_painted_screen = screen
+                    self._last_painted_screen = painted_screen
                 try:
                     await asyncio.wait_for(
                         self._stop_event.wait(), timeout=self.render_interval_ms / 1000.0
@@ -1123,6 +1360,8 @@ class MonitorTuiClient:
                         return
                     continue
                 if char in {"\x7f", "\b"}:
+                    if not self.state.command_buffer and self.state.last_submitted_command:
+                        self.state.last_submitted_command = ""
                     self.state.command_buffer = self.state.command_buffer[:-1]
                     continue
                 if char == "\x03":
@@ -1131,6 +1370,8 @@ class MonitorTuiClient:
                 if char == "\x1b":
                     continue
                 if char.isprintable():
+                    if not self.state.command_buffer and self.state.last_submitted_command:
+                        self.state.last_submitted_command = ""
                     self.state.command_buffer += char
         finally:
             loop.remove_reader(fd)
