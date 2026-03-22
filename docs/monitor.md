@@ -1,8 +1,8 @@
 # Monitor Output
 
-Passivbot can now publish a read-only monitor data root to disk for external tools such as a future TUI/dashboard.
+Passivbot can now publish a read-only monitor data root to disk for external tools such as a TUI or web dashboard.
 
-An initial read-only relay server is also available for local/remote consumers. No built-in dashboard UI has been added yet.
+An initial read-only relay server is also available for local/remote consumers, and now serves a first browser dashboard draft.
 
 ## Purpose
 
@@ -28,6 +28,7 @@ Current endpoints:
 1. `GET /health`
 2. `GET /snapshot`
 3. `GET /ws`
+4. `GET /dashboard`
 
 Current behavior:
 
@@ -37,6 +38,29 @@ Current behavior:
 4. the relay reads only from the monitor root on disk; it does not attach to bot memory
 5. the relay currently tails only `*.current.ndjson` files and does not yet serve rotated-history replay over HTTP
 6. the replay tail defaults to `50` recent lines per current file and can be changed with `--ws-replay-limit`
+7. `/dashboard` serves a static browser reader that bootstraps from `/snapshot` and stays live through `/ws`
+
+## Web Dashboard
+
+The relay now also serves a first browser dashboard:
+
+```bash
+python3 src/tools/monitor_relay.py --monitor-root monitor --host 127.0.0.1 --port 8765
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8765/dashboard?exchange=bitget&user=bitget_01
+```
+
+Current behavior:
+
+1. bootstraps current-state panels from `/snapshot`
+2. keeps recent events and price ticks live via `/ws`
+3. provides a browser focus-symbol selector without changing bot state
+4. renders summary, focus, positions, trailing, forager, unstuck, recent events, recent ticks, and recent orders from the current snapshot plus live websocket tail
+5. uses the same relay contract as the TUI, so browser/mobile readers can stay read-only and decoupled from bot memory
 
 ## Minimal TUI
 
