@@ -1367,6 +1367,7 @@ class Passivbot:
     _build_health_summary_payload = pb_monitor._build_health_summary_payload
     _monitor_recent_orders_payload = pb_monitor._monitor_recent_orders_payload
     _build_monitor_market_section = pb_monitor._build_monitor_market_section
+    _build_monitor_trailing_section = pb_monitor._build_monitor_trailing_section
     _build_monitor_forager_section = pb_monitor._build_monitor_forager_section
     _build_monitor_unstuck_section = pb_monitor._build_monitor_unstuck_section
     _build_monitor_runtime_market_hints = pb_monitor._build_monitor_runtime_market_hints
@@ -5253,6 +5254,7 @@ class Passivbot:
             symbols=symbols,
             last_prices=last_prices,
             m1_close_emas=m1_close_emas,
+            h1_log_range_emas=h1_log_range_emas,
             idx_to_symbol=idx_to_symbol,
             orders=orders,
         )
@@ -5767,6 +5769,7 @@ class Passivbot:
             symbols=symbols,
             last_prices=last_prices,
             m1_close_emas=m1_close_emas,
+            h1_log_range_emas=h1_log_range_emas,
             idx_to_symbol=idx_to_symbol,
             orders=orders,
         )
