@@ -222,3 +222,53 @@ async def test_monitor_relay_websocket_sends_snapshot_then_live_updates(tmp_path
         assert fake_ws.messages[2]["payload"]["last"] == pytest.approx(100000.0)
     finally:
         await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_monitor_relay_websocket_replays_recent_current_file_messages_on_connect(
+    tmp_path, monkeypatch
+):
+    monitor_root = _make_monitor_root(tmp_path)
+    root = monitor_root / "bybit" / "user01"
+    _append_json_line(
+        root / "events" / "current.ndjson",
+        {
+            "ts": 1500,
+            "seq": 4,
+            "kind": "account.balance",
+            "tags": ["account"],
+            "exchange": "bybit",
+            "user": "user01",
+            "payload": {"equity": 999.0},
+        },
+    )
+    _append_json_line(
+        root / "history" / "price_ticks.current.ndjson",
+        {
+            "ts": 1600,
+            "kind": "price_tick",
+            "stream": "price_ticks",
+            "exchange": "bybit",
+            "user": "user01",
+            "symbol": "BTC/USDT:USDT",
+            "payload": {"last": 100100.0},
+        },
+    )
+
+    app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
+    relay = app[RELAY_APP_KEY]
+    fake_ws = FakeWebSocket(close_after_messages=3)
+    monkeypatch.setattr(monitor_relay.web, "WebSocketResponse", lambda heartbeat=30.0: fake_ws)
+
+    await relay.start()
+    try:
+        await asyncio.wait_for(_handle_ws(_make_request(app, "/ws")), timeout=1.0)
+
+        assert fake_ws.messages[0]["type"] == "snapshot"
+        assert fake_ws.messages[1]["type"] == "event"
+        assert fake_ws.messages[1]["kind"] == "account.balance"
+        assert fake_ws.messages[2]["type"] == "history"
+        assert fake_ws.messages[2]["stream"] == "price_ticks"
+        assert fake_ws.messages[2]["payload"]["last"] == pytest.approx(100100.0)
+    finally:
+        await relay.stop()

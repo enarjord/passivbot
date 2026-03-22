@@ -22,13 +22,15 @@ Implemented now:
    - `history/*.current.ndjson`
 4. snapshot-first WebSocket bootstrap, then live `event` / `history` push messages
 5. per-bot subscriber queues with `resync_required` when a subscriber falls behind
+6. websocket connect also replays a recent tail from the current event/history files so new TUI clients can populate recent panels immediately when attaching to an already-running bot
 
 ## Non-Obvious Details
 
 1. Existing current files are primed to EOF on relay startup so reconnecting the relay does not replay the entire current segment by default.
-2. New current files created after relay startup are tailed from the beginning so their first live entries are not skipped.
-3. The relay is intentionally best-effort on malformed monitor lines: invalid JSON is skipped with a warning instead of killing the process.
-4. The poll loop logs relay-side failures and continues; this is acceptable because the relay is observability-only and disk remains authoritative.
+2. The websocket replay tail is read directly from the current files on connect and is independent of the live poll offsets.
+3. New current files created after relay startup are tailed from the beginning so their first live entries are not skipped.
+4. The relay is intentionally best-effort on malformed monitor lines: invalid JSON is skipped with a warning instead of killing the process.
+5. The poll loop logs relay-side failures and continues; this is acceptable because the relay is observability-only and disk remains authoritative.
 
 ## Gaps Still Open
 
@@ -41,7 +43,7 @@ Implemented now:
 
 1. snapshot and health handlers should work without binding sockets
 2. multi-root selection should fail clearly when `exchange` + `user` are omitted
-3. websocket flow should send snapshot first, then live updates
+3. websocket flow should send snapshot first, then replay backlog, then live updates
 4. new current files created after relay startup should publish their first entries
 
 ## Key Code
