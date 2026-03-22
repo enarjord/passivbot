@@ -26,27 +26,30 @@ Implemented now:
      - normalized fill history from the live fill path
      - throttled price ticks from orchestrator price inputs
      - completed 1m/1h candle publication via a single `CandlestickManager._persist_batch()` observer
-4. minimal snapshot sections:
+4. monitor helper implementation now lives in `src/passivbot_monitor.py`, with `Passivbot` binding those helpers into the class to keep the runtime API stable while shrinking `src/passivbot.py`
+5. minimal snapshot sections:
    - `meta`
    - `account`
    - `health`
-   - `positions`
+   - `positions` with per-side exposure metrics, cached last price, price-action distance, and uPnL
    - `open_orders`
    - `modes`
    - `hsl`
-   - `market`
-   - `forager`
-   - `unstuck`
+   - `market` with cached EMA-band snapshots when available
+   - `forager` with current slots, selected symbols, pending symbols, and `next_symbol`
+   - `unstuck` with allowance state plus current planned unstuck symbol/target/EMA-trigger hints when available
+   - `trailing` with observability-only derived trailing next-entry/next-close state, threshold/retracement levels, met-status booleans, and extrema snapshots for currently trailing orders
    - `recent`
 
 ## Non-Obvious Details
 
 1. The config surface was intentionally added ahead of the implementation. The history-related knobs are now live and should keep their current semantics unless the contract is intentionally revised.
 2. Fill events should continue to use normalized fill semantics from the live fill path. Do not switch the monitor stream to raw CCXT payloads by default.
-3. The publisher owns all monitor file writes. Do not add scattered ad hoc writes elsewhere in `passivbot.py`.
+3. The publisher owns all monitor file writes. Do not add scattered ad hoc writes elsewhere in the live bot; keep monitor-specific helper logic in `src/passivbot_monitor.py`.
 4. Snapshot cadence is best-effort from the execution loop. Exact wall-clock cadence is not guaranteed during restart/backoff paths.
 5. Completed-candle publication intentionally bootstraps with only the latest seen candle per `(symbol, timeframe)` and publishes only newer candles after that. This avoids flooding monitor history with startup warmup backfill.
 6. Candle history is gated on `Passivbot._bot_ready`; warmup/startup persistence should not leak large historical batches into monitor history.
+7. Trailing monitor state may derive threshold/retracement display values in Python for observability, but whether the next order is trailing still comes from Rust helper calls. Do not move trading behavior into the monitor path.
 
 ## Gaps Still Open
 
@@ -65,6 +68,7 @@ Implemented now:
 
 - `src/config_utils.py`
 - `src/monitor_publisher.py`
+- `src/passivbot_monitor.py`
 - `src/passivbot.py`
 - `tests/test_monitor_publisher.py`
 - `tests/test_passivbot_monitor.py`

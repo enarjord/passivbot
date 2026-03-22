@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 1 bot-side publisher is partially implemented.
+Bot-side publisher groundwork is implemented through history streams and initial snapshot expansion, and an initial read-only relay server now exists.
 
 Implemented now:
 
@@ -15,11 +15,16 @@ Implemented now:
 7. checkpoint snapshots
 8. event/history rotation and retention pruning
 9. targeted tests
+10. initial read-only relay server with `/health`, `/snapshot`, and `/ws`
+11. initial minimal TUI reader consuming relay `/snapshot` + `/ws`
+12. local dev launcher that starts the relay if needed and embeds recent bot-log tailing in the TUI
+13. TUI pass 2: focused-symbol detail and recent-order panels from the existing snapshot
+14. TUI command prompt with focus switching and quit aliases
 
 Still pending:
 
-1. dashboard/TUI reader
-2. monitor relay server for remote/browser/mobile/TUI consumers
+1. richer TUI/dashboard UX beyond the initial minimal reader
+2. relay auth, history/replay endpoints, and finer-grained subscriptions/filtering
 3. `exchange_config` and any further snapshot/detail expansion beyond the current sections
 4. publisher self-reporting via `error.publisher`
 
@@ -159,6 +164,13 @@ Recommendation:
 2. add a read-only HTTP + WebSocket relay
 3. keep protocol stable and independent of file layout
 
+Current implementation status:
+
+1. `src/monitor_relay.py` and `src/tools/monitor_relay.py` now exist
+2. the relay serves `GET /health`, `GET /snapshot`, and `GET /ws`
+3. websocket clients receive one snapshot first, then live-forward `event` and `history` messages by tailing `*.current.ndjson`
+4. the relay currently serves only live-forward current-file data; auth, replay/history APIs, and richer subscriptions are still pending
+
 ### Bot Integration
 
 `Passivbot` should publish through a narrow interface, for example:
@@ -244,6 +256,12 @@ Suggested top-level structure:
 
 Suggested sections:
 
+Implementation note:
+
+1. `market`, `forager`, `unstuck`, and `recent` now exist in the live snapshot
+2. `exchange_config` is still pending
+3. some details listed below are target-state enrichment rather than fields already published today
+
 #### `meta`
 
 1. exchange
@@ -326,9 +344,11 @@ Per side:
 1. candidate universe
 2. active symbols
 3. selected symbols
-4. current volume / volatility / readiness values actually used
-5. score weights after normalization
+4. score weights after normalization
+5. current volume / volatility / readiness values actually used
+   - planned next, not fully published today
 6. gating reasons if available
+   - planned next, not fully published today
 
 #### `unstuck`
 
@@ -344,16 +364,23 @@ Per side:
 Per symbol:
 
 1. last traded price
-2. best bid
-3. best ask
-4. mid
-5. currently used EMA values
+2. market active flag
+3. effective min cost
+4. candle freshness / last finalized candle timestamps
+5. approval / ignore membership
+6. trailing metrics when available
+7. best bid
+   - planned next, not published today
+8. best ask
+   - planned next, not published today
+9. mid
+   - planned next, not published today
+10. currently used EMA values
    - close EMA
    - volume EMA
    - log-range EMA
    - HSL EMA metrics if applicable
-6. market active flag
-7. effective min cost
+   - planned next, not published today
 
 #### `exchange_config`
 
@@ -369,10 +396,16 @@ Per symbol:
 
 Short bounded summaries for quick UI display:
 
-1. recent fills
-2. recent mode changes
-3. recent errors
-4. recent HSL transitions
+1. recent created orders
+2. recent canceled orders
+3. recent fills
+   - planned next
+4. recent mode changes
+   - planned next
+5. recent errors
+   - planned next
+6. recent HSL transitions
+   - planned next
 
 ### 2. Event Stream
 

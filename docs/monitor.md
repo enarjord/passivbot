@@ -2,7 +2,7 @@
 
 Passivbot can now publish a read-only monitor data root to disk for external tools such as a future TUI/dashboard.
 
-This is a bot-side publisher only. No built-in dashboard UI has been added yet.
+An initial read-only relay server is also available for local/remote consumers. No built-in dashboard UI has been added yet.
 
 ## Purpose
 
@@ -14,6 +14,99 @@ The monitor publisher gives you:
 4. periodic compressed checkpoints of the latest snapshot
 
 The dashboard/process consuming this data must read only from the monitor root on disk. It should not inspect live bot memory directly.
+
+## Relay Server
+
+The repo now includes a small read-only relay:
+
+```bash
+python3 src/tools/monitor_relay.py --monitor-root monitor --host 127.0.0.1 --port 8765
+```
+
+Current endpoints:
+
+1. `GET /health`
+2. `GET /snapshot`
+3. `GET /ws`
+
+Current behavior:
+
+1. `/snapshot` returns the current `state.latest.json` envelope for one bot
+2. `/ws` sends one snapshot first, then replays a small recent tail from the current event/history files, then continues with live `event` and `history` messages as current files advance
+3. when multiple monitor roots exist, clients must pass both `exchange` and `user` query params
+4. the relay reads only from the monitor root on disk; it does not attach to bot memory
+5. the relay currently tails only `*.current.ndjson` files and does not yet serve rotated-history replay over HTTP
+6. the replay tail defaults to `50` recent lines per current file and can be changed with `--ws-replay-limit`
+
+## Minimal TUI
+
+The repo now also includes a minimal terminal reader against the relay:
+
+```bash
+python3 src/tools/monitor_tui.py --relay-url http://127.0.0.1:8765
+```
+
+When multiple monitor roots are available on the relay, select one bot explicitly:
+
+```bash
+python3 src/tools/monitor_tui.py \
+  --relay-url http://127.0.0.1:8765 \
+  --exchange bitget \
+  --user bitget_01 \
+  --focus-symbol BTC/USDT:USDT
+```
+
+Current behavior:
+
+1. bootstraps current-state panels from `/snapshot`
+2. refreshes `/snapshot` periodically for live state sections
+3. consumes `/ws` for recent events and recent price ticks, and now hydrates those panels immediately from the relay’s recent-tail replay when attaching to an already-running bot
+4. can prioritize one symbol with `--focus-symbol`
+5. renders a boxed terminal dashboard with current summaries, a focused-symbol detail box, a total-TWE positions box, dedicated forager, unstuck, and trailing boxes, recent order activity, recent events, recent ticks, and optional local log tailing without touching bot memory directly
+6. uses a two-column layout on wider terminals so the right side is filled with recent activity panels instead of staying mostly empty
+7. redraws in place only when the rendered frame changes, and applies row-diff terminal updates instead of repainting the entire screen, which reduces visible flicker further
+8. provides a bottom command prompt during runtime; current commands include `help`, `focus BTC`, `focus next`, `focus prev`, `focus auto`, `pause`, `resume`, `dump`, `quit`, and `exit`
+9. `pause` freezes the data panels for copy/inspection while keeping the command line live, and `dump` writes the currently displayed screen to `tmp/monitor_tui_dump_*.txt`
+10. the live terminal view now adds modest ANSI color accents for connection state, box headers, and HSL tiers, while dumps remain plain text
+11. the price-ticks box shows labeled outer EMA-band bounds (`lo`, `hi`) instead of a raw merged band string
+12. the forager box now includes next-entry trigger distance plus ranking highlights for total score, volume, volatility, and EMA readiness, and disabled-empty short sections are omitted to save space
+13. the trailing box shows currently trailing next entries/closes per symbol and side, current price versus threshold/retracement trigger levels, and the trailing extrema snapshots used to reason about state
+
+For local monitor development, there is also a one-command wrapper:
+
+```bash
+python3 src/tools/monitor_dev.py --exchange bitget --user bitget_01
+```
+
+Current behavior:
+
+1. reuses an existing relay if one is already healthy at the target `--relay-url`
+2. otherwise launches the relay automatically
+3. selects the newest `logs/*.log` file by default unless `--log-file` is provided
+4. passes through `--focus-symbol` when you want to center the screen on one market
+5. shows recent bot log lines inside the TUI so you do not need a separate `tail -f` terminal during iteration
+
+## Trailing Diagnostics Tool
+
+There is also a standalone trailing explorer for parameter tuning:
+
+```bash
+python3 src/tools/trailing_diagnostics.py \
+  --config configs/live/bitget_01.hjson \
+  --monitor-root monitor \
+  --exchange bitget \
+  --user bitget_01 \
+  --symbol UNI
+```
+
+Current behavior:
+
+1. bootstraps from `config + state.latest.json` when both are available
+2. can also start in manual wizard mode with `--wizard`
+3. renders a simple boxed terminal view for current state, entry diagnostic, close diagnostic, and editable config/state inputs
+4. lets you tune values live with commands such as `set entry_trailing_threshold_pct 0.02`, `edit current_price 3.4`, `symbol BTC`, `side short`, `reset`, `dump`, and `wizard`
+5. writes the current input/diagnostic payload to `tmp/trailing_diagnostics_dump_*.json` via `dump`
+6. `wizard` now asks for the core trailing inputs first and only asks the extra sizing/grid knobs when you explicitly opt into advanced mode
 
 ## Enable It
 
@@ -91,7 +184,8 @@ Current Phase 1 snapshot sections:
 8. `market`
 9. `forager`
 10. `unstuck`
-11. `recent`
+11. `trailing`
+12. `recent`
 
 Important limits:
 
@@ -101,10 +195,12 @@ Important limits:
 
 Current expansion details:
 
-1. `market` includes current cached last price, candle refresh/finalization timestamps, min-cost metadata, approval/ignore flags, open-order/position presence, and trailing state when available
-2. `forager` includes per-side candidate universe, selected symbols, slot counts, and current forager score-weight config
-3. `unstuck` includes per-side allowance status plus any currently open unstuck orders
-4. `recent` includes recent created and canceled orders retained by the live bot throttling caches
+1. `positions` now includes per-side wallet-exposure metrics (`wallet_exposure`, `wel_ratio`, `wele_ratio`, `twel_ratio`) plus `price_action_distance`, `upnl`, and cached `last_price` when available
+2. `market` includes current cached last price, candle refresh/finalization timestamps, min-cost metadata, approval/ignore flags, open-order/position presence, trailing state, and current per-side EMA band snapshots when available
+3. `forager` includes per-side candidate universe, selected symbols, slot counts, pending selected symbols, `next_symbol`, and current forager score-weight config
+4. `unstuck` includes per-side allowance status, any currently open unstuck orders, and the latest planned unstuck symbol/target/EMA-trigger context when available
+5. `trailing` includes per-side next trailing entry/close state when the Rust-owned next order is a trailing order, including current price, threshold/retracement trigger levels, met-status booleans, and trailing extrema snapshots
+6. `recent` includes recent created and canceled orders retained by the live bot throttling caches
 
 ## Event Stream
 
@@ -165,9 +261,10 @@ Current behavior:
 
 Not implemented yet:
 
-1. built-in dashboard/TUI reader
-2. `exchange_config` snapshot coverage
-3. publisher-originated `error.publisher` events
+1. richer browser/mobile dashboard reader
+2. relay auth, filtering/subscriptions, and replay/history HTTP endpoints
+3. `exchange_config` snapshot coverage
+4. publisher-originated `error.publisher` events
 
 ## Related Docs
 

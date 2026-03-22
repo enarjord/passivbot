@@ -311,6 +311,10 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
         _config_hedge_mode = False
         hedge_mode = False
         equity_hard_stop_loss = {"panic_close_order_type": "limit"}
+        _monitor_record_price_ticks = pb_mod.Passivbot._monitor_record_price_ticks
+        _build_monitor_runtime_market_hints = pb_mod.Passivbot._build_monitor_runtime_market_hints
+        _build_monitor_runtime_unstuck_hints = pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        _update_monitor_runtime_hints = pb_mod.Passivbot._update_monitor_runtime_hints
 
         def config_get(self, keys):
             return None
@@ -388,6 +392,10 @@ async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch)
         markets_dict = {symbol: {"maker": 0.0001, "taker": 0.0004}}
         equity_hard_stop_loss = {"panic_close_order_type": "limit"}
         trailing_prices = {}
+        _monitor_record_price_ticks = pb_mod.Passivbot._monitor_record_price_ticks
+        _build_monitor_runtime_market_hints = pb_mod.Passivbot._build_monitor_runtime_market_hints
+        _build_monitor_runtime_unstuck_hints = pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        _update_monitor_runtime_hints = pb_mod.Passivbot._update_monitor_runtime_hints
 
         def config_get(self, keys):
             return None
