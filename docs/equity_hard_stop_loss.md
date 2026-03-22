@@ -183,21 +183,31 @@ Important backtest details:
 Main optimizer-facing global HSL metrics:
 
 1. `drawdown_worst_hsl`
-2. `drawdown_worst_mean_1pct_hsl`
-3. `peak_recovery_hours_hsl`
+2. `drawdown_worst_ema_hsl`
+3. `drawdown_worst_mean_1pct_hsl`
+4. `drawdown_worst_mean_1pct_ema_hsl`
+5. `peak_recovery_hours_hsl`
+
+For the shared EMA-smoothed metrics, long and short each use their own configured
+`hsl_ema_span_minutes`. The shared values are reported conservatively as `max(long, short)`
+rather than trying to invent one combined EMA span.
 
 Useful side-specific HSL metrics:
 
 1. `drawdown_worst_hsl_long`
 2. `drawdown_worst_hsl_short`
-3. `drawdown_worst_mean_1pct_hsl_long`
-4. `drawdown_worst_mean_1pct_hsl_short`
-5. `peak_recovery_hours_hsl_long`
-6. `peak_recovery_hours_hsl_short`
-7. `hard_stop_triggers_long`
-8. `hard_stop_triggers_short`
-9. `hard_stop_restarts_long`
-10. `hard_stop_restarts_short`
+3. `drawdown_worst_ema_hsl_long`
+4. `drawdown_worst_ema_hsl_short`
+5. `drawdown_worst_mean_1pct_hsl_long`
+6. `drawdown_worst_mean_1pct_hsl_short`
+7. `drawdown_worst_mean_1pct_ema_hsl_long`
+8. `drawdown_worst_mean_1pct_ema_hsl_short`
+9. `peak_recovery_hours_hsl_long`
+10. `peak_recovery_hours_hsl_short`
+11. `hard_stop_triggers_long`
+12. `hard_stop_triggers_short`
+13. `hard_stop_restarts_long`
+14. `hard_stop_restarts_short`
 
 Useful global HSL backtest metrics include:
 

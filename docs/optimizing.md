@@ -75,7 +75,8 @@ operator-risk settings such as:
 ```
 
 That default override disables terminal no-restart during optimizer evaluations so candidates can
-be constrained through `drawdown_worst_hsl`, `drawdown_worst_mean_1pct_hsl`, and
+be constrained through `drawdown_worst_hsl`, `drawdown_worst_ema_hsl`,
+`drawdown_worst_mean_1pct_hsl`, `drawdown_worst_mean_1pct_ema_hsl`, and
 `peak_recovery_hours_hsl` instead of being prematurely truncated.
 
 When you provide many starting configs, optimizer now also bounds how many seed evaluations may be
@@ -283,7 +284,9 @@ over all exchanges before scoring.
 | `drawdown_worst` | Maximum peak-to-trough drawdown |
 | `drawdown_worst_mean_1pct` | Mean of worst 1% drawdowns (daily) |
 | `drawdown_worst_hsl` | Worst account-level HSL drawdown |
+| `drawdown_worst_ema_hsl` | Worst EMA-smoothed HSL drawdown, shared as `max(long, short)` |
 | `drawdown_worst_mean_1pct_hsl` | Mean of worst 1% HSL drawdown samples |
+| `drawdown_worst_mean_1pct_ema_hsl` | Mean of worst 1% EMA-smoothed HSL drawdown samples, shared as `max(long, short)` |
 | `expected_shortfall_1pct` | Mean of worst 1% daily losses (CVaR) |
 | `equity_balance_diff_neg_max` / `pos_max` | Largest divergence between equity and account balance (negative side tracks only drawdowns below balance; positive side tracks only run-ups above balance) |
 | `equity_balance_diff_neg_mean` / `pos_mean` | Average divergence between equity and balance (split by sign as above) |

@@ -2233,6 +2233,7 @@ class Passivbot:
             int(summary["rate_limits"]),
             f" | {mem_str}" if mem_str else "",
         )
+        self._monitor_record_event("health.summary", ("health", "summary"), summary, ts=now_ms)
 
     def _set_log_silence_watchdog_context(
         self, *, phase: Optional[str] = None, stage: Optional[str] = None
@@ -2296,7 +2297,6 @@ class Passivbot:
             await task
         except asyncio.CancelledError:
             pass
-        self._monitor_record_event("health.summary", ("health", "summary"), summary, ts=now_ms)
 
     def _calc_unstuck_allowance_for_logging(self, pside: str) -> dict:
         """Calculate raw unstuck allowance values for logging (including negative)."""
@@ -6847,7 +6847,9 @@ class Passivbot:
     ):
         symbols = snapshot["symbols"]
         last_prices = snapshot["last_prices"]
-        self._monitor_record_price_ticks(last_prices, ts=utc_ms(), source="orchestrator_snapshot")
+        Passivbot._monitor_record_price_ticks(
+            self, last_prices, ts=utc_ms(), source="orchestrator_snapshot"
+        )
         m1_close_emas = snapshot["m1_close_emas"]
         m1_volume_emas = snapshot["m1_volume_emas"]
         m1_log_range_emas = snapshot["m1_log_range_emas"]
@@ -7351,7 +7353,9 @@ class Passivbot:
         if missing:
             cm_prices = await self.cm.get_last_prices(missing, max_age_ms=10_000)
             last_prices.update(cm_prices)
-        self._monitor_record_price_ticks(last_prices, ts=utc_ms(), source="orchestrator_live")
+        Passivbot._monitor_record_price_ticks(
+            self, last_prices, ts=utc_ms(), source="orchestrator_live"
+        )
 
         # Ensure effective min cost is up to date.
         if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:

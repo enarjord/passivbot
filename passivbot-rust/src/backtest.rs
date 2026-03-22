@@ -292,13 +292,27 @@ struct HardStopPsideRuntime {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct HardStopPlotEvent {
+    pub kind: String,
+    pub timestamp_ms: u64,
+    pub cooldown_until_ms: Option<u64>,
+    pub terminal: bool,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct HardStopPlotData {
     pub timestamps_ms: Vec<u64>,
     pub drawdown_raw: Vec<f64>,
     pub timestamps_ms_long: Vec<u64>,
     pub drawdown_raw_long: Vec<f64>,
+    pub drawdown_ema_long: Vec<f64>,
+    pub drawdown_score_long: Vec<f64>,
+    pub events_long: Vec<HardStopPlotEvent>,
     pub timestamps_ms_short: Vec<u64>,
     pub drawdown_raw_short: Vec<f64>,
+    pub drawdown_ema_short: Vec<f64>,
+    pub drawdown_score_short: Vec<f64>,
+    pub events_short: Vec<HardStopPlotEvent>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -327,9 +341,15 @@ pub struct HardStopMetrics {
     pub drawdown_worst_hsl: f64,
     pub drawdown_worst_hsl_long: f64,
     pub drawdown_worst_hsl_short: f64,
+    pub drawdown_worst_ema_hsl: f64,
+    pub drawdown_worst_ema_hsl_long: f64,
+    pub drawdown_worst_ema_hsl_short: f64,
     pub drawdown_worst_mean_1pct_hsl: f64,
     pub drawdown_worst_mean_1pct_hsl_long: f64,
     pub drawdown_worst_mean_1pct_hsl_short: f64,
+    pub drawdown_worst_mean_1pct_ema_hsl: f64,
+    pub drawdown_worst_mean_1pct_ema_hsl_long: f64,
+    pub drawdown_worst_mean_1pct_ema_hsl_short: f64,
     pub peak_recovery_hours_hsl: f64,
     pub peak_recovery_hours_hsl_long: f64,
     pub peak_recovery_hours_hsl_short: f64,
@@ -363,7 +383,9 @@ struct StrategyEquityMetrics {
     calmar_ratio_strategy_pnl_rebased: f64,
     sterling_ratio_strategy_pnl_rebased: f64,
     drawdown_worst_hsl: f64,
+    drawdown_worst_ema_hsl: f64,
     drawdown_worst_mean_1pct_hsl: f64,
+    drawdown_worst_mean_1pct_ema_hsl: f64,
     peak_recovery_hours_hsl: f64,
     adg_strategy_pnl_rebased_w: f64,
     mdg_strategy_pnl_rebased_w: f64,
@@ -484,8 +506,11 @@ pub struct Backtest<'a> {
     hard_stop_restart_retrigger_count: u32,
     hard_stop_drawdown_samples: Vec<f64>,
     hard_stop_drawdown_samples_pside: [Vec<f64>; 2],
+    hard_stop_drawdown_ema_samples_pside: [Vec<f64>; 2],
+    hard_stop_drawdown_score_samples_pside: [Vec<f64>; 2],
     hard_stop_drawdown_timestamps_ms: Vec<u64>,
     hard_stop_drawdown_timestamps_ms_pside: [Vec<u64>; 2],
+    hard_stop_plot_events_pside: [Vec<HardStopPlotEvent>; 2],
     strategy_equity_series: Vec<f64>,
     strategy_equity_series_pside: [Vec<f64>; 2],
     peak_strategy_equity_series: Vec<f64>,
@@ -1824,8 +1849,11 @@ impl<'a> Backtest<'a> {
             hard_stop_restart_retrigger_count: 0,
             hard_stop_drawdown_samples: Vec::new(),
             hard_stop_drawdown_samples_pside: [Vec::new(), Vec::new()],
+            hard_stop_drawdown_ema_samples_pside: [Vec::new(), Vec::new()],
+            hard_stop_drawdown_score_samples_pside: [Vec::new(), Vec::new()],
             hard_stop_drawdown_timestamps_ms: Vec::new(),
             hard_stop_drawdown_timestamps_ms_pside: [Vec::new(), Vec::new()],
+            hard_stop_plot_events_pside: [Vec::new(), Vec::new()],
             strategy_equity_series: Vec::new(),
             strategy_equity_series_pside: [Vec::new(), Vec::new()],
             peak_strategy_equity_series: Vec::new(),
@@ -2232,6 +2260,12 @@ impl<'a> Backtest<'a> {
         runtime.pending_stop = None;
         runtime.current_red_start_ms = None;
         runtime.last_restart_ts_ms = Some(current_ts_ms);
+        self.hard_stop_plot_events_pside[pside].push(HardStopPlotEvent {
+            kind: "restart".to_string(),
+            timestamp_ms: current_ts_ms,
+            cooldown_until_ms: None,
+            terminal: false,
+        });
         self.refresh_global_hard_stop_tier();
         true
     }
@@ -2646,10 +2680,17 @@ impl<'a> Backtest<'a> {
         })?;
         let has_open_position = self.has_open_position_pside(pside);
         let has_blocking_open_orders = self.has_blocking_open_orders_pside(pside);
+        let drawdown_ema = self.hard_stop_pside[pside]
+            .state
+            .as_ref()
+            .map(|state| state.drawdown_ema)
+            .unwrap_or(step.drawdown_raw);
         self.strategy_equity_series_pside[pside].push(strategy_equity);
         self.peak_strategy_equity_series_pside[pside].push(peak_strategy_equity);
         self.hard_stop_drawdown_timestamps_ms_pside[pside].push(timestamp_ms);
         self.hard_stop_drawdown_samples_pside[pside].push(step.drawdown_raw);
+        self.hard_stop_drawdown_ema_samples_pside[pside].push(drawdown_ema);
+        self.hard_stop_drawdown_score_samples_pside[pside].push(step.drawdown_score);
         let runtime = &mut self.hard_stop_pside[pside];
         let prev_tier = runtime.tier;
         runtime.tier = step.tier;
@@ -2657,6 +2698,12 @@ impl<'a> Backtest<'a> {
         if step.tier == ehsl::HardStopTier::Red {
             if prev_tier != ehsl::HardStopTier::Red {
                 runtime.current_red_start_ms = Some(timestamp_ms);
+                self.hard_stop_plot_events_pside[pside].push(HardStopPlotEvent {
+                    kind: "red_enter".to_string(),
+                    timestamp_ms,
+                    cooldown_until_ms: None,
+                    terminal: false,
+                });
             }
         } else {
             runtime.current_red_start_ms = None;
@@ -2742,6 +2789,12 @@ impl<'a> Backtest<'a> {
                             runtime.cooldown_until_ms = None;
                         }
                     }
+                    self.hard_stop_plot_events_pside[pside].push(HardStopPlotEvent {
+                        kind: "halt".to_string(),
+                        timestamp_ms: stop_snapshot.timestamp_ms,
+                        cooldown_until_ms: runtime.cooldown_until_ms,
+                        terminal: runtime.no_restart_latched,
+                    });
                 }
             }
         } else {
@@ -3985,6 +4038,7 @@ impl<'a> Backtest<'a> {
         &self,
         strategy_equity_series: &[f64],
         drawdown_samples: &[f64],
+        drawdown_ema_samples: Option<&[f64]>,
         peak_strategy_equity_series: &[f64],
         recovery_equity_series: &[f64],
     ) -> StrategyEquityMetrics {
@@ -4001,17 +4055,33 @@ impl<'a> Backtest<'a> {
         let series = &strategy_equity_series[strategy_equity_series.len() - sample_count..];
         let timestamps = &self.equities.timestamps_ms[timestamps_offset..];
         let drawdowns = &drawdown_samples[drawdown_samples.len() - sample_count..];
+        let drawdown_emas = drawdown_ema_samples.map(|samples| {
+            let ema_sample_count = sample_count.min(samples.len());
+            &samples[samples.len() - ema_sample_count..]
+        });
         let peak_series =
             &peak_strategy_equity_series[peak_strategy_equity_series.len() - sample_count..];
         let recovery_series =
             &recovery_equity_series[recovery_equity_series.len() - sample_count..];
 
-        let compute_metrics = |series: &[f64], timestamps_ms: &[u64], drawdowns: &[f64]| {
+        let compute_metrics = |series: &[f64],
+                               timestamps_ms: &[u64],
+                               drawdowns: &[f64],
+                               drawdown_emas: Option<&[f64]>| {
             let equity_metrics = analyze_equity_series(series, timestamps_ms);
             let drawdown_worst = drawdowns
                 .iter()
                 .fold(0.0_f64, |max_dd, &x| max_dd.max(x.abs()));
             let drawdown_worst_mean_1pct = mean_worst_1pct_abs(drawdowns);
+            let drawdown_worst_ema_hsl = drawdown_emas
+                .map(|values| {
+                    values
+                        .iter()
+                        .fold(0.0_f64, |max_dd, &x| max_dd.max(x.abs()))
+                })
+                .unwrap_or(0.0);
+            let drawdown_worst_mean_1pct_ema_hsl =
+                drawdown_emas.map(mean_worst_1pct_abs).unwrap_or(0.0);
             StrategyEquityMetrics {
                 gain_strategy_pnl_rebased: equity_metrics.gain,
                 adg_strategy_pnl_rebased: equity_metrics.adg,
@@ -4025,12 +4095,14 @@ impl<'a> Backtest<'a> {
                 sterling_ratio_strategy_pnl_rebased: equity_metrics.adg
                     / drawdown_worst_mean_1pct.max(1e-12),
                 drawdown_worst_hsl: drawdown_worst,
+                drawdown_worst_ema_hsl,
                 drawdown_worst_mean_1pct_hsl: drawdown_worst_mean_1pct,
+                drawdown_worst_mean_1pct_ema_hsl,
                 ..StrategyEquityMetrics::default()
             }
         };
 
-        let full = compute_metrics(series, timestamps, drawdowns);
+        let full = compute_metrics(series, timestamps, drawdowns, drawdown_emas);
         let all_time_peak_series = cumulative_max(peak_series);
         let peak_recovery_hours_hsl = calc_peak_recovery_hours_against_peak(
             recovery_series,
@@ -4052,10 +4124,15 @@ impl<'a> Backtest<'a> {
             }
             let subset_timestamps = &timestamps[start_idx..];
             let subset_drawdowns = &drawdowns[start_idx..];
+            let subset_drawdown_emas = drawdown_emas.map(|values| &values[start_idx..]);
             let subset_peaks = &peak_series[start_idx..];
             let subset_recovery_series = &recovery_series[start_idx..];
-            let mut subset_metric =
-                compute_metrics(subset_series, subset_timestamps, subset_drawdowns);
+            let mut subset_metric = compute_metrics(
+                subset_series,
+                subset_timestamps,
+                subset_drawdowns,
+                subset_drawdown_emas,
+            );
             let subset_all_time_peaks = cumulative_max(subset_peaks);
             subset_metric.peak_recovery_hours_hsl = calc_peak_recovery_hours_against_peak(
                 subset_recovery_series,
@@ -4110,6 +4187,7 @@ impl<'a> Backtest<'a> {
         self.strategy_equity_metrics_from_series(
             &self.strategy_equity_series,
             &self.hard_stop_drawdown_samples,
+            None,
             &self.peak_strategy_equity_series,
             &self.equities.usd_total_equity,
         )
@@ -4172,12 +4250,14 @@ impl<'a> Backtest<'a> {
         let strategy_metrics_long = self.strategy_equity_metrics_from_series(
             &self.strategy_equity_series_pside[LONG],
             &self.hard_stop_drawdown_samples_pside[LONG],
+            Some(&self.hard_stop_drawdown_ema_samples_pside[LONG]),
             &self.peak_strategy_equity_series_pside[LONG],
             &self.strategy_equity_series_pside[LONG],
         );
         let strategy_metrics_short = self.strategy_equity_metrics_from_series(
             &self.strategy_equity_series_pside[SHORT],
             &self.hard_stop_drawdown_samples_pside[SHORT],
+            Some(&self.hard_stop_drawdown_ema_samples_pside[SHORT]),
             &self.peak_strategy_equity_series_pside[SHORT],
             &self.strategy_equity_series_pside[SHORT],
         );
@@ -4206,9 +4286,21 @@ impl<'a> Backtest<'a> {
             drawdown_worst_hsl: strategy_metrics.drawdown_worst_hsl,
             drawdown_worst_hsl_long: strategy_metrics_long.drawdown_worst_hsl,
             drawdown_worst_hsl_short: strategy_metrics_short.drawdown_worst_hsl,
+            drawdown_worst_ema_hsl: strategy_metrics_long
+                .drawdown_worst_ema_hsl
+                .max(strategy_metrics_short.drawdown_worst_ema_hsl),
+            drawdown_worst_ema_hsl_long: strategy_metrics_long.drawdown_worst_ema_hsl,
+            drawdown_worst_ema_hsl_short: strategy_metrics_short.drawdown_worst_ema_hsl,
             drawdown_worst_mean_1pct_hsl: strategy_metrics.drawdown_worst_mean_1pct_hsl,
             drawdown_worst_mean_1pct_hsl_long: strategy_metrics_long.drawdown_worst_mean_1pct_hsl,
             drawdown_worst_mean_1pct_hsl_short: strategy_metrics_short.drawdown_worst_mean_1pct_hsl,
+            drawdown_worst_mean_1pct_ema_hsl: strategy_metrics_long
+                .drawdown_worst_mean_1pct_ema_hsl
+                .max(strategy_metrics_short.drawdown_worst_mean_1pct_ema_hsl),
+            drawdown_worst_mean_1pct_ema_hsl_long: strategy_metrics_long
+                .drawdown_worst_mean_1pct_ema_hsl,
+            drawdown_worst_mean_1pct_ema_hsl_short: strategy_metrics_short
+                .drawdown_worst_mean_1pct_ema_hsl,
             peak_recovery_hours_hsl: strategy_metrics.peak_recovery_hours_hsl,
             peak_recovery_hours_hsl_long: strategy_metrics_long.peak_recovery_hours_hsl,
             peak_recovery_hours_hsl_short: strategy_metrics_short.peak_recovery_hours_hsl,
@@ -4243,8 +4335,14 @@ impl<'a> Backtest<'a> {
             drawdown_raw: self.hard_stop_drawdown_samples.clone(),
             timestamps_ms_long: self.hard_stop_drawdown_timestamps_ms_pside[LONG].clone(),
             drawdown_raw_long: self.hard_stop_drawdown_samples_pside[LONG].clone(),
+            drawdown_ema_long: self.hard_stop_drawdown_ema_samples_pside[LONG].clone(),
+            drawdown_score_long: self.hard_stop_drawdown_score_samples_pside[LONG].clone(),
+            events_long: self.hard_stop_plot_events_pside[LONG].clone(),
             timestamps_ms_short: self.hard_stop_drawdown_timestamps_ms_pside[SHORT].clone(),
             drawdown_raw_short: self.hard_stop_drawdown_samples_pside[SHORT].clone(),
+            drawdown_ema_short: self.hard_stop_drawdown_ema_samples_pside[SHORT].clone(),
+            drawdown_score_short: self.hard_stop_drawdown_score_samples_pside[SHORT].clone(),
+            events_short: self.hard_stop_plot_events_pside[SHORT].clone(),
         }
     }
 }
@@ -5576,7 +5674,9 @@ mod tests {
 
         let hs_metrics = bt.hard_stop_metrics();
         assert!((hs_metrics.drawdown_worst_hsl - 0.25).abs() < 1e-12);
+        assert!((hs_metrics.drawdown_worst_ema_hsl - 0.25).abs() < 1e-12);
         assert!((hs_metrics.drawdown_worst_mean_1pct_hsl - 0.25).abs() < 1e-12);
+        assert!((hs_metrics.drawdown_worst_mean_1pct_ema_hsl - 0.25).abs() < 1e-12);
         assert!(
             (hs_metrics.gain_strategy_pnl_rebased - ((100.0 + 90.0 + 75.0) / 3.0 / 100.0)).abs()
                 < 1e-12
@@ -5658,9 +5758,203 @@ mod tests {
 
         let cached = bt.hard_stop_metrics();
         assert!((cached.drawdown_worst_hsl - expected.drawdown_worst_hsl).abs() < 1e-12);
+        assert!((cached.drawdown_worst_ema_hsl - expected.drawdown_worst_ema_hsl).abs() < 1e-12);
         assert!(
             (cached.adg_strategy_pnl_rebased - expected.adg_strategy_pnl_rebased).abs() < 1e-12
         );
+    }
+
+    #[test]
+    fn hard_stop_ema_metrics_use_runtime_side_series_and_shared_max() {
+        let hlcvs = Array3::from_shape_vec((4, 1, 4), vec![1.0; 4 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.short.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.short.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.short.ema_span_0 = 10.0;
+        bp_pair.short.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.short.hsl_enabled = true;
+        bp_pair.long.hsl_red_threshold = 0.5;
+        bp_pair.short.hsl_red_threshold = 0.5;
+        bp_pair.long.hsl_ema_span_minutes = 1.0;
+        bp_pair.short.hsl_ema_span_minutes = 60.0;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.signal_mode = "pside".to_string();
+        hs.red_threshold = 0.5;
+        hs.ema_span_minutes = 60.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 100.0,
+            maker_fee: 0.0,
+            taker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![3],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 365.0,
+            liquidation_threshold: 0.05,
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0,
+            equity_hard_stop_loss: hs,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.equities.timestamps_ms = vec![0, 60_000, 120_000, 180_000];
+        bt.strategy_equity_series_pside[LONG] = vec![100.0, 90.0, 90.0, 90.0];
+        bt.peak_strategy_equity_series_pside[LONG] = vec![100.0, 100.0, 100.0, 100.0];
+        bt.hard_stop_drawdown_samples_pside[LONG] = vec![0.0, 0.10, 0.10, 0.10];
+        bt.hard_stop_drawdown_ema_samples_pside[LONG] = vec![0.0, 0.10, 0.10, 0.10];
+        bt.strategy_equity_series_pside[SHORT] = vec![100.0, 90.0, 100.0, 90.0];
+        bt.peak_strategy_equity_series_pside[SHORT] = vec![100.0, 100.0, 100.0, 100.0];
+        bt.hard_stop_drawdown_samples_pside[SHORT] = vec![0.0, 0.10, 0.0, 0.10];
+        bt.hard_stop_drawdown_ema_samples_pside[SHORT] = vec![0.0, 0.01, 0.005, 0.02];
+
+        let hs_metrics = bt.hard_stop_metrics();
+        assert!((hs_metrics.drawdown_worst_ema_hsl_long - 0.10).abs() < 1e-12);
+        assert!((hs_metrics.drawdown_worst_ema_hsl_short - 0.02).abs() < 1e-12);
+        assert!(
+            (hs_metrics.drawdown_worst_ema_hsl
+                - hs_metrics
+                    .drawdown_worst_ema_hsl_long
+                    .max(hs_metrics.drawdown_worst_ema_hsl_short))
+            .abs()
+                < 1e-12
+        );
+        assert!(
+            (hs_metrics.drawdown_worst_mean_1pct_ema_hsl
+                - hs_metrics
+                    .drawdown_worst_mean_1pct_ema_hsl_long
+                    .max(hs_metrics.drawdown_worst_mean_1pct_ema_hsl_short))
+            .abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn hard_stop_plot_data_includes_runtime_ema_score_and_events() {
+        let hlcvs = Array3::from_shape_vec((4, 1, 4), vec![1.0; 4 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.long.hsl_red_threshold = 0.05;
+        bp_pair.long.hsl_ema_span_minutes = 1.0;
+        bp_pair.long.hsl_cooldown_minutes_after_red = 1.0;
+        bp_pair.long.hsl_no_restart_drawdown_threshold = 0.9;
+        bp_pair.long.hsl_tier_ratio_yellow = 0.5;
+        bp_pair.long.hsl_tier_ratio_orange = 0.75;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.signal_mode = "unified".to_string();
+        hs.red_threshold = 0.05;
+        hs.no_restart_drawdown_threshold = 0.9;
+        hs.cooldown_minutes_after_red = 1.0;
+        hs.ema_span_minutes = 1.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 100.0,
+            maker_fee: 0.0,
+            taker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![3],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 365.0,
+            liquidation_threshold: 0.05,
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0,
+            equity_hard_stop_loss: hs,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.balance.usd_total_balance = 100.0;
+        bt.equities.timestamps_ms.push(0);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state(0).unwrap();
+
+        bt.equities.timestamps_ms.push(60_000);
+        bt.equities.usd_total_equity.push(94.0);
+        bt.update_hard_stop_state(1).unwrap();
+
+        bt.equities.timestamps_ms.push(120_000);
+        bt.equities.usd_total_equity.push(93.0);
+        bt.update_hard_stop_state(2).unwrap();
+
+        assert!(bt.hard_stop_halted);
+        assert_eq!(bt.hard_stop_cooldown_until_ms, Some(120_000));
+        assert!(bt.try_restart_after_hard_stop(120_000));
+
+        let plot_data = bt.hard_stop_plot_data();
+        assert_eq!(
+            plot_data.drawdown_ema_long.len(),
+            plot_data.drawdown_raw_long.len()
+        );
+        assert_eq!(
+            plot_data.drawdown_score_long.len(),
+            plot_data.drawdown_raw_long.len()
+        );
+        assert_eq!(plot_data.events_long.len(), 3);
+        assert_eq!(plot_data.events_long[0].kind, "red_enter");
+        assert_eq!(plot_data.events_long[1].kind, "halt");
+        assert_eq!(plot_data.events_long[1].cooldown_until_ms, Some(120_000));
+        assert!(!plot_data.events_long[1].terminal);
+        assert_eq!(plot_data.events_long[2].kind, "restart");
+        assert!(plot_data.events_short.is_empty());
     }
 
     #[test]
