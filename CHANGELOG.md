@@ -6,10 +6,13 @@ All notable user-facing changes will be documented in this file.
 
 ### Added
 - **Monitor publisher groundwork** - Live configs now support a new `monitor.*` section, and the bot can publish a disk-backed monitor root with a manifest, atomic `state.latest.json` snapshots, structured NDJSON events for lifecycle, balance, positions, orders, fills, modes, and structured bot/exchange errors, plus `history/` streams for normalized fills, throttled price ticks, and completed 1m/1h candles.
+- **Expanded monitor snapshot sections** - The snapshot now also includes `market`, `forager`, `unstuck`, and `recent` sections for richer read-only bot state inspection, including trailing visibility and current EMA-band / unstuck hints when available.
 - **Read-only monitor relay server** - Added a separate relay process that reads the disk-backed monitor root and serves snapshot/history data over HTTP + WebSocket.
-- **Monitor TUI reader** - Added a first terminal dashboard and companion tool entrypoints on top of the relay.
+- **First browser monitor dashboard draft** - The monitor relay now also serves `GET /dashboard` with a static read-only web dashboard. It bootstraps from `/snapshot`, consumes `/ws` for live-forward updates, and renders summary, positions, trailing, forager, unstuck, recent events, price ticks, and recent orders without attaching to live bot memory.
+- **Monitor TUI reader** - Added terminal dashboard and companion tool entrypoints on top of the relay, including focus-symbol views, runtime commands, and an embedded log-tail dev launcher.
 
 ### Changed
+- **Monitor relay websocket bootstrap** - `/ws` now replays a bounded tail of recent lines from current event/history files before switching to live-forward streaming, and the replay size is configurable with `--ws-replay-limit`.
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.
 - **ADG terminal smoothing simplified** - Backtest `gain`/`adg` now smooth the terminal value by taking the mean of the last up to 3 daily equity samples instead of running an EMA over the full daily-equity series. This preserves end-of-run drawdown smoothing while reducing computation.
 - **Unified `passivbot` CLI added** - Passivbot now installs a `passivbot` command with subcommands such as `passivbot live`, `passivbot backtest`, `passivbot optimize`, `passivbot download`, and `passivbot tool ...`. Existing direct script entrypoints like `python3 src/main.py ...` remain supported for backwards compatibility.
