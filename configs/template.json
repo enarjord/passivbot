@@ -133,7 +133,7 @@
             },
             {
                 "label": "twel=2.5",
-                "overrides": {"bot.long.total_wallet_exposure_limit":2}
+                "overrides": {"bot.long.total_wallet_exposure_limit":2.5}
             }
         ],
         "start_date": "2021-01-01",
