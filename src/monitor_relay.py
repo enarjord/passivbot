@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -28,10 +29,12 @@ class MonitorRelay:
         monitor_root: str,
         poll_interval_ms: int = 250,
         subscriber_queue_size: int = 1000,
+        ws_replay_limit: int = 50,
     ) -> None:
         self.monitor_root = Path(monitor_root).expanduser()
         self.poll_interval_ms = max(50, int(poll_interval_ms))
         self.subscriber_queue_size = max(1, int(subscriber_queue_size))
+        self.ws_replay_limit = max(0, int(ws_replay_limit))
         self.started_at_monotonic = time.monotonic()
         self._path_states: dict[Path, _PathState] = {}
         self._subscribers: dict[MonitorKey, set[asyncio.Queue]] = {}
@@ -122,6 +125,7 @@ class MonitorRelay:
             "status": "ok",
             "monitor_root": str(self.monitor_root),
             "poll_interval_ms": self.poll_interval_ms,
+            "ws_replay_limit": self.ws_replay_limit,
             "uptime_ms": int((time.monotonic() - self.started_at_monotonic) * 1000.0),
             "bots": [
                 {"exchange": exchange, "user": user}
@@ -237,6 +241,53 @@ class MonitorRelay:
                 messages.append(self._build_history_message(entry))
         return messages
 
+    def load_recent_messages(self, key: MonitorKey, *, limit: Optional[int] = None) -> list[dict]:
+        per_file_limit = self.ws_replay_limit if limit is None else max(0, int(limit))
+        if per_file_limit <= 0:
+            return []
+        messages: list[tuple[int, int, dict]] = []
+        order = 0
+        for path in self._current_paths_for_key(key):
+            for entry in self._read_recent_entries(path, per_file_limit):
+                if path.parent.name == "events":
+                    message = self._build_event_message(entry)
+                else:
+                    message = self._build_history_message(entry)
+                ts = self._message_ts_ms(message)
+                messages.append((ts, order, message))
+                order += 1
+        messages.sort(key=lambda item: (item[0], item[1]))
+        return [message for _, _, message in messages]
+
+    def _read_recent_entries(self, path: Path, limit: int) -> list[dict]:
+        if limit <= 0 or not path.exists():
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = list(deque((line.rstrip("\n") for line in f), maxlen=limit))
+        except FileNotFoundError:
+            return []
+        entries: list[dict] = []
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception as exc:
+                logging.warning("[monitor-relay] invalid JSON in %s: %s", path, exc)
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
+        return entries
+
+    def _message_ts_ms(self, message: dict) -> int:
+        value = message.get("ts")
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
+
     def _build_event_message(self, entry: dict) -> dict:
         message = {
             "type": "event",
@@ -343,6 +394,8 @@ async def _handle_ws(request: web.Request) -> web.StreamResponse:
     ws = web.WebSocketResponse(heartbeat=30.0)
     await ws.prepare(request)
     await ws.send_json(relay.build_snapshot_message(key, snapshot))
+    for message in relay.load_recent_messages(key):
+        await ws.send_json(message)
     queue = relay.subscribe(key)
     try:
         while not ws.closed:
@@ -371,11 +424,13 @@ def create_monitor_relay_app(
     monitor_root: str = "monitor",
     poll_interval_ms: int = 250,
     subscriber_queue_size: int = 1000,
+    ws_replay_limit: int = 50,
 ) -> web.Application:
     relay = MonitorRelay(
         monitor_root=monitor_root,
         poll_interval_ms=poll_interval_ms,
         subscriber_queue_size=subscriber_queue_size,
+        ws_replay_limit=ws_replay_limit,
     )
     app = web.Application()
     app[RELAY_APP_KEY] = relay
