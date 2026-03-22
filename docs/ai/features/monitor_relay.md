@@ -16,6 +16,8 @@ Implemented now:
    - `GET /health`
    - `GET /snapshot`
    - `GET /ws`
+   - `GET /dashboard`
+   - `GET /dashboard/assets/{name}`
 2. `src/tools/monitor_relay.py` CLI wrapper for local serving
 3. polling of:
    - `events/current.ndjson`
@@ -23,6 +25,7 @@ Implemented now:
 4. snapshot-first WebSocket bootstrap, then live `event` / `history` push messages
 5. per-bot subscriber queues with `resync_required` when a subscriber falls behind
 6. websocket connect also replays a recent tail from the current event/history files so new TUI clients can populate recent panels immediately when attaching to an already-running bot
+7. the relay also serves a static browser dashboard that consumes `/snapshot` + `/ws` from the same origin without requiring a frontend build step
 
 ## Non-Obvious Details
 
@@ -31,6 +34,7 @@ Implemented now:
 3. New current files created after relay startup are tailed from the beginning so their first live entries are not skipped.
 4. The relay is intentionally best-effort on malformed monitor lines: invalid JSON is skipped with a warning instead of killing the process.
 5. The poll loop logs relay-side failures and continues; this is acceptable because the relay is observability-only and disk remains authoritative.
+6. Dashboard assets are intentionally tiny static files under `src/monitor_dashboard_static/`; keep the browser reader read-only and avoid coupling it to bot internals.
 
 ## Gaps Still Open
 
@@ -45,10 +49,14 @@ Implemented now:
 2. multi-root selection should fail clearly when `exchange` + `user` are omitted
 3. websocket flow should send snapshot first, then replay backlog, then live updates
 4. new current files created after relay startup should publish their first entries
+5. dashboard routes should serve expected static assets without binding sockets
 
 ## Key Code
 
 - `src/monitor_relay.py`
+- `src/monitor_dashboard_static/index.html`
+- `src/monitor_dashboard_static/dashboard.css`
+- `src/monitor_dashboard_static/dashboard.js`
 - `src/tools/monitor_relay.py`
 - `tests/test_monitor_relay.py`
 - `docs/monitor.md`
