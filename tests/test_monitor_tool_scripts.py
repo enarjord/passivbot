@@ -35,3 +35,11 @@ def test_monitor_dev_tool_help_runs_without_import_errors():
     assert "Launch the monitor relay if needed" in result.stdout
     assert "bot-log" in result.stdout
     assert "--focus-symbol" in result.stdout
+
+
+def test_trailing_diagnostics_tool_help_runs_without_import_errors():
+    result = _run_tool_help("src/tools/trailing_diagnostics.py")
+    assert result.returncode == 0, result.stderr
+    assert "Interactive trailing diagnostics explorer" in result.stdout
+    assert "--wizard" in result.stdout
+    assert "--snapshot-path" in result.stdout

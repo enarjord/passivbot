@@ -11,6 +11,7 @@ Open these only when touching the relevant subsystem.
 | Monitor publisher | `monitor_publisher.md` | Monitor snapshot/event publication, schema boundaries, dashboard handoff work |
 | Monitor relay | `monitor_relay.md` | Read-only monitor HTTP/WebSocket relay server |
 | Monitor TUI | `monitor_tui.md` | Minimal terminal reader consuming relay snapshot + websocket data |
+| Trailing diagnostics | `trailing_diagnostics.md` | Standalone trailing-logic exploration tool and pure diagnostic helpers |
 
 ## Authoring Rule
 
