@@ -948,8 +948,12 @@ def create_forager_hard_stop_drawdown_figure(
         bot = ((config or {}).get("bot") or {})
         pside_cfg = (bot.get(pside) or {})
         if isinstance(pside_cfg, dict) and "hsl_enabled" in pside_cfg:
+            twel = float(pside_cfg.get("total_wallet_exposure_limit", 0.0) or 0.0)
+            n_positions = int(round(float(pside_cfg.get("n_positions", 0.0) or 0.0)))
             return {
-                "enabled": bool(pside_cfg.get("hsl_enabled", False)),
+                "enabled": bool(pside_cfg.get("hsl_enabled", False))
+                and twel > 0.0
+                and n_positions > 0,
                 "red_threshold": float(pside_cfg.get("hsl_red_threshold", 0.0) or 0.0),
                 "ema_span_minutes": float(pside_cfg.get("hsl_ema_span_minutes", 0.0) or 0.0),
                 "tier_ratios": pside_cfg.get("hsl_tier_ratios", {}) or {},

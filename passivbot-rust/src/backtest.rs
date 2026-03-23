@@ -3484,6 +3484,12 @@ impl<'a> Backtest<'a> {
     }
 
     #[inline(always)]
+    fn hard_stop_reporting_enabled_pside(&self, pside: usize) -> bool {
+        let cfg = self.hard_stop_cfg_pside(pside);
+        cfg.hsl_enabled && cfg.n_positions > 0 && cfg.total_wallet_exposure_limit > 0.0
+    }
+
+    #[inline(always)]
     fn hard_stop_signal_mode(&self) -> &str {
         self.backtest_params
             .equity_hard_stop_loss
@@ -4246,33 +4252,65 @@ impl<'a> Backtest<'a> {
             0.0
         };
         let per_year_scale = if n_days > 0.0 { 365.25 / n_days } else { 0.0 };
+        let long_enabled = self.hard_stop_reporting_enabled_pside(LONG);
+        let short_enabled = self.hard_stop_reporting_enabled_pside(SHORT);
         let strategy_metrics = self.strategy_equity_metrics();
-        let strategy_metrics_long = self.strategy_equity_metrics_from_series(
-            &self.strategy_equity_series_pside[LONG],
-            &self.hard_stop_drawdown_samples_pside[LONG],
-            Some(&self.hard_stop_drawdown_ema_samples_pside[LONG]),
-            &self.peak_strategy_equity_series_pside[LONG],
-            &self.strategy_equity_series_pside[LONG],
-        );
-        let strategy_metrics_short = self.strategy_equity_metrics_from_series(
-            &self.strategy_equity_series_pside[SHORT],
-            &self.hard_stop_drawdown_samples_pside[SHORT],
-            Some(&self.hard_stop_drawdown_ema_samples_pside[SHORT]),
-            &self.peak_strategy_equity_series_pside[SHORT],
-            &self.strategy_equity_series_pside[SHORT],
-        );
+        let strategy_metrics_long = if long_enabled {
+            self.strategy_equity_metrics_from_series(
+                &self.strategy_equity_series_pside[LONG],
+                &self.hard_stop_drawdown_samples_pside[LONG],
+                Some(&self.hard_stop_drawdown_ema_samples_pside[LONG]),
+                &self.peak_strategy_equity_series_pside[LONG],
+                &self.strategy_equity_series_pside[LONG],
+            )
+        } else {
+            StrategyEquityMetrics::default()
+        };
+        let strategy_metrics_short = if short_enabled {
+            self.strategy_equity_metrics_from_series(
+                &self.strategy_equity_series_pside[SHORT],
+                &self.hard_stop_drawdown_samples_pside[SHORT],
+                Some(&self.hard_stop_drawdown_ema_samples_pside[SHORT]),
+                &self.peak_strategy_equity_series_pside[SHORT],
+                &self.strategy_equity_series_pside[SHORT],
+            )
+        } else {
+            StrategyEquityMetrics::default()
+        };
+        let triggers_long = if long_enabled {
+            self.hard_stop_n_triggers_pside[LONG]
+        } else {
+            0
+        };
+        let triggers_short = if short_enabled {
+            self.hard_stop_n_triggers_pside[SHORT]
+        } else {
+            0
+        };
+        let restarts_long = if long_enabled {
+            self.hard_stop_n_restarts_pside[LONG]
+        } else {
+            0
+        };
+        let restarts_short = if short_enabled {
+            self.hard_stop_n_restarts_pside[SHORT]
+        } else {
+            0
+        };
+        let triggers = triggers_long.saturating_add(triggers_short);
+        let restarts = restarts_long.saturating_add(restarts_short);
         HardStopMetrics {
-            triggers: self.hard_stop_n_triggers,
-            triggers_per_year: self.hard_stop_n_triggers as f64 * per_year_scale,
-            triggers_long: self.hard_stop_n_triggers_pside[LONG],
-            triggers_short: self.hard_stop_n_triggers_pside[SHORT],
+            triggers,
+            triggers_per_year: triggers as f64 * per_year_scale,
+            triggers_long,
+            triggers_short,
             halt_to_restart_equity_loss_pct: self.hard_stop_total_panic_loss / starting_balance,
-            restarts: self.hard_stop_n_restarts,
-            restarts_per_year: self.hard_stop_n_restarts as f64 * per_year_scale,
-            restarts_per_year_long: self.hard_stop_n_restarts_pside[LONG] as f64 * per_year_scale,
-            restarts_per_year_short: self.hard_stop_n_restarts_pside[SHORT] as f64 * per_year_scale,
-            restarts_long: self.hard_stop_n_restarts_pside[LONG],
-            restarts_short: self.hard_stop_n_restarts_pside[SHORT],
+            restarts,
+            restarts_per_year: restarts as f64 * per_year_scale,
+            restarts_per_year_long: restarts_long as f64 * per_year_scale,
+            restarts_per_year_short: restarts_short as f64 * per_year_scale,
+            restarts_long,
+            restarts_short,
             time_in_yellow_pct,
             time_in_orange_pct,
             time_in_red_pct,
@@ -5668,6 +5706,7 @@ mod tests {
         bt.equities.usd_total_equity.push(75.0);
         bt.update_hard_stop_state(2).unwrap();
         bt.hard_stop_n_triggers = 3;
+        bt.hard_stop_n_triggers_pside[LONG] = 3;
         bt.hard_stop_n_restarts = 2;
         bt.hard_stop_n_restarts_pside[LONG] = 1;
         bt.hard_stop_n_restarts_pside[SHORT] = 1;
@@ -5682,9 +5721,9 @@ mod tests {
                 < 1e-12
         );
         assert!((hs_metrics.triggers_per_year - 547.875).abs() < 1e-12);
-        assert!((hs_metrics.restarts_per_year - 365.25).abs() < 1e-12);
+        assert!((hs_metrics.restarts_per_year - 182.625).abs() < 1e-12);
         assert!((hs_metrics.restarts_per_year_long - 182.625).abs() < 1e-12);
-        assert!((hs_metrics.restarts_per_year_short - 182.625).abs() < 1e-12);
+        assert_eq!(hs_metrics.restarts_per_year_short, 0.0);
     }
 
     #[test]
@@ -5762,6 +5801,85 @@ mod tests {
         assert!(
             (cached.adg_strategy_pnl_rebased - expected.adg_strategy_pnl_rebased).abs() < 1e-12
         );
+    }
+
+    #[test]
+    fn hard_stop_disabled_side_with_zero_twel_emits_no_side_metrics() {
+        let hlcvs = Array3::from_shape_vec((3, 1, 4), vec![1.0; 3 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.short.n_positions = 1;
+        bp_pair.short.total_wallet_exposure_limit = 0.0;
+        bp_pair.short.wallet_exposure_limit = 0.0;
+        bp_pair.short.hsl_enabled = true;
+        bp_pair.short.hsl_red_threshold = 0.1;
+        bp_pair.short.hsl_ema_span_minutes = 1.0;
+        bp_pair.short.hsl_tier_ratio_yellow = 0.5;
+        bp_pair.short.hsl_tier_ratio_orange = 0.75;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 100.0,
+            maker_fee: 0.0,
+            taker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![2],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 365.0,
+            liquidation_threshold: 0.05,
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.balance.usd_total_balance = 100.0;
+        bt.equities.timestamps_ms.push(0);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.pnl_cumsum_running_net = 0.0;
+        bt.pnl_cumsum_running_net_pside[SHORT] = 0.0;
+        bt.update_hard_stop_state(0).unwrap();
+
+        bt.balance.usd_total_balance = 100.0;
+        bt.equities.timestamps_ms.push(60_000);
+        bt.equities.usd_total_equity.push(50.0);
+        bt.pnl_cumsum_running_net = -50.0;
+        bt.pnl_cumsum_running_net_pside[SHORT] = -50.0;
+        bt.update_hard_stop_state(1).unwrap();
+
+        let hs_metrics = bt.hard_stop_metrics();
+        assert_eq!(hs_metrics.triggers_short, 0);
+        assert_eq!(hs_metrics.triggers, 0);
+        assert_eq!(hs_metrics.restarts_short, 0);
+        assert_eq!(hs_metrics.restarts, 0);
+        assert_eq!(hs_metrics.restarts_per_year_short, 0.0);
+        assert_eq!(hs_metrics.restarts_per_year, 0.0);
+        assert_eq!(hs_metrics.drawdown_worst_hsl_short, 0.0);
+        assert_eq!(hs_metrics.drawdown_worst_ema_hsl_short, 0.0);
+        assert_eq!(hs_metrics.drawdown_worst_mean_1pct_hsl_short, 0.0);
+        assert_eq!(hs_metrics.drawdown_worst_mean_1pct_ema_hsl_short, 0.0);
     }
 
     #[test]
