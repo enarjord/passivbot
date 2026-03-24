@@ -210,21 +210,3 @@ def quantize_floats(obj: Any, sig_digits: int = None, step: float = None) -> Any
         return round_floats_sig_digits(obj, sig_digits)
     else:
         return round_floats_step(obj, step)
-
-
-def enforce_bounds_v2(obj: Any, bounds: Any = None, sig_digits: int = None):
-    """
-    apply floor/ceil capping and rounding to each element in obj
-    obj may be a bot config:
-        - take bounds from config.optimize.bounds
-        - apply to config.bot
-    obj may be a list of floats:
-        - assert len(obj) == len(bounds)
-        - obj is on form [float]
-        - bounds is on form [[float]]
-        - each element of bounds must be len==2 or len==3
-        - bound[0] is lower bound; bound[1] is upper bound
-        - if len bound element == 3, consider bound[2] as step
-        - if len bound element == 2, use sig_digits (raise if missing)
-    """
-    pass

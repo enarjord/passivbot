@@ -14,70 +14,65 @@ from unittest.mock import Mock, MagicMock, patch
 import numpy as np
 import pytest
 
-import optimize
 from optimize import (
-    _apply_config_overrides,
     _looks_like_bool_token,
     _normalize_optional_bool_flag,
-    _format_objectives,
-    individual_to_config,
-    config_to_individual,
-    validate_array,
-    apply_fine_tune_bounds,
     extract_configs,
     get_starting_configs,
     configs_to_individuals,
-    ConstraintAwareFitness,
-    ResultRecorder,
 )
-from optimization.bounds import Bound
-
-
+from optimization.bounds import (
+    apply_config_overrides,
+    apply_fine_tune_bounds,
+    individual_to_config,
+    config_to_individual,
+    validate_array,
+)
 class TestApplyConfigOverrides:
-    """Test _apply_config_overrides function."""
+    """Test apply_config_overrides function."""
 
     def test_empty_overrides_does_nothing(self):
         config = {"bot": {"long": {"value": 1.0}}}
         original = deepcopy(config)
-        _apply_config_overrides(config, {})
+        apply_config_overrides(config, {})
         assert config == original
 
     def test_none_overrides_does_nothing(self):
         config = {"bot": {"long": {"value": 1.0}}}
         original = deepcopy(config)
-        _apply_config_overrides(config, None)
+        apply_config_overrides(config, None)
         assert config == original
 
     def test_simple_override(self):
         config = {"bot": {"long": {"value": 1.0}}}
-        _apply_config_overrides(config, {"bot.long.value": 2.0})
+        apply_config_overrides(config, {"bot.long.value": 2.0})
         assert config["bot"]["long"]["value"] == 2.0
 
     def test_nested_override_creates_path(self):
         config = {}
-        _apply_config_overrides(config, {"bot.long.value": 5.0})
+        apply_config_overrides(config, {"bot.long.value": 5.0})
         assert config["bot"]["long"]["value"] == 5.0
 
     def test_override_creates_missing_dicts(self):
         config = {"bot": {}}
-        _apply_config_overrides(config, {"bot.short.param": 10})
+        apply_config_overrides(config, {"bot.short.param": 10})
         assert config["bot"]["short"]["param"] == 10
 
     def test_non_string_keys_skipped(self):
         config = {"bot": {}}
-        _apply_config_overrides(config, {123: "value"})
+        apply_config_overrides(config, {123: "value"})
         assert config == {"bot": {}}
 
     def test_empty_dotted_path_creates_key(self):
         # Empty string dotted path actually creates an empty-string key
         config = {"bot": {}}
-        _apply_config_overrides(config, {"": "value"})
+        apply_config_overrides(config, {"": "value"})
         # Empty path creates a key with empty string
         assert config[""] == "value"
 
     def test_replaces_non_dict_intermediate_values(self):
         config = {"bot": {"long": "not_a_dict"}}
-        _apply_config_overrides(config, {"bot.long.value": 3.0})
+        apply_config_overrides(config, {"bot.long.value": 3.0})
         assert config["bot"]["long"]["value"] == 3.0
 
 
@@ -161,38 +156,6 @@ class TestNormalizeOptionalBoolFlag:
         assert result == ["--suite=true", "custom_value"]
 
 
-class TestFormatObjectives:
-    """Test _format_objectives function."""
-
-    def test_empty_list(self):
-        assert _format_objectives([]) == "[]"
-
-    def test_single_value(self):
-        result = _format_objectives([1.234567])
-        assert result == "[1.23]"
-
-    def test_multiple_values(self):
-        result = _format_objectives([1.234, 5.678, 9.012])
-        assert result == "[1.23, 5.68, 9.01]"
-
-    def test_numpy_array(self):
-        values = np.array([1.234, 5.678])
-        result = _format_objectives(values)
-        assert result == "[1.23, 5.68]"
-
-    def test_large_numbers(self):
-        result = _format_objectives([1234.5678])
-        # 3 significant figures
-        assert result == "[1.23e+03]"
-
-    def test_small_numbers(self):
-        result = _format_objectives([0.001234])
-        assert result == "[0.00123]"
-
-    def test_mixed_magnitude(self):
-        result = _format_objectives([1000, 0.001, 10])
-        assert result == "[1e+03, 0.001, 10]"
-
 
 class TestIndividualToConfig:
     """Test individual_to_config function."""
@@ -263,10 +226,10 @@ class TestConfigToIndividual:
                 "short": {"param1": 3.5, "param2": 4.5},
             }
         }
-        bounds = [Bound(0.0, 10.0) for _ in range(4)]
-        sig_digits = 6
+        xl = np.array([0.0, 0.0, 0.0, 0.0])
+        xu = np.array([10.0, 10.0, 10.0, 10.0])
 
-        result = config_to_individual(config, bounds, sig_digits)
+        result = config_to_individual(config, xl, xu)
 
         # Values should be extracted in sorted order
         assert len(result) == 4
@@ -282,10 +245,10 @@ class TestConfigToIndividual:
                 "short": {"z_param": 300.0, "a_param": 400.0},
             }
         }
-        bounds = [Bound(0.0, 1000.0)] * 4
-        sig_digits = 6
+        xl = np.array([0.0, 0.0, 0.0, 0.0])
+        xu = np.array([1000.0, 1000.0, 1000.0, 1000.0])
 
-        result = config_to_individual(config, bounds, sig_digits)
+        result = config_to_individual(config, xl, xu)
 
         # Order: long.a_param, long.z_param, short.a_param, short.z_param
         assert result[0] == pytest.approx(200.0)
@@ -551,7 +514,9 @@ class TestConfigsToIndividuals:
     """Test configs_to_individuals function."""
 
     def test_empty_configs(self):
-        result = configs_to_individuals([], [], 6)
+        xl = np.array([])
+        xu = np.array([])
+        result = configs_to_individuals([], xl, xu)
         assert result == []
 
     def test_single_config(self):
@@ -559,303 +524,82 @@ class TestConfigsToIndividuals:
 
         config = get_template_config()
         # Use actual bounds from the template
-        from optimization.config_adapter import extract_bounds_tuple_list_from_config
+        from optimization.bounds import extract_bounds_arrays
 
-        bounds = extract_bounds_tuple_list_from_config(config)
+        xl, xu, keys = extract_bounds_arrays(config)
 
-        result = configs_to_individuals([config], bounds, 6)
+        result = configs_to_individuals([config], xl, xu)
 
         # Should return 2 individuals: original + one with lowered TWE
         assert len(result) >= 1
-        assert len(result[0]) == len(bounds)
+        assert len(result[0]) == len(xl)
 
-    def test_creates_twe_variant(self):
+    def test_multiple_configs(self):
         from config_utils import get_template_config
 
         config = get_template_config()
-        from optimization.config_adapter import extract_bounds_tuple_list_from_config
+        from optimization.bounds import extract_bounds_arrays
 
-        bounds = extract_bounds_tuple_list_from_config(config)
+        xl, xu, keys = extract_bounds_arrays(config)
 
-        result = configs_to_individuals([config], bounds, 6)
+        result = configs_to_individuals([config, config], xl, xu)
 
-        # Should create duplicate with 0.75x TWE
+        # Should return one individual per valid config
         assert len(result) == 2
 
     def test_invalid_config_logged(self):
         invalid_config = {"invalid": "structure"}
-        bounds = [(0.0, 10.0, 0.0)] * 4
-        result = configs_to_individuals([invalid_config], bounds, 6)
+        xl = np.array([0.0, 0.0, 0.0, 0.0])
+        xu = np.array([10.0, 10.0, 10.0, 10.0])
+        result = configs_to_individuals([invalid_config], xl, xu)
 
         assert len(result) == 0
 
 
-class TestConstraintAwareFitness:
-    """Test ConstraintAwareFitness class."""
 
-    def test_lower_violation_dominates(self):
-        # Create a concrete fitness class from ConstraintAwareFitness
-        # This is how deap requires it to be created
-        pytest.importorskip("deap")
-        from deap import creator, base
+class TestParetoStoreFlushOnInterrupt:
+    """Regression test: flush() must not delete files when no generation completed."""
 
-        # Clean up if it exists from previous test
-        if hasattr(creator, "TestFitness1"):
-            del creator.TestFitness1
+    def test_flush_without_writes_preserves_files(self):
+        import tempfile
+        from pareto_store import ParetoStore
 
-        creator.create("TestFitness1", ConstraintAwareFitness, weights=(-1.0, -1.0))
-
-        fit1 = creator.TestFitness1((10.0, 10.0))
-        fit1.constraint_violation = 0.5
-
-        fit2 = creator.TestFitness1((1.0, 1.0))
-        fit2.constraint_violation = 1.0
-
-        # Lower violation dominates regardless of objective values
-        assert fit1.dominates(fit2)
-        assert not fit2.dominates(fit1)
-
-        # Cleanup
-        del creator.TestFitness1
-
-    def test_dominates_with_same_violation(self):
-        # With same constraint violation, regular dominance applies
-        pytest.importorskip("deap")
-        from deap import creator, base
-
-        # Clean up if it exists
-        if hasattr(creator, "TestFitness2"):
-            del creator.TestFitness2
-
-        creator.create("TestFitness2", ConstraintAwareFitness, weights=(-1.0, -1.0))
-
-        fit1 = creator.TestFitness2((1.0, 2.0))
-        fit1.constraint_violation = 0.0
-
-        fit2 = creator.TestFitness2((2.0, 3.0))
-        fit2.constraint_violation = 0.0
-
-        # With minimization weights, lower values dominate
-        assert fit1.dominates(fit2)
-        assert not fit2.dominates(fit1)
-
-        # Cleanup
-        del creator.TestFitness2
-
-
-class TestResultRecorder:
-    """Test ResultRecorder class."""
-
-    def test_initialization(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            bounds = [(0.0, 1.0, 0.0)] * 4
-            recorder = ResultRecorder(
-                results_dir=tmpdir,
-                sig_digits=6,
-                flush_interval=60,
-                scoring_keys=["metric1", "metric2"],
-                compress=False,
-                write_all_results=False,
-                pareto_max_size=300,
-                bounds=bounds,
-            )
+            store = ParetoStore(directory=tmpdir, sig_digits=6)
+            entry = {"bot": {"long": {"a": 0.5}}, "metrics": {"objectives": {"w_0": 1.0}}}
+            store.add_entry(entry)
+            assert len(store._entries) == 1
 
-            assert recorder.write_all is False
-            assert recorder.compress is False
-            assert recorder.scoring_keys == ["metric1", "metric2"]
-            assert recorder.results_file is None
+            # Simulate interrupt: clear written_hashes as if no callback ran
+            store._written_hashes.clear()
 
-    def test_initialization_with_write_all(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            bounds = [(0.0, 1.0, 0.0)] * 4
-            recorder = ResultRecorder(
-                results_dir=tmpdir,
-                sig_digits=6,
-                flush_interval=60,
-                scoring_keys=["metric1"],
-                compress=False,
-                write_all_results=True,
-                bounds=bounds,
-            )
-
-            assert recorder.write_all is True
-            assert recorder.results_file is not None
-            assert os.path.exists(os.path.join(tmpdir, "all_results.bin"))
-
-            recorder.close()
-
-    def test_record_data_without_write_all(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            bounds = [(0.0, 1.0, 0.0)] * 4
-            recorder = ResultRecorder(
-                results_dir=tmpdir,
-                sig_digits=6,
-                flush_interval=60,
-                scoring_keys=["metric1"],
-                compress=False,
-                write_all_results=False,
-                bounds=bounds,
-            )
-
-            data = {
-                "bot": {"long": {}, "short": {}},
-                "metrics": {
-                    "objectives": {"metric1": 0.5},
-                    "constraint_violation": 0.0,
-                },
-            }
-
-            # Should not raise
-            recorder.record(data)
-            recorder.close()
-
-    def test_record_updates_pareto_store(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            bounds = [(0.0, 1.0, 0.0)] * 4
-            recorder = ResultRecorder(
-                results_dir=tmpdir,
-                sig_digits=6,
-                flush_interval=60,
-                scoring_keys=["metric1"],
-                compress=False,
-                write_all_results=False,
-                bounds=bounds,
-            )
-
-            data = {
-                "bot": {"long": {"param": 0.5}, "short": {"param": 0.5}},
-                "metrics": {
-                    "objectives": {"metric1": 0.5},
-                    "constraint_violation": 0.0,
-                },
-            }
-
-            recorder.record(data)
-
-            # Store should have entries
-            assert recorder.store.n_iters > 0
-
-            recorder.close()
-
-    def test_flush_and_close(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            bounds = [(0.0, 1.0, 0.0)] * 4
-            recorder = ResultRecorder(
-                results_dir=tmpdir,
-                sig_digits=6,
-                flush_interval=60,
-                scoring_keys=["metric1"],
-                compress=False,
-                write_all_results=True,
-                bounds=bounds,
-            )
-
-            data = {
-                "bot": {"long": {"param": 0.5}, "short": {"param": 0.5}},
-                "metrics": {
-                    "objectives": {"metric1": 0.5},
-                    "constraint_violation": 0.0,
-                },
-            }
-
-            recorder.record(data)
-            recorder.flush()
-            recorder.close()
-
-            # File should be closed
-            assert recorder.results_file.closed
+            # flush() should preserve files since no generation completed
+            store.flush()
+            assert len(store._entries) == 1
+            path = list(store._entries.values())[0]
+            assert os.path.exists(path)
 
 
-class TestEvaluator:
-    """Test Evaluator class initialization and basic methods."""
+class TestEvaluatorReturnsMetrics:
+    """Evaluator.evaluate returns a metrics dict, not a (objectives, penalty, metrics) tuple."""
 
-    def test_perturb_step_digits(self):
-        """Test perturbation with different change probabilities."""
-        from optimize import Evaluator
+    def test_evaluator_has_no_deap_attributes(self):
+        from optimization.evaluator import Evaluator
         from config_utils import get_template_config
 
-        # Create minimal evaluator for testing perturbation methods
-        mock_config = get_template_config()
-        # Make sure limits is a list, not a string
-        mock_config["optimize"]["limits"] = []
+        config = get_template_config()
+        config["optimize"]["limits"] = []
 
         evaluator = Evaluator(
             hlcvs_specs={},
             btc_usd_specs={},
             msss={},
-            config=mock_config,
+            config=config,
         )
-
-        # Use a simple individual matching bounds length
-        individual = [1.0] * len(evaluator.bounds)
-        perturbed = evaluator.perturb_step_digits(individual, change_chance=0.5)
-
-        # Should have same length
-        assert len(perturbed) == len(individual)
-
-    def test_perturb_x_pct(self):
-        """Test percentage-based perturbation."""
-        from optimize import Evaluator
-        from config_utils import get_template_config
-
-        mock_config = get_template_config()
-        # Make sure limits is a list, not a string
-        mock_config["optimize"]["limits"] = []
-
-        evaluator = Evaluator(
-            hlcvs_specs={},
-            btc_usd_specs={},
-            msss={},
-            config=mock_config,
-        )
-
-        individual = [5.0] * len(evaluator.bounds)
-        perturbed = evaluator.perturb_x_pct(individual, magnitude=0.01)
-
-        assert len(perturbed) == len(individual)
-
-    def test_perturb_random_subset(self):
-        """Test random subset perturbation."""
-        from optimize import Evaluator
-        from config_utils import get_template_config
-
-        mock_config = get_template_config()
-        # Make sure limits is a list, not a string
-        mock_config["optimize"]["limits"] = []
-
-        evaluator = Evaluator(
-            hlcvs_specs={},
-            btc_usd_specs={},
-            msss={},
-            config=mock_config,
-        )
-
-        individual = [1.0] * len(evaluator.bounds)
-        perturbed = evaluator.perturb_random_subset(individual, frac=0.4)
-
-        assert len(perturbed) == len(individual)
-
-    def test_build_limit_checks(self):
-        """Test limit checks building."""
-        from optimize import Evaluator
-        from config_utils import get_template_config
-
-        mock_config = get_template_config()
-        mock_config["optimize"]["limits"] = [
-            {
-                "metric": "drawdown_worst_usd",
-                "penalize_if": "greater_than",
-                "value": 0.3,
-            }
-        ]
-
-        evaluator = Evaluator(
-            hlcvs_specs={},
-            btc_usd_specs={},
-            msss={},
-            config=mock_config,
-        )
-
-        assert len(evaluator.limit_checks) > 0
-        # Check that metric key is created (could be max, mean, etc.)
-        assert "drawdown_worst_usd" in evaluator.limit_checks[0]["metric_key"]
+        assert not hasattr(evaluator, "scoring_weights")
+        assert not hasattr(evaluator, "seen_hashes")
+        assert not hasattr(evaluator, "duplicate_counter")
+        assert not hasattr(evaluator, "xl")
+        assert not hasattr(evaluator, "sig_digits")
+        assert not hasattr(evaluator, "calc_fitness")
+        assert not hasattr(evaluator, "_enforce_bounds")

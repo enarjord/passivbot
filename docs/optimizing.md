@@ -103,7 +103,7 @@ mode is enabled) instead of the older `analyses_combined` / per-exchange analysi
 
 ## Optimization Process
 
-- Uses NSGA-II genetic algorithm to evolve configurations
+- Uses NSGA-III genetic algorithm to evolve configurations
 - Backtests across historical OHLCV data
 - Uses multiprocessing with shared memory for reduced RAM load
 - Maintains Pareto front of best-performing configurations

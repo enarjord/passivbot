@@ -21,7 +21,7 @@ def extract_objectives(
     Ordered by scoring keys if provided, otherwise by sorted w_* keys.
     """
     metrics_block = entry.get("metrics") or {}
-    objectives_map = metrics_block.get("objectives", metrics_block) or {}
+    objectives_map = entry.get("objectives") or metrics_block.get("objectives", metrics_block) or {}
     if scoring_keys:
         w_keys = [f"w_{i}" for i in range(len(scoring_keys))]
     else:

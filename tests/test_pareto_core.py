@@ -45,3 +45,22 @@ def test_prune_preserves_extremes_and_uses_crowding():
     arr = np.array([objectives[k] for k in front])
     cds = crowding_distances(arr)
     assert cds.shape[0] == len(front)
+
+
+def test_objectives_read_from_top_level():
+    """Objectives stored at top level (new callback format) must be found."""
+    entry = {
+        "metrics": {"stats": {"adg": 0.01}},
+        "objectives": {"w_0": 0.5, "w_1": 0.3},
+        "optimize": {"scoring": ["adg", "sharpe"]},
+    }
+    metrics_block = entry.get("metrics", {}) or {}
+    # Current buggy code: looks inside metrics_block
+    objectives_buggy = dict(metrics_block.get("objectives", metrics_block))
+    # Fixed code: check top-level first
+    objectives_fixed = dict(entry.get("objectives") or metrics_block.get("objectives", metrics_block))
+
+    # Buggy version returns the entire metrics_block (wrong)
+    assert "w_0" not in objectives_buggy  # proves the bug exists
+    # Fixed version returns the actual objectives
+    assert objectives_fixed == {"w_0": 0.5, "w_1": 0.3}

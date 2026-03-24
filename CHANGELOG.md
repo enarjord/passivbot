@@ -5,6 +5,8 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 ### Changed
+- **Optimizer migrated from DEAP to pymoo NSGA-III** - The optimizer now uses pymoo's NSGA-III implementation with Das-Dennis reference directions, SBX crossover, and polynomial mutation, replacing the previous DEAP-based evolutionary algorithm.
+- **Step bounds treated as continuous** - Optimizer bounds specified as `[low, high, step]` now treat the parameter as continuous; the step value is ignored. `SignificantDigitsRepair` rounds decision variables to N significant digits after each genetic operation instead.
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.
 - **ADG terminal smoothing simplified** - Backtest `gain`/`adg` now smooth the terminal value by taking the mean of the last up to 3 daily equity samples instead of running an EMA over the full daily-equity series. This preserves end-of-run drawdown smoothing while reducing computation.
 

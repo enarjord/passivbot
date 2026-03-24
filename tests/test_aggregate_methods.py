@@ -6,7 +6,7 @@ high_exposure_hours_max_long) are respected when:
      explicit coins
   2. pareto_store._suite_metrics_to_stats extracts aggregated values
   3. pareto_store.main() corrects objective values for non-mean aggregates
-  4. optimize.SuiteEvaluator overrides flat_stats before calc_fitness
+  4. optimize.SuiteEvaluator passes flat_stats_override for non-mean aggregates
 """
 
 from copy import deepcopy

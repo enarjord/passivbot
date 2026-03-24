@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import json
 import hashlib
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import glob
 import math
 import time
@@ -16,15 +16,7 @@ from opt_utils import round_floats
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
-from optimization.bounds import Bound
-from pareto_core import (
-    compute_ideal,
-    crowding_distances,
-    dominates_with_violation,
-    extract_objectives,
-    extract_violation,
-    prune_front_with_extremes,
-)
+from pareto_core import compute_ideal
 
 STAT_FIELDS = {"mean", "min", "max", "std"}
 
@@ -115,46 +107,6 @@ def _suite_metrics_to_stats(
     return stats_flat, aggregated_values
 
 
-def _quantize_entry_bot_params_with_bounds(
-    entry: dict, bounds: Sequence[Bound], log: logging.Logger
-) -> dict:
-    bot = entry.get("bot", {})
-    if not isinstance(bot, dict):
-        return entry
-
-    idx = 0
-    for pside in sorted(bot):
-        pside_params = bot.get(pside, {})
-        if not isinstance(pside_params, dict):
-            continue
-        for key in sorted(pside_params):
-            if idx >= len(bounds):
-                log.warning(
-                    "ParetoStore bounds length mismatch: bot has more params than bounds "
-                    "(at least %d > %d); skipping remaining params",
-                    idx + 1,
-                    len(bounds),
-                )
-                return entry
-            bound = bounds[idx]
-            value = pside_params[key]
-            if bound.is_stepped:
-                pside_params[key] = bound.quantize(value)
-            else:
-                pside_params[key] = (
-                    bound.high if value > bound.high else bound.low if value < bound.low else value
-                )
-            idx += 1
-
-    if idx != len(bounds):
-        log.warning(
-            "ParetoStore bounds length mismatch: bounds has %d entries but bot has %d params",
-            len(bounds),
-            idx,
-        )
-    return entry
-
-
 def _evaluate_limits(
     specs: Sequence[LimitSpec],
     stats_flat: Dict[str, float],
@@ -172,253 +124,57 @@ def _evaluate_limits(
 
 
 class ParetoStore:
-    def __init__(
-        self,
-        directory: str,
-        sig_digits: int = 6,
-        bounds: Optional[Sequence[Bound]] = None,
-        flush_interval: int = 60,
-        log_name: str | None = None,
-        max_size: int = 300,
-    ):
-        self._log = logging.getLogger(log_name or __name__)
+    """
+    Write-only store for Pareto front configs.
+    pymoo owns the Pareto front in-memory. This store writes configs to disk.
+    """
+
+    def __init__(self, directory: str, sig_digits: int = 6):
+        self._log = logging.getLogger(__name__)
         self.directory = directory
         self.pareto_dir = os.path.join(self.directory, "pareto")
         self.sig_digits = sig_digits
-        self.bounds = bounds
-        self.flush_interval = flush_interval  # seconds
-        self.max_size = max(1, int(max_size))
-        os.makedirs(os.path.join(self.directory, "pareto"), exist_ok=True)
-        # --- in-memory structures -----------------------------------------
+        os.makedirs(self.pareto_dir, exist_ok=True)
         self._entries: dict[str, str] = {}  # hash -> file path
-        self._objectives: dict[str, tuple] = {}  # hash -> objective vector
-        self._violations: dict[str, float] = {}  # hash -> constraint violation
-        self._front: list[str] = []  # list of hashes (Pareto set)
-        self._objective_lookup: dict[tuple, str] = {}  # objective vector ➜ hash
-        # ------------------------------------------------------------------
-        self.n_iters = 0
-        self._last_flush_ts = time.time()
-        self._lock = threading.RLock()
+        self._written_hashes: set[str] = set()
 
-        self.scoring_keys = None
-
-        # bootstrap from disk if any
-        self._bootstrap_from_disk()
+    def __len__(self) -> int:
+        return len(self._entries)
 
     def add_entry(self, entry: dict, *, source_path: str | None = None) -> bool:
-        """
-        Add a new entry, update Pareto front in‑memory.
-        Return True if the store actually changed.
-        """
-        self.n_iters += 1
-        if self.scoring_keys is None:
-            self.scoring_keys = entry["optimize"]["scoring"]
         rounded = round_floats(entry, self.sig_digits)
-        if self.bounds is not None:
-            rounded = _quantize_entry_bot_params_with_bounds(rounded, self.bounds, self._log)
         h = calc_hash(rounded)
-        with self._lock:
-            if h in self._entries:  # fast‑dedupe
-                return False
+        if h in self._entries:
+            self._written_hashes.add(h)
+            return False
+        self._persist_entry(h, rounded, source_path=source_path)
+        self._written_hashes.add(h)
+        return True
 
-            metrics_block = rounded.get("metrics", {}) or {}
-            scoring_keys = self.scoring_keys or entry.get("optimize", {}).get("scoring")
-            obj, _ = extract_objectives(rounded, scoring_keys=scoring_keys)
-            violation = extract_violation(rounded)
-
-            # ───────────── NEW: dedupe on the objective vector ──────────────
-            existing_hash = self._objective_lookup.get(obj)
-            if existing_hash:
-                existing_violation = self._violations.get(existing_hash, 0.0)
-                if violation >= existing_violation - 1e-12:
-                    self._log.info(
-                        "Dropping candidate whose obj score is already present with <= violation: %s",
-                        obj,
-                    )
-                    return False
-                else:
-                    # replace existing entry with higher violation
-                    self._remove_from_front(existing_hash)
-            # ────────────────────────────────────────────────────────────────
-
-            # discard if dominated by current front
-            if any(
-                dominates_with_violation(
-                    self._objectives[idx],
-                    self._violations.get(idx, 0.0),
-                    obj,
-                    violation,
-                )
-                for idx in self._front
-            ):
-                return False
-
-            # remove dominated members
-            dominated = [
-                idx
-                for idx in self._front
-                if dominates_with_violation(
-                    obj, violation, self._objectives[idx], self._violations.get(idx, 0.0)
-                )
-            ]
-            for idx in dominated:
-                self._remove_from_front(idx)
-
-            # add new member
-            self._persist_entry(h, rounded, source_path=source_path)
-            self._objectives[h] = obj
-            self._violations[h] = violation
-            self._front.append(h)
-            self._objective_lookup[obj] = h
-
-            if len(self._front) > self.max_size:
-                self._prune_front(len(self._front) - self.max_size)
-
-            self._log_front_state(
-                added=1,
-                removed=len(dominated),
-            )
-
-            # maybe flush
-            self._maybe_flush()
-
-            return True
-
-    def get_front(self) -> list[dict]:
-        with self._lock:
-            results = []
-            for h in self._front:
-                path = self._entries.get(h)
-                if not path:
-                    continue
-                try:
-                    with open(path) as f:
-                        results.append(json.load(f))
-                except FileNotFoundError:
-                    continue
-            return results
-
-    def flush_now(self) -> None:
-        """Force a write of the current in‑memory set to disk."""
-        with self._lock:
-            self._write_all_to_disk()
-            self._last_flush_ts = time.time()
-
-    def _maybe_flush(self) -> None:
-        if time.time() - self._last_flush_ts >= self.flush_interval:
-            self._write_all_to_disk()
-            self._last_flush_ts = time.time()
-
-    def _write_all_to_disk(self) -> None:
-        if not self._front:
-            for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
-                try:
-                    os.remove(fp)
-                except OSError:
-                    pass
+    def flush(self) -> None:
+        if not self._written_hashes:
             return
+        stale = set(self._entries.keys()) - self._written_hashes
+        for h in stale:
+            self._delete_entry_file(h)
+        self._written_hashes.clear()
 
-        live_files = set(self._entries.values())
-        for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
-            if fp not in live_files:
-                try:
-                    os.remove(fp)
-                except OSError as e:
-                    self._log.warning("Could not remove obsolete Pareto file %s: %s", fp, e)
-
-    def _bootstrap_from_disk(self) -> None:
-        """
-        Read existing *.json files once at start so we don’t lose old results
-        when the new optimizer run appends.
-        """
-        for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
-            try:
-                with open(fp) as f:
-                    entry = json.load(f)
-                self.add_entry(entry, source_path=fp)
-            except Exception as e:
-                print(f"bootstrap skip {fp}: {e}")
-
-    def _log_front_state(self, *, added: int, removed: int) -> None:
-        """Emit a compact one‑liner with min / max / spread per objective."""
-        objs = [self._objectives[idx] for idx in self._front]
-
-        mins = [min(col) for col in zip(*objs)]
-        maxs = [max(col) for col in zip(*objs)]
-
-        metrics = []
-        for i, key in enumerate(self.scoring_keys):
-            metrics.append(
-                f"{key}:(" f"{pbr.round_dynamic(mins[i], 3)}," f"{pbr.round_dynamic(maxs[i], 3)}),"
+    def _persist_entry(self, hash_id, entry, *, source_path=None):
+        path = source_path or os.path.join(self.pareto_dir, f"{hash_id}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(
+                json_dumps_streamlined(
+                    entry,
+                    indent=4,
+                    max_inline=72,
+                    separators=(",", ":"),
+                )
             )
-
-        line = " | ".join(metrics)
-        violation_summary = ""
-        if self._front:
-            viols = [self._violations.get(idx, 0.0) for idx in self._front]
-            if viols:
-                violation_summary = (
-                    f" | constraint:("
-                    f"{pbr.round_dynamic(min(viols), 3)},"
-                    f"{pbr.round_dynamic(max(viols), 3)})"
-                )
-
-        self._log.info(
-            f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}{violation_summary}"
-        )
-
-    def _prune_front(self, n_prune: int) -> None:
-        """Trim the Pareto front down by removing the most crowded entries."""
-        if n_prune <= 0 or len(self._front) <= n_prune:
-            return
-        to_remove = prune_front_with_extremes(
-            self._front, self._objectives, self._violations, len(self._front) - n_prune
-        )
-        for hash_id in to_remove:
-            self._remove_from_front(hash_id)
-
-    def _remove_from_front(self, hash_id: str) -> None:
-        obj = self._objectives.pop(hash_id, None)
-        if obj is not None:
-            self._objective_lookup.pop(obj, None)
-        self._violations.pop(hash_id, None)
-        self._delete_entry_file(hash_id)
-        try:
-            self._front.remove(hash_id)
-        except ValueError:
-            pass
-
-    def _persist_entry(self, hash_id: str, entry: dict, *, source_path: str | None = None) -> None:
-        if source_path is None:
-            path = os.path.join(self.pareto_dir, f"{hash_id}.json")
-            tmp = path + ".tmp"
-            with open(tmp, "w") as f:
-                f.write(
-                    json_dumps_streamlined(
-                        entry,
-                        indent=4,
-                        max_inline=72,
-                        separators=(",", ":"),
-                    )
-                )
-            os.replace(tmp, path)
-        else:
-            path = source_path
-            if not os.path.exists(path):
-                tmp = path + ".tmp"
-                with open(tmp, "w") as f:
-                    f.write(
-                        json_dumps_streamlined(
-                            entry,
-                            indent=4,
-                            max_inline=72,
-                            separators=(",", ":"),
-                        )
-                    )
-                os.replace(tmp, path)
+        os.replace(tmp, path)
         self._entries[hash_id] = path
 
-    def _delete_entry_file(self, hash_id: str) -> None:
+    def _delete_entry_file(self, hash_id):
         path = self._entries.pop(hash_id, None)
         if path and os.path.exists(path):
             try:
@@ -595,7 +351,10 @@ def main():
                 metric_names = entry.get("optimize", {}).get("scoring", [])
                 metric_name_map = {f"w_{i}": name for i, name in enumerate(metric_names)}
             metrics_block = entry.get("metrics", {}) or {}
-            objectives = dict(metrics_block.get("objectives", metrics_block))
+            objectives = dict(
+                entry.get("objectives")
+                or metrics_block.get("objectives", metrics_block)
+            )
             aggregate_cfg = entry.get("backtest", {}).get("aggregate")
             stats_flat: Dict[str, float] = {}
             aggregated_values: Dict[str, float] = {}

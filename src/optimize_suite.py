@@ -32,7 +32,6 @@ from suite_runner import (
     collect_suite_coin_sources,
     filter_coins_by_exchange_assignment,
     prepare_master_datasets,
-    _prepare_dataset_subset,
     _compute_slice_indices,
     _normalize_date_to_ts,
     _determine_needed_individual_exchanges,
@@ -213,7 +212,7 @@ async def prepare_suite_contexts(
                 trade_start_idx = min(last_idx, first_idx + warm_minutes)
             meta["trade_start_index"] = trade_start_idx
 
-        # Meta window details (matches _prepare_dataset_subset semantics without hlcvs copies).
+        # Meta window details for the time-sliced view.
         start_value = require_config_value(scenario_config, "backtest.start_date")
         end_value = require_config_value(scenario_config, "backtest.end_date")
         start_ts = _normalize_date_to_ts(str(start_value))
@@ -330,89 +329,49 @@ async def prepare_suite_contexts(
                 )
                 continue
             scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
-            if dataset.hlcvs_spec is not None:
-                start_idx, end_idx, coin_indices = _compute_slice_indices(
-                    dataset,
-                    scenario_config,
-                    selected_coins,
-                    scenario.label,
+            assert dataset.hlcvs_spec is not None, (
+                f"Scenario {scenario.label}: expected SharedMemory spec from "
+                f"prepare_master_datasets but got None for {dataset.exchange}"
+            )
+            start_idx, end_idx, coin_indices = _compute_slice_indices(
+                dataset,
+                scenario_config,
+                selected_coins,
+                scenario.label,
+            )
+            ts_window = (
+                None
+                if dataset.timestamps is None
+                else np.asarray(dataset.timestamps[start_idx:end_idx], dtype=np.int64)
+            )
+            mss_slice = _build_lazy_mss_slice(
+                dataset,
+                scenario_config,
+                selected_coins,
+                start_idx,
+                end_idx,
+                ts_window,
+            )
+            contexts.append(
+                ScenarioEvalContext(
+                    label=scenario.label,
+                    config=scenario_config,
+                    exchanges=[dataset.exchange],
+                    hlcvs_specs={dataset.exchange: dataset.hlcvs_spec},
+                    btc_usd_specs={dataset.exchange: dataset.btc_spec},
+                    msss={dataset.exchange: mss_slice},
+                    timestamps={dataset.exchange: ts_window},
+                    shared_hlcvs_np={},
+                    shared_btc_np={},
+                    attachments={"hlcvs": {}, "btc": {}},
+                    coin_indices={dataset.exchange: coin_indices},
+                    overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
+                    master_hlcvs_specs={dataset.exchange: dataset.hlcvs_spec},
+                    master_btc_specs={dataset.exchange: dataset.btc_spec},
+                    time_slice={dataset.exchange: (start_idx, end_idx)},
+                    coin_slice_indices={dataset.exchange: coin_indices},
                 )
-                ts_window = (
-                    None
-                    if dataset.timestamps is None
-                    else np.asarray(dataset.timestamps[start_idx:end_idx], dtype=np.int64)
-                )
-                mss_slice = _build_lazy_mss_slice(
-                    dataset,
-                    scenario_config,
-                    selected_coins,
-                    start_idx,
-                    end_idx,
-                    ts_window,
-                )
-                contexts.append(
-                    ScenarioEvalContext(
-                        label=scenario.label,
-                        config=scenario_config,
-                        exchanges=[dataset.exchange],
-                        hlcvs_specs={dataset.exchange: dataset.hlcvs_spec},
-                        btc_usd_specs={dataset.exchange: dataset.btc_spec},
-                        msss={dataset.exchange: mss_slice},
-                        timestamps={dataset.exchange: ts_window},
-                        shared_hlcvs_np={},
-                        shared_btc_np={},
-                        attachments={"hlcvs": {}, "btc": {}},
-                        coin_indices={dataset.exchange: coin_indices},
-                        overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
-                        master_hlcvs_specs={dataset.exchange: dataset.hlcvs_spec},
-                        master_btc_specs={dataset.exchange: dataset.btc_spec},
-                        time_slice={dataset.exchange: (start_idx, end_idx)},
-                        coin_slice_indices={dataset.exchange: coin_indices},
-                    )
-                )
-            else:
-                # Fallback: per-scenario SharedMemory when master specs are unavailable.
-                (
-                    hlcvs_slice,
-                    btc_window,
-                    ts_window,
-                    mss_slice,
-                ) = _prepare_dataset_subset(
-                    dataset,
-                    scenario_config,
-                    selected_coins,
-                    scenario.label,
-                )
-                hlcvs_spec, _ = shared_array_manager.create_from(
-                    np.ascontiguousarray(hlcvs_slice, dtype=np.float64)
-                )
-                btc_spec = None
-                if btc_window is not None:
-                    btc_spec, _ = shared_array_manager.create_from(
-                        np.ascontiguousarray(btc_window, dtype=np.float64)
-                    )
-                del hlcvs_slice, btc_window
-
-                contexts.append(
-                    ScenarioEvalContext(
-                        label=scenario.label,
-                        config=scenario_config,
-                        exchanges=[dataset.exchange],
-                        hlcvs_specs={dataset.exchange: hlcvs_spec},
-                        btc_usd_specs={dataset.exchange: btc_spec},
-                        msss={dataset.exchange: mss_slice},
-                        timestamps={dataset.exchange: ts_window},
-                        shared_hlcvs_np={},
-                        shared_btc_np={},
-                        attachments={"hlcvs": {}, "btc": {}},
-                        coin_indices={dataset.exchange: None},  # Already sliced
-                        overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
-                        master_hlcvs_specs=None,
-                        master_btc_specs=None,
-                        time_slice=None,
-                        coin_slice_indices=None,
-                    )
-                )
+            )
 
             continue
 
@@ -435,56 +394,33 @@ async def prepare_suite_contexts(
                 continue
             exchanges_for_scenario.append(exchange_key)
             scenario_config["backtest"]["coins"][exchange_key] = list(coins_for_exchange)
-            if dataset.hlcvs_spec is not None:
-                start_idx, end_idx, coin_indices = _compute_slice_indices(
-                    dataset,
-                    scenario_config,
-                    coins_for_exchange,
-                    scenario.label,
-                )
-                ts_window = (
-                    None
-                    if dataset.timestamps is None
-                    else np.asarray(dataset.timestamps[start_idx:end_idx], dtype=np.int64)
-                )
-                mss_slice = _build_lazy_mss_slice(
-                    dataset,
-                    scenario_config,
-                    coins_for_exchange,
-                    start_idx,
-                    end_idx,
-                    ts_window,
-                )
-                hlcvs_specs_map[exchange_key] = dataset.hlcvs_spec
-                btc_specs_map[exchange_key] = dataset.btc_spec
-                mss_slices[exchange_key] = mss_slice
-                timestamps_map[exchange_key] = ts_window
-            else:
-                (
-                    hlcvs_slice,
-                    btc_window,
-                    ts_window,
-                    mss_slice,
-                ) = _prepare_dataset_subset(
-                    dataset,
-                    scenario_config,
-                    coins_for_exchange,
-                    scenario.label,
-                )
-                hlcvs_spec, _ = shared_array_manager.create_from(
-                    np.ascontiguousarray(hlcvs_slice, dtype=np.float64)
-                )
-                btc_spec = None
-                if btc_window is not None:
-                    btc_spec, _ = shared_array_manager.create_from(
-                        np.ascontiguousarray(btc_window, dtype=np.float64)
-                    )
-                del hlcvs_slice, btc_window
-
-                hlcvs_specs_map[exchange_key] = hlcvs_spec
-                btc_specs_map[exchange_key] = btc_spec
-                mss_slices[exchange_key] = mss_slice
-                timestamps_map[exchange_key] = ts_window
+            assert dataset.hlcvs_spec is not None, (
+                f"Scenario {scenario.label}: expected SharedMemory spec from "
+                f"prepare_master_datasets but got None for {dataset.exchange}"
+            )
+            start_idx, end_idx, coin_indices = _compute_slice_indices(
+                dataset,
+                scenario_config,
+                coins_for_exchange,
+                scenario.label,
+            )
+            ts_window = (
+                None
+                if dataset.timestamps is None
+                else np.asarray(dataset.timestamps[start_idx:end_idx], dtype=np.int64)
+            )
+            mss_slice = _build_lazy_mss_slice(
+                dataset,
+                scenario_config,
+                coins_for_exchange,
+                start_idx,
+                end_idx,
+                ts_window,
+            )
+            hlcvs_specs_map[exchange_key] = dataset.hlcvs_spec
+            btc_specs_map[exchange_key] = dataset.btc_spec
+            mss_slices[exchange_key] = mss_slice
+            timestamps_map[exchange_key] = ts_window
 
         if not exchanges_for_scenario:
             logging.warning("Skipping scenario %s: no exchanges after filtering.", scenario.label)
@@ -559,19 +495,3 @@ def ensure_suite_config(config_path: Path, suite_path: Optional[Path]) -> Dict[s
         else:
             raise ValueError(f"Suite config {suite_path} must provide backtest.scenarios definition.")
     return extract_suite_config(config, suite_override)
-
-
-def summarized_metrics(
-    per_scenario_metrics: Dict[str, Dict[str, float]], aggregate: Dict[str, Any]
-) -> Dict[str, Any]:
-    payload = {
-        "aggregate": aggregate,
-        "scenarios": per_scenario_metrics,
-    }
-    return payload
-
-
-#
-# Suite configuration is now canonical under backtest.scenarios.
-# Optimizer suite uses the same schema and reads it via suite_runner.extract_suite_config().
-#
