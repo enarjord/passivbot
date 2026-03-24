@@ -51,6 +51,7 @@ All notable user-facing changes will be documented in this file.
 - **Optimizer constraint visibility** - Pareto logging now reports the top violated constraints and penalties instead of only the aggregate penalty number.
 - **One-way forager shortlist eligibility** - In `hedge_mode: false`, coins already occupied on one side no longer consume initial-entry shortlist slots on the opposite side before being blocked.
 - **Live HSL cooldown re-entry handling** - Live HSL cooldown now consistently enforces the configured intervention policy when a position appears during cooldown, including restart-safe latch updates and fake-live regression coverage for manual-entry scenarios.
+- **`resume_normal_reset_drawdown` no longer self-restarts while flat** - During active RED cooldown, `resume_normal_reset_drawdown` now keeps a flat halted `pside` blocked from fresh bot-created initials. The policy only resumes normal trading after a real non-flat position appears during cooldown, matching the intended operator-override contract.
 
 ### Changed
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.

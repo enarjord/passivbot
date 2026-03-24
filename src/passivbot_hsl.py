@@ -160,7 +160,7 @@ def _equity_hard_stop_halted_mode(self, pside: str, symbol: str | None) -> str:
     if policy == "manual_quarantine":
         return "manual" if size != 0.0 else "graceful_stop"
     if policy == "resume_normal_reset_drawdown":
-        return "normal"
+        return "graceful_stop"
     return "graceful_stop"
 
 

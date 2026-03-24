@@ -138,6 +138,7 @@ that is currently halted in RED cooldown.
    - keep the original cooldown deadline
 3. `resume_normal_reset_drawdown`
    - treat the position as an explicit operator override
+   - while that `pside` is still flat, the bot remains halted and will not open fresh initials on its own
    - clear the halt for that `pside`
    - reset HSL drawdown tracking and rolling-peak state from the current live state
 4. `graceful_stop_keep_cooldown`

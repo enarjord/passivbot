@@ -376,7 +376,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **hsl_position_during_cooldown_policy**: Live-only policy for a position that appears on a halted `pside` during HSL RED cooldown.
   - `repanic_reset_cooldown`: panic-close it again and restart the cooldown from that new flatten.
   - `repanic_keep_original_cooldown`: panic-close it again but keep the original cooldown deadline.
-  - `resume_normal_reset_drawdown`: treat it as an explicit operator override, clear the halt for that `pside`, and restart HSL drawdown tracking from the current state.
+  - `resume_normal_reset_drawdown`: treat it as an explicit operator override once a real non-flat position appears during cooldown; while flat the bot still blocks fresh initials on that `pside`, and only after the position appears does it clear the halt and restart HSL drawdown tracking from the current state.
   - `graceful_stop_keep_cooldown`: manage the existing position with `graceful_stop` semantics while keeping the original cooldown running and blocking fresh initials.
   - `manual_quarantine`: leave that position in `manual` mode while keeping the original cooldown running and blocking fresh initials.
 - **hsl_signal_mode**: Selects whether HSL drawdown is tracked per-side (`"pside"`) or from one combined account-level strategy signal (`"unified"`). See [Equity Hard Stop Loss](equity_hard_stop_loss.md).

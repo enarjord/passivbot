@@ -8,6 +8,7 @@ import pytest
 
 from config_utils import load_config
 from exchanges.fake import FakeCCXTClient
+from passivbot import setup_bot
 from tools.run_fake_live import (
     _async_main,
     _apply_assertions,
@@ -74,6 +75,7 @@ class _StubBot:
 
 
 @pytest.mark.asyncio
+@pytest.mark.fake_live
 async def test_run_fake_bot_advances_until_timeline_end():
     bot = _StubBot()
     client = FakeCCXTClient(_scenario(), quote="USDT")
@@ -82,6 +84,7 @@ async def test_run_fake_bot_advances_until_timeline_end():
     assert [row["step_index"] for row in summaries] == [0, 1, 2]
 
 
+@pytest.mark.fake_live
 def test_apply_assertions_validates_positions_and_halted_psides():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     bot = _StubBot()
@@ -97,6 +100,7 @@ def test_apply_assertions_validates_positions_and_halted_psides():
     _apply_assertions(bot, client, scenario, step_summaries=[], log_text="")
 
 
+@pytest.mark.fake_live
 def test_apply_assertions_supports_path_assertions_and_logs():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     bot = _StubBot()
@@ -121,6 +125,7 @@ def test_apply_assertions_supports_path_assertions_and_logs():
     )
 
 
+@pytest.mark.fake_live
 def test_install_fake_user_override_restores_original_loader():
     import passivbot as passivbot_mod
 
@@ -136,6 +141,7 @@ def test_install_fake_user_override_restores_original_loader():
     assert passivbot_mod.load_user_info is original
 
 
+@pytest.mark.fake_live
 def test_extract_hsl_trace_returns_serializable_state():
     bot = _StubBot()
     trace = _extract_hsl_trace(bot)
@@ -143,6 +149,7 @@ def test_extract_hsl_trace_returns_serializable_state():
     assert trace["short"]["halted"] is True
 
 
+@pytest.mark.fake_live
 def test_prime_fake_fill_cache_writes_fake_fill_events(tmp_path):
     scenario = _scenario()
     scenario["account"]["fills"] = [
@@ -165,6 +172,7 @@ def test_prime_fake_fill_cache_writes_fake_fill_events(tmp_path):
     assert "boot_entry" in payload
 
 
+@pytest.mark.fake_live
 def test_prime_fake_candles_seeds_candlestick_manager_cache():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     cm = type("CM", (), {"_cache": {}, "_ema_cache": {}, "_current_close_cache": {}, "_tf_range_cache": {}})()
@@ -174,6 +182,42 @@ def test_prime_fake_candles_seeds_candlestick_manager_cache():
     assert len(arr) == 1
     assert int(arr[0]["ts"]) == 1_767_225_600_000
     assert float(arr[0]["c"]) == pytest.approx(100.0)
+
+
+@pytest.mark.fake_live
+def test_resume_normal_cooldown_does_not_preauthorize_flat_halted_side():
+    scenario_path = (
+        REPO_ROOT
+        / "scenarios"
+        / "fake_live"
+        / "hsl_long_cooldown_resume_normal_bot_self_entry_bug.hjson"
+    )
+    cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
+    cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = 2.0
+    cfg["live"]["hsl_position_during_cooldown_policy"] = "resume_normal_reset_drawdown"
+    cfg["live"]["hsl_signal_mode"] = "unified"
+    cfg["bot"]["short"] = json.loads(json.dumps(cfg["bot"]["long"]))
+    cfg["bot"]["short"]["hsl_enabled"] = False
+    cfg["live"]["approved_coins"]["long"] = ["XMR"]
+    cfg["live"]["approved_coins"]["short"] = ["XMR"]
+    cfg["live"]["fake_scenario_path"] = str(scenario_path)
+
+    _, restore_user_override = _install_fake_user_override(
+        cfg,
+        str(scenario_path),
+        "fake_hsl_resume_normal_self_entry_bug",
+    )
+    try:
+        bot = setup_bot(cfg)
+        state = bot._hsl_state("long")
+        state["halted"] = True
+        state["cooldown_until_ms"] = 1
+
+        symbol = "XMR/USDT:USDT"
+        assert bot._equity_hard_stop_halted_mode("long", symbol) == "graceful_stop"
+        assert bot._orchestrator_mode_override("long", symbol) == "graceful_stop"
+    finally:
+        restore_user_override()
 
 
 def test_bot_params_to_rust_dict_includes_hsl_fields():
@@ -355,6 +399,7 @@ def test_refresh_halted_runtime_forced_modes_keeps_halted_pside_in_panic_or_grac
 
 
 @pytest.mark.asyncio
+@pytest.mark.fake_live
 @pytest.mark.parametrize(
     (
         "scenario_rel",

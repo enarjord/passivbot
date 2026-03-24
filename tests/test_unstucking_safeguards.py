@@ -851,6 +851,20 @@ async def test_hsl_cooldown_resume_normal_resets_runtime_and_clears_halt(monkeyp
     assert state["runtime"].red_latched() is False
 
 
+def test_hsl_cooldown_resume_normal_blocks_fresh_initials_while_flat():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "resume_normal_reset_drawdown"
+    state = _hsl_state(bot)
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    bot.positions[symbol]["long"]["size"] = 0.0
+
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "graceful_stop"
+
+
 @pytest.mark.asyncio
 async def test_hsl_cooldown_graceful_stop_keeps_cooldown_and_manages_position():
     cfg = _dummy_config()

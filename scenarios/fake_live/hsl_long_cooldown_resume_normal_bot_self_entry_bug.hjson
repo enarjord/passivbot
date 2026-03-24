@@ -1,0 +1,104 @@
+{
+  name: hsl_long_cooldown_resume_normal_bot_self_entry_bug
+  exchange: fake
+  start_time: "2026-01-01T00:00:00Z"
+  boot_index: 3
+  run_initial_cycle: false
+  tick_interval_seconds: 30
+  account: {
+    balance: 185.0
+    positions: []
+    fills: [
+      {
+        id: "10"
+        order: "10"
+        timestamp: "2026-01-01T00:00:00Z"
+        symbol: "XMR/USDT:USDT"
+        position_side: long
+        side: buy
+        amount: 5.0
+        price: 80.0
+        pnl: 0.0
+        clientOrderId: initial_entry_boot
+      }
+      {
+        id: "11"
+        order: "11"
+        timestamp: "2026-01-01T00:00:30Z"
+        symbol: "XMR/USDT:USDT"
+        position_side: long
+        side: sell
+        amount: 5.0
+        price: 100.0
+        pnl: 100.0
+        reduceOnly: true
+        clientOrderId: close_grid_long
+      }
+      {
+        id: "12"
+        order: "12"
+        timestamp: "2026-01-01T00:00:30Z"
+        symbol: "XMR/USDT:USDT"
+        position_side: long
+        side: buy
+        amount: 5.0
+        price: 100.0
+        pnl: 0.0
+        clientOrderId: entry_initial_normal_long
+      }
+      {
+        id: "13"
+        order: "13"
+        timestamp: "2026-01-01T00:01:00Z"
+        symbol: "XMR/USDT:USDT"
+        position_side: long
+        side: sell
+        amount: 5.0
+        price: 97.0
+        pnl: -15.0
+        reduceOnly: true
+        clientOrderId: close_panic_long
+      }
+    ]
+  }
+  symbols: {
+    "XMR/USDT:USDT": {
+      price_step: 0.1
+      qty_step: 0.001
+      min_qty: 0.001
+      min_cost: 5.0
+      maker_fee: 0.0
+      taker_fee: 0.0
+    }
+  }
+  timeline: [
+    {t: 0, prices: {"XMR/USDT:USDT": 100.0}}
+    {t: 1, prices: {"XMR/USDT:USDT": 100.0}}
+    {t: 2, prices: {"XMR/USDT:USDT": 97.0}}
+    {t: 3, prices: {"XMR/USDT:USDT": 97.0}}
+    {t: 4, prices: {"XMR/USDT:USDT": 97.0}}
+    {t: 5, prices: {"XMR/USDT:USDT": 97.0}}
+  ]
+  assertions: {
+    fill_count: 4
+    final_balance: 185.0
+    final_positions: {
+      "XMR/USDT:USDT|long": 0.0
+    }
+    hsl_paths: {
+      long.halted: true
+      long.no_restart_latched: false
+      long.cooldown_intervention_active: false
+      long.cooldown_until_ms: {min: 1}
+    }
+    summary_paths: {
+      step_count: 2
+      last.step_index: 5
+      last.open_orders: 0
+    }
+    log_contains: [
+      "reconstructed active RED cooldown from exchange-derived history"
+      "RED cooldown active"
+    ]
+  }
+}
