@@ -1801,6 +1801,179 @@ async def test_get_balance_equity_history_records_panic_flatten_with_same_minute
 
 
 @pytest.mark.asyncio
+async def test_get_balance_equity_history_uses_current_positions_to_reconcile_panic_flatten(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = "XMR/USDT:USDT"
+    base_minute = (1_700_000_000_000 // 60_000) * 60_000
+    base_ts = base_minute
+    bot.c_mults = {symbol: 1.0}
+    bot.inverse = False
+    bot.positions = {symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}}
+
+    async def fake_init_pnls():
+        return None
+
+    class FakeCM:
+        async def get_candles(
+            self, symbol_, start_ts=None, end_ts=None, strict=False, timeframe=None
+        ):
+            assert symbol_ == symbol
+            assert timeframe in (None, "1m")
+            return _make_candles(
+                [
+                    (base_ts, 100.0, 101.0, 95.0, 95.0, 1.0),
+                    (base_ts + 60_000, 95.0, 96.0, 94.0, 95.0, 1.0),
+                    (base_ts + 120_000, 95.0, 96.0, 94.0, 95.0, 1.0),
+                ]
+            )
+
+    monkeypatch.setattr(bot, "init_pnls", fake_init_pnls)
+    bot.cm = FakeCM()
+    bot._live_values["pnls_max_lookback_days"] = 1.0
+    bot.get_exchange_time = lambda: base_ts + 120_000
+    bot.get_raw_balance = lambda: 95.0
+
+    fill_events = [
+        {
+            "timestamp": base_ts + 1_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": -0.1,
+            "price": 100.0,
+            "side": "sell",
+            "pnl": 0.0,
+            "pb_order_type": "close_grid_long",
+        },
+        {
+            "timestamp": base_ts + 20_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": 0.1,
+            "price": 100.0,
+            "side": "buy",
+            "pnl": 0.0,
+            "pb_order_type": "entry_initial_normal_long",
+        },
+        {
+            "timestamp": base_ts + 40_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": 0.28,
+            "price": 95.0,
+            "side": "buy",
+            "pnl": 0.0,
+            "pb_order_type": "entry_grid_normal_long",
+        },
+        {
+            "timestamp": base_ts + 50_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": -0.38,
+            "price": 95.0,
+            "side": "sell",
+            "pnl": -5.0,
+            "pb_order_type": "close_panic_long",
+        },
+    ]
+
+    history = await bot.get_balance_equity_history(fill_events=fill_events, current_balance=95.0)
+
+    assert history["panic_flatten_events"] == [
+        {
+            "timestamp": base_ts + 50_000,
+            "minute_timestamp": base_minute,
+            "pside": "long",
+            "symbol": symbol,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_balance_equity_history_trusts_current_flat_pside_over_residual_panic_replay(
+    monkeypatch, caplog
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = "XMR/USDT:USDT"
+    base_minute = (1_700_000_000_000 // 60_000) * 60_000
+    base_ts = base_minute
+    bot.c_mults = {symbol: 1.0}
+    bot.inverse = False
+    bot.positions = {symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}}
+
+    async def fake_init_pnls():
+        return None
+
+    class FakeCM:
+        async def get_candles(
+            self, symbol_, start_ts=None, end_ts=None, strict=False, timeframe=None
+        ):
+            assert symbol_ == symbol
+            assert timeframe in (None, "1m")
+            return _make_candles(
+                [
+                    (base_ts, 100.0, 101.0, 95.0, 95.0, 1.0),
+                    (base_ts + 60_000, 95.0, 96.0, 94.0, 95.0, 1.0),
+                    (base_ts + 120_000, 95.0, 96.0, 94.0, 95.0, 1.0),
+                ]
+            )
+
+    def fake_compute_psize_pprice(events, *args, **kwargs):
+        for ev in events:
+            ev["psize"] = 0.06 if "panic" in str(ev.get("pb_order_type") or "") else 0.16
+            ev["pprice"] = 0.0
+        return {}
+
+    import passivbot as pb_mod
+
+    monkeypatch.setattr(bot, "init_pnls", fake_init_pnls)
+    bot.cm = FakeCM()
+    bot._live_values["pnls_max_lookback_days"] = 1.0
+    bot.get_exchange_time = lambda: base_ts + 120_000
+    bot.get_raw_balance = lambda: 95.0
+    monkeypatch.setattr(pb_mod, "compute_psize_pprice", fake_compute_psize_pprice)
+
+    fill_events = [
+        {
+            "timestamp": base_ts + 20_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": 0.1,
+            "price": 100.0,
+            "side": "buy",
+            "pnl": 0.0,
+            "pb_order_type": "entry_initial_normal_long",
+        },
+        {
+            "timestamp": base_ts + 50_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": -0.38,
+            "price": 95.0,
+            "side": "sell",
+            "pnl": -5.0,
+            "pb_order_type": "close_panic_long",
+        },
+    ]
+
+    with caplog.at_level("WARNING"):
+        history = await bot.get_balance_equity_history(fill_events=fill_events, current_balance=95.0)
+
+    assert history["panic_flatten_events"] == [
+        {
+            "timestamp": base_ts + 50_000,
+            "minute_timestamp": base_minute,
+            "pside": "long",
+            "symbol": symbol,
+        }
+    ]
+    assert any("trusting current flat long state over residual panic replay size" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_hard_stop_initialize_from_history_resets_after_panic_marker_same_minute_reentry(
     monkeypatch,
 ):

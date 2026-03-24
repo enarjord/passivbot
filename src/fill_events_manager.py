@@ -315,32 +315,26 @@ def _compute_add_reduce(pos_side: str, qty_signed: float) -> Tuple[float, float]
     return add_amt, reduce_amt
 
 
-def compute_psize_pprice(
+def _event_add_reduce(ev: Dict[str, object], pos_side: str) -> Tuple[float, float]:
+    """Compute add/reduce amounts for a canonical fill event.
+
+    Prefer explicit ``action`` when present so callers can pass events whose
+    ``qty`` is unsigned but already classified as increase/decrease.
+    """
+    qty_signed = float(ev.get("qty") or ev.get("amount") or 0.0) * float(
+        ev.get("c_mult", 1.0) or 1.0
+    )
+    explicit = str(ev.get("action") or "").lower()
+    if explicit == "increase":
+        return abs(qty_signed), 0.0
+    if explicit == "decrease":
+        return 0.0, abs(qty_signed)
+    return _compute_add_reduce(pos_side, qty_signed)
+
+
+def _group_position_events(
     events: List[Dict[str, object]],
-    initial_state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
-) -> Dict[Tuple[str, str], Tuple[float, float]]:
-    """
-    Compute psize/pprice for each fill event using two-phase algorithm.
-
-    Phase 1: Forward iteration to compute final position state, storing
-             the state before each fill for use in phase 2.
-    Phase 2: Backward iteration to annotate each event with the "after" state.
-
-    This approach is cleaner than multi-pass reconciliation because working
-    backwards from a known final state is deterministic - no reconciliation needed.
-
-    Args:
-        events: List of fill event dicts (must have: symbol, position_side, side, qty, price)
-                Qty sign must be normalized (buy +, sell -).
-        initial_state: Optional starting positions {(symbol, pside): (size, price)}
-
-    Returns:
-        Final position state after all fills: {(symbol, pside): (size, price)}
-    """
-    if not events:
-        return {}
-
-    # Group events by (symbol, position_side)
+) -> Dict[Tuple[str, str], List[Dict[str, object]]]:
     grouped: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
     for ev in events:
         key = (
@@ -348,53 +342,172 @@ def compute_psize_pprice(
             str(ev.get("position_side") or ev.get("pside") or "long").lower(),
         )
         grouped[key].append(ev)
+    return grouped
 
-    final_state: Dict[Tuple[str, str], Tuple[float, float]] = {}
+
+def _forward_position_states(
+    key: Tuple[str, str],
+    evs: List[Dict[str, object]],
+    start_psize: float,
+    start_pprice: float,
+) -> Tuple[List[Tuple[float, float, float, float]], Tuple[float, float]]:
+    psize = float(start_psize)
+    pprice = float(start_pprice)
+    states: List[Tuple[float, float, float, float]] = []
+
+    for ev in evs:
+        price = float(ev.get("price") or 0.0)
+        add_amt, reduce_amt = _event_add_reduce(ev, key[1])
+
+        before_psize = psize
+        before_pprice = pprice
+
+        if add_amt > 0:
+            if psize <= 0:
+                pprice = price
+            elif pprice <= 0:
+                pprice = 0.0
+            else:
+                pprice = ((psize * pprice) + (add_amt * price)) / (psize + add_amt)
+            psize += add_amt
+        if reduce_amt > 0:
+            psize = max(0.0, psize - reduce_amt)
+            if psize <= 1e-12:
+                psize = 0.0
+                pprice = 0.0
+
+        states.append((before_psize, before_pprice, psize, pprice))
+
+    return states, (psize, pprice)
+
+
+def infer_initial_position_sizes(
+    events: List[Dict[str, object]],
+    final_state: Dict[Tuple[str, str], Tuple[float, float]],
+) -> Dict[Tuple[str, str], float]:
+    """Infer initial position sizes by replaying canonical fills backwards.
+
+    Only size is inferred here. Initial price cannot be reconstructed reliably
+    from the terminal state alone.
+    """
+    inferred: Dict[Tuple[str, str], float] = {}
+    for key, evs in _group_position_events(events).items():
+        evs = sorted(evs, key=lambda x: x.get("timestamp", 0))
+        size = float(final_state.get(key, (0.0, 0.0))[0] or 0.0)
+        for ev in reversed(evs):
+            add_amt, reduce_amt = _event_add_reduce(ev, key[1])
+            if reduce_amt > 0.0:
+                size += reduce_amt
+            elif add_amt > 0.0:
+                size = max(0.0, size - add_amt)
+        inferred[key] = float(size)
+    return inferred
+
+
+def compute_psize_pprice(
+    events: List[Dict[str, object]],
+    initial_state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
+    *,
+    final_state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
+    log_discrepancies: bool = False,
+    log_prefix: str = "",
+) -> Dict[Tuple[str, str], Tuple[float, float]]:
+    """
+    Compute psize/pprice for each fill event.
+
+    When ``final_state`` is provided, the function performs a two-pass
+    reconciliation:
+
+    1. Replay fills backwards from authoritative present position sizes to infer
+       the initial position size for each `(symbol, position_side)`.
+    2. Replay fills forwards from that inferred initial size to annotate
+       `psize`/`pprice` after each fill.
+
+    Args:
+        events: List of fill event dicts (must have: symbol, position_side, side, qty, price)
+        initial_state: Optional starting positions {(symbol, pside): (size, price)}.
+            The starting price is used only for the forward pass.
+        final_state: Optional authoritative current positions
+            {(symbol, pside): (size, price)} used to infer initial sizes.
+        log_discrepancies: Emit warnings if raw forward replay disagrees with
+            ``final_state`` or if reconciled output still disagrees.
+        log_prefix: Optional log prefix for discrepancy warnings.
+
+    Returns:
+        Final position state after all fills: {(symbol, pside): (size, price)}
+    """
+    if not events:
+        return {}
+
+    grouped = _group_position_events(events)
+    inferred_initial_sizes: Dict[Tuple[str, str], float] = {}
+    authoritative_final_state = final_state
+    if authoritative_final_state is not None:
+        inferred_initial_sizes = infer_initial_position_sizes(events, authoritative_final_state)
+
+    output_state: Dict[Tuple[str, str], Tuple[float, float]] = {}
+    log_prefix_fmt = f"{log_prefix} " if log_prefix else ""
 
     for key, evs in grouped.items():
         evs.sort(key=lambda x: x.get("timestamp", 0))
 
-        # Phase 1: Forward to compute final state, storing before-state for each fill
-        psize = initial_state.get(key, (0.0, 0.0))[0] if initial_state else 0.0
-        pprice = initial_state.get(key, (0.0, 0.0))[1] if initial_state else 0.0
+        raw_start_psize = initial_state.get(key, (0.0, 0.0))[0] if initial_state else 0.0
+        raw_start_pprice = initial_state.get(key, (0.0, 0.0))[1] if initial_state else 0.0
+        raw_states, raw_final = _forward_position_states(key, evs, raw_start_psize, raw_start_pprice)
 
-        # Store (before_psize, before_pprice, after_psize, after_pprice) for each fill
-        states: List[Tuple[float, float, float, float]] = []
+        start_psize = raw_start_psize
+        start_pprice = raw_start_pprice
+        if authoritative_final_state is not None:
+            start_psize = inferred_initial_sizes.get(key, 0.0)
+            start_pprice = initial_state.get(key, (0.0, 0.0))[1] if initial_state else 0.0
+            target_size, target_pprice = authoritative_final_state.get(key, (0.0, 0.0))
+            if log_discrepancies and abs(raw_final[0] - target_size) > 1e-9:
+                logger.warning(
+                    "%s[fills] psize replay mismatch before reconciliation | symbol=%s pside=%s replayed_size=%.12f actual_size=%.12f",
+                    log_prefix_fmt,
+                    key[0],
+                    key[1],
+                    raw_final[0],
+                    target_size,
+                )
+            if log_discrepancies and start_psize > 1e-12 and start_pprice <= 0.0:
+                logger.warning(
+                    "%s[fills] inferred initial size without known initial pprice | symbol=%s pside=%s inferred_initial_size=%.12f",
+                    log_prefix_fmt,
+                    key[0],
+                    key[1],
+                    start_psize,
+                )
 
-        for ev in evs:
-            qty_signed = float(ev.get("qty") or ev.get("amount") or 0.0) * float(
-                ev.get("c_mult", 1.0) or 1.0
-            )
-            price = float(ev.get("price") or 0.0)
-            add_amt, reduce_amt = _compute_add_reduce(key[1], qty_signed)
+        states, reconciled_final = _forward_position_states(key, evs, start_psize, start_pprice)
+        output_state[key] = reconciled_final
 
-            before_psize = psize
-            before_pprice = pprice
+        if authoritative_final_state is not None and log_discrepancies:
+            target_size, target_pprice = authoritative_final_state.get(key, (0.0, 0.0))
+            if abs(reconciled_final[0] - target_size) > 1e-9:
+                logger.warning(
+                    "%s[fills] psize replay mismatch after reconciliation | symbol=%s pside=%s replayed_size=%.12f actual_size=%.12f",
+                    log_prefix_fmt,
+                    key[0],
+                    key[1],
+                    reconciled_final[0],
+                    target_size,
+                )
+            if target_size > 1e-12 and target_pprice > 0.0 and abs(reconciled_final[1] - target_pprice) > 1e-9:
+                logger.warning(
+                    "%s[fills] pprice replay mismatch after reconciliation | symbol=%s pside=%s replayed_pprice=%.12f actual_pprice=%.12f",
+                    log_prefix_fmt,
+                    key[0],
+                    key[1],
+                    reconciled_final[1],
+                    target_pprice,
+                )
 
-            # Update position
-            if add_amt > 0:
-                if psize <= 0:
-                    pprice = price
-                else:
-                    pprice = ((psize * pprice) + (add_amt * price)) / (psize + add_amt)
-                psize += add_amt
-            if reduce_amt > 0:
-                psize = max(0.0, psize - reduce_amt)
-                if psize <= 1e-12:
-                    psize = 0.0
-                    pprice = 0.0
-
-            states.append((before_psize, before_pprice, psize, pprice))
-
-        final_state[key] = (psize, pprice)
-
-        # Phase 2: Annotate each event with its after-state
-        # The states list already contains the after-state for each fill
         for ev, (_, _, after_psize, after_pprice) in zip(evs, states):
             ev["psize"] = round(after_psize, 12)
             ev["pprice"] = after_pprice
 
-    return final_state
+    return output_state
 
 
 def annotate_positions_inplace(
