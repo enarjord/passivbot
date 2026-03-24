@@ -4325,6 +4325,7 @@ class Passivbot:
                 }
                 return {
                     "timeline": [point],
+                    "panic_flatten_events": [],
                     "balances": [{"timestamp": point["timestamp"], "balance": balance_now}],
                     "equities": [
                         {
@@ -4441,8 +4442,15 @@ class Passivbot:
             positions: Dict[str, Dict[str, Dict[str, float]]] = {}
             active_symbols: set[str] = set()
             timeline: List[Dict[str, float]] = []
+            panic_flatten_events: List[Dict[str, Any]] = []
             missing_price_symbols: set[str] = set()
             realized_pnl_pside_running = {"long": 0.0, "short": 0.0}
+
+            def _pside_is_flat(pside: str) -> bool:
+                return not any(
+                    positions.get(sym, {}).get(pside, {}).get("size", 0.0) > 1e-12
+                    for sym in positions
+                )
 
             def _apply_event(evt: dict):
                 slot = _ensure_slot(positions, evt["symbol"])[evt["pside"]]
@@ -4491,6 +4499,15 @@ class Passivbot:
                     realized_pnl_pside_running[evt["pside"]] += realized_delta
                     if "panic" in str(evt.get("pb_order_type") or ""):
                         panic_fill_count += 1
+                        if _pside_is_flat(evt["pside"]):
+                            panic_flatten_events.append(
+                                {
+                                    "timestamp": int(evt["timestamp"]),
+                                    "minute_timestamp": int(minute),
+                                    "pside": str(evt["pside"]),
+                                    "symbol": str(evt["symbol"]),
+                                }
+                            )
                     event_idx += 1
                 upnl = 0.0
                 upnl_by_pside = {"long": 0.0, "short": 0.0}
@@ -4579,6 +4596,7 @@ class Passivbot:
             }
             return {
                 "timeline": timeline,
+                "panic_flatten_events": panic_flatten_events,
                 "balances": balances,
                 "equities": equities,
                 "metadata": metadata,

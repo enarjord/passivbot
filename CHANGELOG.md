@@ -87,6 +87,9 @@ All notable user-facing changes will be documented in this file.
 ### Added
 - **Fill events doctor tool** - Added `src/tools/fill_events_doctor.py` to audit cached fill events and auto-repair known Bybit duplicate-fill anomalies without requiring exchange API calls. Bybit startup now runs doctor by default (can be disabled with `PASSIVBOT_FILL_EVENTS_DOCTOR=off`).
 
+### Fixed
+- **HSL restart replay now resets from historical panic flatten events** - Live HSL history initialization no longer relies only on minute-bucket `is_flat_{pside}` snapshots to detect prior RED-stop finalization. It now records side-level panic-flatten markers from canonical fill-event replay and resets the affected side after those historical panic closes, fixing stale pre-panic peak carryover when panic-close and re-entry happened within the same minute.
+
 ## v7.8.3 - 2026-02-24
 
 ### Added

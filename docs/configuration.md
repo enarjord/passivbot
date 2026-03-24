@@ -123,6 +123,7 @@ Each `pside` has the same parameter set:
 - **hsl_cooldown_minutes_after_red**:
   - Minutes to wait before auto-restart after a RED halt on that `pside`.
   - `0.0` means halt without auto-restart.
+  - Restart-time HSL replay treats a historical panic-flatten on that `pside` as a completed RED stop and resets tracking from after that panic before evaluating later cooldown/restart behavior.
 - **hsl_no_restart_drawdown_threshold**:
   - Terminal no-restart threshold for that `pside`.
   - Evaluated from persistent cross-restart HSL drawdown.

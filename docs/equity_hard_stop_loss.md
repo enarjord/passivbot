@@ -104,6 +104,24 @@ The opposite `pside` can continue running if its own HSL remains green/orange/ye
 
 In both live and backtests, `hsl_no_restart_drawdown_threshold` is evaluated against persistent cross-restart HSL drawdown for that `pside`, not just the local RED-halt snapshot. Values below `hsl_red_threshold` are treated as `hsl_red_threshold`.
 
+### Restart Replay Contract
+
+The intended HSL contract after a valid RED panic is:
+
+1. once a `pside` panic-close has finalized and that `pside` is flat, that RED stop is considered complete
+2. that `pside`'s HSL equity tracker is then reset from after that panic
+3. any later cooldown, restart, and future RED decisions for that `pside` are measured from the post-panic state, not from pre-panic peaks
+
+This contract applies both to live runtime and to restart-time history replay.
+
+In practical terms, restart replay must treat a historical panic-flatten event as a completed RED stop even if:
+
+1. the panic-close was split across multiple fills
+2. re-entry happened later in the same minute
+3. the old pre-panic drawdown would otherwise still be above the RED threshold
+
+Without this reset, a restarted bot could incorrectly inherit stale pre-panic peaks and repanic immediately after cooldown or after restart. `hsl_no_restart_drawdown_threshold` is the intended protection against repeated unfavorable restart cycles, not stale pre-panic equity tracking.
+
 ### Live Cooldown Intervention Policy
 
 Live trading has one extra case that backtests do not: a human can open a position on a `pside`

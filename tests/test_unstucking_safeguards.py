@@ -1721,6 +1721,192 @@ async def test_get_balance_equity_history_hyperliquid_backfills_from_5m(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_get_balance_equity_history_records_panic_flatten_with_same_minute_reentry(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = "XMR/USDT:USDT"
+    base_minute = (1_700_000_000_000 // 60_000) * 60_000
+    base_ts = base_minute
+    bot.c_mults = {symbol: 1.0}
+    bot.inverse = False
+
+    async def fake_init_pnls():
+        return None
+
+    class FakeCM:
+        async def get_candles(
+            self, symbol_, start_ts=None, end_ts=None, strict=False, timeframe=None
+        ):
+                assert symbol_ == symbol
+                assert timeframe in (None, "1m")
+                return _make_candles(
+                    [
+                        (base_ts, 100.0, 101.0, 95.0, 95.0, 1.0),
+                        (base_ts + 60_000, 95.0, 96.0, 94.0, 95.0, 1.0),
+                        (base_ts + 120_000, 95.0, 96.0, 94.0, 95.0, 1.0),
+                    ]
+                )
+
+    monkeypatch.setattr(bot, "init_pnls", fake_init_pnls)
+    bot.cm = FakeCM()
+    bot._live_values["pnls_max_lookback_days"] = 1.0
+    bot.get_exchange_time = lambda: base_ts + 120_000
+    bot.get_raw_balance = lambda: 95.0
+
+    fill_events = [
+        {
+            "timestamp": base_ts + 1_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 100.0,
+            "side": "buy",
+            "pnl": 0.0,
+            "pb_order_type": "entry_initial_normal_long",
+        },
+        {
+            "timestamp": base_ts + 30_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 95.0,
+            "side": "sell",
+            "pnl": -5.0,
+            "pb_order_type": "close_panic_long",
+        },
+        {
+            "timestamp": base_ts + 40_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 95.0,
+            "side": "buy",
+            "pnl": 0.0,
+            "pb_order_type": "entry_initial_normal_long",
+        },
+    ]
+
+    history = await bot.get_balance_equity_history(fill_events=fill_events, current_balance=95.0)
+
+    row0 = next(row for row in history["timeline"] if row["timestamp"] == base_minute)
+    assert row0["is_flat_long"] is False
+    assert history["panic_flatten_events"] == [
+        {
+            "timestamp": base_ts + 30_000,
+            "minute_timestamp": base_minute,
+            "pside": "long",
+            "symbol": symbol,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_resets_after_panic_marker_same_minute_reentry(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["red_threshold"] = 0.05
+    _hsl_cfg(bot)["ema_span_minutes"] = 1.0
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.3
+    bot.balance = 80.0
+    bot._live_values["execution_delay_seconds"] = 60.0
+
+    async def fake_history(*, current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 1_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 61_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": -20.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 121_000,
+                    "balance": 80.0,
+                    "realized_pnl": -20.0,
+                    "realized_pnl_long": -20.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 181_000,
+                    "balance": 80.0,
+                    "realized_pnl": -20.0,
+                    "realized_pnl_long": -20.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 241_000,
+                    "balance": 80.0,
+                    "realized_pnl": -20.0,
+                    "realized_pnl_long": -20.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+            ],
+            "panic_flatten_events": [
+                {
+                    "timestamp": 121_500,
+                    "minute_timestamp": 121_000,
+                    "pside": "long",
+                    "symbol": "XMR/USDT:USDT",
+                }
+            ],
+        }
+
+    async def fake_upnl(*_args, **_kwargs):
+        return 0.0
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(bot, "get_exchange_time", lambda: 301_000)
+    monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+    monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", lambda pside, payload: "/tmp/latch.json")
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    assert bot.stop_signal_received is False
+    assert _hsl_state(bot)["halted"] is False
+    assert _hsl_state(bot)["runtime"].red_latched() is False
+    assert _hsl_state(bot)["runtime"].tier() != "red"
+    assert _hsl_state(bot)["pending_red_since_ms"] is None
+    assert _hsl_state(bot)["last_stop_event"]["stop_event_timestamp_ms"] == 121_500
+
+
+@pytest.mark.asyncio
 async def test_orders_sorted_by_market_diff(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)

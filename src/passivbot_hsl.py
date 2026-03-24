@@ -790,6 +790,35 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             raise TypeError(
                 f"get_balance_equity_history()['timeline'] must be a list, got {type(timeline).__name__}"
             )
+        panic_flatten_events = history.get("panic_flatten_events", [])
+        if panic_flatten_events is None:
+            panic_flatten_events = []
+        if not isinstance(panic_flatten_events, list):
+            raise TypeError(
+                "get_balance_equity_history()['panic_flatten_events'] must be a list, "
+                f"got {type(panic_flatten_events).__name__}"
+            )
+        panic_flatten_events_by_key = {}
+        for item in panic_flatten_events:
+            if not isinstance(item, dict):
+                continue
+            pside = str(item.get("pside") or "").lower()
+            if pside not in self._hsl_psides():
+                continue
+            minute_ts = item.get("minute_timestamp")
+            stop_ts = item.get("timestamp")
+            if minute_ts is None or stop_ts is None:
+                continue
+            key = (pside, int(minute_ts))
+            marker = {
+                "timestamp": int(stop_ts),
+                "minute_timestamp": int(minute_ts),
+                "pside": pside,
+                "symbol": str(item.get("symbol") or ""),
+            }
+            prev = panic_flatten_events_by_key.get(key)
+            if prev is None or marker["timestamp"] >= prev["timestamp"]:
+                panic_flatten_events_by_key[key] = marker
         now_ms = int(self.get_exchange_time())
         current_balance = float(self.get_raw_balance())
         current_realized_total = float(self._equity_hard_stop_realized_pnl_now())
@@ -844,6 +873,49 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 if self._equity_hard_stop_runtime_tier(pside) == "red":
                     pending_red = True
                     state["pending_red_since_ms"] = int(ts)
+                panic_flatten_marker = panic_flatten_events_by_key.get((pside, ts))
+                if panic_flatten_marker is not None:
+                    stop_drawdown_raw = float(current_metrics["drawdown_raw"])
+                    cooldown_until_ms = None
+                    if stop_drawdown_raw < no_restart_drawdown_threshold and cooldown_ms > 0:
+                        cooldown_until_ms = int(panic_flatten_marker["timestamp"]) + cooldown_ms
+                    payload = self._equity_hard_stop_build_latch_payload(
+                        pside,
+                        stop_event_timestamp_ms=int(panic_flatten_marker["timestamp"]),
+                        balance=float(row["balance"]),
+                        realized_pnl_total=float(row["realized_pnl"]),
+                        realized_pnl=float(row[f"realized_pnl_{pside}"]),
+                        unrealized_pnl=float(row[f"unrealized_pnl_{pside}"]),
+                        strategy_pnl=float(current_metrics["strategy_pnl"]),
+                        peak_strategy_pnl=float(current_metrics["peak_strategy_pnl"]),
+                        strategy_equity=float(current_metrics["strategy_equity"]),
+                        peak_strategy_equity=float(current_metrics["peak_strategy_equity"]),
+                        trigger_peak_strategy_equity=float(current_metrics["peak_strategy_equity"]),
+                        drawdown_raw=float(current_metrics["drawdown_raw"]),
+                        drawdown_ema=float(current_metrics["drawdown_ema"]),
+                        drawdown_score=float(current_metrics["drawdown_score"]),
+                        no_restart_latched=bool(stop_drawdown_raw >= no_restart_drawdown_threshold),
+                        cooldown_until_ms=cooldown_until_ms,
+                    )
+                    state["last_stop_event"] = payload
+                    state["halted"] = True
+                    state["no_restart_latched"] = bool(stop_drawdown_raw >= no_restart_drawdown_threshold)
+                    state["cooldown_until_ms"] = cooldown_until_ms
+                    state["pending_red_since_ms"] = None
+                    latch_path = self._equity_hard_stop_write_latch(pside, payload)
+                    logging.critical(
+                        "[risk] HSL[%s] replay found finalized RED stop in exchange-derived history | stop_ts=%s drawdown_raw=%.6f no_restart_latched=%s cooldown_until_ms=%s diagnostic=%s source=panic_fill_flatten",
+                        pside,
+                        int(panic_flatten_marker["timestamp"]),
+                        stop_drawdown_raw,
+                        state["no_restart_latched"],
+                        cooldown_until_ms if cooldown_until_ms is not None else "none",
+                        latch_path,
+                    )
+                    pending_red = False
+                    if state["no_restart_latched"]:
+                        break
+                    continue
                 is_flat = bool(row.get(f"is_flat_{pside}", False))
                 if pending_red and is_flat:
                     stop_drawdown_raw = float(current_metrics["drawdown_raw"])
