@@ -61,6 +61,8 @@ Current behavior:
 3. provides a browser focus-symbol selector without changing bot state
 4. renders summary, focus, positions, trailing, forager, unstuck, recent events, recent ticks, and recent orders from the current snapshot plus live websocket tail
 5. uses the same relay contract as the TUI, so browser/mobile readers can stay read-only and decoupled from bot memory
+6. recent events, ticks, trailing cards, and order rows now use compact summaries instead of dumping raw payload JSON into narrow cards
+7. symbol-bearing rows in the positions, trailing, ticks, recent events, and recent orders panels can now be clicked to set browser focus quickly
 
 ## Minimal TUI
 
