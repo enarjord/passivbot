@@ -766,6 +766,7 @@ class Passivbot:
                 "cooldown_intervention_active": False,
                 "cooldown_repanic_reset_pending": False,
                 "last_cooldown_intervention_log_ms": 0,
+                "cooldown_unresolved_residue": False,
             }
             for pside in ("long", "short")
         }
@@ -1331,8 +1332,12 @@ class Passivbot:
     _equity_hard_stop_lookback_ms = pb_hsl._equity_hard_stop_lookback_ms
     _equity_hard_stop_apply_sample = pb_hsl._equity_hard_stop_apply_sample
     _equity_hard_stop_log_transition = pb_hsl._equity_hard_stop_log_transition
+    _equity_hard_stop_format_remaining_time = staticmethod(
+        pb_hsl._equity_hard_stop_format_remaining_time
+    )
     _equity_hard_stop_build_latch_payload = pb_hsl._equity_hard_stop_build_latch_payload
     _equity_hard_stop_compute_stop_event = pb_hsl._equity_hard_stop_compute_stop_event
+    _equity_hard_stop_infer_replay_contract = pb_hsl._equity_hard_stop_infer_replay_contract
     _equity_hard_stop_log_cooldown_status = pb_hsl._equity_hard_stop_log_cooldown_status
     _equity_hard_stop_position_symbols = pb_hsl._equity_hard_stop_position_symbols
     _equity_hard_stop_refresh_cooldown_after_repanic = (
@@ -1342,6 +1347,7 @@ class Passivbot:
         pb_hsl._equity_hard_stop_handle_position_during_cooldown
     )
     _equity_hard_stop_reset_after_restart = pb_hsl._equity_hard_stop_reset_after_restart
+    _equity_hard_stop_replay_from_boundary = pb_hsl._equity_hard_stop_replay_from_boundary
     _equity_hard_stop_refresh_halted_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_refresh_halted_runtime_forced_modes
     )
@@ -4350,6 +4356,7 @@ class Passivbot:
                 return {
                     "timeline": [point],
                     "panic_flatten_events": [],
+                    "fill_events": [],
                     "balances": [{"timestamp": point["timestamp"], "balance": balance_now}],
                     "equities": [
                         {
@@ -4648,6 +4655,7 @@ class Passivbot:
             return {
                 "timeline": timeline,
                 "panic_flatten_events": panic_flatten_events,
+                "fill_events": events,
                 "balances": balances,
                 "equities": equities,
                 "metadata": metadata,

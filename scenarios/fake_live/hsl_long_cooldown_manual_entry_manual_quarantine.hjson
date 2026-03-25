@@ -107,7 +107,7 @@
       last.open_orders: 0
     }
     log_contains: [
-      "detected non-flat position during RED cooldown | policy=manual_quarantine"
+      "detected non-flat position during RED cooldown | policy=manual"
       "changed long.BTC/USDT:USDT: panic -> manual"
     ]
   }

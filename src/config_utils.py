@@ -147,11 +147,11 @@ HSL_PSIDE_KEYS = (
 )
 HSL_SIGNAL_MODES = ("pside", "unified")
 HSL_COOLDOWN_POSITION_POLICIES = (
-    "repanic_reset_cooldown",
-    "repanic_keep_original_cooldown",
-    "resume_normal_reset_drawdown",
-    "graceful_stop_keep_cooldown",
-    "manual_quarantine",
+    "normal",
+    "panic",
+    "tp_only",
+    "graceful_stop",
+    "manual",
 )
 MONITOR_BOOL_KEYS = (
     "enabled",
@@ -2821,7 +2821,7 @@ def get_template_config():
             "forced_mode_long": "",
             "forced_mode_short": "",
             "hedge_mode": True,
-            "hsl_position_during_cooldown_policy": "repanic_reset_cooldown",
+            "hsl_position_during_cooldown_policy": "panic",
             "hsl_signal_mode": "pside",
             "ignored_coins": {"long": [], "short": []},
             "inactive_coin_candle_ttl_minutes": 10.0,

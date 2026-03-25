@@ -54,6 +54,7 @@ See also:
 1. [Risk Management](risk_management.md)
 2. [Configuration](configuration.md)
 3. [HSL Reference](equity_hard_stop_loss_reference.md)
+4. [HSL Cooldown Contracts](equity_hard_stop_loss_cooldown_contracts.md)
 
 ## How It Works
 
@@ -129,25 +130,25 @@ that is currently halted in RED cooldown.
 
 `live.hsl_position_during_cooldown_policy` controls what happens next:
 
-1. `repanic_reset_cooldown`
+1. `panic`
    - panic-close that position immediately
    - once flat, restart the cooldown timer from that new panic-close
    - this is the safest default
-2. `repanic_keep_original_cooldown`
-   - panic-close that position immediately
-   - keep the original cooldown deadline
-3. `resume_normal_reset_drawdown`
+2. `normal`
    - treat the position as an explicit operator override
    - while that `pside` is still flat, the bot remains halted and will not open fresh initials on its own
    - clear the halt for that `pside`
    - reset HSL drawdown tracking and rolling-peak state from the current live state
-4. `graceful_stop_keep_cooldown`
-   - keep the original cooldown deadline
-   - manage the position with `graceful_stop` semantics:
-     the bot may manage the existing position, but it will not open fresh initials on that `pside`
-5. `manual_quarantine`
+3. `manual`
    - keep the original cooldown deadline
    - leave the position in `manual` mode and do not let the bot resume normal trading on that `pside`
+4. `tp_only`
+   - keep the original cooldown deadline
+   - block new entries on that `pside`
+   - allow Passivbot to manage closes only
+5. `graceful_stop`
+   - keep the original cooldown deadline
+   - manage the existing position with `graceful_stop` semantics while still blocking fresh initials
 
 This policy is live-only. Backtests do not model human intervention during cooldown.
 
