@@ -1223,6 +1223,12 @@ def _apply_non_live_adjustments(
             canonical_scoring.append(canon)
             seen.add(canon)
     result["optimize"]["scoring"] = canonical_scoring
+    backend = str(result["optimize"].get("backend", "deap") or "deap").strip().lower()
+    if backend not in {"deap", "pymoo"}:
+        raise ValueError(
+            f"optimize.backend must be one of ['deap', 'pymoo']; got {result['optimize'].get('backend')!r}"
+        )
+    result["optimize"]["backend"] = backend
 
     current_limits = deepcopy(result["optimize"].get("limits", []))
     limits_snapshot = deepcopy(current_limits)
@@ -1972,6 +1978,7 @@ def create_acronym(full_name, acronyms=set()):
 #       "help": "Human-facing help text",
 #   }
 RESERVED_CLI_ARGS = {
+<<<<<<< HEAD
     "live.approved_coins": {
         "visible": ["--symbols", "-s"],
         "hidden": ["--live.approved_coins", "--live_approved_coins"],
@@ -2199,7 +2206,7 @@ RESERVED_CLI_ARGS = {
         "metavar": "BACKEND",
         "commands": {"optimize"},
         "group": {"optimize": "Optimizer"},
-        "help": "Optimizer backend to use. Current option: deap. More coming soon.",
+        "help": "Optimizer backend to use. Supported values: deap or pymoo.",
     },
 }
 
@@ -2967,6 +2974,7 @@ def get_template_config():
                 "short_unstuck_loss_allowance_pct": [0.001, 0.05],
                 "short_unstuck_threshold": [0.4, 0.95],
             },
+            "backend": "deap",
             "compress_results_file": True,
             "crossover_eta": 20.0,
             "crossover_probability": 0.7,
