@@ -405,6 +405,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "cooldown_intervention_active": False,
                 "cooldown_repanic_reset_pending": False,
                 "last_cooldown_intervention_log_ms": 0,
+                "cooldown_unresolved_residue": False,
             }
             for pside in ("long", "short")
         }
@@ -470,7 +471,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "price_distance_threshold": 1.0,
                 "market_orders_allowed": False,
                 "order_match_tolerance_pct": 0.0,
-                "hsl_position_during_cooldown_policy": "repanic_reset_cooldown",
+                "hsl_position_during_cooldown_policy": "panic",
             }
 
             async def _get_last_prices(symbols, max_age_ms=None):
@@ -541,6 +542,50 @@ def _set_basic_state(bot, symbol="TEST/USDT"):
     bot.approved_coins_minus_ignored_coins = {"long": [symbol], "short": []}
     bot.pnls = [{"pnl": 5.0, "timestamp": 0, "id": 1}]
     return symbol
+
+
+def _make_hsl_fill_event(
+    timestamp: int,
+    *,
+    symbol: str,
+    pside: str,
+    action: str,
+    pb_order_type: str,
+):
+    return {
+        "timestamp": int(timestamp),
+        "symbol": symbol,
+        "pside": pside,
+        "action": action,
+        "pb_order_type": pb_order_type,
+    }
+
+
+def _infer_long_replay_contract(
+    *,
+    policy: str,
+    fill_events: list[dict],
+    now_ms: int,
+    pos_size: float,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 2.0
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = policy
+    bot.positions[symbol]["long"]["size"] = float(pos_size)
+    contract = bot._equity_hard_stop_infer_replay_contract("long", fill_events, now_ms)
+    return bot, symbol, contract
+
+
+def _apply_replay_contract_to_hsl_state(bot, contract):
+    state = _hsl_state(bot)
+    state["halted"] = bool(contract["active_cooldown_now"])
+    state["cooldown_until_ms"] = contract["cooldown_until_ms"] if contract["active_cooldown_now"] else None
+    state["cooldown_intervention_active"] = bool(contract["intervention_active"])
+    state["cooldown_unresolved_residue"] = bool(contract["unresolved_residue"])
+    return state
 
 
 def _make_unstuck_order(symbol="TEST/USDT", type_id=0x1234, price=100.0):
@@ -750,13 +795,13 @@ def test_hsl_halted_universe_keeps_managed_symbols_and_blocks_flat_candidates():
 
 
 @pytest.mark.asyncio
-async def test_hsl_cooldown_repanic_reset_cooldown_refreshes_anchor(monkeypatch):
+async def test_hsl_cooldown_panic_refreshes_anchor(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     _hsl_cfg(bot)["enabled"] = True
     _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
-    bot.config["live"]["hsl_position_during_cooldown_policy"] = "repanic_reset_cooldown"
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "panic"
     state = _hsl_state(bot)
     state["halted"] = True
     state["cooldown_until_ms"] = 200_000
@@ -805,12 +850,12 @@ async def test_hsl_cooldown_repanic_reset_cooldown_refreshes_anchor(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_hsl_cooldown_repanic_keep_original_does_not_reset_anchor():
+async def test_hsl_cooldown_tp_only_keeps_cooldown_and_blocks_entries():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     _hsl_cfg(bot)["enabled"] = True
-    bot.config["live"]["hsl_position_during_cooldown_policy"] = "repanic_keep_original_cooldown"
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "tp_only"
     state = _hsl_state(bot)
     state["halted"] = True
     state["cooldown_until_ms"] = 200_000
@@ -821,16 +866,16 @@ async def test_hsl_cooldown_repanic_keep_original_does_not_reset_anchor():
     assert state["cooldown_intervention_active"] is True
     assert state["cooldown_repanic_reset_pending"] is False
     assert state["cooldown_until_ms"] == 200_000
-    assert bot._equity_hard_stop_halted_mode("long", symbol) == "panic"
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "tp_only"
 
 
 @pytest.mark.asyncio
-async def test_hsl_cooldown_resume_normal_resets_runtime_and_clears_halt(monkeypatch):
+async def test_hsl_cooldown_normal_resets_runtime_and_clears_halt(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     _hsl_cfg(bot)["enabled"] = True
-    bot.config["live"]["hsl_position_during_cooldown_policy"] = "resume_normal_reset_drawdown"
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "normal"
     state = _hsl_state(bot)
     state["halted"] = True
     state["cooldown_until_ms"] = 200_000
@@ -851,12 +896,12 @@ async def test_hsl_cooldown_resume_normal_resets_runtime_and_clears_halt(monkeyp
     assert state["runtime"].red_latched() is False
 
 
-def test_hsl_cooldown_resume_normal_blocks_fresh_initials_while_flat():
+def test_hsl_cooldown_normal_blocks_fresh_initials_while_flat():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     _hsl_cfg(bot)["enabled"] = True
-    bot.config["live"]["hsl_position_during_cooldown_policy"] = "resume_normal_reset_drawdown"
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "normal"
     state = _hsl_state(bot)
     state["halted"] = True
     state["cooldown_until_ms"] = 200_000
@@ -866,12 +911,30 @@ def test_hsl_cooldown_resume_normal_blocks_fresh_initials_while_flat():
 
 
 @pytest.mark.asyncio
+async def test_hsl_cooldown_manual_keeps_cooldown_and_leaves_position_manual():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "manual"
+    state = _hsl_state(bot)
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    bot.positions[symbol]["long"]["size"] = 1.0
+
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
+    assert changed is False
+    assert state["cooldown_until_ms"] == 200_000
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "manual"
+
+
+@pytest.mark.asyncio
 async def test_hsl_cooldown_graceful_stop_keeps_cooldown_and_manages_position():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     _hsl_cfg(bot)["enabled"] = True
-    bot.config["live"]["hsl_position_during_cooldown_policy"] = "graceful_stop_keep_cooldown"
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "graceful_stop"
     state = _hsl_state(bot)
     state["halted"] = True
     state["cooldown_until_ms"] = 200_000
@@ -883,22 +946,370 @@ async def test_hsl_cooldown_graceful_stop_keeps_cooldown_and_manages_position():
     assert bot._equity_hard_stop_halted_mode("long", symbol) == "graceful_stop"
 
 
-@pytest.mark.asyncio
-async def test_hsl_cooldown_manual_quarantine_keeps_cooldown_and_leaves_position_manual():
-    cfg = _dummy_config()
-    bot = _make_dummy_bot(cfg)
-    symbol = _set_basic_state(bot)
-    _hsl_cfg(bot)["enabled"] = True
-    bot.config["live"]["hsl_position_during_cooldown_policy"] = "manual_quarantine"
-    state = _hsl_state(bot)
-    state["halted"] = True
-    state["cooldown_until_ms"] = 200_000
-    bot.positions[symbol]["long"]["size"] = 1.0
+@pytest.mark.parametrize("policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"])
+def test_hsl_replay_contract_s1_clean_panic_flat_cooldown_active(policy):
+    p_ts = 100_000
+    symbol = "TEST/USDT"
+    bot, symbol, contract = _infer_long_replay_contract(
+        policy=policy,
+        fill_events=[
+            _make_hsl_fill_event(
+                p_ts,
+                symbol=symbol,
+                pside="long",
+                action="decrease",
+                pb_order_type="close_panic_long",
+            )
+        ],
+        now_ms=150_000,
+        pos_size=0.0,
+    )
+    _apply_replay_contract_to_hsl_state(bot, contract)
 
-    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
-    assert changed is False
-    assert state["cooldown_until_ms"] == 200_000
-    assert bot._equity_hard_stop_halted_mode("long", symbol) == "manual"
+    assert contract["latest_panic_ts"] == p_ts
+    assert contract["cooldown_until_ms"] == 220_000
+    assert contract["intervention_entry_ts"] is None
+    assert contract["replay_reset_boundary_ts"] == p_ts
+    assert contract["active_cooldown_now"] is True
+    assert contract["intervention_active"] is False
+    assert contract["unresolved_residue"] is False
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "graceful_stop"
+
+
+@pytest.mark.parametrize("policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"])
+def test_hsl_replay_contract_s2_clean_panic_flat_cooldown_expired(policy):
+    p_ts = 100_000
+    symbol = "TEST/USDT"
+    bot, symbol, contract = _infer_long_replay_contract(
+        policy=policy,
+        fill_events=[
+            _make_hsl_fill_event(
+                p_ts,
+                symbol=symbol,
+                pside="long",
+                action="decrease",
+                pb_order_type="close_panic_long",
+            )
+        ],
+        now_ms=250_000,
+        pos_size=0.0,
+    )
+    _apply_replay_contract_to_hsl_state(bot, contract)
+
+    assert contract["latest_panic_ts"] == p_ts
+    assert contract["cooldown_until_ms"] == 220_000
+    assert contract["intervention_entry_ts"] is None
+    assert contract["replay_reset_boundary_ts"] == p_ts
+    assert contract["active_cooldown_now"] is False
+    assert contract["intervention_active"] is False
+    assert contract["unresolved_residue"] is False
+
+
+@pytest.mark.parametrize("policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"])
+def test_hsl_replay_contract_s3_panic_residue_no_later_entry(policy):
+    p_ts = 100_000
+    symbol = "TEST/USDT"
+    bot, symbol, contract = _infer_long_replay_contract(
+        policy=policy,
+        fill_events=[
+            _make_hsl_fill_event(
+                p_ts,
+                symbol=symbol,
+                pside="long",
+                action="decrease",
+                pb_order_type="close_panic_long",
+            )
+        ],
+        now_ms=150_000,
+        pos_size=0.25,
+    )
+    _apply_replay_contract_to_hsl_state(bot, contract)
+
+    assert contract["latest_panic_ts"] == p_ts
+    assert contract["intervention_entry_ts"] is None
+    assert contract["replay_reset_boundary_ts"] == p_ts
+    assert contract["active_cooldown_now"] is True
+    assert contract["intervention_active"] is False
+    assert contract["unresolved_residue"] is True
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "panic"
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_boundary", "expected_mode"),
+    [
+        ("normal", 130_000, "graceful_stop"),
+        ("panic", 100_000, "panic"),
+        ("manual", 100_000, "manual"),
+        ("tp_only", 100_000, "tp_only"),
+        ("graceful_stop", 100_000, "graceful_stop"),
+    ],
+)
+def test_hsl_replay_contract_s4_later_entry_during_active_cooldown_position_open(
+    policy,
+    expected_boundary,
+    expected_mode,
+):
+    symbol = "TEST/USDT"
+    bot, _, contract = _infer_long_replay_contract(
+        policy=policy,
+        fill_events=[
+            _make_hsl_fill_event(
+                100_000,
+                symbol=symbol,
+                pside="long",
+                action="decrease",
+                pb_order_type="close_panic_long",
+            ),
+            _make_hsl_fill_event(
+                130_000,
+                symbol=symbol,
+                pside="long",
+                action="increase",
+                pb_order_type="entry_initial_normal_long",
+            ),
+        ],
+        now_ms=150_000,
+        pos_size=0.25,
+    )
+    _apply_replay_contract_to_hsl_state(bot, contract)
+
+    assert contract["latest_panic_ts"] == 100_000
+    assert contract["intervention_entry_ts"] == 130_000
+    assert contract["replay_reset_boundary_ts"] == expected_boundary
+    assert contract["active_cooldown_now"] is True
+    assert contract["intervention_active"] is True
+    assert contract["unresolved_residue"] is False
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == expected_mode
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_boundary"),
+    [
+        ("normal", 130_000),
+        ("panic", 100_000),
+        ("manual", 100_000),
+        ("tp_only", 100_000),
+        ("graceful_stop", 100_000),
+    ],
+)
+def test_hsl_replay_contract_s5_later_entry_during_cooldown_flat_by_restart(policy, expected_boundary):
+    symbol = "TEST/USDT"
+    bot, _, contract = _infer_long_replay_contract(
+        policy=policy,
+        fill_events=[
+            _make_hsl_fill_event(
+                100_000,
+                symbol=symbol,
+                pside="long",
+                action="decrease",
+                pb_order_type="close_panic_long",
+            ),
+            _make_hsl_fill_event(
+                130_000,
+                symbol=symbol,
+                pside="long",
+                action="increase",
+                pb_order_type="entry_initial_normal_long",
+            ),
+            _make_hsl_fill_event(
+                160_000,
+                symbol=symbol,
+                pside="long",
+                action="decrease",
+                pb_order_type="close_grid_long",
+            ),
+        ],
+        now_ms=180_000,
+        pos_size=0.0,
+    )
+    _apply_replay_contract_to_hsl_state(bot, contract)
+
+    assert contract["latest_panic_ts"] == 100_000
+    assert contract["intervention_entry_ts"] == 130_000
+    assert contract["replay_reset_boundary_ts"] == expected_boundary
+    assert contract["active_cooldown_now"] is True
+    assert contract["intervention_active"] is False
+    assert contract["unresolved_residue"] is False
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "graceful_stop"
+
+
+@pytest.mark.parametrize("policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"])
+def test_hsl_replay_contract_s6_later_entry_after_cooldown_expired(policy):
+    symbol = "TEST/USDT"
+    bot, _, contract = _infer_long_replay_contract(
+        policy=policy,
+        fill_events=[
+            _make_hsl_fill_event(
+                100_000,
+                symbol=symbol,
+                pside="long",
+                action="decrease",
+                pb_order_type="close_panic_long",
+            ),
+            _make_hsl_fill_event(
+                230_000,
+                symbol=symbol,
+                pside="long",
+                action="increase",
+                pb_order_type="entry_initial_normal_long",
+            ),
+        ],
+        now_ms=250_000,
+        pos_size=1.0,
+    )
+    _apply_replay_contract_to_hsl_state(bot, contract)
+
+    assert contract["latest_panic_ts"] == 100_000
+    assert contract["intervention_entry_ts"] is None
+    assert contract["replay_reset_boundary_ts"] == 100_000
+    assert contract["active_cooldown_now"] is False
+    assert contract["intervention_active"] is False
+    assert contract["unresolved_residue"] is False
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_boundary", "expected_mode"),
+    [
+        ("normal", 130_000, "graceful_stop"),
+        ("panic", 100_000, "panic"),
+        ("manual", 100_000, "manual"),
+        ("tp_only", 100_000, "tp_only"),
+        ("graceful_stop", 100_000, "graceful_stop"),
+    ],
+)
+def test_hsl_replay_contract_s7_multiple_panics_latest_episode_governs(
+    policy,
+    expected_boundary,
+    expected_mode,
+):
+    symbol = "TEST/USDT"
+    bot, _, contract = _infer_long_replay_contract(
+        policy=policy,
+        fill_events=[
+            _make_hsl_fill_event(
+                40_000,
+                symbol=symbol,
+                pside="long",
+                action="decrease",
+                pb_order_type="close_panic_long",
+            ),
+            _make_hsl_fill_event(
+                60_000,
+                symbol=symbol,
+                pside="long",
+                action="increase",
+                pb_order_type="entry_initial_normal_long",
+            ),
+            _make_hsl_fill_event(
+                100_000,
+                symbol=symbol,
+                pside="long",
+                action="decrease",
+                pb_order_type="close_panic_long",
+            ),
+            _make_hsl_fill_event(
+                130_000,
+                symbol=symbol,
+                pside="long",
+                action="increase",
+                pb_order_type="entry_initial_normal_long",
+            ),
+        ],
+        now_ms=150_000,
+        pos_size=0.25,
+    )
+    _apply_replay_contract_to_hsl_state(bot, contract)
+
+    assert contract["latest_panic_ts"] == 100_000
+    assert contract["intervention_entry_ts"] == 130_000
+    assert contract["replay_reset_boundary_ts"] == expected_boundary
+    assert contract["active_cooldown_now"] is True
+    assert contract["intervention_active"] is True
+    assert contract["unresolved_residue"] is False
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == expected_mode
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_boundary", "expected_mode"),
+    [
+        ("normal", 100_500, "graceful_stop"),
+        ("panic", 100_000, "panic"),
+        ("manual", 100_000, "manual"),
+        ("tp_only", 100_000, "tp_only"),
+        ("graceful_stop", 100_000, "graceful_stop"),
+    ],
+)
+def test_hsl_replay_contract_s8_same_minute_panic_and_reentry_follows_fill_order(
+    policy,
+    expected_boundary,
+    expected_mode,
+):
+    symbol = "TEST/USDT"
+    bot, _, contract = _infer_long_replay_contract(
+        policy=policy,
+        fill_events=[
+            _make_hsl_fill_event(
+                100_000,
+                symbol=symbol,
+                pside="long",
+                action="decrease",
+                pb_order_type="close_panic_long",
+            ),
+            _make_hsl_fill_event(
+                100_500,
+                symbol=symbol,
+                pside="long",
+                action="increase",
+                pb_order_type="entry_initial_normal_long",
+            ),
+        ],
+        now_ms=150_000,
+        pos_size=0.25,
+    )
+    _apply_replay_contract_to_hsl_state(bot, contract)
+
+    assert contract["latest_panic_ts"] == 100_000
+    assert contract["intervention_entry_ts"] == 100_500
+    assert contract["replay_reset_boundary_ts"] == expected_boundary
+    assert contract["active_cooldown_now"] is True
+    assert contract["intervention_active"] is True
+    assert contract["unresolved_residue"] is False
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == expected_mode
+
+
+@pytest.mark.parametrize("policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"])
+def test_hsl_replay_contract_s9_opposite_side_trading_is_side_local(policy):
+    symbol = "TEST/USDT"
+    bot, _, contract = _infer_long_replay_contract(
+        policy=policy,
+        fill_events=[
+            _make_hsl_fill_event(
+                100_000,
+                symbol=symbol,
+                pside="long",
+                action="decrease",
+                pb_order_type="close_panic_long",
+            ),
+            _make_hsl_fill_event(
+                130_000,
+                symbol=symbol,
+                pside="short",
+                action="increase",
+                pb_order_type="entry_initial_normal_short",
+            ),
+        ],
+        now_ms=150_000,
+        pos_size=0.0,
+    )
+    _apply_replay_contract_to_hsl_state(bot, contract)
+
+    assert contract["latest_panic_ts"] == 100_000
+    assert contract["intervention_entry_ts"] is None
+    assert contract["replay_reset_boundary_ts"] == 100_000
+    assert contract["active_cooldown_now"] is True
+    assert contract["intervention_active"] is False
+    assert contract["unresolved_residue"] is False
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "graceful_stop"
 
 
 @pytest.mark.asyncio
@@ -2091,6 +2502,211 @@ async def test_hard_stop_initialize_from_history_resets_after_panic_marker_same_
     assert _hsl_state(bot)["runtime"].tier() != "red"
     assert _hsl_state(bot)["pending_red_since_ms"] is None
     assert _hsl_state(bot)["last_stop_event"]["stop_event_timestamp_ms"] == 121_500
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_normal_policy_replays_from_entry_boundary(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["red_threshold"] = 0.05
+    _hsl_cfg(bot)["ema_span_minutes"] = 1.0
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 2.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.3
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "normal"
+    bot.positions[symbol]["long"]["size"] = 1.0
+    bot.positions[symbol]["long"]["price"] = 90.0
+    bot.balance = 90.0
+
+    async def fake_history(*, current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 1_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 61_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": -20.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 121_000,
+                    "balance": 80.0,
+                    "realized_pnl": -20.0,
+                    "realized_pnl_long": -20.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": True,
+                    "is_flat_long": True,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 181_000,
+                    "balance": 80.0,
+                    "realized_pnl": -20.0,
+                    "realized_pnl_long": -20.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 241_000,
+                    "balance": 81.0,
+                    "realized_pnl": -19.0,
+                    "realized_pnl_long": -19.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 1.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+            ],
+            "fill_events": [
+                {
+                    "timestamp": 121_500,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "pb_order_type": "close_panic_long",
+                },
+                {
+                    "timestamp": 181_500,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "pb_order_type": "entry_initial_normal_long",
+                },
+            ],
+            "panic_flatten_events": [
+                {
+                    "timestamp": 121_500,
+                    "minute_timestamp": 121_000,
+                    "pside": "long",
+                    "symbol": symbol,
+                }
+            ],
+        }
+
+    async def fake_upnl(pside=None, **_kwargs):
+        return 1.0 if pside == "long" else 0.0
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(bot, "get_exchange_time", lambda: 200_000)
+    monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    assert _hsl_state(bot)["halted"] is False
+    assert _hsl_state(bot)["cooldown_until_ms"] is None
+    assert _hsl_state(bot)["runtime"].red_latched() is False
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_unresolved_panic_residue_stays_panic(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["red_threshold"] = 0.05
+    _hsl_cfg(bot)["ema_span_minutes"] = 1.0
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 2.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.3
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "manual"
+    bot.positions[symbol]["long"]["size"] = 0.5
+    bot.positions[symbol]["long"]["price"] = 90.0
+    bot.balance = 80.0
+
+    async def fake_history(*, current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 1_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 61_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": -20.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 121_000,
+                    "balance": 80.0,
+                    "realized_pnl": -20.0,
+                    "realized_pnl_long": -20.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+            ],
+            "fill_events": [
+                {
+                    "timestamp": 121_500,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "pb_order_type": "close_panic_long",
+                }
+            ],
+            "panic_flatten_events": [],
+        }
+
+    async def fake_upnl(pside=None, **_kwargs):
+        return -5.0 if pside == "long" else 0.0
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(bot, "get_exchange_time", lambda: 200_000)
+    monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    assert _hsl_state(bot)["halted"] is True
+    assert _hsl_state(bot)["cooldown_unresolved_residue"] is True
+    assert _hsl_state(bot)["cooldown_until_ms"] == 241_500
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == "panic"
 
 
 @pytest.mark.asyncio

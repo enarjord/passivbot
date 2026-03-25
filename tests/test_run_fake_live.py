@@ -194,7 +194,7 @@ def test_resume_normal_cooldown_does_not_preauthorize_flat_halted_side():
     )
     cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
     cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = 2.0
-    cfg["live"]["hsl_position_during_cooldown_policy"] = "resume_normal_reset_drawdown"
+    cfg["live"]["hsl_position_during_cooldown_policy"] = "normal"
     cfg["live"]["hsl_signal_mode"] = "unified"
     cfg["bot"]["short"] = json.loads(json.dumps(cfg["bot"]["long"]))
     cfg["bot"]["short"]["hsl_enabled"] = False
@@ -432,15 +432,7 @@ def test_refresh_halted_runtime_forced_modes_keeps_halted_pside_in_panic_or_grac
             5,
             "cooldown violation repanic flattened; cooldown reset",
             2.0,
-            "repanic_reset_cooldown",
-        ),
-        (
-            "scenarios/fake_live/hsl_long_cooldown_manual_entry_repanic_keep_original.hjson",
-            "fake_hsl_manual_keep_original_test",
-            5,
-            "cooldown intervention ended flat; policy=repanic_keep_original_cooldown",
-            2.0,
-            "repanic_keep_original_cooldown",
+            "panic",
         ),
         (
             "scenarios/fake_live/hsl_long_cooldown_manual_entry_resume_normal.hjson",
@@ -448,23 +440,31 @@ def test_refresh_halted_runtime_forced_modes_keeps_halted_pside_in_panic_or_grac
             5,
             "operator override during RED cooldown: resumed normal operation and reset drawdown tracker",
             2.0,
-            "resume_normal_reset_drawdown",
-        ),
-        (
-            "scenarios/fake_live/hsl_long_cooldown_manual_entry_graceful_stop.hjson",
-            "fake_hsl_manual_graceful_stop_test",
-            5,
-            "detected non-flat position during RED cooldown | policy=graceful_stop_keep_cooldown",
-            2.0,
-            "graceful_stop_keep_cooldown",
+            "normal",
         ),
         (
             "scenarios/fake_live/hsl_long_cooldown_manual_entry_manual_quarantine.hjson",
             "fake_hsl_manual_quarantine_test",
             5,
-            "detected non-flat position during RED cooldown | policy=manual_quarantine",
+            "detected non-flat position during RED cooldown | policy=manual",
             2.0,
-            "manual_quarantine",
+            "manual",
+        ),
+        (
+            "scenarios/fake_live/hsl_long_cooldown_manual_entry_tp_only.hjson",
+            "fake_hsl_manual_tp_only_test",
+            5,
+            "detected non-flat position during RED cooldown | policy=tp_only",
+            2.0,
+            "tp_only",
+        ),
+        (
+            "scenarios/fake_live/hsl_long_cooldown_manual_entry_graceful_stop.hjson",
+            "fake_hsl_manual_graceful_stop_test",
+            5,
+            "detected non-flat position during RED cooldown | policy=graceful_stop",
+            2.0,
+            "graceful_stop",
         ),
     ],
 )
