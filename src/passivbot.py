@@ -33,6 +33,7 @@ from fill_events_manager import (
     FillEventsManager,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
+    compute_psize_pprice,
 )
 from monitor_publisher import MonitorPublisher
 from passivbot_exceptions import RestartBotException
@@ -765,6 +766,7 @@ class Passivbot:
                 "cooldown_intervention_active": False,
                 "cooldown_repanic_reset_pending": False,
                 "last_cooldown_intervention_log_ms": 0,
+                "cooldown_unresolved_residue": False,
             }
             for pside in ("long", "short")
         }
@@ -1330,8 +1332,12 @@ class Passivbot:
     _equity_hard_stop_lookback_ms = pb_hsl._equity_hard_stop_lookback_ms
     _equity_hard_stop_apply_sample = pb_hsl._equity_hard_stop_apply_sample
     _equity_hard_stop_log_transition = pb_hsl._equity_hard_stop_log_transition
+    _equity_hard_stop_format_remaining_time = staticmethod(
+        pb_hsl._equity_hard_stop_format_remaining_time
+    )
     _equity_hard_stop_build_latch_payload = pb_hsl._equity_hard_stop_build_latch_payload
     _equity_hard_stop_compute_stop_event = pb_hsl._equity_hard_stop_compute_stop_event
+    _equity_hard_stop_infer_replay_contract = pb_hsl._equity_hard_stop_infer_replay_contract
     _equity_hard_stop_log_cooldown_status = pb_hsl._equity_hard_stop_log_cooldown_status
     _equity_hard_stop_position_symbols = pb_hsl._equity_hard_stop_position_symbols
     _equity_hard_stop_refresh_cooldown_after_repanic = (
@@ -1341,6 +1347,7 @@ class Passivbot:
         pb_hsl._equity_hard_stop_handle_position_during_cooldown
     )
     _equity_hard_stop_reset_after_restart = pb_hsl._equity_hard_stop_reset_after_restart
+    _equity_hard_stop_replay_from_boundary = pb_hsl._equity_hard_stop_replay_from_boundary
     _equity_hard_stop_refresh_halted_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_refresh_halted_runtime_forced_modes
     )
@@ -4294,6 +4301,21 @@ class Passivbot:
                 )
             return sorted(out, key=lambda x: x["timestamp"])
 
+        def _current_position_state() -> Dict[Tuple[str, str], Tuple[float, float]]:
+            out: Dict[Tuple[str, str], Tuple[float, float]] = {}
+            for symbol, slots in (self.positions or {}).items():
+                norm_symbol = _normalize_symbol(symbol)
+                if not norm_symbol or not isinstance(slots, dict):
+                    continue
+                for pside in ("long", "short"):
+                    pos = slots.get(pside, {})
+                    if not isinstance(pos, dict):
+                        continue
+                    size = abs(_safe_float(pos.get("size"), 0.0))
+                    price = _safe_float(pos.get("price"), 0.0) if size > 1e-12 else 0.0
+                    out[(norm_symbol, pside)] = (size, price)
+            return out
+
         try:
             if fill_events is None:
                 # Use FillEventsManager events converted to dict format
@@ -4303,6 +4325,14 @@ class Passivbot:
                     fill_events = []
 
             events = _extract_events(fill_events)
+            current_position_state = _current_position_state()
+            if events:
+                compute_psize_pprice(
+                    events,
+                    final_state=current_position_state,
+                    log_discrepancies=True,
+                    log_prefix=f"{self.exchange}:{self.user} balance-equity replay",
+                )
             if not events:
                 ts_now = self.get_exchange_time()
                 balance_now = (
@@ -4325,6 +4355,8 @@ class Passivbot:
                 }
                 return {
                     "timeline": [point],
+                    "panic_flatten_events": [],
+                    "fill_events": [],
                     "balances": [{"timestamp": point["timestamp"], "balance": balance_now}],
                     "equities": [
                         {
@@ -4441,8 +4473,23 @@ class Passivbot:
             positions: Dict[str, Dict[str, Dict[str, float]]] = {}
             active_symbols: set[str] = set()
             timeline: List[Dict[str, float]] = []
+            panic_flatten_events: List[Dict[str, Any]] = []
             missing_price_symbols: set[str] = set()
             realized_pnl_pside_running = {"long": 0.0, "short": 0.0}
+            actual_pside_flat = {
+                pside: not any(size > 1e-12 for (sym, ps), (size, _price) in current_position_state.items() if ps == pside)
+                for pside in ("long", "short")
+            }
+            last_event_ts_by_pside = {
+                pside: max((evt["timestamp"] for evt in events if evt["pside"] == pside), default=None)
+                for pside in ("long", "short")
+            }
+
+            def _pside_is_flat(pside: str) -> bool:
+                return not any(
+                    positions.get(sym, {}).get(pside, {}).get("size", 0.0) > 1e-12
+                    for sym in positions
+                )
 
             def _apply_event(evt: dict):
                 slot = _ensure_slot(positions, evt["symbol"])[evt["pside"]]
@@ -4491,6 +4538,34 @@ class Passivbot:
                     realized_pnl_pside_running[evt["pside"]] += realized_delta
                     if "panic" in str(evt.get("pb_order_type") or ""):
                         panic_fill_count += 1
+                        after_psize = _safe_float(evt.get("psize"), math.nan)
+                        authoritative_flat_override = (
+                            actual_pside_flat.get(evt["pside"], False)
+                            and last_event_ts_by_pside.get(evt["pside"]) == evt["timestamp"]
+                        )
+                        if authoritative_flat_override and (
+                            not math.isfinite(after_psize) or after_psize > 1e-12
+                        ):
+                            logging.warning(
+                                "[risk] balance-equity replay trusting current flat %s state over residual panic replay size | timestamp=%s replay_after_psize=%s symbol=%s",
+                                evt["pside"],
+                                evt["timestamp"],
+                                f"{after_psize:.12f}" if math.isfinite(after_psize) else "nan",
+                                evt["symbol"],
+                            )
+                        if (
+                            (math.isfinite(after_psize) and after_psize <= 1e-12)
+                            or authoritative_flat_override
+                            or _pside_is_flat(evt["pside"])
+                        ):
+                            panic_flatten_events.append(
+                                {
+                                    "timestamp": int(evt["timestamp"]),
+                                    "minute_timestamp": int(minute),
+                                    "pside": str(evt["pside"]),
+                                    "symbol": str(evt["symbol"]),
+                                }
+                            )
                     event_idx += 1
                 upnl = 0.0
                 upnl_by_pside = {"long": 0.0, "short": 0.0}
@@ -4579,6 +4654,8 @@ class Passivbot:
             }
             return {
                 "timeline": timeline,
+                "panic_flatten_events": panic_flatten_events,
+                "fill_events": events,
                 "balances": balances,
                 "equities": equities,
                 "metadata": metadata,

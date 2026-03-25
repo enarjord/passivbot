@@ -52,6 +52,7 @@ All notable user-facing changes will be documented in this file.
 - **Optimizer constraint visibility** - Pareto logging now reports the top violated constraints and penalties instead of only the aggregate penalty number.
 - **One-way forager shortlist eligibility** - In `hedge_mode: false`, coins already occupied on one side no longer consume initial-entry shortlist slots on the opposite side before being blocked.
 - **Live HSL cooldown re-entry handling** - Live HSL cooldown now consistently enforces the configured intervention policy when a position appears during cooldown, including restart-safe latch updates and fake-live regression coverage for manual-entry scenarios.
+- **`resume_normal_reset_drawdown` no longer self-restarts while flat** - During active RED cooldown, `resume_normal_reset_drawdown` now keeps a flat halted `pside` blocked from fresh bot-created initials. The policy only resumes normal trading after a real non-flat position appears during cooldown, matching the intended operator-override contract.
 
 ### Changed
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.
@@ -68,6 +69,7 @@ All notable user-facing changes will be documented in this file.
 - **Equity hard-stop framework (live+backtest)** - Added the equity hard-stop framework with configurable thresholds, EMA span in minutes, yellow/orange tier ratios, orange mode selector, panic close order type, plus Rust drawdown/tier state machine support, backtest rolling-peak enforcement using `pnls_max_lookback_days`, and live runtime hooks for tier tracking and RED supervisory flatten-until-confirmed-flat behavior.
 
 ### Fixed
+- **Disabled sides no longer report HSL restart metrics** - Backtest HSL reporting now excludes sides with `total_wallet_exposure_limit <= 0` or `n_positions <= 0` from side-specific trigger/restart metrics, and the `hard_stop_drawdown` plot no longer renders HSL panels for disabled sides.
 - **Bybit fill-event qty inflation on duplicate pages** - `BybitFetcher` now deduplicates `fetch_my_trades` rows by exec id before canonicalization/coalescing, preventing duplicate pagination rows from inflating canonical `qty`, `fees`, and close PnL.
 - **Balance peak drift in wrong direction under hysteresis** - Peak reconstruction (`balance + (pnl_cumsum_max - pnl_cumsum_last)`) previously used hysteresis-snapped balance in some paths. Since snapped balance can stay stale while `pnl_cumsum_last` changes fill-by-fill, this made reconstructed peak drift down after profits and up after losses. Peak/PnL-accuracy-sensitive paths now use raw balance (`balance_raw`) consistently.
 - **Pytest Rust-module bootstrap fallback** - Test bootstrap now tries the project venv `passivbot_rust` package before falling back to the lightweight stub when tests are launched outside the venv, reducing false failures from missing/incorrect Rust module resolution.
@@ -86,6 +88,9 @@ All notable user-facing changes will be documented in this file.
 
 ### Added
 - **Fill events doctor tool** - Added `src/tools/fill_events_doctor.py` to audit cached fill events and auto-repair known Bybit duplicate-fill anomalies without requiring exchange API calls. Bybit startup now runs doctor by default (can be disabled with `PASSIVBOT_FILL_EVENTS_DOCTOR=off`).
+
+### Fixed
+- **HSL restart replay now resets from historical panic flatten events** - Live HSL history initialization no longer relies only on minute-bucket `is_flat_{pside}` snapshots to detect prior RED-stop finalization. It now records side-level panic-flatten markers from canonical fill-event replay and resets the affected side after those historical panic closes, fixing stale pre-panic peak carryover when panic-close and re-entry happened within the same minute.
 
 ## v7.8.3 - 2026-02-24
 
