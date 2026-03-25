@@ -214,6 +214,23 @@ def collect_runtime_provenance() -> dict:
     }
 
 
+def preferred_compiled_path() -> Optional[Path]:
+    """
+    Path of the extension artifact that is *most likely* to be imported.
+
+    Priority mirrors `preferred_compiled_mtime()`.
+    """
+    for group in (
+        _local_extension_candidates(),
+        _installed_extension_candidates(),
+        _target_extension_candidates(),
+    ):
+        existing = [p for p in group if p.exists()]
+        if existing:
+            return max(existing, key=lambda p: p.stat().st_mtime)
+    return None
+
+
 def latest_compiled_mtime(paths: Iterable[Path]) -> Optional[float]:
     mtimes = [p.stat().st_mtime for p in paths if p.exists()]
     return max(mtimes) if mtimes else None

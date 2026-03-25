@@ -887,7 +887,12 @@ class Evaluator:
             "objectives": objectives_map,
             "constraint_violation": total_penalty,
         }
-        individual.evaluation_metrics = metrics_payload
+        if self.config["optimize"]["backend"] == "pymoo":
+            logging.info(
+                "Eval complete | objectives=%s | constraint=%s",
+                _format_objectives(objectives),
+                pbr.round_dynamic(total_penalty, 3),
+            )
         actual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
             self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
@@ -1242,8 +1247,13 @@ class SuiteEvaluator:
             "suite_metrics": suite_payload,
             "constraint_violation": total_penalty,
         }
+        if self.base.config["optimize"]["backend"] == "pymoo":
+            logging.info(
+                "Eval complete | objectives=%s | constraint=%s",
+                _format_objectives(objectives),
+                pbr.round_dynamic(total_penalty, 3),
+            )
 
-        individual.evaluation_metrics = metrics_payload
         actual_hash = calc_hash(individual)
         if self.base.use_duplicate_guard:
             self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)

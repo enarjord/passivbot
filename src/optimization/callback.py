@@ -8,6 +8,36 @@ from pymoo.core.callback import Callback
 from config_utils import strip_config_metadata
 
 
+def build_record_entry(
+    *,
+    template: dict,
+    build_config_fn,
+    overrides_fn,
+    overrides_list: Sequence[str] | None,
+    vector,
+    metrics: dict,
+) -> dict:
+    if isinstance(vector, np.ndarray):
+        vector = vector.tolist()
+    metrics_copy = dict(metrics)
+    suite_metrics = metrics_copy.pop("suite_metrics", None)
+    config = build_config_fn(
+        vector,
+        overrides_fn,
+        list(overrides_list or []),
+        template,
+    )
+    entry = dict(config)
+    if suite_metrics is not None:
+        entry["suite_metrics"] = suite_metrics
+        backtest = entry.get("backtest")
+        if isinstance(backtest, dict):
+            backtest.pop("coins", None)
+    if metrics_copy:
+        entry["metrics"] = metrics_copy
+    return strip_config_metadata(entry)
+
+
 class PymooRecorderCallback(Callback):
     def __init__(
         self,
@@ -31,27 +61,17 @@ class PymooRecorderCallback(Callback):
             vector = individual.data.get("evaluation_vector")
         if vector is None:
             vector = individual.X
-        if isinstance(vector, np.ndarray):
-            vector = vector.tolist()
         metrics = {}
         if hasattr(individual, "data") and isinstance(individual.data, dict):
             metrics = dict(individual.data.get("metrics") or {})
-        suite_metrics = metrics.pop("suite_metrics", None)
-        config = self.build_config_fn(
-            vector,
-            self.overrides_fn,
-            self.overrides_list,
-            self.template,
+        return build_record_entry(
+            template=self.template,
+            build_config_fn=self.build_config_fn,
+            overrides_fn=self.overrides_fn,
+            overrides_list=self.overrides_list,
+            vector=vector,
+            metrics=metrics,
         )
-        entry = dict(config)
-        if suite_metrics is not None:
-            entry["suite_metrics"] = suite_metrics
-            backtest = entry.get("backtest")
-            if isinstance(backtest, dict):
-                backtest.pop("coins", None)
-        if metrics:
-            entry["metrics"] = metrics
-        return strip_config_metadata(entry)
 
     def notify(self, algorithm):
         batch = getattr(algorithm, "off", None)

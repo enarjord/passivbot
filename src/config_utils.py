@@ -1146,6 +1146,93 @@ def _seed_missing_compatibility_sections(
             tracker.add(["optimize", "bounds"], seeded_bounds)
 
 
+_LEGACY_DEAP_OPTIMIZE_KEYS = {
+    "crossover_eta": "crossover_eta",
+    "crossover_probability": "crossover_probability",
+    "mutation_eta": "mutation_eta",
+    "mutation_indpb": "mutation_indpb",
+    "mutation_probability": "mutation_probability",
+    "offspring_multiplier": "offspring_multiplier",
+}
+
+_LEGACY_PYMOO_SHARED_KEYS = {
+    "crossover_eta": "crossover_eta",
+    "crossover_probability": "crossover_prob_var",
+    "mutation_eta": "mutation_eta",
+    "mutation_indpb": "mutation_prob_var",
+    "eliminate_duplicates": "eliminate_duplicates",
+}
+
+
+def _optimizer_param_count(result: dict) -> int:
+    return sum(len(params) for params in result["bot"].values())
+
+
+def _default_mutation_prob_per_param(result: dict) -> float:
+    return 1.0 / max(1, _optimizer_param_count(result))
+
+
+def _migrate_optimizer_backend_sections(
+    result: dict,
+    *,
+    tracker: Optional[ConfigTransformTracker] = None,
+) -> None:
+    optimize = result["optimize"]
+    if not isinstance(optimize.get("deap"), dict):
+        optimize["deap"] = {}
+        if tracker is not None:
+            tracker.add(["optimize", "deap"], {})
+    if not isinstance(optimize.get("pymoo"), dict):
+        optimize["pymoo"] = {}
+        if tracker is not None:
+            tracker.add(["optimize", "pymoo"], {})
+    if not isinstance(optimize["deap"].get("shared"), dict):
+        optimize["deap"]["shared"] = {}
+        if tracker is not None:
+            tracker.add(["optimize", "deap", "shared"], {})
+    if not isinstance(optimize["pymoo"].get("shared"), dict):
+        optimize["pymoo"]["shared"] = {}
+        if tracker is not None:
+            tracker.add(["optimize", "pymoo", "shared"], {})
+    if not isinstance(optimize["pymoo"].get("algorithms"), dict):
+        optimize["pymoo"]["algorithms"] = {}
+        if tracker is not None:
+            tracker.add(["optimize", "pymoo", "algorithms"], {})
+
+    # Migrate flat master-era optimize.* keys into the final backend-specific schema.
+    for old_key, new_key in _LEGACY_DEAP_OPTIMIZE_KEYS.items():
+        if old_key in optimize and new_key not in optimize["deap"]["shared"]:
+            optimize["deap"]["shared"][new_key] = deepcopy(optimize[old_key])
+            if tracker is not None:
+                tracker.add(
+                    ["optimize", "deap", "shared", new_key],
+                    deepcopy(optimize["deap"]["shared"][new_key]),
+                )
+
+    for old_key, new_key in _LEGACY_PYMOO_SHARED_KEYS.items():
+        if old_key in optimize and new_key not in optimize["pymoo"]["shared"]:
+            optimize["pymoo"]["shared"][new_key] = deepcopy(optimize[old_key])
+            if tracker is not None:
+                tracker.add(
+                    ["optimize", "pymoo", "shared", new_key],
+                    deepcopy(optimize["pymoo"]["shared"][new_key]),
+                )
+
+    algorithms = optimize["pymoo"]["algorithms"]
+    if not isinstance(algorithms.get("nsga2"), dict):
+        algorithms["nsga2"] = {}
+        if tracker is not None:
+            tracker.add(["optimize", "pymoo", "algorithms", "nsga2"], {})
+    if not isinstance(algorithms.get("nsga3"), dict):
+        algorithms["nsga3"] = {}
+        if tracker is not None:
+            tracker.add(["optimize", "pymoo", "algorithms", "nsga3"], {})
+    if not isinstance(algorithms["nsga3"].get("ref_dirs"), dict):
+        algorithms["nsga3"]["ref_dirs"] = {}
+        if tracker is not None:
+            tracker.add(["optimize", "pymoo", "algorithms", "nsga3", "ref_dirs"], {})
+
+
 def _normalize_position_counts(
     result: dict, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
@@ -1229,6 +1316,75 @@ def _apply_non_live_adjustments(
             f"optimize.backend must be one of ['deap', 'pymoo']; got {result['optimize'].get('backend')!r}"
         )
     result["optimize"]["backend"] = backend
+    deap_shared = result["optimize"]["deap"]["shared"]
+    mutation_indpb = deap_shared["mutation_indpb"]
+    if mutation_indpb is None or (
+        isinstance(mutation_indpb, (int, float)) and float(mutation_indpb) <= 0.0
+    ):
+        deap_shared["mutation_indpb"] = _default_mutation_prob_per_param(result)
+    elif not isinstance(mutation_indpb, (int, float)) or not 0.0 < float(mutation_indpb) <= 1.0:
+        raise ValueError(
+            "optimize.deap.shared.mutation_indpb must be a float in (0, 1]; "
+            f"got {mutation_indpb!r}"
+        )
+    else:
+        deap_shared["mutation_indpb"] = float(mutation_indpb)
+    offspring_multiplier = deap_shared["offspring_multiplier"]
+    if not isinstance(offspring_multiplier, (int, float)) or float(offspring_multiplier) <= 0.0:
+        raise ValueError(
+            "optimize.deap.shared.offspring_multiplier must be a positive float; "
+            f"got {offspring_multiplier!r}"
+        )
+    deap_shared["offspring_multiplier"] = float(offspring_multiplier)
+    pymoo_algorithm = (
+        str(result["optimize"].get("pymoo", {}).get("algorithm", "nsga2") or "nsga2")
+        .strip()
+        .lower()
+    )
+    if pymoo_algorithm not in {"nsga2", "nsga3", "auto"}:
+        raise ValueError(
+            "optimize.pymoo.algorithm must be one of ['auto', 'nsga2', 'nsga3']; "
+            f"got {result['optimize'].get('pymoo', {}).get('algorithm')!r}"
+        )
+    result["optimize"]["pymoo"]["algorithm"] = pymoo_algorithm
+    pymoo_shared = result["optimize"]["pymoo"]["shared"]
+    mutation_prob_var = pymoo_shared["mutation_prob_var"]
+    if mutation_prob_var is None or (
+        isinstance(mutation_prob_var, (int, float)) and float(mutation_prob_var) <= 0.0
+    ):
+        pymoo_shared["mutation_prob_var"] = _default_mutation_prob_per_param(result)
+    elif not isinstance(mutation_prob_var, (int, float)) or not 0.0 < float(
+        mutation_prob_var
+    ) <= 1.0:
+        raise ValueError(
+            "optimize.pymoo.shared.mutation_prob_var must be a float in (0, 1]; "
+            f"got {mutation_prob_var!r}"
+        )
+    else:
+        pymoo_shared["mutation_prob_var"] = float(mutation_prob_var)
+    ref_dirs = result["optimize"]["pymoo"]["algorithms"]["nsga3"]["ref_dirs"]
+    ref_method = str(ref_dirs.get("method", "das_dennis") or "das_dennis").strip().lower()
+    ref_method = ref_method.replace("-", "_")
+    if ref_method not in {"das_dennis"}:
+        raise ValueError(
+            "optimize.pymoo.algorithms.nsga3.ref_dirs.method must be one of ['das_dennis']; "
+            f"got {ref_dirs.get('method')!r}"
+        )
+    ref_dirs["method"] = ref_method
+    n_partitions = ref_dirs.get("n_partitions", "auto")
+    if isinstance(n_partitions, str):
+        n_partitions = n_partitions.strip().lower()
+        if n_partitions != "auto":
+            raise ValueError(
+                "optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions must be a positive int "
+                f"or 'auto'; got {ref_dirs.get('n_partitions')!r}"
+            )
+        ref_dirs["n_partitions"] = n_partitions
+    elif not isinstance(n_partitions, int) or n_partitions <= 0:
+        raise ValueError(
+            "optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions must be a positive int "
+            f"or 'auto'; got {ref_dirs.get('n_partitions')!r}"
+        )
 
     current_limits = deepcopy(result["optimize"].get("limits", []))
     limits_snapshot = deepcopy(current_limits)
@@ -1295,7 +1451,20 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     _migrate_btc_collateral_settings(result, verbose=verbose, tracker=tracker)
     _migrate_suite_to_scenarios(result, verbose=verbose, tracker=tracker)
     _seed_missing_compatibility_sections(template, result, tracker=tracker)
-    for path in ("bot.long", "bot.short", "optimize.bounds"):
+    _migrate_optimizer_backend_sections(result, tracker=tracker)
+    for path in (
+        "bot.long",
+        "bot.short",
+        "optimize.bounds",
+        "optimize.deap",
+        "optimize.deap.shared",
+        "optimize.pymoo",
+        "optimize.pymoo.shared",
+        "optimize.pymoo.algorithms",
+        "optimize.pymoo.algorithms.nsga2",
+        "optimize.pymoo.algorithms.nsga3",
+        "optimize.pymoo.algorithms.nsga3.ref_dirs",
+    ):
         require_config_dict(result, path)
     _ensure_bot_defaults_and_bounds(result, verbose=verbose, tracker=tracker)
     _hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
@@ -2748,7 +2917,7 @@ def get_optional_live_value(config: dict, key: str, default=None):
 
 
 def get_template_config():
-    return {
+    template = {
         "backtest": {
             "aggregate": {"default": "mean"},
             "balance_sample_divider": 60,
@@ -2975,8 +3144,16 @@ def get_template_config():
             },
             "backend": "deap",
             "compress_results_file": True,
-            "crossover_eta": 20.0,
-            "crossover_probability": 0.7,
+            "deap": {
+                "shared": {
+                    "crossover_eta": 20.0,
+                    "crossover_probability": 0.7,
+                    "mutation_eta": 20.0,
+                    "mutation_indpb": 0.0,
+                    "mutation_probability": 0.45,
+                    "offspring_multiplier": 1.0,
+                }
+            },
             "enable_overrides": [],
             "iters": 30000,
             "limits": [
@@ -3016,11 +3193,33 @@ def get_template_config():
             "mutation_indpb": 0.0,
             "mutation_probability": 0.45,
             "n_cpus": 5,
-            "offspring_multiplier": 1.0,
             "pareto_max_size": 300,
             "population_size": 1000,
+            "pymoo": {
+                "algorithm": "nsga2",
+                "shared": {
+                    "crossover_eta": 20.0,
+                    "crossover_prob_var": 0.7,
+                    "eliminate_duplicates": True,
+                    "mutation_eta": 20.0,
+                    "mutation_prob_var": 0.0,
+                },
+                "algorithms": {
+                    "nsga2": {},
+                    "nsga3": {
+                        "ref_dirs": {
+                            "method": "das_dennis",
+                            "n_partitions": "auto",
+                        }
+                    },
+                },
+            },
             "round_to_n_significant_digits": 5,
             "scoring": ["adg", "sharpe_ratio"],
             "write_all_results": True,
         },
     }
+    default_mutation_prob = _default_mutation_prob_per_param(template)
+    template["optimize"]["deap"]["shared"]["mutation_indpb"] = default_mutation_prob
+    template["optimize"]["pymoo"]["shared"]["mutation_prob_var"] = default_mutation_prob
+    return template
