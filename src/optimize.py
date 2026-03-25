@@ -148,10 +148,7 @@ from optimization.bounds import (
     enforce_bounds,
 )
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
-from optimization.deap_adapters import (
-    mutPolynomialBoundedWrapper,
-    cxSimulatedBinaryBoundedWrapper,
-)
+from optimization.backends import get_backend_runner
 
 
 def _ignore_sigint_in_worker():
@@ -621,6 +618,7 @@ class Evaluator:
         self.duplicate_counter = duplicate_counter if duplicate_counter is not None else {"count": 0}
         self.bounds = extract_bounds_tuple_list_from_config(self.config)
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
+        self.use_duplicate_guard = True
 
         shared_metric_weights = {
             "positions_held_per_day": 1.0,
@@ -821,39 +819,40 @@ class Evaluator:
         individual[:] = enforce_bounds(individual, self.bounds, self.sig_digits)
         config = individual_to_config(individual, optimizer_overrides, overrides_list, self.config)
         individual_hash = calc_hash(individual)
-        if individual_hash in self.seen_hashes:
-            existing_entry = self.seen_hashes[individual_hash]
-            existing_score = None
-            existing_penalty = 0.0
-            if existing_entry is not None:
-                existing_score, existing_penalty = existing_entry
-            self.duplicate_counter["total"] += 1
-            perturbation_funcs = [
-                self.perturb_x_pct,
-                self.perturb_step_digits,
-                self.perturb_gaussian,
-                self.perturb_random_subset,
-                self.perturb_sample_some,
-                self.perturb_large_uniform,
-            ]
-            for perturb_fn in perturbation_funcs:
-                perturbed = perturb_fn(individual)
-                perturbed = enforce_bounds(perturbed, self.bounds, self.sig_digits)
-                new_hash = calc_hash(perturbed)
-                if new_hash not in self.seen_hashes:
-                    individual[:] = perturbed
-                    self.seen_hashes[new_hash] = None
-                    config = individual_to_config(
-                        perturbed, optimizer_overrides, overrides_list, self.config
-                    )
-                    self.duplicate_counter["resolved"] += 1
-                    break
+        if self.use_duplicate_guard:
+            if individual_hash in self.seen_hashes:
+                existing_entry = self.seen_hashes[individual_hash]
+                existing_score = None
+                existing_penalty = 0.0
+                if existing_entry is not None:
+                    existing_score, existing_penalty = existing_entry
+                self.duplicate_counter["total"] += 1
+                perturbation_funcs = [
+                    self.perturb_x_pct,
+                    self.perturb_step_digits,
+                    self.perturb_gaussian,
+                    self.perturb_random_subset,
+                    self.perturb_sample_some,
+                    self.perturb_large_uniform,
+                ]
+                for perturb_fn in perturbation_funcs:
+                    perturbed = perturb_fn(individual)
+                    perturbed = enforce_bounds(perturbed, self.bounds, self.sig_digits)
+                    new_hash = calc_hash(perturbed)
+                    if new_hash not in self.seen_hashes:
+                        individual[:] = perturbed
+                        self.seen_hashes[new_hash] = None
+                        config = individual_to_config(
+                            perturbed, optimizer_overrides, overrides_list, self.config
+                        )
+                        self.duplicate_counter["resolved"] += 1
+                        break
+                else:
+                    if existing_score is not None:
+                        self.duplicate_counter["reused"] += 1
+                        return tuple(existing_score), existing_penalty, None
             else:
-                if existing_score is not None:
-                    self.duplicate_counter["reused"] += 1
-                    return tuple(existing_score), existing_penalty, None
-        else:
-            self.seen_hashes[individual_hash] = None
+                self.seen_hashes[individual_hash] = None
         analyses = {}
         for exchange in self.exchanges:
             self._ensure_attached(exchange)
@@ -883,7 +882,8 @@ class Evaluator:
         }
         individual.evaluation_metrics = metrics_payload
         actual_hash = calc_hash(individual)
-        self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
+        if self.use_duplicate_guard:
+            self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
         return tuple(objectives), total_penalty, metrics_payload
 
     def build_limit_checks(self):
@@ -1090,39 +1090,40 @@ class SuiteEvaluator:
         seen_hashes = self.base.seen_hashes
         duplicate_counter = self.base.duplicate_counter
 
-        if individual_hash in seen_hashes:
-            existing_entry = seen_hashes[individual_hash]
-            existing_score = None
-            existing_penalty = 0.0
-            if existing_entry is not None:
-                existing_score, existing_penalty = existing_entry
-            duplicate_counter["total"] += 1
-            perturbation_funcs = [
-                self.base.perturb_x_pct,
-                self.base.perturb_step_digits,
-                self.base.perturb_gaussian,
-                self.base.perturb_random_subset,
-                self.base.perturb_sample_some,
-                self.base.perturb_large_uniform,
-            ]
-            for perturb_fn in perturbation_funcs:
-                perturbed = perturb_fn(individual)
-                perturbed = enforce_bounds(perturbed, self.base.bounds, self.base.sig_digits)
-                new_hash = calc_hash(perturbed)
-                if new_hash not in seen_hashes:
-                    individual[:] = perturbed
-                    seen_hashes[new_hash] = None
-                    config = individual_to_config(
-                        perturbed, optimizer_overrides, overrides_list, self.base.config
-                    )
-                    duplicate_counter["resolved"] += 1
-                    break
+        if self.base.use_duplicate_guard:
+            if individual_hash in seen_hashes:
+                existing_entry = seen_hashes[individual_hash]
+                existing_score = None
+                existing_penalty = 0.0
+                if existing_entry is not None:
+                    existing_score, existing_penalty = existing_entry
+                duplicate_counter["total"] += 1
+                perturbation_funcs = [
+                    self.base.perturb_x_pct,
+                    self.base.perturb_step_digits,
+                    self.base.perturb_gaussian,
+                    self.base.perturb_random_subset,
+                    self.base.perturb_sample_some,
+                    self.base.perturb_large_uniform,
+                ]
+                for perturb_fn in perturbation_funcs:
+                    perturbed = perturb_fn(individual)
+                    perturbed = enforce_bounds(perturbed, self.base.bounds, self.base.sig_digits)
+                    new_hash = calc_hash(perturbed)
+                    if new_hash not in seen_hashes:
+                        individual[:] = perturbed
+                        seen_hashes[new_hash] = None
+                        config = individual_to_config(
+                            perturbed, optimizer_overrides, overrides_list, self.base.config
+                        )
+                        duplicate_counter["resolved"] += 1
+                        break
+                else:
+                    if existing_score is not None:
+                        duplicate_counter["reused"] += 1
+                        return tuple(existing_score), existing_penalty, None
             else:
-                if existing_score is not None:
-                    duplicate_counter["reused"] += 1
-                    return tuple(existing_score), existing_penalty, None
-        else:
-            seen_hashes[individual_hash] = None
+                seen_hashes[individual_hash] = None
 
         scenario_results: List[ScenarioResult] = []
 
@@ -1237,7 +1238,8 @@ class SuiteEvaluator:
 
         individual.evaluation_metrics = metrics_payload
         actual_hash = calc_hash(individual)
-        self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
+        if self.base.use_duplicate_guard:
+            self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
         return tuple(objectives), total_penalty, metrics_payload
 
     def __del__(self):
@@ -1708,198 +1710,28 @@ async def main():
             pareto_max_size=pareto_max,
             bounds=evaluator.bounds,
         )
-
-        n_objectives = len(config["optimize"]["scoring"])
-        if not hasattr(creator, "FitnessMulti"):
-            creator.create("FitnessMulti", ConstraintAwareFitness, weights=(-1.0,) * n_objectives)
-        else:
-            creator.FitnessMulti.weights = (-1.0,) * n_objectives
-        if not hasattr(creator, "Individual"):
-            creator.create("Individual", list, fitness=creator.FitnessMulti)
-
-        toolbox = base.Toolbox()
-
-        # Define parameter bounds
-        bounds = evaluator.bounds
-        sig_digits = config["optimize"]["round_to_n_significant_digits"]
-        crossover_eta = config["optimize"].get("crossover_eta", 20.0)
-        mutation_eta = config["optimize"].get("mutation_eta", 20.0)
-        mutation_indpb_raw = config["optimize"].get("mutation_indpb", 0.0)
-        if isinstance(mutation_indpb_raw, (int, float)) and mutation_indpb_raw > 0.0:
-            mutation_indpb = max(0.0, min(1.0, float(mutation_indpb_raw)))
-        else:
-            mutation_indpb = 1.0 / len(bounds) if bounds else 1.0
-        offspring_multiplier = config["optimize"].get("offspring_multiplier", 1.0)
-        if not isinstance(offspring_multiplier, (int, float)) or offspring_multiplier <= 0.0:
-            offspring_multiplier = 1.0
-
-        # Register attribute generators (generating on-grid values for stepped params)
-        def _make_random_attr(bound):
-            """Generate a random value respecting step constraints."""
-            return bound.random_on_grid()
-
-        for i, bound in enumerate(bounds):
-            toolbox.register(f"attr_{i}", _make_random_attr, bound)
-
-        # Register genetic operators with bounds for step-aware crossover/mutation
-        toolbox.register(
-            "mate",
-            cxSimulatedBinaryBoundedWrapper,
-            eta=crossover_eta,
-            bounds=bounds,
-        )
-        toolbox.register(
-            "mutate",
-            mutPolynomialBoundedWrapper,
-            eta=mutation_eta,
-            indpb=mutation_indpb,
-            bounds=bounds,
-        )
-        toolbox.register("select", tools.selNSGA2)
-        toolbox.register("evaluate", evaluator_for_pool.evaluate, overrides_list=overrides_list)
-
-        # Parallelization setup
-        logging.info(f"Initializing multiprocessing pool. N cpus: {config['optimize']['n_cpus']}")
-        pool = multiprocessing.Pool(
-            processes=config["optimize"]["n_cpus"],
-            initializer=_ignore_sigint_in_worker,
-        )
-        toolbox.register("map", pool.map)
-        logging.info(f"Finished initializing multiprocessing pool.")
-        pool_state = {"terminated": False}
-
-        # Create initial population
-        logging.info(f"Creating initial population...")
-
-        def _evaluate_initial(individuals):
-            if not individuals:
-                return 0
-            total = len(individuals)
-            pending = {}
-            for ind in individuals:
-                pending[pool.apply_async(toolbox.evaluate, (ind,))] = ind
-            completed = 0
-            try:
-                while pending:
-                    ready = [res for res in pending if res.ready()]
-                    if not ready:
-                        time.sleep(0.05)
-                        continue
-                    for res in ready:
-                        ind = pending.pop(res)
-                        fit_values, penalty, metrics = res.get()
-                        ind.fitness.values = fit_values
-                        ind.fitness.constraint_violation = penalty
-                        ind.constraint_violation = penalty
-                        if metrics is not None:
-                            ind.evaluation_metrics = metrics
-                            _record_individual_result(
-                                ind,
-                                evaluator.config,
-                                overrides_list,
-                                recorder,
-                            )
-                        elif hasattr(ind, "evaluation_metrics"):
-                            delattr(ind, "evaluation_metrics")
-                        completed += 1
-                        logging.info("Evaluated %d/%d starting configs", completed, total)
-            except KeyboardInterrupt:
-                logging.info("Evaluation interrupted; terminating pending starting configs...")
-                for res in pending:
-                    try:
-                        res.cancel()
-                    except Exception:
-                        pass
-                if not pool_state["terminated"]:
-                    logging.info("Terminating worker pool immediately due to interrupt...")
-                    pool.terminate()
-                    pool_state["terminated"] = True
-                raise
-            return completed
-
-        population_size = config["optimize"]["population_size"]
-        starting_configs = get_starting_configs(args.starting_configs)
-        if starting_configs:
-            logging.info(
-                "Loaded %d starting configs before quantization (population size=%d)",
-                len(starting_configs),
-                population_size,
-            )
-        else:
-            logging.info("No starting configs provided; population will be random-initialized")
-        starting_individuals = configs_to_individuals(
-            starting_configs,
-            bounds,
-            sig_digits,
-        )
-
-        def _make_random_individual():
-            """Generate a random individual respecting step constraints."""
-            values = [bound.random_on_grid() for bound in bounds]
-            return creator.Individual(values)
-
-        population = [_make_random_individual() for _ in range(population_size)]
-        if starting_individuals:
-            evaluated_seeds = [creator.Individual(ind) for ind in starting_individuals]
-            eval_count = _evaluate_initial(evaluated_seeds)
-            logging.info("Evaluated %d starting configs", eval_count)
-            if len(evaluated_seeds) > population_size:
-                evaluated_seeds = tools.selNSGA2(evaluated_seeds, population_size)
-                logging.info(
-                    "Trimmed starting configs to population size via NSGA-II crowding (kept %d)",
-                    len(evaluated_seeds),
-                )
-            for i, ind in enumerate(evaluated_seeds):
-                population[i] = creator.Individual(ind)
-
-            remaining = population_size - len(evaluated_seeds)
-            seed_pool = evaluated_seeds if evaluated_seeds else []
-            if seed_pool and remaining > 0:
-                for i in range(len(evaluated_seeds), len(evaluated_seeds) + remaining // 2):
-                    population[i] = deepcopy(seed_pool[np.random.choice(range(len(seed_pool)))])
-        for i in range(len(population)):
-            population[i][:] = enforce_bounds(population[i], bounds, sig_digits)
-
-        logging.info(f"Initial population size: {len(population)}")
-
-        # Set up statistics and hall of fame
-        stats = tools.Statistics(lambda ind: ind.fitness.values)
-        # stats.register("avg", np.mean, axis=0)
-        # stats.register("std", np.std, axis=0)
-        stats.register("min", np.min, axis=0)
-        stats.register("max", np.max, axis=0)
-
-        logbook = tools.Logbook()
-        # logbook.header = "gen", "evals", "std", "min", "avg", "max"
-        logbook.header = "gen", "evals", "min", "max"
-
-        hof = tools.ParetoFront()
-
-        # Run the optimization
-        logging.info(f"Starting optimize...")
-        lambda_size = max(1, int(round(config["optimize"]["population_size"] * offspring_multiplier)))
-        population, logbook = ea_mu_plus_lambda_stream(
-            population,
-            toolbox,
-            mu=config["optimize"]["population_size"],
-            lambda_=lambda_size,
-            cxpb=config["optimize"]["crossover_probability"],
-            mutpb=config["optimize"]["mutation_probability"],
-            ngen=max(1, int(config["optimize"]["iters"] / len(population))),
-            stats=stats,
-            halloffame=hof,
-            verbose=False,
+        backend_name = config["optimize"]["backend"]
+        logging.info("Selected optimizer backend: %s", backend_name)
+        backend_runner = get_backend_runner(backend_name)
+        backend_result = backend_runner(
+            config=config,
+            evaluator=evaluator,
+            evaluator_for_pool=evaluator_for_pool,
             recorder=recorder,
-            evaluator_config=evaluator.config,
             overrides_list=overrides_list,
-            pool=pool,
             duplicate_counter=duplicate_counter,
-            pool_state=pool_state,
+            starting_configs_path=args.starting_configs,
+            constraint_fitness_cls=ConstraintAwareFitness,
+            ignore_sigint_in_worker=_ignore_sigint_in_worker,
+            get_starting_configs=get_starting_configs,
+            configs_to_individuals=configs_to_individuals,
+            record_individual_result=_record_individual_result,
+            run_evolution=ea_mu_plus_lambda_stream,
+            build_config_fn=individual_to_config,
+            overrides_fn=optimizer_overrides,
         )
-
-        logging.info("Optimization complete.")
-
-        pool_terminated = pool_state["terminated"]
+        pool = backend_result.get("pool")
+        pool_terminated = backend_result.get("pool_terminated", False)
 
     except KeyboardInterrupt:
         interrupted = True

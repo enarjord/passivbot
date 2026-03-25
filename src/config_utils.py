@@ -1210,6 +1210,12 @@ def _apply_non_live_adjustments(
             canonical_scoring.append(canon)
             seen.add(canon)
     result["optimize"]["scoring"] = canonical_scoring
+    backend = str(result["optimize"].get("backend", "deap") or "deap").strip().lower()
+    if backend not in {"deap", "pymoo"}:
+        raise ValueError(
+            f"optimize.backend must be one of ['deap', 'pymoo']; got {result['optimize'].get('backend')!r}"
+        )
+    result["optimize"]["backend"] = backend
 
     existing_limits = deepcopy(result["optimize"].get("limits", []))
     limits_snapshot = deepcopy(existing_limits)
@@ -1873,6 +1879,12 @@ RESERVED_CLI_ARGS = {
         comma_separated_values,
         "Override optimize.scoring: comma_separated_values",
     ),
+    "optimize.backend": (
+        "ob",
+        ["--optimizer-backend"],
+        str,
+        "Override optimize.backend: deap|pymoo",
+    ),
 }
 
 
@@ -2345,6 +2357,7 @@ def get_template_config():
                 "short_unstuck_loss_allowance_pct": [0.001, 0.05],
                 "short_unstuck_threshold": [0.4, 0.95],
             },
+            "backend": "deap",
             "compress_results_file": True,
             "crossover_eta": 20.0,
             "crossover_probability": 0.7,
