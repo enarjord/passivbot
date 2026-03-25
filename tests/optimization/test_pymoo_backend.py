@@ -2,6 +2,9 @@ import copy
 
 from optimization.bounds import Bound
 from optimization.backends import pymoo_backend
+from opt_utils import load_results
+from optimize import ResultRecorder
+from tools.pareto_dash import load_pareto_dataframe
 
 
 class FakePool:
@@ -163,3 +166,57 @@ def test_run_backend_supports_single_objective(monkeypatch):
     assert result["pool_terminated"] is False
     assert recorder.entries
     assert list(recorder.entries[0]["metrics"]["objectives"]) == ["w_0"]
+
+
+def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
+    evaluator = FakeEvaluator(["adg", "drawdown_worst"])
+    recorder = ResultRecorder(
+        results_dir=str(tmp_path),
+        sig_digits=4,
+        flush_interval=60,
+        scoring_keys=["adg", "drawdown_worst"],
+        compress=False,
+        write_all_results=True,
+        bounds=evaluator.bounds,
+    )
+
+    result = pymoo_backend.run_backend(
+        config={
+            "optimize": {
+                "backend": "pymoo",
+                "population_size": 6,
+                "iters": 12,
+                "n_cpus": 1,
+                "round_to_n_significant_digits": 4,
+                "scoring": ["adg", "drawdown_worst"],
+                "crossover_probability": 0.7,
+                "crossover_eta": 20.0,
+                "mutation_eta": 20.0,
+                "mutation_indpb": 0.5,
+            }
+        },
+        evaluator=evaluator,
+        evaluator_for_pool=evaluator,
+        recorder=recorder,
+        overrides_list=[],
+        duplicate_counter={},
+        starting_configs_path=None,
+        constraint_fitness_cls=None,
+        ignore_sigint_in_worker=_ignore_sigint,
+        get_starting_configs=_get_starting_configs,
+        configs_to_individuals=_configs_to_individuals,
+        record_individual_result=None,
+        run_evolution=None,
+        build_config_fn=_build_config,
+        overrides_fn=object(),
+    )
+    recorder.flush()
+    recorder.close()
+    result["pool"].close()
+    result["pool"].join()
+
+    records = list(load_results(tmp_path / "all_results.bin"))
+    assert records
+    run_data = load_pareto_dataframe(str(tmp_path))
+    assert not run_data.dataframe.empty
