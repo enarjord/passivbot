@@ -54,6 +54,10 @@ class PymooRecorderCallback(Callback):
         return strip_config_metadata(entry)
 
     def notify(self, algorithm):
-        batch = getattr(algorithm, "off", None) or getattr(algorithm, "pop", None) or []
+        batch = getattr(algorithm, "off", None)
+        if batch is None:
+            batch = getattr(algorithm, "pop", None)
+        if batch is None:
+            batch = []
         for individual in batch:
             self.recorder.record(self._build_entry(individual))
