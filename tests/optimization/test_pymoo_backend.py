@@ -51,9 +51,14 @@ class FakeEvaluator:
     def evaluate(self, vector, overrides_list):
         x0 = float(vector[0])
         x1 = float(vector[1])
-        objectives = [-x0]
-        if len(self.config["optimize"]["scoring"]) > 1:
-            objectives.append(x1)
+        objectives = []
+        for idx in range(len(self.config["optimize"]["scoring"])):
+            if idx == 0:
+                objectives.append(-x0)
+            elif idx == 1:
+                objectives.append(x1)
+            else:
+                objectives.append(x0 + x1 + idx)
         return (
             tuple(objectives),
             0.0,
@@ -83,26 +88,45 @@ def _ignore_sigint():
     return None
 
 
+def _pymoo_optimize_config(scoring, algorithm="nsga2"):
+    return {
+        "optimize": {
+            "backend": "pymoo",
+            "population_size": 6,
+            "iters": 12,
+            "n_cpus": 1,
+            "round_to_n_significant_digits": 4,
+            "scoring": list(scoring),
+            "pymoo": {
+                "algorithm": algorithm,
+                "shared": {
+                    "crossover_eta": 20.0,
+                    "crossover_prob_var": 0.7,
+                    "eliminate_duplicates": True,
+                    "mutation_eta": 20.0,
+                    "mutation_prob_var": 0.5,
+                },
+                "algorithms": {
+                    "nsga2": {},
+                    "nsga3": {
+                        "ref_dirs": {
+                            "method": "das_dennis",
+                            "n_partitions": "auto",
+                        }
+                    },
+                },
+            },
+        }
+    }
+
+
 def test_run_backend_records_entries(monkeypatch):
     monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
     evaluator = FakeEvaluator(["adg", "drawdown_worst"])
     recorder = FakeRecorder()
 
     result = pymoo_backend.run_backend(
-        config={
-            "optimize": {
-                "backend": "pymoo",
-                "population_size": 6,
-                "iters": 12,
-                "n_cpus": 1,
-                "round_to_n_significant_digits": 4,
-                "scoring": ["adg", "drawdown_worst"],
-                "crossover_probability": 0.7,
-                "crossover_eta": 20.0,
-                "mutation_eta": 20.0,
-                "mutation_indpb": 0.5,
-            }
-        },
+        config=_pymoo_optimize_config(["adg", "drawdown_worst"]),
         evaluator=evaluator,
         evaluator_for_pool=evaluator,
         recorder=recorder,
@@ -133,20 +157,7 @@ def test_run_backend_supports_single_objective(monkeypatch):
     recorder = FakeRecorder()
 
     result = pymoo_backend.run_backend(
-        config={
-            "optimize": {
-                "backend": "pymoo",
-                "population_size": 4,
-                "iters": 8,
-                "n_cpus": 1,
-                "round_to_n_significant_digits": 4,
-                "scoring": ["adg"],
-                "crossover_probability": 0.7,
-                "crossover_eta": 20.0,
-                "mutation_eta": 20.0,
-                "mutation_indpb": 0.5,
-            }
-        },
+        config=_pymoo_optimize_config(["adg"]),
         evaluator=evaluator,
         evaluator_for_pool=evaluator,
         recorder=recorder,
@@ -182,20 +193,7 @@ def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
     )
 
     result = pymoo_backend.run_backend(
-        config={
-            "optimize": {
-                "backend": "pymoo",
-                "population_size": 6,
-                "iters": 12,
-                "n_cpus": 1,
-                "round_to_n_significant_digits": 4,
-                "scoring": ["adg", "drawdown_worst"],
-                "crossover_probability": 0.7,
-                "crossover_eta": 20.0,
-                "mutation_eta": 20.0,
-                "mutation_indpb": 0.5,
-            }
-        },
+        config=_pymoo_optimize_config(["adg", "drawdown_worst"]),
         evaluator=evaluator,
         evaluator_for_pool=evaluator,
         recorder=recorder,
@@ -220,3 +218,45 @@ def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
     assert records
     run_data = load_pareto_dataframe(str(tmp_path))
     assert not run_data.dataframe.empty
+
+
+def test_resolve_algorithm_name_auto_prefers_nsga2_for_small_objective_count():
+    assert (
+        pymoo_backend._resolve_algorithm_name({"algorithm": "auto"}, 3)  # noqa: SLF001
+        == "nsga2"
+    )
+
+
+def test_resolve_algorithm_name_auto_prefers_nsga3_for_many_objectives():
+    assert (
+        pymoo_backend._resolve_algorithm_name({"algorithm": "auto"}, 4)  # noqa: SLF001
+        == "nsga3"
+    )
+
+
+def test_run_backend_supports_auto_nsga3(monkeypatch):
+    monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
+    evaluator = FakeEvaluator(["m1", "m2", "m3", "m4"])
+    recorder = FakeRecorder()
+
+    result = pymoo_backend.run_backend(
+        config=_pymoo_optimize_config(["m1", "m2", "m3", "m4"], algorithm="auto"),
+        evaluator=evaluator,
+        evaluator_for_pool=evaluator,
+        recorder=recorder,
+        overrides_list=[],
+        duplicate_counter={},
+        starting_configs_path=None,
+        constraint_fitness_cls=None,
+        ignore_sigint_in_worker=_ignore_sigint,
+        get_starting_configs=_get_starting_configs,
+        configs_to_individuals=_configs_to_individuals,
+        record_individual_result=None,
+        run_evolution=None,
+        build_config_fn=_build_config,
+        overrides_fn=object(),
+    )
+
+    assert result["pool_terminated"] is False
+    assert recorder.entries
+    assert list(recorder.entries[0]["metrics"]["objectives"]) == ["w_0", "w_1", "w_2", "w_3"]

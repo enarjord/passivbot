@@ -20,3 +20,4 @@ dash==2.18.2
 dash-bootstrap-components==1.6.0
 setuptools>=68.2
 psutil==5.9.8
+pymoo==0.6.1.6

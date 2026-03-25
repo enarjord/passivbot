@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from optimization.bounds import Bound
 from optimization.problem import PassivbotProblem, PymooEvaluatorAdapter
@@ -38,6 +39,14 @@ class SingleObjectiveEvaluator:
         )
 
 
+class InvalidMetricsEvaluator:
+    def __init__(self):
+        self.limit_checks = []
+
+    def evaluate(self, vector, overrides_list):
+        return ((-1.0,), 0.0, None)
+
+
 def test_problem_evaluate_passthroughs_metrics_and_vector():
     evaluator = FakeEvaluator(has_constraints=True)
     adapter = PymooEvaluatorAdapter(evaluator, overrides_list=["foo"])
@@ -71,3 +80,16 @@ def test_problem_without_constraints_omits_g():
 
     assert "G" not in out
     assert out["F"].tolist() == [-1.5]
+
+
+def test_problem_rejects_missing_metrics_dict():
+    evaluator = InvalidMetricsEvaluator()
+    adapter = PymooEvaluatorAdapter(evaluator)
+    problem = PassivbotProblem(
+        bounds=[Bound(0.0, 1.0)],
+        scoring_keys=["adg"],
+        evaluator_adapter=adapter,
+    )
+
+    with pytest.raises(TypeError, match="metrics dict"):
+        problem._evaluate(np.asarray([0.7]), {})

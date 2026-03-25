@@ -26,10 +26,12 @@ class PymooEvaluatorAdapter:
             evaluated_vector,
             self.overrides_list,
         )
+        if not isinstance(metrics, dict):
+            raise TypeError(f"pymoo evaluator must return metrics dict; got {type(metrics).__name__}")
         return {
             "objectives": list(objectives),
             "constraint_violation": float(constraint_violation),
-            "metrics": metrics or {},
+            "metrics": metrics,
             "evaluation_vector": np.asarray(evaluated_vector, dtype=np.float64),
         }
 

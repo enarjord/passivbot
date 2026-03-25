@@ -46,6 +46,7 @@ def run_backend(
     pool = None
     pool_state = {"terminated": False}
     try:
+        deap_cfg = config["optimize"]["deap"]["shared"]
         n_objectives = len(config["optimize"]["scoring"])
         if not hasattr(creator, "FitnessMulti"):
             creator.create(
@@ -61,16 +62,10 @@ def run_backend(
         toolbox = base.Toolbox()
         bounds = evaluator.bounds
         sig_digits = config["optimize"]["round_to_n_significant_digits"]
-        crossover_eta = config["optimize"].get("crossover_eta", 20.0)
-        mutation_eta = config["optimize"].get("mutation_eta", 20.0)
-        mutation_indpb_raw = config["optimize"].get("mutation_indpb", 0.0)
-        if isinstance(mutation_indpb_raw, (int, float)) and mutation_indpb_raw > 0.0:
-            mutation_indpb = max(0.0, min(1.0, float(mutation_indpb_raw)))
-        else:
-            mutation_indpb = 1.0 / len(bounds) if bounds else 1.0
-        offspring_multiplier = config["optimize"].get("offspring_multiplier", 1.0)
-        if not isinstance(offspring_multiplier, (int, float)) or offspring_multiplier <= 0.0:
-            offspring_multiplier = 1.0
+        crossover_eta = float(deap_cfg["crossover_eta"])
+        mutation_eta = float(deap_cfg["mutation_eta"])
+        mutation_indpb = float(deap_cfg["mutation_indpb"])
+        offspring_multiplier = float(deap_cfg["offspring_multiplier"])
 
         def _make_random_attr(bound):
             return bound.random_on_grid()
@@ -208,8 +203,8 @@ def run_backend(
             toolbox,
             mu=config["optimize"]["population_size"],
             lambda_=lambda_size,
-            cxpb=config["optimize"]["crossover_probability"],
-            mutpb=config["optimize"]["mutation_probability"],
+            cxpb=float(deap_cfg["crossover_probability"]),
+            mutpb=float(deap_cfg["mutation_probability"]),
             ngen=max(1, int(config["optimize"]["iters"] / len(population))),
             stats=stats,
             halloffame=hof,

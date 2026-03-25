@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import multiprocessing
 from typing import Any
 
@@ -8,16 +9,18 @@ import numpy as np
 
 try:
     from pymoo.algorithms.moo.nsga2 import NSGA2
+    from pymoo.algorithms.moo.nsga3 import NSGA3
     from pymoo.optimize import minimize as pymoo_minimize
     from pymoo.operators.crossover.sbx import SBX
     from pymoo.operators.mutation.pm import PM
     from pymoo.parallelization.starmap import StarmapParallelization
     from pymoo.termination import get_termination
+    from pymoo.util.ref_dirs import get_reference_directions
 except ImportError:  # pragma: no cover
     NSGA2 = None
 
-from optimization.problem import PassivbotProblem, PymooEvaluatorAdapter
 from optimization.callback import PymooRecorderCallback
+from optimization.problem import PassivbotProblem, PymooEvaluatorAdapter
 from optimization.repair import BoundsRepair
 
 
@@ -57,6 +60,39 @@ def _build_initial_population(
     return np.asarray(population, dtype=np.float64)
 
 
+def _resolve_algorithm_name(pymoo_cfg: dict[str, Any], n_objectives: int) -> str:
+    raw = str(pymoo_cfg["algorithm"]).strip().lower()
+    if raw == "auto":
+        return "nsga2" if n_objectives <= 3 else "nsga3"
+    return raw
+
+
+def _compute_n_partitions(n_obj: int, pop_size: int) -> int:
+    if n_obj < 2 or pop_size < 1:
+        raise ValueError(
+            f"n_obj must be >= 2 and pop_size >= 1, got n_obj={n_obj}, pop_size={pop_size}"
+        )
+    p = 1
+    while math.comb(p + n_obj - 1, n_obj - 1) < pop_size:
+        p += 1
+    if p > 1:
+        below = math.comb(p - 1 + n_obj - 1, n_obj - 1)
+        above = math.comb(p + n_obj - 1, n_obj - 1)
+        return p - 1 if (pop_size - below) <= (above - pop_size) else p
+    return p
+
+
+def _build_nsga3_ref_dirs(pymoo_cfg: dict[str, Any], n_objectives: int, pop_size: int):
+    if n_objectives < 2:
+        raise ValueError("pymoo nsga3 requires at least 2 objectives")
+    ref_cfg = pymoo_cfg["algorithms"]["nsga3"]["ref_dirs"]
+    method = str(ref_cfg["method"]).strip().lower().replace("_", "-")
+    n_partitions = ref_cfg["n_partitions"]
+    if n_partitions == "auto":
+        n_partitions = _compute_n_partitions(n_objectives, pop_size)
+    return get_reference_directions(method, n_objectives, n_partitions=int(n_partitions))
+
+
 def run_backend(
     *,
     config: dict[str, Any],
@@ -89,6 +125,7 @@ def run_backend(
     pool = None
     try:
         bounds = base_evaluator.bounds
+        n_objectives = len(config["optimize"]["scoring"])
         sig_digits = config["optimize"]["round_to_n_significant_digits"]
         sampling = _build_initial_population(
             bounds=bounds,
@@ -119,21 +156,42 @@ def run_backend(
             overrides_fn=overrides_fn,
             overrides_list=overrides_list,
         )
-        algorithm = NSGA2(
-            pop_size=config["optimize"]["population_size"],
-            sampling=sampling,
-            crossover=SBX(
-                prob_var=float(config["optimize"].get("crossover_probability", 0.7)),
-                eta=float(config["optimize"].get("crossover_eta", 20.0)),
+        pymoo_cfg = config["optimize"]["pymoo"]
+        pymoo_shared = pymoo_cfg["shared"]
+        algorithm_name = _resolve_algorithm_name(pymoo_cfg, n_objectives)
+        common_kwargs = {
+            "sampling": sampling,
+            "crossover": SBX(
+                prob_var=float(pymoo_shared["crossover_prob_var"]),
+                eta=float(pymoo_shared["crossover_eta"]),
             ),
-            mutation=PM(
-                prob=_resolve_mutation_prob(config, len(bounds)),
-                eta=float(config["optimize"].get("mutation_eta", 20.0)),
+            "mutation": PM(
+                prob=_resolve_mutation_prob(pymoo_shared, len(bounds)),
+                eta=float(pymoo_shared["mutation_eta"]),
             ),
-            repair=BoundsRepair(bounds, sig_digits),
-            eliminate_duplicates=True,
-        )
+            "repair": BoundsRepair(bounds, sig_digits),
+            "eliminate_duplicates": bool(pymoo_shared["eliminate_duplicates"]),
+        }
         population_size = max(1, int(config["optimize"]["population_size"]))
+        if algorithm_name == "nsga2":
+            algorithm = NSGA2(
+                pop_size=population_size,
+                **common_kwargs,
+            )
+        elif algorithm_name == "nsga3":
+            algorithm = NSGA3(
+                ref_dirs=_build_nsga3_ref_dirs(
+                    pymoo_cfg,
+                    n_objectives,
+                    population_size,
+                ),
+                pop_size=population_size,
+                **common_kwargs,
+            )
+        else:
+            raise NotImplementedError(
+                f"unsupported pymoo algorithm {algorithm_name!r}; expected nsga2 or nsga3"
+            )
         ngen = max(1, int(config["optimize"]["iters"] / population_size))
         logging.info("Starting optimize...")
         pymoo_minimize(
@@ -156,8 +214,6 @@ def run_backend(
         raise
 
 
-def _resolve_mutation_prob(config: dict[str, Any], n_params: int) -> float:
-    raw = config["optimize"].get("mutation_indpb", 0.0)
-    if isinstance(raw, (int, float)) and raw > 0.0:
-        return max(0.0, min(1.0, float(raw)))
-    return 1.0 / max(1, int(n_params))
+def _resolve_mutation_prob(pymoo_shared: dict[str, Any], n_params: int) -> float:
+    del n_params
+    return float(pymoo_shared["mutation_prob_var"])

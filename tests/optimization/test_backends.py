@@ -36,6 +36,11 @@ def test_format_config_defaults_backend_to_deap():
     out = format_config(current, verbose=False)
 
     assert out["optimize"]["backend"] == "deap"
+    assert "deap" in out["optimize"]
+    assert "pymoo" in out["optimize"]
+    assert "shared" in out["optimize"]["deap"]
+    assert "shared" in out["optimize"]["pymoo"]
+    assert "algorithms" in out["optimize"]["pymoo"]
 
 
 def test_format_config_normalizes_backend_name():
@@ -52,6 +57,100 @@ def test_format_config_rejects_unknown_backend():
     current["optimize"]["backend"] = "unknown"
 
     with pytest.raises(ValueError, match="optimize.backend must be one of"):
+        format_config(current, verbose=False)
+
+
+def test_format_config_migrates_flat_optimizer_hyperparams_into_backend_sections():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["backend"] = "pymoo"
+    current["optimize"].pop("deap", None)
+    current["optimize"].pop("pymoo", None)
+    current["optimize"]["crossover_eta"] = 17.0
+    current["optimize"]["crossover_probability"] = 0.33
+    current["optimize"]["mutation_eta"] = 11.0
+    current["optimize"]["mutation_indpb"] = 0.22
+    current["optimize"]["mutation_probability"] = 0.44
+    current["optimize"]["offspring_multiplier"] = 1.7
+
+    out = format_config(current, verbose=False)
+
+    assert "crossover_eta" not in out["optimize"]
+    assert out["optimize"]["deap"]["shared"]["crossover_eta"] == 17.0
+    assert out["optimize"]["deap"]["shared"]["crossover_probability"] == 0.33
+    assert out["optimize"]["deap"]["shared"]["mutation_eta"] == 11.0
+    assert out["optimize"]["deap"]["shared"]["mutation_indpb"] == 0.22
+    assert out["optimize"]["deap"]["shared"]["mutation_probability"] == 0.44
+    assert out["optimize"]["deap"]["shared"]["offspring_multiplier"] == 1.7
+    assert out["optimize"]["pymoo"]["shared"]["crossover_eta"] == 17.0
+    assert out["optimize"]["pymoo"]["shared"]["crossover_prob_var"] == 0.33
+    assert out["optimize"]["pymoo"]["shared"]["mutation_eta"] == 11.0
+    assert out["optimize"]["pymoo"]["shared"]["mutation_prob_var"] == 0.22
+
+
+def test_format_config_preserves_nested_backend_specific_settings():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["deap"]["shared"]["crossover_eta"] = 31.0
+    current["optimize"]["pymoo"]["algorithm"] = "nsga2"
+    current["optimize"]["pymoo"]["shared"]["crossover_prob_var"] = 0.41
+    current["optimize"]["pymoo"]["algorithms"]["nsga3"]["ref_dirs"]["n_partitions"] = 9
+
+    out = format_config(current, verbose=False)
+
+    assert out["optimize"]["deap"]["shared"]["crossover_eta"] == 31.0
+    assert out["optimize"]["pymoo"]["algorithm"] == "nsga2"
+    assert out["optimize"]["pymoo"]["shared"]["crossover_prob_var"] == 0.41
+    assert out["optimize"]["pymoo"]["algorithms"]["nsga3"]["ref_dirs"]["n_partitions"] == 9
+
+
+def test_format_config_rejects_unknown_pymoo_algorithm():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["pymoo"]["algorithm"] = "moead"
+
+    with pytest.raises(ValueError, match="optimize.pymoo.algorithm must be one of"):
+        format_config(current, verbose=False)
+
+
+def test_format_config_accepts_auto_pymoo_algorithm():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["pymoo"]["algorithm"] = "auto"
+
+    out = format_config(current, verbose=False)
+
+    assert out["optimize"]["pymoo"]["algorithm"] == "auto"
+
+
+def test_format_config_normalizes_zero_mutation_prob_sentinels_centrally():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["deap"]["shared"]["mutation_indpb"] = 0.0
+    current["optimize"]["pymoo"]["shared"]["mutation_prob_var"] = 0.0
+
+    out = format_config(current, verbose=False)
+
+    assert out["optimize"]["deap"]["shared"]["mutation_indpb"] > 0.0
+    assert out["optimize"]["pymoo"]["shared"]["mutation_prob_var"] > 0.0
+
+
+def test_format_config_rejects_invalid_offspring_multiplier():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["deap"]["shared"]["offspring_multiplier"] = 0.0
+
+    with pytest.raises(ValueError, match="offspring_multiplier"):
+        format_config(current, verbose=False)
+
+
+def test_format_config_rejects_invalid_pymoo_mutation_prob_var():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["pymoo"]["shared"]["mutation_prob_var"] = 1.5
+
+    with pytest.raises(ValueError, match="mutation_prob_var"):
+        format_config(current, verbose=False)
+
+
+def test_format_config_rejects_invalid_nsga3_ref_dirs_method():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["pymoo"]["algorithms"]["nsga3"]["ref_dirs"]["method"] = "bad"
+
+    with pytest.raises(ValueError, match="ref_dirs.method"):
         format_config(current, verbose=False)
 
 
