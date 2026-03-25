@@ -142,6 +142,7 @@ body {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 1rem;
+  align-items: start;
 }
 
 .panel {
@@ -151,6 +152,7 @@ body {
   box-shadow: var(--shadow);
   padding: 1rem 1rem 1.05rem;
   backdrop-filter: blur(7px);
+  overflow: hidden;
 }
 
 .panel-summary { grid-column: span 12; }
@@ -225,15 +227,30 @@ body {
   border-radius: 0.9rem;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.54);
+  overflow: hidden;
 }
 
 .detail-row .headline,
 .stack-item .headline {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 0.8rem;
   margin: 0 0 0.25rem;
   font-weight: 700;
+  min-width: 0;
+}
+
+.detail-row .headline > span,
+.stack-item .headline > span {
+  min-width: 0;
+}
+
+.detail-row .headline > span:first-child,
+.stack-item .headline > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .detail-row .subline,
@@ -243,6 +260,9 @@ body {
   margin: 0.18rem 0 0;
   color: var(--muted);
   font-size: 0.88rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .stack-item .minor code {
@@ -251,13 +271,14 @@ body {
 }
 
 .table-wrap {
-  overflow: auto;
+  overflow: auto hidden;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.92rem;
+  table-layout: fixed;
+  font-size: 0.88rem;
 }
 
 th,
@@ -307,6 +328,53 @@ tbody tr:last-child td {
 
 .mono {
   font-family: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+}
+
+.is-clickable {
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.is-clickable:hover {
+  transform: translateY(-1px);
+  border-color: rgba(142, 59, 27, 0.32);
+  background: rgba(255, 251, 244, 0.92);
+}
+
+.is-focus {
+  border-color: rgba(142, 59, 27, 0.36);
+  background: rgba(245, 224, 199, 0.28);
+}
+
+tbody tr.is-clickable {
+  cursor: pointer;
+}
+
+tbody tr.is-clickable:hover td {
+  background: rgba(255, 251, 244, 0.72);
+}
+
+tbody tr.is-focus td {
+  background: rgba(245, 224, 199, 0.34);
+}
+
+.tight {
+  letter-spacing: 0;
+}
+
+.subtle {
+  color: var(--muted);
+}
+
+.positions-symbol {
+  font-weight: 700;
+}
+
+.positions-meta {
+  font-size: 0.82rem;
 }
 
 .empty-state {

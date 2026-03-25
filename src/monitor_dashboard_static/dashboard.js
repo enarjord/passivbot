@@ -94,6 +94,58 @@
       .replaceAll('"', "&quot;");
   }
 
+  function shortSymbol(symbol) {
+    if (!symbol) return "-";
+    return String(symbol).replace(":USDT", "").replace(":USDC", "");
+  }
+
+  function fmtShortTs(tsMs) {
+    if (!tsMs) return "-";
+    try {
+      return new Date(Number(tsMs)).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+    } catch {
+      return String(tsMs);
+    }
+  }
+
+  function compactEntries(entries) {
+    return entries.filter(([, value]) => value !== null && value !== undefined && value !== "-" && value !== "");
+  }
+
+  function summarizeObject(payload, limit = 3) {
+    if (!payload || typeof payload !== "object") return "-";
+    const parts = Object.entries(payload)
+      .filter(([, value]) => typeof value !== "object")
+      .slice(0, limit)
+      .map(([key, value]) => {
+        const formatted = typeof value === "number" ? fmtCompact(value, 4) : String(value);
+        return `${key}=${formatted}`;
+      });
+    return parts.length ? parts.join(" · ") : "-";
+  }
+
+  function rankingLabel(entry) {
+    if (!entry || !entry.symbol) return "-";
+    return `${shortSymbol(entry.symbol)} ${fmtCompact(entry.total_score ?? entry.normalized_score, 2)}`;
+  }
+
+  function focusClasses(symbol, focusSymbol, baseClass = "") {
+    const classes = [];
+    if (baseClass) classes.push(baseClass);
+    if (symbol) classes.push("is-clickable");
+    if (symbol && focusSymbol && symbol === focusSymbol) classes.push("is-focus");
+    return classes.join(" ");
+  }
+
+  function setFocusSymbol(symbol) {
+    state.focusSymbol = symbol || "";
+    render();
+  }
+
   function emptyNode() {
     return els.emptyTemplate.content.firstElementChild.cloneNode(true);
   }
@@ -201,6 +253,50 @@
     return filtered.slice(0, 8);
   }
 
+  function summarizeEvent(event) {
+    const payload = event.payload || {};
+    switch (event.kind) {
+      case "account.balance":
+        return compactEntries([
+          ["eq", fmtCompact(payload.equity, 2)],
+          ["bal", fmtCompact(payload.balance_raw ?? payload.balance_snapped, 2)],
+        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
+      case "position.changed":
+        return compactEntries([
+          ["size", fmtCompact(payload.new_size ?? payload.size, 4)],
+          ["price", fmtCompact(payload.new_price ?? payload.price, 4)],
+          ["upnl", fmtCompact(payload.upnl, 2)],
+        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
+      case "order.executed":
+      case "order.canceled":
+        return compactEntries([
+          ["qty", fmtCompact(payload.qty, 4)],
+          ["px", fmtCompact(payload.price, 4)],
+          ["type", payload.pb_order_type],
+        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
+      case "hsl.transition":
+        return compactEntries([
+          ["tier", payload.tier],
+          ["score", fmtCompact(payload.drawdown_score, 4)],
+          ["halted", payload.halted],
+        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
+      case "health.summary":
+        return compactEntries([
+          ["loop", `${fmtCompact(payload.last_loop_duration_ms, 0)}ms`],
+          ["fills", fmtCompact(payload.fills, 0)],
+          ["orders", fmtCompact(payload.orders_placed, 0)],
+        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
+      default:
+        return summarizeObject(payload, 4);
+    }
+  }
+
+  function trailingStatusTone(status) {
+    if (status === "triggered") return "is-ok";
+    if (status === "waiting_threshold" || status === "waiting_retracement") return "is-warn";
+    return "";
+  }
+
   function buildSummaryCards(payload) {
     const account = payload.account || {};
     const health = payload.health || {};
@@ -272,8 +368,10 @@
     });
     for (const row of rows) {
       const tr = document.createElement("tr");
+      tr.className = focusClasses(row.symbol, focusSymbol);
+      if (row.symbol) tr.dataset.symbol = row.symbol;
       tr.innerHTML = `
-        <td>${escapeHtml(row.symbol.replace(":USDT", "").replace(":USDC", ""))}</td>
+        <td class="positions-symbol">${escapeHtml(shortSymbol(row.symbol))}</td>
         <td><span class="pill ${row.pside === "long" ? "is-ok" : "is-bad"}">${escapeHtml(row.pside)}</span></td>
         <td class="mono">${escapeHtml(`${fmtCompact(row.side.size)} @ ${fmtCompact(row.side.price)}`)}</td>
         <td class="mono">${escapeHtml(fmtCompact(row.side.wallet_exposure))}</td>
@@ -295,15 +393,16 @@
     }
     for (const row of rows) {
       const item = document.createElement("article");
-      item.className = "stack-item";
+      item.className = focusClasses(row.symbol, focusSymbol, "stack-item");
+      if (row.symbol) item.dataset.symbol = row.symbol;
       item.innerHTML = `
         <p class="headline">
-          <span>${escapeHtml(row.symbol)} · ${escapeHtml(row.pside)} · ${escapeHtml(row.kind)}</span>
-          <span class="pill ${row.payload.status === "triggered" ? "is-ok" : row.payload.status === "waiting_threshold" ? "is-warn" : ""}">${escapeHtml(row.payload.status)}</span>
+          <span>${escapeHtml(shortSymbol(row.symbol))} · ${escapeHtml(row.pside)} ${escapeHtml(row.kind)}</span>
+          <span class="pill ${trailingStatusTone(row.payload.status)}">${escapeHtml(row.payload.status)}</span>
         </p>
-        <p class="subline mono">cur=${escapeHtml(fmtCompact(row.payload.current_price))} thr=${escapeHtml(fmtCompact(row.payload.threshold_price))} ret=${escapeHtml(fmtCompact(row.payload.retracement_price))}</p>
-        <p class="minor mono">thr_met=${escapeHtml(String(row.payload.threshold_met))} ret_met=${escapeHtml(String(row.payload.retracement_met))} qty=${escapeHtml(fmtCompact(row.payload.qty))} px=${escapeHtml(fmtCompact(row.payload.price))}</p>
-        <p class="minor mono">min_open=${escapeHtml(fmtCompact(row.payload.extrema?.min_since_open))} max_min=${escapeHtml(fmtCompact(row.payload.extrema?.max_since_min))} max_open=${escapeHtml(fmtCompact(row.payload.extrema?.max_since_open))} min_max=${escapeHtml(fmtCompact(row.payload.extrema?.min_since_max))}</p>
+        <p class="subline mono">cur ${escapeHtml(fmtCompact(row.payload.current_price))} · thr ${escapeHtml(fmtCompact(row.payload.threshold_price))} · ret ${escapeHtml(fmtCompact(row.payload.retracement_price))}</p>
+        <p class="minor mono">thr ${escapeHtml(row.payload.threshold_met ? "met" : "wait")} · ret ${escapeHtml(row.payload.retracement_met ? "met" : "wait")} · qty ${escapeHtml(fmtCompact(row.payload.qty))} · px ${escapeHtml(fmtCompact(row.payload.price))}</p>
+        <p class="minor mono">min_open ${escapeHtml(fmtCompact(row.payload.extrema?.min_since_open))} · max_min ${escapeHtml(fmtCompact(row.payload.extrema?.max_since_min))} · max_open ${escapeHtml(fmtCompact(row.payload.extrema?.max_since_open))} · min_max ${escapeHtml(fmtCompact(row.payload.extrema?.min_since_max))}</p>
       `;
       els.trailingList.appendChild(item);
     }
@@ -319,8 +418,8 @@
       item.className = "detail-row";
       item.innerHTML = `
         <p class="headline"><span>${escapeHtml(pside)}</span><span class="pill ${side.enabled ? "is-ok" : "is-warn"}">${side.enabled ? "enabled" : "off"}</span></p>
-        <p class="subline">slots ${escapeHtml(String(side.slots?.current || 0))}/${escapeHtml(String(side.slots?.max || 0))} · open ${escapeHtml(String(side.slots?.open || 0))} · next ${escapeHtml(side.next_symbol || "-")}</p>
-        <p class="minor">ranking total ${escapeHtml(side.ranking?.top_total?.symbol || "-")} · vol ${escapeHtml(side.ranking?.top_volume?.symbol || "-")} · vola ${escapeHtml(side.ranking?.top_volatility?.symbol || "-")} · ema ${escapeHtml(side.ranking?.top_ema_readiness?.symbol || "-")}</p>
+        <p class="subline">slots ${escapeHtml(String(side.slots?.current || 0))}/${escapeHtml(String(side.slots?.max || 0))} · open ${escapeHtml(String(side.slots?.open || 0))} · next ${escapeHtml(shortSymbol(side.next_symbol))}</p>
+        <p class="minor">rank total ${escapeHtml(rankingLabel(side.ranking?.top_total))} · vol ${escapeHtml(rankingLabel(side.ranking?.top_volume))} · vola ${escapeHtml(rankingLabel(side.ranking?.top_volatility))} · ema ${escapeHtml(rankingLabel(side.ranking?.top_ema_readiness))}</p>
       `;
       els.foragerDetails.appendChild(item);
     }
@@ -354,11 +453,12 @@
     }
     for (const event of rows) {
       const item = document.createElement("article");
-      item.className = "stack-item";
+      item.className = focusClasses(event.symbol, focusSymbol, "stack-item");
+      if (event.symbol) item.dataset.symbol = event.symbol;
       item.innerHTML = `
         <p class="headline"><span>${escapeHtml(event.kind)}</span><span>${escapeHtml(fmtAgeMs(event.ts))}</span></p>
-        <p class="subline">${escapeHtml(event.symbol || event.pside || "-")}</p>
-        <p class="minor mono">${escapeHtml(JSON.stringify(event.payload || {}))}</p>
+        <p class="subline">${escapeHtml(event.symbol ? shortSymbol(event.symbol) : event.pside || "-")}</p>
+        <p class="minor mono">${escapeHtml(summarizeEvent(event))}</p>
       `;
       els.eventsList.appendChild(item);
     }
@@ -374,10 +474,11 @@
     for (const [symbol, tick] of rows) {
       const market = payload.market?.[symbol] || {};
       const item = document.createElement("article");
-      item.className = "stack-item";
+      item.className = focusClasses(symbol, focusSymbol, "stack-item");
+      item.dataset.symbol = symbol;
       item.innerHTML = `
-        <p class="headline"><span>${escapeHtml(symbol)}</span><span>${escapeHtml(fmtAgeMs(tick.ts))}</span></p>
-        <p class="subline mono">last=${escapeHtml(fmtCompact(tick.payload?.last))} lo=${escapeHtml(fmtCompact(market.ema_bands?.long?.lower))} hi=${escapeHtml(fmtCompact(market.ema_bands?.long?.upper))}</p>
+        <p class="headline"><span>${escapeHtml(shortSymbol(symbol))}</span><span>${escapeHtml(fmtAgeMs(tick.ts))}</span></p>
+        <p class="subline mono">last ${escapeHtml(fmtCompact(tick.payload?.last))} · lo ${escapeHtml(fmtCompact(market.ema_bands?.long?.lower))} · hi ${escapeHtml(fmtCompact(market.ema_bands?.long?.upper))}</p>
       `;
       els.ticksList.appendChild(item);
     }
@@ -392,9 +493,10 @@
     }
     for (const row of rows) {
       const item = document.createElement("article");
-      item.className = "stack-item";
+      item.className = focusClasses(row.symbol, focusSymbol, "stack-item");
+      if (row.symbol) item.dataset.symbol = row.symbol;
       item.innerHTML = `
-        <p class="headline"><span>${escapeHtml(row.action)} · ${escapeHtml(row.symbol || "-")}</span><span>${escapeHtml(fmtTs(row.execution_timestamp))}</span></p>
+        <p class="headline"><span>${escapeHtml(row.action)} · ${escapeHtml(shortSymbol(row.symbol))}</span><span>${escapeHtml(fmtShortTs(row.execution_timestamp))}</span></p>
         <p class="subline mono">${escapeHtml(`${row.position_side || "-"} / ${row.side || "-"} / ${fmtCompact(row.qty)} @ ${fmtCompact(row.price)}`)}</p>
         <p class="minor">${escapeHtml(row.pb_order_type || row.reason || "-")}</p>
       `;
@@ -489,8 +591,7 @@
 
   function bindUi() {
     els.focusSelect.addEventListener("change", () => {
-      state.focusSymbol = els.focusSelect.value || "";
-      render();
+      setFocusSymbol(els.focusSelect.value || "");
     });
     els.refreshButton.addEventListener("click", async () => {
       try {
@@ -499,6 +600,19 @@
         setChip(els.snapshotStatus, `Snapshot: ${error.message}`, "is-bad");
       }
     });
+    for (const container of [
+      els.positionsBody,
+      els.trailingList,
+      els.eventsList,
+      els.ticksList,
+      els.ordersList,
+    ]) {
+      container.addEventListener("click", (event) => {
+        const target = event.target.closest("[data-symbol]");
+        if (!target) return;
+        setFocusSymbol(target.dataset.symbol || "");
+      });
+    }
   }
 
   async function start() {
