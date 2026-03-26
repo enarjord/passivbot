@@ -400,6 +400,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - `cross`: require cross for new entries; isolated-only symbols are skipped for new entries but existing positions/orders remain manageable.
   - `isolated`: require isolated for new entries; cross-only symbols are skipped for new entries but existing positions/orders remain manageable.
   - If the exchange reports an already-open live position or open orders on a symbol, the live bot preserves that symbol's actual live margin mode for state management instead of forcing the configured preference mid-position.
+  - Hyperliquid HIP-3 exception: isolated HIP-3 live trading is currently unsupported. Cross-capable HIP-3 markets are forced to cross for new entries, isolated-only HIP-3 markets are skipped for new entries, and existing isolated HIP-3 live state causes startup to fail loudly.
 - **market_orders_allowed**: If `true`, allows Passivbot to place market orders when the order price is very close to the current market price. If `false`, only places limit orders. Default is `true`.
 - **market_order_near_touch_threshold**: Unified threshold used by Rust order orchestration when `market_orders_allowed` is enabled. If an order price is within this fractional distance of the current market price, Rust emits it as a market order. Crossing orders also become market orders (`bid >= market` for buys, `ask <= market` for sells). This execution intent is now shared by both live and backtest. Default is `0.001`.
   - Decision rules:

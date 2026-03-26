@@ -29,6 +29,7 @@ class HyperliquidBot(CCXTBot):
     # HIP-3 symbols use "xyz:" prefix (TradeXYZ builder)
     HIP3_PREFIX = "xyz:"
     HIP3_ALT_PREFIXES = ("XYZ-", "XYZ:")
+    HIP3_ISOLATED_SUPPORTED = False
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -240,6 +241,30 @@ class HyperliquidBot(CCXTBot):
 
     def _resolve_margin_policy_for_symbol(self, symbol: str) -> dict:
         policy = super()._resolve_margin_policy_for_symbol(symbol)
+        if self._is_hip3_symbol(symbol) and not self.HIP3_ISOLATED_SUPPORTED:
+            live_margin_mode = getattr(self, "_hl_live_margin_modes", {}).get(symbol)
+            if self._has_live_symbol_state(symbol) and live_margin_mode == "isolated":
+                return {
+                    **policy,
+                    "mode": "isolated",
+                    "blocked": False,
+                    "live_margin_mode": "isolated",
+                    "unsupported_isolated_live_state": True,
+                }
+            if self._requires_isolated_margin(symbol):
+                return {
+                    **policy,
+                    "mode": "isolated",
+                    "blocked": True,
+                    "unsupported_isolated_entries": True,
+                }
+            if policy.get("mode") == "isolated":
+                return {
+                    **policy,
+                    "mode": "cross",
+                    "blocked": False,
+                    "forced_cross_only": True,
+                }
         live_margin_mode = getattr(self, "_hl_live_margin_modes", {}).get(symbol)
         if self._has_live_symbol_state(symbol) and live_margin_mode in {"cross", "isolated"}:
             return {
@@ -249,6 +274,86 @@ class HyperliquidBot(CCXTBot):
                 "live_margin_mode": live_margin_mode,
             }
         return policy
+    def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
+        symbols = set(symbols)
+        kept = set()
+        if not hasattr(self, "_unsupported_hip3_symbols_warned"):
+            self._unsupported_hip3_symbols_warned = set()
+        if not hasattr(self, "_forced_cross_hip3_warned"):
+            self._forced_cross_hip3_warned = set()
+        for symbol in symbols:
+            policy = self._resolve_margin_policy_for_symbol(symbol)
+            if policy.get("forced_cross_only"):
+                warn_key = (pside, symbol, self._get_margin_mode_preference())
+                if warn_key not in self._forced_cross_hip3_warned:
+                    self._forced_cross_hip3_warned.add(warn_key)
+                    logging.warning(
+                        "[margin] %s %s: HIP-3 isolated margin is currently unsupported; "
+                        "forcing cross mode for new entries on this cross-capable market "
+                        "(live.margin_mode_preference=%s).",
+                        pside,
+                        symbol,
+                        self._get_margin_mode_preference(),
+                    )
+            if not policy["blocked"]:
+                kept.add(symbol)
+                continue
+            if policy.get("unsupported_isolated_entries"):
+                warn_key = (pside, symbol)
+                if warn_key not in self._unsupported_hip3_symbols_warned:
+                    self._unsupported_hip3_symbols_warned.add(warn_key)
+                    logging.warning(
+                        "[margin] disabling %s %s for new entries: HIP-3 isolated margin is "
+                        "currently unsupported in Passivbot. The symbol is isolated-only by "
+                        "exchange metadata and will be ignored for now.",
+                        pside,
+                        symbol,
+                    )
+                continue
+            kept.add(symbol)
+        return kept
+
+    def _assert_supported_live_state(self) -> None:
+        if self.HIP3_ISOLATED_SUPPORTED:
+            return
+        unsupported = []
+        live_modes = getattr(self, "_hl_live_margin_modes", {}) or {}
+        for symbol in sorted(set(getattr(self, "positions", {})) | set(getattr(self, "open_orders", {}))):
+            if not self._is_hip3_symbol(symbol):
+                continue
+            has_pos = False
+            pos = getattr(self, "positions", {}).get(symbol, {})
+            for pside in ("long", "short"):
+                if abs(float(pos.get(pside, {}).get("size", 0.0) or 0.0)) > 0.0:
+                    has_pos = True
+                    break
+            has_orders = bool(getattr(self, "open_orders", {}).get(symbol))
+            if not (has_pos or has_orders):
+                continue
+            isolated_live_mode = live_modes.get(symbol) == "isolated"
+            isolated_only = self._requires_isolated_margin(symbol)
+            if not (isolated_live_mode or isolated_only):
+                continue
+            reasons = []
+            if isolated_only:
+                reasons.append("isolated-only market")
+            if isolated_live_mode:
+                reasons.append("live isolated margin state")
+            state_bits = []
+            if has_pos:
+                state_bits.append("position")
+            if has_orders:
+                state_bits.append("open_orders")
+            unsupported.append(
+                f"{symbol} ({'/'.join(state_bits)}; {', '.join(reasons)})"
+            )
+        if unsupported:
+            joined = "; ".join(unsupported)
+            raise NotImplementedError(
+                "Hyperliquid HIP-3 isolated margin is currently unsupported in Passivbot. "
+                f"Unsupported live state detected: {joined}. Close/cancel the isolated state "
+                "or move it to cross-capable markets before running the bot."
+            )
     async def _fetch_hip3_positions(self) -> list[dict]:
         """Fetch HIP-3 positions via dex-scoped CCXT routes."""
         positions_by_key = {}

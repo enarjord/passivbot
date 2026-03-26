@@ -782,6 +782,10 @@ class Passivbot:
         """Hook: exchange-specific filtering for approved symbols used for new entries."""
         return symbols
 
+    def _assert_supported_live_state(self) -> None:
+        """Hook: exchange-specific startup/runtime validation for unsupported live state."""
+        return None
+
     def _build_ccxt_options(self, overrides: Optional[dict] = None) -> dict:
         options = {"adjustForTimeDifference": True}
         recv_window = get_optional_live_value(self.config, "recv_window_ms", None)
@@ -1189,6 +1193,7 @@ class Passivbot:
         self.set_wallet_exposure_limits()
         await self.update_positions_and_balance()
         await self.update_open_orders()
+        self._assert_supported_live_state()
         await self.update_effective_min_cost()
         # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
         if self.is_forager_mode():
@@ -3036,6 +3041,7 @@ class Passivbot:
         self.set_wallet_exposure_limits()
         if any(self.is_forager_mode(pside) for pside in ("long", "short")):
             await self.update_first_timestamps()
+        self._assert_supported_live_state()
         self.active_symbols = self._build_live_symbol_universe()
         for symbol in self.active_symbols:
             if symbol not in self.positions:
