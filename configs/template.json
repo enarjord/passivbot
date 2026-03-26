@@ -1,11 +1,17 @@
 {
     "backtest": {
-        "aggregate": {"default":"mean"},
+        "aggregate": {
+            "default":"mean",
+            "peak_recovery_hours_hsl": "max",
+            "position_held_hours_max": "max",
+            "drawdown_worst_hsl": "max",
+            "drawdown_worst_mean_1pct_hsl": "max"
+        },
         "balance_sample_divider": 60,
         "base_dir": "backtests",
         "btc_collateral_cap": 0.0,
         "btc_collateral_ltv_cap": null,
-        "candle_interval_minutes": 2,
+        "candle_interval_minutes": 1,
         "coin_sources": {},
         "compress_cache": true,
         "dynamic_wel_by_tradability": true,
@@ -120,11 +126,11 @@
                 "label": "subset_6_mix"
             },
             {
-                "label": "n_positions=3",
+                "label": "n_positions_3",
                 "overrides": {"bot.long.n_positions":3,"bot.short.n_positions":3}
             },
             {
-                "label": "n_positions=20",
+                "label": "n_positions_20",
                 "overrides": {"bot.long.n_positions":20,"bot.short.n_positions":20}
             },
             {
@@ -132,8 +138,8 @@
                 "overrides": {"backtest.btc_collateral_cap":0.5}
             },
             {
-                "label": "twel=2.5",
-                "overrides": {"bot.long.total_wallet_exposure_limit":2.5}
+                "label": "twel=2",
+                "overrides": {"bot.long.total_wallet_exposure_limit":2}
             }
         ],
         "start_date": "2021-01-01",
