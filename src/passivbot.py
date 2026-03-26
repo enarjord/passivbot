@@ -7306,7 +7306,7 @@ class Passivbot:
                             }
                         )
                         logging.warning(
-                            "Stock perps detected in approved_coins (%s). HIP-3 stock perps support is experimental/WIP.",
+                            "Stock perps detected in approved_coins (%s). HIP-3 isolated margin is currently unsupported; isolated-only symbols will be skipped and existing isolated live state will fail loudly.",
                             ",".join(coins),
                         )
                         self._stock_perps_warning_logged = True
