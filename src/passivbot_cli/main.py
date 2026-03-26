@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import runpy
 import sys
@@ -109,6 +110,9 @@ FULL_INSTALL_MODULE_HINTS = {
 }
 
 
+FULL_INSTALL_MARKER_MODULES = tuple(sorted(FULL_INSTALL_MODULE_HINTS | {"websockets"}))
+
+
 def _build_root_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot",
@@ -155,7 +159,20 @@ def _full_install_message(prog_name: str, missing_module: str | None = None) -> 
     )
 
 
+def _missing_full_install_markers() -> list[str]:
+    return [name for name in FULL_INSTALL_MARKER_MODULES if importlib.util.find_spec(name) is None]
+
+
+def _is_help_request(argv: list[str]) -> bool:
+    return any(arg in {"-h", "--help"} for arg in argv)
+
+
 def _run_module(module_name: str, prog_name: str, argv: list[str], requires_full: bool = False) -> int:
+    if requires_full and not _is_help_request(argv):
+        if _missing_full_install_markers():
+            print(_full_install_message(prog_name), file=sys.stderr)
+            return 2
+
     previous_argv = sys.argv[:]
     previous_prog = os.environ.get("PASSIVBOT_CLI_PROG")
     sys.argv = [prog_name, *argv]

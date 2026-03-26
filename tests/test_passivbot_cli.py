@@ -30,6 +30,7 @@ def test_dispatch_core_command_forwards_module_and_prog(monkeypatch):
         raise SystemExit(0)
 
     monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
     assert cli_main.main(["optimize", "--suite", "y"]) == 0
 
@@ -50,6 +51,7 @@ def test_help_subcommand_forwards_to_command_help(monkeypatch):
         raise SystemExit(0)
 
     monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: ["deap"])
 
     assert cli_main.main(["help", "backtest"]) == 0
 
@@ -78,6 +80,7 @@ def test_tool_dispatch_forwards_module_and_prog(monkeypatch):
         raise SystemExit(0)
 
     monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
     assert cli_main.main(["tool", "pareto-dash", "--data-root", "optimize_results"]) == 0
 
@@ -106,9 +109,24 @@ def test_full_install_hint_is_shown_for_missing_optional_dependency(monkeypatch,
         raise error
 
     monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
     assert cli_main.main(["optimize", "--iters", "10"]) == 2
 
     captured = capsys.readouterr()
     assert 'pip install -e ".[full]"' in captured.err
     assert "passivbot optimize requires the full Passivbot install." in captured.err
+
+
+def test_requires_full_command_fails_immediately_without_full_install(monkeypatch, capsys):
+    def fail_if_called(module_name, run_name):
+        raise AssertionError("run_module should not be called without the full install")
+
+    monkeypatch.setattr(cli_main.runpy, "run_module", fail_if_called)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: ["aiohttp"])
+
+    assert cli_main.main(["backtest", "-s", "XMR"]) == 2
+
+    captured = capsys.readouterr()
+    assert 'pip install -e ".[full]"' in captured.err
+    assert "passivbot backtest requires the full Passivbot install." in captured.err
