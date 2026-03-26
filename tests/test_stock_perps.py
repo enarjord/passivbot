@@ -190,10 +190,11 @@ class TestHyperliquidBotHIP3:
     def test_live_isolated_position_overrides_auto_cross_preference_for_state_management(
         self, bot_class
     ):
-        """Live isolated HIP-3 state must remain manageable after restart."""
+        """Live isolated HIP-3 state is detected, but startup validation must fail."""
         bot = object.__new__(bot_class)
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
         bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.HIP3_ISOLATED_SUPPORTED = False
         bot.config = {"live": {"margin_mode_preference": "auto_cross"}}
         bot.markets_dict = {
             "XYZ-XYZ100/USDC:USDC": {
@@ -215,6 +216,76 @@ class TestHyperliquidBotHIP3:
         assert policy["mode"] == "isolated"
         assert policy["blocked"] is False
         assert policy["live_margin_mode"] == "isolated"
+        assert policy["unsupported_isolated_live_state"] is True
+
+        with pytest.raises(NotImplementedError, match="isolated margin is currently unsupported"):
+            bot._assert_supported_live_state()
+
+    def test_cross_capable_hip3_forces_cross_when_isolated_preferred(self, bot_class):
+        bot = object.__new__(bot_class)
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.HIP3_ISOLATED_SUPPORTED = False
+        bot.config = {"live": {"margin_mode_preference": "auto_isolated"}}
+        bot.markets_dict = {
+            "XYZ-XYZ100/USDC:USDC": {
+                "baseName": "xyz:XYZ100",
+                "marginModes": {"cross": True, "isolated": True},
+                "info": {"marginMode": "normal"},
+            }
+        }
+        bot.positions = {}
+        bot.open_orders = {}
+        bot._hl_live_margin_modes = {}
+
+        policy = bot._resolve_margin_policy_for_symbol("XYZ-XYZ100/USDC:USDC")
+
+        assert policy["mode"] == "cross"
+        assert policy["blocked"] is False
+        assert policy["forced_cross_only"] is True
+
+    def test_isolated_only_hip3_is_ignored_for_new_entries(self, bot_class, caplog):
+        bot = object.__new__(bot_class)
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.HIP3_ISOLATED_SUPPORTED = False
+        bot.exchange = "hyperliquid"
+        bot.config = {"live": {"margin_mode_preference": "auto"}}
+        bot.markets_dict = {
+            "xyz:TSLA/USDC:USDC": {
+                "info": {"onlyIsolated": True},
+                "marginModes": {"cross": False, "isolated": True},
+            }
+        }
+
+        with caplog.at_level("WARNING"):
+            filtered = bot._filter_approved_symbols("long", {"xyz:TSLA/USDC:USDC"})
+
+        assert filtered == set()
+        assert "isolated margin is currently unsupported" in caplog.text
+
+    def test_isolated_only_hip3_open_orders_hard_fail(self, bot_class):
+        bot = object.__new__(bot_class)
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.HIP3_ISOLATED_SUPPORTED = False
+        bot.markets_dict = {
+            "xyz:SP500/USDC:USDC": {
+                "info": {"onlyIsolated": True},
+                "marginModes": {"cross": False, "isolated": True},
+            }
+        }
+        bot.positions = {
+            "xyz:SP500/USDC:USDC": {
+                "long": {"size": 0.0, "price": 0.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+        }
+        bot.open_orders = {"xyz:SP500/USDC:USDC": [{"id": "1"}]}
+        bot._hl_live_margin_modes = {}
+
+        with pytest.raises(NotImplementedError, match="Unsupported live state detected"):
+            bot._assert_supported_live_state()
 
     @pytest.mark.asyncio
     async def test_fetch_positions_and_balance_queries_approved_hip3_symbols_on_cold_restart(
