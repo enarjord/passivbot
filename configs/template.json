@@ -169,13 +169,6 @@
                 }
             },
             {
-                "label": "n_positions=10",
-                "overrides": {
-                    "bot.long.n_positions": 10,
-                    "bot.short.n_positions": 10
-                }
-            },
-            {
                 "label": "n_positions=20",
                 "overrides": {
                     "bot.long.n_positions": 20,
@@ -189,7 +182,7 @@
                 }
             },
             {
-                "label": "twel=2",
+                "label": "twel_2",
                 "overrides": {
                     "bot.long.total_wallet_exposure_limit": 2
                 }
