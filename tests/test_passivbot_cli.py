@@ -15,6 +15,7 @@ def test_root_help_lists_primary_commands(capsys):
     assert "optimize" in out
     assert "download" in out
     assert "tool" in out
+    assert 'pip install -e ".[full]"' in out
 
 
 def test_dispatch_core_command_forwards_module_and_prog(monkeypatch):
@@ -63,6 +64,7 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "pareto-dash" in out
     assert "streamline-json" in out
     assert "verify-hlcvs-data" in out
+    assert "requires full install" in out
 
 
 def test_tool_dispatch_forwards_module_and_prog(monkeypatch):
@@ -94,3 +96,19 @@ def test_unknown_command_exits_with_error():
         cli_main.main(["unknown"])
 
     assert exc.value.code == 2
+
+
+def test_full_install_hint_is_shown_for_missing_optional_dependency(monkeypatch, capsys):
+    error = ModuleNotFoundError("No module named 'deap'")
+    error.name = "deap"
+
+    def fake_run_module(module_name, run_name):
+        raise error
+
+    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+
+    assert cli_main.main(["optimize", "--iters", "10"]) == 2
+
+    captured = capsys.readouterr()
+    assert 'pip install -e ".[full]"' in captured.err
+    assert "passivbot optimize requires the full Passivbot install." in captured.err

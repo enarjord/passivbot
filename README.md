@@ -4,7 +4,7 @@
 
 :warning: **Used at one's own risk** :warning:
 
-v7.8.4
+v7.8.5
 
 
 ## Overview
@@ -88,8 +88,15 @@ venv\Scripts\activate
 
 ### Step 4: Install Passivbot
 
-Install Passivbot into the active virtual environment. This installs the Python dependencies,
-builds the Rust extension, and registers the `passivbot` command:
+Choose the install profile that matches your use case:
+
+- **Live-only VPS**: `pip install -e .`
+- **Backtesting / optimization / research workstation**: `pip install -e ".[full]"`
+- **Contributing / docs / lint tooling**: `pip install -e ".[dev]"`
+
+All profiles build the Rust extension and register the `passivbot` command.
+
+Typical live-only install:
 
 ```sh
 pip install -e .
@@ -161,7 +168,9 @@ python3 -m jupyter lab
 ## Requirements
 
 - Python >= 3.12
-- [requirements.txt](requirements.txt) dependencies
+- `pip install -e .` for live trading only
+- `pip install -e ".[full]"` for backtesting, optimization, downloader, and advanced tools
+- `pip install -e ".[dev]"` for contributor tooling on top of the full install
 
 ## Pre-optimized configurations
 

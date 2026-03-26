@@ -1,5 +1,11 @@
 # Tools
 
+Most tools below require the full install profile:
+
+```shell
+pip install -e ".[full]"
+```
+
 ## Pareto dashboard for optimizer runs
 
 `passivbot tool pareto-dash` scans one or more `optimize_results/` directories and launches a Plotly Dash UI with scatter plots, histograms, suite-aware metrics, and CSV export. Install Dash/Plotly (`pip install dash plotly`) if they are not already in your environment.

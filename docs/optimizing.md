@@ -2,6 +2,12 @@
 
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
+Optimization requires the full install profile:
+
+```bash
+pip install -e ".[full]"
+```
+
 ## Running Optimization
 
 ```bash

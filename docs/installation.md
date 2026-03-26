@@ -23,6 +23,14 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
 
 ## 3. Install Passivbot
 
+Choose the install profile that matches the machine:
+
+- **Live-only VPS**: `pip install -e .`
+- **Backtesting / optimization / research**: `pip install -e ".[full]"`
+- **Contributing / docs / linting**: `pip install -e ".[dev]"`
+
+Typical live-only install:
+
 ```bash
 pip install -U pip
 pip install -e .
@@ -51,6 +59,13 @@ pytest -q
 passivbot -h
 ```
 
+For backtesting and optimization environments, also verify:
+
+```bash
+passivbot backtest -h
+passivbot optimize -h
+```
+
 If pytest reports missing `passivbot_rust`, double-check that the venv is active and `maturin develop --release` completed successfully.
 
 ## 6. Keeping it up to date
@@ -60,7 +75,9 @@ When pulling new commits:
 ```bash
 source venv/bin/activate
 git pull
-pip install -e .                       # reruns dependency/entrypoint sync when needed
+pip install -e .                       # live-only refresh
+# or: pip install -e ".[full]"         # full research/runtime refresh
+# or: pip install -e ".[dev]"          # contributor refresh
 maturin develop --release              # only when passivbot-rust changed
 ```
 
@@ -77,6 +94,7 @@ If you see linker errors after an OS update (e.g. new glibc), rebuild the extens
 | Symptom | Fix |
 |---------|-----|
 | `ModuleNotFoundError: passivbot_rust…` | Activate venv or rerun `maturin develop --release`. |
+| `passivbot optimize requires the full Passivbot install` | Install the full profile: `pip install -e ".[full]"`. |
 | `linker cc not found` / `cannot find crt1.o` | Install build-essential + `python3-dev`. |
 | `rustup: command not found` | Install Rust via https://rustup.rs/. |
 | `pip install … failed due to SSL` | Update `certifi` or set `PIP_CERT` if corporate proxies intercept TLS. |
