@@ -168,7 +168,8 @@
             "adg_pnl",
             "pnl_ratio_long_short",
             "hard_stop_restarts_per_year_long",
-            "hard_stop_restarts_per_year_short"
+            "hard_stop_restarts_per_year_short",
+            "drawdown_worst_ema_hsl"
         ],
         "volume_normalization": true
     },
@@ -531,25 +532,26 @@
             {
                 "metric": "loss_profit_ratio",
                 "penalize_if": "greater_than",
-                "value": 0.9
+                "value": 0.9,
+                "enabled": true
             },
             {
                 "metric": "high_exposure_hours_max_long",
                 "penalize_if": "greater_than",
                 "value": 3000,
-                "enabled": true
+                "enabled": false
             },
             {
                 "metric": "peak_recovery_hours_hsl",
                 "penalize_if": "greater_than",
                 "value": 3000,
-                "enabled": true
+                "enabled": false
             },
             {
                 "metric": "position_held_hours_max",
                 "penalize_if": "greater_than",
                 "value": 3000,
-                "enabled": true
+                "enabled": false
             },
             {
                 "metric": "backtest_completion_ratio",
@@ -559,7 +561,7 @@
             {
                 "metric": "adg_strategy_pnl_rebased",
                 "penalize_if": "less_than",
-                "value": 0.0015,
+                "value": 0.0003,
                 "enabled": true
             },
             {
@@ -588,6 +590,6 @@
             "drawdown_worst_mean_1pct_hsl"
         ],
         "starting_config_twe_multiplier": 1,
-        "write_all_results": false
+        "write_all_results": true
     }
 }
