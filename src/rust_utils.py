@@ -22,6 +22,7 @@ LOCK_TIMEOUT = 300  # seconds
 LOCK_CHECK_INTERVAL = 2  # seconds
 COMPILED_EXTENSION_NAME = "libpassivbot_rust"
 PYTHON_MODULE_NAME = "passivbot_rust"
+SOURCE_STAMP_SUFFIX = ".rust-src-sha256"
 
 
 def _extension_suffixes() -> list[str]:
@@ -168,11 +169,23 @@ def collect_runtime_provenance() -> dict:
         ),
         "pid": os.getpid(),
     }
-
-
 def latest_compiled_mtime(paths: Iterable[Path]) -> Optional[float]:
     mtimes = [p.stat().st_mtime for p in paths if p.exists()]
     return max(mtimes) if mtimes else None
+
+
+def _tracked_source_files(root: Path = Path("passivbot-rust")) -> list[Path]:
+    tracked_files: list[Path] = []
+    for file_path in (root / "Cargo.toml", root / "Cargo.lock"):
+        if file_path.exists():
+            tracked_files.append(file_path)
+    for file_path in root.glob("*.rs"):
+        if file_path.exists():
+            tracked_files.append(file_path)
+    src_root = root / "src"
+    if src_root.exists():
+        tracked_files.extend(path for path in src_root.rglob("*.rs") if path.exists())
+    return sorted(set(tracked_files))
 
 
 def latest_source_mtime(root: Path = Path("passivbot-rust")) -> Optional[float]:
@@ -183,31 +196,29 @@ def latest_source_mtime(root: Path = Path("passivbot-rust")) -> Optional[float]:
     - Avoid scanning `target/` since build artifacts may contain generated `.rs` files and
       can cause perpetual "stale" detection.
     """
-    tracked_roots = [root / "src"]
-    tracked_files = [root / "Cargo.toml", root / "Cargo.lock"]
-
     mtimes: list[float] = []
-    for file_path in tracked_files:
+    for file_path in _tracked_source_files(root):
         try:
-            if file_path.exists():
-                mtimes.append(file_path.stat().st_mtime)
+            mtimes.append(file_path.stat().st_mtime)
         except OSError:
             continue
-    for file_path in root.glob("*.rs"):
-        try:
-            if file_path.exists():
-                mtimes.append(file_path.stat().st_mtime)
-        except OSError:
-            continue
-    for scan_root in tracked_roots:
-        if not scan_root.exists():
-            continue
-        for path in scan_root.rglob("*.rs"):
-            try:
-                mtimes.append(path.stat().st_mtime)
-            except OSError:
-                continue
     return max(mtimes) if mtimes else None
+
+
+def source_fingerprint(root: Path = Path("passivbot-rust")) -> Optional[str]:
+    tracked_files = _tracked_source_files(root)
+    if not tracked_files:
+        return None
+    digest = hashlib.sha256()
+    for path in tracked_files:
+        rel = path.relative_to(root)
+        digest.update(str(rel).encode("utf-8"))
+        digest.update(b"\0")
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def is_stale(compiled_mtime: Optional[float], source_mtime: Optional[float]) -> bool:
@@ -216,6 +227,39 @@ def is_stale(compiled_mtime: Optional[float], source_mtime: Optional[float]) -> 
     if source_mtime is None:
         return False
     return compiled_mtime < source_mtime
+
+
+def source_stamp_path(compiled_path: Path) -> Path:
+    return compiled_path.with_name(f"{compiled_path.name}{SOURCE_STAMP_SUFFIX}")
+
+
+def read_source_stamp(compiled_path: Path) -> Optional[str]:
+    stamp_path = source_stamp_path(compiled_path)
+    try:
+        if stamp_path.exists():
+            return stamp_path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+    return None
+
+
+def write_source_stamp(compiled_path: Path, fingerprint: str) -> None:
+    stamp_path = source_stamp_path(compiled_path)
+    stamp_path.write_text(f"{fingerprint}\n", encoding="utf-8")
+
+
+def extension_needs_rebuild(
+    compiled_path: Optional[Path],
+    source_mtime: Optional[float],
+    fingerprint: Optional[str],
+) -> bool:
+    if compiled_path is None or not compiled_path.exists():
+        return True
+    if is_stale(compiled_path.stat().st_mtime, source_mtime):
+        return True
+    if fingerprint is None:
+        return False
+    return read_source_stamp(compiled_path) != fingerprint
 
 
 def acquire_lock(lock_file: Path = LOCK_FILE) -> bool:
@@ -255,6 +299,18 @@ def release_lock(lock_file: Path = LOCK_FILE) -> None:
         pass
 
 
+def stamp_compiled_extensions(fingerprint: Optional[str]) -> None:
+    if fingerprint is None:
+        return
+    for compiled_path in compiled_extension_paths():
+        if not compiled_path.exists():
+            continue
+        try:
+            write_source_stamp(compiled_path, fingerprint)
+        except OSError:
+            continue
+
+
 def recompile_rust() -> bool:
     try:
         start = time.time()
@@ -269,6 +325,7 @@ def recompile_rust() -> bool:
         print(result.stdout)
         print(f"Rust extension rebuild finished in {elapsed:.2f}s")
         sync_installed_extension_into_src()
+        stamp_compiled_extensions(source_fingerprint())
         return True
     except subprocess.CalledProcessError as e:
         print(e.stderr)
@@ -299,14 +356,10 @@ def check_and_maybe_compile(
         print("passivbot_rust already imported; using existing binary.")
         return
 
-    # If a newer build already exists in site-packages, sync it into `src/` first so we don't
-    # spuriously rebuild just because a stale local `.so` is shadowing the installed one.
-    sync_installed_extension_into_src()
-
-    compiled_paths = compiled_extension_paths()
-    compiled_mtime = preferred_compiled_mtime()
+    compiled_path = preferred_compiled_path()
     source_mtime = latest_source_mtime()
-    stale = is_stale(compiled_mtime, source_mtime)
+    fingerprint = source_fingerprint()
+    stale = extension_needs_rebuild(compiled_path, source_mtime, fingerprint)
 
     needs_compile = force or stale
     if fail_on_stale and stale:
@@ -314,7 +367,7 @@ def check_and_maybe_compile(
     if not needs_compile:
         return
 
-    if compiled_mtime is None:
+    if compiled_path is None:
         print("Rust extension missing; compiling...")
     elif stale:
         print("Rust extension is stale; recompiling...")
@@ -330,8 +383,8 @@ def check_and_maybe_compile(
         release_lock()
 
     # Re-check staleness after compile
-    compiled_mtime = preferred_compiled_mtime()
-    if is_stale(compiled_mtime, latest_source_mtime()):
+    compiled_path = preferred_compiled_path()
+    if extension_needs_rebuild(compiled_path, latest_source_mtime(), source_fingerprint()):
         raise RuntimeError("Rust extension appears stale even after recompilation; check build.")
 
 
@@ -347,12 +400,15 @@ def sync_installed_extension_into_src() -> None:
         return
     installed_path = max(installed, key=lambda p: p.stat().st_mtime)
     dst = Path("src") / installed_path.name
+    installed_stamp = source_stamp_path(installed_path)
+    dst_stamp = source_stamp_path(dst)
 
     # Remove any shadowing local builds with a different filename.
     for local in _local_extension_candidates():
         try:
             if local.exists() and local.name != dst.name:
                 local.unlink()
+                source_stamp_path(local).unlink(missing_ok=True)
         except OSError:
             pass
 
@@ -378,6 +434,13 @@ def sync_installed_extension_into_src() -> None:
                         os.utime(dst, (inst_mtime, inst_mtime))
                     except OSError:
                         pass
+                    try:
+                        if installed_stamp.exists():
+                            copy2(installed_stamp, dst_stamp)
+                        elif dst_stamp.exists():
+                            dst_stamp.unlink()
+                    except OSError:
+                        pass
                     return
         dst.parent.mkdir(parents=True, exist_ok=True)
         tmp = dst.with_name(f".{dst.name}.tmp.{os.getpid()}")
@@ -391,6 +454,13 @@ def sync_installed_extension_into_src() -> None:
                 text=True,
             )
         os.replace(tmp, dst)
+        try:
+            if installed_stamp.exists():
+                copy2(installed_stamp, dst_stamp)
+            elif dst_stamp.exists():
+                dst_stamp.unlink()
+        except OSError:
+            pass
         print(f"Synced Rust extension into {dst}")
     except OSError:
         # Best-effort; if we can't sync, the build still exists in site-packages.

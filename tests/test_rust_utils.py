@@ -11,6 +11,10 @@ from rust_utils import (
     latest_compiled_mtime,
     latest_source_mtime,
     check_and_maybe_compile,
+    extension_needs_rebuild,
+    source_fingerprint,
+    source_stamp_path,
+    write_source_stamp,
 )
 
 
@@ -101,3 +105,37 @@ def test_latest_source_mtime_no_root_level_rs(tmp_path: Path):
 
     assert src_mtime is not None
     assert isinstance(src_mtime, float)
+
+
+def test_source_fingerprint_changes_when_tracked_source_changes(tmp_path: Path):
+    src_dir = tmp_path / "passivbot-rust"
+    nested_dir = src_dir / "src"
+    nested_dir.mkdir(parents=True)
+    cargo = src_dir / "Cargo.toml"
+    rust_file = nested_dir / "lib.rs"
+
+    cargo.write_text("[package]\nname = 'x'\nversion = '0.1.0'\n")
+    rust_file.write_text("// first\n")
+    first = source_fingerprint(src_dir)
+
+    rust_file.write_text("// second\n")
+    second = source_fingerprint(src_dir)
+
+    assert first is not None
+    assert second is not None
+    assert first != second
+
+
+def test_extension_needs_rebuild_when_source_stamp_missing_or_mismatched(tmp_path: Path):
+    compiled = tmp_path / "passivbot_rust.cpython-312-darwin.so"
+    compiled.write_text("binary")
+    source_mtime = compiled.stat().st_mtime - 10
+
+    assert extension_needs_rebuild(compiled, source_mtime, "abc123") is True
+
+    write_source_stamp(compiled, "wrong")
+    assert extension_needs_rebuild(compiled, source_mtime, "abc123") is True
+
+    write_source_stamp(compiled, "abc123")
+    assert extension_needs_rebuild(compiled, source_mtime, "abc123") is False
+    assert source_stamp_path(compiled).exists()
