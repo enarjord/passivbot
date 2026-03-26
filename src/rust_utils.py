@@ -7,6 +7,7 @@ itself; it only inspects filesystem state.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -86,6 +87,39 @@ def compiled_extension_paths() -> List[Path]:
     )
 
 
+def _import_target_compiled_path() -> Optional[Path]:
+    """
+    Resolve the compiled artifact Python would import in the current process.
+
+    This must work both for direct extension modules and for the package layout produced by
+    `maturin develop`, where `find_spec("passivbot_rust")` resolves to `__init__.py` and the
+    compiled extension lives alongside it.
+    """
+    spec = importlib.util.find_spec(PYTHON_MODULE_NAME)
+    if spec is None:
+        return None
+
+    origin = getattr(spec, "origin", None)
+    if origin and origin not in {"built-in", "frozen"}:
+        origin_path = Path(origin)
+        suffixes = {suffix.lower() for suffix in _extension_suffixes()}
+        if any(str(origin_path).lower().endswith(f".{suffix}") for suffix in suffixes):
+            return origin_path
+
+    locations = list(getattr(spec, "submodule_search_locations", []) or [])
+    if not locations:
+        return None
+
+    suffixes = _extension_suffixes()
+    for location in locations:
+        location_path = Path(location)
+        for ext in suffixes:
+            matches = [p for p in location_path.glob(f"{PYTHON_MODULE_NAME}*.{ext}") if p.exists()]
+            if matches:
+                return max(matches, key=lambda p: p.stat().st_mtime)
+    return None
+
+
 def preferred_compiled_mtime() -> Optional[float]:
     """
     Mtime of the extension artifact that is *most likely* to be imported.
@@ -95,6 +129,9 @@ def preferred_compiled_mtime() -> Optional[float]:
     2) installed site-packages `passivbot_rust/passivbot_rust*.so`
     3) `passivbot-rust/target/release/libpassivbot_rust.*`
     """
+    import_target = _import_target_compiled_path()
+    if import_target is not None and import_target.exists():
+        return import_target.stat().st_mtime
     for group in (
         _local_extension_candidates(),
         _installed_extension_candidates(),
@@ -112,6 +149,9 @@ def preferred_compiled_path() -> Optional[Path]:
 
     Priority mirrors `preferred_compiled_mtime()`.
     """
+    import_target = _import_target_compiled_path()
+    if import_target is not None and import_target.exists():
+        return import_target
     for group in (
         _local_extension_candidates(),
         _installed_extension_candidates(),

@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from rust_utils import (
     latest_source_mtime,
     check_and_maybe_compile,
     extension_needs_rebuild,
+    preferred_compiled_path,
     source_fingerprint,
     source_stamp_path,
     write_source_stamp,
@@ -160,3 +162,38 @@ def test_installed_extension_candidates_find_root_level_maturin_module(
     )
 
     assert _installed_extension_candidates() == [installed]
+
+
+def test_preferred_compiled_path_uses_actual_import_target_for_package_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    stale_local = src_dir / "passivbot_rust.cpython-312-darwin.so"
+    stale_local.write_text("stale-local")
+
+    site_packages = tmp_path / "site-packages"
+    package_dir = site_packages / "passivbot_rust"
+    package_dir.mkdir(parents=True)
+    (package_dir / "__init__.py").write_text("from .passivbot_rust import *\n")
+    installed = package_dir / "passivbot_rust.cpython-312-darwin.so"
+    installed.write_text("fresh-installed")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "rust_utils._extension_suffixes",
+        lambda: ["cpython-312-darwin.so"],
+    )
+    monkeypatch.setattr(
+        "rust_utils.sysconfig.get_paths",
+        lambda: {"platlib": str(site_packages), "purelib": str(site_packages)},
+    )
+    monkeypatch.setattr(
+        "rust_utils.importlib.util.find_spec",
+        lambda name: SimpleNamespace(
+            origin=str(package_dir / "__init__.py"),
+            submodule_search_locations=[str(package_dir)],
+        ),
+    )
+
+    assert preferred_compiled_path() == installed
