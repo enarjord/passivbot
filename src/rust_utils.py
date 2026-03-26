@@ -45,13 +45,17 @@ def _local_extension_candidates() -> list[Path]:
 def _installed_extension_candidates() -> list[Path]:
     exts = _extension_suffixes()
     out: list[Path] = []
-    # The installed extension module produced by `maturin develop` typically lives in
-    # `<site-packages>/passivbot_rust/passivbot_rust.*.so` (platform-specific).
+    # The installed extension produced by `maturin develop` is typically a direct module in
+    # `<site-packages>/passivbot_rust.*.so` (platform-specific), though some layouts may place
+    # it under a package directory.
     for key in ("platlib", "purelib"):
         root = sysconfig.get_paths().get(key)
         if not root:
             continue
-        pkg_dir = Path(root) / PYTHON_MODULE_NAME
+        root_path = Path(root)
+        for ext in exts:
+            out.extend(root_path.glob(f"{PYTHON_MODULE_NAME}*.{ext}"))
+        pkg_dir = root_path / PYTHON_MODULE_NAME
         if not pkg_dir.exists():
             continue
         for ext in exts:
