@@ -16,6 +16,7 @@ from config_utils import (
     _rename_config_keys,
     _sync_with_template,
     get_template_config,
+    load_config,
     update_config_with_args,
     parse_overrides,
     format_config,
@@ -157,25 +158,25 @@ def test_apply_non_live_adjustments_keeps_default_completion_limit():
     assert completion_limit["value"] == pytest.approx(0.9)
 
 
-def test_apply_non_live_adjustments_merges_missing_default_limit_into_existing_list():
+def test_apply_non_live_adjustments_preserves_present_valid_limits_without_injecting_defaults():
     config = get_template_config()
     config["live"]["approved_coins"] = "btc"
     config["live"]["ignored_coins"] = {"long": [], "short": []}
     config["backtest"]["end_date"] = "2023-01-01"
     config["optimize"]["limits"] = [
-        {"metric": "drawdown_worst_btc", "penalize_if": "greater_than", "value": 0.85},
+        {"metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.85},
         {"metric": "position_held_hours_max", "penalize_if": "greater_than", "value": 2160},
     ]
 
-    _apply_non_live_adjustments(config, verbose=False)
-
-    limits = config["optimize"]["limits"]
-    completion_limit = next(
-        (entry for entry in limits if entry["metric"] == "backtest_completion_ratio"), None
+    raw_limits = deepcopy(config["optimize"]["limits"])
+    _apply_non_live_adjustments(
+        config,
+        verbose=False,
+        raw_optimize_limits=raw_limits,
+        raw_optimize_limits_present=True,
     )
-    assert completion_limit is not None
-    assert completion_limit["penalize_if"] == "less_than"
-    assert completion_limit["value"] == pytest.approx(0.9)
+
+    assert config["optimize"]["limits"] == raw_limits
 
 
 def test_apply_non_live_adjustments_respects_disabled_default_limit_tombstone():
@@ -187,7 +188,13 @@ def test_apply_non_live_adjustments_respects_disabled_default_limit_tombstone():
         {"metric": "backtest_completion_ratio", "enabled": False},
     ]
 
-    _apply_non_live_adjustments(config, verbose=False)
+    raw_limits = deepcopy(config["optimize"]["limits"])
+    _apply_non_live_adjustments(
+        config,
+        verbose=False,
+        raw_optimize_limits=raw_limits,
+        raw_optimize_limits_present=True,
+    )
 
     limits = config["optimize"]["limits"]
     matches = [entry for entry in limits if entry["metric"] == "backtest_completion_ratio"]
@@ -234,6 +241,66 @@ def test_normalize_limit_entries_supports_new_schema():
     assert normalized[1]["metric"] == "loss_profit_ratio"
     assert normalized[2]["range"] == [1.5, 3.0]
     assert normalized[3]["penalize_if"] == "inside_range"
+
+
+def test_normalize_limit_entries_preserves_optional_fields_on_canonical_entries():
+    raw = [
+        {
+            "metric": "drawdown_worst_btc",
+            "penalize_if": "greater_than",
+            "value": 0.85,
+            "enabled": False,
+        },
+        {
+            "metric": "adg_pnl",
+            "penalize_if": "less_than",
+            "stat": "mean",
+            "value": 0,
+            "enabled": False,
+        },
+    ]
+
+    normalized = config_utils.normalize_limit_entries(raw)
+
+    assert normalized[0]["enabled"] is False
+    assert normalized[1]["enabled"] is False
+
+
+def test_load_config_preserves_canonical_optimize_limits(tmp_path):
+    cfg = get_template_config()
+    cfg["optimize"]["limits"] = [
+        {
+            "metric": "drawdown_worst_btc",
+            "penalize_if": "greater_than",
+            "value": 0.85,
+            "enabled": False,
+        },
+        {
+            "metric": "adg_pnl",
+            "penalize_if": "less_than",
+            "stat": "mean",
+            "value": 0,
+            "enabled": False,
+        },
+    ]
+    path = tmp_path / "limits.json"
+    path.write_text(json.dumps(cfg))
+
+    loaded = load_config(str(path), verbose=False)
+
+    assert loaded["optimize"]["limits"] == cfg["optimize"]["limits"]
+
+
+def test_load_config_malformed_optimize_limits_falls_back_to_template(caplog, tmp_path):
+    cfg = get_template_config()
+    cfg["optimize"]["limits"] = [{"metric": "adg_pnl", "value": 0}]
+    path = tmp_path / "malformed_limits.json"
+    path.write_text(json.dumps(cfg))
+
+    loaded = load_config(str(path), verbose=False)
+
+    assert loaded["optimize"]["limits"] == get_template_config()["optimize"]["limits"]
+    assert any("optimize.limits malformed or unsupported" in rec.message for rec in caplog.records)
 
 
 def test_normalize_limit_entries_preserves_integers():
