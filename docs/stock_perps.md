@@ -2,6 +2,16 @@
 
 This guide covers trading stock perpetuals (equity perps) on Hyperliquid using Passivbot.
 
+## Current Support Status
+
+Passivbot currently supports **cross-only** live trading for Hyperliquid HIP-3 markets.
+
+- Cross-capable HIP-3 markets may still be traded in cross mode.
+- HIP-3 markets that are isolated-only by exchange metadata are currently ignored for new entries.
+- If the bot detects an existing isolated HIP-3 position or open order at startup, it hard-fails instead of trying to manage that state.
+
+The isolated-margin code paths remain in the repo for possible future work, but isolated HIP-3 live trading is currently not supported.
+
 ## Overview
 
 Stock perpetuals are perpetual futures contracts that track traditional equity prices (TSLA, NVDA, AAPL, etc.). On Hyperliquid, these are deployed via **HIP-3** (Hyperliquid Improvement Proposal 3), which enables permissionless perpetual market creation.
@@ -13,7 +23,7 @@ The primary stock perps provider on Hyperliquid is **TradeXYZ** (trade.xyz), whi
 | Aspect | Stock Perps | Crypto Perps |
 |--------|-------------|--------------|
 | Symbol format | `xyz:TSLA/USDC:USDC` | `BTC/USDC:USDC` |
-| Margin mode | **Isolated only** | Cross or Isolated |
+| Margin mode | Exchange metadata decides; Passivbot currently supports cross-only live trading | Cross or Isolated |
 | Max leverage | 10x | Up to 50x |
 | Trading hours | 24/7 | 24/7 |
 | Fees | 2x standard Hyperliquid fees | Standard fees |
@@ -28,20 +38,20 @@ As of early 2026, TradeXYZ offers perpetuals on:
 - **Currencies**: EUR, JPY
 - **Index**: XYZ100 (Nasdaq-like index)
 
-Other HIP-3 builders (FLX, KM, CASH, VNTL, HYNA, ABCD) also offer various perps. Passivbot supports any isolated-margin market automatically.
+Other HIP-3 builders (FLX, KM, CASH, VNTL, HYNA, ABCD) also offer various perps. Cross-capable builder markets may still work, but isolated-only HIP-3 trading is currently disabled.
 
 ## Understanding Balance and Margin
 
 ### How Isolated Margin Works
 
-HIP-3 stock perps use **isolated margin**, which is fundamentally different from cross margin used by most crypto perps.
+HIP-3 stock perps may be either **isolated-only** or **cross-capable**, depending on exchange metadata. Many still use isolated margin, which is fundamentally different from cross margin used by most crypto perps. Passivbot currently avoids that isolated live path and treats HIP-3 as cross-only when possible.
 
 | Cross Margin (HL crypto perps) | Isolated Margin (HIP-3/XYZ perps) |
 |-------------------------------|-----------------------------------|
 | Entire balance backs all positions | Each position has dedicated margin |
 | One liquidation can cascade to others | Liquidations are contained per-position |
 | More capital efficient | Safer but requires more upfront margin |
-| Default for BTC, ETH, etc. | **Required** for all stock perps |
+| Default for BTC, ETH, etc. | Unsupported in Passivbot live trading for now |
 
 ### Balance Display Differences
 
@@ -147,7 +157,7 @@ Passivbot automatically maps `TSLA` to `XYZ-TSLA/USDC:USDC` on Hyperliquid.
 
 ### Mixing Crypto and Stock Perps
 
-You can run both crypto perps (cross margin) and stock perps (isolated margin) in the same bot:
+You can run both crypto perps and supported stock perps in the same bot:
 
 ```json
 {
@@ -159,11 +169,11 @@ You can run both crypto perps (cross margin) and stock perps (isolated margin) i
 
 Passivbot automatically sets the correct margin mode for each symbol:
 - **Crypto perps** (BTC, ETH, SOL, etc.) → cross margin
-- **Stock perps** (TSLA, NVDA, AAPL, etc.) → isolated margin
+- **Stock perps** (TSLA, NVDA, AAPL, etc.) → cross only when the market is cross-capable; isolated-only markets are skipped
 
 ```
 BTC/USDC:USDC: margin=ok (cross)
-XYZ-TSLA/USDC:USDC: margin=ok (isolated)
+XYZ-XYZ100/USDC:USDC: margin=ok (cross)
 ```
 
 **How balance works in mixed mode:**
@@ -173,7 +183,7 @@ XYZ-TSLA/USDC:USDC: margin=ok (isolated)
 | Free balance | Shared by all cross-margin positions (BTC, ETH, etc.) |
 | Locked margin (per stock) | Only that specific stock perp position |
 
-**Risk isolation**: If TSLA gets liquidated, only its locked margin is lost. Your BTC/ETH positions and their shared margin pool are unaffected. Stock perp positions are "firewalled" from each other and from crypto positions.
+**Risk isolation**: This is how isolated margin works at the exchange level. Passivbot currently does not support live HIP-3 isolated trading, but the distinction is still useful context for understanding the exchange.
 
 **Practical consideration**: Isolated margin positions lock up capital, reducing what's available for cross-margin positions. Plan your `n_positions` and `total_wallet_exposure_limit` accordingly.
 
@@ -186,14 +196,17 @@ Passivbot automatically detects stock perps by:
 
 ### Leverage and Margin
 
-Stock perps require **isolated margin mode**. Passivbot handles this automatically:
+Stock perps do not all share the same margin capabilities. Passivbot currently:
 
-1. Detects isolated-only markets
-2. Sets isolated margin mode (not cross)
-3. Calculates minimum leverage based on your TWEL setting
-4. Caps leverage at 10x (HIP-3 maximum)
+1. Detects whether a HIP-3 market is isolated-only or cross-capable from exchange metadata
+2. Uses cross mode on cross-capable HIP-3 markets
+3. Ignores isolated-only HIP-3 markets for new entries
+4. Hard-fails if existing isolated HIP-3 live state is detected at startup
+5. Retains the isolated-margin code for possible future support work
 
 **Leverage calculation for isolated margin:**
+
+The remaining isolated-margin notes below are kept as exchange/background reference. They do not mean isolated HIP-3 trading is currently supported in Passivbot live mode.
 
 For isolated margin, your margin requirement is: `margin = exposure / leverage`
 
