@@ -16,11 +16,13 @@ Then use `docs/ai/README.md` to load task-specific docs only when relevant.
 
 ```bash
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cd passivbot-rust && maturin develop --release && cd ..
+pip install -e ".[dev]"
 pytest
-python3 src/main.py -u {account_name}
+passivbot live -u {account_name}
 ```
+
+Legacy direct-script entrypoints such as `python3 src/main.py ...` still work, but prefer the
+unified `passivbot ...` CLI for new usage.
 
 ## Non-Negotiables
 

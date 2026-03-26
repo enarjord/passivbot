@@ -153,7 +153,7 @@ python3 src/pareto_store.py optimize_results/.../pareto/
 - Streaming history chart sourced from `all_results.bin`
 - CSV export of the current run's dataset for offline analysis
 
-Install the dependencies via `pip install dash plotly` if they are not already present.
+Use the full install profile (`pip install -e ".[full]"`) if the dashboard dependencies are not already present.
 The legacy `pareto_store.py` script still supports quick 2D/3D matplotlib plots if a GUI
 isn't needed.
 
