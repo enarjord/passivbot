@@ -20,11 +20,11 @@ For `.npz` files, the archive must contain a `candles` key with a structured Num
 ## Usage
 
 ```shell
-python3 src/backtest.py
+passivbot backtest
 ```
 Or
 ```shell
-python3 src/backtest.py path/to/config.json
+passivbot backtest path/to/config.json
 ```
 If no config is specified, it will default to `configs/template.json`
 
@@ -41,7 +41,7 @@ Standalone runs write metrics and plots to `backtests/{exchange}/timestamp/`. Su
 
 For a comprehensive list of CLI args:
 ```shell
-python3 src/backtest.py -h
+passivbot backtest -h
 ```
 
 ## Suite Runs

@@ -7,8 +7,7 @@ Use from repo root unless noted.
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
-cd passivbot-rust && maturin develop --release && cd ..
+pip install -e .
 ```
 
 ## Tests
@@ -22,22 +21,22 @@ pytest tests/test_specific.py::test_name
 ## Live Bot
 
 ```bash
-python3 src/main.py -u {account_name}
-python3 src/main.py path/to/config.json --debug-level {0-3}
+passivbot live -u {account_name}
+passivbot live path/to/config.json --debug-level {0-3}
 ```
 
 ## Backtest
 
 ```bash
-python3 src/backtest.py path/to/config.json
-python3 src/backtest.py --suite
+passivbot backtest path/to/config.json
+passivbot backtest --suite
 ```
 
 ## Optimize
 
 ```bash
-python3 src/optimize.py path/to/config.json
-python3 src/optimize.py --suite
+passivbot optimize path/to/config.json
+passivbot optimize --suite
 ```
 
 ## Rust
@@ -51,9 +50,9 @@ cd passivbot-rust && cargo check --tests && cd ..
 ## Useful Tools
 
 ```bash
-python3 src/tools/pareto_dash.py --data-root optimize_results
-python3 src/tools/verify_hlcvs_data.py
-python3 src/tools/streamline_json.py configs/template.json
+passivbot tool pareto-dash --data-root optimize_results
+passivbot tool verify-hlcvs-data
+passivbot tool streamline-json configs/template.json
 ```
 
 ## High-Signal Gotcha

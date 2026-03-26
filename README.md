@@ -86,12 +86,13 @@ venv\Scripts\activate
 .\venv\Scripts\Activate.ps1
 ```
 
-### Step 4: Install Python Dependencies
+### Step 4: Install Passivbot
 
-Install all the required Python dependencies listed in the `requirements.txt` file:
+Install Passivbot into the active virtual environment. This installs the Python dependencies,
+builds the Rust extension, and registers the `passivbot` command:
 
 ```sh
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ### Step 5 (optional): Build Rust Extensions
@@ -125,21 +126,24 @@ Add your keys to api-keys.json.
 To start the bot with the default settings, run:
 
 ```sh
-python3 src/main.py -u {account_name_from_api-keys.json}
+passivbot live -u {account_name_from_api-keys.json}
 ```
 
 or make a new configuration file, using `configs/template.json` as a template, and start the bot with:
 
 
 ```sh
-python3 src/main.py path/to/config.json
+passivbot live path/to/config.json
 ```
+
+Legacy direct-script entrypoints such as `python3 src/main.py ...`, `python3 src/backtest.py ...`,
+and `python3 src/optimize.py ...` still work unchanged for backwards compatibility.
 
 ### Logging
 
 Passivbot uses Python's logging module throughout the bot, backtester, and supporting tools.  
-- Use `--debug-level {0-3}` (alias `--log-level`) on `src/main.py` or `src/backtest.py` to adjust verbosity at runtime: `0 = warnings only`, `1 = info`, `2 = debug`, `3 = trace`.  
-- Use `--verbose` on `src/main.py` to force debug logging (`--log-level debug`).  
+- Use `--debug-level {0-3}` (alias `--log-level`) on `passivbot live` or `passivbot backtest` to adjust verbosity at runtime: `0 = warnings only`, `1 = info`, `2 = debug`, `3 = trace`.  
+- Use `--verbose` on `passivbot live` to force debug logging (`--log-level debug`).  
 - Persist a default by adding a top-level section to your config: `"logging": {"level": 2}`. The CLI flag always overrides the config value for that run.
 - CandlestickManager and other subsystems inherit the chosen level so EMA warm-up, data fetching, and cache behaviour can be inspected consistently.
 

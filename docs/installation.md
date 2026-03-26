@@ -21,17 +21,17 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
  source venv/bin/activate  # Windows: venv\Scripts\activate
 ```
 
-## 3. Install Python dependencies
+## 3. Install Passivbot
 
 ```bash
 pip install -U pip
-pip install -r requirements.txt
-pip install -r requirements-rust.txt   # only needed when building the Rust extension yourself
+pip install -e .
 ```
 
 ## 4. Build the Rust extension
 
-Passivbot exposes the Rust core through `passivbot_rust.*.so`. Build it once per environment:
+Passivbot exposes the Rust core through `passivbot_rust.*.so`. `pip install -e .` builds it as part
+of installation, but you can still rebuild manually when iterating on Rust code:
 
 ```bash
 source venv/bin/activate
@@ -48,7 +48,7 @@ Common errors:
 
 ```bash
 pytest -q
-python3 src/passivbot.py -h
+passivbot -h
 ```
 
 If pytest reports missing `passivbot_rust`, double-check that the venv is active and `maturin develop --release` completed successfully.
@@ -60,7 +60,7 @@ When pulling new commits:
 ```bash
 source venv/bin/activate
 git pull
-pip install -r requirements.txt       # only when dependencies change
+pip install -e .                       # reruns dependency/entrypoint sync when needed
 maturin develop --release              # only when passivbot-rust changed
 ```
 

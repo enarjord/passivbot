@@ -5,7 +5,7 @@ Passivbot configurations can be optimized using a multi-objective evolutionary a
 ## Running Optimization
 
 ```bash
-python3 src/optimize.py [path/to/config.json]
+passivbot optimize [path/to/config.json]
 ```
 
 - Defaults to `configs/template.json` if no config is specified
@@ -15,10 +15,10 @@ python3 src/optimize.py [path/to/config.json]
 
 Example:
 ```bash
-python3 src/optimize.py configs/template.json --start configs/starting_pool/
+passivbot optimize configs/template.json --start configs/starting_pool/
 ```
 
-Most config parameters can be modified via CLI. `python3 src/optimize.py -h` for more info.
+Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
 
 ### Candle Interval
 
@@ -48,7 +48,7 @@ keys to keep tunable; all other bounds are locked to their current config values
 the run starts.
 
 ```bash
-python3 src/optimize.py configs/template.json \
+passivbot optimize configs/template.json \
   --fine_tune_params long_entry_grid_spacing_pct,long_entry_initial_qty_pct
 ```
 
@@ -131,7 +131,7 @@ Full analysis is included in each member of the Pareto front. Two helper tools a
 
 ```bash
 # Interactive dashboard (recommended)
-python3 src/tools/pareto_dash.py --data-root optimize_results
+passivbot tool pareto-dash --data-root optimize_results
 
 # Static matplotlib plotter
 python3 src/pareto_store.py optimize_results/.../pareto/
@@ -177,7 +177,7 @@ Example:
 CLI overrides accept the same JSON/HJSON payload:
 
 ```bash
-python3 src/optimize.py --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
+passivbot optimize --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
 
 For quick-and-dirty tweaks, the legacy format (`--penalize_if_greater_than_drawdown_worst 0.3`) is still recognized and converted to the new schema at runtime.
