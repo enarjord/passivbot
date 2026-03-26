@@ -35,6 +35,7 @@ import json
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
+from cli_utils import get_cli_prog
 from config_utils import (
     load_config,
     dump_config,
@@ -1307,7 +1308,9 @@ def post_process(
 
 
 async def main():
-    parser = argparse.ArgumentParser(prog="backtest", description="run forager backtest")
+    parser = argparse.ArgumentParser(
+        prog=get_cli_prog("backtest"), description="run forager backtest"
+    )
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )

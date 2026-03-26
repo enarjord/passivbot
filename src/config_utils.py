@@ -99,6 +99,21 @@ SHARED_METRICS = {
 Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
 
 
+# Template-aligned config cleaning normally treats non-empty dict templates as closed schemas.
+# These paths are exceptions: they have required template keys plus arbitrary user-defined keys.
+PARTIALLY_OPEN_CONFIG_PATHS: set[Path] = {
+    ("backtest", "aggregate"),
+}
+
+TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
+    ("coin_overrides",),
+    ("backtest", "suite", "aggregate"),
+    ("backtest", "suite", "scenarios"),
+    ("backtest", "market_settings_sources"),
+    *tuple(PARTIALLY_OPEN_CONFIG_PATHS),
+)
+
+
 def load_hjson_config(config_path: str) -> dict:
     try:
         with open(config_path, encoding="utf-8") as f:
@@ -1082,13 +1097,7 @@ def _sync_with_template(
         template_with_extras,
         result,
         verbose=verbose,
-        preserve=[
-            ("coin_overrides",),
-            ("backtest", "suite", "aggregate"),
-            ("backtest", "suite", "scenarios"),
-            ("backtest", "aggregate"),  # Preserve per-metric aggregation settings
-            ("backtest", "market_settings_sources"),  # Preserve per-coin market settings
-        ],
+        preserve=TEMPLATE_SYNC_PRESERVE_PATHS,
         tracker=tracker,
     )
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose, tracker=tracker)
@@ -1491,14 +1500,25 @@ def _clean_dynamic_node(value):
     return deepcopy(value)
 
 
-def _clean_with_template(template_node, source_node):
+def _clean_with_template(template_node, source_node, path: Path = ()):
     if isinstance(template_node, dict):
-        if not template_node:
-            return _clean_dynamic_node(source_node if isinstance(source_node, dict) else {})
-        result = {}
         source_dict = source_node if isinstance(source_node, dict) else {}
+        if path in PARTIALLY_OPEN_CONFIG_PATHS:
+            cleaned = {}
+            for key, value in source_dict.items():
+                if key in template_node:
+                    cleaned[key] = _clean_with_template(template_node[key], value, path + (key,))
+                else:
+                    cleaned[key] = _clean_dynamic_node(value)
+            for key, tmpl_value in template_node.items():
+                if key not in cleaned:
+                    cleaned[key] = _clean_with_template(tmpl_value, None, path + (key,))
+            return cleaned
+        if not template_node:
+            return _clean_dynamic_node(source_dict)
+        result = {}
         for key, tmpl_value in template_node.items():
-            result[key] = _clean_with_template(tmpl_value, source_dict.get(key))
+            result[key] = _clean_with_template(tmpl_value, source_dict.get(key), path + (key,))
         return result
     if isinstance(template_node, list):
         if isinstance(source_node, list):

@@ -24,6 +24,7 @@ import passivbot_rust as pbr
 import logging
 import math
 from pathlib import Path
+from cli_utils import get_cli_prog
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
 from fill_events_manager import (
     FillEventsManager,
@@ -730,6 +731,14 @@ class Passivbot:
     def bot_value(self, pside: str, key: str):
         return require_config_value(self.config, f"bot.{pside}.{key}")
 
+    def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
+        """Hook: exchange-specific filtering for approved symbols used for new entries."""
+        return symbols
+
+    def _assert_supported_live_state(self) -> None:
+        """Hook: exchange-specific startup/runtime validation for unsupported live state."""
+        return None
+
     def _build_ccxt_options(self, overrides: Optional[dict] = None) -> dict:
         options = {"adjustForTimeDifference": True}
         recv_window = get_optional_live_value(self.config, "recv_window_ms", None)
@@ -1025,6 +1034,7 @@ class Passivbot:
         self.set_wallet_exposure_limits()
         await self.update_positions_and_balance()
         await self.update_open_orders()
+        self._assert_supported_live_state()
         await self.update_effective_min_cost()
         # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
         if self.is_forager_mode():
@@ -2697,6 +2707,7 @@ class Passivbot:
         await self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
         self.set_wallet_exposure_limits()
+        self._assert_supported_live_state()
         previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, "PB_modes") else None
         self.PB_modes = {"long": {}, "short": {}}
         # Compute a shared forager fetch budget once per cycle and split it fairly by side.
@@ -6334,8 +6345,8 @@ class Passivbot:
                 if self.live_value("empty_means_all_approved") and not self.approved_coins[pside]:
                     # if approved_coins is empty, all coins are approved
                     self.approved_coins[pside] = self.eligible_symbols
-                self.approved_coins_minus_ignored_coins[pside] = (
-                    self.approved_coins[pside] - self.ignored_coins[pside]
+                self.approved_coins_minus_ignored_coins[pside] = self._filter_approved_symbols(
+                    pside, self.approved_coins[pside] - self.ignored_coins[pside]
                 )
             # aggregate add/remove logs for readability
             for k, summary in (("added", added_summary.get("approved_coins", {})),):
@@ -6396,7 +6407,7 @@ class Passivbot:
                             }
                         )
                         logging.warning(
-                            "Stock perps detected in approved_coins (%s). HIP-3 stock perps support is experimental/WIP.",
+                            "Stock perps detected in approved_coins (%s). HIP-3 isolated margin is currently unsupported; isolated-only symbols will be skipped and existing isolated live state will fail loudly.",
                             ",".join(coins),
                         )
                         self._stock_perps_warning_logged = True
@@ -6544,7 +6555,9 @@ async def shutdown_bot(bot):
 
 async def main():
     """Entry point: parse CLI args, load config, and launch the bot lifecycle."""
-    parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
+    parser = argparse.ArgumentParser(
+        prog=get_cli_prog("passivbot"), description="run passivbot"
+    )
     parser.add_argument(
         "config_path",
         type=str,

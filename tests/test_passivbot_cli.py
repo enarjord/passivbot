@@ -1,0 +1,132 @@
+import os
+import sys
+
+import pytest
+
+from passivbot_cli import main as cli_main
+
+
+def test_root_help_lists_primary_commands(capsys):
+    assert cli_main.main(["-h"]) == 0
+
+    out = capsys.readouterr().out
+    assert "live" in out
+    assert "backtest" in out
+    assert "optimize" in out
+    assert "download" in out
+    assert "tool" in out
+    assert 'pip install -e ".[full]"' in out
+
+
+def test_dispatch_core_command_forwards_module_and_prog(monkeypatch):
+    captured = {}
+    original_argv = sys.argv[:]
+
+    def fake_run_module(module_name, run_name):
+        captured["module_name"] = module_name
+        captured["run_name"] = run_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["optimize", "--suite", "y"]) == 0
+
+    assert captured["module_name"] == "optimize"
+    assert captured["run_name"] == "__main__"
+    assert captured["argv"] == ["passivbot optimize", "--suite", "y"]
+    assert captured["prog_env"] == "passivbot optimize"
+    assert sys.argv == original_argv
+    assert os.environ.get("PASSIVBOT_CLI_PROG") is None
+
+
+def test_help_subcommand_forwards_to_command_help(monkeypatch):
+    captured = {}
+
+    def fake_run_module(module_name, run_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: ["deap"])
+
+    assert cli_main.main(["help", "backtest"]) == 0
+
+    assert captured["module_name"] == "backtest"
+    assert captured["argv"] == ["passivbot backtest", "-h"]
+
+
+def test_tool_help_lists_supported_tools(capsys):
+    assert cli_main.main(["tool", "-h"]) == 0
+
+    out = capsys.readouterr().out
+    assert "pareto-dash" in out
+    assert "streamline-json" in out
+    assert "verify-hlcvs-data" in out
+    assert "requires full install" in out
+
+
+def test_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_run_module(module_name, run_name):
+        captured["module_name"] = module_name
+        captured["run_name"] = run_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "pareto-dash", "--data-root", "optimize_results"]) == 0
+
+    assert captured["module_name"] == "tools.pareto_dash"
+    assert captured["run_name"] == "__main__"
+    assert captured["argv"] == [
+        "passivbot tool pareto-dash",
+        "--data-root",
+        "optimize_results",
+    ]
+    assert captured["prog_env"] == "passivbot tool pareto-dash"
+
+
+def test_unknown_command_exits_with_error():
+    with pytest.raises(SystemExit) as exc:
+        cli_main.main(["unknown"])
+
+    assert exc.value.code == 2
+
+
+def test_full_install_hint_is_shown_for_missing_optional_dependency(monkeypatch, capsys):
+    error = ModuleNotFoundError("No module named 'deap'")
+    error.name = "deap"
+
+    def fake_run_module(module_name, run_name):
+        raise error
+
+    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["optimize", "--iters", "10"]) == 2
+
+    captured = capsys.readouterr()
+    assert 'pip install -e ".[full]"' in captured.err
+    assert "passivbot optimize requires the full Passivbot install." in captured.err
+
+
+def test_requires_full_command_fails_immediately_without_full_install(monkeypatch, capsys):
+    def fail_if_called(module_name, run_name):
+        raise AssertionError("run_module should not be called without the full install")
+
+    monkeypatch.setattr(cli_main.runpy, "run_module", fail_if_called)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: ["aiohttp"])
+
+    assert cli_main.main(["backtest", "-s", "XMR"]) == 2
+
+    captured = capsys.readouterr()
+    assert 'pip install -e ".[full]"' in captured.err
+    assert "passivbot backtest requires the full Passivbot install." in captured.err

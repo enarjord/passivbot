@@ -2,6 +2,12 @@
 
 Passivbot ships with a backtester that replays historical 1 minute candles. When a coin isn't cached locally, the backtester fetches data from the exchange archives and caches it under `caches/ohlcv/` for reuse.
 
+Backtesting requires the full install profile:
+
+```shell
+pip install -e ".[full]"
+```
+
 > **GateIO cache note:** If you have existing GateIO OHLCV data in `caches/ohlcv/gateio`, delete the folder after upgrading to the new data strategy so fresh data (normalized to base volume) is fetched.
 
 ### External OHLCV source dir
@@ -20,11 +26,11 @@ For `.npz` files, the archive must contain a `candles` key with a structured Num
 ## Usage
 
 ```shell
-python3 src/backtest.py
+passivbot backtest
 ```
 Or
 ```shell
-python3 src/backtest.py path/to/config.json
+passivbot backtest path/to/config.json
 ```
 If no config is specified, it will default to `configs/template.json`
 
@@ -41,7 +47,7 @@ Standalone runs write metrics and plots to `backtests/{exchange}/timestamp/`. Su
 
 For a comprehensive list of CLI args:
 ```shell
-python3 src/backtest.py -h
+passivbot backtest -h
 ```
 
 ## Suite Runs
