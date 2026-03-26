@@ -16,6 +16,7 @@ from config_utils import (
     _rename_config_keys,
     _sync_with_template,
     get_template_config,
+    load_config,
     update_config_with_args,
     parse_overrides,
     format_config,
@@ -180,6 +181,66 @@ def test_normalize_limit_entries_supports_new_schema():
     assert normalized[1]["metric"] == "loss_profit_ratio"
     assert normalized[2]["range"] == [1.5, 3.0]
     assert normalized[3]["penalize_if"] == "inside_range"
+
+
+def test_normalize_limit_entries_preserves_optional_fields_on_canonical_entries():
+    raw = [
+        {
+            "metric": "drawdown_worst_btc",
+            "penalize_if": "greater_than",
+            "value": 0.85,
+            "enabled": False,
+        },
+        {
+            "metric": "adg_pnl",
+            "penalize_if": "less_than",
+            "stat": "mean",
+            "value": 0,
+            "enabled": False,
+        },
+    ]
+
+    normalized = config_utils.normalize_limit_entries(raw)
+
+    assert normalized[0]["enabled"] is False
+    assert normalized[1]["enabled"] is False
+
+
+def test_load_config_preserves_canonical_optimize_limits(tmp_path):
+    cfg = get_template_config()
+    cfg["optimize"]["limits"] = [
+        {
+            "metric": "drawdown_worst_btc",
+            "penalize_if": "greater_than",
+            "value": 0.85,
+            "enabled": False,
+        },
+        {
+            "metric": "adg_pnl",
+            "penalize_if": "less_than",
+            "stat": "mean",
+            "value": 0,
+            "enabled": False,
+        },
+    ]
+    path = tmp_path / "limits.json"
+    path.write_text(json.dumps(cfg))
+
+    loaded = load_config(str(path), verbose=False)
+
+    assert loaded["optimize"]["limits"] == cfg["optimize"]["limits"]
+
+
+def test_load_config_malformed_optimize_limits_falls_back_to_template(caplog, tmp_path):
+    cfg = get_template_config()
+    cfg["optimize"]["limits"] = [{"metric": "adg_pnl", "value": 0}]
+    path = tmp_path / "malformed_limits.json"
+    path.write_text(json.dumps(cfg))
+
+    loaded = load_config(str(path), verbose=False)
+
+    assert loaded["optimize"]["limits"] == get_template_config()["optimize"]["limits"]
+    assert any("optimize.limits malformed or unsupported" in rec.message for rec in caplog.records)
 
 
 def test_normalize_limit_entries_preserves_integers():

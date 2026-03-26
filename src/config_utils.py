@@ -1191,7 +1191,11 @@ def _preserve_coin_sources(result: dict) -> None:
 
 
 def _apply_non_live_adjustments(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+    result: dict,
+    verbose: bool = True,
+    tracker: Optional[ConfigTransformTracker] = None,
+    raw_optimize_limits: Any = None,
+    raw_optimize_limits_present: Optional[bool] = None,
 ) -> None:
     """Adjust live/backtest/optimize fields when not running in live-only mode."""
     for key in ("approved_coins", "ignored_coins"):
@@ -1220,20 +1224,37 @@ def _apply_non_live_adjustments(
             seen.add(canon)
     result["optimize"]["scoring"] = canonical_scoring
 
-    existing_limits = deepcopy(result["optimize"].get("limits", []))
-    limits_snapshot = deepcopy(existing_limits)
-    normalized_limits = normalize_limit_entries(existing_limits)
-    changed_limits = not _limits_structurally_equal(existing_limits, normalized_limits)
-    result["optimize"]["limits"] = normalized_limits
-    if changed_limits:
+    current_limits = deepcopy(result["optimize"].get("limits", []))
+    limits_snapshot = deepcopy(current_limits)
+    if raw_optimize_limits_present is None:
+        raw_optimize_limits_present = "limits" in result.get("optimize", {})
+        if raw_optimize_limits is None and raw_optimize_limits_present:
+            raw_optimize_limits = deepcopy(result["optimize"].get("limits"))
+    template_limits = deepcopy(get_template_config()["optimize"]["limits"])
+    resolved_limits, resolution = _resolve_optimize_limits_for_load(
+        raw_optimize_limits=raw_optimize_limits,
+        raw_optimize_limits_present=raw_optimize_limits_present,
+        template_limits=template_limits,
+    )
+    result["optimize"]["limits"] = resolved_limits
+    if resolution == "normalized_legacy":
         _log_config(
             verbose,
             logging.INFO,
             "normalized optimize.limits to canonical schema (%d entries)",
-            len(normalized_limits),
+            len(resolved_limits),
         )
         if tracker is not None:
-            tracker.update(["optimize", "limits"], limits_snapshot, normalized_limits)
+            tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
+    elif resolution == "fallback_template":
+        _log_config(
+            verbose,
+            logging.WARNING,
+            "optimize.limits malformed or unsupported; falling back to template defaults (%d entries)",
+            len(template_limits),
+        )
+        if tracker is not None:
+            tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
     for key, value in sorted(result["optimize"]["bounds"].items()):
         if isinstance(value, list):
             if len(value) == 1:
@@ -1254,6 +1275,10 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     optimize_suite_defined = (
         isinstance(config.get("optimize"), dict) and "suite" in config["optimize"]
     )
+    raw_optimize_limits_present = (
+        isinstance(config.get("optimize"), dict) and "limits" in config["optimize"]
+    )
+    raw_optimize_limits = deepcopy(config.get("optimize", {}).get("limits"))
     coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
     template = get_template_config()
     flavor = detect_flavor(config, template)
@@ -1291,7 +1316,13 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
 
     if not live_only:
         # unneeded adjustments if running live
-        _apply_non_live_adjustments(result, verbose=verbose, tracker=tracker)
+        _apply_non_live_adjustments(
+            result,
+            verbose=verbose,
+            tracker=tracker,
+            raw_optimize_limits=raw_optimize_limits,
+            raw_optimize_limits_present=raw_optimize_limits_present,
+        )
 
     result["_transform_log"] = existing_log
     details = {
@@ -1446,8 +1477,71 @@ def normalize_limit_entries(
 
     normalized: List[Dict[str, Any]] = []
     for entry in entries:
-        normalized.append(_normalize_limit_entry(entry))
+        normalized.append(_normalize_limit_entry_preserve_extras(entry))
     return normalized
+
+
+def _normalize_limit_entry_preserve_extras(entry: Any) -> Dict[str, Any]:
+    normalized = _normalize_limit_entry(entry)
+    if not isinstance(entry, dict):
+        return normalized
+    for key, value in entry.items():
+        if key not in normalized:
+            normalized[key] = deepcopy(value)
+    return normalized
+
+
+def _is_canonical_limit_entry(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    try:
+        normalized = _normalize_limit_entry(entry)
+    except Exception:
+        return False
+    for key, norm_val in normalized.items():
+        raw_val = entry.get(key)
+        if key == "range":
+            if not _range_equal(raw_val, norm_val):
+                return False
+        else:
+            if not _numeric_equal(raw_val, norm_val):
+                return False
+    return True
+
+
+def _resolve_optimize_limits_for_load(
+    *,
+    raw_optimize_limits: Any,
+    raw_optimize_limits_present: bool,
+    template_limits: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Resolve optimize.limits during config load.
+
+    Returns (resolved_limits, resolution) where resolution is one of:
+    - "template_default"
+    - "preserved_canonical"
+    - "normalized_legacy"
+    - "fallback_template"
+    """
+    if not raw_optimize_limits_present:
+        return deepcopy(template_limits), "template_default"
+
+    if isinstance(raw_optimize_limits, list):
+        if all(_is_canonical_limit_entry(entry) for entry in raw_optimize_limits):
+            return deepcopy(raw_optimize_limits), "preserved_canonical"
+        try:
+            return normalize_limit_entries(raw_optimize_limits), "normalized_legacy"
+        except Exception:
+            return deepcopy(template_limits), "fallback_template"
+
+    if isinstance(raw_optimize_limits, (str, dict)):
+        try:
+            return normalize_limit_entries(raw_optimize_limits), "normalized_legacy"
+        except Exception:
+            return deepcopy(template_limits), "fallback_template"
+
+    return deepcopy(template_limits), "fallback_template"
 
 
 def _legacy_limits_dict_to_entries(limits_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -2370,7 +2464,39 @@ def get_template_config():
             "crossover_probability": 0.7,
             "enable_overrides": [],
             "iters": 30000,
-            "limits": "--drawdown_worst 0.333 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 300.0",
+            "limits": [
+                {
+                    "metric": "drawdown_worst_usd",
+                    "penalize_if": "greater_than",
+                    "value": 0.85,
+                    "enabled": True
+                },
+                {
+                    "metric": "loss_profit_ratio",
+                    "penalize_if": "greater_than",
+                    "value": 0.85,
+                    "enabled": True
+                },
+                {
+                    "metric": "adg_pnl",
+                    "penalize_if": "less_than",
+                    "stat": "mean",
+                    "value": 0,
+                    "enabled": False
+                },
+                {
+                    "metric": "peak_recovery_hours_pnl",
+                    "penalize_if": "greater_than",
+                    "value": 1680,
+                    "enabled": False
+                },
+                {
+                    "metric": "position_held_hours_max",
+                    "penalize_if": "greater_than",
+                    "value": 840,
+                    "enabled": False
+                }
+            ],
             "mutation_eta": 20.0,
             "mutation_indpb": 0.0,
             "mutation_probability": 0.45,
