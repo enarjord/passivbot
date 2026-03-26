@@ -1,0 +1,5 @@
+prospector==1.17.3
+mkdocs==1.6.1
+mkdocs-material==9.5.32
+pymdown-extensions==10.8.1
+PyYAML==6.0.2

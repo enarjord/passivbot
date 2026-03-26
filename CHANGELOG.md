@@ -58,6 +58,12 @@ All notable user-facing changes will be documented in this file.
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.
 - **ADG terminal smoothing simplified** - Backtest `gain`/`adg` now smooth the terminal value by taking the mean of the last up to 3 daily equity samples instead of running an EMA over the full daily-equity series. This preserves end-of-run drawdown smoothing while reducing computation.
 - **Optimize-time runtime controls** - Optimizer config now supports `optimize.fixed_params` to lock selected bounds to the current config value and `optimize.fixed_runtime_overrides` to override runtime config values only during optimize evaluations.
+- **Unified `passivbot` CLI added** - Passivbot now installs a `passivbot` command with subcommands such as `passivbot live`, `passivbot backtest`, `passivbot optimize`, `passivbot download`, and `passivbot tool ...`. Existing direct script entrypoints like `python3 src/main.py ...` remain supported for backwards compatibility.
+- **Install profiles split into `live`, `full`, and `dev`** - `pip install -e .` now targets a lightweight live-trading environment, while `pip install -e ".[full]"` adds backtesting/optimization/tooling dependencies and `pip install -e ".[dev]"` adds contributor-focused docs/lint extras on top.
+
+### Fixed
+- **Hyperliquid HIP-3 margin-mode detection for `XYZ-...` symbols** - Hyperliquid stock perps exposed by CCXT as `XYZ-...` or `XYZ:...` now correctly force isolated margin mode, preventing erroneous cross-margin config calls that could lead to repeated duplicate entry submissions on stock-perp markets such as `XYZ100`.
+- **Hyperliquid HIP-3 state sync for positions and open orders** - Hyperliquid stock-perp positions and open orders now use dex-scoped CCXT queries for HIP-3 symbols instead of relying only on the default `fetch_balance()` / global open-orders routes. This fixes bots repeatedly re-entering because filled HIP-3 positions or resting HIP-3 orders were invisible to local state reconciliation.
 
 ## v7.8.4 - 2026-03-06
 

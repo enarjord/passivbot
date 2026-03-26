@@ -249,7 +249,6 @@ class HyperliquidBot(CCXTBot):
                 "live_margin_mode": live_margin_mode,
             }
         return policy
-
     async def _fetch_hip3_positions(self) -> list[dict]:
         """Fetch HIP-3 positions via dex-scoped CCXT routes."""
         positions_by_key = {}
@@ -330,6 +329,7 @@ class HyperliquidBot(CCXTBot):
         seen_ids = set()
         query_symbols = [symbol] if symbol is not None else self._get_hl_hip3_state_symbols()
 
+        # Default route covers core perps; HIP-3 symbols need dex-scoped queries.
         if symbol is None or not self._get_hl_dex_for_symbol(symbol):
             for order in await self.cca.fetch_open_orders(symbol=symbol):
                 if order["id"] in seen_ids:

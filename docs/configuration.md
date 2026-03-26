@@ -67,7 +67,7 @@ Example per-metric aggregation:
 
 - **level**: Controls global verbosity for Passivbot and tooling.
   - Accepted values: `0` (warnings), `1` (info), `2` (debug), `3` (trace).
-  - The CLI flag `--debug-level`/`--log-level` on `src/passivbot.py` and `src/backtest.py` overrides the configured value for a single run.
+  - The CLI flag `--debug-level`/`--log-level` on `passivbot live` and `passivbot backtest` overrides the configured value for a single run.
   - Components such as the CandlestickManager inherit this level, so EMA warm-up and candle maintenance logs follow the same verbosity.
 - **memory_snapshot_interval_minutes**: Interval between `_log_memory_snapshot` telemetry entries (RSS, cache footprint, asyncio task counts). Default `30`; lower values surface leaks sooner, higher values reduce noise.
 - **volume_refresh_info_threshold_seconds**: Minimum duration a bulk volume-EMA refresh must take before it is promoted to an INFO log. Runs that finish faster emit only DEBUG output (when debug logging is enabled). Set `0` to log every refresh at INFO.
@@ -542,7 +542,7 @@ Risk should be constrained through `*_hsl` metrics instead.
 
 The optimizer reuses the backtest suite configuration when `--suite [y/n]` is enabled.
 
-- **backtest.suite_enabled**: Can be toggled for optimizer runs via `--suite [y/n]` on `src/optimize.py`.
+- **backtest.suite_enabled**: Can be toggled for optimizer runs via `--suite [y/n]` on `passivbot optimize`.
 - **backtest.aggregate**: Per-metric aggregation rules applied to scenario results before feeding into `optimize.scoring` and `optimize.limits`.
 - **backtest.scenarios**: Scenario dictionaries. Each one may override `coins`, `ignored_coins`, `start_date`, `end_date`, `exchanges`, `coin_sources`, and `overrides` (arbitrary config path overrides).
 
@@ -584,7 +584,7 @@ To intentionally opt out of a default limit, keep the metric name but disable it
 For quick CLI overrides you can pass the JSON/HJSON string directly:
 
 ```
-python3 src/optimize.py --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
+passivbot optimize --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
 
 Passivbot also accepts the shorthand CLI syntax (`--penalize_if_greater_than_*`) and normalizes it into the list form at runtime.

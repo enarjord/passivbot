@@ -61,6 +61,7 @@ import multiprocessing
 import signal
 import time
 from collections import defaultdict
+from cli_utils import get_cli_prog
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from config_utils import (
     get_template_config,
@@ -1739,7 +1740,9 @@ def configs_to_individuals(cfgs, bounds, sig_digits=0, twe_multiplier=0.75):
 
 
 async def main():
-    parser = argparse.ArgumentParser(prog="optimize", description="run optimizer")
+    parser = argparse.ArgumentParser(
+        prog=get_cli_prog("optimize"), description="run optimizer"
+    )
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )

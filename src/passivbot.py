@@ -24,6 +24,7 @@ import passivbot_rust as pbr
 import logging
 import math
 from pathlib import Path
+from cli_utils import get_cli_prog
 from candlestick_manager import (
     CandlestickManager,
     CANDLE_DTYPE,
@@ -7451,7 +7452,9 @@ async def shutdown_bot(bot):
 
 async def main():
     """Entry point: parse CLI args, load config, and launch the bot lifecycle."""
-    parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
+    parser = argparse.ArgumentParser(
+        prog=get_cli_prog("passivbot"), description="run passivbot"
+    )
     parser.add_argument(
         "config_path",
         type=str,

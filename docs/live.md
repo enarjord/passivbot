@@ -86,10 +86,10 @@ The CLI also accepts an explicit path or can disable overrides entirely:
 
 ```sh
 # Use custom endpoints from a specific file
-python src/passivbot.py --custom-endpoints configs/custom_endpoints.json configs/your_config.hjson
+passivbot live --custom-endpoints configs/custom_endpoints.json configs/your_config.hjson
 
 # Disable overrides even if the file exists
-python src/passivbot.py --custom-endpoints none configs/your_config.hjson
+passivbot live --custom-endpoints none configs/your_config.hjson
 ```
 
 You can embed the path in your live config so it is always applied:

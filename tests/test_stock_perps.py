@@ -187,6 +187,34 @@ class TestHyperliquidBotHIP3:
 
         assert bot._requires_isolated_margin("XYZ-XYZ100/USDC:USDC") is False
 
+    @pytest.mark.asyncio
+    async def test_update_exchange_config_uses_isolated_for_metadata_isolated_symbol(
+        self, bot_class
+    ):
+        """Isolated-only HIP-3 symbols must still configure isolated margin mode."""
+        bot = object.__new__(bot_class)
+        bot.exchange = "hyperliquid"
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot.user_info = {"is_vault": False}
+        bot.markets_dict = {
+            "XYZ-XYZ100/USDC:USDC": {
+                "baseName": "xyz:XYZ100",
+                "info": {"onlyIsolated": True},
+            }
+        }
+        bot.cca = MagicMock()
+        bot.cca.set_margin_mode = AsyncMock(return_value={"status": "ok"})
+        bot._calc_leverage_for_symbol = lambda symbol: 7
+
+        await bot.update_exchange_config_by_symbols(["XYZ-XYZ100/USDC:USDC"])
+
+        bot.cca.set_margin_mode.assert_awaited_once_with(
+            "isolated",
+            symbol="XYZ-XYZ100/USDC:USDC",
+            params={"leverage": 7},
+        )
+
     def test_live_isolated_position_overrides_auto_cross_preference_for_state_management(
         self, bot_class
     ):
@@ -268,8 +296,15 @@ class TestHyperliquidBotHIP3:
         positions, balance = await bot._fetch_positions_and_balance()
 
         assert balance == 1000.0
-        assert positions[0]["symbol"] == "XYZ-XYZ100/USDC:USDC"
-        assert positions[0]["margin_mode"] == "isolated"
+        assert positions == [
+            {
+                "symbol": "XYZ-XYZ100/USDC:USDC",
+                "position_side": "long",
+                "size": 0.0013,
+                "price": 24888.0,
+                "margin_mode": "isolated",
+            }
+        ]
         bot.cca.fetch_positions.assert_awaited_once_with(symbols=["XYZ-XYZ100/USDC:USDC"])
 
     @pytest.mark.asyncio
@@ -317,7 +352,18 @@ class TestHyperliquidBotHIP3:
 
         orders = await bot.fetch_open_orders()
 
-        assert orders[0]["symbol"] == "XYZ-XYZ100/USDC:USDC"
+        assert orders == [
+            {
+                "id": "abc123",
+                "symbol": "XYZ-XYZ100/USDC:USDC",
+                "side": "buy",
+                "amount": 0.0013,
+                "price": 24888.0,
+                "timestamp": 1000,
+                "position_side": "long",
+                "qty": 0.0013,
+            }
+        ]
         assert bot.cca.fetch_open_orders.await_args_list[0].kwargs == {"symbol": None}
         assert bot.cca.fetch_open_orders.await_args_list[1].kwargs == {
             "symbol": "XYZ-XYZ100/USDC:USDC"
