@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from rust_utils import (
+    _installed_extension_candidates,
     compiled_extension_paths,
     is_stale,
     latest_compiled_mtime,
@@ -139,3 +140,23 @@ def test_extension_needs_rebuild_when_source_stamp_missing_or_mismatched(tmp_pat
     write_source_stamp(compiled, "abc123")
     assert extension_needs_rebuild(compiled, source_mtime, "abc123") is False
     assert source_stamp_path(compiled).exists()
+
+
+def test_installed_extension_candidates_find_root_level_maturin_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    installed = site_packages / "passivbot_rust.cpython-312-darwin.so"
+    installed.write_text("binary")
+
+    monkeypatch.setattr(
+        "rust_utils._extension_suffixes",
+        lambda: ["cpython-312-darwin.so"],
+    )
+    monkeypatch.setattr(
+        "rust_utils.sysconfig.get_paths",
+        lambda: {"platlib": str(site_packages), "purelib": str(site_packages)},
+    )
+
+    assert _installed_extension_candidates() == [installed]
