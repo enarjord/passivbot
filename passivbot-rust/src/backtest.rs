@@ -1541,7 +1541,6 @@ impl<'a> Backtest<'a> {
                     ..OrchProfile::default()
                 }),
             max_tradable_coins_seen: 0,
-            max_tradable_coins_seen: 0,
             hard_stop_state: None,
             hard_stop_tier: ehsl::HardStopTier::Green,
             hard_stop_rolling_peak: VecDeque::new(),
@@ -3066,6 +3065,7 @@ mod tests {
             btc_collateral_ltv_cap: None,
             metrics_only: true,
             filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
@@ -3126,6 +3126,7 @@ mod tests {
             btc_collateral_ltv_cap: None,
             metrics_only: true,
             filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
@@ -3185,6 +3186,7 @@ mod tests {
             btc_collateral_ltv_cap: None,
             metrics_only: true,
             filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
@@ -3247,6 +3249,7 @@ mod tests {
             btc_collateral_ltv_cap: None,
             metrics_only: true,
             filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 1.0,
@@ -3540,6 +3543,8 @@ mod tests {
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             candle_interval_minutes: 1,
         };
 
@@ -3608,6 +3613,8 @@ mod tests {
             dynamic_wel_by_tradability: false,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             candle_interval_minutes: 1,
         };
 
