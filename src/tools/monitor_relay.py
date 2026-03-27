@@ -8,6 +8,9 @@ from pathlib import Path
 from aiohttp import web
 
 SRC_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if SCRIPT_DIR in sys.path:
+    sys.path.remove(SCRIPT_DIR)
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 

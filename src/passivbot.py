@@ -35,7 +35,7 @@ from monitor_publisher import MonitorPublisher
 from passivbot_monitor import _get_process_rss_bytes
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
-from logging_setup import configure_logging, resolve_log_level
+from logging_setup import configure_logging, get_last_log_activity_monotonic, resolve_log_level
 from utils import (
     load_markets,
     coin_to_symbol,
@@ -735,6 +735,37 @@ class Passivbot:
     def _hsl_state(self, pside: str) -> dict[str, Any]:
         return {}
 
+    def _get_exchange_fee_rates(self, symbol: str) -> tuple[float, float]:
+        market = {}
+        try:
+            market = self.markets_dict.get(symbol, {}) or {}
+        except Exception:
+            market = {}
+        maker_fee = market.get("maker_fee", market.get("maker", 0.0002))
+        taker_fee = market.get("taker_fee", market.get("taker", 0.00055))
+        maker_fee = float(maker_fee)
+        taker_fee = float(taker_fee)
+        if not math.isfinite(maker_fee):
+            raise ValueError(f"maker_fee must be finite for {symbol}, got {maker_fee}")
+        if not math.isfinite(taker_fee):
+            raise ValueError(f"taker_fee must be finite for {symbol}, got {taker_fee}")
+        return maker_fee, taker_fee
+
+    def _orchestrator_exchange_params(self, symbol: str) -> dict:
+        maker_fee, taker_fee = self._get_exchange_fee_rates(symbol)
+        return {
+            "qty_step": float(self.qty_steps[symbol]),
+            "price_step": float(self.price_steps[symbol]),
+            "min_qty": float(self.min_qtys[symbol]),
+            "min_cost": float(self.min_costs[symbol]),
+            "c_mult": float(self.c_mults[symbol]),
+            "maker_fee": float(maker_fee),
+            "taker_fee": float(taker_fee),
+        }
+
+    def _equity_hard_stop_realized_pnl_now(self, pside: Optional[str] = None) -> float:
+        return 0.0
+
     def _build_ccxt_options(self, overrides: Optional[dict] = None) -> dict:
         options = {"adjustForTimeDifference": True}
         recv_window = get_optional_live_value(self.config, "recv_window_ms", None)
@@ -997,67 +1028,106 @@ class Passivbot:
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
         self._log_startup_banner()
+        self._bot_ready = False
+        self._set_log_silence_watchdog_context(phase="startup", stage="start")
+        self._start_log_silence_watchdog()
         logging.info("[boot] starting bot %s...", self.exchange)
-        self._monitor_record_event(
-            "bot.start",
-            ("bot", "lifecycle", "start"),
-            {
-                "exchange": self.exchange,
-                "user": self.user,
-                "pid": os.getpid(),
-                "quote": self.quote,
-                "start_time_ms": self.start_time_ms,
-            },
-            ts=self.start_time_ms,
-        )
-
-        # Random boot stagger to spread API load when multiple bots start simultaneously.
-        # Applies BEFORE init_markets() so even the first API calls are staggered.
-        boot_stagger = get_optional_live_value(self.config, "boot_stagger_seconds", None)
-        if boot_stagger is None:
-            exchange_lower = (self.exchange or "").lower()
-            if exchange_lower == "hyperliquid":
-                boot_stagger = 30.0
-            else:
-                boot_stagger = 0.0
+        boot_stage = "start"
         try:
-            boot_stagger = float(boot_stagger)
-        except Exception:
-            boot_stagger = 0.0
-        if boot_stagger > 0:
-            delay = random.uniform(0, boot_stagger)
-            logging.info(
-                "[boot] stagger delay: waiting %.1fs before init (max=%.0fs)...",
-                delay, boot_stagger,
+            self._monitor_record_event(
+                "bot.start",
+                ("bot", "lifecycle", "start"),
+                {
+                    "exchange": self.exchange,
+                    "user": self.user,
+                    "pid": os.getpid(),
+                    "quote": self.quote,
+                    "start_time_ms": int(self.start_time_ms),
+                },
+                ts=int(self.start_time_ms),
             )
-            await asyncio.sleep(delay)
 
-        await format_approved_ignored_coins(self.config, self.user_info["exchange"], quote=self.quote)
-        await self.init_markets()
-        # Staggered warmup of candles for approved symbols (large sets handled gracefully)
-        try:
-            await self.warmup_candles_staggered()
-        except Exception as e:
-            logging.info("[boot] warmup skipped due to: %s", e)
-        await asyncio.sleep(1)
-        self._log_memory_snapshot()
-        logging.info("[boot] starting data maintainers...")
-        await self.start_data_maintainers()
+            boot_stage = "boot_stagger"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            boot_stagger = get_optional_live_value(self.config, "boot_stagger_seconds", None)
+            if boot_stagger is None:
+                exchange_lower = (self.exchange or "").lower()
+                boot_stagger = 30.0 if exchange_lower == "hyperliquid" else 0.0
+            try:
+                boot_stagger = float(boot_stagger)
+            except Exception:
+                boot_stagger = 0.0
+            if boot_stagger > 0:
+                delay = random.uniform(0, boot_stagger)
+                logging.info(
+                    "[boot] stagger delay: waiting %.1fs before init (max=%.0fs)...",
+                    delay,
+                    boot_stagger,
+                )
+                await asyncio.sleep(delay)
 
-        logging.info("[boot] starting execution loop...")
-        logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
-        logging.info("[boot] READY - Bot initialization complete, entering main trading loop")
-        logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
-        ready_ts = utc_ms()
-        self._monitor_record_event(
-            "bot.ready",
-            ("bot", "lifecycle", "ready"),
-            {"debug_mode": bool(self.debug_mode)},
-            ts=ready_ts,
-        )
-        await self._monitor_flush_snapshot(force=True, ts=ready_ts)
-        if not self.debug_mode:
-            await self.run_execution_loop()
+            boot_stage = "format_approved_ignored_coins"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            await format_approved_ignored_coins(
+                self.config, self.user_info["exchange"], quote=self.quote
+            )
+            boot_stage = "init_markets"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            await self.init_markets()
+            init_snapshot_ts = utc_ms()
+            await self._monitor_flush_snapshot(force=True, ts=init_snapshot_ts)
+
+            boot_stage = "warmup_candles_staggered"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            try:
+                await self.warmup_candles_staggered()
+            except Exception as e:
+                logging.info("[boot] warmup skipped due to: %s", e)
+
+            boot_stage = "post_init_sleep"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            await asyncio.sleep(1)
+            self._log_memory_snapshot()
+            logging.info("[boot] starting data maintainers...")
+            boot_stage = "start_data_maintainers"
+            self._set_log_silence_watchdog_context(stage=boot_stage)
+            await self.start_data_maintainers()
+
+            logging.info("[boot] starting execution loop...")
+            logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
+            logging.info("[boot] READY - Bot initialization complete, entering main trading loop")
+            logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
+            self._bot_ready = True
+            self._set_log_silence_watchdog_context(phase="runtime", stage="run_execution_loop")
+            ready_ts = utc_ms()
+            self._monitor_record_event(
+                "bot.ready",
+                ("bot", "lifecycle", "ready"),
+                {"debug_mode": bool(self.debug_mode)},
+                ts=ready_ts,
+            )
+            await self._monitor_flush_snapshot(force=True, ts=ready_ts)
+            if not self.debug_mode:
+                boot_stage = "run_execution_loop"
+                await self.run_execution_loop()
+        except Exception as exc:
+            error_ts = utc_ms()
+            self._monitor_record_error(
+                "error.bot",
+                exc,
+                tags=("error", "bot", "startup"),
+                payload={"source": "start_bot", "stage": boot_stage},
+                ts=error_ts,
+            )
+            await self._monitor_flush_snapshot(force=True, ts=error_ts)
+            self._monitor_emit_stop(
+                "startup_error",
+                ts=error_ts,
+                payload={"stage": boot_stage, "error_type": type(exc).__name__},
+            )
+            raise
+        finally:
+            await self._stop_log_silence_watchdog()
 
     async def init_markets(self, verbose=True):
         """Load exchange market metadata and refresh approval lists."""
@@ -4637,13 +4707,7 @@ class Passivbot:
                 {
                     "symbol_idx": int(idx),
                     "order_book": {"bid": mprice, "ask": mprice},
-                    "exchange": {
-                        "qty_step": float(self.qty_steps[symbol]),
-                        "price_step": float(self.price_steps[symbol]),
-                        "min_qty": float(self.min_qtys[symbol]),
-                        "min_cost": float(self.min_costs[symbol]),
-                        "c_mult": float(self.c_mults[symbol]),
-                    },
+                    "exchange": self._orchestrator_exchange_params(symbol),
                     "tradable": bool(active),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
