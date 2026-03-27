@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+### Added
+- **Standalone trailing diagnostics explorer** - Added `src/tools/trailing_diagnostics.py`, a separate interactive tool for tuning trailing behavior from `config + monitor snapshot` or from a manual wizard. The monitor snapshot now also exposes `market.c_mult` and `market.entry_volatility_logrange_ema` so exact trailing diagnostics can be recomputed outside the live bot.
+- **Trailing diagnostics wizard cleanup** - The standalone trailing explorer now asks for the core trailing inputs first instead of dumping every knob up front, no longer repeats shared fields like `wallet_exposure_limit`, and accepts both `set <key> <value>` and `edit <key> <value>` for one-off parameter tuning.
+
 ### Changed
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.
 - **ADG terminal smoothing simplified** - Backtest `gain`/`adg` now smooth the terminal value by taking the mean of the last up to 3 daily equity samples instead of running an EMA over the full daily-equity series. This preserves end-of-run drawdown smoothing while reducing computation.
