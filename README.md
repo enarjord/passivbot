@@ -182,6 +182,9 @@ See also https://pbconfigdb.scud.dedyn.io/
 
 For more detailed information about Passivbot, see documentation files here: [docs/](docs/)
 
+- Installation details: [docs/installation.md](docs/installation.md)
+- Common setup and CLI issues: [docs/troubleshooting.md](docs/troubleshooting.md)
+
 ## Support
 
 [![Discord](https://img.shields.io/badge/Discord-7289DA?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/QAF2H2UmzZ)

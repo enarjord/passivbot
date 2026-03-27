@@ -35,7 +35,13 @@ import json
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
-from cli_utils import get_cli_prog
+from cli_utils import (
+    add_help_all_argument,
+    build_command_parser,
+    expand_help_all_argv,
+    get_cli_prog,
+    help_all_requested,
+)
 from config_utils import (
     load_config,
     dump_config,
@@ -1312,49 +1318,42 @@ def post_process(
 
 
 async def main():
-    parser = argparse.ArgumentParser(
-        prog=get_cli_prog("backtest"), description="run forager backtest"
+    raw_argv = sys.argv[1:]
+    help_all = help_all_requested(raw_argv)
+    parser = build_command_parser(
+        prog=get_cli_prog("backtest"),
+        description="run backtest",
+        usage="%(prog)s [config_path] [options]",
+        epilog=(
+            "Examples:\n"
+            "  passivbot backtest configs/template.json -s XMR -sd 2025 --suite n\n"
+            "  passivbot backtest -e bybit -s BTC,ETH -sd 2024-01 -ed 2024-06\n"
+            "\n"
+            "Use --help-all to show every config override flag."
+        ),
     )
     parser.add_argument(
-        "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
+        "config_path",
+        type=str,
+        default=None,
+        nargs="?",
+        help="path to json/hjson passivbot config (defaults to configs/template.json if omitted)",
     )
-    parser.add_argument(
-        "--disable_plotting",
-        "-dp",
-        dest="disable_plotting",
-        action="store_true",
-        help="disable plotting",
+    add_help_all_argument(
+        parser,
+        help_all=help_all,
+        help_text="Show all backtest override flags, including advanced config overrides.",
     )
-    parser.add_argument(
+
+    logging_group = parser.add_argument_group("Logging")
+    logging_group.add_argument(
         "--log-level",
         dest="log_level",
         default=None,
         help="Logging verbosity (warning, info, debug, trace or 0-3).",
     )
-    parser.add_argument(
-        "--cm-debug",
-        nargs="?",
-        const=1,
-        type=int,
-        default=None,
-        help="CandlestickManager debug level (0=off, 1=network only, 2=all). "
-        "If passed without value, defaults to 1. Overrides config backtest.cm_debug_level.",
-    )
-    parser.add_argument(
-        "--cm-progress",
-        nargs="?",
-        const=30.0,
-        type=float,
-        default=None,
-        help="CandlestickManager INFO progress log interval in seconds (0 disables). "
-        "If passed without value, defaults to 30. Overrides config backtest.cm_progress_log_interval_seconds.",
-    )
-    parser.add_argument(
-        "--cm-remote",
-        action="store_true",
-        help="Show a per-exchange per-coin remote request progress bar (updates on every CCXT/archive request).",
-    )
-    parser.add_argument(
+    suite_group = parser.add_argument_group("Suite")
+    suite_group.add_argument(
         "--suite",
         nargs="?",
         const="true",
@@ -1363,7 +1362,7 @@ async def main():
         metavar="y/n",
         help="Enable or disable suite mode (omit to use config's suite_enabled setting).",
     )
-    parser.add_argument(
+    suite_group.add_argument(
         "--scenarios",
         "-sc",
         type=str,
@@ -1372,18 +1371,80 @@ async def main():
         help="Comma-separated list of scenario labels to run (implies --suite y). "
         "Example: --scenarios base,binance_only",
     )
-    parser.add_argument(
+    suite_group.add_argument(
         "--suite-config",
         type=str,
         default=None,
         help="Optional config file providing backtest.suite overrides.",
     )
-    parser.add_argument(
+
+    runtime_group = parser.add_argument_group("Backtest Runtime")
+    runtime_group.add_argument(
+        "--disable_plotting",
+        "-dp",
+        dest="disable_plotting",
+        action="store_true",
+        help="Disable plotting and save only backtest results.",
+    )
+    runtime_group.add_argument(
+        "--cm-debug",
+        nargs="?",
+        const=1,
+        type=int,
+        default=None,
+        help=(
+            "CandlestickManager debug level (0=off, 1=network only, 2=all). "
+            "If passed without value, defaults to 1. Overrides config "
+            "backtest.cm_debug_level."
+            if help_all
+            else argparse.SUPPRESS
+        ),
+    )
+    runtime_group.add_argument(
+        "--cm-progress",
+        nargs="?",
+        const=30.0,
+        type=float,
+        default=None,
+        help=(
+            "CandlestickManager INFO progress log interval in seconds (0 disables). "
+            "If passed without value, defaults to 30. Overrides config "
+            "backtest.cm_progress_log_interval_seconds."
+            if help_all
+            else argparse.SUPPRESS
+        ),
+    )
+    runtime_group.add_argument(
+        "--cm-remote",
+        action="store_true",
+        help=(
+            "Show a per-exchange per-coin remote request progress bar "
+            "(updates on every CCXT/archive request)."
+            if help_all
+            else argparse.SUPPRESS
+        ),
+    )
+    runtime_group.add_argument(
         "--force-refetch-gaps",
         action="store_true",
-        help="Force refetch all known gaps (clears gap cache before downloading). "
-        "Useful when you suspect gaps may have been incorrectly marked as persistent.",
+        help=(
+            "Force refetch all known gaps (clears gap cache before downloading). "
+            "Useful when you suspect gaps may have been incorrectly marked as persistent."
+            if help_all
+            else argparse.SUPPRESS
+        ),
     )
+
+    group_map = {
+        "Coin Selection": parser.add_argument_group("Coin Selection"),
+        "Date Range": parser.add_argument_group("Date Range"),
+        "Backtest Runtime": runtime_group,
+        "Suite": suite_group,
+        "Output / Analysis": parser.add_argument_group("Output / Analysis"),
+        "Logging": logging_group,
+        "Advanced Overrides": parser.add_argument_group("Advanced Overrides"),
+    }
+
     template_config = get_template_config()
     del template_config["optimize"]
     keep_live_keys = {
@@ -1398,8 +1459,14 @@ async def main():
             del template_config["live"][key]
     if "logging" in template_config and isinstance(template_config["logging"], dict):
         template_config["logging"].pop("level", None)
-    add_config_arguments(parser, template_config)
-    raw_args = _normalize_optional_bool_flag(sys.argv[1:], "--suite")
+    add_config_arguments(
+        parser,
+        template_config,
+        command="backtest",
+        help_all=help_all,
+        group_map=group_map,
+    )
+    raw_args = _normalize_optional_bool_flag(expand_help_all_argv(raw_argv), "--suite")
     args = parser.parse_args(raw_args)
     cli_log_level = args.log_level
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)

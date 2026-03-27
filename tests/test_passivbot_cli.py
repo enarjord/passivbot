@@ -1,9 +1,11 @@
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
 from passivbot_cli import main as cli_main
+from cli_utils import expand_help_all_argv
 
 
 def test_root_help_lists_primary_commands(capsys):
@@ -130,3 +132,88 @@ def test_requires_full_command_fails_immediately_without_full_install(monkeypatc
     captured = capsys.readouterr()
     assert 'pip install -e ".[full]"' in captured.err
     assert "passivbot backtest requires the full Passivbot install." in captured.err
+
+
+def test_expand_help_all_argv_appends_help_when_needed():
+    assert expand_help_all_argv(["--help-all"]) == ["--help-all", "--help"]
+    assert expand_help_all_argv(["--help-all", "-s", "XMR"]) == ["--help-all", "-s", "XMR", "--help"]
+
+
+def test_expand_help_all_argv_preserves_explicit_help():
+    assert expand_help_all_argv(["--help-all", "-h"]) == ["--help-all", "-h"]
+
+
+def _configure_real_cli_module_test(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SKIP_RUST_COMPILE", "1")
+    monkeypatch.setenv("MPLBACKEND", "Agg")
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_text"),
+    [
+        (
+            [
+                "live",
+                "--live.approved_coins",
+                "BTC,ETH",
+                "--live_ignored_coins",
+                "DOGE",
+                "--live.minimum_coin_age_days",
+                "5",
+                "--live.filter_by_min_effective_cost",
+                "y",
+                "--live.hedge_mode",
+                "n",
+                "--live_leverage",
+                "3",
+                "-h",
+            ],
+            "usage: passivbot live [config_path] [options]",
+        ),
+        (
+            [
+                "backtest",
+                "--backtest.exchanges",
+                "bybit",
+                "--backtest_start_date",
+                "2025",
+                "--backtest.end_date",
+                "now",
+                "--backtest_starting_balance",
+                "1000",
+                "--live.approved_coins",
+                "BTC",
+                "-h",
+            ],
+            "usage: passivbot backtest [config_path] [options]",
+        ),
+        (
+            [
+                "optimize",
+                "--optimize.iters",
+                "10",
+                "--optimize_n_cpus",
+                "2",
+                "--optimize.scoring",
+                "adg_pnl",
+                "--backtest_start_date",
+                "2025",
+                "--optimizer-backend",
+                "deap",
+                "-h",
+            ],
+            "usage: passivbot optimize [config_path] [options]",
+        ),
+    ],
+)
+def test_legacy_aliases_still_work_through_real_command_modules(
+    monkeypatch, tmp_path, capsys, argv, expected_text
+):
+    _configure_real_cli_module_test(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(argv) == 0
+
+    captured = capsys.readouterr()
+    assert expected_text in captured.out
