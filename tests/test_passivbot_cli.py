@@ -4,6 +4,7 @@ import sys
 import pytest
 
 from passivbot_cli import main as cli_main
+from cli_utils import expand_help_all_argv
 
 
 def test_root_help_lists_primary_commands(capsys):
@@ -130,3 +131,12 @@ def test_requires_full_command_fails_immediately_without_full_install(monkeypatc
     captured = capsys.readouterr()
     assert 'pip install -e ".[full]"' in captured.err
     assert "passivbot backtest requires the full Passivbot install." in captured.err
+
+
+def test_expand_help_all_argv_appends_help_when_needed():
+    assert expand_help_all_argv(["--help-all"]) == ["--help-all", "--help"]
+    assert expand_help_all_argv(["--help-all", "-s", "XMR"]) == ["--help-all", "-s", "XMR", "--help"]
+
+
+def test_expand_help_all_argv_preserves_explicit_help():
+    assert expand_help_all_argv(["--help-all", "-h"]) == ["--help-all", "-h"]

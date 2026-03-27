@@ -61,7 +61,13 @@ import multiprocessing
 import signal
 import time
 from collections import defaultdict
-from cli_utils import get_cli_prog
+from cli_utils import (
+    add_help_all_argument,
+    build_command_parser,
+    expand_help_all_argv,
+    get_cli_prog,
+    help_all_requested,
+)
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from config_utils import (
     get_template_config,
@@ -1255,7 +1261,7 @@ class SuiteEvaluator:
                     pass
 
 
-def add_extra_options(parser):
+def add_extra_options(parser, *, help_all: bool):
     parser.add_argument(
         "-t",
         "--start",
@@ -1263,7 +1269,11 @@ def add_extra_options(parser):
         required=False,
         dest="starting_configs",
         default=None,
-        help="Start with given live configs. Single json file or dir with multiple json files",
+        help=(
+            "Start with given live configs. Single json file or dir with multiple json files"
+            if help_all
+            else argparse.SUPPRESS
+        ),
     )
     parser.add_argument(
         "-ft",
@@ -1274,6 +1284,8 @@ def add_extra_options(parser):
         dest="fine_tune_params",
         help=(
             "Comma-separated optimize bounds keys to tune; other parameters are fixed to their current config values"
+            if help_all
+            else argparse.SUPPRESS
         ),
     )
 
@@ -1390,13 +1402,42 @@ def configs_to_individuals(cfgs, bounds, sig_digits=0):
 
 
 async def main():
-    parser = argparse.ArgumentParser(
-        prog=get_cli_prog("optimize"), description="run optimizer"
+    raw_argv = sys.argv[1:]
+    help_all = help_all_requested(raw_argv)
+    parser = build_command_parser(
+        prog=get_cli_prog("optimize"),
+        description="run optimizer",
+        usage="%(prog)s [config_path] [options]",
+        epilog=(
+            "Examples:\n"
+            "  passivbot optimize configs/template.json -s XMR -sd 2025 -c 4 --suite n\n"
+            "  passivbot optimize -e bybit -s BTC,ETH -i 10000 -ps 200\n"
+            "\n"
+            "Use --help-all to show every config override flag, including optimize bounds."
+        ),
     )
     parser.add_argument(
-        "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
+        "config_path",
+        type=str,
+        default=None,
+        nargs="?",
+        help="path to json/hjson passivbot config (defaults to configs/template.json if omitted)",
     )
-    parser.add_argument(
+    add_help_all_argument(
+        parser,
+        help_all=help_all,
+        help_text="Show all optimizer override flags, including advanced bounds and backend options.",
+    )
+
+    logging_group = parser.add_argument_group("Logging")
+    logging_group.add_argument(
+        "--log-level",
+        dest="log_level",
+        default=None,
+        help="Logging verbosity (warning, info, debug, trace or 0-3).",
+    )
+    suite_group = parser.add_argument_group("Suite")
+    suite_group.add_argument(
         "--suite",
         nargs="?",
         const="true",
@@ -1405,7 +1446,7 @@ async def main():
         metavar="y/n",
         help="Enable or disable suite mode for optimizer run (omit to use config's suite_enabled setting).",
     )
-    parser.add_argument(
+    suite_group.add_argument(
         "--scenarios",
         "-sc",
         type=str,
@@ -1414,18 +1455,27 @@ async def main():
         help="Comma-separated list of scenario labels to run (implies --suite y). "
         "Example: --scenarios base,binance_only",
     )
-    parser.add_argument(
+    suite_group.add_argument(
         "--suite-config",
         type=str,
         default=None,
         help="Optional config file providing backtest.scenarios overrides.",
     )
-    parser.add_argument(
-        "--log-level",
-        dest="log_level",
-        default=None,
-        help="Logging verbosity (warning, info, debug, trace or 0-3).",
-    )
+
+    group_map = {
+        "Coin Selection": parser.add_argument_group("Coin Selection"),
+        "Date Range": parser.add_argument_group("Date Range"),
+        "Optimizer": parser.add_argument_group("Optimizer"),
+        "Suite": suite_group,
+        "Logging": logging_group,
+        "Backtest Runtime": parser.add_argument_group("Backtest Runtime"),
+        "Optimize Common": parser.add_argument_group("Optimize Common"),
+        "Optimize Bounds": parser.add_argument_group("Optimize Bounds"),
+        "Optimize DEAP": parser.add_argument_group("Optimize DEAP"),
+        "Optimize Pymoo": parser.add_argument_group("Optimize Pymoo"),
+        "Advanced Overrides": parser.add_argument_group("Advanced Overrides"),
+    }
+
     template_config = get_template_config()
     del template_config["bot"]
     keep_live_keys = {
@@ -1435,9 +1485,15 @@ async def main():
     for key in sorted(template_config["live"]):
         if key not in keep_live_keys:
             del template_config["live"][key]
-    add_config_arguments(parser, template_config)
-    add_extra_options(parser)
-    raw_args = merge_negative_cli_values(sys.argv[1:])
+    add_config_arguments(
+        parser,
+        template_config,
+        command="optimize",
+        help_all=help_all,
+        group_map=group_map,
+    )
+    add_extra_options(group_map["Advanced Overrides"], help_all=help_all)
+    raw_args = merge_negative_cli_values(expand_help_all_argv(raw_argv))
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
     args = parser.parse_args(raw_args)
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)

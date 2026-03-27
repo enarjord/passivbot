@@ -1960,37 +1960,489 @@ def create_acronym(full_name, acronyms=set()):
     return acronym
 
 
-# Hard-coded CLI shortcuts for backwards compatibility
-# Format: config_key -> (acronym, [extra_aliases], type_converter, help_text)
+# Hard-coded CLI shortcuts for backwards compatibility and cleaner default help.
+# Format:
+#   config_key -> {
+#       "visible": ["--preferred-name", "-x"],
+#       "hidden": ["--legacy_name", "--legacy_name_with_dots"],
+#       "commands": {"live", "backtest", "optimize"},
+#       "group": {"live": "Coin Selection", ...},
+#       "type": type_converter,
+#       "metavar": "CSV|INT|...",
+#       "help": "Human-facing help text",
+#   }
 RESERVED_CLI_ARGS = {
-    "live.approved_coins": (
-        "s",
-        ["--symbols"],
-        comma_separated_values,
-        "Override live.approved_coins: comma_separated_values",
-    ),
-    "optimize.iters": (
-        "i",
-        ["--iters"],
-        int,
-        "Override optimize.iters: int",
-    ),
-    "optimize.n_cpus": (
-        "c",
-        ["--cpus"],
-        int,
-        "Override optimize.n_cpus: int",
-    ),
-    "optimize.scoring": (
-        "os",
-        ["--scoring"],
-        comma_separated_values,
-        "Override optimize.scoring: comma_separated_values",
-    ),
+    "live.approved_coins": {
+        "visible": ["--symbols", "-s"],
+        "hidden": ["--live.approved_coins", "--live_approved_coins"],
+        "type": comma_separated_values,
+        "metavar": "CSV_OR_PATH",
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Coin Selection",
+            "backtest": "Coin Selection",
+            "optimize": "Coin Selection",
+        },
+        "help": (
+            "Approved coins. Comma-separated coins like BTC,ETH,XRP, or path to a JSON "
+            "coin list file. Use coin tickers, not exchange symbols."
+        ),
+    },
+    "live.ignored_coins": {
+        "visible": ["--ignored-coins", "-ic"],
+        "hidden": ["--live.ignored_coins", "--live_ignored_coins"],
+        "type": comma_separated_values,
+        "metavar": "CSV_OR_PATH",
+        "commands": {"live", "backtest"},
+        "group": {
+            "live": "Coin Selection",
+            "backtest": "Coin Selection",
+        },
+        "help": "Ignored coins. Comma-separated coins or path to a JSON coin list file.",
+    },
+    "live.minimum_coin_age_days": {
+        "visible": ["--minimum-coin-age-days", "-mcad"],
+        "hidden": ["--live.minimum_coin_age_days", "--live_minimum_coin_age_days"],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Coin Selection"},
+        "help": "Minimum coin age in days required before a coin is eligible to trade.",
+    },
+    "live.filter_by_min_effective_cost": {
+        "visible": ["--filter-by-min-effective-cost", "-fbmec"],
+        "hidden": [
+            "--live.filter_by_min_effective_cost",
+            "--live_filter_by_min_effective_cost",
+        ],
+        "type": str2bool,
+        "metavar": "Y/N",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Filter out coins whose minimum effective cost exceeds the configured size.",
+    },
+    "live.hedge_mode": {
+        "visible": ["--hedge-mode", "-hm"],
+        "hidden": ["--live.hedge_mode", "--live_hedge_mode"],
+        "type": str2bool,
+        "metavar": "Y/N",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": (
+            "Enable or disable hedge mode. If the exchange does not support simultaneous "
+            "long and short on the same coin, the bot will use hedge_mode=false."
+        ),
+    },
+    "live.leverage": {
+        "visible": ["--leverage", "-lev"],
+        "hidden": ["--live.leverage", "--live_leverage"],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Set leverage for this run.",
+    },
+    "live.market_orders_allowed": {
+        "visible": ["--market-orders-allowed", "-moa"],
+        "hidden": ["--live.market_orders_allowed", "--live_market_orders_allowed"],
+        "type": str2bool,
+        "metavar": "Y/N",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Allow or disallow market orders.",
+    },
+    "live.max_realized_loss_pct": {
+        "visible": ["--max-realized-loss-pct", "-mrlp"],
+        "hidden": ["--live.max_realized_loss_pct", "--live_max_realized_loss_pct"],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Maximum realized loss percentage allowed before trading is halted.",
+    },
+    "live.price_distance_threshold": {
+        "visible": ["--price-distance-threshold", "-pdt"],
+        "hidden": ["--live.price_distance_threshold", "--live_price_distance_threshold"],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Reject orders whose price is too far from the market.",
+    },
+    "live.time_in_force": {
+        "visible": ["--time-in-force", "-tif"],
+        "hidden": ["--live.time_in_force", "--live_time_in_force"],
+        "type": str,
+        "metavar": "VALUE",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Time-in-force policy for live orders.",
+    },
+    "backtest.exchanges": {
+        "visible": ["--exchanges", "-e"],
+        "hidden": ["--backtest.exchanges", "--backtest_exchanges"],
+        "type": comma_separated_values,
+        "metavar": "CSV",
+        "commands": {"backtest", "optimize"},
+        "group": {
+            "backtest": "Coin Selection",
+            "optimize": "Coin Selection",
+        },
+        "help": "Backtest exchanges to use, for example bybit or binance,bybit.",
+    },
+    "backtest.start_date": {
+        "visible": ["--start-date", "-sd"],
+        "hidden": ["--backtest.start_date", "--backtest_start_date"],
+        "type": str,
+        "metavar": "DATE",
+        "commands": {"backtest", "optimize"},
+        "group": {
+            "backtest": "Date Range",
+            "optimize": "Date Range",
+        },
+        "help": "Backtest start date. Examples: 2025, 2025-01, 2025-01-15.",
+    },
+    "backtest.end_date": {
+        "visible": ["--end-date", "-ed"],
+        "hidden": ["--backtest.end_date", "--backtest_end_date"],
+        "type": str,
+        "metavar": "DATE",
+        "commands": {"backtest", "optimize"},
+        "group": {
+            "backtest": "Date Range",
+            "optimize": "Date Range",
+        },
+        "help": 'Backtest end date. Use "-ed now" for the latest available candles.',
+    },
+    "backtest.candle_interval_minutes": {
+        "visible": ["--candle-interval-minutes", "-cim"],
+        "hidden": [
+            "--backtest.candle_interval_minutes",
+            "--backtest_candle_interval_minutes",
+        ],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"backtest", "optimize"},
+        "group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Date Range",
+        },
+        "help": "Backtest candle interval in minutes.",
+    },
+    "backtest.starting_balance": {
+        "visible": ["--starting-balance", "-sb"],
+        "hidden": ["--backtest.starting_balance", "--backtest_starting_balance"],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"backtest"},
+        "group": {"backtest": "Backtest Runtime"},
+        "help": "Starting balance for the backtest.",
+    },
+    "backtest.aggregate.default": {
+        "visible": ["--aggregate-default"],
+        "hidden": ["--backtest.aggregate.default", "--backtest_aggregate_default"],
+        "type": str,
+        "metavar": "VALUE",
+        "commands": {"backtest"},
+        "group": {"backtest": "Suite"},
+        "help": "Suite-only: default aggregation to use for scenario metrics.",
+    },
+    "optimize.iters": {
+        "visible": ["--iters", "-i"],
+        "hidden": ["--optimize.iters", "--optimize_iters"],
+        "type": int,
+        "metavar": "INT",
+        "commands": {"optimize"},
+        "group": {"optimize": "Optimizer"},
+        "help": "Optimizer iteration budget.",
+    },
+    "optimize.n_cpus": {
+        "visible": ["--cpus", "-c"],
+        "hidden": ["--optimize.n_cpus", "--optimize_n_cpus"],
+        "type": int,
+        "metavar": "INT",
+        "commands": {"optimize"},
+        "group": {"optimize": "Optimizer"},
+        "help": "Optimizer worker count.",
+    },
+    "optimize.scoring": {
+        "visible": ["--scoring", "-os"],
+        "hidden": ["--optimize.scoring", "--optimize_scoring"],
+        "type": comma_separated_values,
+        "metavar": "CSV",
+        "commands": {"optimize"},
+        "group": {"optimize": "Optimizer"},
+        "help": "Optimizer scoring metrics, for example adg_pnl,loss_profit_ratio.",
+    },
+    "optimize.population_size": {
+        "visible": ["--population-size", "-ps"],
+        "hidden": ["--optimize.population_size", "--optimize_population_size"],
+        "type": int,
+        "metavar": "INT",
+        "commands": {"optimize"},
+        "group": {"optimize": "Optimizer"},
+        "help": "Optimizer population size.",
+    },
+    "optimize.pareto_max_size": {
+        "visible": ["--pareto-max-size", "-pms"],
+        "hidden": ["--optimize.pareto_max_size", "--optimize_pareto_max_size"],
+        "type": int,
+        "metavar": "INT",
+        "commands": {"optimize"},
+        "group": {"optimize": "Optimizer"},
+        "help": "Maximum persisted Pareto set size.",
+    },
+    "optimize.backend": {
+        "visible": ["--backend", "-ob"],
+        "hidden": ["--optimize.backend", "--optimize_backend", "--optimizer-backend"],
+        "type": str,
+        "metavar": "BACKEND",
+        "commands": {"optimize"},
+        "group": {"optimize": "Optimizer"},
+        "help": "Optimizer backend to use. Current option: deap. More coming soon.",
+    },
+}
+
+CLI_HELP_GROUPS = {
+    "live": [
+        "Coin Selection",
+        "Behavior",
+        "Runtime",
+        "Logging",
+        "Advanced Overrides",
+    ],
+    "backtest": [
+        "Coin Selection",
+        "Date Range",
+        "Backtest Runtime",
+        "Suite",
+        "Output / Analysis",
+        "Logging",
+        "Advanced Overrides",
+    ],
+    "optimize": [
+        "Coin Selection",
+        "Date Range",
+        "Optimizer",
+        "Suite",
+        "Logging",
+        "Backtest Runtime",
+        "Optimize Common",
+        "Optimize Bounds",
+        "Optimize DEAP",
+        "Optimize Pymoo",
+        "Advanced Overrides",
+    ],
 }
 
 
-def add_reserved_arguments(parser) -> Tuple[set, set]:
+def _register_argument(container, visible_names, hidden_names, **kwargs):
+    container.add_argument(*visible_names, **kwargs)
+    hidden_kwargs = dict(kwargs)
+    hidden_kwargs["help"] = argparse.SUPPRESS
+    for alias in hidden_names:
+        container.add_argument(alias, **hidden_kwargs)
+
+
+def _argument_metavar(type_, full_name: str, value):
+    if type_ is comma_separated_values:
+        return "CSV"
+    if type_ is comma_separated_values_float:
+        return "MIN,MAX[,STEP]"
+    if type_ is str2bool:
+        return "Y/N"
+    if type_ is optional_float:
+        return "FLOAT"
+    if type_ is int:
+        return "INT"
+    if type_ is float:
+        return "FLOAT"
+    if type_ is str and full_name.endswith("_date"):
+        return "DATE"
+    if type_ is str and full_name.endswith("_dir"):
+        return "PATH"
+    if type_ is str and value is None:
+        return "VALUE"
+    return "VALUE"
+
+
+def _argument_help_text(full_name: str, appendix: str) -> str:
+    base = f"Override {full_name}."
+    if appendix:
+        return f"{base} {appendix}".strip()
+    return base
+
+
+def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
+    coin_selection = {
+        "live.approved_coins",
+        "live.ignored_coins",
+        "live.minimum_coin_age_days",
+    }
+    behavior = {
+        "live.filter_by_min_effective_cost",
+        "live.forced_mode_long",
+        "live.forced_mode_short",
+        "live.hedge_mode",
+        "live.leverage",
+        "live.market_orders_allowed",
+        "live.max_realized_loss_pct",
+        "live.order_match_tolerance_pct",
+        "live.price_distance_threshold",
+    }
+    runtime = {
+        "live.execution_delay_seconds",
+        "live.max_concurrent_api_requests",
+        "live.max_n_restarts_per_day",
+        "live.max_ohlcv_fetches_per_minute",
+        "live.recv_window_ms",
+        "live.time_in_force",
+        "live.user",
+    }
+    if full_name in coin_selection:
+        return "Coin Selection"
+    if full_name in behavior:
+        return "Behavior"
+    if full_name in runtime:
+        return "Runtime"
+    return "Advanced Overrides" if help_all else None
+
+
+def _classify_backtest_argument(full_name: str, help_all: bool) -> Optional[str]:
+    coin_selection = {
+        "backtest.exchanges",
+        "live.approved_coins",
+        "live.ignored_coins",
+        "live.minimum_coin_age_days",
+    }
+    date_range = {
+        "backtest.end_date",
+        "backtest.max_warmup_minutes",
+        "backtest.start_date",
+    }
+    runtime = {
+        "backtest.aggregate.default",
+        "backtest.balance_sample_divider",
+        "backtest.btc_collateral_cap",
+        "backtest.btc_collateral_ltv_cap",
+        "backtest.candle_interval_minutes",
+        "backtest.compress_cache",
+        "backtest.dynamic_wel_by_tradability",
+        "backtest.filter_by_min_effective_cost",
+        "backtest.gap_tolerance_ohlcvs_minutes",
+        "backtest.maker_fee_override",
+        "backtest.ohlcv_source_dir",
+        "backtest.starting_balance",
+    }
+    output = {
+        "backtest.base_dir",
+        "backtest.volume_normalization",
+    }
+    if full_name in coin_selection:
+        return "Coin Selection"
+    if full_name in date_range:
+        return "Date Range"
+    if full_name in runtime:
+        return "Backtest Runtime"
+    if full_name in output:
+        return "Output / Analysis"
+    if full_name.startswith("backtest.scenarios"):
+        return "Suite"
+    return "Advanced Overrides" if help_all else None
+
+
+def _classify_optimize_argument(full_name: str, help_all: bool) -> Optional[str]:
+    coin_selection = {
+        "backtest.exchanges",
+        "live.approved_coins",
+    }
+    date_range = {
+        "backtest.end_date",
+        "backtest.start_date",
+        "backtest.candle_interval_minutes",
+    }
+    optimizer = {
+        "optimize.iters",
+        "optimize.backend",
+        "optimize.n_cpus",
+        "optimize.pareto_max_size",
+        "optimize.population_size",
+        "optimize.scoring",
+    }
+    backtest_runtime = {
+        "backtest.aggregate.default",
+        "backtest.balance_sample_divider",
+        "backtest.btc_collateral_cap",
+        "backtest.btc_collateral_ltv_cap",
+        "backtest.compress_cache",
+        "backtest.dynamic_wel_by_tradability",
+        "backtest.filter_by_min_effective_cost",
+        "backtest.gap_tolerance_ohlcvs_minutes",
+        "backtest.maker_fee_override",
+        "backtest.max_warmup_minutes",
+        "backtest.ohlcv_source_dir",
+        "backtest.starting_balance",
+        "backtest.volume_normalization",
+    }
+    optimize_common = {
+        "optimize.compress_results_file",
+        "optimize.enable_overrides",
+        "optimize.fixed_params",
+        "optimize.fixed_runtime_overrides",
+        "optimize.limits",
+        "optimize.max_pending_starting_evals_per_cpu",
+        "optimize.round_to_n_significant_digits",
+        "optimize.starting_config_twe_multiplier",
+        "optimize.write_all_results",
+    }
+    optimize_deap = {
+        "optimize.crossover_eta",
+        "optimize.crossover_probability",
+        "optimize.mutation_eta",
+        "optimize.mutation_indpb",
+        "optimize.mutation_probability",
+        "optimize.offspring_multiplier",
+    }
+    if full_name in coin_selection:
+        return "Coin Selection"
+    if full_name in date_range:
+        return "Date Range"
+    if full_name in optimizer:
+        return "Optimizer"
+    if full_name in backtest_runtime:
+        return "Backtest Runtime"
+    if full_name.startswith("backtest.scenarios"):
+        return "Suite"
+    if full_name.startswith("optimize.bounds."):
+        return "Optimize Bounds" if help_all else None
+    if full_name in optimize_deap or full_name.startswith("optimize.deap.shared."):
+        return "Optimize DEAP" if help_all else None
+    if full_name.startswith("optimize.pymoo."):
+        return "Optimize Pymoo" if help_all else None
+    if full_name in optimize_common:
+        return "Optimize Common" if help_all else None
+    return "Advanced Overrides" if help_all else None
+
+
+def classify_config_argument(
+    full_name: str, command: Optional[str], help_all: bool
+) -> Optional[str]:
+    if command == "live":
+        return _classify_live_argument(full_name, help_all)
+    if command == "backtest":
+        return _classify_backtest_argument(full_name, help_all)
+    if command == "optimize":
+        return _classify_optimize_argument(full_name, help_all)
+    return None
+
+
+def add_reserved_arguments(
+    parser,
+    *,
+    command: Optional[str] = None,
+    help_all: bool = False,
+    group_map=None,
+) -> Tuple[set, set]:
     """Add hard-coded CLI arguments for backwards compatibility.
 
     Returns the set of reserved acronyms and config keys that should be
@@ -1999,29 +2451,43 @@ def add_reserved_arguments(parser) -> Tuple[set, set]:
     reserved_acronyms = set()
     reserved_keys = set()
 
-    for config_key, (acronym, aliases, type_conv, help_text) in RESERVED_CLI_ARGS.items():
-        arg_names = [
-            f"--{config_key}",
-            f"--{config_key.replace('.', '_')}",
-            f"-{acronym}",
-        ] + aliases
+    for config_key, spec in RESERVED_CLI_ARGS.items():
+        commands = spec.get("commands")
+        if command is not None and commands is not None and command not in commands:
+            continue
+        visible_group = (
+            spec.get("group", {}).get(command)
+            if command is not None
+            else None
+        )
+        container = group_map.get(visible_group, parser) if group_map and visible_group else parser
 
-        parser.add_argument(
-            *arg_names,
-            type=type_conv,
+        register_kwargs = dict(
+            type=spec["type"],
             dest=config_key,
             required=False,
             default=None,
-            metavar="",
-            help=help_text,
+            metavar=spec["metavar"],
+            help=spec["help"] if visible_group is not None or command is None else argparse.SUPPRESS,
         )
-        reserved_acronyms.add(acronym)
+        if "choices" in spec:
+            register_kwargs["choices"] = spec["choices"]
+
+        _register_argument(
+            container,
+            spec["visible"],
+            spec["hidden"],
+            **register_kwargs,
+        )
+        visible_shorts = [name[1:] for name in spec["visible"] if name.startswith("-") and not name.startswith("--")]
+        for short_name in visible_shorts:
+            reserved_acronyms.add(short_name)
         reserved_keys.add(config_key)
 
     return reserved_acronyms, reserved_keys
 
 
-def add_config_arguments(parser, config):
+def add_config_arguments(parser, config, *, command: Optional[str] = None, help_all: bool = False, group_map=None):
     """Add all CLI arguments for config parameters.
 
     This is the main entry point for adding config-based arguments.
@@ -2032,11 +2498,31 @@ def add_config_arguments(parser, config):
         parser: argparse.ArgumentParser
         config: Config dict (typically from get_template_config())
     """
-    reserved_acronyms, reserved_keys = add_reserved_arguments(parser)
-    add_arguments_recursively(parser, config, acronyms=reserved_acronyms, skip_keys=reserved_keys)
+    reserved_acronyms, reserved_keys = add_reserved_arguments(
+        parser, command=command, help_all=help_all, group_map=group_map
+    )
+    add_arguments_recursively(
+        parser,
+        config,
+        prefix="",
+        acronyms=reserved_acronyms,
+        skip_keys=reserved_keys,
+        command=command,
+        help_all=help_all,
+        group_map=group_map,
+    )
 
 
-def add_arguments_recursively(parser, config, prefix="", acronyms=None, skip_keys=None):
+def add_arguments_recursively(
+    parser,
+    config,
+    prefix="",
+    acronyms=None,
+    skip_keys=None,
+    command: Optional[str] = None,
+    help_all: bool = False,
+    group_map=None,
+):
     """Recursively add CLI arguments for config parameters.
 
     Args:
@@ -2051,7 +2537,8 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=None, skip_key
     if skip_keys is None:
         skip_keys = set()
 
-    for key, value in config.items():
+    for key in sorted(config):
+        value = config[key]
         full_name = f"{prefix}{key}"
 
         # Skip if this key was already added as a reserved argument
@@ -2062,21 +2549,37 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=None, skip_key
             if any(full_name.endswith(x) for x in ["approved_coins", "ignored_coins"]):
                 # Handle coin dict configs as comma-separated values
                 acronym = create_acronym(full_name, acronyms)
-                parser.add_argument(
-                    f"--{full_name}",
-                    f"--{full_name.replace('.', '_')}",
-                    f"-{acronym}",
+                visible_group = classify_config_argument(full_name, command, help_all)
+                container = (
+                    group_map.get(visible_group, parser) if group_map and visible_group else parser
+                )
+                _register_argument(
+                    container,
+                    [f"--{full_name}"],
+                    [f"--{full_name.replace('.', '_')}", f"-{acronym}"],
                     type=comma_separated_values,
                     dest=full_name,
                     required=False,
                     default=None,
-                    metavar="",
-                    help=f"Override {full_name}: comma_separated_values",
+                    metavar="CSV",
+                    help=(
+                        "Override "
+                        f"{full_name}."
+                        if help_all or command is None
+                        else argparse.SUPPRESS
+                    ),
                 )
                 acronyms.add(acronym)
                 continue
             add_arguments_recursively(
-                parser, value, f"{full_name}.", acronyms=acronyms, skip_keys=skip_keys
+                parser,
+                value,
+                f"{full_name}.",
+                acronyms=acronyms,
+                skip_keys=skip_keys,
+                command=command,
+                help_all=help_all,
+                group_map=group_map,
             )
             continue
         else:
@@ -2101,7 +2604,6 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=None, skip_key
                     type_ = str
             elif type_ == bool:
                 type_ = str2bool
-                appendix = "[y/n]"
             elif isinstance(value, (int, float)) and not isinstance(value, bool):
                 type_ = float
             if "combine_ohlcvs" in full_name:
@@ -2109,16 +2611,22 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=None, skip_key
                     "If true, combine ohlcvs data from all exchanges into single numpy array, otherwise backtest each exchange separately. "
                     + appendix
                 )
-            parser.add_argument(
-                f"--{full_name}",
-                f"--{full_name.replace('.', '_')}",
-                f"-{acronym}",
+            visible_group = classify_config_argument(full_name, command, help_all)
+            container = group_map.get(visible_group, parser) if group_map and visible_group else parser
+            _register_argument(
+                container,
+                [f"--{full_name}"],
+                [f"--{full_name.replace('.', '_')}", f"-{acronym}"],
                 type=type_,
                 dest=full_name,
                 required=False,
                 default=None,
-                metavar="",
-                help=f"Override {full_name}: {str(type_.__name__)} " + appendix,
+                metavar=_argument_metavar(type_, full_name, value),
+                help=(
+                    _argument_help_text(full_name, appendix)
+                    if help_all or command is None
+                    else argparse.SUPPRESS
+                ),
             )
             acronyms.add(acronym)
 

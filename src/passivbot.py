@@ -24,7 +24,13 @@ import passivbot_rust as pbr
 import logging
 import math
 from pathlib import Path
-from cli_utils import get_cli_prog
+from cli_utils import (
+    add_help_all_argument,
+    build_command_parser,
+    expand_help_all_argv,
+    get_cli_prog,
+    help_all_requested,
+)
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
 from fill_events_manager import (
     FillEventsManager,
@@ -6555,17 +6561,50 @@ async def shutdown_bot(bot):
 
 async def main():
     """Entry point: parse CLI args, load config, and launch the bot lifecycle."""
-    parser = argparse.ArgumentParser(
-        prog=get_cli_prog("passivbot"), description="run passivbot"
+    raw_argv = sys.argv[1:]
+    help_all = help_all_requested(raw_argv)
+    parser = build_command_parser(
+        prog=get_cli_prog("passivbot"),
+        description="run passivbot",
+        usage="%(prog)s [config_path] [options]",
+        epilog=(
+            "Examples:\n"
+            "  passivbot live configs/live/my_account.json\n"
+            "  passivbot live configs/live/my_account.json -s BTC,ETH --log-level info\n"
+            "\n"
+            "Use --help-all to show every config override flag."
+        ),
     )
     parser.add_argument(
         "config_path",
         type=str,
         nargs="?",
         default="configs/template.json",
-        help="path to hjson passivbot config",
+        help="path to json/hjson passivbot config (defaults to configs/template.json if omitted)",
     )
-    parser.add_argument(
+    add_help_all_argument(
+        parser,
+        help_all=help_all,
+        help_text="Show all live-trading override flags, including advanced config overrides.",
+    )
+
+    logging_group = parser.add_argument_group("Logging")
+    logging_group.add_argument(
+        "--log-level",
+        dest="log_level",
+        default=None,
+        help="Logging verbosity (warning, info, debug, trace or 0-3).",
+    )
+    logging_group.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Enable verbose (debug) logging. Equivalent to --log-level debug.",
+    )
+
+    runtime_group = parser.add_argument_group("Runtime")
+    runtime_group.add_argument(
         "--custom-endpoints",
         dest="custom_endpoints",
         default=None,
@@ -6574,26 +6613,28 @@ async def main():
             "Use 'none' to disable overrides even if a default file exists."
         ),
     )
-    parser.add_argument(
-        "--log-level",
-        dest="log_level",
-        default=None,
-        help="Logging verbosity (warning, info, debug, trace or 0-3).",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        default=False,
-        help="Enable verbose (debug) logging. Equivalent to --log-level debug.",
-    )
+
+    group_map = {
+        "Coin Selection": parser.add_argument_group("Coin Selection"),
+        "Behavior": parser.add_argument_group("Behavior"),
+        "Runtime": runtime_group,
+        "Logging": logging_group,
+        "Advanced Overrides": parser.add_argument_group("Advanced Overrides"),
+    }
+
     template_config = get_template_config()
     del template_config["optimize"]
     del template_config["backtest"]
     if "logging" in template_config and isinstance(template_config["logging"], dict):
         template_config["logging"].pop("level", None)
-    add_config_arguments(parser, template_config)
-    raw_args = merge_negative_cli_values(sys.argv[1:])
+    add_config_arguments(
+        parser,
+        template_config,
+        command="live",
+        help_all=help_all,
+        group_map=group_map,
+    )
+    raw_args = merge_negative_cli_values(expand_help_all_argv(raw_argv))
     args = parser.parse_args(raw_args)
     # --verbose flag overrides --log-level to debug (level 2)
     cli_log_level = "debug" if args.verbose else args.log_level

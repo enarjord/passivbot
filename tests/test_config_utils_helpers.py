@@ -1,3 +1,4 @@
+import argparse
 from copy import deepcopy
 from types import SimpleNamespace
 import json
@@ -15,6 +16,8 @@ from config_utils import (
     _normalize_position_counts,
     _rename_config_keys,
     _sync_with_template,
+    CLI_HELP_GROUPS,
+    add_config_arguments,
     get_template_config,
     load_config,
     update_config_with_args,
@@ -407,3 +410,72 @@ def test_backtest_filter_min_cost_inherits_from_live():
     formatted = format_config(cfg, verbose=False)
 
     assert formatted["backtest"]["filter_by_min_effective_cost"] is True
+
+
+def _format_parser_help_with_config(command: str, config: dict, help_all: bool) -> str:
+    parser = argparse.ArgumentParser(prog=command)
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get(command, [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command=command,
+        help_all=help_all,
+        group_map=group_map,
+    )
+    return parser.format_help()
+
+
+def test_optimize_default_help_groups_common_flags_and_hides_bounds():
+    config = get_template_config()
+    help_text = _format_parser_help_with_config("optimize", config, help_all=False)
+
+    assert "Coin Selection:" in help_text
+    assert "Date Range:" in help_text
+    assert "Optimizer:" in help_text
+    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
+    assert "--population-size INT, -ps INT" in help_text
+    assert "--backend BACKEND, -ob BACKEND" in help_text
+    assert "--optimize_population_size" not in help_text
+    assert "--optimize.bounds.long_close_grid_markup_end" not in help_text
+    assert "Optimize DEAP:" not in help_text
+    assert "Optimize Pymoo:" not in help_text
+
+
+def test_optimize_help_all_shows_hidden_bounds_flags():
+    config = get_template_config()
+    help_text = _format_parser_help_with_config("optimize", config, help_all=True)
+
+    assert "Optimize Bounds:" in help_text
+    assert "--optimize.bounds.long_close_grid_markup_end MIN,MAX[,STEP]" in help_text
+
+
+def test_live_default_help_shows_curated_groups():
+    config = get_template_config()
+    del config["optimize"]
+    del config["backtest"]
+    help_text = _format_parser_help_with_config("live", config, help_all=False)
+
+    assert "Coin Selection:" in help_text
+    assert "Behavior:" in help_text
+    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
+    assert "--ignored-coins CSV_OR_PATH" in help_text
+    assert "--minimum-coin-age-days FLOAT" in help_text
+    assert "--hedge-mode Y/N" in help_text
+    assert "--live.auto_gs" not in help_text
+    assert "--optimize.iters" not in help_text
+
+
+def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
+    config = get_template_config()
+    help_text = _format_parser_help_with_config("backtest", config, help_all=False)
+
+    assert "Coin Selection:" in help_text
+    assert "Date Range:" in help_text
+    assert "Backtest Runtime:" in help_text
+    assert "Suite:" in help_text
+    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
+    assert "--ignored-coins CSV_OR_PATH" in help_text
+    assert "--aggregate-default VALUE" in help_text
+    assert "--iters INT, -i INT" not in help_text
