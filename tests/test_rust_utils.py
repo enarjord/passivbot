@@ -142,9 +142,6 @@ def test_extension_needs_rebuild_when_source_stamp_missing_or_mismatched(tmp_pat
     write_source_stamp(compiled, "abc123")
     assert extension_needs_rebuild(compiled, source_mtime, "abc123") is False
     assert source_stamp_path(compiled).exists()
-
-
-def test_source_fingerprint_changes_when_tracked_source_changes(tmp_path: Path):
 def test_installed_extension_candidates_find_root_level_maturin_module(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
