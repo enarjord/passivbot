@@ -17,7 +17,7 @@ use crate::trailing::{
 use crate::types::OrderType;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, ExchangeParams, HlcvsBundle,
-    HlcvsMeta, OrderBook, Position, StateParams, TrailingPriceBundle,
+    HlcvsMeta, OrderBook, Position, StateParams, StrategyKind, TrailingPriceBundle,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -789,6 +789,15 @@ fn struct_to_py_dict<T: Serialize + ?Sized>(py: Python<'_>, obj: &T) -> PyResult
 }
 
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
+    let strategy_kind = match dict.get_item("strategy_kind")? {
+        Some(item) => {
+            let raw = item.extract::<String>()?;
+            StrategyKind::from_str(&raw).map_err(|_| {
+                PyValueError::new_err(format!("invalid strategy_kind '{}'", raw))
+            })?
+        }
+        None => StrategyKind::AdaptiveGrid,
+    };
     Ok(BacktestParams {
         starting_balance: extract_value(dict, "starting_balance").unwrap_or_default(),
         maker_fee: extract_value(dict, "maker_fee").unwrap_or_default(),
@@ -843,6 +852,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(true),
+        strategy_kind,
         max_realized_loss_pct: dict
             .get_item("max_realized_loss_pct")?
             .map(|item| item.extract::<f64>())

@@ -1,0 +1,39 @@
+{
+    "backtest": {
+        "base_dir": "backtests/simple_ema_mm",
+        "candle_interval_minutes": 2,
+        "start_date": "2025-01-01",
+        "end_date": "2026-03-01",
+        "exchanges": ["bybit"],
+        "starting_balance": 100000,
+        "suite_enabled": true,
+        "scenarios": [
+            {
+                "label": "base",
+                "coins": ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA"]
+            }
+        ]
+    },
+    "bot": {
+        "long": {
+            "ema_span_0": 200.0,
+            "ema_span_1": 800.0,
+            "entry_initial_ema_dist": 0.002,
+            "entry_initial_qty_pct": 0.01,
+            "entry_grid_spacing_we_weight": 0.1,
+            "n_positions": 3,
+            "total_wallet_exposure_limit": 1.0
+        },
+        "short": {
+            "n_positions": 3,
+            "total_wallet_exposure_limit": 1.0
+        }
+    },
+    "live": {
+        "strategy_kind": "simple_ema_mm",
+        "hedge_mode": false
+    },
+    "optimize": {
+        "iters": 30000
+    }
+}

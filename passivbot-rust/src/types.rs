@@ -172,8 +172,33 @@ pub struct BacktestParams {
     pub filter_by_min_effective_cost: bool,
     pub dynamic_wel_by_tradability: bool,
     pub hedge_mode: bool,
+    pub strategy_kind: StrategyKind,
     pub max_realized_loss_pct: f64,
     pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    EnumString,
+    Display,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum StrategyKind {
+    AdaptiveGrid,
+    SimpleEmaMm,
+}
+
+impl Default for StrategyKind {
+    fn default() -> Self {
+        Self::AdaptiveGrid
+    }
 }
 
 #[derive(Default, Debug, Clone, Copy, Serialize, Deserialize)]

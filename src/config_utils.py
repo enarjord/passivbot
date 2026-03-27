@@ -2370,6 +2370,7 @@ def get_template_config():
             "pnls_max_lookback_days": 30.0,
             "price_distance_threshold": 0.002,
             "recv_window_ms": 5000,
+            "strategy_kind": "adaptive_grid",
             "time_in_force": "good_till_cancelled",
             "user": "bybit_01",
             "warmup_jitter_seconds": 30.0,

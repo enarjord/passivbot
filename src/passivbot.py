@@ -4369,6 +4369,10 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
+        strategy_kind = str(
+            get_optional_live_value(self.config, "strategy_kind", "adaptive_grid")
+            or "adaptive_grid"
+        )
         input_dict = {
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
@@ -4382,6 +4386,7 @@ class Passivbot:
                 "sort_global": True,
                 "global_bot_params": global_bp,
                 "hedge_mode": effective_hedge_mode,
+                "strategy_kind": strategy_kind,
             },
             "symbols": [],
             "peek_hints": None,
@@ -4872,6 +4877,10 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
+        strategy_kind = str(
+            get_optional_live_value(self.config, "strategy_kind", "adaptive_grid")
+            or "adaptive_grid"
+        )
         input_dict = {
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
@@ -4885,6 +4894,7 @@ class Passivbot:
                 "sort_global": True,
                 "global_bot_params": global_bp,
                 "hedge_mode": effective_hedge_mode,
+                "strategy_kind": strategy_kind,
             },
             "symbols": [],
             "peek_hints": None,

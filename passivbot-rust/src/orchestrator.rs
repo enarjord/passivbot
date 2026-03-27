@@ -32,9 +32,10 @@ mod core {
         calc_twel_enforcer_actions, calc_unstucking_action, GateEntriesPosition,
         TwelEnforcerInputPosition, UnstuckPositionInput,
     };
+    use crate::simple_ema_mm::{calc_orders_long as calc_simple_ema_mm_long, calc_orders_short as calc_simple_ema_mm_short};
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
-        StateParams, TrailingPriceBundle,
+        StateParams, StrategyKind, TrailingPriceBundle,
     };
     use crate::utils::{
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
@@ -189,6 +190,8 @@ mod core {
         /// When no position exists on either side, the side closer to its EMA entry band wins.
         #[serde(default = "default_hedge_mode")]
         pub hedge_mode: bool,
+        #[serde(default)]
+        pub strategy_kind: StrategyKind,
     }
 
     fn default_hedge_mode() -> bool {
@@ -377,6 +380,33 @@ mod core {
         }
         let req = balance * effective_limit * bot.entry_initial_qty_pct;
         req >= effective_min_cost
+    }
+
+    fn simple_ema_mm_bot_params(actual_bot: &BotParams, shared_long_bot: &BotParams) -> BotParams {
+        let mut bot = actual_bot.clone();
+        bot.ema_span_0 = shared_long_bot.ema_span_0;
+        bot.ema_span_1 = shared_long_bot.ema_span_1;
+        bot.entry_initial_ema_dist = shared_long_bot.entry_initial_ema_dist;
+        bot.entry_initial_qty_pct = shared_long_bot.entry_initial_qty_pct;
+        bot.entry_grid_spacing_we_weight = shared_long_bot.entry_grid_spacing_we_weight;
+        bot
+    }
+
+    fn strategy_bot_params(
+        strategy_kind: StrategyKind,
+        symbol: &SymbolInput,
+        pside: PositionSide,
+    ) -> BotParams {
+        match (strategy_kind, pside) {
+            (StrategyKind::AdaptiveGrid, PositionSide::Long) => symbol.long.bot_params.clone(),
+            (StrategyKind::AdaptiveGrid, PositionSide::Short) => symbol.short.bot_params.clone(),
+            (StrategyKind::SimpleEmaMm, PositionSide::Long) => {
+                simple_ema_mm_bot_params(&symbol.long.bot_params, &symbol.long.bot_params)
+            }
+            (StrategyKind::SimpleEmaMm, PositionSide::Short) => {
+                simple_ema_mm_bot_params(&symbol.short.bot_params, &symbol.long.bot_params)
+            }
+        }
     }
 
     fn market_price_for_order_side(ob: &OrderBook, qty: f64) -> f64 {
@@ -1294,6 +1324,7 @@ mod core {
         // Compute selection sets and effective n_positions per pside.
         let enabled_long = is_pside_enabled(&input.global.global_bot_params, PositionSide::Long);
         let enabled_short = is_pside_enabled(&input.global.global_bot_params, PositionSide::Short);
+        let strategy_kind = input.global.strategy_kind;
 
         fill_forced_normal_indices(
             &input.symbols,
@@ -1502,14 +1533,16 @@ mod core {
                     }
 
                     // Both sides are eligible - choose based on EMA band distance.
-                    let ema_bands_long = derive_ema_bands(idx, &s.emas, &s.long.bot_params);
-                    let ema_bands_short = derive_ema_bands(idx, &s.emas, &s.short.bot_params);
+                    let long_bot = strategy_bot_params(strategy_kind, s, PositionSide::Long);
+                    let short_bot = strategy_bot_params(strategy_kind, s, PositionSide::Short);
+                    let ema_bands_long = derive_ema_bands(idx, &s.emas, &long_bot);
+                    let ema_bands_short = derive_ema_bands(idx, &s.emas, &short_bot);
 
                     if let (Ok(bands_long), Ok(bands_short)) = (ema_bands_long, ema_bands_short) {
                         let entry_threshold_long =
-                            bands_long.lower * (1.0 - s.long.bot_params.entry_initial_ema_dist);
+                            bands_long.lower * (1.0 - long_bot.entry_initial_ema_dist);
                         let entry_threshold_short =
-                            bands_short.upper * (1.0 + s.short.bot_params.entry_initial_ema_dist);
+                            bands_short.upper * (1.0 + short_bot.entry_initial_ema_dist);
 
                         let dist_long = entry_threshold_long / s.order_book.bid - 1.0;
                         let dist_short = 1.0 - entry_threshold_short / s.order_book.ask;
@@ -1565,6 +1598,7 @@ mod core {
                 } else {
                     mode
                 };
+                let strategy_bot = strategy_bot_params(strategy_kind, s, PositionSide::Long);
 
                 let allow_initial = actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
@@ -1572,7 +1606,7 @@ mod core {
                         input.balance,
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
-                        &s.long.bot_params,
+                        &strategy_bot,
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -1592,14 +1626,18 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let ema_bands =
-                            derive_ema_bands(s.symbol_idx, &s.emas, &s.long.bot_params)?;
-                        let entry_volatility_logrange_ema_1h =
+                        let ema_bands = derive_ema_bands(s.symbol_idx, &s.emas, &strategy_bot)?;
+                        let entry_volatility_logrange_ema_1h = if strategy_kind
+                            == StrategyKind::SimpleEmaMm
+                        {
+                            0.0
+                        } else {
                             derive_entry_volatility_logrange_ema_1h(
                                 s.symbol_idx,
                                 &s.emas,
-                                &s.long.bot_params,
-                            )?;
+                                &strategy_bot,
+                            )?
+                        };
                         let state = StateParams {
                             balance: input.balance,
                             order_book: s.order_book.clone(),
@@ -1607,14 +1645,47 @@ mod core {
                             entry_volatility_logrange_ema_1h,
                         };
 
-                        if wants_entries {
+                        if strategy_kind == StrategyKind::SimpleEmaMm {
+                            let generated = calc_simple_ema_mm_long(
+                                &s.exchange,
+                                &state,
+                                &strategy_bot,
+                                &s.long.position,
+                            );
+                            if wants_entries {
+                                for e in generated.entries {
+                                    if e.qty != 0.0 {
+                                        entries.push(IdealOrder {
+                                            symbol_idx: s.symbol_idx,
+                                            pside: PositionSide::Long,
+                                            qty: e.qty,
+                                            price: e.price,
+                                            order_type: e.order_type,
+                                        });
+                                    }
+                                }
+                            }
+                            if wants_closes {
+                                for c in generated.closes {
+                                    if c.qty != 0.0 {
+                                        closes.push(IdealOrder {
+                                            symbol_idx: s.symbol_idx,
+                                            pside: PositionSide::Long,
+                                            qty: c.qty,
+                                            price: c.price,
+                                            order_type: c.order_type,
+                                        });
+                                    }
+                                }
+                            }
+                        } else if wants_entries {
                             if let Some(hints) = input.peek_hints.as_ref() {
                                 let expand_entries = hints.expand_grid_long.contains(&s.symbol_idx);
                                 if expand_entries {
                                     for e in calc_entries_long(
                                         &s.exchange,
                                         &state,
-                                        &s.long.bot_params,
+                                        &strategy_bot,
                                         &s.long.position,
                                         &s.long.trailing,
                                     ) {
@@ -1632,7 +1703,7 @@ mod core {
                                     let e = calc_next_entry_long(
                                         &s.exchange,
                                         &state,
-                                        &s.long.bot_params,
+                                        &strategy_bot,
                                         &s.long.position,
                                         &s.long.trailing,
                                     );
@@ -1650,7 +1721,7 @@ mod core {
                                 let e = calc_next_entry_long(
                                     &s.exchange,
                                     &state,
-                                    &s.long.bot_params,
+                                    &strategy_bot,
                                     &s.long.position,
                                     &s.long.trailing,
                                 );
@@ -1660,7 +1731,7 @@ mod core {
                                     for e in calc_entries_long(
                                         &s.exchange,
                                         &state,
-                                        &s.long.bot_params,
+                                        &strategy_bot,
                                         &s.long.position,
                                         &s.long.trailing,
                                     ) {
@@ -1687,7 +1758,7 @@ mod core {
                                 for e in calc_entries_long(
                                     &s.exchange,
                                     &state,
-                                    &s.long.bot_params,
+                                    &strategy_bot,
                                     &s.long.position,
                                     &s.long.trailing,
                                 ) {
@@ -1704,14 +1775,14 @@ mod core {
                             }
                         }
 
-                        if wants_closes {
+                        if strategy_kind != StrategyKind::SimpleEmaMm && wants_closes {
                             if let Some(hints) = input.peek_hints.as_ref() {
                                 let expand_closes = hints.expand_close_long.contains(&s.symbol_idx);
                                 if expand_closes {
                                     for c in calc_closes_long(
                                         &s.exchange,
                                         &state,
-                                        &s.long.bot_params,
+                                        &strategy_bot,
                                         &s.long.position,
                                         &s.long.trailing,
                                     ) {
@@ -1729,7 +1800,7 @@ mod core {
                                     let c = calc_next_close_long(
                                         &s.exchange,
                                         &state,
-                                        &s.long.bot_params,
+                                        &strategy_bot,
                                         &s.long.position,
                                         &s.long.trailing,
                                     );
@@ -1747,7 +1818,7 @@ mod core {
                                 let c = calc_next_close_long(
                                     &s.exchange,
                                     &state,
-                                    &s.long.bot_params,
+                                    &strategy_bot,
                                     &s.long.position,
                                     &s.long.trailing,
                                 );
@@ -1757,7 +1828,7 @@ mod core {
                                     for c in calc_closes_long(
                                         &s.exchange,
                                         &state,
-                                        &s.long.bot_params,
+                                        &strategy_bot,
                                         &s.long.position,
                                         &s.long.trailing,
                                     ) {
@@ -1784,7 +1855,7 @@ mod core {
                                 for c in calc_closes_long(
                                     &s.exchange,
                                     &state,
-                                    &s.long.bot_params,
+                                    &strategy_bot,
                                     &s.long.position,
                                     &s.long.trailing,
                                 ) {
@@ -1837,6 +1908,7 @@ mod core {
                 } else {
                     mode
                 };
+                let strategy_bot = strategy_bot_params(strategy_kind, s, PositionSide::Short);
 
                 let allow_initial = actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
@@ -1844,7 +1916,7 @@ mod core {
                         input.balance,
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
-                        &s.short.bot_params,
+                        &strategy_bot,
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -1864,14 +1936,18 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let ema_bands =
-                            derive_ema_bands(s.symbol_idx, &s.emas, &s.short.bot_params)?;
-                        let entry_volatility_logrange_ema_1h =
+                        let ema_bands = derive_ema_bands(s.symbol_idx, &s.emas, &strategy_bot)?;
+                        let entry_volatility_logrange_ema_1h = if strategy_kind
+                            == StrategyKind::SimpleEmaMm
+                        {
+                            0.0
+                        } else {
                             derive_entry_volatility_logrange_ema_1h(
                                 s.symbol_idx,
                                 &s.emas,
-                                &s.short.bot_params,
-                            )?;
+                                &strategy_bot,
+                            )?
+                        };
                         let state = StateParams {
                             balance: input.balance,
                             order_book: s.order_book.clone(),
@@ -1879,7 +1955,40 @@ mod core {
                             entry_volatility_logrange_ema_1h,
                         };
 
-                        if wants_entries {
+                        if strategy_kind == StrategyKind::SimpleEmaMm {
+                            let generated = calc_simple_ema_mm_short(
+                                &s.exchange,
+                                &state,
+                                &strategy_bot,
+                                &s.short.position,
+                            );
+                            if wants_entries {
+                                for e in generated.entries {
+                                    if e.qty != 0.0 {
+                                        entries.push(IdealOrder {
+                                            symbol_idx: s.symbol_idx,
+                                            pside: PositionSide::Short,
+                                            qty: e.qty,
+                                            price: e.price,
+                                            order_type: e.order_type,
+                                        });
+                                    }
+                                }
+                            }
+                            if wants_closes {
+                                for c in generated.closes {
+                                    if c.qty != 0.0 {
+                                        closes.push(IdealOrder {
+                                            symbol_idx: s.symbol_idx,
+                                            pside: PositionSide::Short,
+                                            qty: c.qty,
+                                            price: c.price,
+                                            order_type: c.order_type,
+                                        });
+                                    }
+                                }
+                            }
+                        } else if wants_entries {
                             if let Some(hints) = input.peek_hints.as_ref() {
                                 let expand_entries =
                                     hints.expand_grid_short.contains(&s.symbol_idx);
@@ -1887,7 +1996,7 @@ mod core {
                                     for e in calc_entries_short(
                                         &s.exchange,
                                         &state,
-                                        &s.short.bot_params,
+                                        &strategy_bot,
                                         &s.short.position,
                                         &s.short.trailing,
                                     ) {
@@ -1905,7 +2014,7 @@ mod core {
                                     let e = calc_next_entry_short(
                                         &s.exchange,
                                         &state,
-                                        &s.short.bot_params,
+                                        &strategy_bot,
                                         &s.short.position,
                                         &s.short.trailing,
                                     );
@@ -1923,7 +2032,7 @@ mod core {
                                 let e = calc_next_entry_short(
                                     &s.exchange,
                                     &state,
-                                    &s.short.bot_params,
+                                    &strategy_bot,
                                     &s.short.position,
                                     &s.short.trailing,
                                 );
@@ -1933,7 +2042,7 @@ mod core {
                                     for e in calc_entries_short(
                                         &s.exchange,
                                         &state,
-                                        &s.short.bot_params,
+                                        &strategy_bot,
                                         &s.short.position,
                                         &s.short.trailing,
                                     ) {
@@ -1960,7 +2069,7 @@ mod core {
                                 for e in calc_entries_short(
                                     &s.exchange,
                                     &state,
-                                    &s.short.bot_params,
+                                    &strategy_bot,
                                     &s.short.position,
                                     &s.short.trailing,
                                 ) {
@@ -1977,7 +2086,7 @@ mod core {
                             }
                         }
 
-                        if wants_closes {
+                        if strategy_kind != StrategyKind::SimpleEmaMm && wants_closes {
                             if let Some(hints) = input.peek_hints.as_ref() {
                                 let expand_closes =
                                     hints.expand_close_short.contains(&s.symbol_idx);
@@ -1985,7 +2094,7 @@ mod core {
                                     for c in calc_closes_short(
                                         &s.exchange,
                                         &state,
-                                        &s.short.bot_params,
+                                        &strategy_bot,
                                         &s.short.position,
                                         &s.short.trailing,
                                     ) {
@@ -2003,7 +2112,7 @@ mod core {
                                     let c = calc_next_close_short(
                                         &s.exchange,
                                         &state,
-                                        &s.short.bot_params,
+                                        &strategy_bot,
                                         &s.short.position,
                                         &s.short.trailing,
                                     );
@@ -2021,7 +2130,7 @@ mod core {
                                 let c = calc_next_close_short(
                                     &s.exchange,
                                     &state,
-                                    &s.short.bot_params,
+                                    &strategy_bot,
                                     &s.short.position,
                                     &s.short.trailing,
                                 );
@@ -2031,7 +2140,7 @@ mod core {
                                     for c in calc_closes_short(
                                         &s.exchange,
                                         &state,
-                                        &s.short.bot_params,
+                                        &strategy_bot,
                                         &s.short.position,
                                         &s.short.trailing,
                                     ) {
@@ -2058,7 +2167,7 @@ mod core {
                                 for c in calc_closes_short(
                                     &s.exchange,
                                     &state,
-                                    &s.short.bot_params,
+                                    &strategy_bot,
                                     &s.short.position,
                                     &s.short.trailing,
                                 ) {
@@ -2594,6 +2703,7 @@ mod core {
                         pair
                     },
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
@@ -2679,6 +2789,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -2711,6 +2822,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -2752,6 +2864,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -2798,6 +2911,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -2906,6 +3020,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: syms,
                 peek_hints: None,
@@ -3116,6 +3231,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp.clone(),
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
@@ -3183,6 +3299,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3238,6 +3355,7 @@ mod core {
                         sort_global: true,
                         global_bot_params: global_bp,
                         hedge_mode: true,
+                        strategy_kind: StrategyKind::AdaptiveGrid,
                     },
                     symbols: vec![sym],
                     peek_hints: None,
@@ -3297,6 +3415,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3349,6 +3468,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3407,6 +3527,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3450,6 +3571,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::AdaptiveGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3457,6 +3579,108 @@ mod core {
             let out = compute_ideal_orders(&input).unwrap();
             assert_eq!(out.orders.len(), 1);
             assert_eq!(out.orders[0].order_type, OrderType::ClosePanicLong);
+        }
+
+        #[test]
+        fn simple_ema_mm_long_position_emits_single_entry_and_close() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.position = Position {
+                size: 1.0,
+                price: 100.0,
+            };
+            sym.long.bot_params.wallet_exposure_limit = 0.5;
+            sym.long.bot_params.entry_initial_qty_pct = 0.1;
+            sym.long.bot_params.entry_initial_ema_dist = 0.01;
+            sym.long.bot_params.entry_grid_spacing_we_weight = 0.0;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 1.0;
+            global_bp.long.n_positions = 1;
+            global_bp.short.total_wallet_exposure_limit = 0.0;
+            global_bp.short.n_positions = 0;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                    strategy_kind: StrategyKind::SimpleEmaMm,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            let long_entries: Vec<_> = out
+                .orders
+                .iter()
+                .filter(|o| o.pside == PositionSide::Long && o.qty > 0.0)
+                .collect();
+            let long_closes: Vec<_> = out
+                .orders
+                .iter()
+                .filter(|o| o.pside == PositionSide::Long && o.qty < 0.0)
+                .collect();
+            assert_eq!(long_entries.len(), 1);
+            assert_eq!(long_closes.len(), 1);
+            assert_eq!(long_entries[0].order_type, OrderType::EntryGridNormalLong);
+            assert_eq!(long_closes[0].order_type, OrderType::CloseGridLong);
+        }
+
+        #[test]
+        fn simple_ema_mm_short_uses_long_shape_params() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.bot_params.entry_initial_ema_dist = 0.05;
+            sym.long.bot_params.entry_grid_spacing_we_weight = 0.0;
+            sym.long.bot_params.entry_initial_qty_pct = 0.1;
+            sym.short.bot_params.entry_initial_ema_dist = 0.001;
+            sym.short.bot_params.wallet_exposure_limit = 0.5;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.0;
+            global_bp.long.n_positions = 0;
+            global_bp.short.total_wallet_exposure_limit = 1.0;
+            global_bp.short.n_positions = 1;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: false,
+                    strategy_kind: StrategyKind::SimpleEmaMm,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            let short_entries: Vec<_> = out
+                .orders
+                .iter()
+                .filter(|o| o.pside == PositionSide::Short && o.qty < 0.0)
+                .collect();
+            assert_eq!(short_entries.len(), 1);
+            assert!(
+                (short_entries[0].price - 105.0).abs() < 1e-9,
+                "expected short entry to use long offset 0.05, got {}",
+                short_entries[0].price
+            );
         }
     }
 }

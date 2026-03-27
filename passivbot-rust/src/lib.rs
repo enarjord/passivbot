@@ -7,6 +7,7 @@ mod entries;
 mod orchestrator;
 mod python;
 mod risk;
+mod simple_ema_mm;
 mod trailing;
 mod types;
 mod utils;

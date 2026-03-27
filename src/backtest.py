@@ -1113,6 +1113,10 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                 require_config_value(config, "backtest.dynamic_wel_by_tradability")
             ),
             "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
+            "strategy_kind": str(
+                get_optional_config_value(config, "live.strategy_kind", "adaptive_grid")
+                or "adaptive_grid"
+            ),
             "max_realized_loss_pct": float(
                 get_optional_config_value(config, "live.max_realized_loss_pct", 1.0)
             ),

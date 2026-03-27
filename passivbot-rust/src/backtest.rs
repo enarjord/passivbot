@@ -1012,6 +1012,7 @@ impl<'a> Backtest<'a> {
                 sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
                 hedge_mode: self.backtest_params.hedge_mode,
+                strategy_kind: self.backtest_params.strategy_kind,
             },
             symbols,
             peek_hints,
@@ -2860,6 +2861,7 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::StrategyKind;
     use ndarray::{Array1, Array3};
 
     #[test]
@@ -2893,6 +2895,7 @@ mod tests {
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
+            strategy_kind: StrategyKind::AdaptiveGrid,
             max_realized_loss_pct: 1.0,
             candle_interval_minutes: 1,
         };
@@ -2952,6 +2955,7 @@ mod tests {
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
+            strategy_kind: StrategyKind::AdaptiveGrid,
             max_realized_loss_pct: 1.0,
             candle_interval_minutes: 1,
         };
@@ -3034,6 +3038,7 @@ mod tests {
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
+            strategy_kind: StrategyKind::AdaptiveGrid,
             max_realized_loss_pct: 1.0,
             candle_interval_minutes: 1,
         };
@@ -3120,6 +3125,7 @@ mod tests {
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
+            strategy_kind: StrategyKind::AdaptiveGrid,
             max_realized_loss_pct: 1.0,
             candle_interval_minutes: 1,
         };
@@ -3188,6 +3194,7 @@ mod tests {
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: false,
             hedge_mode: true,
+            strategy_kind: StrategyKind::AdaptiveGrid,
             max_realized_loss_pct: 1.0,
             candle_interval_minutes: 1,
         };

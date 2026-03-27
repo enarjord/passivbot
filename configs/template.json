@@ -305,6 +305,7 @@
         "pnls_max_lookback_days": 30,
         "price_distance_threshold": 0.002,
         "recv_window_ms": 5000,
+        "strategy_kind": "adaptive_grid",
         "time_in_force": "good_till_cancelled",
         "user": "bybit_01",
         "warmup_concurrency": 0,

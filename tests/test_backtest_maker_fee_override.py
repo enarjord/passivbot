@@ -1,4 +1,6 @@
-from config_utils import get_template_config
+import json
+
+from config_utils import get_template_config, load_config
 from backtest import prep_backtest_args
 
 
@@ -46,3 +48,22 @@ def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():
     config["backtest"]["dynamic_wel_by_tradability"] = False
     _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["dynamic_wel_by_tradability"] is False
+
+
+def test_prep_backtest_args_passes_strategy_kind():
+    config = _base_config()
+    config["live"]["strategy_kind"] = "simple_ema_mm"
+    mss = _base_mss()
+
+    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    assert backtest_params["strategy_kind"] == "simple_ema_mm"
+
+
+def test_load_config_preserves_strategy_kind(tmp_path):
+    config = get_template_config()
+    config["live"]["strategy_kind"] = "simple_ema_mm"
+    cfg_path = tmp_path / "simple_ema_mm.json"
+    cfg_path.write_text(json.dumps(config), encoding="utf-8")
+
+    loaded = load_config(str(cfg_path), verbose=False)
+    assert loaded["live"]["strategy_kind"] == "simple_ema_mm"

@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+### Added
+- **Experimental `simple_ema_mm` strategy kind** - Backtest/live orchestrator inputs now accept `live.strategy_kind = "simple_ema_mm"` for a minimal EMA-band market-making experiment. It reuses the existing Rust backtester, fills, plots, and optimizer pipeline while keeping Passivbot's current one-way blocking and per-side portfolio/risk gates.
+
 ### Changed
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.
 - **ADG terminal smoothing simplified** - Backtest `gain`/`adg` now smooth the terminal value by taking the mean of the last up to 3 daily equity samples instead of running an EMA over the full daily-equity series. This preserves end-of-run drawdown smoothing while reducing computation.
