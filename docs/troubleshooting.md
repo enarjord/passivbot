@@ -20,6 +20,7 @@ Check which command is being used:
 ```bash
 type -a passivbot
 command -v passivbot
+python -c "import sys; print(sys.executable)"
 ```
 
 Expected result:
@@ -30,11 +31,22 @@ Expected result:
 /path/to/passivbot/venv/bin/passivbot
 ```
 
-If it points somewhere else, refresh shell command lookup:
+The Python executable should also point to the same virtualenv, for example:
+
+```bash
+/path/to/passivbot/venv/bin/python
+```
+
+If either command points somewhere else, refresh shell command lookup:
+
+```bash
+hash -r
+```
+
+If your shell also supports `rehash` (`zsh`, `tcsh`), run that too:
 
 ```bash
 rehash
-hash -r
 ```
 
 If that is not enough, reactivate the venv:
@@ -42,8 +54,20 @@ If that is not enough, reactivate the venv:
 ```bash
 deactivate
 source venv/bin/activate
-rehash
 hash -r
+```
+
+For shells with `rehash`, run it after reactivating:
+
+```bash
+rehash
+```
+
+If you use `pyenv`, also refresh its shims:
+
+```bash
+pyenv which passivbot
+pyenv rehash
 ```
 
 If you still need to confirm the current checkout is correct, compare:
@@ -79,3 +103,28 @@ pip install -e .
 # or: pip install -e ".[full]"
 # or: pip install -e ".[dev]"
 ```
+
+## `maturin develop` says it could not find a virtualenv or conda environment
+
+This usually means the build is running outside the project venv.
+
+Activate the venv first:
+
+```bash
+source venv/bin/activate
+which python
+python -m pip --version
+```
+
+Expected result:
+
+- `which python` should point to `.../venv/bin/python`
+- `python -m pip --version` should reference the same venv
+
+Then rerun:
+
+```bash
+maturin develop --release
+```
+
+If you are still seeing the wrong interpreter, recreate the venv from the desired Python 3.12 install and reinstall Passivbot inside that venv.

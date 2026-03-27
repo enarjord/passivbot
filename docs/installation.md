@@ -95,7 +95,7 @@ If you see linker errors after an OS update (e.g. new glibc), rebuild the extens
 |---------|-----|
 | `ModuleNotFoundError: passivbot_rust…` | Activate venv or rerun `maturin develop --release`. |
 | `passivbot optimize requires the full Passivbot install` | Install the full profile: `pip install -e ".[full]"`. |
-| `venv/bin/passivbot ...` works but `passivbot ...` behaves differently | Run `command -v passivbot`, then refresh shell command lookup with `rehash` and `hash -r`. |
+| `venv/bin/passivbot ...` works but `passivbot ...` behaves differently | Run `command -v passivbot`, then refresh shell command lookup with `hash -r` and, if your shell supports it, `rehash`. |
 | `linker cc not found` / `cannot find crt1.o` | Install build-essential + `python3-dev`. |
 | `rustup: command not found` | Install Rust via https://rustup.rs/. |
 | `pip install … failed due to SSL` | Update `certifi` or set `PIP_CERT` if corporate proxies intercept TLS. |
