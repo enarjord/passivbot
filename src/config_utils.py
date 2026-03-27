@@ -1978,7 +1978,6 @@ def create_acronym(full_name, acronyms=set()):
 #       "help": "Human-facing help text",
 #   }
 RESERVED_CLI_ARGS = {
-<<<<<<< HEAD
     "live.approved_coins": {
         "visible": ["--symbols", "-s"],
         "hidden": ["--live.approved_coins", "--live_approved_coins"],
