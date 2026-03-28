@@ -73,8 +73,10 @@ def test_tool_help_lists_supported_tools(capsys):
 
 def test_console_main_reexecs_into_active_virtualenv(monkeypatch, tmp_path):
     venv_prefix = tmp_path / "venv"
+    python_path = venv_prefix / "bin" / "python"
     script_path = venv_prefix / "bin" / "passivbot"
     script_path.parent.mkdir(parents=True)
+    python_path.write_text("", encoding="utf-8")
     script_path.write_text("#!/bin/sh\n", encoding="utf-8")
 
     monkeypatch.setenv("VIRTUAL_ENV", str(venv_prefix))
@@ -97,8 +99,8 @@ def test_console_main_reexecs_into_active_virtualenv(monkeypatch, tmp_path):
         cli_main.console_main()
 
     assert exc.value.code == 0
-    assert captured["path"] == str(script_path.resolve())
-    assert captured["argv"] == [str(script_path.resolve()), "backtest", "cfg.json"]
+    assert captured["path"] == str(python_path.resolve())
+    assert captured["argv"] == [str(python_path.resolve()), str(script_path.resolve()), "backtest", "cfg.json"]
     assert os.environ.get(cli_main.ENV_REEXEC_GUARD_ENV) == "1"
 
 
@@ -122,6 +124,24 @@ def test_console_main_fails_loudly_when_active_env_has_no_passivbot(monkeypatch,
     assert "/usr/bin/python3" in message
     assert f"{venv_prefix / 'bin' / 'passivbot'}" in message
     assert f"{venv_prefix / 'bin' / 'python'} -m pip install -e \".[full]\"" in message
+
+
+def test_console_main_accepts_symlinked_virtualenv_python(monkeypatch, tmp_path):
+    venv_prefix = tmp_path / "venv"
+    (venv_prefix / "bin").mkdir(parents=True)
+
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv_prefix))
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    monkeypatch.delenv(cli_main.ENV_REEXEC_GUARD_ENV, raising=False)
+    monkeypatch.delenv(cli_main.ENV_MISMATCH_IGNORE_ENV, raising=False)
+    monkeypatch.setattr(cli_main.sys, "executable", str(venv_prefix / "bin" / "python"))
+    monkeypatch.setattr(cli_main.sys, "argv", ["passivbot", "-h"])
+    monkeypatch.setattr(cli_main, "main", lambda argv=None: 0)
+
+    with pytest.raises(SystemExit) as exc:
+        cli_main.console_main()
+
+    assert exc.value.code == 0
 
 
 def test_tool_dispatch_forwards_module_and_prog(monkeypatch):
