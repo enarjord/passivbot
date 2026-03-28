@@ -7,6 +7,7 @@ to enable safe refactoring. They document how the code actually works today.
 
 import math
 import os
+from multiprocessing.reduction import ForkingPickler
 import tempfile
 from copy import deepcopy
 from unittest.mock import Mock, MagicMock, patch
@@ -30,7 +31,12 @@ from optimize import (
     ConstraintAwareFitness,
     ResultRecorder,
 )
+from multiprocessing_utils import ignore_sigint_in_worker
 from optimization.bounds import Bound
+
+
+def test_worker_initializer_is_pickleable_for_spawn():
+    ForkingPickler.dumps(ignore_sigint_in_worker)
 
 
 class TestApplyConfigOverrides:
