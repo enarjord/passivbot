@@ -1015,8 +1015,9 @@ class Passivbot:
         """Load exchange market metadata and refresh approval lists."""
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
-        # Retry on transient network errors at cold boot (TCP + TLS handshake
-        # on a fresh aiohttp session can time out before load_markets finishes).
+        # Retry on transient network errors (TCP + TLS handshake on a fresh
+        # aiohttp session can time out; also called hourly so transient errors
+        # should not abort the refresh cycle).
         for _attempt in range(1, 4):
             try:
                 await self.update_exchange_config()  # set hedge mode
@@ -1025,7 +1026,7 @@ class Passivbot:
                 if _attempt == 3:
                     raise
                 logging.warning(
-                    "[boot] update_exchange_config error (attempt %d/3): %s – retrying in %ds",
+                    "[init_markets] update_exchange_config error (attempt %d/3): %s – retrying in %ds",
                     _attempt,
                     e,
                     5 * _attempt,
