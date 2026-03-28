@@ -73,6 +73,25 @@ Example per-metric aggregation:
 - **memory_snapshot_interval_minutes**: Interval between `_log_memory_snapshot` telemetry entries (RSS, cache footprint, asyncio task counts). Default `30`; lower values surface leaks sooner, higher values reduce noise.
 - **volume_refresh_info_threshold_seconds**: Minimum duration a bulk volume-EMA refresh must take before it is promoted to an INFO log. Runs that finish faster emit only DEBUG output (when debug logging is enabled). Set `0` to keep the previous always-INFO behaviour.
 
+## Monitor
+
+The optional `monitor` section enables a local publisher that writes live bot state snapshots,
+event streams, and selected history streams to disk under `monitor/<exchange>/<user>/` by default.
+
+- **enabled**: Master switch. Default `false`.
+- **root_dir**: Base output directory for monitor artifacts.
+- **snapshot_interval_seconds**: Minimum interval between `state.latest.json` refreshes.
+- **checkpoint_interval_minutes**: Interval for snapshot checkpoints under `checkpoints/`.
+- **event_rotation_mb / event_rotation_minutes**: Rotate `events/current.ndjson` when either limit is exceeded.
+- **retain_days / max_total_bytes**: Retention guardrails for rotated event/history/checkpoint files.
+- **retain_price_ticks / retain_candles / retain_fills**: Enable corresponding history streams under `history/`.
+- **price_tick_min_interval_ms**: Debounce repeated same-symbol price tick writes.
+- **emit_completed_candles**: Persist completed `1m`/`1h` candle batches observed through the candlestick manager.
+- **include_raw_fill_payloads**: Include raw exchange fill payloads in retained fill history.
+
+The current publisher snapshot keeps HSL state at the account level to match the live runtime on
+this branch. Treat these files as local diagnostics/replay artifacts, not as a stable remote API.
+
 ## Bot Settings
 
 ### Common Account-Level Bot Parameters

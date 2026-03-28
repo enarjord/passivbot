@@ -37,6 +37,8 @@ from fill_events_manager import (
     _build_fetcher_for_bot,
     _extract_symbol_pool,
 )
+from monitor_publisher import MonitorPublisher
+import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
 from logging_setup import configure_logging, resolve_log_level
 from utils import (
@@ -546,6 +548,21 @@ class Passivbot:
         self._last_plan_detail: dict[str, tuple[int, int, int]] = {}
         self._last_action_summary: dict[tuple[str, str], str] = {}
         self.start_time_ms = utc_ms()
+        self._bot_ready = False
+        self._monitor_last_equity = float(self.balance_raw)
+        self._monitor_stop_emitted = False
+        self.monitor_publisher: Optional[MonitorPublisher] = None
+        self.monitor_enabled = bool(get_optional_config_value(config, "monitor.enabled", False))
+        if self.monitor_enabled:
+            try:
+                self.monitor_publisher = MonitorPublisher.from_config(
+                    exchange=self.exchange,
+                    user=self.user,
+                    config=require_config_value(config, "monitor"),
+                )
+            except Exception as exc:
+                logging.error("[monitor] failed to initialize monitor publisher: %s", exc)
+                self.monitor_publisher = None
         # CandlestickManager settings from config.live
         # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
         cm_kwargs = {
@@ -614,6 +631,8 @@ class Passivbot:
         archive_enabled = get_optional_live_value(config, "enable_archive_candle_fetch", False)
         cm_kwargs["archive_enabled"] = bool(archive_enabled)
         self.cm = CandlestickManager(**cm_kwargs)
+        if self.monitor_publisher is not None:
+            self.cm.set_persist_batch_observer(self._monitor_handle_candlestick_persist)
         # TTL (minutes) for EMA candles on non-traded symbols
         ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")
         self.inactive_coin_candle_ttl_ms = int(float(ttl_min) * 60_000)
@@ -749,6 +768,20 @@ class Passivbot:
         self._equity_hard_stop_cooldown_log_interval_ms = 15 * 60 * 1000
         self._equity_hard_stop_pending_stop_event = None
         self._equity_hard_stop_last_stop_event = None
+
+    _monitor_record_event = pb_monitor._monitor_record_event
+    _monitor_record_error = pb_monitor._monitor_record_error
+    _monitor_emit_stop = pb_monitor._monitor_emit_stop
+    _monitor_hsl_payload = pb_monitor._monitor_hsl_payload
+    _monitor_order_payload = pb_monitor._monitor_order_payload
+    _monitor_fill_payload = pb_monitor._monitor_fill_payload
+    _monitor_record_fill_history = pb_monitor._monitor_record_fill_history
+    _monitor_record_price_ticks = pb_monitor._monitor_record_price_ticks
+    _monitor_handle_candlestick_persist = pb_monitor._monitor_handle_candlestick_persist
+    _build_health_summary_payload = pb_monitor._build_health_summary_payload
+    _monitor_recent_orders_payload = pb_monitor._monitor_recent_orders_payload
+    _build_monitor_snapshot = pb_monitor._build_monitor_snapshot
+    _monitor_flush_snapshot = pb_monitor._monitor_flush_snapshot
 
     def live_value(self, key: str):
         return require_live_value(self.config, key)
@@ -1954,51 +1987,107 @@ class Passivbot:
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
         self._log_startup_banner()
+        self._bot_ready = False
         logging.info("[boot] starting bot %s...", self.exchange)
-
-        # Random boot stagger to spread API load when multiple bots start simultaneously.
-        # Applies BEFORE init_markets() so even the first API calls are staggered.
-        boot_stagger = get_optional_live_value(self.config, "boot_stagger_seconds", None)
-        if boot_stagger is None:
-            exchange_lower = (self.exchange or "").lower()
-            if exchange_lower == "hyperliquid":
-                boot_stagger = 30.0
-            else:
-                boot_stagger = 0.0
+        boot_stage = "start"
         try:
-            boot_stagger = float(boot_stagger)
-        except Exception:
-            boot_stagger = 0.0
-        if boot_stagger > 0:
-            delay = random.uniform(0, boot_stagger)
-            logging.info(
-                "[boot] stagger delay: waiting %.1fs before init (max=%.0fs)...",
-                delay, boot_stagger,
+            self._monitor_record_event(
+                "bot.start",
+                ("bot", "lifecycle", "start"),
+                {
+                    "exchange": self.exchange,
+                    "user": self.user,
+                    "pid": os.getpid(),
+                    "quote": self.quote,
+                    "start_time_ms": int(self.start_time_ms),
+                },
+                ts=int(self.start_time_ms),
             )
-            await asyncio.sleep(delay)
 
-        await format_approved_ignored_coins(self.config, self.user_info["exchange"], quote=self.quote)
-        await self.init_markets()
-        # Staggered warmup of candles for approved symbols (large sets handled gracefully)
-        try:
-            await self.warmup_candles_staggered()
-        except Exception as e:
-            logging.info("[boot] warmup skipped due to: %s", e)
-        if self._equity_hard_stop_enabled():
-            await self._equity_hard_stop_initialize_from_history()
-            if self.stop_signal_received:
-                return
-        await asyncio.sleep(1)
-        self._log_memory_snapshot()
-        logging.info("[boot] starting data maintainers...")
-        await self.start_data_maintainers()
+            # Random boot stagger to spread API load when multiple bots start simultaneously.
+            # Applies BEFORE init_markets() so even the first API calls are staggered.
+            boot_stage = "boot_stagger"
+            boot_stagger = get_optional_live_value(self.config, "boot_stagger_seconds", None)
+            if boot_stagger is None:
+                exchange_lower = (self.exchange or "").lower()
+                if exchange_lower == "hyperliquid":
+                    boot_stagger = 30.0
+                else:
+                    boot_stagger = 0.0
+            try:
+                boot_stagger = float(boot_stagger)
+            except Exception:
+                boot_stagger = 0.0
+            if boot_stagger > 0:
+                delay = random.uniform(0, boot_stagger)
+                logging.info(
+                    "[boot] stagger delay: waiting %.1fs before init (max=%.0fs)...",
+                    delay,
+                    boot_stagger,
+                )
+                await asyncio.sleep(delay)
 
-        logging.info("[boot] starting execution loop...")
-        logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
-        logging.info("[boot] READY - Bot initialization complete, entering main trading loop")
-        logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
-        if not self.debug_mode:
-            await self.run_execution_loop()
+            boot_stage = "format_approved_ignored_coins"
+            await format_approved_ignored_coins(
+                self.config, self.user_info["exchange"], quote=self.quote
+            )
+            boot_stage = "init_markets"
+            await self.init_markets()
+            await self._monitor_flush_snapshot(force=True, ts=utc_ms())
+            # Staggered warmup of candles for approved symbols (large sets handled gracefully)
+            boot_stage = "warmup_candles_staggered"
+            try:
+                await self.warmup_candles_staggered()
+            except Exception as e:
+                logging.info("[boot] warmup skipped due to: %s", e)
+            if self._equity_hard_stop_enabled():
+                boot_stage = "equity_hard_stop_initialize_from_history"
+                await self._equity_hard_stop_initialize_from_history()
+                if self.stop_signal_received:
+                    self._monitor_emit_stop(
+                        "startup_aborted",
+                        ts=utc_ms(),
+                        payload={"stage": boot_stage, "stop_signal_received": True},
+                    )
+                    return
+            boot_stage = "post_init_sleep"
+            await asyncio.sleep(1)
+            self._log_memory_snapshot()
+            logging.info("[boot] starting data maintainers...")
+            boot_stage = "start_data_maintainers"
+            await self.start_data_maintainers()
+
+            logging.info("[boot] starting execution loop...")
+            logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
+            logging.info("[boot] READY - Bot initialization complete, entering main trading loop")
+            logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
+            self._bot_ready = True
+            ready_ts = utc_ms()
+            self._monitor_record_event(
+                "bot.ready",
+                ("bot", "lifecycle", "ready"),
+                {"debug_mode": bool(self.debug_mode)},
+                ts=ready_ts,
+            )
+            await self._monitor_flush_snapshot(force=True, ts=ready_ts)
+            if not self.debug_mode:
+                await self.run_execution_loop()
+        except Exception as exc:
+            error_ts = utc_ms()
+            self._monitor_record_error(
+                "error.bot",
+                exc,
+                tags=("error", "bot", "startup"),
+                payload={"source": "start_bot", "stage": boot_stage},
+                ts=error_ts,
+            )
+            await self._monitor_flush_snapshot(force=True, ts=error_ts)
+            self._monitor_emit_stop(
+                "startup_error",
+                ts=error_ts,
+                payload={"stage": boot_stage, "error_type": type(exc).__name__},
+            )
+            raise
 
     async def init_markets(self, verbose=True):
         """Load exchange market metadata and refresh approval lists."""
@@ -2906,6 +2995,7 @@ class Passivbot:
                 # Periodic health summary
                 self._maybe_log_health_summary()
                 self._maybe_log_unstuck_status()
+                await self._monitor_flush_snapshot()
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
                 sleep_duration = 30
                 for i in range(sleep_duration * 10):
@@ -2917,11 +3007,23 @@ class Passivbot:
             except RateLimitExceeded as e:
                 self._health_errors += 1
                 self._health_rate_limits += 1
+                self._monitor_record_error(
+                    "error.exchange",
+                    e,
+                    tags=("error", "exchange", "rate_limit"),
+                    payload={"source": "run_execution_loop"},
+                )
                 logging.warning("[rate] execution loop hit rate limit; backing off 5s...")
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(5.0)
             except Exception as e:
                 self._health_errors += 1
+                self._monitor_record_error(
+                    "error.bot",
+                    e,
+                    tags=("error", "bot"),
+                    payload={"source": "run_execution_loop"},
+                )
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
                 await self.restart_bot_on_too_many_errors()
@@ -2932,6 +3034,8 @@ class Passivbot:
             return
         self._shutdown_in_progress = True
         self.stop_signal_received = True
+        stop_ts = utc_ms()
+        self._monitor_emit_stop("shutdown_gracefully", ts=stop_ts)
         logging.info("[shutdown] shutdown requested; closing background tasks and sessions")
         try:
             self.stop_data_maintainers(verbose=False)
@@ -2948,6 +3052,10 @@ class Passivbot:
                 await self.cca.close()
         except Exception as e:
             logging.error("[shutdown] error closing public ccxt session: %s", e)
+        await self._monitor_flush_snapshot(force=True, ts=utc_ms())
+        publisher = getattr(self, "monitor_publisher", None)
+        if publisher is not None:
+            publisher.close()
         logging.info("[shutdown] cleanup complete")
 
     async def update_pos_oos_pnls_ohlcvs(self) -> bool:
@@ -3129,6 +3237,13 @@ class Passivbot:
         if to_return:
             for elm in to_return:
                 self.add_new_order(elm, source="POST")
+                self._monitor_record_event(
+                    "order.opened",
+                    ("order", "open"),
+                    self._monitor_order_payload(elm, source="POST"),
+                    symbol=elm.get("symbol"),
+                    pside=elm.get("position_side"),
+                )
             self._health_orders_placed += len(to_return)
         return to_return
 
@@ -3189,6 +3304,13 @@ class Passivbot:
         if to_return:
             for elm in to_return:
                 self.remove_order(elm, source="POST")
+                self._monitor_record_event(
+                    "order.canceled",
+                    ("order", "cancel"),
+                    self._monitor_order_payload(elm, source="POST"),
+                    symbol=elm.get("symbol"),
+                    pside=elm.get("position_side"),
+                )
             self._health_orders_cancelled += len(to_return)
         return to_return
 
@@ -4274,8 +4396,9 @@ class Passivbot:
             now = time.time()
             should_log = snap_changed or (now - self._last_raw_only_log_time >= 900.0)
             try:
+                equity = balance_raw + (await self.calc_upnl_sum())
+                self._monitor_last_equity = float(equity)
                 if should_log:
-                    equity = balance_raw + (await self.calc_upnl_sum())
                     logging.info(
                         "[balance] raw %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
                         self._previous_balance_raw,
@@ -4287,6 +4410,18 @@ class Passivbot:
                     )
                     if raw_only:
                         self._last_raw_only_log_time = now
+                self._monitor_record_event(
+                    "account.balance",
+                    ("account", "balance"),
+                    {
+                        "previous_balance_raw": float(self._previous_balance_raw),
+                        "balance_raw": float(balance_raw),
+                        "previous_balance_snapped": float(self._previous_balance_snapped),
+                        "balance_snapped": float(balance_snapped),
+                        "equity": float(equity),
+                        "source": str(source),
+                    },
+                )
             except Exception as e:
                 logging.error(f"error with handle_balance_update {e}")
                 traceback.print_exc()
@@ -4459,9 +4594,20 @@ class Passivbot:
 
         except RateLimitExceeded:
             self._health_rate_limits += 1
+            self._monitor_record_event(
+                "error.exchange",
+                ("error", "exchange", "rate_limit"),
+                {"source": "update_pnls", "message": "rate limit exceeded"},
+            )
             logging.warning("[rate] hit rate limit while fetching fill events; retrying next cycle")
             return False
         except Exception as e:
+            self._monitor_record_error(
+                "error.exchange",
+                e,
+                tags=("error", "exchange"),
+                payload={"source": "update_pnls"},
+            )
             logging.error("[fills] Failed to update FillEventsManager: %s", e)
             if self.logging_level >= 2:
                 traceback.print_exc()
@@ -4541,6 +4687,16 @@ class Passivbot:
             # Log each event
             for event in sorted(new_events, key=lambda e: e.timestamp):
                 logging.info(self._log_fill_event(event))
+        for event in sorted(new_events, key=lambda e: e.timestamp):
+            self._monitor_record_fill_history(event)
+            self._monitor_record_event(
+                "order.filled",
+                ("order", "fill"),
+                self._monitor_fill_payload(event),
+                symbol=getattr(event, "symbol", None),
+                pside=str(getattr(event, "position_side", "") or "").lower() or None,
+                ts=int(getattr(event, "timestamp", 0) or 0) or None,
+            )
 
     def _calc_unstuck_allowances(self, allow_new_unstuck: bool) -> dict[str, float]:
         """Calculate unstuck allowances using FillEventsManager data."""
@@ -5384,6 +5540,7 @@ class Passivbot:
     ):
         symbols = snapshot["symbols"]
         last_prices = snapshot["last_prices"]
+        Passivbot._monitor_record_price_ticks(self, last_prices, ts=utc_ms(), source="orchestrator_snapshot")
         m1_close_emas = snapshot["m1_close_emas"]
         m1_volume_emas = snapshot["m1_volume_emas"]
         m1_log_range_emas = snapshot["m1_log_range_emas"]
@@ -5890,6 +6047,7 @@ class Passivbot:
         if missing:
             cm_prices = await self.cm.get_last_prices(missing, max_age_ms=10_000)
             last_prices.update(cm_prices)
+        Passivbot._monitor_record_price_ticks(self, last_prices, ts=utc_ms(), source="orchestrator_live")
 
         # Ensure effective min cost is up to date.
         if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:

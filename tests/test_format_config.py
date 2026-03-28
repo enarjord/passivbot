@@ -171,6 +171,39 @@ def test_format_config_rejects_invalid_hsl_position_during_cooldown_policy():
     with pytest.raises(ValueError, match="live.hsl_position_during_cooldown_policy"):
         format_config(current, verbose=False, live_only=True)
 
+
+def test_format_config_adds_monitor_defaults():
+    current = copy.deepcopy(_template())
+    current.pop("monitor", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["monitor"] == {
+        "enabled": False,
+        "root_dir": "monitor",
+        "snapshot_interval_seconds": 1.0,
+        "checkpoint_interval_minutes": 10.0,
+        "event_rotation_mb": 128.0,
+        "event_rotation_minutes": 60.0,
+        "retain_days": 7.0,
+        "max_total_bytes": 1073741824,
+        "retain_price_ticks": True,
+        "retain_candles": True,
+        "retain_fills": True,
+        "compress_rotated_segments": True,
+        "price_tick_min_interval_ms": 500,
+        "emit_completed_candles": True,
+        "include_raw_fill_payloads": False,
+    }
+
+
+def test_format_config_rejects_invalid_monitor_snapshot_interval():
+    current = copy.deepcopy(_template())
+    current["monitor"]["snapshot_interval_seconds"] = 0.0
+
+    with pytest.raises(ValueError, match="config.monitor.snapshot_interval_seconds"):
+        format_config(current, verbose=False, live_only=True)
+
 def test_format_config_current_with_empty_optimize_adds_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
