@@ -881,10 +881,11 @@ def process_forager_fills(
         btc_cash_series.index = pd.to_datetime(btc_cash_series.index, unit="ns")
         btc_total_balance_series.index = pd.to_datetime(btc_total_balance_series.index, unit="ns")
     else:
-        usd_cash_series = pd.Series(dtype=float, name="usd_cash_wallet")
-        usd_total_balance_series = pd.Series(dtype=float, name="usd_total_balance")
-        btc_cash_series = pd.Series(dtype=float, name="btc_cash_wallet")
-        btc_total_balance_series = pd.Series(dtype=float, name="btc_total_balance")
+        empty_dtidx = pd.DatetimeIndex([])
+        usd_cash_series = pd.Series(dtype=float, name="usd_cash_wallet", index=empty_dtidx)
+        usd_total_balance_series = pd.Series(dtype=float, name="usd_total_balance", index=empty_dtidx)
+        btc_cash_series = pd.Series(dtype=float, name="btc_cash_wallet", index=empty_dtidx)
+        btc_total_balance_series = pd.Series(dtype=float, name="btc_total_balance", index=empty_dtidx)
     equities_array = np.asarray(equities_array)
     equities_index = pd.to_datetime(equities_array[:, 0].astype(np.int64), unit="ms")
     edf = pd.Series(
@@ -940,7 +941,7 @@ def process_forager_fills(
         if sample_divider > 1 and not bal_eq.empty:
             try:
                 bal_eq = bal_eq.resample(f"{sample_divider}min").last()
-            except ValueError:
+            except (ValueError, TypeError):
                 bal_eq = bal_eq.iloc[::sample_divider]
             bal_eq = bal_eq.dropna(how="all").ffill().bfill()
     bal_eq = bal_eq.round(4).astype(np.float32)
