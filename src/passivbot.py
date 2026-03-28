@@ -7,7 +7,7 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 
 set_windows_event_loop_policy()
 
-from ccxt.base.errors import NetworkError, RateLimitExceeded
+from ccxt.base.errors import NetworkError, RateLimitExceeded, RequestTimeout
 import random
 import traceback
 import argparse
@@ -1015,7 +1015,22 @@ class Passivbot:
         """Load exchange market metadata and refresh approval lists."""
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
-        await self.update_exchange_config()  # set hedge mode
+        # Retry on transient network errors at cold boot (TCP + TLS handshake
+        # on a fresh aiohttp session can time out before load_markets finishes).
+        for _attempt in range(1, 4):
+            try:
+                await self.update_exchange_config()  # set hedge mode
+                break
+            except (RequestTimeout, NetworkError) as e:
+                if _attempt == 3:
+                    raise
+                logging.warning(
+                    "[boot] update_exchange_config error (attempt %d/3): %s – retrying in %ds",
+                    _attempt,
+                    e,
+                    5 * _attempt,
+                )
+                await asyncio.sleep(5 * _attempt)
         # Reuse existing ccxt session when available (ensures shared options such as fetchMarkets types).
         cc_instance = getattr(self, "cca", None)
         self.markets_dict = await load_markets(
