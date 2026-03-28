@@ -5485,6 +5485,12 @@ class Passivbot:
                         "min_qty": float(self.min_qtys[symbol]),
                         "min_cost": float(self.min_costs[symbol]),
                         "c_mult": float(self.c_mults[symbol]),
+                        "maker_fee": float(
+                            self.markets_dict.get(symbol, {}).get("maker", 0.0) or 0.0
+                        ),
+                        "taker_fee": float(
+                            self.markets_dict.get(symbol, {}).get("taker", 0.0) or 0.0
+                        ),
                     },
                     "tradable": bool(active),
                     "next_candle": None,
@@ -5995,6 +6001,12 @@ class Passivbot:
                         "min_qty": float(self.min_qtys[symbol]),
                         "min_cost": float(self.min_costs[symbol]),
                         "c_mult": float(self.c_mults[symbol]),
+                        "maker_fee": float(
+                            self.markets_dict.get(symbol, {}).get("maker", 0.0) or 0.0
+                        ),
+                        "taker_fee": float(
+                            self.markets_dict.get(symbol, {}).get("taker", 0.0) or 0.0
+                        ),
                     },
                     "tradable": bool(active),
                     "next_candle": None,
@@ -7590,6 +7602,10 @@ def setup_bot(config):
         from exchanges.paradex import ParadexBot
 
         bot = ParadexBot(config)
+    elif user_info["exchange"] == "fake":
+        from exchanges.fake import FakeBot
+
+        bot = FakeBot(config)
     else:
         # Generic CCXTBot for any CCXT-supported exchange
         from exchanges.ccxt_bot import CCXTBot

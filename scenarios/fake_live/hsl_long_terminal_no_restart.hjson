@@ -1,0 +1,103 @@
+{
+  name: hsl_long_terminal_no_restart
+  exchange: fake
+  boot_index: 1
+  run_initial_cycle: false
+  account: {
+    balance: 200.0
+    positions: [
+      {
+        symbol: "BTC/USDT:USDT"
+        position_side: long
+        qty: 5.0
+        price: 100.0
+      }
+    ]
+    fills: [
+      {
+        id: "10"
+        order: "10"
+        timestamp: "2026-01-01T00:00:00Z"
+        symbol: "BTC/USDT:USDT"
+        position_side: long
+        side: buy
+        amount: 5.0
+        price: 80.0
+        pnl: 0.0
+        clientOrderId: initial_entry_boot
+      }
+      {
+        id: "11"
+        order: "11"
+        timestamp: "2026-01-01T00:01:00Z"
+        symbol: "BTC/USDT:USDT"
+        position_side: long
+        side: sell
+        amount: 5.0
+        price: 100.0
+        pnl: 100.0
+        reduceOnly: true
+        clientOrderId: initial_take_profit_boot
+      }
+      {
+        id: "12"
+        order: "12"
+        timestamp: "2026-01-01T00:01:00Z"
+        symbol: "BTC/USDT:USDT"
+        position_side: long
+        side: buy
+        amount: 5.0
+        price: 100.0
+        pnl: 0.0
+        clientOrderId: reentry_boot
+      }
+    ]
+  }
+  symbols: {
+    "BTC/USDT:USDT": {
+      price_step: 0.1
+      qty_step: 0.001
+      min_qty: 0.001
+      min_cost: 5.0
+      maker_fee: 0.0
+      taker_fee: 0.0
+    }
+  }
+  replay: {
+    symbols: {
+      "BTC/USDT:USDT": {
+        candles: [
+          ["2026-01-01T00:00:00Z", 100.0, 100.5, 99.5, 100.0, 10.0]
+          ["2026-01-01T00:01:00Z", 100.0, 100.2, 99.8, 100.0, 9.0]
+          ["2026-01-01T00:02:00Z", 100.0, 100.0, 60.0, 60.2, 20.0]
+          ["2026-01-01T00:03:00Z", 60.2, 61.0, 60.0, 60.6, 10.0]
+          ["2026-01-01T00:04:00Z", 60.6, 62.0, 60.2, 61.0, 10.0]
+        ]
+      }
+    }
+  }
+  assertions: {
+    fill_count: 4
+    final_balance: {approx: 1.0, tolerance: 1e-9}
+    last_prices: {
+      "BTC/USDT:USDT": 61.0
+    }
+    final_positions: {
+      "BTC/USDT:USDT|long": 0.0
+    }
+    hsl_paths: {
+      halted: false
+      no_restart_latched: false
+      runtime_red_latched: true
+      last_stop_event.auto_restart_eligible: false
+      last_stop_event.drawdown_raw: {min: 0.99, max: 0.996}
+    }
+    summary_paths: {
+      step_count: 3
+      last.step_index: 4
+    }
+    log_contains: [
+      "RED stop finalized (terminal)"
+    ]
+  }
+}

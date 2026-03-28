@@ -1063,6 +1063,33 @@ class BaseFetcher:
         raise NotImplementedError
 
 
+class FakeFetcher(BaseFetcher):
+    """Fetch canonical fill events from the fake exchange ledger."""
+
+    def __init__(self, api) -> None:
+        self.api = api
+
+    async def fetch(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        events = list(self.api.get_fill_events(since_ms, until_ms))
+        for event in events:
+            cache_entry = detail_cache.get(event["id"])
+            if cache_entry:
+                event["client_order_id"], event["pb_order_type"] = cache_entry
+            elif event["client_order_id"]:
+                event["pb_order_type"] = custom_id_to_snake(event["client_order_id"])
+            if not event["pb_order_type"]:
+                event["pb_order_type"] = "unknown"
+        if on_batch and events:
+            on_batch(events)
+        return events
+
+
 class BitgetFetcher(BaseFetcher):
     """Fetches and enriches fill events from Bitget."""
 
@@ -4405,6 +4432,7 @@ EXCHANGE_BOT_CLASSES: Dict[str, Tuple[str, str]] = {
     "binance": ("exchanges.binance", "BinanceBot"),
     "bitget": ("exchanges.bitget", "BitgetBot"),
     "bybit": ("exchanges.bybit", "BybitBot"),
+    "fake": ("exchanges.fake", "FakeBot"),
     "hyperliquid": ("exchanges.hyperliquid", "HyperliquidBot"),
     "gateio": ("exchanges.gateio", "GateIOBot"),
     "kucoin": ("exchanges.kucoin", "KucoinBot"),
@@ -4517,6 +4545,8 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         )
     if exchange == "bybit":
         return BybitFetcher(api=bot.cca)
+    if exchange == "fake":
+        return FakeFetcher(api=bot.cca)
     if exchange == "hyperliquid":
         return HyperliquidFetcher(
             api=bot.cca,
