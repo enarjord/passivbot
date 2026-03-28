@@ -100,6 +100,16 @@ Account-level drawdown circuit breaker.
 - **cooldown_minutes_after_red**:
   - Minutes to wait before auto-restart after a RED halt.
   - `0.0` means halt without auto-restart.
+- **live.hsl_position_during_cooldown_policy**:
+  - Allowed values:
+    - `normal`
+    - `panic`
+    - `manual`
+    - `tp_only`
+    - `graceful_stop`
+  - Default: `panic`.
+  - Applies only while RED cooldown is active and auto-restart is enabled.
+  - Open positions are managed according to this policy during cooldown, while flat symbols stay entry-blocked until cooldown ends.
 - **no_restart_drawdown_threshold**:
   - If trigger drawdown is at or above this threshold, RED becomes terminal and the bot will not auto-restart.
   - Values below `red_threshold` are clamped up to `red_threshold`.
@@ -122,7 +132,7 @@ Behavior summary:
 
 1. YELLOW: warning tier
 2. ORANGE: reduced-risk mode
-3. RED: panic close, flat confirmation, halt, optional cooldown restart
+3. RED: panic close, flat confirmation, halt, cooldown intervention policy, optional cooldown restart
 
 Backtest-specific note:
 

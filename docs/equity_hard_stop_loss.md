@@ -62,9 +62,26 @@ At RED:
 2. the bot closes positions using `panic_close_order_type`
 3. the bot waits until the account is flat
 4. trading halts
-5. optional cooldown-based restart may occur
+5. during auto-restart cooldown, any new positions stay blocked
+6. optional cooldown-based restart may occur
 
 If the trigger drawdown is at or above `no_restart_drawdown_threshold`, the halt becomes terminal and auto-restart is disabled. Values below `red_threshold` are treated as `red_threshold`.
+
+### Cooldown intervention policy
+
+`live.hsl_position_during_cooldown_policy` controls how live runtime handles positions that still exist or reappear while RED cooldown is active:
+
+1. `panic`
+   - default
+   - forces panic mode again and restarts the cooldown after the account is flat
+2. `normal`
+   - clears the halt immediately and resumes normal trading
+3. `manual`
+   - keeps the halt active and leaves the position unmanaged by PB mode forcing
+4. `tp_only`
+   - keeps the halt active and forces `tp_only` on the open position
+5. `graceful_stop`
+   - keeps the halt active and forces `graceful_stop` on the open position
 
 ## Parameters
 
@@ -91,6 +108,12 @@ All parameters live under `bot.common.equity_hard_stop_loss`:
    - ORANGE behavior selector
 9. `panic_close_order_type`
    - `market` or `limit`
+
+Live-only parameter under `live`:
+
+1. `hsl_position_during_cooldown_policy`
+   - `normal`, `panic`, `manual`, `tp_only`, or `graceful_stop`
+   - default is `panic`
 
 ## Backtest Behavior
 

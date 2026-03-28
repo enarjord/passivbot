@@ -152,6 +152,25 @@ def test_format_config_prunes_unknown_keys_recursively():
     assert "extra" not in out["optimize"]["bounds"]
     assert "extra_section" not in out
 
+
+def test_format_config_normalizes_hsl_position_during_cooldown_policy():
+    tmpl = _template()
+    current = copy.deepcopy(tmpl)
+    current["live"]["hsl_position_during_cooldown_policy"] = "manual"
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["live"]["hsl_position_during_cooldown_policy"] == "manual"
+
+
+def test_format_config_rejects_invalid_hsl_position_during_cooldown_policy():
+    tmpl = _template()
+    current = copy.deepcopy(tmpl)
+    current["live"]["hsl_position_during_cooldown_policy"] = "bad_policy"
+
+    with pytest.raises(ValueError, match="live.hsl_position_during_cooldown_policy"):
+        format_config(current, verbose=False, live_only=True)
+
 def test_format_config_current_with_empty_optimize_adds_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)

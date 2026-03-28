@@ -383,6 +383,13 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self._equity_hard_stop_runtime = pbr.EquityHardStopRuntime()
             self._equity_hard_stop_strategy_pnl_peak = pbr.EquityHardStopRollingPeak()
             self._equity_hard_stop_last_metrics = None
+            self._equity_hard_stop_halted = False
+            self._equity_hard_stop_no_restart_latched = False
+            self._equity_hard_stop_halted_until_ms = None
+            self._equity_hard_stop_cooldown_intervention_active = False
+            self._equity_hard_stop_cooldown_repanic_reset_pending = False
+            self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
+            self._equity_hard_stop_cooldown_log_interval_ms = 15 * 60 * 1000
             self._bp_defaults = {
                 "ema_span_0": 1.0,
                 "ema_span_1": 2.0,
@@ -953,32 +960,20 @@ async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypat
         }
 
     captured = {}
-    waited = {}
-    cleared = {}
-
     def fake_write(payload):
         captured["payload"] = payload
         return "/tmp/hs_latch_auto.json"
 
-    async def fake_wait(until_ms):
-        waited["until_ms"] = until_ms
-
-    def fake_remove():
-        cleared["done"] = True
-
     monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
     monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
-    monkeypatch.setattr(bot, "_equity_hard_stop_wait_for_cooldown", fake_wait)
-    monkeypatch.setattr(bot, "_equity_hard_stop_remove_latch_file", fake_remove)
 
     await bot._equity_hard_stop_finalize_red_stop()
 
     assert bot.stop_signal_received is False
+    assert bot._equity_hard_stop_halted is True
     assert captured["payload"]["no_restart_latched"] is False
-    assert captured["payload"]["cooldown_until_ms"] is not None
-    assert waited["until_ms"] == captured["payload"]["cooldown_until_ms"]
-    assert cleared["done"] is True
-    assert bot._equity_hard_stop_runtime.red_latched() is False
+    assert bot._equity_hard_stop_halted_until_ms == captured["payload"]["cooldown_until_ms"]
+    assert bot._equity_hard_stop_runtime.red_latched() is True
 
 
 @pytest.mark.asyncio
@@ -1085,26 +1080,101 @@ async def test_hard_stop_initialize_from_history_reconstructs_active_cooldown_wi
         }
 
     current_time = {"ts": 200_000}
-    waited = {}
-
-    async def fake_wait(until_ms):
-        waited["until_ms"] = until_ms
-        current_time["ts"] = until_ms
 
     async def fake_upnl():
         return 0.0
 
     monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
-    monkeypatch.setattr(bot, "_equity_hard_stop_wait_for_cooldown", fake_wait)
     monkeypatch.setattr(bot, "get_exchange_time", lambda: current_time["ts"])
     monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
 
     await bot._equity_hard_stop_initialize_from_history()
 
-    assert waited["until_ms"] == 241_000
     assert bot.stop_signal_received is False
+    assert bot._equity_hard_stop_halted is True
+    assert bot._equity_hard_stop_halted_until_ms == 241_000
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_cooldown_policy_normal_resumes_immediately(monkeypatch):
+    cfg = _dummy_config()
+    cfg["live"]["hsl_position_during_cooldown_policy"] = "normal"
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._equity_hard_stop_halted = True
+    bot._equity_hard_stop_halted_until_ms = 200_000
+    bot.positions[symbol]["long"]["size"] = 1.0
+    removed = {"count": 0}
+
+    monkeypatch.setattr(
+        bot,
+        "_equity_hard_stop_remove_latch_file",
+        lambda: removed.__setitem__("count", removed["count"] + 1),
+    )
+
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown(150_000)
+
+    assert changed is True
+    assert removed["count"] == 1
+    assert bot._equity_hard_stop_halted is False
+    assert bot._equity_hard_stop_halted_until_ms is None
     assert bot._equity_hard_stop_runtime.red_latched() is False
-    assert bot._equity_hard_stop_pending_red_since_ms is None
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_mode"),
+    [
+        ("panic", "panic"),
+        ("manual", "manual"),
+        ("tp_only", "tp_only"),
+        ("graceful_stop", "graceful_stop"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_hard_stop_cooldown_policy_keeps_halt_and_forces_mode(policy, expected_mode):
+    cfg = _dummy_config()
+    cfg["live"]["hsl_position_during_cooldown_policy"] = policy
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._equity_hard_stop_halted = True
+    bot._equity_hard_stop_halted_until_ms = 200_000
+    bot.positions[symbol]["long"]["size"] = 1.0
+
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown(150_000)
+
+    assert changed is False
+    assert bot._equity_hard_stop_halted is True
+    assert bot._equity_hard_stop_cooldown_intervention_active is True
+    assert bot._equity_hard_stop_halted_mode("long", symbol) == expected_mode
+    assert bot._equity_hard_stop_halted_mode("short", symbol) == "graceful_stop"
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_cooldown_policy_panic_restarts_cooldown_after_repanic_flat(monkeypatch):
+    cfg = _dummy_config()
+    cfg["live"]["hsl_position_during_cooldown_policy"] = "panic"
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._equity_hard_stop_halted = True
+    bot._equity_hard_stop_halted_until_ms = 200_000
+    bot.positions[symbol]["long"]["size"] = 1.0
+
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown(150_000)
+    assert changed is False
+    assert bot._equity_hard_stop_cooldown_repanic_reset_pending is True
+
+    bot.positions[symbol]["long"]["size"] = 0.0
+    captured = {}
+
+    async def fake_refresh(now_ms):
+        captured["now_ms"] = now_ms
+
+    monkeypatch.setattr(bot, "_equity_hard_stop_refresh_cooldown_after_repanic", fake_refresh)
+
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown(180_000)
+
+    assert changed is True
+    assert captured["now_ms"] == 180_000
 
 
 @pytest.mark.asyncio

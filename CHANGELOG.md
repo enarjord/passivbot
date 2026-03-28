@@ -16,6 +16,7 @@ All notable user-facing changes will be documented in this file.
 - **CLI help is now task-oriented by default** - `passivbot live -h`, `passivbot backtest -h`, and `passivbot optimize -h` now show curated, grouped common flags by default, while `--help-all` exposes the full advanced/raw override surface.
 - **Install profiles split into `live`, `full`, and `dev`** - `pip install -e .` now targets a lightweight live-trading environment, while `pip install -e ".[full]"` adds backtesting/optimization/tooling dependencies and `pip install -e ".[dev]"` adds contributor-focused docs/lint extras on top.
 - **Equity hard-stop config moved under `bot.common`** - Shared HSL settings now live at `bot.common.equity_hard_stop_loss`, with config formatting migrating legacy `live.equity_hard_stop_loss` inputs and optimizer bounds to the new location.
+- **Live HSL cooldown interventions are now configurable** - RED cooldown no longer blocks the runtime in one wait path. Live now keeps the halt active while enforcing `live.hsl_position_during_cooldown_policy` (`panic`, `normal`, `manual`, `tp_only`, or `graceful_stop`) until cooldown expires or trading is resumed.
 
 ### Fixed
 - **Hyperliquid HIP-3 margin-mode detection for `XYZ-...` symbols** - Hyperliquid stock perps exposed by CCXT as `XYZ-...` or `XYZ:...` now correctly force isolated margin mode, preventing erroneous cross-margin config calls that could lead to repeated duplicate entry submissions on stock-perp markets such as `XYZ100`.

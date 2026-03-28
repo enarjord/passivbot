@@ -173,6 +173,25 @@ def expand_PB_mode(mode: str) -> str:
         raise Exception(f"unknown passivbot mode {mode}")
 
 
+HSL_COOLDOWN_POSITION_POLICIES = (
+    "normal",
+    "panic",
+    "tp_only",
+    "graceful_stop",
+    "manual",
+)
+
+
+def normalize_hsl_cooldown_position_policy(
+    value, path: str = "live.hsl_position_during_cooldown_policy"
+) -> str:
+    policy = str(value)
+    if policy not in HSL_COOLDOWN_POSITION_POLICIES:
+        allowed = ", ".join(HSL_COOLDOWN_POSITION_POLICIES)
+        raise ValueError(f"{path} must be one of {{{allowed}}}, got {policy!r}")
+    return policy
+
+
 def apply_allowed_modifications(src, modifications, allowed_overrides, return_full=True):
     """
     Apply `modifications` to `src`, but only where `allowed_overrides` permits.
@@ -1379,6 +1398,9 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     _migrate_bot_common_hsl(result, verbose=verbose, tracker=tracker)
 
     _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
+    result["live"]["hsl_position_during_cooldown_policy"] = normalize_hsl_cooldown_position_policy(
+        result["live"]["hsl_position_during_cooldown_policy"]
+    )
 
     _normalize_position_counts(result, tracker=tracker)
     if coin_sources_input is not None:
@@ -2960,6 +2982,7 @@ def get_template_config():
             "forced_mode_long": "",
             "forced_mode_short": "",
             "hedge_mode": True,
+            "hsl_position_during_cooldown_policy": "panic",
             "ignored_coins": {"long": [], "short": []},
             "inactive_coin_candle_ttl_minutes": 10.0,
             "leverage": 10.0,

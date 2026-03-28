@@ -81,6 +81,7 @@ from config_utils import (
     require_config_value,
     require_live_value,
     merge_negative_cli_values,
+    normalize_hsl_cooldown_position_policy,
 )
 from procedures import (
     load_broker_code,
@@ -739,7 +740,13 @@ class Passivbot:
         self._equity_hard_stop_last_red_progress = None
         self._equity_hard_stop_red_flat_confirmations = 0
         self._equity_hard_stop_pending_red_since_ms = None
+        self._equity_hard_stop_halted = False
+        self._equity_hard_stop_no_restart_latched = False
         self._equity_hard_stop_halted_until_ms = None
+        self._equity_hard_stop_cooldown_intervention_active = False
+        self._equity_hard_stop_cooldown_repanic_reset_pending = False
+        self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
+        self._equity_hard_stop_cooldown_log_interval_ms = 15 * 60 * 1000
         self._equity_hard_stop_pending_stop_event = None
         self._equity_hard_stop_last_stop_event = None
 
@@ -878,7 +885,12 @@ class Passivbot:
         self._equity_hard_stop_last_red_progress = None
         self._equity_hard_stop_red_flat_confirmations = 0
         self._equity_hard_stop_pending_red_since_ms = None
+        self._equity_hard_stop_halted = False
+        self._equity_hard_stop_no_restart_latched = False
         self._equity_hard_stop_halted_until_ms = None
+        self._equity_hard_stop_cooldown_intervention_active = False
+        self._equity_hard_stop_cooldown_repanic_reset_pending = False
+        self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
         self._equity_hard_stop_pending_stop_event = None
         self._equity_hard_stop_last_stop_event = None
         self._runtime_forced_modes = {"long": {}, "short": {}}
@@ -891,6 +903,11 @@ class Passivbot:
 
     def _equity_hard_stop_runtime_tier(self) -> str:
         return str(self._equity_hard_stop_runtime.tier())
+
+    def _equity_hard_stop_cooldown_position_policy(self) -> str:
+        return normalize_hsl_cooldown_position_policy(
+            get_optional_live_value(self.config, "hsl_position_during_cooldown_policy", "panic")
+        )
 
     async def _calc_upnl_sum_strict(self) -> float:
         if not self.fetched_positions:
@@ -1162,8 +1179,137 @@ class Passivbot:
         self._equity_hard_stop_red_flat_confirmations = 0
         self._equity_hard_stop_last_red_progress = None
         self._equity_hard_stop_pending_red_since_ms = None
+        self._equity_hard_stop_halted = False
+        self._equity_hard_stop_no_restart_latched = False
         self._equity_hard_stop_halted_until_ms = None
+        self._equity_hard_stop_cooldown_intervention_active = False
+        self._equity_hard_stop_cooldown_repanic_reset_pending = False
+        self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
         self._equity_hard_stop_pending_stop_event = None
+
+    def _equity_hard_stop_position_symbols(self) -> list[str]:
+        symbols = []
+        for symbol, position in self.positions.items():
+            if any(
+                float(position.get(pside, {}).get("size", 0.0) or 0.0) != 0.0
+                for pside in ("long", "short")
+            ):
+                symbols.append(symbol)
+        return sorted(symbols)
+
+    def _equity_hard_stop_halted_mode(self, pside: str, symbol: str | None) -> str:
+        policy = self._equity_hard_stop_cooldown_position_policy()
+        size = 0.0
+        if symbol is not None:
+            size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
+        if size == 0.0:
+            return "graceful_stop"
+        if policy == "panic":
+            return "panic"
+        if policy == "manual":
+            return "manual"
+        if policy == "tp_only":
+            return "tp_only"
+        return "graceful_stop"
+
+    def _equity_hard_stop_refresh_halted_runtime_forced_modes(self) -> None:
+        if not self._equity_hard_stop_halted:
+            self._equity_hard_stop_clear_runtime_forced_modes()
+            return
+        forced = {"long": {}, "short": {}}
+        symbols = set(self.positions.keys()) | set(self.open_orders.keys()) | set(self.active_symbols)
+        for symbol in symbols:
+            for pside in ("long", "short"):
+                forced[pside][symbol] = self._equity_hard_stop_halted_mode(pside, symbol)
+        self._runtime_forced_modes = forced
+
+    async def _equity_hard_stop_refresh_cooldown_after_repanic(self, now_ms: int) -> None:
+        cooldown_minutes = float(self.equity_hard_stop_loss["cooldown_minutes_after_red"])
+        cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
+        cooldown_until_ms = now_ms + cooldown_ms if cooldown_ms > 0 else None
+        stop_event = await self._equity_hard_stop_compute_stop_event(now_ms)
+        payload = self._equity_hard_stop_build_latch_payload(
+            stop_event_timestamp_ms=now_ms,
+            balance=stop_event.get("balance"),
+            realized_pnl=stop_event.get("realized_pnl"),
+            unrealized_pnl=stop_event.get("unrealized_pnl"),
+            strategy_pnl=stop_event.get("strategy_pnl"),
+            peak_strategy_pnl=stop_event.get("peak_strategy_pnl"),
+            equity=float(stop_event["equity"]),
+            peak_strategy_equity=float(stop_event["peak_strategy_equity"]),
+            trigger_peak_strategy_equity=float(stop_event["trigger_peak_strategy_equity"]),
+            drawdown_raw=float(stop_event["drawdown_raw"]),
+            drawdown_ema=float(stop_event["drawdown_ema"]),
+            drawdown_score=float(stop_event["drawdown_score"]),
+            no_restart_latched=False,
+            cooldown_until_ms=cooldown_until_ms,
+        )
+        self._equity_hard_stop_last_stop_event = payload
+        self._equity_hard_stop_halted_until_ms = cooldown_until_ms
+        self._equity_hard_stop_cooldown_intervention_active = False
+        self._equity_hard_stop_cooldown_repanic_reset_pending = False
+        self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
+        latch_path = self._equity_hard_stop_write_latch(payload)
+        self._equity_hard_stop_refresh_halted_runtime_forced_modes()
+        logging.critical(
+            "[risk] cooldown violation repanic flattened; cooldown reset from flat_ts=%s to cooldown_until_ms=%s latch=%s",
+            now_ms,
+            cooldown_until_ms if cooldown_until_ms is not None else "none",
+            latch_path,
+        )
+
+    async def _equity_hard_stop_handle_position_during_cooldown(self, now_ms: int) -> bool:
+        if not self._equity_hard_stop_halted or self._equity_hard_stop_no_restart_latched:
+            return False
+        cooldown_until_ms = self._equity_hard_stop_halted_until_ms
+        if cooldown_until_ms is None or now_ms >= cooldown_until_ms:
+            return False
+
+        symbols = self._equity_hard_stop_position_symbols()
+        policy = self._equity_hard_stop_cooldown_position_policy()
+        if not symbols:
+            if self._equity_hard_stop_cooldown_repanic_reset_pending:
+                await self._equity_hard_stop_refresh_cooldown_after_repanic(now_ms)
+                return True
+            if self._equity_hard_stop_cooldown_intervention_active:
+                logging.info(
+                    "[risk] cooldown intervention ended flat; policy=%s original_cooldown_until_ms=%s",
+                    policy,
+                    cooldown_until_ms,
+                )
+            self._equity_hard_stop_cooldown_intervention_active = False
+            self._equity_hard_stop_cooldown_repanic_reset_pending = False
+            self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
+            self._equity_hard_stop_refresh_halted_runtime_forced_modes()
+            return False
+
+        should_log = (
+            not self._equity_hard_stop_cooldown_intervention_active
+            or self._equity_hard_stop_last_cooldown_intervention_log_ms == 0
+            or now_ms - self._equity_hard_stop_last_cooldown_intervention_log_ms
+            >= self._equity_hard_stop_cooldown_log_interval_ms
+        )
+        if should_log:
+            logging.critical(
+                "[risk] detected non-flat position during RED cooldown | policy=%s symbols=%s cooldown_until_ms=%s",
+                policy,
+                ",".join(symbols),
+                cooldown_until_ms,
+            )
+            self._equity_hard_stop_last_cooldown_intervention_log_ms = now_ms
+        self._equity_hard_stop_cooldown_intervention_active = True
+
+        if policy == "normal":
+            self._equity_hard_stop_reset_after_restart()
+            self._equity_hard_stop_remove_latch_file()
+            logging.critical(
+                "[risk] operator override during RED cooldown: resumed normal operation and reset drawdown tracker"
+            )
+            return True
+
+        self._equity_hard_stop_cooldown_repanic_reset_pending = policy == "panic"
+        self._equity_hard_stop_refresh_halted_runtime_forced_modes()
+        return False
 
     async def _equity_hard_stop_initialize_from_history(self) -> None:
         if not self._equity_hard_stop_enabled():
@@ -1276,19 +1422,24 @@ class Passivbot:
 
         now_ms = int(self.get_exchange_time())
         if cooldown_until_ms is not None:
-            if now_ms < cooldown_until_ms:
+            if now_ms >= cooldown_until_ms:
+                self._equity_hard_stop_reset_after_restart()
+                cooldown_until_ms = None
+                pending_red = False
+            else:
+                self._equity_hard_stop_halted = True
+                self._equity_hard_stop_no_restart_latched = False
+                self._equity_hard_stop_halted_until_ms = cooldown_until_ms
+                self._equity_hard_stop_cooldown_intervention_active = False
+                self._equity_hard_stop_cooldown_repanic_reset_pending = False
+                self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
+                self._equity_hard_stop_refresh_halted_runtime_forced_modes()
                 logging.critical(
-                    "[risk] reconstructed hard-stop cooldown from exchange-derived history; "
-                    "delaying startup %.1fs",
+                    "[risk] reconstructed active RED cooldown from exchange-derived history | remaining_seconds=%.1f policy=%s",
                     (cooldown_until_ms - now_ms) / 1000.0,
+                    self._equity_hard_stop_cooldown_position_policy(),
                 )
-                await self._equity_hard_stop_wait_for_cooldown(cooldown_until_ms)
-                if self.stop_signal_received:
-                    return
-                now_ms = int(self.get_exchange_time())
-            self._equity_hard_stop_reset_after_restart()
-            cooldown_until_ms = None
-            pending_red = False
+                return
 
         current_balance = self.get_raw_balance()
         current_realized = self._equity_hard_stop_realized_pnl_now()
@@ -1320,6 +1471,27 @@ class Passivbot:
             return None
         if not self._equity_hard_stop_runtime_initialized():
             await self._equity_hard_stop_initialize_from_history()
+        now_ms = int(self.get_exchange_time())
+        if self._equity_hard_stop_halted:
+            if await self._equity_hard_stop_handle_position_during_cooldown(now_ms):
+                if not self._equity_hard_stop_halted:
+                    return None
+            if self._equity_hard_stop_halted:
+                cooldown_until_ms = self._equity_hard_stop_halted_until_ms
+                if (
+                    not self._equity_hard_stop_no_restart_latched
+                    and cooldown_until_ms is not None
+                    and now_ms >= cooldown_until_ms
+                ):
+                    self._equity_hard_stop_reset_after_restart()
+                    self._equity_hard_stop_remove_latch_file()
+                    logging.info("[risk] RED cooldown elapsed; trading resumed")
+                else:
+                    self._equity_hard_stop_refresh_halted_runtime_forced_modes()
+                    return {
+                        "halted": True,
+                        "cooldown_until_ms": cooldown_until_ms,
+                    }
 
         prev_latched = self._equity_hard_stop_runtime_red_latched()
         prev_tier = self._equity_hard_stop_runtime_tier()
@@ -1327,7 +1499,7 @@ class Passivbot:
         realized_pnl = self._equity_hard_stop_realized_pnl_now()
         unrealized_pnl = await self._calc_upnl_sum_strict()
         metrics = self._equity_hard_stop_apply_sample(
-            int(self.get_exchange_time()),
+            now_ms,
             float(balance),
             float(realized_pnl),
             float(unrealized_pnl),
@@ -1453,20 +1625,24 @@ class Passivbot:
             self.stop_signal_received = True
             return
 
+        self._equity_hard_stop_halted = True
+        self._equity_hard_stop_no_restart_latched = False
+        self._equity_hard_stop_halted_until_ms = cooldown_until_ms
+        self._equity_hard_stop_cooldown_intervention_active = False
+        self._equity_hard_stop_cooldown_repanic_reset_pending = False
+        self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
+        self._equity_hard_stop_pending_stop_event = None
+        self._equity_hard_stop_refresh_halted_runtime_forced_modes()
         logging.critical(
-            "[risk] RED stop finalized (auto-restart eligible) | stop_ts=%s "
-            "drawdown_raw=%.6f cooldown_until_ms=%s latch=%s",
+            "[risk] RED stop finalized (cooldown active) | stop_ts=%s "
+            "drawdown_raw=%.6f cooldown_until_ms=%s policy=%s latch=%s",
             stop_ts_ms,
             stop_event["drawdown_raw"],
             cooldown_until_ms,
+            self._equity_hard_stop_cooldown_position_policy(),
             latch_path,
         )
-        await self._equity_hard_stop_wait_for_cooldown(cooldown_until_ms)
-        if self.stop_signal_received:
-            return
-        self._equity_hard_stop_reset_after_restart()
-        self._equity_hard_stop_remove_latch_file()
-        logging.info("[risk] RED cooldown elapsed; trading loop resumed")
+        return
 
     async def _equity_hard_stop_run_red_supervisor(self) -> None:
         if self._equity_hard_stop_supervisor_running:
@@ -2719,7 +2895,7 @@ class Passivbot:
                 failed_update_pos_oos_pnls_ohlcvs_count = 0
                 if self._equity_hard_stop_enabled():
                     await self._equity_hard_stop_check()
-                    if self._equity_hard_stop_runtime_red_latched():
+                    if self._equity_hard_stop_runtime_red_latched() and not self._equity_hard_stop_halted:
                         await self._equity_hard_stop_run_red_supervisor()
                         continue
                 res = await self.execute_to_exchange()
