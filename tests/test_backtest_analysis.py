@@ -178,6 +178,30 @@ def test_process_forager_fills_handles_zero_pnl_division():
     assert analysis_appendix["pnl_ratio_long_short"] == 0.5
 
 
+def test_process_forager_fills_no_fills_keeps_datetime_index_for_resample():
+    """No-fill balance/equity joins should stay resample-safe on a DatetimeIndex."""
+    t0 = 1_740_000_000_000
+    equities_array = np.array(
+        [
+            [t0, 1000.0, 0.02],
+            [t0 + 3_600_000, 1000.5, 0.02],
+        ],
+        dtype=np.float64,
+    )
+
+    fdf, _analysis_appendix, bal_eq = process_forager_fills(
+        fills=[],
+        coins=[],
+        hlcvs=np.empty((0, 0), dtype=np.float64),
+        equities_array=equities_array,
+        balance_sample_divider=60,
+    )
+
+    assert fdf.empty
+    assert isinstance(bal_eq.index, pd.DatetimeIndex)
+    assert not bal_eq.empty
+
+
 def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, monkeypatch):
     calls = {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
 

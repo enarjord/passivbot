@@ -941,7 +941,9 @@ def process_forager_fills(
         if sample_divider > 1 and not bal_eq.empty:
             try:
                 bal_eq = bal_eq.resample(f"{sample_divider}min").last()
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                if isinstance(e, TypeError) and "DatetimeIndex" not in str(e):
+                    raise
                 bal_eq = bal_eq.iloc[::sample_divider]
             bal_eq = bal_eq.dropna(how="all").ffill().bfill()
     bal_eq = bal_eq.round(4).astype(np.float32)
