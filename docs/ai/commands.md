@@ -7,9 +7,9 @@ Use from repo root unless noted.
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -e .              # live-only
-# or: pip install -e ".[full]"
-# or: pip install -e ".[dev]"
+python3 -m pip install -e .              # live-only
+# or: python3 -m pip install -e ".[full]"
+# or: python3 -m pip install -e ".[dev]"
 ```
 
 ## Tests

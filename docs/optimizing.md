@@ -5,7 +5,7 @@ Passivbot configurations can be optimized using a multi-objective evolutionary a
 Optimization requires the full install profile:
 
 ```bash
-pip install -e ".[full]"
+python3 -m pip install -e ".[full]"
 ```
 
 ## Running Optimization
@@ -153,7 +153,7 @@ python3 src/pareto_store.py optimize_results/.../pareto/
 - Streaming history chart sourced from `all_results.bin`
 - CSV export of the current run's dataset for offline analysis
 
-Use the full install profile (`pip install -e ".[full]"`) if the dashboard dependencies are not already present.
+Use the full install profile (`python3 -m pip install -e ".[full]"`) if the dashboard dependencies are not already present.
 The legacy `pareto_store.py` script still supports quick 2D/3D matplotlib plots if a GUI
 isn't needed.
 

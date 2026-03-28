@@ -6,6 +6,7 @@ import os
 import runpy
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,8 @@ FULL_INSTALL_MODULE_HINTS = {
 
 
 FULL_INSTALL_MARKER_MODULES = tuple(sorted(FULL_INSTALL_MODULE_HINTS | {"websockets"}))
+ENV_MISMATCH_IGNORE_ENV = "PASSIVBOT_IGNORE_ENV_MISMATCH"
+ENV_REEXEC_GUARD_ENV = "PASSIVBOT_ENV_REEXEC"
 
 
 def _build_root_parser() -> argparse.ArgumentParser:
@@ -119,8 +122,9 @@ def _build_root_parser() -> argparse.ArgumentParser:
         description="Passivbot unified CLI",
         epilog=(
             "Use 'passivbot <command> -h' for command-specific help.\n"
-            "Base install supports live trading. Install passivbot with 'pip install -e \".[full]\"' "
-            "for backtesting, optimization, downloader, and advanced tools."
+            "Base install supports live trading. Install passivbot with "
+            "'python3 -m pip install -e \".[full]\"' for backtesting, optimization, downloader, "
+            "and advanced tools."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", metavar="command")
@@ -136,7 +140,8 @@ def _build_tool_parser() -> argparse.ArgumentParser:
         description="Run auxiliary Passivbot tools",
         epilog=(
             "Use 'passivbot tool <tool> -h' for tool-specific help.\n"
-            "Install passivbot with 'pip install -e \".[full]\"' for tools marked as requiring the full install."
+            "Install passivbot with 'python3 -m pip install -e \".[full]\"' for tools marked as "
+            "requiring the full install."
         ),
     )
     parser.add_argument("tool_name", nargs="?", help="Tool to run")
@@ -150,12 +155,100 @@ def _restore_env_var(name: str, previous: str | None) -> None:
         os.environ[name] = previous
 
 
+def _active_env_prefix() -> Path | None:
+    for name in ("VIRTUAL_ENV", "CONDA_PREFIX"):
+        raw = os.environ.get(name)
+        if raw:
+            return Path(raw).expanduser().resolve()
+    return None
+
+
+def _resolve_path(value: str | os.PathLike[str]) -> Path:
+    return Path(value).expanduser().resolve()
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _env_bin_dir(prefix: Path) -> Path:
+    return prefix / ("Scripts" if os.name == "nt" else "bin")
+
+
+def _expected_console_script(prefix: Path) -> Path:
+    suffix = ".exe" if os.name == "nt" else ""
+    return _env_bin_dir(prefix) / f"passivbot{suffix}"
+
+
+def _expected_python(prefix: Path) -> Path:
+    suffix = ".exe" if os.name == "nt" else ""
+    return _env_bin_dir(prefix) / f"python{suffix}"
+
+
+def _install_command_line(command: str, prefix: Path | None = None) -> str:
+    if prefix is not None:
+        return f"{_expected_python(prefix)} -m pip install -e {command}"
+    return f'python3 -m pip install -e {command}'
+
+
+def _install_guidance(prefix: Path | None = None) -> str:
+    full = '".[full]"'
+    dev = '".[dev]"'
+    return (
+        "Install Passivbot into the active environment with one of:\n"
+        f"  {_install_command_line('.', prefix)}\n"
+        f"  {_install_command_line(full, prefix)}\n"
+        f"  {_install_command_line(dev, prefix)}\n"
+    )
+
+
+def _environment_mismatch_message(prefix: Path, actual_python: Path) -> str:
+    script = _resolve_path(sys.argv[0]) if sys.argv and sys.argv[0] else None
+    expected_script = _expected_console_script(prefix)
+    return (
+        "passivbot detected an active environment mismatch.\n"
+        f"  Active environment: {prefix}\n"
+        f"  Running python:     {actual_python}\n"
+        f"  Running script:     {script}\n"
+        f"  Expected script:    {expected_script}\n"
+        "This usually means your shell resolved a stale shim or a different install.\n\n"
+        f"{_install_guidance(prefix)}"
+        "After installing, reactivate the environment and refresh shell command lookup "
+        "(for example: 'hash -r'; with zsh also run 'rehash').\n"
+        f"Set {ENV_MISMATCH_IGNORE_ENV}=1 to bypass this check intentionally.\n"
+    )
+
+
+def _ensure_expected_environment() -> None:
+    if os.environ.get(ENV_MISMATCH_IGNORE_ENV):
+        return
+
+    prefix = _active_env_prefix()
+    if prefix is None:
+        return
+
+    actual_python = _resolve_path(sys.executable)
+    if _path_is_within(actual_python, prefix):
+        return
+
+    expected_script = _expected_console_script(prefix)
+    if expected_script.exists() and not os.environ.get(ENV_REEXEC_GUARD_ENV):
+        os.environ[ENV_REEXEC_GUARD_ENV] = "1"
+        os.execv(str(expected_script), [str(expected_script), *sys.argv[1:]])
+
+    raise SystemExit(_environment_mismatch_message(prefix, actual_python))
+
+
 def _full_install_message(prog_name: str, missing_module: str | None = None) -> str:
     detail = f" Missing dependency: {missing_module}." if missing_module else ""
     return (
         f"{prog_name} requires the full Passivbot install.{detail}\n"
         "Install it with:\n"
-        '  pip install -e ".[full]"\n'
+        '  python3 -m pip install -e ".[full]"\n'
     )
 
 
@@ -246,4 +339,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def console_main() -> None:
+    _ensure_expected_environment()
     raise SystemExit(main())
