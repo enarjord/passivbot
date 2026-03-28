@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 from backtest import expand_analysis, process_forager_fills
 
@@ -119,3 +120,39 @@ def test_process_forager_fills_handles_zero_pnl_division():
     assert analysis_appendix["loss_profit_ratio_long"] == 1.0
     assert analysis_appendix["loss_profit_ratio_short"] == 1.0
     assert analysis_appendix["pnl_ratio_long_short"] == 0.5
+
+
+def test_process_forager_fills_no_fills_does_not_crash_resample():
+    """Regression test: no fills + sample_divider > 1 must not raise TypeError.
+
+    When a backtest period produces zero fills the four balance series were
+    previously created with a plain RangeIndex.  After pd.concat with the
+    equity series (DatetimeIndex) pandas returned a generic Index, which
+    caused resample() to raise:
+        TypeError: Only valid with DatetimeIndex, TimedeltaIndex or
+        PeriodIndex, but got an instance of 'Index'
+    """
+    # Two equity data points 1 hour apart (ms timestamps)
+    t0 = 1_740_000_000_000  # some Unix ms timestamp
+    equities_array = np.array(
+        [
+            [t0, 1000.0, 0.02],
+            [t0 + 3_600_000, 1000.5, 0.02],
+        ],
+        dtype=np.float64,
+    )
+
+    # Must not raise; balance_sample_divider=60 triggers the resample path
+    fdf, analysis_appendix, bal_eq = process_forager_fills(
+        fills=[],
+        coins=[],
+        hlcvs=np.empty((0, 0), dtype=np.float64),
+        equities_array=equities_array,
+        balance_sample_divider=60,
+    )
+
+    assert fdf.empty
+    assert isinstance(bal_eq.index, pd.DatetimeIndex), (
+        f"Expected DatetimeIndex, got {type(bal_eq.index)}"
+    )
+    assert not bal_eq.empty
