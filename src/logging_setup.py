@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,24 @@ TRACE_LEVEL_NAME = "TRACE"
 DEFAULT_FORMAT = "%(asctime)s %(levelname)-8s %(message)s"
 DEFAULT_FORMAT_WITH_PREFIX = "%(asctime)s %(levelname)-8s [%(log_prefix)s] %(message)s"
 DEFAULT_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+_LAST_LOG_ACTIVITY_MONOTONIC = time.monotonic()
+
+
+class ActivityFilter(logging.Filter):
+    """Filter that tracks the most recent emitted log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        mark_log_activity()
+        return True
+
+
+def mark_log_activity() -> None:
+    global _LAST_LOG_ACTIVITY_MONOTONIC
+    _LAST_LOG_ACTIVITY_MONOTONIC = time.monotonic()
+
+
+def get_last_log_activity_monotonic() -> float:
+    return _LAST_LOG_ACTIVITY_MONOTONIC
 
 
 class PrefixFilter(logging.Filter):

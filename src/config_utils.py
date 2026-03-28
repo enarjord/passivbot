@@ -712,6 +712,7 @@ LEGACY_ENTRY_GRID_KEYS = {
     "entry_trailing_threshold_log_weight": "entry_trailing_threshold_volatility_weight",
 }
 
+
 LEGACY_BOUNDS_KEYS = {
     "long_filter_noisiness_rolling_window": "long_filter_volatility_ema_span",
     "long_filter_noisiness_ema_span": "long_filter_volatility_ema_span",
@@ -1064,13 +1065,13 @@ def _ensure_bot_defaults_and_bounds(
                 bounds.get(f"{pside}_close_grid_min_markup", [0.001, 0.03]),
             ),
             (
-                "filter_volume_drop_pct",
-                result["live"].get("filter_relative_volume_clip_pct", 0.5),
+                "filter_volatility_drop_pct",
+                0.0,
                 [0.0, 1.0],
             ),
             (
-                "filter_volatility_drop_pct",
-                0.0,
+                "filter_volume_drop_pct",
+                result["live"].get("filter_relative_volume_clip_pct", 0.5),
                 [0.0, 1.0],
             ),
         ]:
