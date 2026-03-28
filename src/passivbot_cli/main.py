@@ -159,12 +159,12 @@ def _active_env_prefix() -> Path | None:
     for name in ("VIRTUAL_ENV", "CONDA_PREFIX"):
         raw = os.environ.get(name)
         if raw:
-            return Path(raw).expanduser().resolve()
+            return Path(os.path.abspath(os.path.expanduser(raw)))
     return None
 
 
 def _resolve_path(value: str | os.PathLike[str]) -> Path:
-    return Path(value).expanduser().resolve()
+    return Path(os.path.abspath(os.path.expanduser(os.fspath(value))))
 
 
 def _path_is_within(path: Path, root: Path) -> bool:
@@ -236,9 +236,13 @@ def _ensure_expected_environment() -> None:
         return
 
     expected_script = _expected_console_script(prefix)
-    if expected_script.exists() and not os.environ.get(ENV_REEXEC_GUARD_ENV):
+    expected_python = _expected_python(prefix)
+    if expected_script.exists() and expected_python.exists() and not os.environ.get(ENV_REEXEC_GUARD_ENV):
         os.environ[ENV_REEXEC_GUARD_ENV] = "1"
-        os.execv(str(expected_script), [str(expected_script), *sys.argv[1:]])
+        os.execv(
+            str(expected_python),
+            [str(expected_python), str(expected_script), *sys.argv[1:]],
+        )
 
     raise SystemExit(_environment_mismatch_message(prefix, actual_python))
 
