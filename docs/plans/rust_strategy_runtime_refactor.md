@@ -120,7 +120,7 @@ Recommended files:
 - `passivbot-rust/src/strategies/mod.rs`
 - `passivbot-rust/src/strategies/registry.rs`
 - `passivbot-rust/src/strategies/spec.rs`
-- `passivbot-rust/src/strategies/adaptive_grid.rs`
+- `passivbot-rust/src/strategies/adaptive_trailing_grid.rs`
 - `passivbot-rust/src/strategies/simple_ema_mm.rs`
 
 ### 3. Feature Provider Layer
@@ -144,6 +144,15 @@ This layer owns feature derivation from raw inputs already available to the orch
 
 Keep `StrategyKind` in `types.rs`, but make it only a dispatch key, not the thing that forces
 branching all over orchestrator internals.
+
+Recommended built-in names:
+
+- `adaptive_trailing_grid` for the standard Passivbot strategy
+- `simple_ema_mm` for the EMA-band market-making experiment
+
+`adaptive_trailing_grid` should describe the strategy's core order behavior, grid plus trailing.
+Features such as TWEL/WEL enforcers, unstuck, panic, hard stop loss, and realized-loss gating
+should remain shared engine capabilities rather than defining the strategy name.
 
 ### SharedBotParams
 
@@ -480,12 +489,13 @@ implicitly inherit dynamic-WEL behavior unless the strategy explicitly opts into
 
 ### Phase 1: Extract Strategy Runtime Seam
 
-Goal: isolate strategy order generation without changing external behavior for the default strategy.
+Goal: isolate strategy order generation without changing external behavior for the standard
+`adaptive_trailing_grid` strategy.
 
 Tasks:
 
 1. Create `strategies/` module with:
-   - `adaptive_grid.rs`
+   - `adaptive_trailing_grid.rs`
    - `simple_ema_mm.rs`
    - `registry.rs`
    - `spec.rs`
@@ -531,7 +541,7 @@ Tasks:
 1. Introduce `SharedBotParams`
 2. Introduce `StrategyParams`
 3. Add config normalization from current schema to the new internal shape
-4. Keep backwards compatibility for adaptive-grid
+4. Keep backwards compatibility for `adaptive_trailing_grid`
 
 Success criteria:
 
