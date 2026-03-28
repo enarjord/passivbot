@@ -17,7 +17,7 @@ def test_root_help_lists_primary_commands(capsys):
     assert "optimize" in out
     assert "download" in out
     assert "tool" in out
-    assert 'pip install -e ".[full]"' in out
+    assert 'python3 -m pip install -e ".[full]"' in out
 
 
 def test_dispatch_core_command_forwards_module_and_prog(monkeypatch):
@@ -71,6 +71,59 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "requires full install" in out
 
 
+def test_console_main_reexecs_into_active_virtualenv(monkeypatch, tmp_path):
+    venv_prefix = tmp_path / "venv"
+    script_path = venv_prefix / "bin" / "passivbot"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv_prefix))
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    monkeypatch.delenv(cli_main.ENV_REEXEC_GUARD_ENV, raising=False)
+    monkeypatch.delenv(cli_main.ENV_MISMATCH_IGNORE_ENV, raising=False)
+    monkeypatch.setattr(cli_main.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr(cli_main.sys, "argv", ["passivbot", "backtest", "cfg.json"])
+
+    captured = {}
+
+    def fake_execv(path, argv):
+        captured["path"] = path
+        captured["argv"] = argv
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli_main.os, "execv", fake_execv)
+
+    with pytest.raises(SystemExit) as exc:
+        cli_main.console_main()
+
+    assert exc.value.code == 0
+    assert captured["path"] == str(script_path.resolve())
+    assert captured["argv"] == [str(script_path.resolve()), "backtest", "cfg.json"]
+    assert os.environ.get(cli_main.ENV_REEXEC_GUARD_ENV) == "1"
+
+
+def test_console_main_fails_loudly_when_active_env_has_no_passivbot(monkeypatch, tmp_path):
+    venv_prefix = tmp_path / "venv"
+    (venv_prefix / "bin").mkdir(parents=True)
+
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv_prefix))
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    monkeypatch.delenv(cli_main.ENV_REEXEC_GUARD_ENV, raising=False)
+    monkeypatch.delenv(cli_main.ENV_MISMATCH_IGNORE_ENV, raising=False)
+    monkeypatch.setattr(cli_main.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr(cli_main.sys, "argv", ["passivbot", "backtest", "cfg.json"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli_main.console_main()
+
+    message = str(exc.value)
+    assert "active environment mismatch" in message
+    assert str(venv_prefix.resolve()) in message
+    assert "/usr/bin/python3" in message
+    assert f"{venv_prefix / 'bin' / 'passivbot'}" in message
+    assert f"{venv_prefix / 'bin' / 'python'} -m pip install -e \".[full]\"" in message
+
+
 def test_tool_dispatch_forwards_module_and_prog(monkeypatch):
     captured = {}
 
@@ -116,7 +169,7 @@ def test_full_install_hint_is_shown_for_missing_optional_dependency(monkeypatch,
     assert cli_main.main(["optimize", "--iters", "10"]) == 2
 
     captured = capsys.readouterr()
-    assert 'pip install -e ".[full]"' in captured.err
+    assert 'python3 -m pip install -e ".[full]"' in captured.err
     assert "passivbot optimize requires the full Passivbot install." in captured.err
 
 
@@ -130,7 +183,7 @@ def test_requires_full_command_fails_immediately_without_full_install(monkeypatc
     assert cli_main.main(["backtest", "-s", "XMR"]) == 2
 
     captured = capsys.readouterr()
-    assert 'pip install -e ".[full]"' in captured.err
+    assert 'python3 -m pip install -e ".[full]"' in captured.err
     assert "passivbot backtest requires the full Passivbot install." in captured.err
 
 

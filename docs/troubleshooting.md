@@ -14,6 +14,8 @@ Cause:
 
 - Your shell is resolving a different `passivbot` executable than the one inside the active virtualenv.
 - This is common with `pyenv`, multiple virtualenvs, or shells that cache command paths.
+- Newer Passivbot builds detect this and either re-exec into the active environment's `passivbot`
+  script or fail loudly with an explicit mismatch message.
 
 Check which command is being used:
 
@@ -84,7 +86,7 @@ If the first command is correct and the second is not, the problem is shell path
 Install the full profile:
 
 ```bash
-pip install -e ".[full]"
+python3 -m pip install -e ".[full]"
 ```
 
 ## `passivbot_rust` missing or stale
@@ -99,9 +101,9 @@ maturin develop --release
 If you recently pulled new commits, refresh the install too:
 
 ```bash
-pip install -e .
-# or: pip install -e ".[full]"
-# or: pip install -e ".[dev]"
+python3 -m pip install -e .
+# or: python3 -m pip install -e ".[full]"
+# or: python3 -m pip install -e ".[dev]"
 ```
 
 ## `maturin develop` says it could not find a virtualenv or conda environment
