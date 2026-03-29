@@ -2,16 +2,10 @@
 
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
-Optimization requires the full install profile:
-
-```bash
-pip install -e ".[full]"
-```
-
 ## Running Optimization
 
 ```bash
-passivbot optimize [path/to/config.json]
+python3 src/optimize.py [path/to/config.json]
 ```
 
 - Defaults to `configs/template.json` if no config is specified
@@ -21,10 +15,10 @@ passivbot optimize [path/to/config.json]
 
 Example:
 ```bash
-passivbot optimize configs/template.json --start configs/starting_pool/
+python3 src/optimize.py configs/template.json --start configs/starting_pool/
 ```
 
-Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
+Most config parameters can be modified via CLI. `python3 src/optimize.py -h` for more info.
 
 ### Candle Interval
 
@@ -54,7 +48,7 @@ keys to keep tunable; all other bounds are locked to their current config values
 the run starts.
 
 ```bash
-passivbot optimize configs/template.json \
+python3 src/optimize.py configs/template.json \
   --fine_tune_params long_entry_grid_spacing_pct,long_entry_initial_qty_pct
 ```
 
@@ -137,7 +131,7 @@ Full analysis is included in each member of the Pareto front. Two helper tools a
 
 ```bash
 # Interactive dashboard (recommended)
-passivbot tool pareto-dash --data-root optimize_results
+python3 src/tools/pareto_dash.py --data-root optimize_results
 
 # Static matplotlib plotter
 python3 src/pareto_store.py optimize_results/.../pareto/
@@ -153,7 +147,7 @@ python3 src/pareto_store.py optimize_results/.../pareto/
 - Streaming history chart sourced from `all_results.bin`
 - CSV export of the current run's dataset for offline analysis
 
-Use the full install profile (`pip install -e ".[full]"`) if the dashboard dependencies are not already present.
+Install the dependencies via `pip install dash plotly` if they are not already present.
 The legacy `pareto_store.py` script still supports quick 2D/3D matplotlib plots if a GUI
 isn't needed.
 
@@ -183,7 +177,7 @@ Example:
 CLI overrides accept the same JSON/HJSON payload:
 
 ```bash
-passivbot optimize --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
+python3 src/optimize.py --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
 
 For quick-and-dirty tweaks, the legacy format (`--penalize_if_greater_than_drawdown_worst 0.3`) is still recognized and converted to the new schema at runtime.

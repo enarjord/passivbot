@@ -222,7 +222,7 @@ pub fn calc_grid_close_long(
             price: f64::max(
                 state_params.order_book.ask,
                 round_up(
-                    position.price * (1.0 + bot_params.close_grid_markup_start),
+                    state_params.ema_bands.upper * (1.0 + bot_params.close_grid_markup_start),
                     exchange_params.price_step,
                 ),
             ),
@@ -230,11 +230,11 @@ pub fn calc_grid_close_long(
         };
     }
     let close_prices_start = round_up(
-        position.price * (1.0 + bot_params.close_grid_markup_start),
+        state_params.ema_bands.upper * (1.0 + bot_params.close_grid_markup_start),
         exchange_params.price_step,
     );
     let close_prices_end = round_up(
-        position.price * (1.0 + bot_params.close_grid_markup_end),
+        state_params.ema_bands.upper * (1.0 + bot_params.close_grid_markup_end),
         exchange_params.price_step,
     );
     if close_prices_start == close_prices_end {
@@ -328,7 +328,7 @@ pub fn calc_trailing_close_long(
             let close_price = f64::max(
                 state_params.order_book.ask,
                 round_up(
-                    position.price * (1.0 + bot_params.close_trailing_threshold_pct),
+                    state_params.ema_bands.upper * (1.0 + bot_params.close_trailing_threshold_pct),
                     exchange_params.price_step,
                 ),
             );
@@ -347,7 +347,7 @@ pub fn calc_trailing_close_long(
         } else {
             // close if both conditions are met
             if trailing_price_bundle.max_since_open
-                > position.price * (1.0 + bot_params.close_trailing_threshold_pct)
+                > state_params.ema_bands.upper * (1.0 + bot_params.close_trailing_threshold_pct)
                 && trailing_price_bundle.min_since_max
                     < trailing_price_bundle.max_since_open
                         * (1.0 - bot_params.close_trailing_retracement_pct)
@@ -355,7 +355,7 @@ pub fn calc_trailing_close_long(
                 let close_price = f64::max(
                     state_params.order_book.ask,
                     round_up(
-                        position.price
+                        state_params.ema_bands.upper
                             * (1.0 + bot_params.close_trailing_threshold_pct
                                 - bot_params.close_trailing_retracement_pct),
                         exchange_params.price_step,
@@ -516,7 +516,7 @@ pub fn calc_grid_close_short(
             price: f64::min(
                 state_params.order_book.bid,
                 round_dn(
-                    position.price * (1.0 - bot_params.close_grid_markup_start),
+                    state_params.ema_bands.lower * (1.0 - bot_params.close_grid_markup_start),
                     exchange_params.price_step,
                 ),
             ),
@@ -524,11 +524,11 @@ pub fn calc_grid_close_short(
         };
     }
     let close_prices_start = round_dn(
-        position.price * (1.0 - bot_params.close_grid_markup_start),
+        state_params.ema_bands.lower * (1.0 - bot_params.close_grid_markup_start),
         exchange_params.price_step,
     );
     let close_prices_end = round_dn(
-        position.price * (1.0 - bot_params.close_grid_markup_end),
+        state_params.ema_bands.lower * (1.0 - bot_params.close_grid_markup_end),
         exchange_params.price_step,
     );
     if close_prices_start == close_prices_end {
@@ -622,7 +622,7 @@ pub fn calc_trailing_close_short(
             let close_price = f64::min(
                 state_params.order_book.bid,
                 round_dn(
-                    position.price * (1.0 - bot_params.close_trailing_threshold_pct),
+                    state_params.ema_bands.lower * (1.0 - bot_params.close_trailing_threshold_pct),
                     exchange_params.price_step,
                 ),
             );
@@ -640,7 +640,7 @@ pub fn calc_trailing_close_short(
             }
         } else {
             if trailing_price_bundle.min_since_open
-                < position.price * (1.0 - bot_params.close_trailing_threshold_pct)
+                < state_params.ema_bands.lower * (1.0 - bot_params.close_trailing_threshold_pct)
                 && trailing_price_bundle.max_since_min
                     > trailing_price_bundle.min_since_open
                         * (1.0 + bot_params.close_trailing_retracement_pct)
@@ -648,7 +648,7 @@ pub fn calc_trailing_close_short(
                 let close_price = f64::min(
                     state_params.order_book.bid,
                     round_dn(
-                        position.price
+                        state_params.ema_bands.lower
                             * (1.0 - bot_params.close_trailing_threshold_pct
                                 + bot_params.close_trailing_retracement_pct),
                         exchange_params.price_step,
@@ -881,6 +881,148 @@ mod tests {
         let new_psize = (pos.size.abs() - order.qty.abs()).max(0.0);
         let new_we = calc_wallet_exposure(exchange.c_mult, state.balance, new_psize, pos.price);
         assert!(new_we < 1.0, "new_we={} not strictly below target", new_we);
+    }
+
+    #[test]
+    fn test_grid_close_long_uses_ema_upper() {
+        let exchange = make_exchange_params();
+        let state = StateParams {
+            balance: 1000.0,
+            order_book: crate::types::OrderBook {
+                ask: 90.0,
+                bid: 90.0,
+                ..Default::default()
+            },
+            ema_bands: crate::types::EMABands {
+                upper: 105.0,
+                lower: 95.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            close_grid_qty_pct: 0.1,
+            close_grid_markup_start: 0.01,
+            close_grid_markup_end: 0.05,
+            ..Default::default()
+        };
+        let pos = Position {
+            size: 5.0,
+            price: 100.0,
+        };
+        let order = calc_grid_close_long(&exchange, &state, &bot, &pos);
+        assert!(
+            order.price > 105.0,
+            "close price {} should be anchored above EMA upper (105), not position price (100)",
+            order.price
+        );
+    }
+
+    #[test]
+    fn test_grid_close_short_uses_ema_lower() {
+        let exchange = make_exchange_params();
+        let state = StateParams {
+            balance: 1000.0,
+            order_book: crate::types::OrderBook {
+                ask: 110.0,
+                bid: 110.0,
+                ..Default::default()
+            },
+            ema_bands: crate::types::EMABands {
+                upper: 105.0,
+                lower: 95.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            close_grid_qty_pct: 0.1,
+            close_grid_markup_start: 0.01,
+            close_grid_markup_end: 0.05,
+            ..Default::default()
+        };
+        let pos = Position {
+            size: -5.0,
+            price: 100.0,
+        };
+        let order = calc_grid_close_short(&exchange, &state, &bot, &pos);
+        assert!(
+            order.price < 95.0,
+            "close price {} should be anchored below EMA lower (95), not position price (100)",
+            order.price
+        );
+    }
+
+    #[test]
+    fn test_trailing_close_long_uses_ema_upper() {
+        let exchange = make_exchange_params();
+        let state = StateParams {
+            balance: 1000.0,
+            order_book: crate::types::OrderBook {
+                ask: 90.0,
+                bid: 90.0,
+                ..Default::default()
+            },
+            ema_bands: crate::types::EMABands {
+                upper: 105.0,
+                lower: 95.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            close_trailing_threshold_pct: 0.02,
+            close_trailing_retracement_pct: 0.0,
+            close_trailing_qty_pct: 0.5,
+            ..Default::default()
+        };
+        let pos = Position {
+            size: 5.0,
+            price: 100.0,
+        };
+        let trailing = TrailingPriceBundle::default();
+        let order = calc_trailing_close_long(&exchange, &state, &bot, &pos, &trailing);
+        assert!(
+            order.price > 105.0,
+            "trailing close price {} should be anchored above EMA upper (105)",
+            order.price
+        );
+    }
+
+    #[test]
+    fn test_trailing_close_short_uses_ema_lower() {
+        let exchange = make_exchange_params();
+        let state = StateParams {
+            balance: 1000.0,
+            order_book: crate::types::OrderBook {
+                ask: 110.0,
+                bid: 110.0,
+                ..Default::default()
+            },
+            ema_bands: crate::types::EMABands {
+                upper: 105.0,
+                lower: 95.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            close_trailing_threshold_pct: 0.02,
+            close_trailing_retracement_pct: 0.0,
+            close_trailing_qty_pct: 0.5,
+            ..Default::default()
+        };
+        let pos = Position {
+            size: -5.0,
+            price: 100.0,
+        };
+        let trailing = TrailingPriceBundle::default();
+        let order = calc_trailing_close_short(&exchange, &state, &bot, &pos, &trailing);
+        assert!(
+            order.price < 95.0,
+            "trailing close price {} should be anchored below EMA lower (95)",
+            order.price
+        );
     }
 }
 

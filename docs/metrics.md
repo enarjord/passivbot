@@ -50,3 +50,12 @@ and more stable across collateral caps.
 - `position_unchanged_hours_max`: Longest span with no fills on an open position.
 - `peak_recovery_hours_equity`: Longest time to make a new high on the equity curve.
 - `peak_recovery_hours_pnl`: Same calculation on cumulative realized PnL.
+
+## Trade-level metrics
+- `win_rate`: Fraction of completed trades (position open to close to zero) with net positive
+  realized PnL. A trade's net PnL is the sum of `fill.pnl` across all fills in that position
+  lifecycle. Positions still open at backtest end are excluded.
+- `trade_loss_max`: Worst single-trade loss as a fraction of balance at position open time.
+  Only losing trades (net PnL <= 0) contribute.
+- `trade_loss_mean`: Mean trade loss across all losing trades, same unit.
+- `trade_loss_median`: Median trade loss across all losing trades.

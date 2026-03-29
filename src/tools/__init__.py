@@ -1,1 +1,0 @@
-"""Passivbot auxiliary tools."""

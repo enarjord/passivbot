@@ -61,7 +61,6 @@ import multiprocessing
 import signal
 import time
 from collections import defaultdict
-from cli_utils import get_cli_prog
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from config_utils import (
     get_template_config,
@@ -642,6 +641,11 @@ class Evaluator:
             "sharpe_ratio_pnl_w": -1.0,
             "sortino_ratio_pnl": -1.0,
             "sortino_ratio_pnl_w": -1.0,
+            "win_rate": -1.0,
+            "win_rate_w": -1.0,
+            "trade_loss_max": 1.0,
+            "trade_loss_mean": 1.0,
+            "trade_loss_median": 1.0,
         }
 
         currency_metric_weights = {
@@ -1390,9 +1394,7 @@ def configs_to_individuals(cfgs, bounds, sig_digits=0):
 
 
 async def main():
-    parser = argparse.ArgumentParser(
-        prog=get_cli_prog("optimize"), description="run optimizer"
-    )
+    parser = argparse.ArgumentParser(prog="optimize", description="run optimizer")
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )

@@ -46,7 +46,7 @@ cfg.setdefault("live", {})
 cfg["live"]["approved_coins"] = {"long": ["BTC/USDT:USDT"], "short": []}
 json.dump(cfg, open("/tmp/review_backtest.json", "w"), indent=2)
 PY
-passivbot backtest /tmp/review_backtest.json --suite n -dp
+python3 src/backtest.py /tmp/review_backtest.json --suite n -dp
 ```
 
 ## Review Report Template

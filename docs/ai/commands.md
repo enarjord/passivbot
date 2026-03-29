@@ -7,9 +7,8 @@ Use from repo root unless noted.
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -e .              # live-only
-# or: pip install -e ".[full]"
-# or: pip install -e ".[dev]"
+pip install -r requirements.txt
+cd passivbot-rust && maturin develop --release && cd ..
 ```
 
 ## Tests
@@ -23,22 +22,22 @@ pytest tests/test_specific.py::test_name
 ## Live Bot
 
 ```bash
-passivbot live -u {account_name}
-passivbot live path/to/config.json --debug-level {0-3}
+python3 src/main.py -u {account_name}
+python3 src/main.py path/to/config.json --debug-level {0-3}
 ```
 
 ## Backtest
 
 ```bash
-passivbot backtest path/to/config.json
-passivbot backtest --suite
+python3 src/backtest.py path/to/config.json
+python3 src/backtest.py --suite
 ```
 
 ## Optimize
 
 ```bash
-passivbot optimize path/to/config.json
-passivbot optimize --suite
+python3 src/optimize.py path/to/config.json
+python3 src/optimize.py --suite
 ```
 
 ## Rust
@@ -52,9 +51,9 @@ cd passivbot-rust && cargo check --tests && cd ..
 ## Useful Tools
 
 ```bash
-passivbot tool pareto-dash --data-root optimize_results
-passivbot tool verify-hlcvs-data
-passivbot tool streamline-json configs/template.json
+python3 src/tools/pareto_dash.py --data-root optimize_results
+python3 src/tools/verify_hlcvs_data.py
+python3 src/tools/streamline_json.py configs/template.json
 ```
 
 ## High-Signal Gotcha

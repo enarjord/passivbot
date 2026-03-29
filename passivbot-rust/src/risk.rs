@@ -358,10 +358,10 @@ pub fn calc_unstucking_action(
 
         let ema_price = match input.side {
             LONG => {
-                if !input.ema_band_upper.is_finite() || input.ema_band_upper <= 0.0 {
+                if !input.ema_band_lower.is_finite() || input.ema_band_lower <= 0.0 {
                     continue;
                 }
-                let target = input.ema_band_upper * (1.0 + input.unstuck_ema_dist);
+                let target = input.ema_band_lower * (1.0 + input.unstuck_ema_dist);
                 let rounded = if price_step > 0.0 {
                     round_up(target, price_step)
                 } else {
@@ -373,10 +373,10 @@ pub fn calc_unstucking_action(
                 rounded
             }
             SHORT => {
-                if !input.ema_band_lower.is_finite() || input.ema_band_lower <= 0.0 {
+                if !input.ema_band_upper.is_finite() || input.ema_band_upper <= 0.0 {
                     continue;
                 }
-                let target = input.ema_band_lower * (1.0 - input.unstuck_ema_dist);
+                let target = input.ema_band_upper * (1.0 - input.unstuck_ema_dist);
                 let rounded = if price_step > 0.0 {
                     round_dn(target, price_step)
                 } else {
@@ -1193,5 +1193,61 @@ mod tests {
         assert_eq!(gated.len(), 1);
         assert!((gated[0].qty - 4.0).abs() < 1e-12);
         assert!((gated[0].price - 100.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_unstuck_long_uses_lower_band() {
+        let input = UnstuckPositionInput {
+            idx: 0,
+            side: LONG,
+            position_size: 10.0,
+            position_price: 100.0,
+            wallet_exposure_limit: 1.0,
+            risk_we_excess_allowance_pct: 0.0,
+            unstuck_threshold: 0.5,
+            unstuck_close_pct: 0.01,
+            unstuck_ema_dist: 0.0,
+            ema_band_upper: 200.0,
+            ema_band_lower: 102.0,
+            current_price: 103.0,
+            price_step: 0.01,
+            qty_step: 0.01,
+            min_qty: 0.01,
+            min_cost: 0.0,
+            c_mult: 1.0,
+        };
+        let result = calc_unstucking_action(1000.0, 100.0, 100.0, &[input]);
+        assert!(
+            result.is_some(),
+            "unstuck long should trigger using lower band (102), not upper band (200)"
+        );
+    }
+
+    #[test]
+    fn test_unstuck_short_uses_upper_band() {
+        let input = UnstuckPositionInput {
+            idx: 0,
+            side: SHORT,
+            position_size: -10.0,
+            position_price: 100.0,
+            wallet_exposure_limit: 1.0,
+            risk_we_excess_allowance_pct: 0.0,
+            unstuck_threshold: 0.5,
+            unstuck_close_pct: 0.01,
+            unstuck_ema_dist: 0.0,
+            ema_band_upper: 98.0,
+            ema_band_lower: 50.0,
+            current_price: 97.0,
+            price_step: 0.01,
+            qty_step: 0.01,
+            min_qty: 0.01,
+            min_cost: 0.0,
+            c_mult: 1.0,
+        };
+        let result = calc_unstucking_action(1000.0, 100.0, 100.0, &[input]);
+        assert!(
+            result.is_some(),
+            "unstuck short should trigger using upper band (98), not lower band (50)"
+        );
     }
 }

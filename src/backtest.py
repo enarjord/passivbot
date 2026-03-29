@@ -35,7 +35,6 @@ import json
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
-from cli_utils import get_cli_prog
 from config_utils import (
     load_config,
     dump_config,
@@ -1147,6 +1146,11 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
         "position_unchanged_hours_max",
         "loss_profit_ratio",
         "loss_profit_ratio_w",
+        "win_rate",
+        "win_rate_w",
+        "trade_loss_max",
+        "trade_loss_mean",
+        "trade_loss_median",
         "volume_pct_per_day_avg",
         "volume_pct_per_day_avg_w",
         "peak_recovery_hours_pnl",
@@ -1308,9 +1312,7 @@ def post_process(
 
 
 async def main():
-    parser = argparse.ArgumentParser(
-        prog=get_cli_prog("backtest"), description="run forager backtest"
-    )
+    parser = argparse.ArgumentParser(prog="backtest", description="run forager backtest")
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )

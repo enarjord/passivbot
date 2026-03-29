@@ -21,25 +21,17 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
  source venv/bin/activate  # Windows: venv\Scripts\activate
 ```
 
-## 3. Install Passivbot
-
-Choose the install profile that matches the machine:
-
-- **Live-only VPS**: `pip install -e .`
-- **Backtesting / optimization / research**: `pip install -e ".[full]"`
-- **Contributing / docs / linting**: `pip install -e ".[dev]"`
-
-Typical live-only install:
+## 3. Install Python dependencies
 
 ```bash
 pip install -U pip
-pip install -e .
+pip install -r requirements.txt
+pip install -r requirements-rust.txt   # only needed when building the Rust extension yourself
 ```
 
 ## 4. Build the Rust extension
 
-Passivbot exposes the Rust core through `passivbot_rust.*.so`. `pip install -e .` builds it as part
-of installation, but you can still rebuild manually when iterating on Rust code:
+Passivbot exposes the Rust core through `passivbot_rust.*.so`. Build it once per environment:
 
 ```bash
 source venv/bin/activate
@@ -56,14 +48,7 @@ Common errors:
 
 ```bash
 pytest -q
-passivbot -h
-```
-
-For backtesting and optimization environments, also verify:
-
-```bash
-passivbot backtest -h
-passivbot optimize -h
+python3 src/passivbot.py -h
 ```
 
 If pytest reports missing `passivbot_rust`, double-check that the venv is active and `maturin develop --release` completed successfully.
@@ -75,9 +60,7 @@ When pulling new commits:
 ```bash
 source venv/bin/activate
 git pull
-pip install -e .                       # live-only refresh
-# or: pip install -e ".[full]"         # full research/runtime refresh
-# or: pip install -e ".[dev]"          # contributor refresh
+pip install -r requirements.txt       # only when dependencies change
 maturin develop --release              # only when passivbot-rust changed
 ```
 
@@ -94,7 +77,6 @@ If you see linker errors after an OS update (e.g. new glibc), rebuild the extens
 | Symptom | Fix |
 |---------|-----|
 | `ModuleNotFoundError: passivbot_rust…` | Activate venv or rerun `maturin develop --release`. |
-| `passivbot optimize requires the full Passivbot install` | Install the full profile: `pip install -e ".[full]"`. |
 | `linker cc not found` / `cannot find crt1.o` | Install build-essential + `python3-dev`. |
 | `rustup: command not found` | Install Rust via https://rustup.rs/. |
 | `pip install … failed due to SSL` | Update `certifi` or set `PIP_CERT` if corporate proxies intercept TLS. |

@@ -153,7 +153,6 @@ __pycache__/
 
 # C extensions
 *.so
-*.rust-src-sha256
 
 # Distribution / packaging
 .Python

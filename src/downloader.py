@@ -28,7 +28,6 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 from tqdm import tqdm
-from cli_utils import get_cli_prog
 from config_utils import (
     add_config_arguments,
     load_config,
@@ -2110,9 +2109,7 @@ async def compute_exchange_volume_ratios(
 
 
 async def main():
-    parser = argparse.ArgumentParser(
-        prog=get_cli_prog("downloader"), description="download ohlcv data"
-    )
+    parser = argparse.ArgumentParser(prog="downloader", description="download ohlcv data")
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )

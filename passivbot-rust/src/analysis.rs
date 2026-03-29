@@ -289,6 +289,11 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
     let mut last_fill_time: HashMap<String, u64> = HashMap::new(); // Last fill time per position (ms)
     let mut unchanged_durations_ms: Vec<u64> = Vec::new(); // Durations of unchanged periods (ms)
 
+    // Trade-level PnL tracking: coin_side → (cumulative_pnl, balance_at_open)
+    let mut trade_accumulators: HashMap<String, (f64, f64)> = HashMap::new();
+    // Completed trades: (net_pnl, balance_at_open)
+    let mut completed_trades: Vec<(f64, f64)> = Vec::new();
+
     for fill in fills {
         let side = if fill.order_type.is_long() {
             "long"
@@ -306,6 +311,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
         if !positions_opened.contains_key(&key) {
             positions_opened.insert(key.clone(), fill_ts);
             last_fill_time.insert(key.clone(), fill_ts); // Initialize last fill time
+            trade_accumulators.insert(key.clone(), (0.0, fill.usd_total_balance));
         }
 
         // Calculate unchanged duration since the last fill
@@ -316,12 +322,22 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
         // Update the last fill time
         last_fill_time.insert(key.clone(), fill_ts);
 
+        // Accumulate PnL for close fills
+        if fill.pnl != 0.0 {
+            if let Some(acc) = trade_accumulators.get_mut(&key) {
+                acc.0 += fill.pnl;
+            }
+        }
+
         // If the position is fully closed, calculate total duration and reset
         if fill.position_size == 0.0 {
             if let Some(&start_idx) = positions_opened.get(&key) {
                 durations_ms.push(fill_ts.saturating_sub(start_idx));
                 positions_opened.remove(&key);
                 last_fill_time.remove(&key); // Reset tracking
+                if let Some((net_pnl, balance_at_open)) = trade_accumulators.remove(&key) {
+                    completed_trades.push((net_pnl, balance_at_open));
+                }
             }
         }
     }
@@ -387,6 +403,40 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
     } else {
         0.0
     };
+    // Compute trade-level metrics
+    let (win_rate, trade_loss_max, trade_loss_mean, trade_loss_median) =
+        if completed_trades.is_empty() {
+            (0.0, 0.0, 0.0, 0.0)
+        } else {
+            let n_trades = completed_trades.len() as f64;
+            let n_wins = completed_trades
+                .iter()
+                .filter(|(pnl, _)| *pnl > 0.0)
+                .count() as f64;
+            let win_rate = n_wins / n_trades;
+
+            let mut loss_ratios: Vec<f64> = completed_trades
+                .iter()
+                .filter(|(pnl, _)| *pnl <= 0.0)
+                .map(|(pnl, bal)| if *bal > 0.0 { pnl.abs() / bal } else { 0.0 })
+                .collect();
+
+            if loss_ratios.is_empty() {
+                (win_rate, 0.0, 0.0, 0.0)
+            } else {
+                let max = loss_ratios.iter().cloned().fold(0.0_f64, f64::max);
+                let mean = loss_ratios.iter().sum::<f64>() / loss_ratios.len() as f64;
+                loss_ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let mid = loss_ratios.len() / 2;
+                let median = if loss_ratios.len() % 2 == 0 {
+                    (loss_ratios[mid - 1] + loss_ratios[mid]) / 2.0
+                } else {
+                    loss_ratios[mid]
+                };
+                (win_rate, max, mean, median)
+            }
+        };
+
     let equity_choppiness = calc_equity_choppiness(&daily_eqs);
     let equity_jerkiness = calc_equity_jerkiness(&daily_eqs);
     let exponential_fit_error = calc_exponential_fit_error(&daily_eqs);
@@ -436,6 +486,10 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
     analysis.volume_pct_per_day_avg = volume_pct_per_day_avg;
     analysis.peak_recovery_hours_equity = peak_recovery_hours_equity;
     analysis.peak_recovery_hours_pnl = peak_recovery_hours_pnl;
+    analysis.win_rate = win_rate;
+    analysis.trade_loss_max = trade_loss_max;
+    analysis.trade_loss_mean = trade_loss_mean;
+    analysis.trade_loss_median = trade_loss_median;
 
     analysis
 }
@@ -560,6 +614,8 @@ pub fn analyze_backtest(
         .map(|a| a.positions_held_per_day)
         .sum::<f64>()
         / 10.0;
+
+    analysis.win_rate_w = subset_analyses.iter().map(|a| a.win_rate).sum::<f64>() / 10.0;
 
     // Use absolute values for exposure metrics since short positions have negative twe_net.
     // The metric represents "how much exposure" regardless of direction.
@@ -1179,6 +1235,189 @@ mod tests {
 
         assert!((gain - expected_gain).abs() < 1e-12);
         assert!((adg - expected_adg).abs() < 1e-12);
+    }
+
+    /// Helper: build a fill with explicit position lifecycle fields.
+    fn make_trade_fill(
+        index: usize,
+        timestamp_ms: u64,
+        coin: &str,
+        pnl: f64,
+        fill_qty: f64,
+        position_size: f64,
+        usd_total_balance: f64,
+    ) -> Fill {
+        Fill {
+            index,
+            timestamp_ms,
+            coin: coin.to_string(),
+            pnl,
+            fee_paid: 0.0,
+            usd_total_balance,
+            btc_cash_wallet: 0.0,
+            usd_cash_wallet: usd_total_balance,
+            btc_price: 50000.0,
+            fill_qty,
+            fill_price: 50000.0,
+            position_size,
+            position_price: 50000.0,
+            order_type: if fill_qty > 0.0 {
+                OrderType::EntryInitialNormalLong
+            } else {
+                OrderType::CloseGridLong
+            },
+            wallet_exposure: 0.1,
+            twe_long: 0.1,
+            twe_short: 0.0,
+            twe_net: 0.1,
+        }
+    }
+
+    #[test]
+    fn test_win_rate_mixed_trades() {
+        // Trade 1: open at index 0, close at index 1 with +50 pnl (WIN)
+        // Trade 2: open at index 2, close at index 3 with -30 pnl (LOSS)
+        let balance = 10000.0;
+        let fills = vec![
+            make_trade_fill(10, 10 * 60_000, "BTC", 0.0, 0.1, 0.1, balance),    // open trade 1
+            make_trade_fill(20, 20 * 60_000, "BTC", 50.0, -0.1, 0.0, balance),   // close trade 1: +50
+            make_trade_fill(30, 30 * 60_000, "BTC", 0.0, 0.1, 0.1, balance),     // open trade 2
+            make_trade_fill(40, 40 * 60_000, "BTC", -30.0, -0.1, 0.0, balance),  // close trade 2: -30
+        ];
+
+        let equities: Vec<f64> = vec![balance; 100];
+        let timestamps: Vec<u64> = (0..100).map(|i| (i as u64) * 60_000).collect();
+        let exposures: Vec<f64> = vec![];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures);
+
+        // 1 win out of 2 trades = 0.5
+        assert!(
+            (analysis.win_rate - 0.5).abs() < 1e-9,
+            "Expected win_rate=0.5, got {}",
+            analysis.win_rate
+        );
+
+        // Only 1 losing trade: loss = 30 / 10000 = 0.003
+        let expected_loss = 30.0 / balance;
+        assert!(
+            (analysis.trade_loss_max - expected_loss).abs() < 1e-9,
+            "Expected trade_loss_max={}, got {}",
+            expected_loss,
+            analysis.trade_loss_max
+        );
+        assert!(
+            (analysis.trade_loss_mean - expected_loss).abs() < 1e-9,
+            "Expected trade_loss_mean={}, got {}",
+            expected_loss,
+            analysis.trade_loss_mean
+        );
+        assert!(
+            (analysis.trade_loss_median - expected_loss).abs() < 1e-9,
+            "Expected trade_loss_median={}, got {}",
+            expected_loss,
+            analysis.trade_loss_median
+        );
+    }
+
+    #[test]
+    fn test_win_rate_all_winners() {
+        let balance = 10000.0;
+        let fills = vec![
+            make_trade_fill(10, 10 * 60_000, "ETH", 0.0, 1.0, 1.0, balance),
+            make_trade_fill(20, 20 * 60_000, "ETH", 100.0, -1.0, 0.0, balance),
+        ];
+
+        let equities: Vec<f64> = vec![balance; 100];
+        let timestamps: Vec<u64> = (0..100).map(|i| (i as u64) * 60_000).collect();
+        let exposures: Vec<f64> = vec![];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures);
+
+        assert!(
+            (analysis.win_rate - 1.0).abs() < 1e-9,
+            "Expected win_rate=1.0, got {}",
+            analysis.win_rate
+        );
+        assert!(
+            analysis.trade_loss_max.abs() < 1e-9,
+            "Expected trade_loss_max=0.0, got {}",
+            analysis.trade_loss_max
+        );
+    }
+
+    #[test]
+    fn test_win_rate_no_completed_trades() {
+        // Two positions open on different coins but neither closes — no completed trades
+        // Need 2+ fills to avoid the early-return guard (fills.len() <= 1)
+        let balance = 10000.0;
+        let fills = vec![
+            make_trade_fill(10, 10 * 60_000, "BTC", 0.0, 0.1, 0.1, balance),
+            make_trade_fill(20, 20 * 60_000, "ETH", 0.0, 1.0, 1.0, balance),
+        ];
+
+        let equities: Vec<f64> = vec![balance; 100];
+        let timestamps: Vec<u64> = (0..100).map(|i| (i as u64) * 60_000).collect();
+        let exposures: Vec<f64> = vec![];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures);
+
+        // No completed trades → defaults (0.0)
+        assert!(
+            analysis.win_rate.abs() < 1e-9,
+            "Expected win_rate=0.0, got {}",
+            analysis.win_rate
+        );
+        assert!(
+            analysis.trade_loss_max.abs() < 1e-9,
+            "Expected trade_loss_max=0.0, got {}",
+            analysis.trade_loss_max
+        );
+    }
+
+    #[test]
+    fn test_trade_loss_multiple_losers() {
+        // Two losing trades with different loss magnitudes
+        let balance = 10000.0;
+        let fills = vec![
+            make_trade_fill(10, 10 * 60_000, "BTC", 0.0, 0.1, 0.1, balance),
+            make_trade_fill(20, 20 * 60_000, "BTC", -100.0, -0.1, 0.0, balance), // loss 100
+            make_trade_fill(30, 30 * 60_000, "BTC", 0.0, 0.1, 0.1, balance),
+            make_trade_fill(40, 40 * 60_000, "BTC", -200.0, -0.1, 0.0, balance), // loss 200
+        ];
+
+        let equities: Vec<f64> = vec![balance; 100];
+        let timestamps: Vec<u64> = (0..100).map(|i| (i as u64) * 60_000).collect();
+        let exposures: Vec<f64> = vec![];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures);
+
+        assert!(
+            (analysis.win_rate).abs() < 1e-9,
+            "Expected win_rate=0.0 (all losers), got {}",
+            analysis.win_rate
+        );
+
+        // max loss = 200/10000 = 0.02
+        assert!(
+            (analysis.trade_loss_max - 0.02).abs() < 1e-9,
+            "Expected trade_loss_max=0.02, got {}",
+            analysis.trade_loss_max
+        );
+
+        // mean loss = (100/10000 + 200/10000) / 2 = 0.015
+        assert!(
+            (analysis.trade_loss_mean - 0.015).abs() < 1e-9,
+            "Expected trade_loss_mean=0.015, got {}",
+            analysis.trade_loss_mean
+        );
+
+        // median of [0.01, 0.02] = 0.015
+        assert!(
+            (analysis.trade_loss_median - 0.015).abs() < 1e-9,
+            "Expected trade_loss_median=0.015, got {}",
+            analysis.trade_loss_median
+        );
     }
 
     #[test]

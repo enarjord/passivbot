@@ -11,7 +11,7 @@
 1. If not already installed, install Passivbot. Otherwise, pull latest master branch: `git pull`.
 2. Update the requirements:
    ```bash
-   pip install -e .
+   pip install -r requirements.txt
    ```
 3. Add your Hyperliquid wallet address and API wallet to `api-keys.json`:
 ```json
@@ -24,7 +24,7 @@
 ```
 For the `"private_key"`, use the API wallet created in the API section on Hyperliquid.
 
-Now Passivbot may be run as normal with `passivbot live ...`. Note that Hyperliquid has a minimum $10 order size:  
+Now Passivbot may be run as normal. Note that Hyperliquid has a minimum $10 order size:  
 `initial_entry_cost = balance * (total_wallet_exposure_limit / n_positions) * entry_initial_qty_pct`
 
 #### HyperLiquid with a Vault (CopyTrading-like)

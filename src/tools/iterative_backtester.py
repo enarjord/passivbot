@@ -73,6 +73,11 @@ SHARED_METRIC_WEIGHTS = {
     "high_exposure_hours_max_long": 1.0,
     "high_exposure_hours_mean_short": 1.0,
     "high_exposure_hours_max_short": 1.0,
+    "win_rate": -1.0,
+    "win_rate_w": -1.0,
+    "trade_loss_max": 1.0,
+    "trade_loss_mean": 1.0,
+    "trade_loss_median": 1.0,
 }
 
 CURRENCY_METRIC_WEIGHTS = {
