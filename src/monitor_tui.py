@@ -177,6 +177,16 @@ def _http_to_ws(url: str) -> str:
     return urlunsplit((scheme, parts.netloc, parts.path, parts.query, parts.fragment))
 
 
+def _read_last_lines(path: Path, max_lines: int) -> list[str]:
+    if max_lines <= 0 or not path.exists():
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().splitlines()[-max_lines:]
+    except FileNotFoundError:
+        return []
+
+
 def _parse_symbol_parts(symbol: str) -> tuple[str, str]:
     base = symbol
     quote = ""
@@ -202,6 +212,13 @@ def _symbol_aliases(symbol: str) -> set[str]:
         aliases.add(f"{base}/{quote}")
         aliases.add(f"{base}{quote}")
     return aliases
+
+
+@dataclass
+class _LogTailState:
+    dev: int
+    ino: int
+    offset: int
 
 
 @dataclass
@@ -697,6 +714,9 @@ class MonitorTuiClient:
         focus_symbol: Optional[str] = None,
         snapshot_refresh_seconds: float = 2.0,
         render_interval_ms: int = 250,
+        log_file: Optional[str] = None,
+        log_poll_interval_ms: int = 500,
+        log_bootstrap_lines: int = 12,
     ) -> None:
         self.state = MonitorTuiState(
             relay_url=relay_url,
@@ -706,6 +726,12 @@ class MonitorTuiClient:
         )
         self.snapshot_refresh_seconds = max(0.25, float(snapshot_refresh_seconds))
         self.render_interval_ms = max(50, int(render_interval_ms))
+        self.log_poll_interval_ms = max(100, int(log_poll_interval_ms))
+        self.log_bootstrap_lines = max(0, int(log_bootstrap_lines))
+        self.log_file = str(Path(log_file).expanduser()) if log_file else None
+        self._log_tail_state: Optional[_LogTailState] = None
+        self.state.set_log_file(self.log_file)
+        self._bootstrap_log_tail()
         self._stop_event = asyncio.Event()
 
     def _snapshot_url(self) -> str:
@@ -716,6 +742,61 @@ class MonitorTuiClient:
         params = _build_query_params(self.state.exchange, self.state.user)
         http_url = _append_query(urljoin(self.state.relay_url.rstrip("/") + "/", "ws"), params)
         return _http_to_ws(http_url)
+
+    def _bootstrap_log_tail(self) -> None:
+        if not self.log_file:
+            return
+        path = Path(self.log_file)
+        if path.exists():
+            self.state.push_log_lines(_read_last_lines(path, self.log_bootstrap_lines))
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                return
+            self._log_tail_state = _LogTailState(
+                dev=int(stat.st_dev),
+                ino=int(stat.st_ino),
+                offset=int(stat.st_size),
+            )
+
+    def _poll_log_tail_once(self) -> None:
+        if not self.log_file:
+            return
+        path = Path(self.log_file)
+        if not path.exists():
+            self._log_tail_state = None
+            return
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            self._log_tail_state = None
+            return
+        file_id = (int(stat.st_dev), int(stat.st_ino))
+        size = int(stat.st_size)
+        state = self._log_tail_state
+        if state is None:
+            self.state.push_log_lines(_read_last_lines(path, self.log_bootstrap_lines))
+            self._log_tail_state = _LogTailState(file_id[0], file_id[1], size)
+            return
+        reset = size < state.offset or (state.dev, state.ino) != file_id
+        read_from = 0 if reset else state.offset
+        if reset and self.log_bootstrap_lines > 0:
+            self.state.push_log_lines(_read_last_lines(path, self.log_bootstrap_lines))
+            self._log_tail_state = _LogTailState(file_id[0], file_id[1], size)
+            return
+        if size == read_from:
+            self._log_tail_state = _LogTailState(file_id[0], file_id[1], size)
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                f.seek(read_from)
+                lines = f.readlines()
+                new_offset = int(f.tell())
+        except FileNotFoundError:
+            self._log_tail_state = None
+            return
+        self.state.push_log_lines(lines)
+        self._log_tail_state = _LogTailState(file_id[0], file_id[1], new_offset)
 
     async def _snapshot_loop(self, session: aiohttp.ClientSession) -> None:
         while not self._stop_event.is_set():
@@ -765,6 +846,17 @@ class MonitorTuiClient:
             self._previous_screen = screen
             await asyncio.sleep(self.render_interval_ms / 1000.0)
 
+    async def _log_tail_loop(self) -> None:
+        if not self.log_file:
+            await self._stop_event.wait()
+            return
+        while not self._stop_event.is_set():
+            try:
+                self._poll_log_tail_once()
+            except Exception as exc:
+                self.state.last_error = f"log-tail: {exc}"
+            await asyncio.sleep(self.log_poll_interval_ms / 1000.0)
+
     async def _command_loop(self) -> None:
         if not sys.stdin or not sys.stdin.isatty():
             await self._stop_event.wait()
@@ -787,6 +879,7 @@ class MonitorTuiClient:
                 asyncio.create_task(self._snapshot_loop(session)),
                 asyncio.create_task(self._ws_loop(session)),
                 asyncio.create_task(self._render_loop()),
+                asyncio.create_task(self._log_tail_loop()),
                 asyncio.create_task(self._command_loop()),
             ]
             try:

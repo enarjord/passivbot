@@ -12,6 +12,7 @@ All notable user-facing changes will be documented in this file.
 - **Opt-in live monitor publisher** - Added a local monitor publisher with on-disk snapshots, event streams, and retained fill/price/candle history, plus basic live bot integration for startup, balance, order, fill, and shutdown events.
 - **Read-only monitor relay** - Added a local `monitor-relay` tool exposing monitor snapshots and streamed event/history tails over HTTP and websocket, including recent-message replay on connect.
 - **Terminal monitor TUI** - Added a local `monitor-tui` tool consuming the relay for current-state panels, live recent activity, focus cycling, pause/resume, and screen dumps.
+- **Monitor dev wrapper** - Added a `monitor-dev` helper that reuses or launches the local relay and opens the terminal monitor with the newest bot log tailed by default.
 
 ### Changed
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.

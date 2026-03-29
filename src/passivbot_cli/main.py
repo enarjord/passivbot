@@ -76,6 +76,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "serve monitor snapshots and live streams (requires full install)",
         requires_full=True,
     ),
+    "monitor-dev": CommandSpec(
+        "tools.monitor_dev",
+        "launch relay if needed and attach the terminal monitor (requires full install)",
+        requires_full=True,
+    ),
     "monitor-tui": CommandSpec(
         "tools.monitor_tui",
         "launch terminal monitor reader (requires full install)",

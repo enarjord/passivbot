@@ -61,3 +61,18 @@ Current behavior:
 2. Keeps recent events and price ticks live through `/ws`
 3. Supports `focus`, `pause`, `resume`, `dump`, `clear`, `help`, `quit`, and `exit`
 4. Renders a lightweight boxed terminal dashboard without reading bot memory or raw monitor files directly
+
+## Monitor Dev Wrapper
+
+For local monitor iteration there is also a convenience wrapper:
+
+```bash
+passivbot tool monitor-dev --exchange bitget --user bitget_01
+```
+
+Current behavior:
+
+1. Reuses an existing relay if one is already healthy at the target `--relay-url`
+2. Otherwise launches the relay automatically for local relay URLs
+3. Selects the newest `logs/*.log` file by default unless `--log-file` is provided
+4. Passes the selected bot log into the TUI for local tailing
