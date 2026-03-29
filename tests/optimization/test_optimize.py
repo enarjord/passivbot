@@ -39,6 +39,48 @@ def test_worker_initializer_is_pickleable_for_spawn():
     ForkingPickler.dumps(ignore_sigint_in_worker)
 
 
+def test_evaluator_is_pickleable_for_spawn():
+    from config_utils import get_template_config
+    from optimize import Evaluator
+
+    cfg = get_template_config()
+    cfg["optimize"]["limits"] = []
+    evaluator = Evaluator({}, {}, {}, cfg)
+
+    ForkingPickler.dumps(evaluator)
+
+
+def test_suite_evaluator_is_pickleable_for_spawn():
+    from config_utils import get_template_config
+    from optimize import Evaluator, SuiteEvaluator
+
+    cfg = get_template_config()
+    cfg["optimize"]["limits"] = []
+    evaluator = Evaluator({}, {}, {}, cfg)
+    suite_evaluator = SuiteEvaluator(evaluator, [], {})
+
+    ForkingPickler.dumps(suite_evaluator)
+
+
+def test_deap_individual_is_pickleable_for_spawn():
+    from deap import creator
+    from optimize import ConstraintAwareFitness
+
+    fitness_name = "SpawnTestFitness"
+    individual_name = "SpawnTestIndividual"
+    if hasattr(creator, fitness_name):
+        delattr(creator, fitness_name)
+    if hasattr(creator, individual_name):
+        delattr(creator, individual_name)
+
+    creator.create(fitness_name, ConstraintAwareFitness, weights=(-1.0,))
+    creator.create(individual_name, list, fitness=getattr(creator, fitness_name))
+    individual = getattr(creator, individual_name)([1.0])
+    individual.fitness.values = (0.0,)
+
+    ForkingPickler.dumps(individual)
+
+
 class TestApplyConfigOverrides:
     """Test _apply_config_overrides function."""
 

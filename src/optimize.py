@@ -158,18 +158,14 @@ from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
 )
+from optimization.deap_runtime import ConstraintAwareFitness as SpawnSafeConstraintAwareFitness
+from optimization.evaluator_runtime import (
+    Evaluator as SpawnSafeEvaluator,
+    SuiteEvaluator as SpawnSafeSuiteEvaluator,
+    apply_config_overrides as spawn_safe_apply_config_overrides,
+    individual_to_config as spawn_safe_individual_to_config,
+)
 from multiprocessing_utils import ignore_sigint_in_worker
-
-
-class ConstraintAwareFitness(base.Fitness):
-    constraint_violation: float = 0.0
-
-    def dominates(self, other, obj=slice(None)):
-        self_violation = getattr(self, "constraint_violation", 0.0)
-        other_violation = getattr(other, "constraint_violation", 0.0)
-        if math.isclose(self_violation, other_violation, rel_tol=0.0, abs_tol=1e-12):
-            return super().dominates(other, obj)
-        return self_violation < other_violation
 
 
 def _apply_config_overrides(config: Dict[str, Any], overrides: Dict[str, Any]) -> None:
@@ -1251,6 +1247,15 @@ class SuiteEvaluator:
                     attachment.close()
                 except Exception:
                     pass
+
+
+# Worker-facing evaluator objects must live in an importable module so macOS/Python
+# spawn multiprocessing can pickle them when optimize runs via the unified CLI.
+Evaluator = SpawnSafeEvaluator
+SuiteEvaluator = SpawnSafeSuiteEvaluator
+ConstraintAwareFitness = SpawnSafeConstraintAwareFitness
+_apply_config_overrides = spawn_safe_apply_config_overrides
+individual_to_config = spawn_safe_individual_to_config
 
 
 def add_extra_options(parser, *, help_all: bool):

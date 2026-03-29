@@ -792,9 +792,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
     let strategy_kind = match dict.get_item("strategy_kind")? {
         Some(item) => {
             let raw = item.extract::<String>()?;
-            StrategyKind::from_str(&raw).map_err(|_| {
-                PyValueError::new_err(format!("invalid strategy_kind '{}'", raw))
-            })?
+            StrategyKind::from_str(&raw)
+                .map_err(|_| PyValueError::new_err(format!("invalid strategy_kind '{}'", raw)))?
         }
         None => StrategyKind::AdaptiveGrid,
     };

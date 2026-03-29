@@ -1,6 +1,7 @@
 {
     "backtest": {
         "base_dir": "backtests/simple_ema_mm",
+        "btc_collateral_cap": 0.0,
         "candle_interval_minutes": 1,
         "start_date": "2025-01-01",
         "end_date": "2026-03-01",
