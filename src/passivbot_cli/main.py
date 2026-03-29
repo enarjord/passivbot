@@ -71,6 +71,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "migrate historical data layout (requires full install)",
         requires_full=True,
     ),
+    "monitor-relay": CommandSpec(
+        "tools.monitor_relay",
+        "serve monitor snapshots and live streams (requires full install)",
+        requires_full=True,
+    ),
     "pad-historical-daily": CommandSpec(
         "tools.pad_historical_daily",
         "pad missing daily historical data (requires full install)",

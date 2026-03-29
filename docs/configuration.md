@@ -91,6 +91,8 @@ event streams, and selected history streams to disk under `monitor/<exchange>/<u
 
 The current publisher snapshot keeps HSL state at the account level to match the live runtime on
 this branch. Treat these files as local diagnostics/replay artifacts, not as a stable remote API.
+See [Monitor Relay](/Users/eiriknarjord/repos/passivbot-3/docs/monitor.md) for the read-only relay
+layer built on top of these files.
 
 ## Bot Settings
 

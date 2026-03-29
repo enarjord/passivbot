@@ -65,6 +65,7 @@ def test_tool_help_lists_supported_tools(capsys):
     assert cli_main.main(["tool", "-h"]) == 0
 
     out = capsys.readouterr().out
+    assert "monitor-relay" in out
     assert "pareto-dash" in out
     assert "streamline-json" in out
     assert "verify-hlcvs-data" in out
@@ -94,6 +95,27 @@ def test_tool_dispatch_forwards_module_and_prog(monkeypatch):
         "optimize_results",
     ]
     assert captured["prog_env"] == "passivbot tool pareto-dash"
+
+
+def test_monitor_relay_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_run_module(module_name, run_name):
+        captured["module_name"] = module_name
+        captured["run_name"] = run_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "monitor-relay", "--port", "9000"]) == 0
+
+    assert captured["module_name"] == "tools.monitor_relay"
+    assert captured["run_name"] == "__main__"
+    assert captured["argv"] == ["passivbot tool monitor-relay", "--port", "9000"]
+    assert captured["prog_env"] == "passivbot tool monitor-relay"
 
 
 def test_unknown_command_exits_with_error():
