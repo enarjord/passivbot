@@ -76,6 +76,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "serve monitor snapshots and live streams (requires full install)",
         requires_full=True,
     ),
+    "monitor-tui": CommandSpec(
+        "tools.monitor_tui",
+        "launch terminal monitor reader (requires full install)",
+        requires_full=True,
+    ),
     "pad-historical-daily": CommandSpec(
         "tools.pad_historical_daily",
         "pad missing daily historical data (requires full install)",
