@@ -20,8 +20,8 @@ The current Rust shape is good for one dominant strategy, but too coupled for mu
 Observed pain points:
 
 1. Strategy logic is embedded inside shared orchestrator flow.
-   - `StrategyKind` already exists in [passivbot-rust/src/types.rs](/tmp/passivbot-master-spec/passivbot-rust/src/types.rs)
-   - strategy branching currently happens directly inside [passivbot-rust/src/orchestrator.rs](/tmp/passivbot-master-spec/passivbot-rust/src/orchestrator.rs)
+   - `StrategyKind` already exists in `passivbot-rust/src/types.rs`
+   - strategy branching currently happens directly inside `passivbot-rust/src/orchestrator.rs`
 
 2. Strategy-specific param adaptation is ad hoc.
    - `simple_ema_mm` currently needs a custom adapter in orchestrator to reinterpret existing config
@@ -39,6 +39,52 @@ Observed pain points:
 6. Shared portfolio logic and strategy sizing semantics can conflict.
    - `simple_ema_mm` exposed this with configured `total_wallet_exposure_limit / n_positions`
      semantics versus dynamic backtest WEL behavior
+
+## Runtime Flow
+
+The intended refactor should preserve the current high-level decision flow while making each stage
+cleanly separable.
+
+1. Python assembles payload inputs for Rust.
+   - live bot gathers exchange state, candles, EMAs, balances, positions, open orders, and config
+   - backtester assembles the same logical state from historical simulation state
+
+2. Rust shared engine performs selection and allocation.
+   - enabled sides
+   - effective `n_positions`
+   - forager-style active coin selection
+   - forced-active handling
+   - keeping already-open positions active
+
+3. Rust shared engine applies routing and mode constraints.
+   - hedge/non-hedge one-way blocking
+   - manual / tp-only / normal / panic mode interpretation
+   - effective-min-cost gating for initial entries
+
+4. Rust strategy runtime generates candidate entries and closes.
+   - one symbol, one side, one strategy context at a time
+   - uses requested features only
+
+5. Rust shared protection/risk layer augments and gates orders.
+   - WEL auto-reduce
+   - TWEL enforcer
+   - unstuck
+   - panic close
+   - realized-loss gate
+   - dust/min-cost trimming
+   - entry TWEL gating
+
+6. Rust emits final ideal orders.
+   - deterministic per-symbol ordering
+   - optional global ordering
+   - diagnostics
+
+7. Consumer-specific handling happens after Rust emits ideal orders.
+   - backtester clears and replaces its resting open-order model each step
+   - live bot reconciles ideal orders against actual exchange orders and applies configurable
+     tolerance to avoid cancel/create churn
+
+This flow is the basis for the config grouping proposed below.
 
 ## Goals
 
@@ -388,9 +434,24 @@ This avoids blocking the refactor on speculative complexity.
 
 ### Recommended New Shape
 
-Shared engine/risk params remain in `bot`.
+Shared bot config should be grouped by runtime role rather than by implementation order labels like
+`pre_processing` and `post_processing`.
 
-Strategy-specific params move to a new config section.
+Recommended groups:
+
+- `selection`
+- `portfolio`
+- `strategy`
+- `protection`
+
+Why this is preferred:
+
+- `selection` maps to forager / slot activation
+- `portfolio` maps to exposure-budget semantics
+- `strategy` maps to the main entry/close logic for the chosen strategy
+- `protection` maps to shared add-on behaviors layered after strategy generation
+
+This matches the runtime flow without coupling the config to exact call order.
 
 Recommended:
 
@@ -401,40 +462,105 @@ Recommended:
   },
   "bot": {
     "long": {
-      "total_wallet_exposure_limit": 1.0,
-      "n_positions": 3,
-      "risk_twel_enforcer_threshold": 1.0
+      "selection": {
+        "n_positions": 3,
+        "filter_volume_ema_span": 60.0,
+        "filter_volume_drop_pct": 0.5,
+        "filter_volatility_ema_span": 60.0,
+        "filter_volatility_drop_pct": 0.0
+      },
+      "portfolio": {
+        "total_wallet_exposure_limit": 1.0,
+        "wallet_exposure_excess_allowance_pct": 0.0
+      },
+      "strategy": {
+        "base_qty_pct": 0.01,
+        "ema_span_0": 200.0,
+        "ema_span_1": 800.0,
+        "quote_offset_pct": 0.002,
+        "position_bias_weight": 0.1
+      },
+      "protection": {
+        "wel_enforcer_threshold": 1.0,
+        "twel_enforcer_threshold": 1.0,
+        "unstuck_close_pct": 0.001,
+        "unstuck_ema_dist": 0.0,
+        "unstuck_loss_allowance_pct": 0.03,
+        "unstuck_threshold": 0.916
+      }
     },
     "short": {
-      "total_wallet_exposure_limit": 1.0,
-      "n_positions": 3,
-      "risk_twel_enforcer_threshold": 1.0
-    }
-  },
-  "strategy": {
-    "long": {
-      "base_qty_pct": 0.01,
-      "ema_span_0": 200.0,
-      "ema_span_1": 800.0,
-      "offset": 0.002,
-      "offset_psize_weight": 0.1
-    },
-    "short": {
-      "mirror_long": true
+      "mirror_from": "long",
+      "strategy": {
+        "quote_offset_pct": 0.003
+      }
     }
   }
 }
 ```
 
+The example above shows the preferred symmetry model:
+
+- `bot.short.mirror_from = "long"` mirrors the entire side configuration
+- local subsection overrides remain allowed
+
+### Mirroring Design
+
+Mirroring should be a generic config feature, not a strategy-only special case.
+
+Recommended rule:
+
+- allow `mirror_from: "long"` or `mirror_from: "short"` on side blocks
+- allow `mirror_from` on subsection blocks like `selection`, `portfolio`, `strategy`,
+  and `protection`
+- resolve in this order:
+  1. shared defaults
+  2. mirrored source block
+  3. local overrides
+
+Examples:
+
+Full side mirroring:
+
+```json
+"bot": {
+  "long": { ... },
+  "short": {
+    "mirror_from": "long"
+  }
+}
+```
+
+Section-only mirroring:
+
+```json
+"bot": {
+  "long": { ... },
+  "short": {
+    "selection": { "mirror_from": "long" },
+    "portfolio": { "mirror_from": "long" },
+    "strategy": { "mirror_from": "long" },
+    "protection": { "mirror_from": "long" }
+  }
+}
+```
+
+This is preferred over many booleans such as `mirror_long_strategy`, `mirror_long_portfolio`,
+etc., because it scales better and keeps the resolved config model simple.
+
 ### Compatibility Rule
 
 During migration:
 
-- continue accepting current `bot.*` strategy fields for the adaptive-grid strategy
+- continue accepting current flat `bot.*` fields for the `adaptive_trailing_grid` strategy
 - allow `simple_ema_mm` to read old mapped config on the research branch
-- add a normalized internal config representation so Rust receives:
-  - `shared_bot_params`
+- normalize legacy config into the new grouped structure before Rust sees it
+- resolve all `mirror_from` references during normalization
+- Rust should receive:
+  - `selection_params`
+  - `portfolio_params`
   - `strategy_params`
+  - `protection_params`
   - `strategy_kind`
 
 ## Python Changes
