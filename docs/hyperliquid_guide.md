@@ -11,7 +11,7 @@
 1. If not already installed, install Passivbot. Otherwise, pull latest master branch: `git pull`.
 2. Update the requirements:
    ```bash
-   pip install -e .
+   python3 -m pip install -e .
    ```
 3. Add your Hyperliquid wallet address and API wallet to `api-keys.json`:
 ```json

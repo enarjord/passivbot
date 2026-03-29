@@ -90,16 +90,16 @@ venv\Scripts\activate
 
 Choose the install profile that matches your use case:
 
-- **Live-only VPS**: `pip install -e .`
-- **Backtesting / optimization / research workstation**: `pip install -e ".[full]"`
-- **Contributing / docs / lint tooling**: `pip install -e ".[dev]"`
+- **Live-only VPS**: `python3 -m pip install -e .`
+- **Backtesting / optimization / research workstation**: `python3 -m pip install -e ".[full]"`
+- **Contributing / docs / lint tooling**: `python3 -m pip install -e ".[dev]"`
 
 All profiles build the Rust extension and register the `passivbot` command.
 
 Typical live-only install:
 
 ```sh
-pip install -e .
+python3 -m pip install -e .
 ```
 
 ### Step 5 (optional): Build Rust Extensions
@@ -168,9 +168,9 @@ python3 -m jupyter lab
 ## Requirements
 
 - Python >= 3.12
-- `pip install -e .` for live trading only
-- `pip install -e ".[full]"` for backtesting, optimization, downloader, and advanced tools
-- `pip install -e ".[dev]"` for contributor tooling on top of the full install
+- `python3 -m pip install -e .` for live trading only
+- `python3 -m pip install -e ".[full]"` for backtesting, optimization, downloader, and advanced tools
+- `python3 -m pip install -e ".[dev]"` for contributor tooling on top of the full install
 
 ## Pre-optimized configurations
 

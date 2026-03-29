@@ -58,7 +58,6 @@ from backtest import (
 import asyncio
 import argparse
 import multiprocessing
-import signal
 import time
 from collections import defaultdict
 from cli_utils import (
@@ -161,14 +160,7 @@ from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
 )
-
-
-def _ignore_sigint_in_worker():
-    """Ensure worker processes don't receive SIGINT so the parent controls shutdown."""
-    try:
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-    except (AttributeError, ValueError):
-        pass
+from multiprocessing_utils import ignore_sigint_in_worker
 
 
 class ConstraintAwareFitness(base.Fitness):
@@ -1948,7 +1940,7 @@ async def main():
             duplicate_counter=duplicate_counter,
             starting_configs_path=args.starting_configs,
             constraint_fitness_cls=ConstraintAwareFitness,
-            ignore_sigint_in_worker=_ignore_sigint_in_worker,
+            ignore_sigint_in_worker=ignore_sigint_in_worker,
             get_starting_configs=get_starting_configs,
             configs_to_individuals=configs_to_individuals,
             record_individual_result=_record_individual_result,
