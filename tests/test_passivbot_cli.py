@@ -24,20 +24,18 @@ def test_dispatch_core_command_forwards_module_and_prog(monkeypatch):
     captured = {}
     original_argv = sys.argv[:]
 
-    def fake_run_module(module_name, run_name):
+    def fake_invoke_module_main(module_name):
         captured["module_name"] = module_name
-        captured["run_name"] = run_name
         captured["argv"] = sys.argv[:]
         captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
-        raise SystemExit(0)
+        return True, 0
 
-    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
     monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
     assert cli_main.main(["optimize", "--suite", "y"]) == 0
 
     assert captured["module_name"] == "optimize"
-    assert captured["run_name"] == "__main__"
     assert captured["argv"] == ["passivbot optimize", "--suite", "y"]
     assert captured["prog_env"] == "passivbot optimize"
     assert sys.argv == original_argv
@@ -47,12 +45,12 @@ def test_dispatch_core_command_forwards_module_and_prog(monkeypatch):
 def test_help_subcommand_forwards_to_command_help(monkeypatch):
     captured = {}
 
-    def fake_run_module(module_name, run_name):
+    def fake_invoke_module_main(module_name):
         captured["module_name"] = module_name
         captured["argv"] = sys.argv[:]
-        raise SystemExit(0)
+        return True, 0
 
-    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
     monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: ["deap"])
 
     assert cli_main.main(["help", "backtest"]) == 0
@@ -150,20 +148,18 @@ def test_console_main_accepts_symlinked_virtualenv_python(monkeypatch, tmp_path)
 def test_tool_dispatch_forwards_module_and_prog(monkeypatch):
     captured = {}
 
-    def fake_run_module(module_name, run_name):
+    def fake_invoke_module_main(module_name):
         captured["module_name"] = module_name
-        captured["run_name"] = run_name
         captured["argv"] = sys.argv[:]
         captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
-        raise SystemExit(0)
+        return True, 0
 
-    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
     monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
     assert cli_main.main(["tool", "pareto-dash", "--data-root", "optimize_results"]) == 0
 
     assert captured["module_name"] == "tools.pareto_dash"
-    assert captured["run_name"] == "__main__"
     assert captured["argv"] == [
         "passivbot tool pareto-dash",
         "--data-root",
@@ -175,20 +171,18 @@ def test_tool_dispatch_forwards_module_and_prog(monkeypatch):
 def test_monitor_relay_tool_dispatch_forwards_module_and_prog(monkeypatch):
     captured = {}
 
-    def fake_run_module(module_name, run_name):
+    def fake_invoke_module_main(module_name):
         captured["module_name"] = module_name
-        captured["run_name"] = run_name
         captured["argv"] = sys.argv[:]
         captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
-        raise SystemExit(0)
+        return True, 0
 
-    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
     monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
     assert cli_main.main(["tool", "monitor-relay", "--port", "9000"]) == 0
 
     assert captured["module_name"] == "tools.monitor_relay"
-    assert captured["run_name"] == "__main__"
     assert captured["argv"] == ["passivbot tool monitor-relay", "--port", "9000"]
     assert captured["prog_env"] == "passivbot tool monitor-relay"
 
@@ -196,20 +190,18 @@ def test_monitor_relay_tool_dispatch_forwards_module_and_prog(monkeypatch):
 def test_monitor_dev_tool_dispatch_forwards_module_and_prog(monkeypatch):
     captured = {}
 
-    def fake_run_module(module_name, run_name):
+    def fake_invoke_module_main(module_name):
         captured["module_name"] = module_name
-        captured["run_name"] = run_name
         captured["argv"] = sys.argv[:]
         captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
-        raise SystemExit(0)
+        return True, 0
 
-    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
     monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
     assert cli_main.main(["tool", "monitor-dev", "--exchange", "bitget"]) == 0
 
     assert captured["module_name"] == "tools.monitor_dev"
-    assert captured["run_name"] == "__main__"
     assert captured["argv"] == ["passivbot tool monitor-dev", "--exchange", "bitget"]
     assert captured["prog_env"] == "passivbot tool monitor-dev"
 
@@ -217,20 +209,18 @@ def test_monitor_dev_tool_dispatch_forwards_module_and_prog(monkeypatch):
 def test_monitor_tui_tool_dispatch_forwards_module_and_prog(monkeypatch):
     captured = {}
 
-    def fake_run_module(module_name, run_name):
+    def fake_invoke_module_main(module_name):
         captured["module_name"] = module_name
-        captured["run_name"] = run_name
         captured["argv"] = sys.argv[:]
         captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
-        raise SystemExit(0)
+        return True, 0
 
-    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
     monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
     assert cli_main.main(["tool", "monitor-tui", "--focus-symbol", "BTC"]) == 0
 
     assert captured["module_name"] == "tools.monitor_tui"
-    assert captured["run_name"] == "__main__"
     assert captured["argv"] == ["passivbot tool monitor-tui", "--focus-symbol", "BTC"]
     assert captured["prog_env"] == "passivbot tool monitor-tui"
 
@@ -246,10 +236,10 @@ def test_full_install_hint_is_shown_for_missing_optional_dependency(monkeypatch,
     error = ModuleNotFoundError("No module named 'deap'")
     error.name = "deap"
 
-    def fake_run_module(module_name, run_name):
+    def fake_invoke_module_main(module_name):
         raise error
 
-    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
     monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
     assert cli_main.main(["optimize", "--iters", "10"]) == 2
@@ -260,10 +250,10 @@ def test_full_install_hint_is_shown_for_missing_optional_dependency(monkeypatch,
 
 
 def test_requires_full_command_fails_immediately_without_full_install(monkeypatch, capsys):
-    def fail_if_called(module_name, run_name):
-        raise AssertionError("run_module should not be called without the full install")
+    def fail_if_called(module_name):
+        raise AssertionError("_invoke_module_main should not be called without the full install")
 
-    monkeypatch.setattr(cli_main.runpy, "run_module", fail_if_called)
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fail_if_called)
     monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: ["aiohttp"])
 
     assert cli_main.main(["backtest", "-s", "XMR"]) == 2
@@ -271,6 +261,41 @@ def test_requires_full_command_fails_immediately_without_full_install(monkeypatc
     captured = capsys.readouterr()
     assert 'python3 -m pip install -e ".[full]"' in captured.err
     assert "passivbot backtest requires the full Passivbot install." in captured.err
+
+
+def test_run_module_falls_back_to_runpy_when_module_has_no_main(monkeypatch):
+    captured = {}
+
+    class ModuleWithoutMain:
+        pass
+
+    def fake_import_module(module_name):
+        captured["module_name"] = module_name
+        return ModuleWithoutMain()
+
+    def fake_run_module(module_name, run_name):
+        captured["runpy_module_name"] = module_name
+        captured["run_name"] = run_name
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli_main.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(cli_main.runpy, "run_module", fake_run_module)
+
+    assert cli_main._run_module("tools.generate_mcap_list", "passivbot tool generate-mcap-list", []) == 0
+
+    assert captured["module_name"] == "tools.generate_mcap_list"
+    assert captured["runpy_module_name"] == "tools.generate_mcap_list"
+    assert captured["run_name"] == "__main__"
+
+
+def test_invoke_module_main_runs_async_entrypoint(monkeypatch):
+    class AsyncModule:
+        async def main(self):
+            return 7
+
+    monkeypatch.setattr(cli_main.importlib, "import_module", lambda module_name: AsyncModule())
+
+    assert cli_main._invoke_module_main("optimize") == (True, 7)
 
 
 def test_expand_help_all_argv_appends_help_when_needed():

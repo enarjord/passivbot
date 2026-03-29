@@ -435,6 +435,8 @@ class TestHLCVManagerGapHandling:
         )
         om.tradfi_for_stock_perps = True
         om.load_cc = lambda: None
+        om.load_markets = AsyncMock()
+        om.markets = {"XYZ-AAPL/USDC:USDC": {"symbol": "XYZ-AAPL/USDC:USDC"}}
         om.has_coin = lambda coin: True
         om.get_symbol = lambda coin: "XYZ-AAPL/USDC:USDC"
         om.cm = MagicMock()

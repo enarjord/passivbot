@@ -19,8 +19,10 @@ import optimize
 from optimize import (
     _apply_config_overrides,
     _analysis_indicates_liquidation,
+    _clear_candidate_metrics,
     _looks_like_bool_token,
     _normalize_optional_bool_flag,
+    _set_candidate_metrics,
     _format_objectives,
     individual_to_config,
     config_to_individual,
@@ -39,6 +41,23 @@ from optimize_suite import ScenarioEvalContext
 
 def test_worker_initializer_is_pickleable_for_spawn():
     ForkingPickler.dumps(ignore_sigint_in_worker)
+
+
+def test_candidate_metrics_sidecars_only_attach_to_objects():
+    class Candidate:
+        pass
+
+    obj = Candidate()
+    _set_candidate_metrics(obj, {"foo": 1})
+    assert obj.evaluation_metrics == {"foo": 1}
+    _clear_candidate_metrics(obj)
+    assert not hasattr(obj, "evaluation_metrics")
+
+    plain_vector = [1.0, 2.0]
+    _set_candidate_metrics(plain_vector, {"foo": 1})
+    assert not hasattr(plain_vector, "evaluation_metrics")
+    _clear_candidate_metrics(plain_vector)
+    assert plain_vector == [1.0, 2.0]
 
 
 class TestApplyConfigOverrides:

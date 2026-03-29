@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import importlib
 import importlib.util
+import inspect
 import os
 import runpy
 import sys
@@ -279,6 +282,23 @@ def _is_help_request(argv: list[str]) -> bool:
     return any(arg in {"-h", "--help"} for arg in argv)
 
 
+def _invoke_module_main(module_name: str) -> tuple[bool, int]:
+    module = importlib.import_module(module_name)
+    main_fn = getattr(module, "main", None)
+    if not callable(main_fn):
+        return False, 0
+
+    result = main_fn()
+    if inspect.isawaitable(result):
+        result = asyncio.run(result)
+
+    if result is None:
+        return True, 0
+    if isinstance(result, int):
+        return True, result
+    return True, 0
+
+
 def _run_module(module_name: str, prog_name: str, argv: list[str], requires_full: bool = False) -> int:
     if requires_full and not _is_help_request(argv):
         if _missing_full_install_markers():
@@ -290,6 +310,9 @@ def _run_module(module_name: str, prog_name: str, argv: list[str], requires_full
     sys.argv = [prog_name, *argv]
     os.environ["PASSIVBOT_CLI_PROG"] = prog_name
     try:
+        ran_main, exit_code = _invoke_module_main(module_name)
+        if ran_main:
+            return exit_code
         runpy.run_module(module_name, run_name="__main__")
     except ModuleNotFoundError as exc:
         if requires_full and exc.name and exc.name.split(".", 1)[0] in FULL_INSTALL_MODULE_HINTS:

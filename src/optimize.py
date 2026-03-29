@@ -402,6 +402,16 @@ def _analysis_indicates_liquidation(analysis: dict | None, config: dict) -> bool
     return float(drawdown) >= _liquidation_drawdown_threshold(config) - 1e-12
 
 
+def _set_candidate_metrics(individual, metrics_payload) -> None:
+    if hasattr(individual, "__dict__"):
+        individual.evaluation_metrics = metrics_payload
+
+
+def _clear_candidate_metrics(individual) -> None:
+    if hasattr(individual, "evaluation_metrics"):
+        delattr(individual, "evaluation_metrics")
+
+
 def _record_individual_result(individual, evaluator_config, overrides_list, recorder):
     metrics = getattr(individual, "evaluation_metrics", {}) or {}
     suite_metrics = metrics.pop("suite_metrics", None)
@@ -420,8 +430,7 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
         entry["metrics"] = metrics
     entry = strip_config_metadata(entry)
     recorder.record(entry)
-    if hasattr(individual, "evaluation_metrics"):
-        del individual.evaluation_metrics
+    _clear_candidate_metrics(individual)
 
 
 def ea_mu_plus_lambda_stream(
@@ -500,10 +509,10 @@ def ea_mu_plus_lambda_stream(
                     if metrics is not None:
                         if bool(metrics.get("liquidated")):
                             liquidation_total += 1
-                        ind.evaluation_metrics = metrics
+                        _set_candidate_metrics(ind, metrics)
                         _record_individual_result(ind, evaluator_config, overrides_list, recorder)
-                    elif hasattr(ind, "evaluation_metrics"):
-                        delattr(ind, "evaluation_metrics")
+                    else:
+                        _clear_candidate_metrics(ind)
                     completed += 1
         except KeyboardInterrupt:
             logging.info("Evaluation interrupted; terminating pending tasks...")
@@ -970,7 +979,7 @@ class Evaluator:
                     error,
                     include_stats=True,
                 )
-                individual.evaluation_metrics = metrics_payload
+                _set_candidate_metrics(individual, metrics_payload)
                 actual_hash = calc_hash(individual)
                 self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
                 return tuple(objectives), total_penalty, metrics_payload
@@ -991,7 +1000,7 @@ class Evaluator:
             "constraint_violation": total_penalty,
             "liquidated": liquidated,
         }
-        individual.evaluation_metrics = metrics_payload
+        _set_candidate_metrics(individual, metrics_payload)
         actual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
             self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
@@ -1307,7 +1316,7 @@ class SuiteEvaluator:
                         include_stats=False,
                         include_suite_metrics=True,
                     )
-                    individual.evaluation_metrics = metrics_payload
+                    _set_candidate_metrics(individual, metrics_payload)
                     actual_hash = calc_hash(individual)
                     self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
                     return tuple(objectives), total_penalty, metrics_payload
@@ -1373,7 +1382,7 @@ class SuiteEvaluator:
             "liquidated": liquidated,
         }
 
-        individual.evaluation_metrics = metrics_payload
+        _set_candidate_metrics(individual, metrics_payload)
         actual_hash = calc_hash(individual)
         if self.base.use_duplicate_guard:
             self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
