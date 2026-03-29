@@ -66,10 +66,10 @@ class OKXBot(CCXTBot):
                     "size": contracts,
                     "price": float(elm.get("entryPrice", 0)),
                 }
-                margin_mode = elm.get("marginMode") or elm.get("info", {}).get("marginMode")
-                if margin_mode:
+                margin_mode = self._extract_live_margin_mode(elm)
+                if margin_mode is not None:
                     normalized["margin_mode"] = margin_mode
-                    self._live_margin_modes[normalized["symbol"]] = margin_mode
+                    self._record_live_margin_mode(normalized["symbol"], margin_mode)
                 positions.append(normalized)
         return positions
 

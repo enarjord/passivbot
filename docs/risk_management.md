@@ -156,12 +156,39 @@ For each candidate close order, the bot projects realized PnL if filled and bloc
 Behavior by value:
 * `max_realized_loss_pct <= 0.0`: block all lossy closes.
 * `0.0 < max_realized_loss_pct < 1.0`: allow losses only down to the configured fraction below peak balance.
-* `max_realized_loss_pct >= 1.0`: disabled (legacy behavior).
+* `max_realized_loss_pct >= 1.0`: disabled.
 
 Operational notes:
 * Live bot logs visible warnings whenever an order is blocked by this gate.
 * This can intentionally block automatic reducers if they would realize too much loss.
 * If you need immediate forced reduction regardless of realized loss, use panic mode.
+
+### D. Equity Hard Stop Loss (`bot.{long,short}.hsl_*`)
+This is a side-specific circuit breaker based on reconstructed strategy drawdown, not just raw exchange equity.
+
+It exists for cases where:
+
+1. auto-unstuck is too slow
+2. the realized-loss gate is still allowing the bot to operate in a clearly degraded state
+3. you want a final supervisory backstop that can flatten and halt one `pside`
+
+Behavior:
+
+1. `yellow`: warning tier
+2. `orange`: reduced-risk mode (`graceful_stop` or `tp_only_with_active_entry_cancellation`) for that `pside`
+3. `red`: force panic exits, wait until that `pside` is flat, and halt that `pside`
+
+Operational notes:
+
+1. HSL is configured separately under `bot.long.hsl_*` and `bot.short.hsl_*`.
+2. `live.hsl_signal_mode` chooses whether each `pside` controller uses its own `pside` strategy signal or a shared `unified` account-level signal.
+3. RED can auto-restart after `hsl_cooldown_minutes_after_red`. Terminal no-restart uses persistent cross-restart HSL drawdown.
+4. In backtests, simulated market panic closes use `backtest.market_order_slippage_pct`.
+5. Backtests still export global `*_hsl` metrics in addition to side-specific `*_hsl_long` / `*_hsl_short` metrics.
+
+See the dedicated guide:
+
+1. [Equity Hard Stop Loss](equity_hard_stop_loss.md)
 
 ---
 

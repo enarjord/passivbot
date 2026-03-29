@@ -73,6 +73,37 @@ Avoid: `int(sqrt(span0 * span1))`.
 
 Do: keep EMA spans as float throughout calculations.
 
+---
+
+## 7) Re-Applying Config Defaults Outside Config Loading
+
+**Don't**: Re-define defaults in runtime code for required config fields.
+
+**Because**: It hides config/schema regressions and scatters source-of-truth for defaults.
+
+**Example**:
+```python
+# WRONG: Runtime fallback for required config
+red_threshold = float(config["bot"]["long"].get("hsl_red_threshold", 0.25))
+
+# CORRECT: Required config access (defaults handled centrally at config load)
+red_threshold = float(require_config_value(config, "bot.long.hsl_red_threshold"))
+```
+
+```rust
+// WRONG: Silent fallback in parser for required key
+let red_threshold = cfg
+    .get_item("red_threshold")?
+    .map(|v| v.extract::<f64>())
+    .transpose()?
+    .unwrap_or(0.25);
+
+// CORRECT: Required key extraction
+let red_threshold: f64 = extract_value(cfg, "red_threshold")?;
+```
+
+**Instead**: Keep defaults in one place (config loader/formatter). Runtime code must validate and consume required fields without fallback.
+
 Example:
 
 ```python

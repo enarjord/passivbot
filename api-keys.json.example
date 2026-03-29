@@ -62,6 +62,12 @@
         "secret": "your_api_secret",
         "password": "optional_passphrase"
     },
+    "_comment_fake": "Fake exchange harness user. Point fake_scenario_path at a local HJSON/JSON scenario file.",
+    "fake_01": {
+        "exchange": "fake",
+        "quote": "USDT",
+        "fake_scenario_path": "scenarios/fake_live/minimal.hjson"
+    },
     "_comment_tradfi": "TradFi data provider for stock perp backtesting. Providers: alpaca (recommended, 5yr+ free), polygon (2yr free), yfinance (7 days, no key), finnhub, alphavantage",
     "tradfi": {
         "provider": "alpaca",

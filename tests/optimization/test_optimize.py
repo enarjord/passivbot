@@ -17,6 +17,8 @@ import pytest
 import optimize
 from optimize import (
     _apply_config_overrides,
+    _analysis_indicates_liquidation,
+    _drain_async_results_bounded,
     _looks_like_bool_token,
     _normalize_optional_bool_flag,
     _format_objectives,
@@ -31,6 +33,7 @@ from optimize import (
     ResultRecorder,
 )
 from optimization.bounds import Bound
+from optimize_suite import ScenarioEvalContext
 
 
 class TestApplyConfigOverrides:
@@ -79,6 +82,68 @@ class TestApplyConfigOverrides:
         config = {"bot": {"long": "not_a_dict"}}
         _apply_config_overrides(config, {"bot.long.value": 3.0})
         assert config["bot"]["long"]["value"] == 3.0
+
+
+class TestDrainAsyncResultsBounded:
+    def test_caps_in_flight_tasks(self, monkeypatch):
+        class FakeAsyncResult:
+            def __init__(self, value):
+                self.value = value
+                self.is_ready = False
+
+            def ready(self):
+                return self.is_ready
+
+            def get(self):
+                return self.value
+
+        submitted = []
+        active = 0
+        max_active = 0
+        handled = []
+
+        def submit_fn(item):
+            nonlocal active, max_active
+            res = FakeAsyncResult(item * 10)
+            submitted.append(res)
+            active += 1
+            max_active = max(max_active, active)
+            return res
+
+        def handle_result(item, res):
+            nonlocal active
+            handled.append((item, res.get()))
+            active -= 1
+
+        def fake_sleep(_seconds):
+            for res in submitted:
+                if not res.is_ready:
+                    res.is_ready = True
+                    break
+
+        monkeypatch.setattr(optimize.time, "sleep", fake_sleep)
+
+        completed = _drain_async_results_bounded(
+            [1, 2, 3, 4, 5],
+            submit_fn,
+            handle_result,
+            max_pending=2,
+            poll_interval_seconds=0.0,
+        )
+
+        assert completed == 5
+        assert handled == [(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)]
+        assert max_active <= 2
+
+
+class TestLiquidationHelpers:
+    def test_analysis_indicates_liquidation_at_threshold(self):
+        from config_utils import get_template_config
+
+        config = get_template_config()
+        config["backtest"]["liquidation_threshold"] = 0.05
+        assert _analysis_indicates_liquidation({"drawdown_worst": 0.95}, config) is True
+        assert _analysis_indicates_liquidation({"drawdown_worst": 0.949}, config) is False
 
 
 class TestLooksLikeBoolToken:
@@ -203,7 +268,15 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {"param1": 0.0, "param2": 0.0},
                 "short": {"param1": 0.0, "param2": 0.0},
-            }
+            },
+            "optimize": {
+                "bounds": {
+                    "long_param1": [0.0, 10.0],
+                    "long_param2": [0.0, 10.0],
+                    "short_param1": [0.0, 10.0],
+                    "short_param2": [0.0, 10.0],
+                }
+            },
         }
         overrides_list = []
         mock_overrides = lambda x, y, z: y
@@ -222,7 +295,15 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {"z_param": 0.0, "a_param": 0.0},
                 "short": {"z_param": 0.0, "a_param": 0.0},
-            }
+            },
+            "optimize": {
+                "bounds": {
+                    "long_a_param": [0.0, 1000.0],
+                    "long_z_param": [0.0, 1000.0],
+                    "short_a_param": [0.0, 1000.0],
+                    "short_z_param": [0.0, 1000.0],
+                }
+            },
         }
         overrides_list = []
         mock_overrides = lambda x, y, z: y
@@ -241,7 +322,14 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {"param1": 99.0, "param2": 99.0},
                 "short": {"param1": 99.0, "param2": 99.0},
-            }
+            },
+            "optimize": {"bounds": {}},
+        }
+        template["optimize"]["bounds"] = {
+            "long_param1": [0.0, 10.0],
+            "long_param2": [0.0, 10.0],
+            "short_param1": [0.0, 10.0],
+            "short_param2": [0.0, 10.0],
         }
         original_template = deepcopy(template)
         overrides_list = []
@@ -251,6 +339,151 @@ class TestIndividualToConfig:
 
         # Template should be unchanged
         assert template == original_template
+
+    def test_includes_live_hsl_values_when_present_in_bounds(self):
+        individual = [60.0, 1.0, 2.0, 0.22, 3.0, 4.0]
+        template = {
+            "bot": {
+                "long": {
+                    "param1": 0.0,
+                    "param2": 0.0,
+                    "hsl_ema_span_minutes": 120.0,
+                },
+                "short": {
+                    "param1": 0.0,
+                    "param2": 0.0,
+                    "hsl_red_threshold": 0.25,
+                },
+            },
+            "optimize": {
+                "bounds": {
+                    "long_param1": [0.0, 10.0],
+                    "long_param2": [0.0, 10.0],
+                    "short_param1": [0.0, 10.0],
+                    "short_param2": [0.0, 10.0],
+                    "long_hsl_ema_span_minutes": [30.0, 180.0, 5.0],
+                    "short_hsl_red_threshold": [0.15, 0.35, 0.01],
+                }
+            },
+        }
+        overrides_list = []
+        mock_overrides = lambda x, y, z: y
+
+        result = individual_to_config(individual, mock_overrides, overrides_list, template)
+
+        assert result["bot"]["long"]["hsl_ema_span_minutes"] == pytest.approx(60.0)
+        assert result["bot"]["short"]["hsl_red_threshold"] == pytest.approx(0.22)
+
+    def test_normalizes_common_hsl_no_restart_to_red_threshold_floor(self):
+        individual = [0.20, 0.25, 1.0, 2.0, 3.0, 4.0]
+        template = {
+            "bot": {
+                "long": {
+                    "param1": 0.0,
+                    "param2": 0.0,
+                    "hsl_red_threshold": 0.20,
+                    "hsl_no_restart_drawdown_threshold": 0.40,
+                },
+                "short": {"param1": 0.0, "param2": 0.0},
+            },
+            "optimize": {
+                "bounds": {
+                    "long_param1": [0.0, 10.0],
+                    "long_param2": [0.0, 10.0],
+                    "short_param1": [0.0, 10.0],
+                    "short_param2": [0.0, 10.0],
+                    "long_hsl_no_restart_drawdown_threshold": [0.20, 0.90, 0.01],
+                    "long_hsl_red_threshold": [0.15, 0.35, 0.01],
+                }
+            },
+        }
+        overrides_list = []
+        mock_overrides = lambda x, y, z: y
+
+        result = individual_to_config(individual, mock_overrides, overrides_list, template)
+
+        assert result["bot"]["long"]["hsl_red_threshold"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(0.25)
+
+    def test_applies_optimize_fixed_runtime_overrides_without_mutating_template(self):
+        individual = [0.25, 1.0, 2.0, 3.0, 4.0]
+        template = {
+            "bot": {
+                "long": {
+                    "param1": 0.0,
+                    "param2": 0.0,
+                    "hsl_red_threshold": 0.20,
+                    "hsl_no_restart_drawdown_threshold": 0.30,
+                },
+                "short": {"param1": 0.0, "param2": 0.0},
+            },
+            "optimize": {
+                "bounds": {
+                    "long_param1": [0.0, 10.0],
+                    "long_param2": [0.0, 10.0],
+                    "short_param1": [0.0, 10.0],
+                    "short_param2": [0.0, 10.0],
+                    "long_hsl_red_threshold": [0.15, 0.35, 0.01],
+                },
+                "fixed_runtime_overrides": {
+                    "bot.long.hsl_no_restart_drawdown_threshold": 1.0
+                },
+            },
+        }
+        original_template = deepcopy(template)
+        result = individual_to_config(individual, lambda x, y, z: y, [], template)
+
+        assert result["bot"]["long"]["hsl_red_threshold"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
+        assert template == original_template
+
+    def test_normalizes_forager_weights_from_optimizer_candidate(self):
+        from config_utils import get_template_config
+
+        template = get_template_config()
+        key_paths = optimize.get_optimization_key_paths(template)
+        individual = []
+        for bound_key, _ in key_paths:
+            if bound_key == "long_forager_score_weights_volume":
+                individual.append(2.0)
+            elif bound_key == "long_forager_score_weights_ema_readiness":
+                individual.append(1.0)
+            elif bound_key == "long_forager_score_weights_volatility":
+                individual.append(1.0)
+            else:
+                individual.append(template["optimize"]["bounds"][bound_key][0])
+
+        result = individual_to_config(individual, lambda x, y, z: y, [], template)
+
+        assert result["bot"]["long"]["forager_score_weights"] == {
+            "volume": pytest.approx(0.5),
+            "ema_readiness": pytest.approx(0.25),
+            "volatility": pytest.approx(0.25),
+        }
+
+    def test_zero_forager_weights_from_optimizer_candidate_map_to_volume_only(self):
+        from config_utils import get_template_config
+
+        template = get_template_config()
+        key_paths = optimize.get_optimization_key_paths(template)
+        individual = []
+        for bound_key, _ in key_paths:
+            if bound_key in {
+                "long_forager_score_weights_volume",
+                "long_forager_score_weights_ema_readiness",
+                "long_forager_score_weights_volatility",
+            }:
+                individual.append(0.0)
+            else:
+                individual.append(template["optimize"]["bounds"][bound_key][0])
+
+        result = individual_to_config(individual, lambda x, y, z: y, [], template)
+
+        assert result["bot"]["long"]["forager_score_weights"] == {
+            "volume": 1.0,
+            "ema_readiness": 0.0,
+            "volatility": 0.0,
+        }
 
 
 class TestConfigToIndividual:
@@ -280,7 +513,8 @@ class TestConfigToIndividual:
             "bot": {
                 "long": {"z_param": 100.0, "a_param": 200.0},
                 "short": {"z_param": 300.0, "a_param": 400.0},
-            }
+            },
+            "optimize": {"bounds": {}},
         }
         bounds = [Bound(0.0, 1000.0)] * 4
         sig_digits = 6
@@ -292,6 +526,30 @@ class TestConfigToIndividual:
         assert result[1] == pytest.approx(100.0)
         assert result[2] == pytest.approx(400.0)
         assert result[3] == pytest.approx(300.0)
+
+    def test_appends_live_hsl_values_when_present_in_bounds(self):
+        config = {
+            "bot": {
+                "long": {"a_param": 1.0, "z_param": 2.0, "hsl_ema_span_minutes": 60.0},
+                "short": {"a_param": 3.0, "z_param": 4.0, "hsl_red_threshold": 0.22},
+            },
+            "optimize": {
+                "bounds": {
+                    "long_a_param": [0.0, 1000.0],
+                    "long_z_param": [0.0, 1000.0],
+                    "short_a_param": [0.0, 1000.0],
+                    "short_z_param": [0.0, 1000.0],
+                    "long_hsl_ema_span_minutes": [30.0, 180.0, 5.0],
+                    "short_hsl_red_threshold": [0.15, 0.35, 0.01],
+                }
+            },
+        }
+        bounds = [Bound(0.0, 1000.0)] * 6
+        sig_digits = 6
+
+        result = config_to_individual(config, bounds, sig_digits)
+
+        assert result == pytest.approx([1.0, 60.0, 2.0, 3.0, 0.22, 4.0])
 
 
 class TestValidateArray:
@@ -450,6 +708,61 @@ class TestApplyFineTuneBounds:
         # Requesting a non-existent key should log warning
         apply_fine_tune_bounds(config, ["long_nonexistent"], set())
 
+    def test_config_fixed_params_fix_only_listed_bounds(self):
+        config = {
+            "optimize": {
+                "bounds": {
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                },
+                "fixed_params": ["long_param2"],
+            },
+            "bot": {
+                "long": {"param1": 0.5, "param2": 0.7},
+            },
+        }
+        apply_fine_tune_bounds(config, [], set())
+
+        assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
+        assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
+
+    def test_config_fixed_params_support_pside_hsl_keys(self):
+        config = {
+            "optimize": {
+                "bounds": {
+                    "long_hsl_red_threshold": [0.1, 0.3],
+                },
+                "fixed_params": ["long_hsl_red_threshold"],
+            },
+            "bot": {
+                "long": {"hsl_red_threshold": 0.22},
+                "short": {},
+            },
+        }
+        apply_fine_tune_bounds(config, [], set())
+
+        assert config["optimize"]["bounds"]["long_hsl_red_threshold"] == [0.22, 0.22]
+
+    def test_fine_tune_and_fixed_params_share_single_effective_fixing_path(self):
+        config = {
+            "optimize": {
+                "bounds": {
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_param3": [0.0, 1.0],
+                },
+                "fixed_params": ["long_param3"],
+            },
+            "bot": {
+                "long": {"param1": 0.5, "param2": 0.7, "param3": 0.9},
+            },
+        }
+        apply_fine_tune_bounds(config, ["long_param1", "long_param3"], set())
+
+        assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
+        assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
+        assert config["optimize"]["bounds"]["long_param3"] == [0.9, 0.9]
+
 
 class TestExtractConfigs:
     """Test extract_configs function."""
@@ -551,8 +864,9 @@ class TestConfigsToIndividuals:
     """Test configs_to_individuals function."""
 
     def test_empty_configs(self):
-        result = configs_to_individuals([], [], 6)
+        result, stats = configs_to_individuals([], [], 6)
         assert result == []
+        assert stats["raw_configs"] == 0
 
     def test_single_config(self):
         from config_utils import get_template_config
@@ -563,11 +877,12 @@ class TestConfigsToIndividuals:
 
         bounds = extract_bounds_tuple_list_from_config(config)
 
-        result = configs_to_individuals([config], bounds, 6)
+        result, stats = configs_to_individuals([config], bounds, 6)
 
         # Should return 2 individuals: original + one with lowered TWE
         assert len(result) >= 1
         assert len(result[0]) == len(bounds)
+        assert stats["valid_configs"] == 1
 
     def test_creates_twe_variant(self):
         from config_utils import get_template_config
@@ -577,17 +892,34 @@ class TestConfigsToIndividuals:
 
         bounds = extract_bounds_tuple_list_from_config(config)
 
-        result = configs_to_individuals([config], bounds, 6)
+        result, stats = configs_to_individuals([config], bounds, 6)
 
         # Should create duplicate with 0.75x TWE
         assert len(result) == 2
+        assert stats["variant_attempted"] == 1
+        assert stats["variant_added"] == 1
+
+    def test_twe_multiplier_one_disables_variant(self):
+        from config_utils import get_template_config
+
+        config = get_template_config()
+        from optimization.config_adapter import extract_bounds_tuple_list_from_config
+
+        bounds = extract_bounds_tuple_list_from_config(config)
+
+        result, stats = configs_to_individuals([config], bounds, 6, twe_multiplier=1.0)
+
+        assert len(result) == 1
+        assert stats["variant_attempted"] == 0
+        assert stats["variant_skipped_multiplier_is_one"] == 1
 
     def test_invalid_config_logged(self):
         invalid_config = {"invalid": "structure"}
         bounds = [(0.0, 10.0, 0.0)] * 4
-        result = configs_to_individuals([invalid_config], bounds, 6)
+        result, stats = configs_to_individuals([invalid_config], bounds, 6)
 
         assert len(result) == 0
+        assert stats["invalid_configs"] == 1
 
 
 class TestConstraintAwareFitness:
@@ -859,3 +1191,97 @@ class TestEvaluator:
         assert len(evaluator.limit_checks) > 0
         # Check that metric key is created (could be max, mean, etc.)
         assert "drawdown_worst_usd" in evaluator.limit_checks[0]["metric_key"]
+
+    def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
+        from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
+        from config_utils import get_template_config
+
+        class PanicException(Exception):
+            pass
+
+        class DummyIndividual(list):
+            pass
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["scoring"] = ["adg_pnl_w", "drawdown_worst_usd"]
+
+        evaluator = Evaluator(
+            hlcvs_specs={"binance": object()},
+            btc_usd_specs={},
+            msss={"binance": {}},
+            config=mock_config,
+            timestamps={"binance": None},
+        )
+        evaluator.shared_hlcvs_np["binance"] = np.zeros((1, 1, 5))
+        evaluator.shared_btc_np["binance"] = None
+
+        individual = DummyIndividual(
+            config_to_individual(mock_config, evaluator.bounds, evaluator.sig_digits)
+        )
+
+        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+            "optimize.execute_backtest",
+            side_effect=PanicException(
+                "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
+            ),
+        ):
+            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+
+        assert objectives == (0.0, 0.0)
+        assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
+        assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
+        assert "PanicException" in metrics["error"]
+        assert metrics["stats"] == {}
+
+    def test_suite_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
+        from optimize import Evaluator, SuiteEvaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
+        from config_utils import get_template_config
+
+        class PanicException(Exception):
+            pass
+
+        class DummyIndividual(list):
+            pass
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["scoring"] = ["adg_pnl_w"]
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+        ctx = ScenarioEvalContext(
+            label="test",
+            config=deepcopy(mock_config),
+            exchanges=["binance"],
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={"binance": {}},
+            timestamps={"binance": None},
+            shared_hlcvs_np={"binance": np.zeros((1, 1, 5))},
+            shared_btc_np={},
+            attachments={"hlcvs": {}, "btc": {}},
+            coin_indices={"binance": None},
+            overrides={},
+        )
+        ctx.config["backtest"]["coins"] = {}
+        evaluator = SuiteEvaluator(base, [ctx], {})
+        individual = DummyIndividual(config_to_individual(mock_config, base.bounds, base.sig_digits))
+
+        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+            "optimize.execute_backtest",
+            side_effect=PanicException(
+                "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
+            ),
+        ):
+            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+
+        assert objectives == (0.0,)
+        assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
+        assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
+        assert "PanicException" in metrics["error"]
+        assert metrics["suite_metrics"] == {}

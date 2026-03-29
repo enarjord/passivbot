@@ -142,6 +142,36 @@ async def test_calc_orders_to_cancel_and_create_reconciles_orders(monkeypatch):
     ]
 
 
+def test_to_executable_orders_respects_rust_market_execution_hint():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._live_values["market_orders_allowed"] = False
+
+    order_type = "close_unstuck_long"
+    order_type_id = pbr.order_type_snake_to_id(order_type)
+    ideal = {symbol: [(-0.5, 100.0, order_type, order_type_id, "market")]}
+
+    orders, _ = bot._to_executable_orders(ideal, {symbol: 100.0})
+
+    assert orders[symbol][0]["type"] == "market"
+
+
+def test_to_executable_orders_respects_rust_limit_execution_hint():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._live_values["market_orders_allowed"] = True
+
+    order_type = "close_unstuck_long"
+    order_type_id = pbr.order_type_snake_to_id(order_type)
+    ideal = {symbol: [(-0.5, 100.0, order_type, order_type_id, "limit")]}
+
+    orders, _ = bot._to_executable_orders(ideal, {symbol: 100.0})
+
+    assert orders[symbol][0]["type"] == "limit"
+
+
 @pytest.mark.asyncio
 async def test_order_hysteresis_skips_near_identical_cancel_create(monkeypatch):
     symbol = "BTC/USDT"

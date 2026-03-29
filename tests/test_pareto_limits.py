@@ -1,6 +1,8 @@
 import operator
 
-from pareto_store import LimitSpec, _evaluate_limits
+import numpy as np
+
+from pareto_store import LimitSpec, _evaluate_limits, _filter_ideal_selection_to_feasible
 
 
 def test_limit_metric_mean_default():
@@ -57,3 +59,15 @@ def test_metric_name_ending_with_suffix_is_not_misparsed():
         "position_unchanged_hours_max_mean": 650.0,
     }
     assert _evaluate_limits(specs, stats_flat, aggregated, {}, {})
+
+
+def test_filter_ideal_selection_prefers_zero_violation_members():
+    values = np.array([[1.0, 2.0], [0.1, 0.2], [3.0, 4.0]])
+    hashes = ["a", "b", "c"]
+    violations = np.array([0.0, 10.0, 0.0])
+    filtered_values, filtered_hashes, message = _filter_ideal_selection_to_feasible(
+        values, hashes, violations
+    )
+    assert filtered_hashes == ["a", "c"]
+    assert filtered_values.shape == (2, 2)
+    assert message is not None

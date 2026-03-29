@@ -74,6 +74,7 @@ from config_utils import (
     load_hjson_config,
     load_config,
     format_config,
+    normalize_forager_score_weights,
     add_config_arguments,
     update_config_with_args,
     recursive_config_update,
@@ -156,6 +157,12 @@ from optimization.bounds import (
 )
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.backends import get_backend_runner
+from optimization.config_adapter import get_optimization_key_paths, OPTIMIZABLE_COMMON_KEY_PATHS
+from optimization.deap_adapters import (
+    mutPolynomialBoundedWrapper,
+    cxSimulatedBinaryBoundedWrapper,
+)
+from rust_utils import collect_runtime_provenance
 
 
 def _ignore_sigint_in_worker():
@@ -277,6 +284,17 @@ class ResultRecorder:
         self.prev_data = None
         self.counter = 0
         self.scoring_keys = list(scoring_keys)
+        self.session_provenance = {
+            "optimizer_runtime": collect_runtime_provenance(),
+            "results_dir": results_dir,
+            "results_file": os.path.join(results_dir, "all_results.bin"),
+        }
+
+    def build_provenance(self) -> dict:
+        return {
+            **deepcopy(self.session_provenance),
+            "recorded_at_ms": utc_ms(),
+        }
 
     def record(self, data: dict) -> None:
         if self.write_all and self.results_file:
@@ -297,6 +315,7 @@ class ResultRecorder:
                 logging.error(f"Error writing results: {exc}")
         metrics_block = data.get("metrics", {}) or {}
         violation = metrics_block.get("constraint_violation")
+        violation_details = metrics_block.get("constraint_details") or []
         try:
             updated = self.store.add_entry(data)
         except Exception as exc:
@@ -314,12 +333,15 @@ class ResultRecorder:
                     if isinstance(violation, (int, float))
                     else ""
                 )
+                detail_summary = _summarize_constraint_details(violation_details)
+                detail_str = f" | violated={detail_summary}" if detail_summary else ""
                 logging.info(
-                    "Pareto update | eval=%d | front=%d | objectives=%s%s",
+                    "Pareto update | eval=%d | front=%d | objectives=%s%s%s",
                     self.store.n_iters,
                     len(self.store._front),
                     _format_objectives(objective_values),
                     violation_str,
+                    detail_str,
                 )
 
     def flush(self) -> None:
@@ -338,6 +360,12 @@ logging.basicConfig(
 
 
 TEMPLATE_CONFIG_MODE = "v7"
+INVALID_BACKTEST_CANDIDATE_PENALTY = 1e18
+_RECOVERABLE_BACKTEST_PANIC_PATTERNS = (
+    "hard-stop evaluation failed",
+    "equity must be finite and > 0",
+    "peak_strategy_equity must be finite and > 0",
+)
 
 
 def _format_objectives(values: Sequence[float]) -> str:
@@ -346,6 +374,102 @@ def _format_objectives(values: Sequence[float]) -> str:
     if not values:
         return "[]"
     return "[" + ", ".join(f"{float(v):.3g}" for v in values) + "]"
+
+
+def _format_constraint_target(detail: dict) -> str:
+    mode = detail.get("mode")
+    if mode in {"greater_than", "less_than"}:
+        bound = detail.get("bound")
+        if isinstance(bound, (int, float)):
+            comparator = ">" if mode == "greater_than" else "<"
+            return f"{comparator} {pbr.round_dynamic(float(bound), 4)}"
+    if mode in {"outside_range", "inside_range"}:
+        rng = detail.get("range")
+        if isinstance(rng, (list, tuple)) and len(rng) == 2:
+            low, high = rng
+            label = "outside" if mode == "outside_range" else "inside"
+            return (
+                f"{label} [{pbr.round_dynamic(float(low), 4)}, "
+                f"{pbr.round_dynamic(float(high), 4)}]"
+            )
+    return str(mode or "unknown")
+
+
+def _format_constraint_detail(detail: dict) -> str:
+    metric_key = detail.get("metric_key") or detail.get("metric") or "unknown_metric"
+    value = detail.get("value")
+    penalty = detail.get("penalty")
+    value_str = pbr.round_dynamic(float(value), 4) if isinstance(value, (int, float)) else value
+    penalty_str = (
+        pbr.round_dynamic(float(penalty), 4) if isinstance(penalty, (int, float)) else penalty
+    )
+    return (
+        f"{metric_key}={value_str} "
+        f"({_format_constraint_target(detail)}, penalty={penalty_str})"
+    )
+
+
+def _summarize_constraint_details(details: Sequence[dict], *, limit: int = 3) -> str:
+    if not details:
+        return ""
+    sorted_details = sorted(
+        details,
+        key=lambda detail: float(detail.get("penalty") or 0.0),
+        reverse=True,
+    )
+    summary = "; ".join(_format_constraint_detail(detail) for detail in sorted_details[:limit])
+    remaining = len(sorted_details) - limit
+    if remaining > 0:
+        summary = f"{summary}; +{remaining} more"
+    return summary
+
+
+def _is_recoverable_backtest_candidate_error(exc: BaseException) -> bool:
+    message = str(exc)
+    return any(pattern in message for pattern in _RECOVERABLE_BACKTEST_PANIC_PATTERNS)
+
+
+def _build_invalid_candidate_metrics(
+    scoring_keys: Sequence[str],
+    error: str,
+    *,
+    include_stats: bool = True,
+    include_suite_metrics: bool = False,
+) -> tuple[tuple[float, ...], float, dict]:
+    objectives = tuple(0.0 for _ in scoring_keys)
+    metrics_payload = {
+        "objectives": {f"w_{i}": val for i, val in enumerate(objectives)},
+        "constraint_violation": INVALID_BACKTEST_CANDIDATE_PENALTY,
+        "error": error,
+    }
+    if include_stats:
+        metrics_payload["stats"] = {}
+    if include_suite_metrics:
+        metrics_payload["suite_metrics"] = {}
+    return objectives, INVALID_BACKTEST_CANDIDATE_PENALTY, metrics_payload
+
+
+def _liquidation_drawdown_threshold(config: dict) -> float:
+    raw = (
+        get_optional_config_value(config, "backtest.liquidation_threshold", 0.05)
+        if isinstance(config, dict)
+        else 0.05
+    )
+    try:
+        threshold = float(raw if raw is not None else 0.05)
+    except (TypeError, ValueError):
+        threshold = 0.05
+    threshold = min(max(threshold, 0.0), 1.0 - 1e-12)
+    return 1.0 - threshold
+
+
+def _analysis_indicates_liquidation(analysis: dict | None, config: dict) -> bool:
+    if not isinstance(analysis, dict):
+        return False
+    drawdown = analysis.get("drawdown_worst")
+    if not isinstance(drawdown, (int, float)):
+        return False
+    return float(drawdown) >= _liquidation_drawdown_threshold(config) - 1e-12
 
 
 def _record_individual_result(individual, evaluator_config, overrides_list, recorder):
@@ -364,10 +488,47 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
             if violation is not None:
                 metrics["constraint_violation"] = violation
         entry["metrics"] = metrics
+    entry["provenance"] = recorder.build_provenance()
     entry = strip_config_metadata(entry)
     recorder.record(entry)
     if hasattr(individual, "evaluation_metrics"):
         del individual.evaluation_metrics
+
+
+def _drain_async_results_bounded(
+    items,
+    submit_fn,
+    handle_result_fn,
+    *,
+    max_pending: int,
+    poll_interval_seconds: float = 0.05,
+):
+    max_pending = max(1, int(max_pending))
+    iterator = iter(items)
+    pending = {}
+    exhausted = False
+    completed = 0
+
+    while pending or not exhausted:
+        while not exhausted and len(pending) < max_pending:
+            try:
+                item = next(iterator)
+            except StopIteration:
+                exhausted = True
+                break
+            pending[submit_fn(item)] = item
+
+        ready = [res for res in pending if res.ready()]
+        if not ready:
+            time.sleep(poll_interval_seconds)
+            continue
+
+        for res in ready:
+            item = pending.pop(res)
+            handle_result_fn(item, res)
+            completed += 1
+
+    return completed
 
 
 def ea_mu_plus_lambda_stream(
@@ -393,9 +554,11 @@ def ea_mu_plus_lambda_stream(
 
     start_time = time.time()
     total_evals = 0
+    liquidation_total = 0
+    liquidation_prev_total = 0
 
     def evaluate_and_record(individuals):
-        nonlocal total_evals
+        nonlocal total_evals, liquidation_total
         if not individuals:
             return 0
         logging.debug("Evaluating %d candidates", len(individuals))
@@ -442,6 +605,8 @@ def ea_mu_plus_lambda_stream(
                                 prh_val,
                             )
                     if metrics is not None:
+                        if bool(metrics.get("liquidated")):
+                            liquidation_total += 1
                         ind.evaluation_metrics = metrics
                         _record_individual_result(ind, evaluator_config, overrides_list, recorder)
                     elif hasattr(ind, "evaluation_metrics"):
@@ -468,7 +633,7 @@ def ea_mu_plus_lambda_stream(
     dup_prev_reused = 0
 
     def log_generation(gen, nevals, record):
-        nonlocal dup_prev_total, dup_prev_resolved, dup_prev_reused
+        nonlocal dup_prev_total, dup_prev_resolved, dup_prev_reused, liquidation_prev_total
         best = record.get("min") if record else None
         front_size = len(halloffame) if halloffame is not None else 0
         dup_tot = duplicate_counter["total"]
@@ -479,11 +644,13 @@ def ea_mu_plus_lambda_stream(
         dup_res_delta = dup_res - dup_prev_resolved
         dup_reuse_delta = dup_reuse - dup_prev_reused
         dup_gen_ratio = (dup_delta / nevals) if nevals else 0.0
+        liquidation_delta = liquidation_total - liquidation_prev_total
         logging.info(
             (
                 "Gen %d complete | evals=%d | total=%d | front=%d | best=%s | "
                 "dups=%d (resolved=%d reused=%d) | dup_delta=%d (res=%d reuse=%d) | "
-                "dup_ratio=%.2f%% | dup_gen=%.2f%% | elapsed=%.1fs"
+                "dup_ratio=%.2f%% | dup_gen=%.2f%% | "
+                "n_bankruptcies=%d (delta=%d) | elapsed=%.1fs"
             ),
             gen,
             nevals,
@@ -498,11 +665,14 @@ def ea_mu_plus_lambda_stream(
             dup_reuse_delta,
             dup_ratio * 100.0,
             dup_gen_ratio * 100.0,
+            liquidation_total,
+            liquidation_delta,
             time.time() - start_time,
         )
         dup_prev_total = dup_tot
         dup_prev_resolved = dup_res
         dup_prev_reused = dup_reuse
+        liquidation_prev_total = liquidation_total
         if verbose and record:
             logging.debug("Logbook: %s", " ".join(f"{k}={v}" for k, v in record.items()))
 
@@ -554,23 +724,60 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
     assume individual is already bound enforced (or will be after)
     """
     config = deepcopy(template)
-    i = 0
+    key_paths = get_optimization_key_paths(config)
+    assert len(individual) == len(
+        key_paths
+    ), f"individual length {len(individual)} does not match optimization key count {len(key_paths)}"
+    for value, (_, path) in zip(individual, key_paths):
+        target = config
+        for part in path[:-1]:
+            target = target[part]
+        target[path[-1]] = value
+    _apply_config_overrides(
+        config,
+        config.get("optimize", {}).get("fixed_runtime_overrides", {}),
+    )
+    common_hsl = config.get("bot", {}).get("common", {}).get("equity_hard_stop_loss")
+    if isinstance(common_hsl, dict):
+        red_threshold = common_hsl.get("red_threshold")
+        no_restart = common_hsl.get("no_restart_drawdown_threshold")
+        if red_threshold is not None and no_restart is not None:
+            if float(no_restart) < float(red_threshold):
+                common_hsl["no_restart_drawdown_threshold"] = float(red_threshold)
+    for pside in ("long", "short"):
+        pside_cfg = config.get("bot", {}).get(pside, {})
+        if not isinstance(pside_cfg, dict):
+            continue
+        red_threshold = pside_cfg.get("hsl_red_threshold")
+        no_restart = pside_cfg.get("hsl_no_restart_drawdown_threshold")
+        if red_threshold is not None and no_restart is not None:
+            if float(no_restart) < float(red_threshold):
+                pside_cfg["hsl_no_restart_drawdown_threshold"] = float(red_threshold)
     for pside in sorted(config["bot"]):
-        for key in sorted(config["bot"][pside]):
-            config["bot"][pside][key] = individual[i]
-            i += 1
+        if pside == "common":
+            continue
         config = optimizer_overrides(overrides_list, config, pside)
+    for pside in ("long", "short"):
+        pside_cfg = config.get("bot", {}).get(pside, {})
+        if not isinstance(pside_cfg, dict) or "forager_score_weights" not in pside_cfg:
+            continue
+        pside_cfg["forager_score_weights"] = normalize_forager_score_weights(
+            pside_cfg["forager_score_weights"],
+            path=f"bot.{pside}.forager_score_weights",
+        )
 
     return config
 
 
 def config_to_individual(config, bounds, sig_digits=None):
+    values = []
+    for _, path in get_optimization_key_paths(config):
+        target = config
+        for part in path:
+            target = target[part]
+        values.append(target)
     return enforce_bounds(
-        [
-            config["bot"][pside][key]
-            for pside in sorted(config["bot"])
-            for key in sorted(config["bot"][pside])
-        ],
+        values,
         bounds,
         sig_digits,
     )
@@ -626,6 +833,7 @@ class Evaluator:
         self.bounds = extract_bounds_tuple_list_from_config(self.config)
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
         self.use_duplicate_guard = True
+        self.last_constraint_details: List[Dict[str, Any]] = []
 
         shared_metric_weights = {
             "positions_held_per_day": 1.0,
@@ -640,6 +848,25 @@ class Evaluator:
             "high_exposure_hours_max_short": 1.0,
             "adg_pnl": -1.0,
             "adg_pnl_w": -1.0,
+            "gain_strategy_pnl_rebased": -1.0,
+            "adg_strategy_pnl_rebased": -1.0,
+            "mdg_strategy_pnl_rebased": -1.0,
+            "sharpe_ratio_strategy_pnl_rebased": -1.0,
+            "sortino_ratio_strategy_pnl_rebased": -1.0,
+            "omega_ratio_strategy_pnl_rebased": -1.0,
+            "expected_shortfall_1pct_strategy_pnl_rebased": 1.0,
+            "calmar_ratio_strategy_pnl_rebased": -1.0,
+            "sterling_ratio_strategy_pnl_rebased": -1.0,
+            "adg_strategy_pnl_rebased_w": -1.0,
+            "mdg_strategy_pnl_rebased_w": -1.0,
+            "sharpe_ratio_strategy_pnl_rebased_w": -1.0,
+            "sortino_ratio_strategy_pnl_rebased_w": -1.0,
+            "omega_ratio_strategy_pnl_rebased_w": -1.0,
+            "calmar_ratio_strategy_pnl_rebased_w": -1.0,
+            "sterling_ratio_strategy_pnl_rebased_w": -1.0,
+            "drawdown_worst_hsl": 1.0,
+            "drawdown_worst_mean_1pct_hsl": 1.0,
+            "peak_recovery_hours_hsl": 1.0,
             "mdg_pnl": -1.0,
             "mdg_pnl_w": -1.0,
             "sharpe_ratio_pnl": -1.0,
@@ -861,6 +1088,7 @@ class Evaluator:
             else:
                 self.seen_hashes[individual_hash] = None
         analyses = {}
+        liquidated = False
         for exchange in self.exchanges:
             self._ensure_attached(exchange)
             payload = build_backtest_payload(
@@ -871,8 +1099,29 @@ class Evaluator:
                 self.shared_btc_np[exchange],
                 self.timestamps.get(exchange),
             )
-            fills, equities_array, analysis = execute_backtest(payload, config)
+            try:
+                fills, equities_array, analysis = execute_backtest(payload, config)
+            except BaseException as exc:
+                if not _is_recoverable_backtest_candidate_error(exc):
+                    raise
+                error = f"{exc.__class__.__name__}: {exc}"
+                logging.debug(
+                    "Optimizer candidate invalid due to recoverable backtest failure | hash=%s | exchange=%s | error=%s",
+                    individual_hash[:12],
+                    exchange,
+                    error,
+                )
+                objectives, total_penalty, metrics_payload = _build_invalid_candidate_metrics(
+                    self.config["optimize"]["scoring"],
+                    error,
+                    include_stats=True,
+                )
+                individual.evaluation_metrics = metrics_payload
+                actual_hash = calc_hash(individual)
+                self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
+                return tuple(objectives), total_penalty, metrics_payload
             analyses[exchange] = analysis
+            liquidated = liquidated or _analysis_indicates_liquidation(analysis, config)
 
             # Explicitly drop large intermediate arrays to keep worker RSS low.
             del fills
@@ -886,6 +1135,7 @@ class Evaluator:
             "stats": aggregate_stats,
             "objectives": objectives_map,
             "constraint_violation": total_penalty,
+            "liquidated": liquidated,
         }
         if self.config["optimize"]["backend"] == "pymoo":
             logging.info(
@@ -893,6 +1143,9 @@ class Evaluator:
                 _format_objectives(objectives),
                 pbr.round_dynamic(total_penalty, 3),
             )
+        if self.last_constraint_details:
+            metrics_payload["constraint_details"] = deepcopy(self.last_constraint_details)
+        individual.evaluation_metrics = metrics_payload
         actual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
             self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
@@ -914,11 +1167,26 @@ class Evaluator:
         scoring_keys = self.config["optimize"]["scoring"]
         per_objective_modifier = [0.0] * len(scoring_keys)
         global_modifier = 0.0
+        violation_details = []
         for check in self.limit_checks:
             val = analyses_combined.get(check["metric_key"])
             penalty = compute_limit_violation(check, val)
             if not penalty:
                 continue
+            detail = {
+                "metric": check.get("metric"),
+                "metric_key": check.get("metric_key"),
+                "mode": check.get("mode"),
+                "stat": check.get("stat"),
+                "value": float(val) if isinstance(val, (int, float)) else val,
+                "penalty": float(penalty),
+                "objective_indexes": list(check.get("objective_indexes") or []),
+            }
+            if "bound" in check:
+                detail["bound"] = float(check["bound"])
+            if "range" in check:
+                detail["range"] = [float(check["range"][0]), float(check["range"][1])]
+            violation_details.append(detail)
             targets = check.get("objective_indexes") or []
             if targets:
                 for idx in targets:
@@ -928,6 +1196,11 @@ class Evaluator:
                 global_modifier += penalty
 
         total_penalty = global_modifier + sum(per_objective_modifier)
+        self.last_constraint_details = sorted(
+            violation_details,
+            key=lambda detail: detail["penalty"],
+            reverse=True,
+        )
         scores = []
         for idx, sk in enumerate(scoring_keys):
             penalty_total = global_modifier + per_objective_modifier[idx]
@@ -1138,6 +1411,7 @@ class SuiteEvaluator:
                 seen_hashes[individual_hash] = None
 
         scenario_results: List[ScenarioResult] = []
+        liquidated = False
 
         from tools.iterative_backtester import combine_analyses as combine
 
@@ -1189,8 +1463,30 @@ class SuiteEvaluator:
                     ctx.timestamps.get(exchange),
                     coin_indices=coin_indices,
                 )
-                fills, equities_array, analysis = execute_backtest(payload, scenario_config)
+                try:
+                    fills, equities_array, analysis = execute_backtest(payload, scenario_config)
+                except BaseException as exc:
+                    if not _is_recoverable_backtest_candidate_error(exc):
+                        raise
+                    error = f"{exc.__class__.__name__}: {exc}"
+                    logging.debug(
+                        "Optimizer suite candidate invalid due to recoverable backtest failure | label=%s | exchange=%s | error=%s",
+                        ctx.label,
+                        exchange,
+                        error,
+                    )
+                    objectives, total_penalty, metrics_payload = _build_invalid_candidate_metrics(
+                        self.base.config["optimize"]["scoring"],
+                        error,
+                        include_stats=False,
+                        include_suite_metrics=True,
+                    )
+                    individual.evaluation_metrics = metrics_payload
+                    actual_hash = calc_hash(individual)
+                    self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
+                    return tuple(objectives), total_penalty, metrics_payload
                 analyses[exchange] = analysis
+                liquidated = liquidated or _analysis_indicates_liquidation(analysis, scenario_config)
 
                 # Free backtest results to allow memory reuse
                 del fills
@@ -1246,6 +1542,7 @@ class SuiteEvaluator:
             "objectives": objectives_map,
             "suite_metrics": suite_payload,
             "constraint_violation": total_penalty,
+            "liquidated": liquidated,
         }
         if self.base.config["optimize"]["backend"] == "pymoo":
             logging.info(
@@ -1253,6 +1550,8 @@ class SuiteEvaluator:
                 _format_objectives(objectives),
                 pbr.round_dynamic(total_penalty, 3),
             )
+        if self.base.last_constraint_details:
+            metrics_payload["constraint_details"] = deepcopy(self.base.last_constraint_details)
 
         actual_hash = calc_hash(individual)
         if self.base.use_duplicate_guard:
@@ -1308,7 +1607,38 @@ def apply_fine_tune_bounds(
     cli_overridden_bounds: set[str],
 ) -> None:
     bounds = config.get("optimize", {}).get("bounds", {})
-    bot_cfg = config.get("bot", {})
+
+    def _resolve_bound_key_path(bound_key: str):
+        try:
+            pside, param = bound_key.split("_", 1)
+        except ValueError:
+            return None
+        if pside not in ("long", "short"):
+            return None
+        return ("bot", pside, param)
+
+    def _fix_bound_to_current_value(bound_key: str) -> bool:
+        path = _resolve_bound_key_path(bound_key)
+        if path is None:
+            logging.warning("fine-tune bounds: unable to resolve key '%s', skipping", bound_key)
+            return False
+        target = config
+        try:
+            for part in path:
+                target = target[part]
+        except (KeyError, TypeError):
+            logging.warning(
+                "fine-tune bounds: missing current config value for '%s', leaving bounds unchanged",
+                bound_key,
+            )
+            return False
+        try:
+            value_float = float(target)
+            bounds[bound_key] = [value_float, value_float]
+        except (TypeError, ValueError):
+            bounds[bound_key] = [target, target]
+        return True
+
     # First, normalize any CLI overrides such that single values mean fixed bounds
     for key in cli_overridden_bounds:
         if key not in bounds:
@@ -1324,37 +1654,32 @@ def apply_fine_tune_bounds(
                 continue
             bounds[key] = [val, val]
 
-    if not fine_tune_params:
+    fine_tune_set = set(fine_tune_params)
+    config_fixed_params = set(config.get("optimize", {}).get("fixed_params", []) or [])
+
+    effective_fixed_params = set(config_fixed_params)
+    if fine_tune_set:
+        effective_fixed_params.update(key for key in bounds if key not in fine_tune_set)
+
+    if not effective_fixed_params:
         return
 
-    fine_tune_set = set(fine_tune_params)
-
-    for key in list(bounds.keys()):
-        if key in fine_tune_set:
+    for key in sorted(effective_fixed_params):
+        if key not in bounds:
             continue
-        try:
-            pside, param = key.split("_", 1)
-        except ValueError:
-            logging.warning(f"fine-tune bounds: unable to parse key '{key}', skipping")
-            continue
-        side_cfg = bot_cfg.get(pside)
-        if not isinstance(side_cfg, dict) or param not in side_cfg:
-            logging.warning(
-                f"fine-tune bounds: missing bot value for '{key}', leaving bounds unchanged"
-            )
-            continue
-        value = side_cfg[param]
-        try:
-            value_float = float(value)
-            bounds[key] = [value_float, value_float]
-        except (TypeError, ValueError):
-            bounds[key] = [value, value]
+        _fix_bound_to_current_value(key)
 
     missing = [key for key in fine_tune_set if key not in bounds]
     if missing:
         logging.warning(
             "fine-tune bounds: requested keys not found in optimize bounds: %s",
             ",".join(sorted(missing)),
+        )
+    fixed_missing = [key for key in config_fixed_params if key not in bounds]
+    if fixed_missing:
+        logging.warning(
+            "optimize.fixed_params keys not found in optimize bounds: %s",
+            ",".join(sorted(fixed_missing)),
         )
 
 
@@ -1394,23 +1719,53 @@ def get_starting_configs(starting_configs: str):
     return extract_configs(starting_configs)
 
 
-def configs_to_individuals(cfgs, bounds, sig_digits=0):
+def configs_to_individuals(cfgs, bounds, sig_digits=0, twe_multiplier=0.75):
     inds = set()
+    stats = {
+        "raw_configs": len(cfgs),
+        "valid_configs": 0,
+        "invalid_configs": 0,
+        "original_unique": 0,
+        "original_duplicates_collapsed": 0,
+        "variant_attempted": 0,
+        "variant_added": 0,
+        "variant_duplicates_collapsed": 0,
+        "variant_skipped_multiplier_is_one": 0,
+        "total_unique": 0,
+        "twe_multiplier": twe_multiplier,
+    }
     for cfg in cfgs:
         try:
             fcfg = format_config(cfg, verbose=False)
+            stats["valid_configs"] += 1
             individual = config_to_individual(fcfg, bounds, sig_digits)
-            inds.add(tuple(individual))
-            # add duplicate of config, but with lowered total wallet exposure limit
+            original = tuple(individual)
+            if original in inds:
+                stats["original_duplicates_collapsed"] += 1
+            else:
+                inds.add(original)
+                stats["original_unique"] += 1
+            # optionally add duplicate of config with scaled total wallet exposure limit
+            if math.isclose(float(twe_multiplier), 1.0, rel_tol=0.0, abs_tol=1e-12):
+                stats["variant_skipped_multiplier_is_one"] += 1
+                continue
+            stats["variant_attempted"] += 1
             fcfg2 = deepcopy(fcfg)
             for pside in ["long", "short"]:
-                value = fcfg2["bot"][pside]["total_wallet_exposure_limit"] * 0.75
+                value = fcfg2["bot"][pside]["total_wallet_exposure_limit"] * twe_multiplier
                 fcfg2["bot"][pside]["total_wallet_exposure_limit"] = value
             individual2 = config_to_individual(fcfg2, bounds, sig_digits)
-            inds.add(tuple(individual2))
+            variant = tuple(individual2)
+            if variant in inds:
+                stats["variant_duplicates_collapsed"] += 1
+            else:
+                inds.add(variant)
+                stats["variant_added"] += 1
         except Exception as e:
+            stats["invalid_configs"] += 1
             logging.error(f"error loading starting config: {e}")
-    return list(inds)
+    stats["total_unique"] = len(inds)
+    return list(inds), stats
 
 
 async def main():
@@ -1492,6 +1847,7 @@ async def main():
     del template_config["bot"]
     keep_live_keys = {
         "approved_coins",
+        "hsl_signal_mode",
         "minimum_coin_age_days",
     }
     for key in sorted(template_config["live"]):
@@ -1577,6 +1933,7 @@ async def main():
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
     pool = None
+    manager = None
     pool_terminated = False
     try:
         array_manager = SharedArrayManager()
@@ -1804,7 +2161,7 @@ async def main():
 
     except KeyboardInterrupt:
         interrupted = True
-        logging.warning("Keyboard interrupt received; terminating optimization...")
+        logging.info("SIGINT received; starting graceful shutdown")
         if "pool" in locals():
             already = pool_state["terminated"] if "pool_state" in locals() else pool_terminated
             if not already:
@@ -1818,24 +2175,46 @@ async def main():
         traceback.print_exc()
     finally:
         if "recorder" in locals():
+            logging.info("Flushing Pareto/results recorder...")
             try:
                 recorder.flush()
             except Exception:
                 logging.exception("Failed to flush recorder")
+            logging.info("Closing results recorder...")
             recorder.close()
         if "pool" in locals() and pool is not None:
+            if interrupted and not pool_terminated:
+                logging.info("Terminating worker pool...")
+                pool.terminate()
+                pool_terminated = True
             if pool_terminated or interrupted:
                 logging.info("Joining terminated worker pool...")
             else:
                 logging.info("Closing worker pool...")
                 pool.close()
-            pool.join()
+            try:
+                pool.join()
+            except KeyboardInterrupt:
+                logging.info("Additional SIGINT received during pool join; continuing shutdown")
+        if manager is not None:
+            logging.info("Shutting down multiprocessing manager...")
+            try:
+                manager.shutdown()
+            except Exception:
+                logging.exception("Failed to shut down multiprocessing manager")
         if "array_manager" in locals():
-            array_manager.cleanup()
+            logging.info("Releasing shared memory...")
+            try:
+                array_manager.cleanup()
+            except Exception:
+                logging.exception("Failed to release shared memory")
 
-        logging.info("Cleanup complete. Exiting.")
+        logging.info("Shutdown complete.")
         sys.exit(130 if interrupted else 0)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

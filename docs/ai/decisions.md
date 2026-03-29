@@ -20,6 +20,18 @@ Decision: exchange fetch methods do not catch and downgrade exceptions.
 
 Impact: clear return types and preserved error context.
 
+## 2026-03: Coin Selection Is Rust-Owned Trading Behavior
+
+Decision: forager shortlist construction, candidate ranking, and slot-filling behavior are part of trading behavior and belong in Rust.
+
+Impact: live/backtest must call the same Rust-defined coin-selection behavior; Python may gather data and build payloads but must not define shortlist behavior independently.
+
+## 2026-03: Config Correctness Is Centralized
+
+Decision: config hydration, migration, renaming, and default insertion happen in centralized config formatting/parsing code.
+
+Impact: downstream consumers must assume required params already exist and are valid, and must not compensate for missing required config keys with local defaults.
+
 ## 2026-01: Bybit Closed-PnL Uses Hybrid Pagination
 
 Decision: cursor + time-window pagination with deduplication.

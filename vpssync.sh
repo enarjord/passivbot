@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
-# Wrapper to sync files or directories between local and remote passivbot trees.
+# Wrapper to sync directories between local and remote passivbot trees.
 # Usage:
-#   sh vpssync.sh push <local-path> <vps-alias-or-host>
+#   sh vpssync.sh push <local-subdir> <vps-alias-or-host>
 #   sh vpssync.sh pull <vps-alias-or-host> <remote-subdir>
 #
 # Notes:
@@ -17,7 +17,7 @@ SYNC_TOOL="$REPO_ROOT/sync_tar.py"
 if [ "$#" -lt 3 ]; then
     cat >&2 <<EOF
 Usage:
-  sh vpssync.sh push <local-path> <vps-alias>
+  sh vpssync.sh push <local-subdir> <vps-alias>
   sh vpssync.sh pull <vps-alias> <remote-subdir>
 
 Quote or escape wildcard patterns when pulling, for example:
@@ -31,14 +31,14 @@ MODE="$1"
 case "$MODE" in
     push)
         if [ "$#" -ne 3 ]; then
-            echo "push usage: sh vpssync.sh push <local-path> <vps-alias>" >&2
+            echo "push usage: sh vpssync.sh push <local-subdir> <vps-alias>" >&2
             exit 1
         fi
         LOCAL_SUBDIR="${2%/}"
         REMOTE_ALIAS="$3"
         LOCAL_PATH="$REPO_ROOT/$LOCAL_SUBDIR"
-        if [ ! -e "$LOCAL_PATH" ]; then
-            echo "Error: local path '$LOCAL_PATH' does not exist." >&2
+        if [ ! -d "$LOCAL_PATH" ]; then
+            echo "Error: local directory '$LOCAL_PATH' does not exist." >&2
             exit 1
         fi
         LOCAL_PARENT="$(dirname "$LOCAL_SUBDIR")"

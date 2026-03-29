@@ -8,8 +8,6 @@ from aiohttp.test_utils import make_mocked_request
 import monitor_relay
 from monitor_relay import (
     RELAY_APP_KEY,
-    _handle_dashboard,
-    _handle_dashboard_asset,
     _handle_health,
     _handle_snapshot,
     _handle_ws,
@@ -129,44 +127,6 @@ async def test_monitor_relay_snapshot_requires_exchange_and_user_when_multiple_r
 
 
 @pytest.mark.asyncio
-async def test_monitor_relay_dashboard_handler_serves_html(tmp_path):
-    monitor_root = _make_monitor_root(tmp_path)
-    app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
-
-    response = await _handle_dashboard(_make_request(app, "/dashboard"))
-
-    assert response.status == 200
-    assert response.content_type == "text/html"
-    assert "Passivbot Monitor Dashboard" in response.text
-
-
-@pytest.mark.asyncio
-async def test_monitor_relay_dashboard_asset_handler_serves_static_assets(tmp_path):
-    monitor_root = _make_monitor_root(tmp_path)
-    app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
-
-    request = _make_request(app, "/dashboard/assets/dashboard.js")
-    request._match_info = {"name": "dashboard.js"}
-    response = await _handle_dashboard_asset(request)
-
-    assert response.status == 200
-    assert response.content_type == "application/javascript"
-    assert "const state" in response.text
-
-
-@pytest.mark.asyncio
-async def test_monitor_relay_dashboard_asset_handler_rejects_unknown_assets(tmp_path):
-    monitor_root = _make_monitor_root(tmp_path)
-    app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
-
-    request = _make_request(app, "/dashboard/assets/nope.js")
-    request._match_info = {"name": "nope.js"}
-
-    with pytest.raises(web.HTTPNotFound):
-        await _handle_dashboard_asset(request)
-
-
-@pytest.mark.asyncio
 async def test_monitor_relay_publishes_first_entries_for_new_current_files_after_start(tmp_path):
     monitor_root = _make_monitor_root(tmp_path)
     app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
@@ -260,55 +220,5 @@ async def test_monitor_relay_websocket_sends_snapshot_then_live_updates(tmp_path
         assert fake_ws.messages[2]["stream"] == "price_ticks"
         assert fake_ws.messages[2]["symbol"] == "BTC/USDT:USDT"
         assert fake_ws.messages[2]["payload"]["last"] == pytest.approx(100000.0)
-    finally:
-        await relay.stop()
-
-
-@pytest.mark.asyncio
-async def test_monitor_relay_websocket_replays_recent_current_file_messages_on_connect(
-    tmp_path, monkeypatch
-):
-    monitor_root = _make_monitor_root(tmp_path)
-    root = monitor_root / "bybit" / "user01"
-    _append_json_line(
-        root / "events" / "current.ndjson",
-        {
-            "ts": 1500,
-            "seq": 4,
-            "kind": "account.balance",
-            "tags": ["account"],
-            "exchange": "bybit",
-            "user": "user01",
-            "payload": {"equity": 999.0},
-        },
-    )
-    _append_json_line(
-        root / "history" / "price_ticks.current.ndjson",
-        {
-            "ts": 1600,
-            "kind": "price_tick",
-            "stream": "price_ticks",
-            "exchange": "bybit",
-            "user": "user01",
-            "symbol": "BTC/USDT:USDT",
-            "payload": {"last": 100100.0},
-        },
-    )
-
-    app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
-    relay = app[RELAY_APP_KEY]
-    fake_ws = FakeWebSocket(close_after_messages=3)
-    monkeypatch.setattr(monitor_relay.web, "WebSocketResponse", lambda heartbeat=30.0: fake_ws)
-
-    await relay.start()
-    try:
-        await asyncio.wait_for(_handle_ws(_make_request(app, "/ws")), timeout=1.0)
-
-        assert fake_ws.messages[0]["type"] == "snapshot"
-        assert fake_ws.messages[1]["type"] == "event"
-        assert fake_ws.messages[1]["kind"] == "account.balance"
-        assert fake_ws.messages[2]["type"] == "history"
-        assert fake_ws.messages[2]["stream"] == "price_ticks"
-        assert fake_ws.messages[2]["payload"]["last"] == pytest.approx(100100.0)
     finally:
         await relay.stop()

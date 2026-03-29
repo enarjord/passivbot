@@ -17,6 +17,7 @@ from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
 from optimization.bounds import Bound
+from optimization.config_adapter import get_optimization_key_paths
 from pareto_core import (
     compute_ideal,
     crowding_distances,
@@ -29,12 +30,58 @@ from pareto_core import (
 STAT_FIELDS = {"mean", "min", "max", "std"}
 
 
+def _summarize_constraint_details(details: Sequence[Dict[str, Any]], limit: int = 2) -> str:
+    if not details:
+        return ""
+    sorted_details = sorted(
+        details,
+        key=lambda detail: float(detail.get("penalty") or 0.0),
+        reverse=True,
+    )
+    formatted = []
+    for detail in sorted_details[:limit]:
+        metric_key = detail.get("metric_key") or detail.get("metric") or "unknown_metric"
+        value = detail.get("value")
+        penalty = detail.get("penalty")
+        if isinstance(value, (int, float)):
+            value = pbr.round_dynamic(float(value), 4)
+        if isinstance(penalty, (int, float)):
+            penalty = pbr.round_dynamic(float(penalty), 4)
+        formatted.append(f"{metric_key}={value} (penalty={penalty})")
+    remaining = len(sorted_details) - limit
+    if remaining > 0:
+        formatted.append(f"+{remaining} more")
+    return "; ".join(formatted)
+
+
 @dataclass(frozen=True)
 class LimitSpec:
     metric: str
     field: str  # "mean", "min", "max", "std", or "auto"
     op: Callable[[float, float], bool]
     value: float
+
+
+def _filter_ideal_selection_to_feasible(
+    values_matrix: np.ndarray, hashes: list[str], violations: np.ndarray
+) -> tuple[np.ndarray, list[str], str | None]:
+    feasible_mask = np.isclose(violations, 0.0, atol=1e-12, rtol=0.0)
+    if feasible_mask.any():
+        if not feasible_mask.all():
+            return (
+                values_matrix[feasible_mask],
+                [h for h, keep in zip(hashes, feasible_mask) if keep],
+                (
+                    f"Filtering closest-to-ideal selection to {int(feasible_mask.sum())} feasible "
+                    f"Pareto members (excluded {int((~feasible_mask).sum())} constrained members)."
+                ),
+            )
+        return values_matrix, hashes, None
+    return (
+        values_matrix,
+        hashes,
+        "No zero-violation Pareto members found; closest-to-ideal selection will use constrained members.",
+    )
 
 
 def _split_metric_field(raw_key: str) -> tuple[str, str]:
@@ -115,43 +162,38 @@ def _suite_metrics_to_stats(
     return stats_flat, aggregated_values
 
 
-def _quantize_entry_bot_params_with_bounds(
+def _quantize_entry_params_with_bounds(
     entry: dict, bounds: Sequence[Bound], log: logging.Logger
 ) -> dict:
-    bot = entry.get("bot", {})
-    if not isinstance(bot, dict):
+    if not isinstance(entry, dict):
         return entry
 
-    idx = 0
-    for pside in sorted(bot):
-        pside_params = bot.get(pside, {})
-        if not isinstance(pside_params, dict):
-            continue
-        for key in sorted(pside_params):
-            if idx >= len(bounds):
-                log.warning(
-                    "ParetoStore bounds length mismatch: bot has more params than bounds "
-                    "(at least %d > %d); skipping remaining params",
-                    idx + 1,
-                    len(bounds),
-                )
-                return entry
-            bound = bounds[idx]
-            value = pside_params[key]
-            if bound.is_stepped:
-                pside_params[key] = bound.quantize(value)
-            else:
-                pside_params[key] = (
-                    bound.high if value > bound.high else bound.low if value < bound.low else value
-                )
-            idx += 1
-
-    if idx != len(bounds):
+    key_paths = get_optimization_key_paths(entry)
+    if len(key_paths) != len(bounds):
         log.warning(
-            "ParetoStore bounds length mismatch: bounds has %d entries but bot has %d params",
+            "ParetoStore bounds length mismatch: bounds has %d entries but optimization key list has %d params",
             len(bounds),
-            idx,
+            len(key_paths),
         )
+    for idx, (_, path) in enumerate(key_paths):
+        if idx >= len(bounds):
+            return entry
+        target = entry
+        for part in path[:-1]:
+            if not isinstance(target, dict) or part not in target:
+                target = None
+                break
+            target = target[part]
+        if not isinstance(target, dict) or path[-1] not in target:
+            continue
+        bound = bounds[idx]
+        value = target[path[-1]]
+        if bound.is_stepped:
+            target[path[-1]] = bound.quantize(value)
+        else:
+            target[path[-1]] = (
+                bound.high if value > bound.high else bound.low if value < bound.low else value
+            )
     return entry
 
 
@@ -193,6 +235,7 @@ class ParetoStore:
         self._entries: dict[str, str] = {}  # hash -> file path
         self._objectives: dict[str, tuple] = {}  # hash -> objective vector
         self._violations: dict[str, float] = {}  # hash -> constraint violation
+        self._constraint_summaries: dict[str, str] = {}  # hash -> loggable violation summary
         self._front: list[str] = []  # list of hashes (Pareto set)
         self._objective_lookup: dict[tuple, str] = {}  # objective vector ➜ hash
         # ------------------------------------------------------------------
@@ -215,7 +258,7 @@ class ParetoStore:
             self.scoring_keys = entry["optimize"]["scoring"]
         rounded = round_floats(entry, self.sig_digits)
         if self.bounds is not None:
-            rounded = _quantize_entry_bot_params_with_bounds(rounded, self.bounds, self._log)
+            rounded = _quantize_entry_params_with_bounds(rounded, self.bounds, self._log)
         h = calc_hash(rounded)
         with self._lock:
             if h in self._entries:  # fast‑dedupe
@@ -225,6 +268,9 @@ class ParetoStore:
             scoring_keys = self.scoring_keys or entry.get("optimize", {}).get("scoring")
             obj, _ = extract_objectives(rounded, scoring_keys=scoring_keys)
             violation = extract_violation(rounded)
+            violation_summary = _summarize_constraint_details(
+                metrics_block.get("constraint_details") or []
+            )
 
             # ───────────── NEW: dedupe on the objective vector ──────────────
             existing_hash = self._objective_lookup.get(obj)
@@ -268,6 +314,7 @@ class ParetoStore:
             self._persist_entry(h, rounded, source_path=source_path)
             self._objectives[h] = obj
             self._violations[h] = violation
+            self._constraint_summaries[h] = violation_summary
             self._front.append(h)
             self._objective_lookup[obj] = h
 
@@ -362,9 +409,15 @@ class ParetoStore:
                     f"{pbr.round_dynamic(min(viols), 3)},"
                     f"{pbr.round_dynamic(max(viols), 3)})"
                 )
+        constraint_details_summary = ""
+        if self._front:
+            worst_hash = max(self._front, key=lambda idx: self._violations.get(idx, 0.0))
+            worst_summary = self._constraint_summaries.get(worst_hash) or ""
+            if worst_summary:
+                constraint_details_summary = f" | violated:{worst_summary}"
 
         self._log.info(
-            f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}{violation_summary}"
+            f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}{violation_summary}{constraint_details_summary}"
         )
 
     def _prune_front(self, n_prune: int) -> None:
@@ -382,6 +435,7 @@ class ParetoStore:
         if obj is not None:
             self._objective_lookup.pop(obj, None)
         self._violations.pop(hash_id, None)
+        self._constraint_summaries.pop(hash_id, None)
         self._delete_entry_file(hash_id)
         try:
             self._front.remove(hash_id)
@@ -554,6 +608,7 @@ def main():
             pareto_dir += "/pareto"
             entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))
     points = []
+    point_violations = []
     filenames = {}
     w_keys = []
     metric_names, metric_name_map = None, None
@@ -653,7 +708,9 @@ def main():
                 continue
             values = [objectives.get(k) for k in w_keys]
             if all(v is not None for v in values):
+                violation = extract_violation(entry)
                 points.append((*values, h))
+                point_violations.append(float(violation))
                 filenames[h] = os.path.split(entry_path)[-1]
         except Exception as e:
             print(f"Error loading {h}: {e}")
@@ -666,9 +723,16 @@ def main():
 
     values_matrix = np.array([p[:-1] for p in points])
     hashes = [p[-1] for p in points]
+    violations = np.asarray(point_violations, dtype=float)
     if values_matrix.shape[1] != len(w_keys):
         print("Mismatch between values and keys!")
         exit(1)
+
+    values_matrix, hashes, feasible_message = _filter_ideal_selection_to_feasible(
+        values_matrix, hashes, violations
+    )
+    if feasible_message:
+        print(feasible_message)
 
     weights = tuple([0.0] * values_matrix.shape[1]) if args.weights is None else args.weights
     if len(weights) == 1:

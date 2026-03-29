@@ -172,13 +172,13 @@ async def prepare_suite_contexts(
         total_steps = max(1, int(end_idx - start_idx))
         interval = int(dataset.mss.get("__meta__", {}).get("data_interval_minutes", 1) or 1)
         total_steps_1m = total_steps * interval
-        mss_slice: Dict[str, Any] = {
-            coin: deepcopy(dataset.mss.get(coin, {})) for coin in selected_coins
-        }
+        bundle_coins = list(dataset.coins)
+        mss_slice: Dict[str, Any] = {coin: deepcopy(dataset.mss.get(coin, {})) for coin in bundle_coins}
         # Adjust per-coin indices relative to the time slice to avoid full hlcvs copies.
         warmup_map = compute_per_coin_warmup_minutes(scenario_config)
         default_warm = int(warmup_map.get("__default__", 0))
-        for coin, meta in mss_slice.items():
+        for coin in bundle_coins:
+            meta = mss_slice[coin]
             first_idx = int(meta.get("first_valid_index", 0))
             last_idx = int(meta.get("last_valid_index", total_steps_1m - 1))
             first_idx = first_idx - start_idx * interval
@@ -233,6 +233,7 @@ async def prepare_suite_contexts(
             warmup_provided = int(compute_backtest_warmup_minutes(scenario_config))
         meta["warmup_minutes_requested"] = int(compute_backtest_warmup_minutes(scenario_config))
         meta["warmup_minutes_provided"] = warmup_provided
+        meta["bundle_coins_order"] = bundle_coins
         mss_slice["__meta__"] = meta
         return mss_slice
 
