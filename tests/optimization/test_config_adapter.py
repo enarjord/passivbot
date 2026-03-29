@@ -75,3 +75,21 @@ class TestConfigAdapter:
             "common_equity_hard_stop_loss_ema_span_minutes",
             ("bot", "common", "equity_hard_stop_loss", "ema_span_minutes"),
         ) in key_paths
+
+    def test_get_optimization_key_paths_skips_missing_side_configs(self):
+        config = {
+            "bot": {
+                "long": {
+                    "a": 0.1,
+                    "b": 0.2,
+                }
+            },
+            "optimize": {"bounds": {}},
+        }
+
+        key_paths = get_optimization_key_paths(config)
+
+        assert key_paths == [
+            ("long_a", ("bot", "long", "a")),
+            ("long_b", ("bot", "long", "b")),
+        ]

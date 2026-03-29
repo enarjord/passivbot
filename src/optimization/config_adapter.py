@@ -45,7 +45,10 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     if bot_config is None:
         bot_config = get_template_config()["bot"]
     for pside in ("long", "short"):
-        for key in sorted(bot_config[pside]):
+        pside_config = bot_config.get(pside)
+        if not isinstance(pside_config, dict):
+            continue
+        for key in sorted(pside_config):
             key_paths.append((f"{pside}_{key}", ("bot", pside, key)))
     for bound_key in sorted(OPTIMIZABLE_COMMON_KEY_PATHS):
         if bound_key in config.get("optimize", {}).get("bounds", {}):
@@ -72,9 +75,15 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
         bot_config = get_template_config()["bot"]
     pside_enabled = {}
     for pside in ("long", "short"):
+        if not isinstance(bot_config.get(pside), dict):
+            pside_enabled[pside] = False
+            continue
+        required_keys = [f"{pside}_n_positions", f"{pside}_total_wallet_exposure_limit"]
+        if not all(key in optimize_bounds for key in required_keys):
+            pside_enabled[pside] = True
+            continue
         pside_enabled[pside] = all(
-            Bound.from_config(k, optimize_bounds[k]).high > 0.0
-            for k in [f"{pside}_n_positions", f"{pside}_total_wallet_exposure_limit"]
+            Bound.from_config(key, optimize_bounds[key]).high > 0.0 for key in required_keys
         )
 
     for bound_key, path in key_paths:
