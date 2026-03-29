@@ -91,8 +91,6 @@ def exchange_params(**overrides):
         "min_qty": 0.0,
         "min_cost": 0.0,
         "c_mult": 1.0,
-        "maker_fee": 0.0002,
-        "taker_fee": 0.00055,
     }
     base.update(overrides)
     return base
