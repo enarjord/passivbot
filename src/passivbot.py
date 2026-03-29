@@ -121,6 +121,12 @@ class RestartBotException(Exception):
 _TYPE_MARKER_RE = re.compile(r"0x([0-9a-fA-F]{4})", re.IGNORECASE)
 # Leading pure-hex fallback: optional 0x then 4 hex at the very start
 _LEADING_HEX4_RE = re.compile(r"^(?:0x)?([0-9a-fA-F]{4})", re.IGNORECASE)
+
+
+def _linear_interpolate(value0: float, value1: float, ratio: float) -> float:
+    return float(value0 + (value1 - value0) * ratio)
+
+
 def clip_by_timestamp(xs, start_ts, end_ts):
     # assumes xs is already sorted by timestamp
     timestamps = [x["timestamp"] for x in xs]
@@ -731,9 +737,56 @@ class Passivbot:
         """Hook: exchange-specific filtering for approved symbols used for new entries."""
         return symbols
 
+    def _hsl_psides(self) -> tuple[str, str]:
+        return ("long", "short")
+
     def _assert_supported_live_state(self) -> None:
         """Hook: exchange-specific startup/runtime validation for unsupported live state."""
         return None
+
+    @staticmethod
+    def _build_intrabar_minute_close_lookup(
+        candles, tf_minutes: int
+    ) -> dict:
+        if tf_minutes <= 0 or candles is None or candles.size == 0:
+            return {}
+        import math as _math
+        out: dict = {}
+        last_idx = max(0, int(tf_minutes) - 1)
+        pivot_a = min(last_idx, max(1, int(tf_minutes) // 3))
+        pivot_b = min(last_idx, max(pivot_a + 1, (2 * int(tf_minutes)) // 3))
+        for row in candles:
+            ts = int(row["ts"])
+            o = float(row["o"])
+            h = float(row["h"])
+            l = float(row["l"])
+            c = float(row["c"])
+            if not all(_math.isfinite(x) for x in (o, h, l, c)):
+                continue
+            if h < l:
+                h, l = l, h
+            o = min(max(o, l), h)
+            c = min(max(c, l), h)
+            if last_idx == 0:
+                out[ts] = c
+                continue
+            if c >= o:
+                waypoints = [(0, o), (pivot_a, l), (pivot_b, h), (last_idx, c)]
+            else:
+                waypoints = [(0, o), (pivot_a, h), (pivot_b, l), (last_idx, c)]
+            deduped = [waypoints[0]]
+            for idx, value in waypoints[1:]:
+                if idx > deduped[-1][0]:
+                    deduped.append((idx, value))
+                else:
+                    deduped[-1] = (idx, value)
+            for (i0, v0), (i1, v1) in zip(deduped, deduped[1:]):
+                span = max(1, i1 - i0)
+                for minute_idx in range(i0, i1 + 1):
+                    ratio = 0.0 if i1 == i0 else (minute_idx - i0) / span
+                    price = _linear_interpolate(v0, v1, ratio)
+                    out[ts + minute_idx * 60_000] = min(max(float(price), l), h)
+        return out
 
     def _build_ccxt_options(self, overrides: Optional[dict] = None) -> dict:
         options = {"adjustForTimeDifference": True}
@@ -2791,16 +2844,67 @@ class Passivbot:
         """Ensure exchange-specific settings are initialised for all active symbols."""
         if not hasattr(self, "already_updated_exchange_config_symbols"):
             self.already_updated_exchange_config_symbols = set()
+        if not hasattr(self, "_exchange_config_retry_attempts"):
+            self._exchange_config_retry_attempts = {}
+        if not hasattr(self, "_exchange_config_retry_after_ms"):
+            self._exchange_config_retry_after_ms = {}
         symbols_not_done = [
             x for x in self.active_symbols if x not in self.already_updated_exchange_config_symbols
         ]
         if symbols_not_done:
-            try:
-                await self.update_exchange_config_by_symbols(symbols_not_done)
-            except Exception as e:
-                logging.info(f"error with update_exchange_config_by_symbols {e} {symbols_not_done}")
-                traceback.print_exc()
-            self.already_updated_exchange_config_symbols.update(symbols_not_done)
+            for symbol in symbols_not_done:
+                retry_after_ms = int(self._exchange_config_retry_after_ms.get(symbol, 0) or 0)
+                if retry_after_ms > utc_ms():
+                    continue
+                try:
+                    await self.update_exchange_config_by_symbols([symbol])
+                    self.already_updated_exchange_config_symbols.add(symbol)
+                    self._exchange_config_retry_attempts.pop(symbol, None)
+                    self._exchange_config_retry_after_ms.pop(symbol, None)
+                except RestartBotException:
+                    raise
+                except Exception as e:
+                    attempts = int(self._exchange_config_retry_attempts.get(symbol, 0) or 0) + 1
+                    self._exchange_config_retry_attempts[symbol] = attempts
+                    backoff_s = self._exchange_config_backoff_seconds(attempts)
+                    self._exchange_config_retry_after_ms[symbol] = (
+                        utc_ms() + int(backoff_s * 1000.0)
+                    )
+                    if self._is_rate_limit_like_exception(e):
+                        self._health_rate_limits += 1
+                        logging.warning(
+                            "[rate] exchange config update hit rate limit for %s; retrying in %.1fs",
+                            symbol,
+                            backoff_s,
+                        )
+                        break
+                    logging.warning(
+                        "[config] exchange config update failed for %s; retrying in %.1fs: %s",
+                        symbol,
+                        backoff_s,
+                        e,
+                    )
+                else:
+                    pause_s = self._exchange_config_success_pause_seconds()
+                    if pause_s > 0.0:
+                        await asyncio.sleep(pause_s)
+
+    def _is_rate_limit_like_exception(self, exc: Exception) -> bool:
+        if isinstance(exc, RateLimitExceeded):
+            return True
+        msg = str(exc).lower()
+        return any(token in msg for token in ("rate limit", "too many", "429", "10006"))
+
+    def _exchange_config_backoff_seconds(self, attempt: int) -> float:
+        base = 2.0
+        if getattr(self, "exchange", "") in {"bybit", "hyperliquid"}:
+            base = 5.0
+        return min(base * (2 ** max(int(attempt) - 1, 0)), 60.0) + random.uniform(0.0, 0.5)
+
+    def _exchange_config_success_pause_seconds(self) -> float:
+        if getattr(self, "exchange", "") in {"bybit", "hyperliquid", "okx", "kucoin", "bitget"}:
+            return 0.2
+        return 0.05
 
     async def update_exchange_config_by_symbols(self, symbols):
         """Exchange-specific hook to refresh config for the given symbols."""
@@ -3993,6 +4097,7 @@ class Passivbot:
 
         symbols = {evt["symbol"] for evt in events if evt["symbol"]}
         price_lookup: Dict[str, Dict[int, float]] = {}
+        approximate_price_sources: Dict[str, Dict[str, int]] = {}
         if symbols and getattr(self, "cm", None) is not None:
             tasks = {
                 sym: asyncio.create_task(
@@ -4009,6 +4114,54 @@ class Passivbot:
                 price_lookup[sym] = {
                     int(row["ts"]): float(row["c"]) for row in arr if float(row["c"]) > 0.0
                 }
+            is_hyperliquid = str(getattr(self, "exchange", "")).lower() == "hyperliquid"
+            if is_hyperliquid:
+                lookback_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
+                tf_plan: list[tuple[str, int]] = []
+                if lookback_minutes > 5000:
+                    tf_plan.append(("5m", 5))
+                if lookback_minutes > 5000 * 5:
+                    tf_plan.append(("15m", 15))
+                for timeframe, tf_minutes in tf_plan:
+                    tf_tasks = {
+                        sym: asyncio.create_task(
+                            self.cm.get_candles(
+                                sym,
+                                start_ts=start_minute,
+                                end_ts=end_minute,
+                                strict=False,
+                                timeframe=timeframe,
+                            )
+                        )
+                        for sym in symbols
+                    }
+                    for sym, task in tf_tasks.items():
+                        try:
+                            arr = await task
+                        except Exception as exc:
+                            logging.error(
+                                "error fetching %s candles for %s during equity history replay: %s",
+                                timeframe,
+                                sym,
+                                exc,
+                            )
+                            continue
+                        if arr is None or arr.size == 0:
+                            continue
+                        reconstructed = self._build_intrabar_minute_close_lookup(arr, tf_minutes)
+                        if not reconstructed:
+                            continue
+                        added = 0
+                        lookup = price_lookup.setdefault(sym, {})
+                        for ts, close in reconstructed.items():
+                            if ts < start_minute or ts > end_minute:
+                                continue
+                            if ts in lookup:
+                                continue
+                            lookup[ts] = float(close)
+                            added += 1
+                        if added > 0:
+                            approximate_price_sources.setdefault(sym, {})[timeframe] = added
         else:
             price_lookup = {sym: {} for sym in symbols}
 
@@ -4112,6 +4265,7 @@ class Passivbot:
             "events_used": len(events),
             "symbols_covered": sorted(symbols),
             "missing_price_symbols": sorted(missing_price_symbols),
+            "approximate_price_sources": approximate_price_sources,
         }
         return {
             "timeline": timeline,
@@ -4600,15 +4754,12 @@ class Passivbot:
         return maker_fee, taker_fee
 
     def _orchestrator_exchange_params(self, symbol: str) -> dict:
-        maker_fee, taker_fee = self._get_exchange_fee_rates(symbol)
         return {
             "qty_step": float(self.qty_steps[symbol]),
             "price_step": float(self.price_steps[symbol]),
             "min_qty": float(self.min_qtys[symbol]),
             "min_cost": float(self.min_costs[symbol]),
             "c_mult": float(self.c_mults[symbol]),
-            "maker_fee": float(maker_fee),
-            "taker_fee": float(taker_fee),
         }
 
     async def calc_ideal_orders_orchestrator_from_snapshot(
@@ -6614,8 +6765,9 @@ class Passivbot:
                 if self.live_value("empty_means_all_approved") and not self.approved_coins[pside]:
                     # if approved_coins is empty, all coins are approved
                     self.approved_coins[pside] = self.eligible_symbols
+                filtered = self.approved_coins[pside] - self.ignored_coins[pside]
                 self.approved_coins_minus_ignored_coins[pside] = self._filter_approved_symbols(
-                    pside, self.approved_coins[pside] - self.ignored_coins[pside]
+                    pside, filtered
                 )
             # aggregate add/remove logs for readability
             for k, summary in (("added", added_summary.get("approved_coins", {})),):
@@ -6788,17 +6940,21 @@ def setup_bot(config):
 
         bot = GateIOBot(config)
     elif user_info["exchange"] == "defx":
-        from exchanges.defx import DefxBot
-
-        bot = DefxBot(config)
+        raise NotImplementedError(
+            "exchange 'defx' is temporarily disabled in this dev branch pending resumed support work"
+        )
     elif user_info["exchange"] == "kucoin":
         from exchanges.kucoin import KucoinBot
 
         bot = KucoinBot(config)
     elif user_info["exchange"] == "paradex":
-        from exchanges.paradex import ParadexBot
+        raise NotImplementedError(
+            "exchange 'paradex' is temporarily disabled in this dev branch pending resumed support work"
+        )
+    elif user_info["exchange"] == "fake":
+        from exchanges.fake import FakeBot
 
-        bot = ParadexBot(config)
+        bot = FakeBot(config)
     else:
         # Generic CCXTBot for any CCXT-supported exchange
         from exchanges.ccxt_bot import CCXTBot

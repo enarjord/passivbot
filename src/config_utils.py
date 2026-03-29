@@ -3103,6 +3103,7 @@ def get_template_config():
             "ignored_coins": {"long": [], "short": []},
             "inactive_coin_candle_ttl_minutes": 10.0,
             "leverage": 10.0,
+            "margin_mode_preference": "auto",
             "market_orders_allowed": True,
             "max_disk_candles_per_symbol_per_tf": 2000000,
             "max_memory_candles_per_symbol": 20000,
@@ -3127,6 +3128,7 @@ def get_template_config():
         "logging": {
             "level": 1,
             "memory_snapshot_interval_minutes": 30.0,
+            "silence_watchdog_seconds": 60.0,
             "volume_refresh_info_threshold_seconds": 30.0,
         },
         "monitor": {

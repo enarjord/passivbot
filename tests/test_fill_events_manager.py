@@ -1,9 +1,10 @@
 import asyncio
+import logging
 import sys
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -151,6 +152,30 @@ class _ManualFetcher(BaseFetcher):
         if on_batch:
             on_batch(self.events)
         return list(self.events)
+
+
+class _BatchedFetcher(BaseFetcher):
+    def __init__(
+        self,
+        batches: List[List[Dict[str, object]]],
+        *,
+        before_batch: Optional[Callable[[], None]] = None,
+    ):
+        self.batches = [[dict(ev) for ev in batch] for batch in batches]
+        self.calls: List[Tuple[Optional[int], Optional[int]]] = []
+        self.before_batch = before_batch
+
+    async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+        self.calls.append((since_ms, until_ms))
+        payload: List[Dict[str, object]] = []
+        for batch in self.batches:
+            if self.before_batch is not None:
+                self.before_batch()
+            copied = [dict(ev) for ev in batch]
+            payload.extend(copied)
+            if on_batch:
+                on_batch(copied)
+        return payload
 
 
 class _FakeHyperliquidAPI:
@@ -1700,6 +1725,96 @@ async def test_fill_events_manager_bybit_doctor_detects_cross_event_duplicates(t
     report = await manager.run_doctor(auto_repair=False)
     assert report["anomaly_events"] > 0
     assert report["repaired"] is False
+
+
+@pytest.mark.asyncio
+async def test_fill_events_manager_logs_progress_for_open_ended_refresh(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+):
+    ts0 = 1_770_000_000_000
+    cache_path = tmp_path / "fills_progress"
+    FillEventCache(cache_path).save(
+        [
+            FillEvent.from_dict(
+                {
+                    "id": "cached-1",
+                    "timestamp": ts0 - 120_000,
+                    "datetime": "2026-01-31T23:58:00Z",
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "buy",
+                    "qty": 0.01,
+                    "price": 99_900.0,
+                    "pnl": 0.0,
+                    "fees": {"currency": "USDT", "cost": 0.1},
+                    "pb_order_type": "entry_grid_long",
+                    "position_side": "long",
+                    "client_order_id": "cached-cid",
+                    "raw": [{"source": "fetch_my_trades", "data": {"id": "cached-1"}}],
+                }
+            )
+        ]
+    )
+    batches = [
+        [
+            {
+                "id": "fill-1",
+                "timestamp": ts0,
+                "datetime": "2026-02-01T00:00:00Z",
+                "symbol": "BTC/USDT:USDT",
+                "side": "buy",
+                "qty": 0.01,
+                "price": 100_000.0,
+                "pnl": 0.0,
+                "fees": {"currency": "USDT", "cost": 0.1},
+                "pb_order_type": "entry_grid_long",
+                "position_side": "long",
+                "client_order_id": "cid-1",
+                "raw": [{"source": "fetch_my_trades", "data": {"id": "fill-1"}}],
+            }
+        ],
+        [
+            {
+                "id": "fill-2",
+                "timestamp": ts0 + 60_000,
+                "datetime": "2026-02-01T00:01:00Z",
+                "symbol": "BTC/USDT:USDT",
+                "side": "sell",
+                "qty": -0.01,
+                "price": 100_100.0,
+                "pnl": 1.0,
+                "fees": {"currency": "USDT", "cost": 0.1},
+                "pb_order_type": "close_grid_long",
+                "position_side": "long",
+                "client_order_id": "cid-2",
+                "raw": [{"source": "fetch_my_trades", "data": {"id": "fill-2"}}],
+            }
+        ],
+    ]
+
+    class _Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def advance(self):
+            self.now += 6.0
+
+    clock = _Clock()
+    monkeypatch.setattr("src.fill_events_manager.time.monotonic", clock.monotonic)
+    manager = FillEventsManager(
+        exchange="bitget",
+        user="u",
+        fetcher=_BatchedFetcher(batches, before_batch=clock.advance),
+        cache_path=cache_path,
+    )
+    caplog.set_level(logging.INFO)
+
+    await manager.refresh(start_ms=ts0 - 1_000, end_ms=None)
+
+    assert any("[fills] refresh progress:" in rec.message for rec in caplog.records)
+    assert any("batches=2" in rec.message for rec in caplog.records if "[fills] refresh:" in rec.message)
 
 
 @pytest.mark.asyncio

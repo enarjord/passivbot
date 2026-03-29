@@ -29,7 +29,6 @@ class HyperliquidBot(CCXTBot):
     # HIP-3 symbols use "xyz:" prefix (TradeXYZ builder)
     HIP3_PREFIX = "xyz:"
     HIP3_ALT_PREFIXES = ("XYZ-", "XYZ:")
-    HIP3_ISOLATED_SUPPORTED = False
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -82,6 +81,7 @@ class HyperliquidBot(CCXTBot):
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
         isolated_count = 0
+        hip3_count = 0
         for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
@@ -97,28 +97,40 @@ class HyperliquidBot(CCXTBot):
             )
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
+            market_max_leverage = (
+                int(elm["info"]["maxLeverage"]) if "maxLeverage" in elm["info"] else 0
+            )
 
-            # For isolated-only markets (HIP-3), cap at 10x leverage
+            if self._is_hip3_symbol(symbol):
+                hip3_count += 1
             if self._requires_isolated_margin(symbol):
                 isolated_count += 1
                 self.max_leverage[symbol] = min(
                     self.HIP3_MAX_LEVERAGE,
-                    (
-                        int(elm["info"]["maxLeverage"])
-                        if "maxLeverage" in elm["info"]
-                        else self.HIP3_MAX_LEVERAGE
-                    ),
+                    market_max_leverage or self.HIP3_MAX_LEVERAGE,
                 )
             else:
-                self.max_leverage[symbol] = (
-                    int(elm["info"]["maxLeverage"]) if "maxLeverage" in elm["info"] else 0
-                )
+                self.max_leverage[symbol] = market_max_leverage
         self.n_decimal_places = 6
         self.n_significant_figures = 5
-        if isolated_count:
+        if hip3_count:
             logging.info(
-                f"Detected {isolated_count} isolated-margin-only symbols (HIP-3/stock perps)"
+                "Detected %s HIP-3 symbols (%s isolated-only by exchange metadata)",
+                hip3_count,
+                isolated_count,
             )
+
+    def _is_hip3_symbol(self, symbol: str) -> bool:
+        """Return True if the symbol is a HIP-3 builder-deployed perp."""
+        prefixes = (self.HIP3_PREFIX,) + tuple(self.HIP3_ALT_PREFIXES)
+        if symbol.startswith(prefixes):
+            return True
+        base = symbol.split("/")[0] if "/" in symbol else symbol
+        if base.startswith(prefixes):
+            return True
+        if self._get_hl_dex_for_symbol(symbol):
+            return True
+        return False
 
     def _hip3_margin_metadata(self, symbol: str) -> dict:
         market = getattr(self, "markets_dict", {}).get(symbol, {})
@@ -130,42 +142,21 @@ class HyperliquidBot(CCXTBot):
         cross_capable = not only_isolated and raw_mode_l not in {"strictisolated", "nocross"}
         if isinstance(margin_modes, dict) and margin_modes.get("cross") is False:
             cross_capable = False
+        reason = raw_mode or ("onlyIsolated" if only_isolated else "metadata_allows_cross")
         return {
             "cross_capable": cross_capable,
+            "reason": reason,
+            "raw_margin_mode": raw_mode,
             "only_isolated": only_isolated,
         }
 
     def _requires_isolated_margin(self, symbol: str) -> bool:
-        """Check if a symbol requires isolated margin mode.
-
-        On Hyperliquid, this includes:
-        1. HIP-3 markets that are actually isolated-only by metadata
-        2. Other markets with onlyIsolated=True flag
-
-        Args:
-            symbol: CCXT-style symbol (e.g., "xyz:TSLA/USDC:USDC")
-
-        Returns:
-            True if this symbol requires isolated margin mode
-        """
-        prefixes = (self.HIP3_PREFIX,) + tuple(self.HIP3_ALT_PREFIXES)
-        base = symbol.split("/")[0] if "/" in symbol else symbol
-        if (
-            self._get_hl_dex_for_symbol(symbol)
-            or symbol.startswith(prefixes)
-            or base.startswith(prefixes)
-        ):
+        """Return True only when exchange metadata marks the symbol isolated-only."""
+        if self._is_hip3_symbol(symbol):
             return not self._hip3_margin_metadata(symbol)["cross_capable"]
 
         # Fall back to base class check (onlyIsolated flag, etc.)
         return super()._requires_isolated_margin(symbol)
-
-    def _record_hl_live_margin_mode(self, symbol: str, margin_mode: str | None) -> None:
-        if not symbol or not margin_mode:
-            return
-        normalized = str(margin_mode).lower()
-        if normalized in {"cross", "isolated"}:
-            self._hl_live_margin_modes[symbol] = normalized
 
     def _get_hl_dex_for_symbol(self, symbol: str) -> str | None:
         """Return HIP-3 dex name for a symbol if available."""
@@ -182,6 +173,26 @@ class HyperliquidBot(CCXTBot):
         tracked = set(getattr(self, "active_symbols", []) or [])
         tracked.update(getattr(self, "open_orders", {}).keys())
         tracked.update(getattr(self, "positions", {}).keys())
+        approved = getattr(self, "approved_coins_minus_ignored_coins", {}) or {}
+        for pside in ("long", "short"):
+            tracked.update(approved.get(pside, set()) or set())
+        approved_raw = getattr(self, "approved_coins", {}) or {}
+        for pside in ("long", "short"):
+            tracked.update(approved_raw.get(pside, set()) or set())
+        cfg_live = getattr(self, "config", {}).get("live", {}) if hasattr(self, "config") else {}
+        cfg_approved = cfg_live.get("approved_coins", {}) if isinstance(cfg_live, dict) else {}
+        if isinstance(cfg_approved, dict):
+            for pside in ("long", "short"):
+                vals = cfg_approved.get(pside, [])
+                if isinstance(vals, (list, tuple, set)):
+                    tracked.update(str(x) for x in vals if x)
+        if not tracked and cfg_live.get("empty_means_all_approved"):
+            tracked.update(getattr(self, "eligible_symbols", set()) or set())
+        tracked.update(
+            symbol
+            for symbol in getattr(self, "coin_overrides", {}) or {}
+            if symbol in getattr(self, "markets_dict", {})
+        )
         return sorted(
             symbol
             for symbol in tracked
@@ -208,6 +219,37 @@ class HyperliquidBot(CCXTBot):
             "margin_mode": str(margin_mode).lower() if margin_mode else None,
         }
 
+    def _record_hl_live_margin_mode(self, symbol: str, margin_mode: str | None) -> None:
+        if not symbol or not margin_mode:
+            return
+        normalized = str(margin_mode).lower()
+        if normalized in {"cross", "isolated"}:
+            if not hasattr(self, "_hl_live_margin_modes") or self._hl_live_margin_modes is None:
+                self._hl_live_margin_modes = {}
+            self._hl_live_margin_modes[symbol] = normalized
+
+    def _has_live_symbol_state(self, symbol: str) -> bool:
+        pos = getattr(self, "positions", {}).get(symbol, {})
+        if abs(float(pos.get("long", {}).get("size", 0.0) or 0.0)) > 0.0:
+            return True
+        if abs(float(pos.get("short", {}).get("size", 0.0) or 0.0)) > 0.0:
+            return True
+        if symbol in getattr(self, "open_orders", {}) and self.open_orders.get(symbol):
+            return True
+        return False
+
+    def _resolve_margin_policy_for_symbol(self, symbol: str) -> dict:
+        policy = super()._resolve_margin_policy_for_symbol(symbol)
+        live_margin_mode = getattr(self, "_hl_live_margin_modes", {}).get(symbol)
+        if self._has_live_symbol_state(symbol) and live_margin_mode in {"cross", "isolated"}:
+            return {
+                **policy,
+                "mode": live_margin_mode,
+                "blocked": False,
+                "live_margin_mode": live_margin_mode,
+            }
+        return policy
+
     async def _fetch_hip3_positions(self) -> list[dict]:
         """Fetch HIP-3 positions via dex-scoped CCXT routes."""
         positions_by_key = {}
@@ -221,64 +263,6 @@ class HyperliquidBot(CCXTBot):
                 key = (normalized["symbol"], normalized["position_side"])
                 positions_by_key[key] = normalized
         return list(positions_by_key.values())
-
-    def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
-        kept = set()
-        if not hasattr(self, "_unsupported_hip3_symbols_warned"):
-            self._unsupported_hip3_symbols_warned = set()
-        for symbol in symbols:
-            if self._requires_isolated_margin(symbol):
-                warn_key = (pside, symbol)
-                if warn_key not in self._unsupported_hip3_symbols_warned:
-                    self._unsupported_hip3_symbols_warned.add(warn_key)
-                    logging.warning(
-                        "[margin] disabling %s %s for new entries: HIP-3 isolated margin is "
-                        "currently unsupported in Passivbot. The symbol is isolated-only by "
-                        "exchange metadata and will be ignored for now.",
-                        pside,
-                        symbol,
-                    )
-                continue
-            kept.add(symbol)
-        return kept
-
-    def _assert_supported_live_state(self) -> None:
-        if self.HIP3_ISOLATED_SUPPORTED:
-            return
-        unsupported = []
-        for symbol in sorted(set(getattr(self, "positions", {})) | set(getattr(self, "open_orders", {}))):
-            if not self._get_hl_dex_for_symbol(symbol):
-                continue
-            has_pos = False
-            pos = getattr(self, "positions", {}).get(symbol, {})
-            for pside in ("long", "short"):
-                if abs(float(pos.get(pside, {}).get("size", 0.0) or 0.0)) > 0.0:
-                    has_pos = True
-                    break
-            has_orders = bool(getattr(self, "open_orders", {}).get(symbol))
-            if not (has_pos or has_orders):
-                continue
-            isolated_live_mode = self._hl_live_margin_modes.get(symbol) == "isolated"
-            isolated_only = self._requires_isolated_margin(symbol)
-            if not (isolated_live_mode or isolated_only):
-                continue
-            reasons = []
-            if isolated_only:
-                reasons.append("isolated-only market")
-            if isolated_live_mode:
-                reasons.append("live isolated margin state")
-            state_bits = []
-            if has_pos:
-                state_bits.append("position")
-            if has_orders:
-                state_bits.append("open_orders")
-            unsupported.append(f"{symbol} ({'/'.join(state_bits)}; {', '.join(reasons)})")
-        if unsupported:
-            raise NotImplementedError(
-                "Hyperliquid HIP-3 isolated margin is currently unsupported in Passivbot. "
-                f"Unsupported live state detected: {'; '.join(unsupported)}. "
-                "Close/cancel the isolated state before running the bot."
-            )
 
     async def watch_orders(self):
         res = None
@@ -346,7 +330,6 @@ class HyperliquidBot(CCXTBot):
         seen_ids = set()
         query_symbols = [symbol] if symbol is not None else self._get_hl_hip3_state_symbols()
 
-        # Default route covers core perps; HIP-3 symbols need dex-scoped queries.
         if symbol is None or not self._get_hl_dex_for_symbol(symbol):
             for order in await self.cca.fetch_open_orders(symbol=symbol):
                 if order["id"] in seen_ids:
@@ -377,17 +360,16 @@ class HyperliquidBot(CCXTBot):
         info = await self.cca.fetch_balance()
         positions = {}
         for x in info["info"]["assetPositions"]:
-            symbol = self.coin_to_symbol(x["position"]["coin"])
-            leverage = x["position"].get("leverage", {})
-            if isinstance(leverage, dict):
-                self._record_hl_live_margin_mode(symbol, leverage.get("type"))
             size = float(x["position"]["szi"])
             elm = {
-                "symbol": symbol,
+                "symbol": self.coin_to_symbol(x["position"]["coin"]),
                 "position_side": ("long" if size > 0.0 else "short"),
                 "size": size,
                 "price": float(x["position"]["entryPx"]),
             }
+            leverage = x.get("position", {}).get("leverage", {})
+            if isinstance(leverage, dict):
+                self._record_hl_live_margin_mode(elm["symbol"], leverage.get("type"))
             positions[(elm["symbol"], elm["position_side"])] = elm
         for position in await self._fetch_hip3_positions():
             positions[(position["symbol"], position["position_side"])] = position

@@ -39,6 +39,8 @@ def make_bot():
     bot.cca = DummyCCA()
     bot.hedge_mode = True
     bot.max_leverage = {}
+    bot.config = {"live": {"margin_mode_preference": "auto"}}
+    bot.markets_dict = {}
     return bot
 
 
@@ -63,6 +65,7 @@ async def test_update_exchange_config_handles_missing_position_mode(caplog):
 @pytest.mark.asyncio
 async def test_update_exchange_config_by_symbols_sets_margin_and_leverage(monkeypatch):
     bot = make_bot()
+    bot.config = {"live": {"margin_mode_preference": "auto_isolated"}}
     leverage_cfg = {
         "BTC/USDT:USDT": 5,
         "ETH/USDT:USDT": 3,
@@ -71,6 +74,10 @@ async def test_update_exchange_config_by_symbols_sets_margin_and_leverage(monkey
         "BTC/USDT:USDT": 10,
         "ETH/USDT:USDT": 2,
     }
+    bot.markets_dict = {
+        "BTC/USDT:USDT": {"marginModes": {"cross": True, "isolated": True}, "info": {}},
+        "ETH/USDT:USDT": {"marginModes": {"cross": True, "isolated": True}, "info": {}},
+    }
 
     def config_get(path, *, symbol=None):
         if path == ["live", "leverage"]:
@@ -78,6 +85,7 @@ async def test_update_exchange_config_by_symbols_sets_margin_and_leverage(monkey
         raise KeyError(path)
 
     bot.config_get = config_get
+    bot.bot_value = lambda pside, key: 1.0 if key == "total_wallet_exposure_limit" else 0.0
 
     monkeypatch.setattr(asyncio, "create_task", lambda coro: DummyTask(coro))
 
@@ -86,9 +94,10 @@ async def test_update_exchange_config_by_symbols_sets_margin_and_leverage(monkey
 
     margin_symbols = [call["symbol"] for call in bot.cca.margin_calls]
     assert margin_symbols == symbols
-    assert all(call["marginMode"] == "cross" for call in bot.cca.margin_calls)
+    assert all(call["marginMode"] == "isolated" for call in bot.cca.margin_calls)
 
     leverage_map = {call["symbol"]: call["leverage"] for call in bot.cca.leverage_calls}
     # leverage is clamped by max_leverage
     assert leverage_map["BTC/USDT:USDT"] == 5  # min(10, 5)
     assert leverage_map["ETH/USDT:USDT"] == 2  # min(2, 3)
+    assert all(call["params"]["marginMode"] == "isolated" for call in bot.cca.leverage_calls)

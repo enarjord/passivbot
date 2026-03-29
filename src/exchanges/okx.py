@@ -55,21 +55,22 @@ class OKXBot(CCXTBot):
         return order.get("info", {}).get("posSide", "long").lower()
 
     def _normalize_positions(self, fetched: list) -> list:
-        """OKX: Filter to cross margin positions only."""
+        """OKX: Preserve live positions across both cross and isolated margin modes."""
         positions = []
         for elm in fetched:
-            if elm.get("marginMode") != "cross":
-                continue
             contracts = float(elm.get("contracts", 0))
             if contracts != 0:
-                positions.append(
-                    {
-                        "symbol": elm["symbol"],
-                        "position_side": elm.get("side", "long").lower(),
-                        "size": contracts,
-                        "price": float(elm.get("entryPrice", 0)),
-                    }
-                )
+                normalized = {
+                    "symbol": elm["symbol"],
+                    "position_side": elm.get("side", "long").lower(),
+                    "size": contracts,
+                    "price": float(elm.get("entryPrice", 0)),
+                }
+                margin_mode = elm.get("marginMode") or elm.get("info", {}).get("marginMode")
+                if margin_mode:
+                    normalized["margin_mode"] = margin_mode
+                    self._live_margin_modes[normalized["symbol"]] = margin_mode
+                positions.append(normalized)
         return positions
 
     def _get_pnl_from_trade(self, trade: dict) -> float:
@@ -184,13 +185,14 @@ class OKXBot(CCXTBot):
             raise
 
     def _build_order_params(self, order: dict) -> dict:
+        margin_mode = self._get_margin_mode_for_symbol(order["symbol"])
         params = {
             "postOnly": require_live_value(self.config, "time_in_force") == "post_only",
             "reduceOnly": order["reduce_only"],
             "hedged": True,
             "tag": self.broker_code,
             "clOrdId": order["custom_id"],
-            "marginMode": "cross",
+            "marginMode": margin_mode,
         }
         # Only send positionSide when dual-side mode is confirmed.
         if self.okx_dual_side:
@@ -200,16 +202,18 @@ class OKXBot(CCXTBot):
     async def update_exchange_config_by_symbols(self, symbols: [str]):
         coros_to_call_margin_mode = {}
         for symbol in symbols:
+            margin_mode = self._get_margin_mode_for_symbol(symbol)
             try:
+                leverage = self._calc_leverage_for_symbol(symbol)
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode(
-                        "cross",
+                        margin_mode,
                         symbol=symbol,
-                        params={"lever": int(self.config_get(["live", "leverage"], symbol=symbol))},
+                        params={"lever": leverage},
                     )
                 )
             except Exception as e:
-                logging.error(f"{symbol}: error setting cross mode and leverage {e}")
+                logging.error(f"{symbol}: error setting {margin_mode} mode and leverage {e}")
         for symbol in symbols:
             res = None
             to_print = ""
@@ -226,7 +230,9 @@ class OKXBot(CCXTBot):
                     )
                     continue
                 else:
-                    logging.error(f"{symbol} error setting cross mode {e}")
+                    logging.error(
+                        f"{symbol} error setting {self._get_margin_mode_for_symbol(symbol)} mode {e}"
+                    )
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 
