@@ -148,17 +148,7 @@ class TestHyperliquidBotHIP3:
         """HIP-3 prefix identifies the market family, but margin mode now comes from metadata."""
         # Create minimal bot instance for method testing
         bot = object.__new__(bot_class)
-        bot.markets_dict = {
-            "xyz:TSLA/USDC:USDC": {
-                "info": {"onlyIsolated": True},
-                "marginModes": {"cross": False, "isolated": True},
-            },
-            "XYZ-XYZ100/USDC:USDC": {
-                "baseName": "xyz:XYZ100",
-                "info": {"marginMode": "normal"},
-                "marginModes": {"cross": True, "isolated": True},
-            },
-        }
+        bot.markets_dict = {}
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
         bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
 

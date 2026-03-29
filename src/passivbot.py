@@ -6800,9 +6800,9 @@ def setup_bot(config):
 
         bot = KucoinBot(config)
     elif user_info["exchange"] == "paradex":
-        from exchanges.paradex import ParadexBot
-
-        bot = ParadexBot(config)
+        raise NotImplementedError(
+            "exchange 'paradex' is temporarily disabled in this dev branch pending resumed support work"
+        )
     elif user_info["exchange"] == "fake":
         from exchanges.fake import FakeBot
 

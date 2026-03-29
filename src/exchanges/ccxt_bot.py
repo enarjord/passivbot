@@ -341,10 +341,7 @@ class CCXTBot(Passivbot):
             Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
         """
         fetched = await self._do_fetch_positions()
-        positions = self._normalize_positions(fetched)
-        for position in positions:
-            self._record_live_margin_mode_from_payload(position)
-        return positions
+        return self._normalize_positions(fetched)
 
     async def _do_fetch_positions(self) -> list:
         """Hook: Call exchange API for positions.
@@ -371,16 +368,14 @@ class CCXTBot(Passivbot):
         for elm in fetched:
             contracts = float(elm.get("contracts", 0))
             if contracts != 0:
-                normalized = {
-                    "symbol": elm["symbol"],
-                    "position_side": self._get_position_side(elm),
-                    "size": contracts,
-                    "price": float(elm.get("entryPrice", 0)),
-                }
-                margin_mode = self._extract_live_margin_mode(elm)
-                if margin_mode is not None:
-                    normalized["margin_mode"] = margin_mode
-                positions.append(normalized)
+                positions.append(
+                    {
+                        "symbol": elm["symbol"],
+                        "position_side": self._get_position_side(elm),
+                        "size": contracts,
+                        "price": float(elm.get("entryPrice", 0)),
+                    }
+                )
         return positions
 
     def _get_position_side(self, elm: dict) -> str:
@@ -414,7 +409,6 @@ class CCXTBot(Passivbot):
         for elm in fetched:
             elm["position_side"] = self._get_position_side_for_order(elm)
             elm["qty"] = elm["amount"]
-            self._record_live_margin_mode_from_payload(elm)
         return sorted(fetched, key=lambda x: x["timestamp"])
 
     async def watch_orders(self):
