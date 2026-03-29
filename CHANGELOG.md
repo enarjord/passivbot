@@ -11,6 +11,7 @@ All notable user-facing changes will be documented in this file.
 - **Fake-live exchange harness for HSL replay** - Added a deterministic `fake` exchange, `src/tools/run_fake_live.py`, and scenario-driven tests/docs so live HSL RED, cooldown restart, terminal halt, and cooldown-position policies can be replayed locally against scripted candles and manual interventions.
 - **Opt-in live monitor publisher** - Added a local monitor publisher with on-disk snapshots, event streams, and retained fill/price/candle history, plus basic live bot integration for startup, balance, order, fill, and shutdown events.
 - **Read-only monitor relay** - Added a local `monitor-relay` tool exposing monitor snapshots and streamed event/history tails over HTTP and websocket, including recent-message replay on connect.
+- **Browser monitor dashboard** - The monitor relay now also serves `GET /dashboard` with a read-only web dashboard that bootstraps from `/snapshot`, stays live via `/ws`, shows summary/focus/positions/trailing/forager/unstuck/recent activity panels, and supports quick focus changes by clicking symbol-bearing rows.
 - **Terminal monitor TUI** - Added a local `monitor-tui` tool consuming the relay for current-state panels, live recent activity, focus cycling, pause/resume, and screen dumps.
 - **Monitor dev wrapper** - Added a `monitor-dev` helper that reuses or launches the local relay and opens the terminal monitor with the newest bot log tailed by default.
 

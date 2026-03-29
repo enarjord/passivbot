@@ -10,6 +10,8 @@ from aiohttp.test_utils import make_mocked_request
 import monitor_relay
 from monitor_relay import (
     RELAY_APP_KEY,
+    _handle_dashboard,
+    _handle_dashboard_asset,
     _handle_health,
     _handle_snapshot,
     _handle_ws,
@@ -126,6 +128,44 @@ async def test_monitor_relay_snapshot_requires_exchange_and_user_when_multiple_r
     assert response.status == 200
     assert data["exchange"] == "bybit"
     assert data["user"] == "user01"
+
+
+@pytest.mark.asyncio
+async def test_monitor_relay_dashboard_handler_serves_html(tmp_path):
+    monitor_root = _make_monitor_root(tmp_path)
+    app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
+
+    response = await _handle_dashboard(_make_request(app, "/dashboard"))
+
+    assert response.status == 200
+    assert response.content_type == "text/html"
+    assert "Passivbot Monitor Dashboard" in response.text
+
+
+@pytest.mark.asyncio
+async def test_monitor_relay_dashboard_asset_handler_serves_static_assets(tmp_path):
+    monitor_root = _make_monitor_root(tmp_path)
+    app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
+
+    request = _make_request(app, "/dashboard/assets/dashboard.js")
+    request._match_info = {"name": "dashboard.js"}
+    response = await _handle_dashboard_asset(request)
+
+    assert response.status == 200
+    assert response.content_type == "application/javascript"
+    assert "const state" in response.text
+
+
+@pytest.mark.asyncio
+async def test_monitor_relay_dashboard_asset_handler_rejects_unknown_assets(tmp_path):
+    monitor_root = _make_monitor_root(tmp_path)
+    app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
+
+    request = _make_request(app, "/dashboard/assets/nope.js")
+    request._match_info = {"name": "nope.js"}
+
+    with pytest.raises(web.HTTPNotFound):
+        await _handle_dashboard_asset(request)
 
 
 @pytest.mark.asyncio

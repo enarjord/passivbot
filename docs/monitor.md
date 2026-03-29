@@ -26,6 +26,8 @@ Default bind address is `127.0.0.1:8765`.
 - `GET /snapshot`
   - Returns the latest snapshot envelope for the selected bot.
   - If multiple monitor roots exist, pass `?exchange=<exchange>&user=<user>`.
+- `GET /dashboard`
+  - Serves a static browser dashboard bootstrapped from the same relay contract.
 - `GET /ws`
   - Sends the latest snapshot first.
   - Replays recent messages from current event/history files.
@@ -35,7 +37,29 @@ Default bind address is `127.0.0.1:8765`.
 
 - The relay is read-only. It does not mutate monitor artifacts.
 - The websocket stream is intended for local dashboards, TUIs, and replay tooling.
-- Current integration is intentionally limited to snapshot, event, and history relay. The TUI and web dashboard layers are separate follow-up steps.
+- The browser dashboard and TUI both consume the same read-only `/snapshot` + `/ws` surface.
+
+## Web Dashboard
+
+The relay also serves a first browser dashboard:
+
+```bash
+passivbot tool monitor-relay --monitor-root monitor
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8765/dashboard?exchange=bitget&user=bitget_01
+```
+
+Current behavior:
+
+1. Bootstraps current-state panels from `/snapshot`
+2. Keeps recent events and price ticks live via `/ws`
+3. Provides a browser focus-symbol selector without changing bot state
+4. Renders summary, focus, positions, trailing, forager, unstuck, recent events, recent ticks, and recent orders from the current snapshot plus live websocket tail
+5. Uses compact card summaries and clickable symbol-bearing rows so operators can refocus quickly without leaving the browser
 
 ## Terminal TUI
 

@@ -13,6 +13,11 @@ from aiohttp import web
 
 
 MonitorKey = tuple[str, str]
+DASHBOARD_STATIC_DIR = Path(__file__).resolve().parent / "monitor_dashboard_static"
+_DASHBOARD_ASSETS = {
+    "dashboard.css": ("dashboard.css", "text/css"),
+    "dashboard.js": ("dashboard.js", "application/javascript"),
+}
 
 
 @dataclass
@@ -370,6 +375,25 @@ async def _handle_snapshot(request: web.Request) -> web.Response:
     return web.json_response(relay.build_snapshot_message(key, snapshot))
 
 
+async def _handle_dashboard(request: web.Request) -> web.Response:
+    path = DASHBOARD_STATIC_DIR / "index.html"
+    if not path.exists():
+        raise web.HTTPNotFound(text="dashboard index not found")
+    return web.Response(text=path.read_text(encoding="utf-8"), content_type="text/html")
+
+
+async def _handle_dashboard_asset(request: web.Request) -> web.Response:
+    asset_name = request.match_info.get("name", "")
+    asset = _DASHBOARD_ASSETS.get(asset_name)
+    if asset is None:
+        raise web.HTTPNotFound(text=f"dashboard asset not found: {asset_name}")
+    filename, content_type = asset
+    path = DASHBOARD_STATIC_DIR / filename
+    if not path.exists():
+        raise web.HTTPNotFound(text=f"dashboard asset not found: {asset_name}")
+    return web.Response(text=path.read_text(encoding="utf-8"), content_type=content_type)
+
+
 async def _handle_ws(request: web.Request) -> web.StreamResponse:
     relay = _relay_from_app(request.app)
     try:
@@ -427,6 +451,8 @@ def create_monitor_relay_app(
     app[RELAY_APP_KEY] = relay
     app.router.add_get("/health", _handle_health)
     app.router.add_get("/snapshot", _handle_snapshot)
+    app.router.add_get("/dashboard", _handle_dashboard)
+    app.router.add_get("/dashboard/assets/{name}", _handle_dashboard_asset)
     app.router.add_get("/ws", _handle_ws)
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
