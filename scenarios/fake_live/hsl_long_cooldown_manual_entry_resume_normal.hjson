@@ -107,7 +107,7 @@
       last.open_orders: 4
     }
     log_contains: [
-      "detected non-flat position during RED cooldown | policy=resume_normal_reset_drawdown"
+      "detected non-flat position during RED cooldown | policy=normal"
       "operator override during RED cooldown: resumed normal operation and reset drawdown tracker"
       "changed long.BTC/USDT:USDT: panic -> normal"
     ]

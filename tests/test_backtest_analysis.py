@@ -66,9 +66,15 @@ def _make_analysis_entry(value):
             "drawdown_worst_hsl": 0.0,
             "drawdown_worst_hsl_long": 0.0,
             "drawdown_worst_hsl_short": 0.0,
+            "drawdown_worst_ema_hsl": 0.0,
+            "drawdown_worst_ema_hsl_long": 0.0,
+            "drawdown_worst_ema_hsl_short": 0.0,
             "drawdown_worst_mean_1pct_hsl": 0.0,
             "drawdown_worst_mean_1pct_hsl_long": 0.0,
             "drawdown_worst_mean_1pct_hsl_short": 0.0,
+            "drawdown_worst_mean_1pct_ema_hsl": 0.0,
+            "drawdown_worst_mean_1pct_ema_hsl_long": 0.0,
+            "drawdown_worst_mean_1pct_ema_hsl_short": 0.0,
             "peak_recovery_hours_hsl": 0.0,
             "peak_recovery_hours_hsl_long": 0.0,
             "peak_recovery_hours_hsl_short": 0.0,
@@ -245,6 +251,12 @@ def test_expand_analysis_keeps_strategy_pnl_rebased_and_hsl_metrics_shared():
     analysis_usd["drawdown_worst_hsl"] = 0.21
     analysis_usd["drawdown_worst_hsl_long"] = 0.11
     analysis_usd["drawdown_worst_hsl_short"] = 0.31
+    analysis_usd["drawdown_worst_ema_hsl"] = 0.18
+    analysis_usd["drawdown_worst_ema_hsl_long"] = 0.10
+    analysis_usd["drawdown_worst_ema_hsl_short"] = 0.18
+    analysis_usd["drawdown_worst_mean_1pct_ema_hsl"] = 0.17
+    analysis_usd["drawdown_worst_mean_1pct_ema_hsl_long"] = 0.09
+    analysis_usd["drawdown_worst_mean_1pct_ema_hsl_short"] = 0.17
     analysis_usd["peak_recovery_hours_hsl"] = 17.0
     analysis_usd["peak_recovery_hours_hsl_long"] = 12.0
     analysis_usd["peak_recovery_hours_hsl_short"] = 21.0
@@ -252,6 +264,12 @@ def test_expand_analysis_keeps_strategy_pnl_rebased_and_hsl_metrics_shared():
     analysis_btc["drawdown_worst_hsl"] = 0.21
     analysis_btc["drawdown_worst_hsl_long"] = 0.11
     analysis_btc["drawdown_worst_hsl_short"] = 0.31
+    analysis_btc["drawdown_worst_ema_hsl"] = 0.18
+    analysis_btc["drawdown_worst_ema_hsl_long"] = 0.10
+    analysis_btc["drawdown_worst_ema_hsl_short"] = 0.18
+    analysis_btc["drawdown_worst_mean_1pct_ema_hsl"] = 0.17
+    analysis_btc["drawdown_worst_mean_1pct_ema_hsl_long"] = 0.09
+    analysis_btc["drawdown_worst_mean_1pct_ema_hsl_short"] = 0.17
     analysis_btc["peak_recovery_hours_hsl"] = 17.0
     analysis_btc["peak_recovery_hours_hsl_long"] = 12.0
     analysis_btc["peak_recovery_hours_hsl_short"] = 21.0
@@ -274,6 +292,12 @@ def test_expand_analysis_keeps_strategy_pnl_rebased_and_hsl_metrics_shared():
     assert result["drawdown_worst_hsl"] == 0.21
     assert result["drawdown_worst_hsl_long"] == 0.11
     assert result["drawdown_worst_hsl_short"] == 0.31
+    assert result["drawdown_worst_ema_hsl"] == 0.18
+    assert result["drawdown_worst_ema_hsl_long"] == 0.10
+    assert result["drawdown_worst_ema_hsl_short"] == 0.18
+    assert result["drawdown_worst_mean_1pct_ema_hsl"] == 0.17
+    assert result["drawdown_worst_mean_1pct_ema_hsl_long"] == 0.09
+    assert result["drawdown_worst_mean_1pct_ema_hsl_short"] == 0.17
     assert result["peak_recovery_hours_hsl"] == 17.0
     assert result["peak_recovery_hours_hsl_long"] == 12.0
     assert result["peak_recovery_hours_hsl_short"] == 21.0
@@ -578,6 +602,12 @@ def test_create_forager_hard_stop_drawdown_figure_returns_plot_when_enabled(monk
         def axhline(self, *args, **kwargs):
             return None
 
+        def axvline(self, *args, **kwargs):
+            return None
+
+        def axvspan(self, *args, **kwargs):
+            return None
+
         def set_title(self, *args, **kwargs):
             return None
 
@@ -618,12 +648,16 @@ def test_create_forager_hard_stop_drawdown_figure_returns_plot_when_enabled(monk
         "live": {"pnls_max_lookback_days": 30.0},
         "bot": {
             "long": {
+                "n_positions": 1.0,
+                "total_wallet_exposure_limit": 1.0,
                 "hsl_enabled": True,
                 "hsl_red_threshold": 0.1,
                 "hsl_ema_span_minutes": 60.0,
                 "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
             },
             "short": {
+                "n_positions": 1.0,
+                "total_wallet_exposure_limit": 1.0,
                 "hsl_enabled": True,
                 "hsl_red_threshold": 0.12,
                 "hsl_ema_span_minutes": 90.0,
@@ -634,8 +668,23 @@ def test_create_forager_hard_stop_drawdown_figure_returns_plot_when_enabled(monk
     hard_stop_plot_data = {
         "timestamps_ms_long": (idx.view("int64") // 10**6).tolist(),
         "drawdown_raw_long": [0.0, 0.01, 0.05, 0.06, 0.02, 0.01],
+        "drawdown_ema_long": [0.0, 0.005, 0.03, 0.045, 0.03, 0.02],
+        "drawdown_score_long": [0.0, 0.005, 0.03, 0.045, 0.02, 0.01],
+        "events_long": [
+            {"kind": "red_enter", "timestamp_ms": int(idx[2].value // 10**6), "terminal": False},
+            {
+                "kind": "halt",
+                "timestamp_ms": int(idx[3].value // 10**6),
+                "cooldown_until_ms": int(idx[5].value // 10**6),
+                "terminal": False,
+            },
+            {"kind": "restart", "timestamp_ms": int(idx[5].value // 10**6), "terminal": False},
+        ],
         "timestamps_ms_short": (idx.view("int64") // 10**6).tolist(),
         "drawdown_raw_short": [0.0, 0.0, 0.01, 0.015, 0.01, 0.0],
+        "drawdown_ema_short": [0.0, 0.0, 0.005, 0.01, 0.009, 0.004],
+        "drawdown_score_short": [0.0, 0.0, 0.005, 0.01, 0.009, 0.0],
+        "events_short": [],
     }
 
     figs = create_forager_hard_stop_drawdown_figure(
@@ -646,3 +695,98 @@ def test_create_forager_hard_stop_drawdown_figure_returns_plot_when_enabled(monk
         return_figures=True,
     )
     assert "hard_stop_drawdown" in figs
+
+
+def test_create_forager_hard_stop_drawdown_figure_skips_disabled_short(monkeypatch):
+    calls = {"nrows": None}
+
+    class _Axis:
+        def plot(self, *args, **kwargs):
+            return None
+
+        def axhline(self, *args, **kwargs):
+            return None
+
+        def axvline(self, *args, **kwargs):
+            return None
+
+        def axvspan(self, *args, **kwargs):
+            return None
+
+        def set_title(self, *args, **kwargs):
+            return None
+
+        def set_ylabel(self, *args, **kwargs):
+            return None
+
+        def set_xlabel(self, *args, **kwargs):
+            return None
+
+        def grid(self, *args, **kwargs):
+            return None
+
+        def legend(self, *args, **kwargs):
+            return None
+
+    class _Figure:
+        def tight_layout(self):
+            return None
+
+    def _fake_subplots(nrows, *args, **kwargs):
+        calls["nrows"] = nrows
+        return _Figure(), [_Axis()]
+
+    monkeypatch.setattr(plotting.plt, "subplots", _fake_subplots)
+
+    idx = pd.date_range("2021-01-01", periods=4, freq="1h")
+    bal_eq = pd.DataFrame(
+        {
+            "usd_total_balance": [1000.0, 1000.0, 980.0, 970.0],
+            "usd_total_equity": [1000.0, 990.0, 950.0, 940.0],
+        },
+        index=idx,
+    )
+    config = {
+        "live": {"pnls_max_lookback_days": 30.0},
+        "bot": {
+            "long": {
+                "n_positions": 1.0,
+                "total_wallet_exposure_limit": 1.0,
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.1,
+                "hsl_ema_span_minutes": 60.0,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+            },
+            "short": {
+                "n_positions": 0.0,
+                "total_wallet_exposure_limit": 0.0,
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.12,
+                "hsl_ema_span_minutes": 90.0,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+            },
+        },
+    }
+    hard_stop_plot_data = {
+        "timestamps_ms_long": (idx.view("int64") // 10**6).tolist(),
+        "drawdown_raw_long": [0.0, 0.01, 0.05, 0.06],
+        "drawdown_ema_long": [0.0, 0.005, 0.03, 0.045],
+        "drawdown_score_long": [0.0, 0.005, 0.03, 0.045],
+        "events_long": [],
+        "timestamps_ms_short": (idx.view("int64") // 10**6).tolist(),
+        "drawdown_raw_short": [0.0, 0.0, 0.01, 0.015],
+        "drawdown_ema_short": [0.0, 0.0, 0.005, 0.01],
+        "drawdown_score_short": [0.0, 0.0, 0.005, 0.01],
+        "events_short": [],
+    }
+
+    figs = create_forager_hard_stop_drawdown_figure(
+        bal_eq,
+        config,
+        hard_stop_plot_data=hard_stop_plot_data,
+        autoplot=False,
+        return_figures=True,
+    )
+
+    assert "hard_stop_drawdown" in figs
+    assert calls["nrows"] == 1

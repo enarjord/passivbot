@@ -972,9 +972,17 @@ fn run_backtest_core<'py>(
         analysis_usd.drawdown_worst_hsl = hs.drawdown_worst_hsl;
         analysis_usd.drawdown_worst_hsl_long = hs.drawdown_worst_hsl_long;
         analysis_usd.drawdown_worst_hsl_short = hs.drawdown_worst_hsl_short;
+        analysis_usd.drawdown_worst_ema_hsl = hs.drawdown_worst_ema_hsl;
+        analysis_usd.drawdown_worst_ema_hsl_long = hs.drawdown_worst_ema_hsl_long;
+        analysis_usd.drawdown_worst_ema_hsl_short = hs.drawdown_worst_ema_hsl_short;
         analysis_usd.drawdown_worst_mean_1pct_hsl = hs.drawdown_worst_mean_1pct_hsl;
         analysis_usd.drawdown_worst_mean_1pct_hsl_long = hs.drawdown_worst_mean_1pct_hsl_long;
         analysis_usd.drawdown_worst_mean_1pct_hsl_short = hs.drawdown_worst_mean_1pct_hsl_short;
+        analysis_usd.drawdown_worst_mean_1pct_ema_hsl = hs.drawdown_worst_mean_1pct_ema_hsl;
+        analysis_usd.drawdown_worst_mean_1pct_ema_hsl_long =
+            hs.drawdown_worst_mean_1pct_ema_hsl_long;
+        analysis_usd.drawdown_worst_mean_1pct_ema_hsl_short =
+            hs.drawdown_worst_mean_1pct_ema_hsl_short;
         analysis_usd.peak_recovery_hours_hsl = hs.peak_recovery_hours_hsl;
         analysis_usd.peak_recovery_hours_hsl_long = hs.peak_recovery_hours_hsl_long;
         analysis_usd.peak_recovery_hours_hsl_short = hs.peak_recovery_hours_hsl_short;
@@ -1020,9 +1028,17 @@ fn run_backtest_core<'py>(
         analysis_btc.drawdown_worst_hsl = hs.drawdown_worst_hsl;
         analysis_btc.drawdown_worst_hsl_long = hs.drawdown_worst_hsl_long;
         analysis_btc.drawdown_worst_hsl_short = hs.drawdown_worst_hsl_short;
+        analysis_btc.drawdown_worst_ema_hsl = hs.drawdown_worst_ema_hsl;
+        analysis_btc.drawdown_worst_ema_hsl_long = hs.drawdown_worst_ema_hsl_long;
+        analysis_btc.drawdown_worst_ema_hsl_short = hs.drawdown_worst_ema_hsl_short;
         analysis_btc.drawdown_worst_mean_1pct_hsl = hs.drawdown_worst_mean_1pct_hsl;
         analysis_btc.drawdown_worst_mean_1pct_hsl_long = hs.drawdown_worst_mean_1pct_hsl_long;
         analysis_btc.drawdown_worst_mean_1pct_hsl_short = hs.drawdown_worst_mean_1pct_hsl_short;
+        analysis_btc.drawdown_worst_mean_1pct_ema_hsl = hs.drawdown_worst_mean_1pct_ema_hsl;
+        analysis_btc.drawdown_worst_mean_1pct_ema_hsl_long =
+            hs.drawdown_worst_mean_1pct_ema_hsl_long;
+        analysis_btc.drawdown_worst_mean_1pct_ema_hsl_short =
+            hs.drawdown_worst_mean_1pct_ema_hsl_short;
         analysis_btc.peak_recovery_hours_hsl = hs.peak_recovery_hours_hsl;
         analysis_btc.peak_recovery_hours_hsl_long = hs.peak_recovery_hours_hsl_long;
         analysis_btc.peak_recovery_hours_hsl_short = hs.peak_recovery_hours_hsl_short;
@@ -1049,16 +1065,50 @@ fn run_backtest_core<'py>(
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
         let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
         let hard_stop_plot_data = backtest.hard_stop_plot_data();
+        let py_events_long = PyList::empty_bound(py);
+        for event in hard_stop_plot_data.events_long {
+            let py_event = PyDict::new_bound(py);
+            py_event.set_item("kind", event.kind)?;
+            py_event.set_item("timestamp_ms", event.timestamp_ms)?;
+            if let Some(cooldown_until_ms) = event.cooldown_until_ms {
+                py_event.set_item("cooldown_until_ms", cooldown_until_ms)?;
+            }
+            py_event.set_item("terminal", event.terminal)?;
+            py_events_long.append(py_event)?;
+        }
+        let py_events_short = PyList::empty_bound(py);
+        for event in hard_stop_plot_data.events_short {
+            let py_event = PyDict::new_bound(py);
+            py_event.set_item("kind", event.kind)?;
+            py_event.set_item("timestamp_ms", event.timestamp_ms)?;
+            if let Some(cooldown_until_ms) = event.cooldown_until_ms {
+                py_event.set_item("cooldown_until_ms", cooldown_until_ms)?;
+            }
+            py_event.set_item("terminal", event.terminal)?;
+            py_events_short.append(py_event)?;
+        }
         let py_hard_stop_plot = PyDict::new_bound(py);
         py_hard_stop_plot.set_item("timestamps_ms", hard_stop_plot_data.timestamps_ms)?;
         py_hard_stop_plot.set_item("drawdown_raw", hard_stop_plot_data.drawdown_raw)?;
         py_hard_stop_plot.set_item("timestamps_ms_long", hard_stop_plot_data.timestamps_ms_long)?;
         py_hard_stop_plot.set_item("drawdown_raw_long", hard_stop_plot_data.drawdown_raw_long)?;
+        py_hard_stop_plot.set_item("drawdown_ema_long", hard_stop_plot_data.drawdown_ema_long)?;
+        py_hard_stop_plot.set_item(
+            "drawdown_score_long",
+            hard_stop_plot_data.drawdown_score_long,
+        )?;
+        py_hard_stop_plot.set_item("events_long", py_events_long)?;
         py_hard_stop_plot.set_item(
             "timestamps_ms_short",
             hard_stop_plot_data.timestamps_ms_short,
         )?;
         py_hard_stop_plot.set_item("drawdown_raw_short", hard_stop_plot_data.drawdown_raw_short)?;
+        py_hard_stop_plot.set_item("drawdown_ema_short", hard_stop_plot_data.drawdown_ema_short)?;
+        py_hard_stop_plot.set_item(
+            "drawdown_score_short",
+            hard_stop_plot_data.drawdown_score_short,
+        )?;
+        py_hard_stop_plot.set_item("events_short", py_events_short)?;
         if metrics_only {
             return Ok((
                 py.None().into_py(py),

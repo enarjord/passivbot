@@ -278,6 +278,46 @@ def _install_passivbot_rust_stub():
             features, slots_to_fill, volume_drop_pct, weights, require_forager
         )
 
+    class _EquityHardStopRuntime:
+        """Stub for passivbot_rust.EquityHardStopRuntime."""
+
+        def __init__(self):
+            self._peak_strategy_equity = 0.0
+
+        def red_latched(self):
+            return False
+
+        def apply_sample(self, *, timestamp_ms, equity, peak_strategy_equity,
+                         red_threshold, ema_span_minutes, tier_ratio_yellow, tier_ratio_orange):
+            self._peak_strategy_equity = max(self._peak_strategy_equity, peak_strategy_equity)
+            return {
+                "peak_strategy_equity": self._peak_strategy_equity,
+                "rolling_peak_strategy_equity": self._peak_strategy_equity,
+                "drawdown_raw": 0.0,
+                "drawdown_ema": 0.0,
+                "drawdown_score": 0.0,
+                "tier": "green",
+                "changed": False,
+                "alpha": 0.0,
+                "elapsed_minutes": 0,
+            }
+
+    class _EquityHardStopRollingPeak:
+        """Stub for passivbot_rust.EquityHardStopRollingPeak."""
+
+        def __init__(self):
+            self._peak = 0.0
+
+        def reset(self):
+            self._peak = 0.0
+
+        def update(self, timestamp_ms, strategy_pnl, lookback_ms):
+            self._peak = max(self._peak, float(strategy_pnl))
+            return self._peak
+
+    stub.EquityHardStopRuntime = _EquityHardStopRuntime
+    stub.EquityHardStopRollingPeak = _EquityHardStopRollingPeak
+
     stub.compute_ideal_orders_json = _compute_ideal_orders_json
     stub.select_coin_indices_py = _select_coin_indices_py
     stub.select_forager_candidates_py = _select_forager_candidates_py

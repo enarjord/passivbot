@@ -179,14 +179,21 @@ def test_format_config_preserves_live_optimize_bounds():
 
 def test_format_config_normalizes_hsl_position_during_cooldown_policy():
     current = copy.deepcopy(_template())
-    current["live"]["hsl_position_during_cooldown_policy"] = "manual_quarantine"
+    current["live"]["hsl_position_during_cooldown_policy"] = "manual"
     out = format_config(current, verbose=False, live_only=True)
-    assert out["live"]["hsl_position_during_cooldown_policy"] == "manual_quarantine"
+    assert out["live"]["hsl_position_during_cooldown_policy"] == "manual"
 
 
 def test_format_config_rejects_invalid_hsl_position_during_cooldown_policy():
     current = copy.deepcopy(_template())
     current["live"]["hsl_position_during_cooldown_policy"] = "bad_policy"
+    with pytest.raises(ValueError, match="live.hsl_position_during_cooldown_policy"):
+        format_config(current, verbose=False, live_only=True)
+
+
+def test_format_config_rejects_removed_hsl_cooldown_policy():
+    current = copy.deepcopy(_template())
+    current["live"]["hsl_position_during_cooldown_policy"] = "resume_normal_reset_drawdown"
     with pytest.raises(ValueError, match="live.hsl_position_during_cooldown_policy"):
         format_config(current, verbose=False, live_only=True)
 

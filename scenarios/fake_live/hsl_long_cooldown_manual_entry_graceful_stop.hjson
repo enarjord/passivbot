@@ -107,7 +107,7 @@
       last.open_orders: 4
     }
     log_contains: [
-      "detected non-flat position during RED cooldown | policy=graceful_stop_keep_cooldown"
+      "detected non-flat position during RED cooldown | policy=graceful_stop"
       "changed long.BTC/USDT:USDT: panic -> graceful_stop"
     ]
   }

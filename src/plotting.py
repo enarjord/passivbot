@@ -948,8 +948,12 @@ def create_forager_hard_stop_drawdown_figure(
         bot = ((config or {}).get("bot") or {})
         pside_cfg = (bot.get(pside) or {})
         if isinstance(pside_cfg, dict) and "hsl_enabled" in pside_cfg:
+            twel = float(pside_cfg.get("total_wallet_exposure_limit", 0.0) or 0.0)
+            n_positions = int(round(float(pside_cfg.get("n_positions", 0.0) or 0.0)))
             return {
-                "enabled": bool(pside_cfg.get("hsl_enabled", False)),
+                "enabled": bool(pside_cfg.get("hsl_enabled", False))
+                and twel > 0.0
+                and n_positions > 0,
                 "red_threshold": float(pside_cfg.get("hsl_red_threshold", 0.0) or 0.0),
                 "ema_span_minutes": float(pside_cfg.get("hsl_ema_span_minutes", 0.0) or 0.0),
                 "tier_ratios": pside_cfg.get("hsl_tier_ratios", {}) or {},
@@ -959,19 +963,63 @@ def create_forager_hard_stop_drawdown_figure(
             return legacy
         return {}
 
-    def _trace_df(timestamps_ms, drawdown_raw) -> pd.DataFrame:
+    def _trace_df(
+        timestamps_ms,
+        drawdown_raw,
+        drawdown_ema=None,
+        drawdown_score=None,
+    ) -> pd.DataFrame:
         if not timestamps_ms or not drawdown_raw:
             return pd.DataFrame()
         sample_count = min(len(timestamps_ms), len(drawdown_raw))
+        if drawdown_ema is not None:
+            sample_count = min(sample_count, len(drawdown_ema))
+        if drawdown_score is not None:
+            sample_count = min(sample_count, len(drawdown_score))
         if sample_count <= 0:
             return pd.DataFrame()
         idx = pd.to_datetime(np.asarray(timestamps_ms[:sample_count], dtype=np.int64), unit="ms")
-        df = pd.DataFrame(
-            {"drawdown_raw": pd.to_numeric(np.asarray(drawdown_raw[:sample_count]), errors="coerce")},
-            index=idx,
-        )
+        data = {
+            "drawdown_raw": pd.to_numeric(np.asarray(drawdown_raw[:sample_count]), errors="coerce")
+        }
+        if drawdown_ema is not None:
+            data["drawdown_ema"] = pd.to_numeric(
+                np.asarray(drawdown_ema[:sample_count]), errors="coerce"
+            )
+        if drawdown_score is not None:
+            data["drawdown_score"] = pd.to_numeric(
+                np.asarray(drawdown_score[:sample_count]), errors="coerce"
+            )
+        df = pd.DataFrame(data, index=idx)
         df = df.dropna()
         return df[~df.index.duplicated(keep="first")].sort_index()
+
+    def _normalize_events(events) -> list[dict]:
+        if not isinstance(events, (list, tuple)):
+            return []
+        out = []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            kind = str(event.get("kind", "") or "").strip().lower()
+            timestamp_ms = event.get("timestamp_ms")
+            try:
+                timestamp_ms = int(timestamp_ms)
+            except Exception:
+                continue
+            normalized = {
+                "kind": kind,
+                "timestamp_ms": timestamp_ms,
+                "cooldown_until_ms": event.get("cooldown_until_ms"),
+                "terminal": bool(event.get("terminal", False)),
+            }
+            if normalized["cooldown_until_ms"] is not None:
+                try:
+                    normalized["cooldown_until_ms"] = int(normalized["cooldown_until_ms"])
+                except Exception:
+                    normalized["cooldown_until_ms"] = None
+            out.append(normalized)
+        return out
 
     def _minute_quantized_drawdown_ema(trace_df: pd.DataFrame, ema_span_minutes: float) -> pd.Series:
         drawdown_raw = trace_df["drawdown_raw"].clip(lower=0.0).astype(float)
@@ -1013,11 +1061,19 @@ def create_forager_hard_stop_drawdown_figure(
         traces["long"] = _trace_df(
             hard_stop_plot_data.get("timestamps_ms_long", []),
             hard_stop_plot_data.get("drawdown_raw_long", []),
+            hard_stop_plot_data.get("drawdown_ema_long"),
+            hard_stop_plot_data.get("drawdown_score_long"),
         )
         traces["short"] = _trace_df(
             hard_stop_plot_data.get("timestamps_ms_short", []),
             hard_stop_plot_data.get("drawdown_raw_short", []),
+            hard_stop_plot_data.get("drawdown_ema_short"),
+            hard_stop_plot_data.get("drawdown_score_short"),
         )
+    events_by_pside = {
+        "long": _normalize_events((hard_stop_plot_data or {}).get("events_long", [])),
+        "short": _normalize_events((hard_stop_plot_data or {}).get("events_short", [])),
+    }
 
     if not any(not traces.get(pside, pd.DataFrame()).empty for pside in enabled_psides):
         if bal_eq.empty or "usd_total_equity" not in bal_eq.columns:
@@ -1061,8 +1117,14 @@ def create_forager_hard_stop_drawdown_figure(
             continue
         trace_df = traces[pside]
         drawdown_raw = trace_df["drawdown_raw"].clip(lower=0.0)
-        drawdown_ema = _minute_quantized_drawdown_ema(trace_df, ema_span_minutes)
-        drawdown_score = pd.concat([drawdown_raw, drawdown_ema], axis=1).min(axis=1)
+        if "drawdown_ema" in trace_df.columns:
+            drawdown_ema = trace_df["drawdown_ema"].clip(lower=0.0)
+        else:
+            drawdown_ema = _minute_quantized_drawdown_ema(trace_df, ema_span_minutes)
+        if "drawdown_score" in trace_df.columns:
+            drawdown_score = trace_df["drawdown_score"].clip(lower=0.0)
+        else:
+            drawdown_score = pd.concat([drawdown_raw, drawdown_ema], axis=1).min(axis=1)
         x = trace_df.index.to_numpy()
         tier_ratios = cfg.get("tier_ratios", {}) or {}
         yellow_threshold = float(tier_ratios.get("yellow", 0.5) or 0.5) * red_threshold
@@ -1080,6 +1142,42 @@ def create_forager_hard_stop_drawdown_figure(
         axis.axhline(
             red_threshold, color="#b22222", linestyle="--", linewidth=1.2, label="RED Threshold"
         )
+        label_used = set()
+        for event in events_by_pside.get(pside, []):
+            event_ts = pd.to_datetime(int(event["timestamp_ms"]), unit="ms")
+            kind = event.get("kind", "")
+            if kind == "red_enter":
+                label = "RED Enter" if "RED Enter" not in label_used else None
+                axis.axvline(
+                    event_ts, color="#b22222", linestyle=":", linewidth=1.0, alpha=0.8, label=label
+                )
+                label_used.add("RED Enter")
+            elif kind == "halt":
+                label = "Halt" if "Halt" not in label_used else None
+                axis.axvline(
+                    event_ts, color="#444444", linestyle="-.", linewidth=1.0, alpha=0.9, label=label
+                )
+                label_used.add("Halt")
+                cooldown_until_ms = event.get("cooldown_until_ms")
+                if cooldown_until_ms:
+                    until_ts = pd.to_datetime(int(cooldown_until_ms), unit="ms")
+                    span_label = "Cooldown" if "Cooldown" not in label_used else None
+                    axis.axvspan(
+                        event_ts, until_ts, color="#b22222", alpha=0.08, label=span_label
+                    )
+                    label_used.add("Cooldown")
+                elif event.get("terminal", False):
+                    span_label = "Terminal Halt" if "Terminal Halt" not in label_used else None
+                    axis.axvspan(
+                        event_ts, trace_df.index[-1], color="#444444", alpha=0.08, label=span_label
+                    )
+                    label_used.add("Terminal Halt")
+            elif kind == "restart":
+                label = "Restart" if "Restart" not in label_used else None
+                axis.axvline(
+                    event_ts, color="#2e8b57", linestyle="--", linewidth=1.0, alpha=0.9, label=label
+                )
+                label_used.add("Restart")
         axis.set_title(f"Equity Hard Stop Drawdown ({pside.capitalize()})")
         axis.set_ylabel("Drawdown")
         axis.grid(True, linestyle="--", alpha=0.3)

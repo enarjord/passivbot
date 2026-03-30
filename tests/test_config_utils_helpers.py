@@ -161,25 +161,25 @@ def test_apply_non_live_adjustments_keeps_default_completion_limit():
     assert completion_limit["value"] == pytest.approx(0.9)
 
 
-def test_apply_non_live_adjustments_merges_missing_default_limit_into_existing_list():
+def test_apply_non_live_adjustments_preserves_present_valid_limits_without_injecting_defaults():
     config = get_template_config()
     config["live"]["approved_coins"] = "btc"
     config["live"]["ignored_coins"] = {"long": [], "short": []}
     config["backtest"]["end_date"] = "2023-01-01"
     config["optimize"]["limits"] = [
-        {"metric": "drawdown_worst_btc", "penalize_if": "greater_than", "value": 0.85},
+        {"metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.85},
         {"metric": "position_held_hours_max", "penalize_if": "greater_than", "value": 2160},
     ]
 
-    _apply_non_live_adjustments(config, verbose=False)
-
-    limits = config["optimize"]["limits"]
-    completion_limit = next(
-        (entry for entry in limits if entry["metric"] == "backtest_completion_ratio"), None
+    raw_limits = deepcopy(config["optimize"]["limits"])
+    _apply_non_live_adjustments(
+        config,
+        verbose=False,
+        raw_optimize_limits=raw_limits,
+        raw_optimize_limits_present=True,
     )
-    assert completion_limit is not None
-    assert completion_limit["penalize_if"] == "less_than"
-    assert completion_limit["value"] == pytest.approx(0.9)
+
+    assert config["optimize"]["limits"] == raw_limits
 
 
 def test_apply_non_live_adjustments_respects_disabled_default_limit_tombstone():
@@ -191,7 +191,13 @@ def test_apply_non_live_adjustments_respects_disabled_default_limit_tombstone():
         {"metric": "backtest_completion_ratio", "enabled": False},
     ]
 
-    _apply_non_live_adjustments(config, verbose=False)
+    raw_limits = deepcopy(config["optimize"]["limits"])
+    _apply_non_live_adjustments(
+        config,
+        verbose=False,
+        raw_optimize_limits=raw_limits,
+        raw_optimize_limits_present=True,
+    )
 
     limits = config["optimize"]["limits"]
     matches = [entry for entry in limits if entry["metric"] == "backtest_completion_ratio"]

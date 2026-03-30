@@ -110,7 +110,9 @@ SHARED_METRICS = {
     "calmar_ratio_strategy_pnl_rebased_w",
     "sterling_ratio_strategy_pnl_rebased_w",
     "drawdown_worst_hsl",
+    "drawdown_worst_ema_hsl",
     "drawdown_worst_mean_1pct_hsl",
+    "drawdown_worst_mean_1pct_ema_hsl",
     "peak_recovery_hours_hsl",
     "hard_stop_triggers_per_year",
     "hard_stop_restarts_per_year",
@@ -145,11 +147,11 @@ HSL_PSIDE_KEYS = (
 )
 HSL_SIGNAL_MODES = ("pside", "unified")
 HSL_COOLDOWN_POSITION_POLICIES = (
-    "repanic_reset_cooldown",
-    "repanic_keep_original_cooldown",
-    "resume_normal_reset_drawdown",
-    "graceful_stop_keep_cooldown",
-    "manual_quarantine",
+    "normal",
+    "panic",
+    "tp_only",
+    "graceful_stop",
+    "manual",
 )
 
 
@@ -1589,7 +1591,7 @@ def _sync_with_template(
         template_with_extras,
         result,
         verbose=verbose,
-        preserve=list(TEMPLATE_SYNC_PRESERVE_PATHS) + preserved_live_optimize_bounds,
+        preserve=TEMPLATE_SYNC_PRESERVE_PATHS + tuple(preserved_live_optimize_bounds),
         tracker=tracker,
     )
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose, tracker=tracker)
@@ -1884,40 +1886,37 @@ def _apply_non_live_adjustments(
             f"or 'auto'; got {ref_dirs.get('n_partitions')!r}"
         )
 
-    existing_limits = deepcopy(result["optimize"].get("limits", []))
-    limits_snapshot = deepcopy(existing_limits)
-    try:
-        normalized_limits = normalize_limit_entries(existing_limits)
-    except Exception:
-        normalized_limits = deepcopy(get_template_config()["optimize"].get("limits", []))
-        _log_config(
-            verbose,
-            logging.WARNING,
-            "optimize.limits malformed or unsupported; falling back to template defaults (%d entries)",
-            len(normalized_limits),
-        )
-    default_limits = normalize_limit_entries(get_template_config()["optimize"].get("limits", []))
-    merged_limits = _merge_missing_default_limits(normalized_limits, default_limits)
-    if len(merged_limits) != len(normalized_limits):
-        _log_config(
-            verbose,
-            logging.INFO,
-            "added missing default optimize.limits entries (%d -> %d)",
-            len(normalized_limits),
-            len(merged_limits),
-        )
-        normalized_limits = merged_limits
-    changed_limits = not _limits_structurally_equal(existing_limits, normalized_limits)
-    result["optimize"]["limits"] = normalized_limits
-    if changed_limits and tracker is not None:
-        tracker.update(["optimize", "limits"], limits_snapshot, normalized_limits)
-    if changed_limits:
+    current_limits = deepcopy(result["optimize"].get("limits", []))
+    limits_snapshot = deepcopy(current_limits)
+    if raw_optimize_limits_present is None:
+        raw_optimize_limits_present = "limits" in result.get("optimize", {})
+        if raw_optimize_limits is None and raw_optimize_limits_present:
+            raw_optimize_limits = deepcopy(result["optimize"].get("limits"))
+    template_limits = deepcopy(get_template_config()["optimize"]["limits"])
+    resolved_limits, resolution = _resolve_optimize_limits_for_load(
+        raw_optimize_limits=raw_optimize_limits,
+        raw_optimize_limits_present=raw_optimize_limits_present,
+        template_limits=template_limits,
+    )
+    result["optimize"]["limits"] = resolved_limits
+    if resolution == "normalized_legacy":
         _log_config(
             verbose,
             logging.INFO,
             "normalized optimize.limits to canonical schema (%d entries)",
-            len(normalized_limits),
+            len(resolved_limits),
         )
+        if tracker is not None:
+            tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
+    elif resolution == "fallback_template":
+        _log_config(
+            verbose,
+            logging.WARNING,
+            "optimize.limits malformed or unsupported; falling back to template defaults (%d entries)",
+            len(template_limits),
+        )
+        if tracker is not None:
+            tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
     for key, value in sorted(result["optimize"]["bounds"].items()):
         if isinstance(value, list):
             if len(value) == 1:
@@ -2446,26 +2445,6 @@ def _limits_structurally_equal(raw_limits: Any, normalized_limits: List[Dict[str
     return all(_entries_equivalent(raw, norm) for raw, norm in zip(raw_limits, normalized_limits))
 
 
-def _merge_missing_default_limits(
-    current_limits: List[Dict[str, Any]], default_limits: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
-    merged = deepcopy(current_limits)
-    for default_entry in default_limits:
-        if any(_entries_equivalent(existing, default_entry) for existing in merged):
-            continue
-        same_metric = [
-            existing
-            for existing in merged
-            if isinstance(existing, dict) and existing.get("metric") == default_entry.get("metric")
-        ]
-        # If the user already has an explicit entry for the same metric, including enabled=false,
-        # treat that as intentional and do not re-add the default.
-        if same_metric:
-            continue
-        merged.append(deepcopy(default_entry))
-    return merged
-
-
 def add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=None):
     if parent is None:
         parent = []
@@ -2961,8 +2940,7 @@ CLI_HELP_GROUPS = {
         "Optimize DEAP",
         "Optimize Pymoo",
         "Advanced Overrides",
-    ],
-}
+    ],}
 
 
 def _register_argument(container, visible_names, hidden_names, **kwargs):
@@ -3618,7 +3596,7 @@ def get_template_config():
             "forced_mode_long": "",
             "forced_mode_short": "",
             "hedge_mode": True,
-            "hsl_position_during_cooldown_policy": "repanic_reset_cooldown",
+            "hsl_position_during_cooldown_policy": "panic",
             "hsl_signal_mode": "pside",
             "ignored_coins": {"long": [], "short": []},
             "inactive_coin_candle_ttl_minutes": 10.0,
@@ -3791,29 +3769,7 @@ def get_template_config():
                 {"metric": "peak_recovery_hours_hsl", "penalize_if": "greater_than", "value": 2160},
                 {"metric": "position_held_hours_max", "penalize_if": "greater_than", "value": 2160},
                 {"metric": "backtest_completion_ratio", "penalize_if": "less_than", "value": 0.9},
-                {
-                    "metric": "drawdown_worst_usd",
-                    "penalize_if": "greater_than",
-                    "value": 0.85,
-                    "enabled": False
-                },
-                {
-                    "metric": "adg_pnl",
-                    "penalize_if": "less_than",
-                    "stat": "mean",
-                    "value": 0,
-                    "enabled": False
-                },
-                {
-                    "metric": "peak_recovery_hours_pnl",
-                    "penalize_if": "greater_than",
-                    "value": 1680,
-                    "enabled": False
-                }
             ],
-            "mutation_eta": 20.0,
-            "mutation_indpb": 0.0,
-            "mutation_probability": 0.45,
             "n_cpus": 5,
             "pareto_max_size": 300,
             "population_size": 1000,

@@ -215,8 +215,6 @@ def collect_runtime_provenance() -> dict:
         ),
         "pid": os.getpid(),
     }
-
-
 def latest_compiled_mtime(paths: Iterable[Path]) -> Optional[float]:
     mtimes = [p.stat().st_mtime for p in paths if p.exists()]
     return max(mtimes) if mtimes else None

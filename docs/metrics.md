@@ -58,7 +58,12 @@ and more stable across collateral caps.
 
 ## HSL risk metrics
 - `drawdown_worst_hsl`: Worst account-level HSL drawdown sample.
+- `drawdown_worst_ema_hsl`: Worst EMA-smoothed HSL drawdown. Since long and short may use
+  different `hsl_ema_span_minutes`, the shared metric is `max(drawdown_worst_ema_hsl_long,
+  drawdown_worst_ema_hsl_short)`.
 - `drawdown_worst_mean_1pct_hsl`: Mean of the worst 1% HSL drawdown samples.
+- `drawdown_worst_mean_1pct_ema_hsl`: Mean of the worst 1% EMA-smoothed HSL drawdown samples,
+  using the same conservative shared `max(long, short)` rule.
 - `peak_recovery_hours_hsl`: Longest time spent below the all-time rebased HSL peak before
   recovery. This uses the all-time rebased peak rather than the rolling trigger window.
 - `hard_stop_triggers`: Absolute count of RED trigger events during the run.

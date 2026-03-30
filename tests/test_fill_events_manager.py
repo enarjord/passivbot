@@ -3595,3 +3595,48 @@ def test_compute_psize_pprice_initial_state():
     # VWAP: (2*100 + 1*120) / 3 = 320/3 ≈ 106.67
     assert abs(events[0]["pprice"] - 106.66666666666667) < 0.01
     assert result[("BTC", "long")] == (3.0, events[0]["pprice"])
+
+
+def test_compute_psize_pprice_reconciles_from_authoritative_final_size(caplog):
+    events = [
+        {
+            "id": "1",
+            "timestamp": 1,
+            "symbol": "XMR",
+            "side": "buy",
+            "qty": 0.1,
+            "price": 100.0,
+            "position_side": "long",
+            "pb_order_type": "entry_initial_normal_long",
+        },
+        {
+            "id": "2",
+            "timestamp": 2,
+            "symbol": "XMR",
+            "side": "sell",
+            "qty": 0.1,
+            "price": 101.0,
+            "position_side": "long",
+            "pb_order_type": "close_grid_long",
+        },
+    ]
+    ensure_qty_signage(events)
+
+    with caplog.at_level(logging.WARNING):
+        result = compute_psize_pprice(
+            events,
+            final_state={("XMR", "long"): (0.06, 0.0)},
+            log_discrepancies=True,
+            log_prefix="test",
+        )
+
+    assert events[0]["psize"] == pytest.approx(0.16)
+    assert events[0]["pprice"] == 0.0
+    assert events[1]["psize"] == pytest.approx(0.06)
+    assert events[1]["pprice"] == 0.0
+    assert result[("XMR", "long")] == pytest.approx((0.06, 0.0))
+    assert any("psize replay mismatch before reconciliation" in rec.message for rec in caplog.records)
+    assert any(
+        "inferred initial size without known initial pprice" in rec.message
+        for rec in caplog.records
+    )

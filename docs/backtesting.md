@@ -2,6 +2,12 @@
 
 Passivbot ships with a backtester that replays historical 1 minute candles. When a coin isn't cached locally, the backtester fetches data from the exchange archives and caches it under `caches/ohlcv/` for reuse.
 
+Backtesting requires the full install profile:
+
+```shell
+pip install -e ".[full]"
+```
+
 On exchanges with limited native `1m` retention, the backtester can also reconstruct missing
 minute history in memory from real `5m` / `15m` source candles. Real fetched higher-timeframe
 candles are cached under their own timeframe directories; synthesized `1m` candles are not written
@@ -25,11 +31,11 @@ For `.npz` files, the archive must contain a `candles` key with a structured Num
 ## Usage
 
 ```shell
-python3 src/backtest.py
+passivbot backtest
 ```
 Or
 ```shell
-python3 src/backtest.py path/to/config.json
+passivbot backtest path/to/config.json
 ```
 If no config is specified, it will default to `configs/template.json`
 
@@ -49,7 +55,7 @@ Standalone backtests can optionally filter which metrics are printed to the term
 
 For a comprehensive list of CLI args:
 ```shell
-python3 src/backtest.py -h
+passivbot backtest -h
 ```
 
 ## Suite Runs
