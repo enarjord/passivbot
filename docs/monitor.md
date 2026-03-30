@@ -23,21 +23,22 @@ The relay is intended to be a single long-running process per repo checkout:
 
 1. Start it before or after any bot.
 2. It auto-detects active monitor publishers under `monitor/`.
-3. It keeps relaying as bots start, stop, or restart.
+3. It keeps relaying as bots start, go briefly quiet, stop, or restart.
 4. One relay can fan in any number of bots from the same repo.
+5. Bot presence is sticky: bots move from `active` to `stale` before they are pruned, so short quiet periods do not flicker the feed or dashboard.
 
 ## Endpoints
 
 - `GET /health`
-  - Returns discovered monitor roots, active status, and relay health metadata.
+  - Returns discovered monitor roots, relay presence status (`active`, `stale`, `offline`), and relay health metadata.
 - `GET /snapshot`
   - Returns the latest snapshot envelope for one selected bot when `exchange` and `user` are provided.
-  - Otherwise returns a `snapshot_bundle` containing the latest snapshot envelopes for all active bots.
+  - Otherwise returns a `snapshot_bundle` containing the latest snapshot envelopes for all visible bots (`active` + sticky `stale`).
 - `GET /dashboard`
   - Serves a static browser dashboard bootstrapped from the same relay contract.
 - `GET /ws`
   - With `exchange` and `user`, streams one selected bot.
-  - Without filters, sends startup snapshots for all active bots, replays recent messages across all active bots, then streams live updates from all active bots on one websocket.
+  - Without filters, sends startup snapshots for all visible bots, replays recent messages across all visible bots, then streams live updates from all visible bots on one websocket.
   - All snapshot, event, and history messages carry `exchange` and `user` so consumers can differentiate bots.
 
 ## Notes
@@ -62,12 +63,13 @@ passivbot tool monitor-relay --monitor-root monitor
 
 Current behavior:
 
-1. Connects to the aggregate `/snapshot` + `/ws` relay feed for all active bots
-2. Shows a dense overview card for every active bot discovered by the relay
+1. Connects to the aggregate `/snapshot` + `/ws` relay feed for all visible bots
+2. Shows a dense overview card for every visible bot discovered by the relay
 3. Lets operators click any bot card to focus it without restarting the dashboard
 4. Keeps a focused-bot detail view for summary, focus, positions, trailing, forager, unstuck, recent events, recent ticks, and recent orders
 5. Preserves a separate symbol focus inside the currently selected bot
-6. Accepts optional `exchange`, `user`, and `symbol` query params for initial focus only; the dashboard still consumes the multiplexed relay feed
+6. Marks temporarily quiet bots as `stale` instead of dropping them immediately, and only prunes them after a longer offline timeout
+7. Accepts optional `exchange`, `user`, and `symbol` query params for initial focus only; the dashboard still consumes the multiplexed relay feed
 
 Example initial-focus URL:
 

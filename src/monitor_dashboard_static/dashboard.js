@@ -9,6 +9,7 @@
     snapshotTimer: null,
     lastWsTs: null,
   };
+  const BOT_MISSING_PRUNE_MS = 30000;
 
   const els = {
     heroTitle: document.getElementById("hero-title"),
@@ -177,6 +178,8 @@
         recentEvents: [],
         recentTicks: new Map(),
         lastMessageTs: 0,
+        firstSeenAtMs: Date.now(),
+        missingSinceMs: null,
       });
     }
     return state.bots.get(key);
@@ -186,9 +189,11 @@
     return Array.from(state.bots.entries())
       .filter(([, entry]) => entry.snapshot && entry.snapshot.payload)
       .sort((a, b) => {
-        const ta = Number(a[1].snapshot.ts || 0);
-        const tb = Number(b[1].snapshot.ts || 0);
-        if (tb !== ta) return tb - ta;
+        if (a[0] === state.focusedBotKey) return -1;
+        if (b[0] === state.focusedBotKey) return 1;
+        const fa = Number(a[1].firstSeenAtMs || 0);
+        const fb = Number(b[1].firstSeenAtMs || 0);
+        if (fa !== fb) return fa - fb;
         return a[0].localeCompare(b[0]);
       });
   }
@@ -263,6 +268,7 @@
   function ingestSnapshotPayload(payload) {
     const messages = normalizeSnapshotMessages(payload);
     const seenKeys = new Set();
+    const nowMs = Date.now();
     for (const message of messages) {
       const key = messageKey(message);
       if (!key) continue;
@@ -270,12 +276,18 @@
       const bot = ensureBotState(key);
       bot.snapshot = message;
       bot.lastMessageTs = Number(message.ts || Date.now());
+      bot.missingSinceMs = null;
     }
     if (messages.length) {
       for (const key of Array.from(state.bots.keys())) {
         if (!seenKeys.has(key)) {
-          state.bots.delete(key);
-          state.focusSymbols.delete(key);
+          const bot = state.bots.get(key);
+          if (!bot) continue;
+          if (bot.missingSinceMs === null) bot.missingSinceMs = nowMs;
+          if (nowMs - Number(bot.missingSinceMs || nowMs) >= BOT_MISSING_PRUNE_MS) {
+            state.bots.delete(key);
+            state.focusSymbols.delete(key);
+          }
         }
       }
     }
@@ -474,9 +486,24 @@
     return `${exchange || "-"} / ${user || "-"}`;
   }
 
+  function botRelayStatus(botEntry) {
+    return botEntry?.snapshot?.relay?.status || "active";
+  }
+
+  function botStatusTone(status) {
+    if (status === "active") return "is-ok";
+    if (status === "stale") return "is-warn";
+    return "";
+  }
+
   function renderBotOverview(botEntries) {
     els.botOverview.innerHTML = "";
-    els.botsMeta.textContent = `${botEntries.length} ${botEntries.length === 1 ? "bot" : "bots"}`;
+    const activeCount = botEntries.filter(([, entry]) => botRelayStatus(entry) === "active").length;
+    const staleCount = botEntries.filter(([, entry]) => botRelayStatus(entry) === "stale").length;
+    const metaParts = [`${botEntries.length} ${botEntries.length === 1 ? "bot" : "bots"} visible`];
+    metaParts.push(`${activeCount} active`);
+    if (staleCount) metaParts.push(`${staleCount} stale`);
+    els.botsMeta.textContent = metaParts.join(" · ");
     if (!botEntries.length) {
       els.botOverview.appendChild(emptyNode());
       return;
@@ -487,6 +514,8 @@
       const health = payload.health || {};
       const hsl = payload.hsl || {};
       const counts = positionCounts(payload);
+      const relay = botEntry.snapshot?.relay || {};
+      const presence = relay.status || "active";
       const card = document.createElement("article");
       card.className = focusClasses(key, state.focusedBotKey, "overview-card");
       card.dataset.botKey = key;
@@ -494,9 +523,9 @@
         <div class="overview-head">
           <div>
             <p class="overview-title">${escapeHtml(botDisplayLabel(key))}</p>
-            <p class="overview-subtitle">snapshot ${escapeHtml(fmtAgeMs(botEntry.snapshot?.ts))} · ${escapeHtml(fmtTs(botEntry.snapshot?.ts))}</p>
+            <p class="overview-subtitle">snapshot ${escapeHtml(fmtAgeMs(botEntry.snapshot?.ts))} · ${escapeHtml(fmtTs(botEntry.snapshot?.ts))} · seen ${escapeHtml(fmtAgeMs(relay.last_activity_ts_ms))}</p>
           </div>
-          <span class="pill ${key === state.focusedBotKey ? "is-ok" : ""}">${escapeHtml(key === state.focusedBotKey ? "focused" : "available")}</span>
+          <span class="pill ${key === state.focusedBotKey ? "is-ok" : botStatusTone(presence)}">${escapeHtml(key === state.focusedBotKey ? `focused · ${presence}` : presence)}</span>
         </div>
         <div class="overview-metrics">
           <div class="overview-metric">
@@ -744,8 +773,8 @@
 
   function renderNoBots() {
     els.heroTitle.textContent = "Waiting for active bots...";
-    els.heroSubtitle.textContent = "The relay is up, but no active monitor snapshots are available yet.";
-    els.botsMeta.textContent = "0 bots";
+    els.heroSubtitle.textContent = "The relay is up, but no visible monitor snapshots are available yet.";
+    els.botsMeta.textContent = "0 bots visible";
     els.summaryMeta.textContent = "-";
     setChip(els.snapshotStatus, "Snapshot: waiting", "is-warn");
     setChip(els.focusStatus, "Focus: none", "");
@@ -791,10 +820,13 @@
     const focusSymbol = selectedFocusSymbol(focusedKey, payload);
     const account = payload.account || {};
     const health = payload.health || {};
-    els.heroTitle.textContent = `${botEntries.length} ${botEntries.length === 1 ? "bot" : "bots"} live`;
-    els.heroSubtitle.textContent = `Focused ${botDisplayLabel(focusedKey)} · equity ${fmtCompact(account.equity, 2)} · loop ${fmtCompact(health.last_loop_duration_ms, 0)} ms · snapshot ${fmtAgeMs(snapshot.ts)} old`;
+    const activeCount = botEntries.filter(([, entry]) => botRelayStatus(entry) === "active").length;
+    const staleCount = botEntries.filter(([, entry]) => botRelayStatus(entry) === "stale").length;
+    const focusPresence = botRelayStatus(botEntry);
+    els.heroTitle.textContent = `${botEntries.length} ${botEntries.length === 1 ? "bot" : "bots"} visible`;
+    els.heroSubtitle.textContent = `Focused ${botDisplayLabel(focusedKey)} · ${focusPresence} · ${activeCount} active${staleCount ? ` / ${staleCount} stale` : ""} · equity ${fmtCompact(account.equity, 2)} · loop ${fmtCompact(health.last_loop_duration_ms, 0)} ms · snapshot ${fmtAgeMs(snapshot.ts)} old`;
     els.summaryMeta.textContent = botDisplayLabel(focusedKey);
-    setChip(els.snapshotStatus, `Snapshot: ${botEntries.length} bots · focused ${fmtAgeMs(snapshot.ts)}`, "is-ok");
+    setChip(els.snapshotStatus, `Snapshot: ${activeCount} active${staleCount ? ` / ${staleCount} stale` : ""} · focused ${fmtAgeMs(snapshot.ts)}`, focusPresence === "stale" ? "is-warn" : "is-ok");
     setChip(
       els.focusStatus,
       `Focus: ${botDisplayLabel(focusedKey)}${focusSymbol ? ` · ${shortSymbol(focusSymbol)}` : " · auto"}`,

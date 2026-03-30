@@ -27,6 +27,17 @@ class _PathState:
     offset: int
 
 
+@dataclass
+class _BotPresence:
+    first_seen_ts_ms: int
+    last_seen_ts_ms: int
+    last_activity_ts_ms: int = 0
+    last_snapshot_ts_ms: int = 0
+    last_event_ts_ms: int = 0
+    last_history_ts_ms: int = 0
+    last_snapshot_seq: int = 0
+
+
 class MonitorRelay:
     def __init__(
         self,
@@ -43,6 +54,7 @@ class MonitorRelay:
         self.started_at_monotonic = time.monotonic()
         self._path_states: dict[Path, _PathState] = {}
         self._subscribers: dict[asyncio.Queue, Optional[MonitorKey]] = {}
+        self._bot_presence: dict[MonitorKey, _BotPresence] = {}
         self._poll_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._initial_prime_completed = False
@@ -122,18 +134,121 @@ class MonitorRelay:
     def _key_stale_after_ms(self, key: MonitorKey) -> int:
         manifest = self._load_json(self._manifest_path(key))
         snapshot_interval_ms = self._extract_manifest_snapshot_interval_ms(manifest)
-        return max(30_000, snapshot_interval_ms * 5 if snapshot_interval_ms else 0)
+        return max(90_000, snapshot_interval_ms * 12 if snapshot_interval_ms else 0)
+
+    def _key_prune_after_ms(self, key: MonitorKey) -> int:
+        stale_after_ms = self._key_stale_after_ms(key)
+        return max(300_000, stale_after_ms * 4)
+
+    def _ensure_presence_entry(
+        self,
+        key: MonitorKey,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> _BotPresence:
+        now_ms = self._now_ms() if now_ms is None else int(now_ms)
+        entry = self._bot_presence.get(key)
+        if entry is None:
+            entry = _BotPresence(first_seen_ts_ms=now_ms, last_seen_ts_ms=now_ms)
+            self._bot_presence[key] = entry
+        return entry
+
+    def _now_ms(self) -> int:
+        return int(time.time() * 1000.0)
+
+    def _presence_reference_ts_ms(self, key: MonitorKey) -> int:
+        entry = self._bot_presence.get(key)
+        if entry is None:
+            return 0
+        return max(
+            int(entry.last_activity_ts_ms or 0),
+            int(entry.last_snapshot_ts_ms or 0),
+            int(entry.last_event_ts_ms or 0),
+            int(entry.last_history_ts_ms or 0),
+        )
+
+    def _presence_status(
+        self,
+        key: MonitorKey,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> str:
+        now_ms = self._now_ms() if now_ms is None else int(now_ms)
+        entry = self._bot_presence.get(key)
+        if entry is None:
+            return "offline"
+        reference_ts_ms = self._presence_reference_ts_ms(key)
+        if reference_ts_ms <= 0:
+            return "offline"
+        age_ms = max(0, now_ms - reference_ts_ms)
+        if age_ms <= self._key_stale_after_ms(key):
+            return "active"
+        if age_ms <= self._key_prune_after_ms(key):
+            return "stale"
+        return "offline"
+
+    def _refresh_presence(self, *, now_ms: Optional[int] = None) -> None:
+        now_ms = self._now_ms() if now_ms is None else int(now_ms)
+        for key in self.discover_keys():
+            entry = self._ensure_presence_entry(key, now_ms=now_ms)
+            entry.last_seen_ts_ms = now_ms
+            manifest = self._load_json(self._manifest_path(key))
+            snapshot = self._load_json(self._snapshot_path(key))
+            last_activity_ts_ms = self._key_last_activity_ts_ms(key)
+            if last_activity_ts_ms > entry.last_activity_ts_ms:
+                entry.last_activity_ts_ms = last_activity_ts_ms
+            snapshot_meta = snapshot.get("meta", {}) if isinstance(snapshot, dict) else {}
+            snapshot_ts_ms = int(snapshot_meta.get("snapshot_ts_ms", 0) or 0)
+            if snapshot_ts_ms > entry.last_snapshot_ts_ms:
+                entry.last_snapshot_ts_ms = snapshot_ts_ms
+            snapshot_seq = int(snapshot_meta.get("seq", 0) or 0)
+            if snapshot_seq > entry.last_snapshot_seq:
+                entry.last_snapshot_seq = snapshot_seq
+            manifest_updated_ts_ms = int(manifest.get("updated_ts_ms", 0) or 0)
+            if manifest_updated_ts_ms > entry.last_activity_ts_ms:
+                entry.last_activity_ts_ms = manifest_updated_ts_ms
+
+    def _presence_payload(
+        self,
+        key: MonitorKey,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> dict[str, Any]:
+        now_ms = self._now_ms() if now_ms is None else int(now_ms)
+        entry = self._ensure_presence_entry(key, now_ms=now_ms)
+        return {
+            "status": self._presence_status(key, now_ms=now_ms),
+            "first_seen_ts_ms": entry.first_seen_ts_ms,
+            "last_seen_ts_ms": entry.last_seen_ts_ms,
+            "last_activity_ts_ms": self._presence_reference_ts_ms(key),
+            "last_snapshot_ts_ms": entry.last_snapshot_ts_ms,
+            "last_snapshot_seq": entry.last_snapshot_seq,
+            "last_event_ts_ms": entry.last_event_ts_ms,
+            "last_history_ts_ms": entry.last_history_ts_ms,
+            "stale_after_ms": self._key_stale_after_ms(key),
+            "prune_after_ms": self._key_prune_after_ms(key),
+        }
 
     def _is_key_active(self, key: MonitorKey, *, now_ms: Optional[int] = None) -> bool:
-        now_ms = int(time.time() * 1000.0) if now_ms is None else int(now_ms)
-        last_activity_ms = self._key_last_activity_ts_ms(key)
-        if last_activity_ms <= 0:
-            return False
-        return now_ms - last_activity_ms <= self._key_stale_after_ms(key)
+        return self._presence_status(key, now_ms=now_ms) == "active"
 
     def active_keys(self) -> list[MonitorKey]:
-        now_ms = int(time.time() * 1000.0)
-        return [key for key in self.discover_keys() if self._is_key_active(key, now_ms=now_ms)]
+        now_ms = self._now_ms()
+        self._refresh_presence(now_ms=now_ms)
+        return [
+            key
+            for key in self.discover_keys()
+            if self._presence_status(key, now_ms=now_ms) == "active"
+        ]
+
+    def visible_keys(self) -> list[MonitorKey]:
+        now_ms = self._now_ms()
+        self._refresh_presence(now_ms=now_ms)
+        return [
+            key
+            for key in self.discover_keys()
+            if self._presence_status(key, now_ms=now_ms) in {"active", "stale"}
+        ]
 
     def matching_keys(
         self,
@@ -142,7 +257,7 @@ class MonitorRelay:
         user: Optional[str],
         active_only: bool = True,
     ) -> list[MonitorKey]:
-        keys = self.active_keys() if active_only else self.discover_keys()
+        keys = self.visible_keys() if active_only else self.discover_keys()
         if exchange and user:
             key = (str(exchange), str(user))
             if key not in keys:
@@ -190,27 +305,38 @@ class MonitorRelay:
 
     def build_snapshot_message(self, key: MonitorKey, snapshot: dict) -> dict:
         meta = snapshot.get("meta", {}) if isinstance(snapshot, dict) else {}
+        relay_meta = self._presence_payload(key)
         return {
             "type": "snapshot",
             "exchange": key[0],
             "user": key[1],
             "seq": meta.get("seq"),
             "ts": meta.get("snapshot_ts_ms"),
+            "relay": relay_meta,
             "payload": snapshot,
         }
 
     def build_snapshot_bundle(self, messages: list[dict]) -> dict:
-        now_ms = int(time.time() * 1000.0)
+        now_ms = self._now_ms()
+        active_count = sum(
+            1 for message in messages if (message.get("relay") or {}).get("status") == "active"
+        )
+        stale_count = sum(
+            1 for message in messages if (message.get("relay") or {}).get("status") == "stale"
+        )
         return {
             "type": "snapshot_bundle",
             "ts": now_ms,
             "count": len(messages),
+            "active_count": active_count,
+            "stale_count": stale_count,
             "bots": messages,
         }
 
     def build_health_payload(self) -> dict:
+        now_ms = self._now_ms()
+        self._refresh_presence(now_ms=now_ms)
         discovered = self.discover_keys()
-        active = set(self.active_keys())
         subscribers = {}
         for exchange, user in discovered:
             count = 0
@@ -229,8 +355,11 @@ class MonitorRelay:
                 {
                     "exchange": exchange,
                     "user": user,
-                    "active": (exchange, user) in active,
-                    "last_activity_ts_ms": self._key_last_activity_ts_ms((exchange, user)),
+                    "active": self._presence_status((exchange, user), now_ms=now_ms) == "active",
+                    "status": self._presence_status((exchange, user), now_ms=now_ms),
+                    "last_activity_ts_ms": self._presence_payload(
+                        (exchange, user), now_ms=now_ms
+                    )["last_activity_ts_ms"],
                 }
                 for exchange, user in discovered
             ],
@@ -297,10 +426,29 @@ class MonitorRelay:
             await asyncio.sleep(self.poll_interval_ms / 1000.0)
 
     async def poll_once(self) -> None:
-        for key in self.active_keys():
+        now_ms = self._now_ms()
+        self._refresh_presence(now_ms=now_ms)
+        for key in self.discover_keys():
             for path in self._current_paths_for_key(key):
                 for message in self._read_updates(path):
+                    self._note_message(key, message, now_ms=now_ms)
                     await self._broadcast(key, message)
+
+    def _note_message(
+        self,
+        key: MonitorKey,
+        message: dict,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> None:
+        now_ms = self._now_ms() if now_ms is None else int(now_ms)
+        entry = self._ensure_presence_entry(key, now_ms=now_ms)
+        message_ts_ms = self._message_ts_ms(message)
+        entry.last_activity_ts_ms = max(entry.last_activity_ts_ms, message_ts_ms, now_ms)
+        if message.get("type") == "event":
+            entry.last_event_ts_ms = max(entry.last_event_ts_ms, message_ts_ms, now_ms)
+        elif message.get("type") == "history":
+            entry.last_history_ts_ms = max(entry.last_history_ts_ms, message_ts_ms, now_ms)
 
     def _read_updates(self, path: Path) -> list[dict]:
         if not path.exists():
@@ -358,7 +506,7 @@ class MonitorRelay:
             return []
         messages: list[tuple[int, int, dict]] = []
         order = 0
-        keys = [key] if key is not None else self.active_keys()
+        keys = [key] if key is not None else self.visible_keys()
         for current_key in keys:
             for path in self._current_paths_for_key(current_key):
                 for entry in self._read_recent_entries(path, per_file_limit):

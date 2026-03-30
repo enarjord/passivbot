@@ -25,6 +25,7 @@ All notable user-facing changes will be documented in this file.
 - **Equity hard-stop config moved under `bot.common`** - Shared HSL settings now live at `bot.common.equity_hard_stop_loss`, with config formatting migrating legacy `live.equity_hard_stop_loss` inputs and optimizer bounds to the new location.
 - **Live HSL cooldown interventions are now configurable** - RED cooldown no longer blocks the runtime in one wait path. Live now keeps the halt active while enforcing `live.hsl_position_during_cooldown_policy` (`panic`, `normal`, `manual`, `tp_only`, or `graceful_stop`) until cooldown expires or trading is resumed.
 - **Browser monitor is now multi-bot first-class** - The web dashboard now consumes the multiplexed relay feed directly, shows a dense overview for all active bots in one page, and lets operators switch focused bot detail views without separate relay instances or per-bot dashboard sessions.
+- **Monitor relay presence is now sticky** - Auto-discovered bots now degrade from `active` to `stale` before being pruned, and the browser overview keeps a stable bot order instead of reshuffling on every freshness blip.
 
 ### Fixed
 - **Optimizer multiprocessing now works under the unified CLI on spawn-based platforms** - `passivbot optimize ...` no longer fails at pool startup with a pickling error for the SIGINT worker initializer when launched through the unified CLI on macOS/Python spawn multiprocessing.

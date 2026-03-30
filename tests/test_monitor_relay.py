@@ -30,7 +30,7 @@ def _append_json_line(path, payload):
         f.write(json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n")
 
 
-def _make_monitor_root(tmp_path, exchange="bybit", user="user01"):
+def _make_monitor_root(tmp_path, exchange="bybit", user="user01", snapshot_ts_ms=123456):
     root = tmp_path / "monitor" / exchange / user
     _write_json(
         root / "manifest.json",
@@ -49,7 +49,7 @@ def _make_monitor_root(tmp_path, exchange="bybit", user="user01"):
                 "exchange": exchange,
                 "user": user,
                 "seq": 5,
-                "snapshot_ts_ms": 123456,
+                "snapshot_ts_ms": snapshot_ts_ms,
             },
             "account": {"balance_raw": 1000.0},
         },
@@ -98,6 +98,7 @@ async def test_monitor_relay_health_handler_reports_available_bots(tmp_path):
             "exchange": "bybit",
             "user": "user01",
             "active": True,
+            "status": "active",
             "last_activity_ts_ms": data["bots"][0]["last_activity_ts_ms"],
         }
     ]
@@ -128,6 +129,8 @@ async def test_monitor_relay_snapshot_returns_bundle_when_multiple_roots(tmp_pat
     data = json.loads(response.text)
     assert response.status == 200
     assert data["type"] == "snapshot_bundle"
+    assert data["active_count"] == 2
+    assert data["stale_count"] == 0
     assert len(data["bots"]) == 2
     assert {f"{entry['exchange']}/{entry['user']}" for entry in data["bots"]} == {
         "bybit/user01",
@@ -403,3 +406,33 @@ def test_monitor_relay_tool_help_runs_without_import_errors():
 
     assert result.returncode == 0
     assert "Serve read-only Passivbot monitor snapshots and live streams." in result.stdout
+
+
+def test_monitor_relay_keeps_stale_bots_visible_before_pruning(tmp_path, monkeypatch):
+    monitor_root = _make_monitor_root(tmp_path, snapshot_ts_ms=1000)
+    relay = monitor_relay.MonitorRelay(monitor_root=str(monitor_root), poll_interval_ms=10)
+    key = ("bybit", "user01")
+
+    monkeypatch.setattr(relay, "_key_last_activity_ts_ms", lambda current_key: 1000)
+    monkeypatch.setattr(relay, "_key_stale_after_ms", lambda current_key: 1000)
+    monkeypatch.setattr(relay, "_key_prune_after_ms", lambda current_key: 5000)
+    monkeypatch.setattr(monitor_relay.time, "time", lambda: 1.0)
+
+    assert relay.active_keys() == [key]
+    assert relay.visible_keys() == [key]
+
+    monkeypatch.setattr(monitor_relay.time, "time", lambda: 2.5)
+
+    assert relay.active_keys() == []
+    assert relay.visible_keys() == [key]
+    health = relay.build_health_payload()
+    assert health["bots"][0]["status"] == "stale"
+    assert health["bots"][0]["active"] is False
+
+    snapshot_messages = relay.load_snapshot_messages(exchange=None, user=None)
+    assert len(snapshot_messages) == 1
+    assert snapshot_messages[0]["relay"]["status"] == "stale"
+
+    monkeypatch.setattr(monitor_relay.time, "time", lambda: 7.5)
+
+    assert relay.visible_keys() == []
