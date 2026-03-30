@@ -153,6 +153,43 @@ def test_format_config_prunes_unknown_keys_recursively():
     assert "extra" not in out["optimize"]["bounds"]
     assert "extra_section" not in out
 
+def test_format_config_preserves_live_optimize_bounds():
+    tmpl = _template()
+    current = copy.deepcopy(tmpl)
+    current["optimize"]["bounds"]["common_equity_hard_stop_loss_red_threshold"] = [0.1, 0.3, 0.01]
+    current["optimize"]["bounds"]["common_equity_hard_stop_loss_ema_span_minutes"] = [
+        10.0,
+        120.0,
+        5.0,
+    ]
+
+    out = format_config(current, verbose=False)
+
+    assert out["optimize"]["bounds"]["common_equity_hard_stop_loss_red_threshold"] == [
+        0.1,
+        0.3,
+        0.01,
+    ]
+    assert out["optimize"]["bounds"]["common_equity_hard_stop_loss_ema_span_minutes"] == [
+        10.0,
+        120.0,
+        5.0,
+    ]
+
+
+def test_format_config_normalizes_hsl_position_during_cooldown_policy():
+    current = copy.deepcopy(_template())
+    current["live"]["hsl_position_during_cooldown_policy"] = "manual_quarantine"
+    out = format_config(current, verbose=False, live_only=True)
+    assert out["live"]["hsl_position_during_cooldown_policy"] == "manual_quarantine"
+
+
+def test_format_config_rejects_invalid_hsl_position_during_cooldown_policy():
+    current = copy.deepcopy(_template())
+    current["live"]["hsl_position_during_cooldown_policy"] = "bad_policy"
+    with pytest.raises(ValueError, match="live.hsl_position_during_cooldown_policy"):
+        format_config(current, verbose=False, live_only=True)
+
 
 def test_format_config_current_with_empty_optimize_adds_bounds():
     tmpl = _template()
@@ -256,6 +293,128 @@ def test_format_config_preserves_legacy_derivations_before_hydration():
         assert f"{pside}_close_grid_min_markup" not in out["optimize"]["bounds"]
 
 
+def test_format_config_migrates_legacy_forager_volume_key():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["filter_volume_drop_pct"] = 0.42
+    current["optimize"]["bounds"]["long_filter_volume_drop_pct"] = [0.1, 0.9]
+    current["bot"]["long"].pop("forager_volume_drop_pct", None)
+    current["optimize"]["bounds"].pop("long_forager_volume_drop_pct", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["forager_volume_drop_pct"] == pytest.approx(0.42)
+    assert "filter_volume_drop_pct" not in out["bot"]["long"]
+    assert out["optimize"]["bounds"]["long_forager_volume_drop_pct"] == [0.1, 0.9]
+    assert "long_filter_volume_drop_pct" not in out["optimize"]["bounds"]
+
+
+def test_format_config_adds_missing_forager_score_weights():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"].pop("forager_score_weights", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["forager_score_weights"] == {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 1.0,
+    }
+
+
+def test_format_config_maps_all_zero_forager_weights_to_volume_only():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["forager_score_weights"] = {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["forager_score_weights"] == {
+        "volume": 1.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
+
+
+def test_format_config_normalizes_positive_forager_weights_to_unit_sum():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["forager_score_weights"] = {
+        "volume": 2.0,
+        "ema_readiness": 1.0,
+        "volatility": 1.0,
+    }
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["forager_score_weights"] == {
+        "volume": pytest.approx(0.5),
+        "ema_readiness": pytest.approx(0.25),
+        "volatility": pytest.approx(0.25),
+    }
+
+
+def test_format_config_requires_positive_forager_volume_span_when_volume_weight_enabled():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["forager_score_weights"] = {
+        "volume": 1.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
+    current["bot"]["long"]["forager_volume_ema_span"] = 0.0
+
+    with pytest.raises(
+        ValueError,
+        match="bot.long.forager_volume_ema_span must be > 0 when forager volume ranking or volume pruning is enabled",
+    ):
+        format_config(current, verbose=False, live_only=True)
+
+
+def test_get_template_config_uses_canonical_forager_span_keys_and_weight_bounds():
+    template = _template()
+
+    assert "forager_volatility_ema_span" in template["bot"]["long"]
+    assert "forager_volume_ema_span" in template["bot"]["long"]
+    assert "filter_volatility_ema_span" not in template["bot"]["long"]
+    assert "filter_volume_ema_span" not in template["bot"]["long"]
+
+    bounds = template["optimize"]["bounds"]
+    assert "long_forager_volatility_ema_span" in bounds
+    assert "long_forager_volume_ema_span" in bounds
+    assert "short_forager_volatility_ema_span" in bounds
+    assert "short_forager_volume_ema_span" in bounds
+    assert "long_forager_score_weights_volume" in bounds
+    assert "long_forager_score_weights_ema_readiness" in bounds
+    assert "long_forager_score_weights_volatility" in bounds
+    assert "short_forager_score_weights_volume" in bounds
+    assert "short_forager_score_weights_ema_readiness" in bounds
+    assert "short_forager_score_weights_volatility" in bounds
+
+
+def test_format_config_adds_internal_forager_aliases_for_runtime_compatibility():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"].pop("filter_volatility_ema_span", None)
+    current["bot"]["long"].pop("filter_volume_ema_span", None)
+    current["optimize"]["bounds"].pop("long_filter_volatility_ema_span", None)
+    current["optimize"]["bounds"].pop("long_filter_volume_ema_span", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["filter_volatility_ema_span"] == out["bot"]["long"][
+        "forager_volatility_ema_span"
+    ]
+    assert out["bot"]["long"]["filter_volume_ema_span"] == out["bot"]["long"][
+        "forager_volume_ema_span"
+    ]
+    assert out["optimize"]["bounds"]["long_filter_volatility_ema_span"] == out["optimize"][
+        "bounds"
+    ]["long_forager_volatility_ema_span"]
+    assert out["optimize"]["bounds"]["long_filter_volume_ema_span"] == out["optimize"]["bounds"][
+        "long_forager_volume_ema_span"
+    ]
+
+
 def test_format_config_is_idempotent_for_lean_live_config():
     tmpl = _template()
     lean_live = {"bot": copy.deepcopy(tmpl["bot"]), "live": copy.deepcopy(tmpl["live"])}
@@ -267,7 +426,6 @@ def test_format_config_is_idempotent_for_lean_live_config():
         assert first[key] == second[key]
 
 
-@pytest.mark.skip(reason="requires forager refactor not yet landed in integration branch")
 def test_format_config_drops_obsolete_forager_keys_without_misleading_unused_logs(caplog):
     current = copy.deepcopy(_template())
     current["bot"]["long"]["filter_volatility_drop_pct"] = 0.0

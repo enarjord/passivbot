@@ -204,9 +204,13 @@ def _rust_bot_params(**overrides):
         "entry_trailing_threshold_we_weight": 0.0,
         "entry_trailing_threshold_volatility_weight": 0.0,
         "filter_volatility_ema_span": 10.0,
-        "filter_volatility_drop_pct": 0.0,
         "filter_volume_ema_span": 10.0,
-        "filter_volume_drop_pct": 0.0,
+        "forager_volume_drop_pct": 0.0,
+        "forager_score_weights": {
+            "volume": 0.0,
+            "ema_readiness": 0.0,
+            "volatility": 1.0,
+        },
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
         "n_positions": 1,
@@ -279,9 +283,7 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
                     "mode": "manual",
                     "position": {"size": 0.0, "price": 0.0},
                     "trailing": trailing,
-                    "bot_params": _rust_bot_params(
-                        n_positions=0, total_wallet_exposure_limit=0.0
-                    ),
+                    "bot_params": _rust_bot_params(n_positions=0, total_wallet_exposure_limit=0.0),
                 },
             }
         ],
@@ -387,9 +389,7 @@ async def test_kucoin_avax_bundle_drop_reproduces_missing_ema_symbol_idx_0(close
 
     symbol = "AVAX/USDT:USDT"
     bot = _BundleReproBot(symbol, close_mode=close_mode)
-    with pytest.raises(
-        RuntimeError, match=r"missing required close EMA for AVAX/USDT:USDT"
-    ):
+    with pytest.raises(RuntimeError, match=r"missing required close EMA for AVAX/USDT:USDT"):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
 
     payload = _make_orchestrator_payload(
@@ -399,7 +399,9 @@ async def test_kucoin_avax_bundle_drop_reproduces_missing_ema_symbol_idx_0(close
         m1_lr_pairs=[[10.0, 0.0015]],
     )
 
-    with pytest.raises(ValueError, match=r"orchestrator compute_ideal_orders failed: MissingEma \{ symbol_idx: 0 \}"):
+    with pytest.raises(
+        ValueError, match=r"orchestrator compute_ideal_orders failed: MissingEma \{ symbol_idx: 0 \}"
+    ):
         pbr.compute_ideal_orders_json(json.dumps(payload))
 
 

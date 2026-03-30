@@ -144,6 +144,60 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     assert config["live"]["approved_coins"]["short"] == ["btc", "eth"]
 
 
+def test_apply_non_live_adjustments_keeps_default_completion_limit():
+    config = get_template_config()
+    config["live"]["approved_coins"] = "btc"
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["end_date"] = "2023-01-01"
+
+    _apply_non_live_adjustments(config, verbose=False)
+
+    limits = config["optimize"]["limits"]
+    completion_limit = next(
+        (entry for entry in limits if entry["metric"] == "backtest_completion_ratio"), None
+    )
+    assert completion_limit is not None
+    assert completion_limit["penalize_if"] == "less_than"
+    assert completion_limit["value"] == pytest.approx(0.9)
+
+
+def test_apply_non_live_adjustments_merges_missing_default_limit_into_existing_list():
+    config = get_template_config()
+    config["live"]["approved_coins"] = "btc"
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["end_date"] = "2023-01-01"
+    config["optimize"]["limits"] = [
+        {"metric": "drawdown_worst_btc", "penalize_if": "greater_than", "value": 0.85},
+        {"metric": "position_held_hours_max", "penalize_if": "greater_than", "value": 2160},
+    ]
+
+    _apply_non_live_adjustments(config, verbose=False)
+
+    limits = config["optimize"]["limits"]
+    completion_limit = next(
+        (entry for entry in limits if entry["metric"] == "backtest_completion_ratio"), None
+    )
+    assert completion_limit is not None
+    assert completion_limit["penalize_if"] == "less_than"
+    assert completion_limit["value"] == pytest.approx(0.9)
+
+
+def test_apply_non_live_adjustments_respects_disabled_default_limit_tombstone():
+    config = get_template_config()
+    config["live"]["approved_coins"] = "btc"
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["end_date"] = "2023-01-01"
+    config["optimize"]["limits"] = [
+        {"metric": "backtest_completion_ratio", "enabled": False},
+    ]
+
+    _apply_non_live_adjustments(config, verbose=False)
+
+    limits = config["optimize"]["limits"]
+    matches = [entry for entry in limits if entry["metric"] == "backtest_completion_ratio"]
+    assert matches == [{"metric": "backtest_completion_ratio", "enabled": False}]
+
+
 def test_apply_non_live_adjustments_supports_legacy_coins_file():
     config = get_template_config()
     config["live"]["approved_coins"] = "configs/approved_coins_topmcap.json"
@@ -231,7 +285,12 @@ def test_load_config_preserves_canonical_optimize_limits(tmp_path):
 
     loaded = load_config(str(path), verbose=False)
 
-    assert loaded["optimize"]["limits"] == cfg["optimize"]["limits"]
+    # User's explicit entries are preserved as-is (including enabled: False)
+    user_metrics = {e["metric"]: e for e in cfg["optimize"]["limits"]}
+    for metric, expected in user_metrics.items():
+        found = next((e for e in loaded["optimize"]["limits"] if e["metric"] == metric), None)
+        assert found is not None, f"metric {metric} missing from loaded limits"
+        assert found == expected, f"limit entry for {metric} was modified"
 
 
 def test_load_config_malformed_optimize_limits_falls_back_to_template(caplog, tmp_path):
@@ -255,6 +314,21 @@ def test_normalize_limit_entries_preserves_integers():
     assert normalized[0]["value"] == 2016
 
 
+def test_normalize_limit_entries_canonicalizes_shared_hsl_metric_alias():
+    raw = [{"metric": "usd_hard_stop_time_in_red_pct", "penalize_if": ">", "value": 0.02}]
+    normalized = config_utils.normalize_limit_entries(raw)
+    assert len(normalized) == 1
+    assert normalized[0]["metric"] == "hard_stop_time_in_red_pct"
+    assert normalized[0]["penalize_if"] == "greater_than"
+    assert normalized[0]["value"] == 0.02
+
+
+def test_normalize_limit_entries_supports_enabled_false_tombstone():
+    raw = [{"metric": "backtest_completion_ratio", "enabled": False}]
+    normalized = config_utils.normalize_limit_entries(raw)
+    assert normalized == [{"metric": "backtest_completion_ratio", "enabled": False}]
+
+
 def test_limits_structural_equal_detects_canonical_entries():
     raw = [
         {"metric": "drawdown_worst_btc", "penalize_if": "greater_than", "value": 0.3},
@@ -273,10 +347,12 @@ def test_apply_backward_compatibility_renames_moves_filter_keys():
         "bot": {
             "long": {
                 "filter_noisiness_rolling_window": 42,
-                "filter_volatility_ema_span": 84,
                 "filter_volume_rolling_window": 21,
             },
-            "short": {"filter_volume_rolling_window": 11},
+            "short": {
+                "filter_volatility_ema_span": 84,
+                "filter_volume_rolling_window": 11,
+            },
         },
         "optimize": {
             "bounds": {
@@ -289,14 +365,17 @@ def test_apply_backward_compatibility_renames_moves_filter_keys():
     _apply_backward_compatibility_renames(config, verbose=False)
 
     assert "filter_noisiness_rolling_window" not in config["bot"]["long"]
-    assert config["bot"]["long"]["filter_volatility_ema_span"] == 84
-    assert config["bot"]["long"]["filter_volume_ema_span"] == 21
-    assert config["bot"]["short"]["filter_volume_ema_span"] == 11
+    assert "filter_volume_ema_span" not in config["bot"]["long"]
+    assert config["bot"]["long"]["forager_volatility_ema_span"] == 42
+    assert config["bot"]["long"]["forager_volume_ema_span"] == 21
+    assert "filter_volatility_ema_span" not in config["bot"]["short"]
+    assert config["bot"]["short"]["forager_volatility_ema_span"] == 84
+    assert config["bot"]["short"]["forager_volume_ema_span"] == 11
     bounds = config["optimize"]["bounds"]
     assert "long_filter_noisiness_rolling_window" not in bounds
-    assert bounds["long_filter_volatility_ema_span"] == [10, 20]
+    assert bounds["long_forager_volatility_ema_span"] == [10, 20]
     assert "short_filter_volume_rolling_window" not in bounds
-    assert bounds["short_filter_volume_ema_span"] == [30, 40]
+    assert bounds["short_forager_volume_ema_span"] == [30, 40]
 
 
 def test_update_config_with_args_updates_coin_sources():

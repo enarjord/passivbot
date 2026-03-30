@@ -38,7 +38,6 @@ Implemented now:
    - `market` with cached EMA-band snapshots when available
    - `forager` with current slots, selected symbols, pending symbols, and `next_symbol`
    - `unstuck` with allowance state plus current planned unstuck symbol/target/EMA-trigger hints when available
-   - `trailing` with observability-only derived trailing next-entry/next-close state, threshold/retracement levels, met-status booleans, and extrema snapshots for currently trailing orders
    - `recent`
 
 ## Non-Obvious Details
@@ -49,7 +48,6 @@ Implemented now:
 4. Snapshot cadence is best-effort from the execution loop. Exact wall-clock cadence is not guaranteed during restart/backoff paths.
 5. Completed-candle publication intentionally bootstraps with only the latest seen candle per `(symbol, timeframe)` and publishes only newer candles after that. This avoids flooding monitor history with startup warmup backfill.
 6. Candle history is gated on `Passivbot._bot_ready`; warmup/startup persistence should not leak large historical batches into monitor history.
-7. Trailing monitor state may derive threshold/retracement display values in Python for observability, but whether the next order is trailing still comes from Rust helper calls. Do not move trading behavior into the monitor path.
 
 ## Gaps Still Open
 

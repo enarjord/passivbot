@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
 import warnings
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import portalocker  # type: ignore
@@ -137,6 +137,117 @@ EMA_SERIES_DTYPE = np.dtype(
 
 
 # ----- Utilities -----
+
+
+def _linear_interpolate(value0: float, value1: float, ratio: float) -> float:
+    return float(value0 + (value1 - value0) * ratio)
+
+
+def ohlcv_xm_to_1m(candle: np.void, minutes: int) -> np.ndarray:
+    """Expand one higher-timeframe OHLCV candle into deterministic synthetic 1m candles.
+
+    The synthetic path is designed to be plausible rather than predictive:
+    - bullish parent candle: open -> low -> high -> close
+    - bearish parent candle: open -> high -> low -> close
+    Volume is split evenly across all child candles.
+    """
+    if minutes <= 0:
+        raise ValueError(f"minutes must be > 0, got {minutes}")
+
+    ts = int(candle["ts"])
+    o = float(candle["o"])
+    h = float(candle["h"])
+    l = float(candle["l"])
+    c = float(candle["c"])
+    bv = float(candle["bv"])
+
+    if not all(math.isfinite(x) for x in (o, h, l, c, bv)):
+        raise ValueError("all OHLCV values must be finite")
+    if h < l:
+        h, l = l, h
+    o = min(max(o, l), h)
+    c = min(max(c, l), h)
+
+    out = np.zeros(minutes, dtype=CANDLE_DTYPE)
+    out["ts"] = np.arange(ts, ts + minutes * ONE_MIN_MS, ONE_MIN_MS, dtype=np.int64)
+    out["bv"] = float(bv / minutes)
+
+    last_idx = minutes - 1
+    if last_idx == 0:
+        out[0]["o"] = o
+        out[0]["h"] = h
+        out[0]["l"] = l
+        out[0]["c"] = c
+        return out
+
+    pivot_a = min(last_idx, max(1, minutes // 3))
+    pivot_b = min(last_idx, max(pivot_a + 1, (2 * minutes) // 3))
+
+    if c >= o:
+        waypoints = [(0, o), (pivot_a, l), (pivot_b, h), (last_idx, c)]
+        low_idx = pivot_a
+        high_idx = pivot_b
+    else:
+        waypoints = [(0, o), (pivot_a, h), (pivot_b, l), (last_idx, c)]
+        high_idx = pivot_a
+        low_idx = pivot_b
+
+    deduped = [waypoints[0]]
+    for idx, value in waypoints[1:]:
+        if idx > deduped[-1][0]:
+            deduped.append((idx, value))
+        else:
+            deduped[-1] = (idx, value)
+
+    close_path = np.empty(minutes, dtype=np.float64)
+    close_path[0] = o
+    for (i0, v0), (i1, v1) in zip(deduped, deduped[1:]):
+        span = max(1, i1 - i0)
+        for minute_idx in range(i0, i1 + 1):
+            ratio = 0.0 if i1 == i0 else (minute_idx - i0) / span
+            close_path[minute_idx] = min(max(_linear_interpolate(v0, v1, ratio), l), h)
+
+    prev_close = o
+    for minute_idx in range(minutes):
+        minute_open = prev_close
+        minute_close = float(close_path[minute_idx])
+        minute_high = max(minute_open, minute_close)
+        minute_low = min(minute_open, minute_close)
+        if minute_idx == high_idx:
+            minute_high = max(minute_high, h)
+        if minute_idx == low_idx:
+            minute_low = min(minute_low, l)
+        out[minute_idx]["o"] = minute_open
+        out[minute_idx]["h"] = minute_high
+        out[minute_idx]["l"] = minute_low
+        out[minute_idx]["c"] = minute_close
+        prev_close = minute_close
+
+    return out
+
+
+def ohlcv_5m_to_1m(candle: np.void) -> np.ndarray:
+    return ohlcv_xm_to_1m(candle, 5)
+
+
+def ohlcv_15m_to_1m(candle: np.void) -> np.ndarray:
+    return ohlcv_xm_to_1m(candle, 15)
+
+
+def synthesize_1m_from_higher_tf(candles: np.ndarray, tf_minutes: int) -> np.ndarray:
+    """Expand a higher-timeframe candle array into synthetic 1m OHLCV candles."""
+    arr = _ensure_dtype(candles)
+    if arr.size == 0:
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+    if tf_minutes == 5:
+        expanded = [ohlcv_5m_to_1m(row) for row in arr]
+    elif tf_minutes == 15:
+        expanded = [ohlcv_15m_to_1m(row) for row in arr]
+    else:
+        raise ValueError(f"unsupported tf_minutes={tf_minutes}")
+    if not expanded:
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+    return np.sort(np.concatenate(expanded), order="ts")
 
 
 def get_caller_name(depth: int = 2, logger: Optional[logging.Logger] = None) -> str:
@@ -2020,6 +2131,84 @@ class CandlestickManager:
             seed_last_real_ts=last_ts,
         )
         return int(synth_ts.shape[0])
+
+    async def _backfill_1m_gaps_from_higher_timeframes(
+        self, symbol: str, start_ts: int, end_ts: int
+    ) -> int:
+        """Fill missing 1m candles in memory from 5m/15m candles when 1m history is unavailable."""
+        try:
+            exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
+        except Exception:
+            exid = ""
+        if "hyperliquid" not in exid:
+            return 0
+
+        cache_arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+        sub = self._slice_ts_range(cache_arr, start_ts, end_ts) if cache_arr.size else cache_arr
+        if not self._missing_spans(sub, start_ts, end_ts):
+            return 0
+
+        total_added = 0
+        summary_parts: list[str] = []
+        for timeframe, tf_minutes in (("5m", 5), ("15m", 15)):
+            cache_arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+            sub = self._slice_ts_range(cache_arr, start_ts, end_ts) if cache_arr.size else cache_arr
+            missing = self._missing_spans(sub, start_ts, end_ts)
+            if not missing:
+                break
+            tf_start = min(s for s, _ in missing)
+            tf_end = max(e for _, e in missing)
+            higher_tf = await self.get_candles(
+                symbol,
+                start_ts=tf_start,
+                end_ts=tf_end,
+                timeframe=timeframe,
+                strict=False,
+            )
+            if higher_tf.size == 0:
+                continue
+            synth = synthesize_1m_from_higher_tf(higher_tf, tf_minutes)
+            if synth.size == 0:
+                continue
+
+            existing_ts = set(int(x) for x in cache_arr["ts"]) if cache_arr.size else set()
+            keep_mask = np.array(
+                [
+                    start_ts <= int(row["ts"]) <= end_ts and int(row["ts"]) not in existing_ts
+                    for row in synth
+                ],
+                dtype=bool,
+            )
+            synth = synth[keep_mask]
+            if synth.size == 0:
+                continue
+
+            self._cache[symbol] = self._merge_overwrite(cache_arr, synth)
+            self._track_synthetic_timestamps(symbol, [int(x) for x in synth["ts"]])
+            total_added += int(synth.size)
+            summary_parts.append(f"{timeframe}:source_rows={higher_tf.size},added_1m={synth.size}")
+            first_dt = datetime.fromtimestamp(int(synth[0]["ts"]) / 1000, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M"
+            )
+            last_dt = datetime.fromtimestamp(int(synth[-1]["ts"]) / 1000, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M"
+            )
+            self.log.info(
+                "[candle] %s: synthesized %d 1m candles from %s candles at %s to %s",
+                symbol,
+                int(synth.size),
+                timeframe,
+                first_dt,
+                last_dt,
+            )
+
+        if total_added > 0:
+            self.log.info(
+                "[candle] %s: used higher-TF fallback for 1m gaps after 1m coverage limit/cache miss (%s)",
+                symbol,
+                ", ".join(summary_parts),
+            )
+        return int(total_added)
 
     def _invalidate_ema_cache(self, symbol: str) -> None:
         """Invalidate all cached EMA values for a symbol, forcing recomputation."""
@@ -5460,6 +5649,17 @@ class CandlestickManager:
                     arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
                     sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
 
+        # Hyperliquid-specific historical fallback: where native 1m history is capped,
+        # synthesize missing 1m candles from real 5m/15m candles in memory before
+        # resorting to flat zero-candle standardization.
+        if self.exchange is not None and not strict:
+            added_from_higher_tf = await self._backfill_1m_gaps_from_higher_timeframes(
+                symbol, start_ts, end_ts
+            )
+            if added_from_higher_tf > 0:
+                arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
+
         # Standardize gaps: synthesize zero-candles where missing.
         # To help seed forward-fill, include one candle before start_ts if available.
         # This ensures standardize_gaps has a prev_close even if sub starts after start_ts.
@@ -5845,25 +6045,41 @@ class CandlestickManager:
             return nan, nan
         return float(min(vals)), float(max(vals))
 
-    async def get_last_prices(self, symbols: List[str], max_age_ms: int = 10_000) -> Dict[str, float]:
+    async def get_last_prices(
+        self,
+        symbols: List[str],
+        max_age_ms: int = 10_000,
+        *,
+        strict: bool = False,
+    ) -> Dict[str, float]:
         """Return latest close for current minute per symbol.
 
-        Uses get_current_close per symbol with TTL. Returns 0.0 on failure.
+        Uses get_current_close per symbol with TTL.
+        In strict mode, any failure or non-finite value raises.
+        Otherwise failures return 0.0.
         """
         out: Dict[str, float] = {}
         if not symbols:
             return out
 
         async def one(sym: str) -> float:
-            try:
-                val = await self.get_current_close(sym, max_age_ms=max_age_ms)
-                return float(val) if isinstance(val, (int, float)) else 0.0
-            except Exception:
-                return 0.0
+            val = await self.get_current_close(sym, max_age_ms=max_age_ms)
+            if not isinstance(val, (int, float)):
+                raise TypeError(f"get_current_close returned non-numeric value for {sym}")
+            val = float(val)
+            if not np.isfinite(val):
+                raise ValueError(f"non-finite current close for {sym}")
+            return val
 
         tasks = {s: asyncio.create_task(one(s)) for s in symbols}
         for s, t in tasks.items():
-            out[s] = await t
+            if strict:
+                out[s] = await t
+            else:
+                try:
+                    out[s] = await t
+                except Exception:
+                    out[s] = 0.0
         return out
 
     async def get_ema_bounds_many(
@@ -5873,31 +6089,37 @@ class CandlestickManager:
         max_age_ms: Optional[int] = 60_000,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
+        strict: bool = False,
     ) -> Dict[str, Tuple[float, float]]:
         """Return EMA bounds per symbol for a list of (symbol, span_0, span_1).
 
         Returns mapping symbol -> (lower, upper), using get_ema_bounds per symbol.
+        In strict mode, any failure or non-finite value raises.
+        Otherwise failures return (0.0, 0.0).
         """
         out: Dict[str, Tuple[float, float]] = {}
         if not items:
             return out
 
         async def one(sym: str, s0: float, s1: float) -> Tuple[float, float]:
-            try:
-                lo, hi = await self.get_ema_bounds(
-                    sym, s0, s1, max_age_ms=max_age_ms, timeframe=timeframe, tf=tf
-                )
-                lo = float(lo) if isinstance(lo, (int, float)) else float("nan")
-                hi = float(hi) if isinstance(hi, (int, float)) else float("nan")
-                if not (np.isfinite(lo) and np.isfinite(hi)):
-                    return (0.0, 0.0)
-                return (lo, hi)
-            except Exception:
-                return (0.0, 0.0)
+            lo, hi = await self.get_ema_bounds(
+                sym, s0, s1, max_age_ms=max_age_ms, timeframe=timeframe, tf=tf
+            )
+            lo = float(lo) if isinstance(lo, (int, float)) else float("nan")
+            hi = float(hi) if isinstance(hi, (int, float)) else float("nan")
+            if not (np.isfinite(lo) and np.isfinite(hi)):
+                raise ValueError(f"non-finite EMA bounds for {sym}")
+            return (lo, hi)
 
         tasks = {sym: asyncio.create_task(one(sym, s0, s1)) for (sym, s0, s1) in items}
         for sym, t in tasks.items():
-            out[sym] = await t
+            if strict:
+                out[sym] = await t
+            else:
+                try:
+                    out[sym] = await t
+                except Exception:
+                    out[sym] = (0.0, 0.0)
         return out
 
     async def get_latest_ema_log_range_many(

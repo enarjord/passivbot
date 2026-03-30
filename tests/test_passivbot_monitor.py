@@ -398,7 +398,6 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         _build_monitor_position_side_payload = pb_mod.Passivbot._build_monitor_position_side_payload
         _build_monitor_positions_section = pb_mod.Passivbot._build_monitor_positions_section
         _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
-        _build_monitor_trailing_section = pb_mod.Passivbot._build_monitor_trailing_section
         _build_monitor_forager_section = pb_mod.Passivbot._build_monitor_forager_section
         _build_monitor_unstuck_section = pb_mod.Passivbot._build_monitor_unstuck_section
         _build_monitor_runtime_market_hints = pb_mod.Passivbot._build_monitor_runtime_market_hints
@@ -424,7 +423,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
             self.error_counts = [250000]
             self.positions = {
                 "BTC/USDT:USDT": {
-                    "long": {"size": 0.001, "price": 100000.0},
+                    "long": {"size": 0.01, "price": 100000.0},
                     "short": {"size": 0.0, "price": 0.0},
                 }
             }
@@ -434,7 +433,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                         "symbol": "BTC/USDT:USDT",
                         "side": "buy",
                         "position_side": "long",
-                        "qty": 0.001,
+                        "qty": 0.01,
                         "price": 99000.0,
                         "custom_id": "entry_grid_normal_long",
                         "pb_order_type": "entry_grid_normal_long",
@@ -443,21 +442,15 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                         "symbol": "BTC/USDT:USDT",
                         "side": "sell",
                         "position_side": "long",
-                        "qty": 0.0005,
+                        "qty": 0.005,
                         "price": 101000.0,
                         "custom_id": "close_unstuck_long",
                         "pb_order_type": "close_unstuck_long",
                     },
                 ]
             }
-            self.PB_modes = {
-                "long": {"BTC/USDT:USDT": "normal", "ETH/USDT:USDT": "normal"},
-                "short": {},
-            }
-            self._runtime_forced_modes = {
-                "long": {"BTC/USDT:USDT": "normal", "ETH/USDT:USDT": "normal"},
-                "short": {},
-            }
+            self.PB_modes = {"long": {"BTC/USDT:USDT": "normal"}, "short": {}}
+            self._runtime_forced_modes = {"long": {"BTC/USDT:USDT": "normal"}, "short": {}}
             self.trailing_prices = {
                 "BTC/USDT:USDT": {
                     "long": {
@@ -469,28 +462,25 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 }
             }
             self.active_symbols = ["BTC/USDT:USDT"]
-            self.approved_coins = {"long": {"BTC/USDT:USDT", "ETH/USDT:USDT"}, "short": set()}
+            self.approved_coins = {"long": {"BTC/USDT:USDT"}, "short": set()}
             self.ignored_coins = {"long": set(), "short": {"ETH/USDT:USDT"}}
             self.approved_coins_minus_ignored_coins = {
-                "long": {"BTC/USDT:USDT", "ETH/USDT:USDT"},
+                "long": {"BTC/USDT:USDT"},
                 "short": set(),
             }
-            self.effective_min_cost = {"BTC/USDT:USDT": 5.0, "ETH/USDT:USDT": 5.0}
-            self.min_costs = {"BTC/USDT:USDT": 1.0, "ETH/USDT:USDT": 1.0}
-            self.min_qtys = {"BTC/USDT:USDT": 0.001, "ETH/USDT:USDT": 0.001}
-            self.price_steps = {"BTC/USDT:USDT": 0.1, "ETH/USDT:USDT": 0.1}
-            self.qty_steps = {"BTC/USDT:USDT": 0.001, "ETH/USDT:USDT": 0.001}
-            self.markets_dict = {
-                "BTC/USDT:USDT": {"active": True},
-                "ETH/USDT:USDT": {"active": True},
-            }
+            self.effective_min_cost = {"BTC/USDT:USDT": 5.0}
+            self.min_costs = {"BTC/USDT:USDT": 1.0}
+            self.min_qtys = {"BTC/USDT:USDT": 0.001}
+            self.price_steps = {"BTC/USDT:USDT": 0.1}
+            self.qty_steps = {"BTC/USDT:USDT": 0.001}
+            self.markets_dict = {"BTC/USDT:USDT": {"active": True}}
             self.recent_order_executions = [
                 {
-                        "symbol": "BTC/USDT:USDT",
-                        "side": "buy",
-                        "position_side": "long",
-                        "qty": 0.001,
-                        "price": 99000.0,
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "buy",
+                    "position_side": "long",
+                    "qty": 0.01,
+                    "price": 99000.0,
                     "custom_id": "entry_grid_normal_long",
                     "pb_order_type": "entry_grid_normal_long",
                     "execution_timestamp": 123456,
@@ -499,11 +489,11 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
             ]
             self.recent_order_cancellations = [
                 {
-                        "symbol": "BTC/USDT:USDT",
-                        "side": "sell",
-                        "position_side": "long",
-                        "qty": 0.0005,
-                        "price": 101000.0,
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "sell",
+                    "position_side": "long",
+                    "qty": 0.005,
+                    "price": 101000.0,
                     "custom_id": "close_unstuck_long",
                     "pb_order_type": "close_unstuck_long",
                     "execution_timestamp": 123460,
@@ -539,8 +529,6 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("short", "ema_span_1"): 20.0,
                 ("long", "entry_initial_ema_dist"): 0.01,
                 ("short", "entry_initial_ema_dist"): 0.01,
-                ("long", "entry_volatility_ema_span_hours"): 24.0,
-                ("short", "entry_volatility_ema_span_hours"): 24.0,
                 ("long", "unstuck_ema_dist"): 0.02,
                 ("short", "unstuck_ema_dist"): 0.02,
                 ("long", "unstuck_loss_allowance_pct"): 0.02,
@@ -549,48 +537,6 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("short", "unstuck_close_pct"): 0.5,
                 ("long", "unstuck_threshold"): 0.8,
                 ("short", "unstuck_threshold"): 0.8,
-                ("long", "entry_grid_double_down_factor"): 1.0,
-                ("short", "entry_grid_double_down_factor"): 1.0,
-                ("long", "entry_grid_spacing_volatility_weight"): 0.0,
-                ("short", "entry_grid_spacing_volatility_weight"): 0.0,
-                ("long", "entry_grid_spacing_we_weight"): 0.0,
-                ("short", "entry_grid_spacing_we_weight"): 0.0,
-                ("long", "entry_grid_spacing_pct"): 0.01,
-                ("short", "entry_grid_spacing_pct"): 0.01,
-                ("long", "entry_initial_qty_pct"): 0.1,
-                ("short", "entry_initial_qty_pct"): 0.1,
-                ("long", "entry_trailing_double_down_factor"): 1.0,
-                ("short", "entry_trailing_double_down_factor"): 1.0,
-                ("long", "entry_trailing_grid_ratio"): 1.0,
-                ("short", "entry_trailing_grid_ratio"): 0.0,
-                ("long", "entry_trailing_retracement_pct"): 0.01,
-                ("short", "entry_trailing_retracement_pct"): 0.01,
-                ("long", "entry_trailing_retracement_we_weight"): 0.0,
-                ("short", "entry_trailing_retracement_we_weight"): 0.0,
-                ("long", "entry_trailing_retracement_volatility_weight"): 0.0,
-                ("short", "entry_trailing_retracement_volatility_weight"): 0.0,
-                ("long", "entry_trailing_threshold_pct"): 0.01,
-                ("short", "entry_trailing_threshold_pct"): 0.01,
-                ("long", "entry_trailing_threshold_we_weight"): 0.0,
-                ("short", "entry_trailing_threshold_we_weight"): 0.0,
-                ("long", "entry_trailing_threshold_volatility_weight"): 0.0,
-                ("short", "entry_trailing_threshold_volatility_weight"): 0.0,
-                ("long", "close_grid_markup_end"): 0.02,
-                ("short", "close_grid_markup_end"): 0.02,
-                ("long", "close_grid_markup_start"): 0.01,
-                ("short", "close_grid_markup_start"): 0.01,
-                ("long", "close_grid_qty_pct"): 1.0,
-                ("short", "close_grid_qty_pct"): 1.0,
-                ("long", "close_trailing_grid_ratio"): 1.0,
-                ("short", "close_trailing_grid_ratio"): 0.0,
-                ("long", "close_trailing_qty_pct"): 1.0,
-                ("short", "close_trailing_qty_pct"): 1.0,
-                ("long", "close_trailing_retracement_pct"): 0.01,
-                ("short", "close_trailing_retracement_pct"): 0.01,
-                ("long", "close_trailing_threshold_pct"): 0.01,
-                ("short", "close_trailing_threshold_pct"): 0.01,
-                ("long", "risk_wel_enforcer_threshold"): 0.0,
-                ("short", "risk_wel_enforcer_threshold"): 0.0,
             }
             span2 = float((10.0 * 20.0) ** 0.5)
             self._monitor_runtime_market_hints = {}
@@ -605,7 +551,6 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                         span2: 100400.0,
                     }
                 },
-                h1_log_range_emas={"BTC/USDT:USDT": {24.0: 0.0}},
                 idx_to_symbol={0: "BTC/USDT:USDT"},
                 orders=[
                     {
@@ -680,95 +625,36 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         def _calc_unstuck_allowances_live(self, allow_new_unstuck):
             return {"long": 0.0 if not allow_new_unstuck else 1.0, "short": 0.0}
 
-        async def build_forager_candidate_payload(
-            self,
-            pside,
-            symbols,
-            min_cost_flags,
-            *,
-            max_age_ms,
-            max_network_fetches,
-        ):
-            assert pside == "long"
-            assert max_age_ms == 60_000
-            assert max_network_fetches == 0
-            payloads = []
-            for symbol in symbols:
-                if symbol == "BTC/USDT:USDT":
-                    payloads.append(
-                        {
-                            "enabled": min_cost_flags[symbol],
-                            "volume_score": 100.0,
-                            "volatility_score": 0.03,
-                            "bid": 100500.0,
-                            "ask": 100500.0,
-                            "ema_lower": 100200.0,
-                            "ema_upper": 100600.0,
-                            "entry_initial_ema_dist": 0.01,
-                        }
-                    )
-                else:
-                    payloads.append(
-                        {
-                            "enabled": min_cost_flags[symbol],
-                            "volume_score": 120.0,
-                            "volatility_score": 0.05,
-                            "bid": 2500.0,
-                            "ask": 2500.0,
-                            "ema_lower": 2550.0,
-                            "ema_upper": 2600.0,
-                            "entry_initial_ema_dist": 0.01,
-                        }
-                    )
-            return payloads
-
     bot = FakeBot()
 
     snapshot = await bot._build_monitor_snapshot(now_ms=300000)
 
     assert "market" in snapshot
     assert "forager" in snapshot
-    assert "trailing" in snapshot
     assert "unstuck" in snapshot
     assert "recent" in snapshot
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["last_price"] == pytest.approx(100500.0)
-    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["wallet_exposure"] == pytest.approx(0.1)
-    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["wel_ratio"] == pytest.approx(0.5)
+    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["wallet_exposure"] == pytest.approx(1.0)
+    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["wel_ratio"] == pytest.approx(5.0)
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["wele_ratio"] == pytest.approx(
-        0.1 / 0.3
+        1.0 / 0.3
     )
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["twel_ratio"] == pytest.approx(
-        0.1 / 1.7
+        1.0 / 1.7
     )
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["price_action_distance"] == pytest.approx(
         -0.005
     )
-    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["upnl"] == pytest.approx(0.5)
+    assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["upnl"] == pytest.approx(5.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["last_price"] == pytest.approx(100500.0)
-    assert snapshot["market"]["BTC/USDT:USDT"]["c_mult"] == pytest.approx(1.0)
-    assert snapshot["market"]["BTC/USDT:USDT"]["entry_volatility_logrange_ema"]["long"] == pytest.approx(
-        0.0
-    )
     assert snapshot["market"]["BTC/USDT:USDT"]["ema_bands"]["long"]["lower"] == pytest.approx(100200.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["ema_bands"]["long"]["upper"] == pytest.approx(100600.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["trailing"]["long"]["max_since_open"] == pytest.approx(
         100900.0
     )
-    assert snapshot["trailing"]["BTC/USDT:USDT"]["long"]["entry"]["order_type"] == "entry_trailing_normal_long"
-    assert snapshot["trailing"]["BTC/USDT:USDT"]["long"]["entry"]["threshold_met"] is False
-    assert snapshot["trailing"]["BTC/USDT:USDT"]["long"]["entry"]["retracement_met"] is True
-    assert snapshot["trailing"]["BTC/USDT:USDT"]["long"]["close"]["order_type"] == "close_trailing_long"
-    assert snapshot["trailing"]["BTC/USDT:USDT"]["long"]["close"]["threshold_met"] is False
     assert snapshot["forager"]["long"]["forager_mode"] is True
-    assert snapshot["forager"]["long"]["selected_symbols"] == ["BTC/USDT:USDT", "ETH/USDT:USDT"]
-    assert snapshot["forager"]["long"]["next_symbol"] == "ETH/USDT:USDT"
-    assert snapshot["forager"]["long"]["next_entry_trigger_price"] == pytest.approx(2550.0 * 0.99)
-    assert snapshot["forager"]["long"]["next_entry_distance_ratio"] == pytest.approx(
-        2500.0 / (2550.0 * 0.99) - 1.0
-    )
-    assert snapshot["forager"]["long"]["ranking"]["top_volume"]["symbol"] == "ETH/USDT:USDT"
-    assert snapshot["forager"]["long"]["ranking"]["top_volatility"]["symbol"] == "ETH/USDT:USDT"
-    assert snapshot["forager"]["long"]["ranking"]["top_ema_readiness"]["symbol"] == "ETH/USDT:USDT"
+    assert snapshot["forager"]["long"]["selected_symbols"] == ["BTC/USDT:USDT"]
+    assert snapshot["forager"]["long"]["next_symbol"] is None
     assert snapshot["unstuck"]["has_open_order"] is True
     assert snapshot["unstuck"]["sides"]["long"]["allowance"] == pytest.approx(-20.0)
     assert snapshot["unstuck"]["sides"]["long"]["next_symbol"] == "BTC/USDT:USDT"

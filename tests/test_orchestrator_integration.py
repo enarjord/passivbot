@@ -16,6 +16,16 @@ import json
 import math
 import pytest
 
+
+@pytest.fixture(scope="module", autouse=True)
+def require_real_passivbot_rust_module():
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip(
+            "tests/test_orchestrator_integration.py requires the real passivbot_rust extension; stub detected"
+        )
+
 # ============================================================================
 # Helper Functions (from test_orchestrator_json_api.py)
 # ============================================================================
@@ -47,9 +57,13 @@ def bot_params(**overrides):
         "entry_trailing_threshold_we_weight": 0.0,
         "entry_trailing_threshold_volatility_weight": 0.0,
         "filter_volatility_ema_span": 10.0,
-        "filter_volatility_drop_pct": 0.0,
         "filter_volume_ema_span": 10.0,
-        "filter_volume_drop_pct": 0.0,
+        "forager_volume_drop_pct": 0.0,
+        "forager_score_weights": {
+            "volume": 0.0,
+            "ema_readiness": 0.0,
+            "volatility": 1.0,
+        },
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
         "n_positions": 1,
@@ -118,9 +132,11 @@ def ema_bundle(
     """Create EMA bundle."""
     return {
         "m1": {
-            "close": m1_close or [],
-            "volume": m1_volume or [],
-            "log_range": m1_log_range or [],
+            "close": m1_close
+            if m1_close is not None
+            else [[10.0, 100.0], [20.0, 100.0], [math.sqrt(10.0 * 20.0), 100.0]],
+            "volume": m1_volume if m1_volume is not None else [[10.0, 1_000.0]],
+            "log_range": m1_log_range if m1_log_range is not None else [[10.0, 0.01]],
         },
         "h1": {
             "close": h1_close or [],
@@ -161,7 +177,9 @@ def make_symbol(
                 [10.0, bid],
                 [20.0, bid],
                 [math.sqrt(10.0 * 20.0), bid],
-            ]
+            ],
+            m1_volume=[[10.0, 1_000.0]],
+            m1_log_range=[[10.0, 0.01]],
         ),
         "long": {
             "mode": long_mode,
@@ -549,7 +567,11 @@ class TestOrchestratorMultiSymbol:
                         m1_log_range=[[1.0, 0.001]],  # Very low volatility
                     ),
                     long_bp={
-                        "filter_volatility_drop_pct": 0.5,  # Filter if < 50% of avg
+                        "forager_score_weights": {
+                            "volume": 0.0,
+                            "ema_readiness": 0.0,
+                            "volatility": 1.0,
+                        },
                         "filter_volatility_ema_span": 1.0,
                     },
                 )
@@ -578,7 +600,7 @@ class TestOrchestratorMultiSymbol:
                         m1_volume=[[10.0, 100.0]],  # Low volume
                     ),
                     long_bp={
-                        "filter_volume_drop_pct": 0.5,  # Filter if < 50% of avg
+                        "forager_volume_drop_pct": 0.5,
                         "filter_volume_ema_span": 10.0,
                     },
                 )

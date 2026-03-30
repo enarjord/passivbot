@@ -1,0 +1,114 @@
+{
+  name: hsl_long_cooldown_manual_entry_manual_quarantine
+  exchange: fake
+  start_time: "2026-01-01T00:00:00Z"
+  boot_index: 1
+  run_initial_cycle: false
+  tick_interval_seconds: 30
+  account: {
+    balance: 200.0
+    positions: [
+      {
+        symbol: "BTC/USDT:USDT"
+        position_side: long
+        qty: 5.0
+        price: 100.0
+      }
+    ]
+    fills: [
+      {
+        id: "10"
+        order: "10"
+        timestamp: "2026-01-01T00:00:00Z"
+        symbol: "BTC/USDT:USDT"
+        position_side: long
+        side: buy
+        amount: 5.0
+        price: 80.0
+        pnl: 0.0
+        clientOrderId: initial_entry_boot
+      }
+      {
+        id: "11"
+        order: "11"
+        timestamp: "2026-01-01T00:00:30Z"
+        symbol: "BTC/USDT:USDT"
+        position_side: long
+        side: sell
+        amount: 5.0
+        price: 100.0
+        pnl: 100.0
+        reduceOnly: true
+        clientOrderId: initial_take_profit_boot
+      }
+      {
+        id: "12"
+        order: "12"
+        timestamp: "2026-01-01T00:00:30Z"
+        symbol: "BTC/USDT:USDT"
+        position_side: long
+        side: buy
+        amount: 5.0
+        price: 100.0
+        pnl: 0.0
+        clientOrderId: reentry_boot
+      }
+    ]
+  }
+  symbols: {
+    "BTC/USDT:USDT": {
+      price_step: 0.1
+      qty_step: 0.001
+      min_qty: 0.001
+      min_cost: 5.0
+      maker_fee: 0.0
+      taker_fee: 0.0
+    }
+  }
+  timeline: [
+    {t: 0, prices: {"BTC/USDT:USDT": 100.0}}
+    {t: 1, prices: {"BTC/USDT:USDT": 100.0}}
+    {t: 2, prices: {"BTC/USDT:USDT": 97.0}}
+    {t: 3, prices: {"BTC/USDT:USDT": 97.0}}
+    {t: 4, prices: {"BTC/USDT:USDT": 97.0}}
+    {
+      t: 5
+      prices: {"BTC/USDT:USDT": 97.0}
+      actions: [
+        {
+          type: manual_fill
+          symbol: "BTC/USDT:USDT"
+          position_side: long
+          side: buy
+          qty: 1.0
+          price: 97.0
+          clientOrderId: manual_cooldown_entry
+        }
+      ]
+    }
+    {t: 6, prices: {"BTC/USDT:USDT": 97.0}}
+  ]
+  assertions: {
+    fill_count: 5
+    final_balance: 185.0
+    final_positions: {
+      "BTC/USDT:USDT|long": 1.0
+    }
+    hsl_paths: {
+      long.halted: true
+      long.no_restart_latched: false
+      long.cooldown_intervention_active: true
+      long.cooldown_repanic_reset_pending: false
+      long.cooldown_until_ms: 1767225810000
+    }
+    summary_paths: {
+      step_count: 5
+      last.step_index: 6
+      last.open_orders: 0
+    }
+    log_contains: [
+      "detected non-flat position during RED cooldown | policy=manual_quarantine"
+      "changed long.BTC/USDT:USDT: panic -> manual"
+    ]
+  }
+}

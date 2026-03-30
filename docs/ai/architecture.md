@@ -19,11 +19,11 @@ Python (src/)                          Rust (passivbot-rust/src/)
 ## Source-of-Truth Boundary
 
 1. Rust (`passivbot-rust/src/`) owns order behavior.
-- Includes orchestrator, entries, closes, risk, backtest simulation, and analysis metrics.
+- Includes orchestrator, entries, closes, risk, coin selection / forager shortlist logic, backtest simulation, and analysis metrics.
 2. Python (`src/`) owns orchestration.
-- Includes exchange API calls, config loading, data collection/caching, and process control.
+- Includes exchange API calls, centralized config loading/formatting, data collection/caching, payload building, and process control.
 
-If behavior changes in entries/closes/risk/unstuck, implement in Rust.
+If behavior changes in entries/closes/risk/unstuck/coin selection, implement in Rust.
 
 ## Core Runtime Components
 
@@ -67,6 +67,11 @@ If behavior changes in entries/closes/risk/unstuck, implement in Rust.
 3. `config.optimize`: optimizer-only settings.
 
 Rule: if unsure, prefer `config.live`.
+
+Config hydration rule:
+
+1. Config hydration, migration, renaming, and default insertion happen in centralized config formatting/parsing code.
+2. Downstream consumers assume required config keys already exist and are valid.
 
 ## Stateless Requirement
 

@@ -1,6 +1,7 @@
 """Tests for configurable candle interval feature."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -137,3 +138,166 @@ def test_backtest_with_candle_interval():
     assert equities_array.shape[1] == 3
     assert equities_array.shape[0] <= n_minutes // 5
     assert np.isfinite(analysis["positions_held_per_day"])
+
+
+def test_backtest_allows_hsl_ema_span_below_candle_interval():
+    from backtest import build_backtest_payload
+    from config_utils import load_config
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_config(str(root / "configs" / "template.json"), verbose=False)
+    config["backtest"]["exchanges"] = ["binance"]
+    config["backtest"]["coins"] = {"binance": ["BTC"]}
+    config["backtest"]["candle_interval_minutes"] = 5
+    config["backtest"]["filter_by_min_effective_cost"] = False
+    config["backtest"]["start_date"] = "2021-01-01"
+    config["backtest"]["end_date"] = "2021-01-02"
+    config["live"]["warmup_ratio"] = 0.0
+    config["live"]["max_warmup_minutes"] = 0
+    config["live"]["hedge_mode"] = False
+    config["bot"]["long"]["hsl_enabled"] = True
+    config["bot"]["long"]["hsl_ema_span_minutes"] = 1.0
+    config["bot"]["short"]["hsl_enabled"] = True
+    config["bot"]["short"]["hsl_ema_span_minutes"] = 1.0
+
+    n_minutes = 60
+    start_ts = 1609459200000
+    timestamps = np.arange(start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64)
+    hlcvs = np.zeros((n_minutes, 1, 4), dtype=np.float64)
+    btc_usd_prices = np.full(n_minutes, 20_000.0, dtype=np.float64)
+    mss = {
+        "BTC": {
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.0,
+            "min_cost": 0.0,
+            "c_mult": 1.0,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        },
+        "__meta__": {
+            "requested_start_ts": int(timestamps[0]),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+            "warmup_minutes_provided": 0,
+        },
+    }
+
+    payload = build_backtest_payload(
+        hlcvs,
+        mss,
+        config,
+        "binance",
+        btc_usd_prices,
+        timestamps,
+    )
+    assert payload.bot_params_list[0]["long"]["hsl_ema_span_minutes"] == pytest.approx(1.0)
+    assert payload.bot_params_list[0]["short"]["hsl_ema_span_minutes"] == pytest.approx(1.0)
+
+
+def test_backtest_rejects_invalid_liquidation_threshold():
+    from backtest import build_backtest_payload
+    from config_utils import load_config
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_config(str(root / "configs" / "template.json"), verbose=False)
+    config["backtest"]["exchanges"] = ["binance"]
+    config["backtest"]["coins"] = {"binance": ["BTC"]}
+    config["backtest"]["filter_by_min_effective_cost"] = False
+    config["backtest"]["start_date"] = "2021-01-01"
+    config["backtest"]["end_date"] = "2021-01-02"
+    config["backtest"]["liquidation_threshold"] = 1.0
+    config["live"]["warmup_ratio"] = 0.0
+    config["live"]["max_warmup_minutes"] = 0
+    config["live"]["hedge_mode"] = False
+
+    n_minutes = 60
+    start_ts = 1609459200000
+    timestamps = np.arange(start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64)
+    hlcvs = np.zeros((n_minutes, 1, 4), dtype=np.float64)
+    btc_usd_prices = np.full(n_minutes, 20_000.0, dtype=np.float64)
+    mss = {
+        "BTC": {
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.0,
+            "min_cost": 0.0,
+            "c_mult": 1.0,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        },
+        "__meta__": {
+            "requested_start_ts": int(timestamps[0]),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+            "warmup_minutes_provided": 0,
+        },
+    }
+
+    with pytest.raises(
+        ValueError, match=r"backtest\.liquidation_threshold must satisfy 0\.0 <= x < 1\.0"
+    ):
+        build_backtest_payload(
+            hlcvs,
+            mss,
+            config,
+            "binance",
+            btc_usd_prices,
+            timestamps,
+        )
+
+
+def test_backtest_completion_ratio_is_one_for_full_range():
+    from backtest import _compute_backtest_completion_ratio
+
+    payload = SimpleNamespace(
+        backtest_params={
+            "requested_start_timestamp_ms": 1609459200000,
+            "candle_interval_minutes": 5,
+        }
+    )
+    config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-02",
+        }
+    }
+    equities_array = np.array(
+        [
+            [1609459200000, 1000.0, 0.05],
+            [1609545300000, 1100.0, 0.055],
+        ],
+        dtype=np.float64,
+    )
+
+    ratio = _compute_backtest_completion_ratio(payload, equities_array, config)
+    assert ratio == pytest.approx(1.0)
+
+
+def test_backtest_completion_ratio_drops_for_truncated_run():
+    from backtest import _compute_backtest_completion_ratio
+
+    payload = SimpleNamespace(
+        backtest_params={
+            "requested_start_timestamp_ms": 1609459200000,
+            "candle_interval_minutes": 5,
+        }
+    )
+    config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-11",
+        }
+    }
+    equities_array = np.array(
+        [
+            [1609459200000, 1000.0, 0.05],
+            [1609545300000, 900.0, 0.045],
+        ],
+        dtype=np.float64,
+    )
+
+    ratio = _compute_backtest_completion_ratio(payload, equities_array, config)
+    assert 0.09 < ratio < 0.11

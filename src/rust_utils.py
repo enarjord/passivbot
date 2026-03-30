@@ -95,7 +95,10 @@ def _import_target_compiled_path() -> Optional[Path]:
     `maturin develop`, where `find_spec("passivbot_rust")` resolves to `__init__.py` and the
     compiled extension lives alongside it.
     """
-    spec = importlib.util.find_spec(PYTHON_MODULE_NAME)
+    try:
+        spec = importlib.util.find_spec(PYTHON_MODULE_NAME)
+    except ValueError:
+        return None
     if spec is None:
         return None
 

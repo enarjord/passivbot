@@ -3,7 +3,7 @@ from copy import deepcopy
 import pytest
 
 from config_utils import get_template_config
-from optimize import Evaluator
+from optimize import Evaluator, _summarize_constraint_details
 
 
 def _make_config(limits, scoring=None):
@@ -36,6 +36,15 @@ def test_evaluator_applies_limit_penalties():
     scores, penalty = evaluator.calc_fitness(stats)
     assert pytest.approx(scores[0]) == expected_modifier
     assert pytest.approx(penalty) == expected_modifier
+    assert {detail["metric_key"] for detail in evaluator.last_constraint_details} == {
+        "omega_ratio_mean",
+        "drawdown_worst_max",
+        "loss_profit_ratio_mean",
+        "adg_min",
+    }
+    assert evaluator.last_constraint_details[0]["metric_key"] == "omega_ratio_mean"
+    assert evaluator.last_constraint_details[0]["penalty"] == pytest.approx(200000.0)
+    assert evaluator.last_constraint_details[0]["range"] == [1.0, 1.5]
 
 
 def test_evaluator_returns_weighted_metric_when_within_limits():
@@ -98,3 +107,43 @@ def test_limit_penalty_remains_global_for_non_scoring_metric():
     assert pytest.approx(scores[0]) == expected_penalty
     assert pytest.approx(scores[1]) == expected_penalty
     assert pytest.approx(penalty) == expected_penalty
+
+
+def test_disabled_limit_is_ignored():
+    limits = [
+        {"metric": "drawdown_worst", "enabled": False},
+    ]
+    cfg = _make_config(limits, scoring=["adg"])
+    evaluator = Evaluator({}, {}, {}, cfg)
+    stats = {
+        "adg_mean": 0.001,
+        "drawdown_worst_max": 0.99,
+    }
+    scores, penalty = evaluator.calc_fitness(stats)
+    assert pytest.approx(scores[0]) == -0.001
+    assert pytest.approx(penalty) == 0.0
+    assert evaluator.last_constraint_details == []
+
+
+def test_constraint_summary_formats_top_violations():
+    details = [
+        {
+            "metric_key": "drawdown_worst_max",
+            "mode": "greater_than",
+            "bound": 0.4,
+            "value": 0.45,
+            "penalty": 50000.0,
+        },
+        {
+            "metric_key": "adg_min",
+            "mode": "less_than",
+            "bound": 0.001,
+            "value": 0.0008,
+            "penalty": 200.0,
+        },
+    ]
+
+    summary = _summarize_constraint_details(details, limit=2)
+
+    assert "drawdown_worst_max=0.45 (> 0.4, penalty=50000.0)" in summary
+    assert "adg_min=0.0008 (< 0.001, penalty=200.0)" in summary

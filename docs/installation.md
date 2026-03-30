@@ -68,6 +68,17 @@ passivbot optimize -h
 
 If pytest reports missing `passivbot_rust`, double-check that the venv is active and `maturin develop --release` completed successfully.
 
+You can also sanity-check the fake live harness after setup:
+
+```bash
+PYTHONPATH=src python3 src/tools/run_fake_live.py \
+  configs/fake_live_hsl_btc.hjson \
+  scenarios/fake_live/minimal.hjson \
+  --user fake_01
+```
+
+The `fake_01` example entry is included in `api-keys.json.example`.
+
 ## 6. Keeping it up to date
 
 When pulling new commits:

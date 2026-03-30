@@ -2,6 +2,7 @@ passivbot_agent_principles:
   architecture:
     - Rust is the source of truth for order logic, risk, unstuck, and backtesting behavior.
     - Backtester and live bot must use equivalent Rust behavior.
+    - Coin selection, forager shortlist construction, and slot-filling behavior are trading-critical Rust-owned behavior.
     - Python is orchestration, exchange I/O, config, and data plumbing.
 
   statelessness:
@@ -30,10 +31,15 @@ passivbot_agent_principles:
         used_by: [backtester, optimizer]
       - name: config.optimize
         used_by: [optimizer]
+    parsing_contract:
+      - Config hydration, migration, renaming, and default insertion are centralized in format/parse code.
+      - Downstream consumers must assume required params already exist and are valid.
+      - Do not add downstream fallback defaults for required config keys.
 
   error_handling:
     - Fail loudly in trading-critical paths.
     - Exchange fetch methods must not catch exceptions; let caller policy handle retries/restarts.
+    - Coin-selection / shortlist inputs are trading-critical inputs.
     - Fallbacks are exception-only and must follow docs/ai/error_contract.md.
 
   implementation_scope:
