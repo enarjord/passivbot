@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -36,6 +37,28 @@ def relay_healthcheck(relay_url: str, timeout_seconds: float = 1.0) -> bool:
         return False
 
 
+def _relay_launch_env(*, repo_root: str) -> dict[str, str]:
+    env = os.environ.copy()
+    src_root = str((Path(repo_root) / "src").resolve())
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        src_root if not existing else os.pathsep.join([src_root, existing])
+    )
+    return env
+
+
+def _read_relay_log_excerpt(relay_log_file: str, *, max_lines: int = 20) -> str:
+    path = Path(relay_log_file)
+    if not path.exists():
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return ""
+    excerpt = "\n".join(lines[-max_lines:])
+    return excerpt.strip()
+
+
 def launch_relay_subprocess(
     *,
     repo_root: str,
@@ -52,7 +75,8 @@ def launch_relay_subprocess(
     process = subprocess.Popen(
         [
             sys.executable,
-            "src/tools/monitor_relay.py",
+            "-m",
+            "tools.monitor_relay",
             "--monitor-root",
             monitor_root,
             "--host",
@@ -65,6 +89,7 @@ def launch_relay_subprocess(
             str(queue_size),
         ],
         cwd=repo_root,
+        env=_relay_launch_env(repo_root=repo_root),
         stdout=log_handle,
         stderr=subprocess.STDOUT,
         text=True,
@@ -88,11 +113,23 @@ def stop_relay_subprocess(process: Optional[subprocess.Popen]) -> None:
         log_handle.close()
 
 
-async def wait_for_relay(relay_url: str, *, timeout_seconds: float = 10.0) -> None:
+async def wait_for_relay(
+    relay_url: str,
+    *,
+    timeout_seconds: float = 10.0,
+    process: Optional[subprocess.Popen] = None,
+    relay_log_file: Optional[str] = None,
+) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if relay_healthcheck(relay_url, timeout_seconds=0.5):
             return
+        if process is not None and process.poll() is not None:
+            excerpt = _read_relay_log_excerpt(relay_log_file or "")
+            details = f"relay exited early with code {process.returncode}"
+            if excerpt:
+                details += f"\nRecent relay log:\n{excerpt}"
+            raise RuntimeError(details)
         await asyncio.sleep(0.2)
     raise RuntimeError(f"relay did not become healthy at {relay_url}/health within {timeout_seconds}s")
 
@@ -140,7 +177,11 @@ async def run_monitor_dev(
             relay_log_file=relay_log_file,
         )
         try:
-            await wait_for_relay(relay_url)
+            await wait_for_relay(
+                relay_url,
+                process=relay_process,
+                relay_log_file=relay_log_file,
+            )
         except (OSError, RuntimeError):
             stop_relay_subprocess(relay_process)
             raise

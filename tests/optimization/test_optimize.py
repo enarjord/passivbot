@@ -291,22 +291,28 @@ class TestIndividualToConfig:
         assert template == original_template
 
     def test_includes_live_hsl_values_when_present_in_bounds(self):
-        individual = [1.0, 2.0, 3.0, 4.0, 60.0, 0.22]
+        individual = [60.0, 1.0, 2.0, 0.22, 3.0, 4.0]
         template = {
             "bot": {
-                "common": {
-                    "equity_hard_stop_loss": {
-                        "red_threshold": 0.25,
-                        "ema_span_minutes": 120.0,
-                    }
+                "long": {
+                    "param1": 0.0,
+                    "param2": 0.0,
+                    "hsl_ema_span_minutes": 120.0,
                 },
-                "long": {"param1": 0.0, "param2": 0.0},
-                "short": {"param1": 0.0, "param2": 0.0},
+                "short": {
+                    "param1": 0.0,
+                    "param2": 0.0,
+                    "hsl_red_threshold": 0.25,
+                },
             },
             "optimize": {
                 "bounds": {
-                    "common_equity_hard_stop_loss_red_threshold": [0.15, 0.35, 0.01],
-                    "common_equity_hard_stop_loss_ema_span_minutes": [30.0, 180.0, 5.0],
+                    "long_param1": [0.0, 10.0],
+                    "long_param2": [0.0, 10.0],
+                    "short_param1": [0.0, 10.0],
+                    "short_param2": [0.0, 10.0],
+                    "long_hsl_ema_span_minutes": [30.0, 180.0, 5.0],
+                    "short_hsl_red_threshold": [0.15, 0.35, 0.01],
                 }
             },
         }
@@ -315,30 +321,29 @@ class TestIndividualToConfig:
 
         result = individual_to_config(individual, mock_overrides, overrides_list, template)
 
-        assert result["bot"]["common"]["equity_hard_stop_loss"]["red_threshold"] == pytest.approx(0.22)
-        assert result["bot"]["common"]["equity_hard_stop_loss"]["ema_span_minutes"] == pytest.approx(60.0)
+        assert result["bot"]["long"]["hsl_ema_span_minutes"] == pytest.approx(60.0)
+        assert result["bot"]["short"]["hsl_red_threshold"] == pytest.approx(0.22)
 
     def test_normalizes_common_hsl_no_restart_to_red_threshold_floor(self):
-        individual = [1.0, 2.0, 3.0, 4.0, 0.20, 0.25]
+        individual = [0.20, 0.25, 1.0, 2.0, 3.0, 4.0]
         template = {
             "bot": {
-                "common": {
-                    "equity_hard_stop_loss": {
-                        "red_threshold": 0.20,
-                        "no_restart_drawdown_threshold": 0.40,
-                    }
+                "long": {
+                    "param1": 0.0,
+                    "param2": 0.0,
+                    "hsl_red_threshold": 0.20,
+                    "hsl_no_restart_drawdown_threshold": 0.40,
                 },
-                "long": {"param1": 0.0, "param2": 0.0},
                 "short": {"param1": 0.0, "param2": 0.0},
             },
             "optimize": {
                 "bounds": {
-                    "common_equity_hard_stop_loss_no_restart_drawdown_threshold": [
-                        0.20,
-                        0.90,
-                        0.01,
-                    ],
-                    "common_equity_hard_stop_loss_red_threshold": [0.15, 0.35, 0.01],
+                    "long_param1": [0.0, 10.0],
+                    "long_param2": [0.0, 10.0],
+                    "short_param1": [0.0, 10.0],
+                    "short_param2": [0.0, 10.0],
+                    "long_hsl_no_restart_drawdown_threshold": [0.20, 0.90, 0.01],
+                    "long_hsl_red_threshold": [0.15, 0.35, 0.01],
                 }
             },
         }
@@ -347,38 +352,39 @@ class TestIndividualToConfig:
 
         result = individual_to_config(individual, mock_overrides, overrides_list, template)
 
-        hsl_cfg = result["bot"]["common"]["equity_hard_stop_loss"]
-        assert hsl_cfg["red_threshold"] == pytest.approx(0.25)
-        assert hsl_cfg["no_restart_drawdown_threshold"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["hsl_red_threshold"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(0.25)
 
     def test_applies_optimize_fixed_runtime_overrides_without_mutating_template(self):
-        individual = [1.0, 2.0, 3.0, 4.0, 0.25]
+        individual = [0.25, 1.0, 2.0, 3.0, 4.0]
         template = {
             "bot": {
-                "common": {
-                    "equity_hard_stop_loss": {
-                        "red_threshold": 0.20,
-                        "no_restart_drawdown_threshold": 0.30,
-                    }
+                "long": {
+                    "param1": 0.0,
+                    "param2": 0.0,
+                    "hsl_red_threshold": 0.20,
+                    "hsl_no_restart_drawdown_threshold": 0.30,
                 },
-                "long": {"param1": 0.0, "param2": 0.0},
                 "short": {"param1": 0.0, "param2": 0.0},
             },
             "optimize": {
                 "bounds": {
-                    "common_equity_hard_stop_loss_red_threshold": [0.15, 0.35, 0.01],
+                    "long_param1": [0.0, 10.0],
+                    "long_param2": [0.0, 10.0],
+                    "short_param1": [0.0, 10.0],
+                    "short_param2": [0.0, 10.0],
+                    "long_hsl_red_threshold": [0.15, 0.35, 0.01],
                 },
                 "fixed_runtime_overrides": {
-                    "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold": 1.0
+                    "bot.long.hsl_no_restart_drawdown_threshold": 1.0
                 },
             },
         }
         original_template = deepcopy(template)
         result = individual_to_config(individual, lambda x, y, z: y, [], template)
 
-        hsl_cfg = result["bot"]["common"]["equity_hard_stop_loss"]
-        assert hsl_cfg["red_threshold"] == pytest.approx(0.25)
-        assert hsl_cfg["no_restart_drawdown_threshold"] == pytest.approx(1.0)
+        assert result["bot"]["long"]["hsl_red_threshold"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
         assert template == original_template
 class TestConfigToIndividual:
     """Test config_to_individual function."""
@@ -424,19 +430,17 @@ class TestConfigToIndividual:
     def test_appends_live_hsl_values_when_present_in_bounds(self):
         config = {
             "bot": {
-                "common": {
-                    "equity_hard_stop_loss": {
-                        "red_threshold": 0.22,
-                        "ema_span_minutes": 60.0,
-                    }
-                },
-                "long": {"a_param": 1.0, "z_param": 2.0},
-                "short": {"a_param": 3.0, "z_param": 4.0},
+                "long": {"a_param": 1.0, "z_param": 2.0, "hsl_ema_span_minutes": 60.0},
+                "short": {"a_param": 3.0, "z_param": 4.0, "hsl_red_threshold": 0.22},
             },
             "optimize": {
                 "bounds": {
-                    "common_equity_hard_stop_loss_red_threshold": [0.15, 0.35, 0.01],
-                    "common_equity_hard_stop_loss_ema_span_minutes": [30.0, 180.0, 5.0],
+                    "long_a_param": [0.0, 1000.0],
+                    "long_z_param": [0.0, 1000.0],
+                    "short_a_param": [0.0, 1000.0],
+                    "short_z_param": [0.0, 1000.0],
+                    "long_hsl_ema_span_minutes": [30.0, 180.0, 5.0],
+                    "short_hsl_red_threshold": [0.15, 0.35, 0.01],
                 }
             },
         }
@@ -445,7 +449,7 @@ class TestConfigToIndividual:
 
         result = config_to_individual(config, bounds, sig_digits)
 
-        assert result == pytest.approx([1.0, 2.0, 3.0, 4.0, 60.0, 0.22])
+        assert result == pytest.approx([1.0, 60.0, 2.0, 3.0, 0.22, 4.0])
 
 
 class TestValidateArray:
@@ -622,30 +626,24 @@ class TestApplyFineTuneBounds:
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
         assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
 
-    def test_config_fixed_params_support_common_hsl_keys(self):
+    def test_config_fixed_params_support_pside_hsl_keys(self):
         config = {
             "optimize": {
                 "bounds": {
-                    "common_equity_hard_stop_loss_red_threshold": [0.1, 0.3],
+                    "long_hsl_red_threshold": [0.1, 0.3],
                 },
-                "fixed_params": ["common_equity_hard_stop_loss_red_threshold"],
+                "fixed_params": ["long_hsl_red_threshold"],
             },
             "bot": {
-                "common": {
-                    "equity_hard_stop_loss": {
-                        "red_threshold": 0.22,
-                    }
+                "long": {
+                    "hsl_red_threshold": 0.22,
                 },
-                "long": {},
                 "short": {},
             },
         }
         apply_fine_tune_bounds(config, [], set())
 
-        assert config["optimize"]["bounds"]["common_equity_hard_stop_loss_red_threshold"] == [
-            0.22,
-            0.22,
-        ]
+        assert config["optimize"]["bounds"]["long_hsl_red_threshold"] == [0.22, 0.22]
 
     def test_fine_tune_and_fixed_params_share_single_effective_fixing_path(self):
         config = {

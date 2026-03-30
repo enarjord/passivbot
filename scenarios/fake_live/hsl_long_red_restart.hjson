@@ -78,24 +78,26 @@
     }
   }
   assertions: {
-    fill_count: 4
+    fill_count: 5
     final_balance: 185.0
     last_prices: {
       "BTC/USDT:USDT": 98.5
     }
+    final_positions: {
+      "BTC/USDT:USDT|long": {min: 0.9, max: 1.0}
+    }
     hsl_paths: {
-      halted: false
-      no_restart_latched: false
-      runtime_red_latched: false
-      last_stop_event.auto_restart_eligible: true
-      last_stop_event.drawdown_raw: {min: 0.07, max: 0.08}
+      long.halted: false
+      long.no_restart_latched: false
+      long.last_stop_event.auto_restart_eligible: true
+      long.last_stop_event.drawdown_raw: {min: 0.07, max: 0.08}
     }
     summary_paths: {
       step_count: 4
       last.step_index: 5
     }
     log_contains: [
-      "RED stop finalized (cooldown active)"
+      "RED stop finalized (auto-restart eligible)"
       "RED cooldown elapsed; trading resumed"
     ]
   }

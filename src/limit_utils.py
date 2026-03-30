@@ -22,6 +22,8 @@ def expand_limit_checks(
     checks: List[Dict[str, Any]] = []
     for raw_entry in limits:
         entry = deepcopy(raw_entry)
+        if isinstance(entry, dict) and not bool(entry.get("enabled", True)):
+            continue
         metric = entry.get("metric")
         if not metric:
             continue

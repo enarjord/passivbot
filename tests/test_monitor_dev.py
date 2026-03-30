@@ -1,9 +1,12 @@
+import asyncio
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-from monitor_dev import resolve_latest_log_file
+import pytest
+
+from monitor_dev import _relay_launch_env, resolve_latest_log_file, wait_for_relay
 from monitor_tui import MonitorTuiClient
 
 
@@ -43,6 +46,39 @@ def test_resolve_latest_log_file_picks_newest_log(tmp_path):
 
 def test_resolve_latest_log_file_returns_none_when_missing(tmp_path):
     assert resolve_latest_log_file(logs_dir=str(tmp_path / "missing")) is None
+
+
+def test_relay_launch_env_prepends_repo_src(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    src_root = repo_root / "src"
+    src_root.mkdir(parents=True)
+    monkeypatch.setenv("PYTHONPATH", "existing:path")
+
+    env = _relay_launch_env(repo_root=str(repo_root))
+
+    assert env["PYTHONPATH"] == os.pathsep.join([str(src_root.resolve()), "existing:path"])
+
+
+@pytest.mark.asyncio
+async def test_wait_for_relay_reports_early_exit_with_log_excerpt(tmp_path):
+    relay_log = tmp_path / "relay.log"
+    relay_log.write_text("boom line 1\nboom line 2\n", encoding="utf-8")
+
+    class DummyProcess:
+        returncode = 7
+
+        def poll(self):
+            return self.returncode
+
+    with pytest.raises(RuntimeError, match="relay exited early with code 7") as excinfo:
+        await wait_for_relay(
+            "http://127.0.0.1:8765",
+            timeout_seconds=0.5,
+            process=DummyProcess(),
+            relay_log_file=str(relay_log),
+        )
+
+    assert "boom line 2" in str(excinfo.value)
 
 
 def test_monitor_tui_client_bootstraps_and_polls_log_tail(tmp_path):

@@ -62,6 +62,65 @@ def test_monitor_tui_state_tracks_snapshot_events_and_history():
     assert state.recent_price_ticks["BTC/USDT:USDT"]["payload"]["last"] == 70000.0
 
 
+def test_monitor_tui_state_accepts_snapshot_bundle_and_ignores_other_bots():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765")
+
+    state.apply_message(
+        {
+            "type": "snapshot_bundle",
+            "bots": [
+                {
+                    "type": "snapshot",
+                    "exchange": "bitget",
+                    "user": "bitget_01",
+                    "seq": 42,
+                    "ts": 1774057000000,
+                    "payload": {
+                        "meta": {"exchange": "bitget", "user": "bitget_01"},
+                        "account": {"balance_raw": 1000.0, "equity": 995.0},
+                        "health": {"uptime_ms": 90000, "fills": 3},
+                        "positions": {},
+                        "open_orders": {},
+                        "hsl": {"tier": "green"},
+                        "market": {},
+                    },
+                },
+                {
+                    "type": "snapshot",
+                    "exchange": "bybit",
+                    "user": "bybit_01",
+                    "seq": 41,
+                    "ts": 1774056999000,
+                    "payload": {
+                        "meta": {"exchange": "bybit", "user": "bybit_01"},
+                        "account": {"balance_raw": 2000.0, "equity": 1995.0},
+                        "health": {"uptime_ms": 91000, "fills": 4},
+                        "positions": {},
+                        "open_orders": {},
+                        "hsl": {"tier": "green"},
+                        "market": {},
+                    },
+                },
+            ],
+        }
+    )
+    state.apply_message(
+        {
+            "type": "event",
+            "ts": 1774057000100,
+            "kind": "bot.ready",
+            "exchange": "bybit",
+            "user": "bybit_01",
+            "payload": {"status": "ready"},
+        }
+    )
+
+    assert state.exchange == "bitget"
+    assert state.user == "bitget_01"
+    assert state.snapshot_seq == 42
+    assert len(state.recent_events) == 0
+
+
 def test_monitor_tui_prefers_focus_symbol_in_rendering():
     state = MonitorTuiState(
         relay_url="http://127.0.0.1:8765",

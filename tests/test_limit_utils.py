@@ -40,3 +40,14 @@ def test_auto_penalize_if_respects_scoring_weight_sign():
     weights = {"adg": -1.0}
     violation = _single_violation(entry, value=0.0001, weights=weights, penalty_weight=3)
     assert violation == (0.0005 - 0.0001) * 3
+
+
+def test_disabled_limit_entry_is_skipped():
+    entry = {
+        "metric": "drawdown_worst",
+        "penalize_if": "greater_than",
+        "value": 0.5,
+        "enabled": False,
+    }
+    checks = expand_limit_checks([entry], {}, penalty_weight=1000.0)
+    assert checks == []

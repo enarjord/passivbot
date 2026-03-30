@@ -177,6 +177,21 @@ def _http_to_ws(url: str) -> str:
     return urlunsplit((scheme, parts.netloc, parts.path, parts.query, parts.fragment))
 
 
+def _message_bot_key(message: dict[str, Any]) -> Optional[tuple[str, str]]:
+    exchange = message.get("exchange")
+    user = message.get("user")
+    if exchange and user:
+        return str(exchange), str(user)
+    payload = message.get("payload")
+    if isinstance(payload, dict):
+        meta = payload.get("meta", {})
+        exchange = meta.get("exchange")
+        user = meta.get("user")
+        if exchange and user:
+            return str(exchange), str(user)
+    return None
+
+
 def _read_last_lines(path: Path, max_lines: int) -> list[str]:
     if max_lines <= 0 or not path.exists():
         return []
@@ -246,6 +261,12 @@ class MonitorTuiState:
 
     def apply_message(self, message: dict[str, Any]) -> None:
         message_type = message.get("type")
+        if message_type == "snapshot_bundle":
+            self._apply_snapshot_bundle(message)
+            return
+        if not self._should_accept_message(message):
+            return
+        message_type = message.get("type")
         if message_type == "snapshot":
             self._apply_snapshot_message(message)
             return
@@ -286,6 +307,32 @@ class MonitorTuiState:
         )
         self.user = message.get("user") or self.snapshot.get("meta", {}).get("user") or self.user
         self.status_text = "snapshot refreshed"
+
+    def _apply_snapshot_bundle(self, message: dict[str, Any]) -> None:
+        candidates = message.get("bots", [])
+        if not isinstance(candidates, list):
+            return
+        selected = self._select_snapshot_from_bundle(candidates)
+        if selected is not None:
+            self._apply_snapshot_message(selected)
+
+    def _should_accept_message(self, message: dict[str, Any]) -> bool:
+        key = _message_bot_key(message)
+        if key is None:
+            return True
+        if self.exchange and self.user:
+            return key == (self.exchange, self.user)
+        self.exchange, self.user = key
+        return True
+
+    def _select_snapshot_from_bundle(self, candidates: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        if self.exchange and self.user:
+            for candidate in candidates:
+                if _message_bot_key(candidate) == (self.exchange, self.user):
+                    return candidate
+        if candidates:
+            return candidates[0]
+        return None
 
 
 def _active_position_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]:

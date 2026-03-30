@@ -80,6 +80,7 @@ from config_utils import (
     merge_negative_cli_values,
     strip_config_metadata,
     get_optional_config_value,
+    normalize_forager_score_weights,
 )
 from pure_funcs import (
     denumpyize,
@@ -155,7 +156,7 @@ from optimization.bounds import (
 )
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.backends import get_backend_runner
-from optimization.config_adapter import get_optimization_key_paths, OPTIMIZABLE_COMMON_KEY_PATHS
+from optimization.config_adapter import get_optimization_key_paths, OPTIMIZABLE_BOT_KEY_PATHS
 from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
@@ -639,15 +640,26 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
         config,
         config.get("optimize", {}).get("fixed_runtime_overrides", {}),
     )
-    common_hsl = config.get("bot", {}).get("common", {}).get("equity_hard_stop_loss")
-    if isinstance(common_hsl, dict):
-        red_threshold = common_hsl.get("red_threshold")
-        no_restart = common_hsl.get("no_restart_drawdown_threshold")
+    for pside in ("long", "short"):
+        pside_cfg = config.get("bot", {}).get(pside, {})
+        if not isinstance(pside_cfg, dict):
+            continue
+        red_threshold = pside_cfg.get("hsl_red_threshold")
+        no_restart = pside_cfg.get("hsl_no_restart_drawdown_threshold")
         if red_threshold is not None and no_restart is not None:
             if float(no_restart) < float(red_threshold):
-                common_hsl["no_restart_drawdown_threshold"] = float(red_threshold)
+                pside_cfg["hsl_no_restart_drawdown_threshold"] = float(red_threshold)
     for pside in sorted(config["bot"]):
         config = optimizer_overrides(overrides_list, config, pside)
+
+    for pside in ("long", "short"):
+        pside_cfg = config.get("bot", {}).get(pside, {})
+        if not isinstance(pside_cfg, dict) or "forager_score_weights" not in pside_cfg:
+            continue
+        pside_cfg["forager_score_weights"] = normalize_forager_score_weights(
+            pside_cfg["forager_score_weights"],
+            path=f"bot.{pside}.forager_score_weights",
+        )
 
     return config
 
@@ -1439,8 +1451,8 @@ def apply_fine_tune_bounds(
     bounds = config.get("optimize", {}).get("bounds", {})
 
     def _resolve_bound_key_path(bound_key: str):
-        if bound_key in OPTIMIZABLE_COMMON_KEY_PATHS:
-            return OPTIMIZABLE_COMMON_KEY_PATHS[bound_key]
+        if bound_key in OPTIMIZABLE_BOT_KEY_PATHS:
+            return OPTIMIZABLE_BOT_KEY_PATHS[bound_key]
         try:
             pside, param = bound_key.split("_", 1)
         except ValueError:

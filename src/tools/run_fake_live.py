@@ -55,26 +55,6 @@ def _attach_file_logging(path: Path) -> logging.Handler:
 
 
 def _extract_hsl_trace(bot) -> Dict[str, dict]:
-    if hasattr(bot, "_equity_hard_stop_halted"):
-        return {
-            "halted": bool(getattr(bot, "_equity_hard_stop_halted", False)),
-            "no_restart_latched": bool(
-                getattr(bot, "_equity_hard_stop_no_restart_latched", False)
-            ),
-            "cooldown_until_ms": getattr(bot, "_equity_hard_stop_halted_until_ms", None),
-            "pending_red_since_ms": getattr(bot, "_equity_hard_stop_pending_red_since_ms", None),
-            "red_flat_confirmations": getattr(bot, "_equity_hard_stop_red_flat_confirmations", 0),
-            "cooldown_intervention_active": bool(
-                getattr(bot, "_equity_hard_stop_cooldown_intervention_active", False)
-            ),
-            "cooldown_repanic_reset_pending": bool(
-                getattr(bot, "_equity_hard_stop_cooldown_repanic_reset_pending", False)
-            ),
-            "runtime_red_latched": bool(bot._equity_hard_stop_runtime_red_latched()),
-            "runtime_tier": bot._equity_hard_stop_runtime_tier(),
-            "last_metrics": getattr(bot, "_equity_hard_stop_last_metrics", None),
-            "last_stop_event": getattr(bot, "_equity_hard_stop_last_stop_event", None),
-        }
     trace: Dict[str, dict] = {}
     for pside in ("long", "short"):
         if not hasattr(bot, "_hsl_state"):
@@ -278,43 +258,51 @@ def _install_runtime_overrides(bot, scenario: dict) -> None:
         bot.get_exchange_time = lambda: int(bot.cca.now_ms)
 
 
-def _fake_red_supervisor_active(bot) -> bool:
-    return (
-        bot._equity_hard_stop_enabled()
-        and bot._equity_hard_stop_runtime_red_latched()
-        and not bot._equity_hard_stop_halted
-    )
+def _fake_active_red_psides(bot) -> List[str]:
+    return [
+        pside
+        for pside in bot._hsl_psides()
+        if bot._equity_hard_stop_enabled(pside)
+        and bot._equity_hard_stop_runtime_red_latched(pside)
+        and not bot._hsl_state(pside)["halted"]
+    ]
 
 
 async def _run_fake_red_supervisor_step(bot) -> dict:
-    if not _fake_red_supervisor_active(bot):
+    active_red_psides = _fake_active_red_psides(bot)
+    if not active_red_psides:
         return {"red_supervisor": False}
 
-    n_positions = bot._equity_hard_stop_count_open_positions()
-    entry_orders, nonpanic_close_orders = bot._equity_hard_stop_count_blocking_open_orders()
-    if n_positions == 0 and entry_orders == 0 and nonpanic_close_orders == 0:
-        if bot._equity_hard_stop_red_flat_confirmations == 0:
-            bot._equity_hard_stop_pending_stop_event = await bot._equity_hard_stop_compute_stop_event(
-                int(bot.get_exchange_time())
-            )
-        bot._equity_hard_stop_red_flat_confirmations += 1
-    else:
-        bot._equity_hard_stop_red_flat_confirmations = 0
-        bot._equity_hard_stop_pending_stop_event = None
-    bot._equity_hard_stop_log_red_progress(
-        n_positions,
-        entry_orders,
-        nonpanic_close_orders,
-        bot._equity_hard_stop_red_flat_confirmations,
-    )
-    if bot._equity_hard_stop_red_flat_confirmations >= 2:
-        await bot._equity_hard_stop_finalize_red_stop(bot._equity_hard_stop_pending_stop_event)
+    for pside in list(active_red_psides):
+        state = bot._hsl_state(pside)
+        n_positions = bot._equity_hard_stop_count_open_positions(pside)
+        entry_orders, nonpanic_close_orders = bot._equity_hard_stop_count_blocking_open_orders(pside)
+        if n_positions == 0 and entry_orders == 0 and nonpanic_close_orders == 0:
+            if state["red_flat_confirmations"] == 0:
+                state["pending_stop_event"] = await bot._equity_hard_stop_compute_stop_event(
+                    pside, int(bot.get_exchange_time())
+                )
+            state["red_flat_confirmations"] += 1
+        else:
+            state["red_flat_confirmations"] = 0
+            state["pending_stop_event"] = None
+        bot._equity_hard_stop_log_red_progress(
+            pside,
+            n_positions,
+            entry_orders,
+            nonpanic_close_orders,
+            state["red_flat_confirmations"],
+        )
+        if state["red_flat_confirmations"] >= 2:
+            await bot._equity_hard_stop_finalize_red_stop(pside, state["pending_stop_event"])
+
+    active_red_psides = _fake_active_red_psides(bot)
+    if not active_red_psides:
         return {"red_supervisor": True, "finalized": True}
 
-    if not _fake_red_supervisor_active(bot):
-        return {"red_supervisor": True, "finalized": True}
-
-    bot._equity_hard_stop_set_red_runtime_forced_modes()
+    for pside in active_red_psides:
+        bot._equity_hard_stop_set_red_runtime_forced_modes(pside)
+    bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
     await bot.execute_to_exchange()
     return {"red_supervisor": True, "finalized": False}
 
@@ -388,8 +376,21 @@ async def _run_fake_cycle(bot):
     if not await bot.update_pos_oos_pnls_ohlcvs():
         return {"updated": False}
     if bot._equity_hard_stop_enabled():
+        if any(
+            bot._equity_hard_stop_runtime_red_latched(pside) and not bot._hsl_state(pside)["halted"]
+            for pside in bot._hsl_psides()
+            if bot._equity_hard_stop_enabled(pside)
+        ):
+            if getattr(bot, "exchange", "").lower() == "fake":
+                return await _run_fake_red_supervisor_step(bot)
+            await bot._equity_hard_stop_run_red_supervisor()
+            return {"red_supervisor": True}
         await bot._equity_hard_stop_check()
-        if bot._equity_hard_stop_runtime_red_latched() and not bot._equity_hard_stop_halted:
+        if any(
+            bot._equity_hard_stop_runtime_red_latched(pside) and not bot._hsl_state(pside)["halted"]
+            for pside in bot._hsl_psides()
+            if bot._equity_hard_stop_enabled(pside)
+        ):
             if getattr(bot, "exchange", "").lower() == "fake":
                 return await _run_fake_red_supervisor_step(bot)
             await bot._equity_hard_stop_run_red_supervisor()

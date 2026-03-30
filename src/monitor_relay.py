@@ -7,7 +7,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from aiohttp import web
 
@@ -42,7 +42,7 @@ class MonitorRelay:
         self.ws_replay_limit = max(0, int(ws_replay_limit))
         self.started_at_monotonic = time.monotonic()
         self._path_states: dict[Path, _PathState] = {}
-        self._subscribers: dict[MonitorKey, set[asyncio.Queue]] = {}
+        self._subscribers: dict[asyncio.Queue, Optional[MonitorKey]] = {}
         self._poll_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._initial_prime_completed = False
@@ -61,6 +61,12 @@ class MonitorRelay:
                     keys.append((exchange_dir.name, user_dir.name))
         return keys
 
+    def _manifest_path(self, key: MonitorKey) -> Path:
+        return self._bot_root(key) / "manifest.json"
+
+    def _snapshot_path(self, key: MonitorKey) -> Path:
+        return self._bot_root(key) / "state.latest.json"
+
     def _bot_root(self, key: MonitorKey) -> Path:
         exchange, user = key
         return self.monitor_root / exchange / user
@@ -77,31 +83,110 @@ class MonitorRelay:
     def _current_paths_for_key(self, key: MonitorKey) -> list[Path]:
         return [self._events_current_path(key), *self._history_current_paths(key)]
 
+    def _load_json(self, path: Path) -> dict[str, Any]:
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _path_mtime_ms(self, path: Path) -> int:
+        try:
+            return int(path.stat().st_mtime * 1000.0)
+        except FileNotFoundError:
+            return 0
+
+    def _extract_manifest_snapshot_interval_ms(self, manifest: dict[str, Any]) -> int:
+        raw = manifest.get("config", {}).get("snapshot_interval_seconds")
+        try:
+            value = float(raw)
+        except Exception:
+            value = 0.0
+        return max(0, int(value * 1000.0))
+
+    def _key_last_activity_ts_ms(self, key: MonitorKey) -> int:
+        manifest = self._load_json(self._manifest_path(key))
+        snapshot = self._load_json(self._snapshot_path(key))
+        candidates = [
+            self._path_mtime_ms(self._manifest_path(key)),
+            self._path_mtime_ms(self._snapshot_path(key)),
+            int(manifest.get("updated_ts_ms", 0) or 0),
+            int(snapshot.get("meta", {}).get("snapshot_ts_ms", 0) or 0),
+        ]
+        for path in self._current_paths_for_key(key):
+            candidates.append(self._path_mtime_ms(path))
+        return max(candidates or [0])
+
+    def _key_stale_after_ms(self, key: MonitorKey) -> int:
+        manifest = self._load_json(self._manifest_path(key))
+        snapshot_interval_ms = self._extract_manifest_snapshot_interval_ms(manifest)
+        return max(30_000, snapshot_interval_ms * 5 if snapshot_interval_ms else 0)
+
+    def _is_key_active(self, key: MonitorKey, *, now_ms: Optional[int] = None) -> bool:
+        now_ms = int(time.time() * 1000.0) if now_ms is None else int(now_ms)
+        last_activity_ms = self._key_last_activity_ts_ms(key)
+        if last_activity_ms <= 0:
+            return False
+        return now_ms - last_activity_ms <= self._key_stale_after_ms(key)
+
+    def active_keys(self) -> list[MonitorKey]:
+        now_ms = int(time.time() * 1000.0)
+        return [key for key in self.discover_keys() if self._is_key_active(key, now_ms=now_ms)]
+
+    def matching_keys(
+        self,
+        *,
+        exchange: Optional[str],
+        user: Optional[str],
+        active_only: bool = True,
+    ) -> list[MonitorKey]:
+        keys = self.active_keys() if active_only else self.discover_keys()
+        if exchange and user:
+            key = (str(exchange), str(user))
+            if key not in keys:
+                raise FileNotFoundError(f"monitor root not found for {exchange}/{user}")
+            return [key]
+        if exchange or user:
+            raise ValueError("both exchange and user are required when selecting a monitor root")
+        return keys
+
     def resolve_key(
         self,
         *,
         exchange: Optional[str],
         user: Optional[str],
     ) -> MonitorKey:
-        keys = self.discover_keys()
+        keys = self.matching_keys(exchange=exchange, user=user)
         if exchange and user:
-            key = (str(exchange), str(user))
-            if key not in keys:
-                raise FileNotFoundError(f"monitor root not found for {exchange}/{user}")
-            return key
-        if exchange or user:
-            raise ValueError("both exchange and user are required when selecting a monitor root")
+            return keys[0]
         if not keys:
-            raise FileNotFoundError(f"no monitor roots found under {self.monitor_root}")
+            raise FileNotFoundError(f"no active monitor roots found under {self.monitor_root}")
         if len(keys) == 1:
             return keys[0]
         raise LookupError("multiple monitor roots available; specify exchange and user")
 
     def load_snapshot(self, key: MonitorKey) -> dict:
-        path = self._bot_root(key) / "state.latest.json"
+        path = self._snapshot_path(key)
         if not path.exists():
             raise FileNotFoundError(f"snapshot not found for {key[0]}/{key[1]}")
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def load_snapshot_messages(
+        self,
+        *,
+        exchange: Optional[str],
+        user: Optional[str],
+    ) -> list[dict]:
+        messages: list[dict] = []
+        for key in self.matching_keys(exchange=exchange, user=user):
+            try:
+                snapshot = self.load_snapshot(key)
+            except FileNotFoundError:
+                continue
+            messages.append(self.build_snapshot_message(key, snapshot))
+        return messages
 
     def build_snapshot_message(self, key: MonitorKey, snapshot: dict) -> dict:
         meta = snapshot.get("meta", {}) if isinstance(snapshot, dict) else {}
@@ -114,34 +199,59 @@ class MonitorRelay:
             "payload": snapshot,
         }
 
-    def build_health_payload(self) -> dict:
-        keys = self.discover_keys()
-        subscribers = {
-            f"{exchange}/{user}": len(self._subscribers.get((exchange, user), set()))
-            for exchange, user in keys
+    def build_snapshot_bundle(self, messages: list[dict]) -> dict:
+        now_ms = int(time.time() * 1000.0)
+        return {
+            "type": "snapshot_bundle",
+            "ts": now_ms,
+            "count": len(messages),
+            "bots": messages,
         }
+
+    def build_health_payload(self) -> dict:
+        discovered = self.discover_keys()
+        active = set(self.active_keys())
+        subscribers = {}
+        for exchange, user in discovered:
+            count = 0
+            key = (exchange, user)
+            for subscription in self._subscribers.values():
+                if subscription is None or subscription == key:
+                    count += 1
+            subscribers[f"{exchange}/{user}"] = count
         return {
             "status": "ok",
             "monitor_root": str(self.monitor_root),
             "poll_interval_ms": self.poll_interval_ms,
             "ws_replay_limit": self.ws_replay_limit,
             "uptime_ms": int((time.monotonic() - self.started_at_monotonic) * 1000.0),
-            "bots": [{"exchange": exchange, "user": user} for exchange, user in keys],
+            "bots": [
+                {
+                    "exchange": exchange,
+                    "user": user,
+                    "active": (exchange, user) in active,
+                    "last_activity_ts_ms": self._key_last_activity_ts_ms((exchange, user)),
+                }
+                for exchange, user in discovered
+            ],
             "subscribers": subscribers,
         }
 
-    def subscribe(self, key: MonitorKey) -> asyncio.Queue:
+    def subscribe(self, key: Optional[MonitorKey] = None) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=self.subscriber_queue_size)
-        self._subscribers.setdefault(key, set()).add(queue)
+        self._subscribers[queue] = key
         return queue
 
-    def unsubscribe(self, key: MonitorKey, queue: asyncio.Queue) -> None:
-        subscribers = self._subscribers.get(key)
-        if not subscribers:
-            return
-        subscribers.discard(queue)
-        if not subscribers:
-            self._subscribers.pop(key, None)
+    def unsubscribe(
+        self,
+        queue_or_key: asyncio.Queue | MonitorKey,
+        queue: Optional[asyncio.Queue] = None,
+    ) -> None:
+        if queue is None:
+            target = queue_or_key
+        else:
+            target = queue
+        self._subscribers.pop(target, None)
 
     async def start(self) -> None:
         if self._poll_task is not None:
@@ -187,7 +297,7 @@ class MonitorRelay:
             await asyncio.sleep(self.poll_interval_ms / 1000.0)
 
     async def poll_once(self) -> None:
-        for key in self.discover_keys():
+        for key in self.active_keys():
             for path in self._current_paths_for_key(key):
                 for message in self._read_updates(path):
                     await self._broadcast(key, message)
@@ -237,21 +347,28 @@ class MonitorRelay:
                 messages.append(self._build_history_message(entry))
         return messages
 
-    def load_recent_messages(self, key: MonitorKey, *, limit: Optional[int] = None) -> list[dict]:
+    def load_recent_messages(
+        self,
+        key: Optional[MonitorKey] = None,
+        *,
+        limit: Optional[int] = None,
+    ) -> list[dict]:
         per_file_limit = self.ws_replay_limit if limit is None else max(0, int(limit))
         if per_file_limit <= 0:
             return []
         messages: list[tuple[int, int, dict]] = []
         order = 0
-        for path in self._current_paths_for_key(key):
-            for entry in self._read_recent_entries(path, per_file_limit):
-                if path.parent.name == "events":
-                    message = self._build_event_message(entry)
-                else:
-                    message = self._build_history_message(entry)
-                ts = self._message_ts_ms(message)
-                messages.append((ts, order, message))
-                order += 1
+        keys = [key] if key is not None else self.active_keys()
+        for current_key in keys:
+            for path in self._current_paths_for_key(current_key):
+                for entry in self._read_recent_entries(path, per_file_limit):
+                    if path.parent.name == "events":
+                        message = self._build_event_message(entry)
+                    else:
+                        message = self._build_history_message(entry)
+                    ts = self._message_ts_ms(message)
+                    messages.append((ts, order, message))
+                    order += 1
         messages.sort(key=lambda item: (item[0], item[1]))
         return [message for _, _, message in messages]
 
@@ -316,10 +433,12 @@ class MonitorRelay:
         return message
 
     async def _broadcast(self, key: MonitorKey, message: dict) -> None:
-        subscribers = list(self._subscribers.get(key, set()))
+        subscribers = list(self._subscribers.items())
         if not subscribers:
             return
-        for queue in subscribers:
+        for queue, subscription in subscribers:
+            if subscription is not None and subscription != key:
+                continue
             try:
                 queue.put_nowait(message)
             except asyncio.QueueFull:
@@ -363,16 +482,21 @@ async def _handle_health(request: web.Request) -> web.Response:
 
 async def _handle_snapshot(request: web.Request) -> web.Response:
     relay = _relay_from_app(request.app)
+    exchange = request.query.get("exchange")
+    user = request.query.get("user")
     try:
-        key = _resolve_request_key(relay, request)
-        snapshot = relay.load_snapshot(key)
+        messages = relay.load_snapshot_messages(exchange=exchange, user=user)
     except FileNotFoundError as exc:
         raise web.HTTPNotFound(text=str(exc)) from exc
     except ValueError as exc:
         raise web.HTTPBadRequest(text=str(exc)) from exc
     except LookupError as exc:
         raise web.HTTPBadRequest(text=str(exc)) from exc
-    return web.json_response(relay.build_snapshot_message(key, snapshot))
+    if not messages:
+        raise web.HTTPNotFound(text="no active monitor snapshots available")
+    if len(messages) == 1:
+        return web.json_response(messages[0])
+    return web.json_response(relay.build_snapshot_bundle(messages))
 
 
 async def _handle_dashboard(request: web.Request) -> web.Response:
@@ -396,22 +520,28 @@ async def _handle_dashboard_asset(request: web.Request) -> web.Response:
 
 async def _handle_ws(request: web.Request) -> web.StreamResponse:
     relay = _relay_from_app(request.app)
+    exchange = request.query.get("exchange")
+    user = request.query.get("user")
     try:
-        key = _resolve_request_key(relay, request)
-        snapshot = relay.load_snapshot(key)
+        keys = relay.matching_keys(exchange=exchange, user=user)
+        snapshot_messages = relay.load_snapshot_messages(exchange=exchange, user=user)
     except FileNotFoundError as exc:
         raise web.HTTPNotFound(text=str(exc)) from exc
     except ValueError as exc:
         raise web.HTTPBadRequest(text=str(exc)) from exc
     except LookupError as exc:
         raise web.HTTPBadRequest(text=str(exc)) from exc
+    if not snapshot_messages:
+        raise web.HTTPNotFound(text="no active monitor snapshots available")
 
     ws = web.WebSocketResponse(heartbeat=30.0)
     await ws.prepare(request)
-    await ws.send_json(relay.build_snapshot_message(key, snapshot))
-    for message in relay.load_recent_messages(key):
+    for message in snapshot_messages:
         await ws.send_json(message)
-    queue = relay.subscribe(key)
+    subscription = keys[0] if len(keys) == 1 else None
+    for message in relay.load_recent_messages(subscription):
+        await ws.send_json(message)
+    queue = relay.subscribe(subscription)
     try:
         while not ws.closed:
             message = await queue.get()
@@ -419,9 +549,14 @@ async def _handle_ws(request: web.Request) -> web.StreamResponse:
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logging.info("[monitor-relay] websocket closed for %s/%s: %s", key[0], key[1], exc)
+        scope = (
+            f"{subscription[0]}/{subscription[1]}"
+            if subscription is not None
+            else "all-bots"
+        )
+        logging.info("[monitor-relay] websocket closed for %s: %s", scope, exc)
     finally:
-        relay.unsubscribe(key, queue)
+        relay.unsubscribe(queue)
         await ws.close()
     return ws
 

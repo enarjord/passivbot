@@ -359,13 +359,18 @@ def test_create_forager_hard_stop_drawdown_figure_returns_plot_when_enabled(monk
     config = {
         "live": {"pnls_max_lookback_days": 30.0},
         "bot": {
-            "common": {
-                "equity_hard_stop_loss": {
-                    "enabled": True,
-                    "red_threshold": 0.1,
-                    "ema_span_minutes": 60.0,
-                    "tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                }
+            "long": {
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.1,
+                "hsl_ema_span_minutes": 60.0,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+            },
+            "short": {
+                "hsl_enabled": False,
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0,
             },
         },
     }

@@ -1,17 +1,5 @@
 {
   bot: {
-    common: {
-      equity_hard_stop_loss: {
-        enabled: true
-        red_threshold: 0.05
-        ema_span_minutes: 1.0
-        cooldown_minutes_after_red: 1.0
-        no_restart_drawdown_threshold: 0.9
-        tier_ratios: {yellow: 0.5, orange: 0.75}
-        orange_tier_mode: tp_only_with_active_entry_cancellation
-        panic_close_order_type: market
-      }
-    }
     long: {
       close_grid_markup_end: 0.01
       close_grid_markup_start: 0.005
@@ -41,6 +29,14 @@
       forager_volatility_ema_span: 0.0
       forager_volume_drop_pct: 0.0
       forager_volume_ema_span: 1.0
+      hsl_cooldown_minutes_after_red: 1.0
+      hsl_ema_span_minutes: 1.0
+      hsl_enabled: true
+      hsl_no_restart_drawdown_threshold: 0.9
+      hsl_orange_tier_mode: tp_only_with_active_entry_cancellation
+      hsl_panic_close_order_type: market
+      hsl_red_threshold: 0.05
+      hsl_tier_ratios: {yellow: 0.5, orange: 0.75}
       n_positions: 1.0
       risk_twel_enforcer_threshold: 1.0
       risk_we_excess_allowance_pct: 0.0

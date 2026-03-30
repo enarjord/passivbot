@@ -95,17 +95,20 @@
       "BTC/USDT:USDT|long": 1.0
     }
     hsl_paths: {
-      halted: true
-      no_restart_latched: false
-      cooldown_intervention_active: true
-      cooldown_repanic_reset_pending: false
+      long.halted: true
+      long.no_restart_latched: false
+      long.cooldown_intervention_active: true
+      long.cooldown_repanic_reset_pending: false
+      long.cooldown_until_ms: 1767225810000
     }
     summary_paths: {
       step_count: 5
       last.step_index: 6
+      last.open_orders: 4
     }
     log_contains: [
       "detected non-flat position during RED cooldown | policy=graceful_stop"
+      "changed long.BTC/USDT:USDT: panic -> graceful_stop"
     ]
   }
 }

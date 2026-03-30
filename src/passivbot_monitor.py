@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import Any, Iterable, Optional
 
 import numpy as np
@@ -61,28 +62,20 @@ def _monitor_emit_stop(
     return self._monitor_record_event("bot.stop", ("bot", "lifecycle", "stop"), stop_payload, ts=ts)
 
 
-def _monitor_hsl_payload(self) -> dict[str, Any]:
-    enabled = bool(self._equity_hard_stop_enabled())
-    last_metrics = getattr(self, "_equity_hard_stop_last_metrics", None)
+def _monitor_hsl_payload(self, pside: str) -> dict[str, Any]:
+    enabled = bool(self._equity_hard_stop_enabled(pside))
+    state = self._hsl_state(pside)
+    last_metrics = state.get("last_metrics") or {}
     payload = {
         "enabled": enabled,
-        "tier": (
-            str(last_metrics.get("tier", "unknown"))
-            if isinstance(last_metrics, dict)
-            else ("disabled" if not enabled else "unknown")
-        ),
-        "halted": bool(getattr(self, "_equity_hard_stop_halted", False)),
-        "no_restart_latched": bool(getattr(self, "_equity_hard_stop_no_restart_latched", False)),
-        "pending_red_since_ms": getattr(self, "_equity_hard_stop_pending_red_since_ms", None),
-        "cooldown_until_ms": getattr(self, "_equity_hard_stop_halted_until_ms", None),
-        "cooldown_intervention_active": bool(
-            getattr(self, "_equity_hard_stop_cooldown_intervention_active", False)
-        ),
-        "cooldown_repanic_reset_pending": bool(
-            getattr(self, "_equity_hard_stop_cooldown_repanic_reset_pending", False)
-        ),
+        "tier": str(last_metrics.get("tier", "disabled" if not enabled else "unknown")),
+        "halted": bool(state.get("halted", False)),
+        "no_restart_latched": bool(state.get("no_restart_latched", False)),
+        "pending_red_since_ms": state.get("pending_red_since_ms"),
+        "cooldown_until_ms": state.get("cooldown_until_ms"),
+        "cooldown_intervention_active": bool(state.get("cooldown_intervention_active", False)),
+        "cooldown_repanic_reset_pending": bool(state.get("cooldown_repanic_reset_pending", False)),
         "last_metrics": dict(last_metrics) if isinstance(last_metrics, dict) else {},
-        "last_stop_event": getattr(self, "_equity_hard_stop_last_stop_event", None),
     }
     return {k: v for k, v in payload.items() if v is not None}
 
@@ -243,6 +236,120 @@ def _monitor_recent_orders_payload(self, orders: list[dict], *, limit: int = 20)
     return payloads
 
 
+def _build_monitor_runtime_market_hints(
+    self,
+    symbols: Iterable[str],
+    last_prices: dict[str, float],
+    m1_close_emas: dict[str, dict[float, float]],
+) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for symbol in symbols:
+        hint: dict[str, Any] = {}
+        per_side: dict[str, dict[str, float]] = {}
+        last_price = last_prices.get(symbol)
+        for pside in ("long", "short"):
+            try:
+                span0 = float(self.bp(pside, "ema_span_0", symbol))
+                span1 = float(self.bp(pside, "ema_span_1", symbol))
+                entry_dist = float(self.bp(pside, "entry_initial_ema_dist", symbol))
+                unstuck_ema_dist = float(self.bp(pside, "unstuck_ema_dist", symbol))
+            except Exception:
+                continue
+            if span0 <= 0.0 or span1 <= 0.0:
+                continue
+            span2 = (span0 * span1) ** 0.5
+            emas = m1_close_emas.get(symbol, {})
+            ema0 = float(emas.get(span0, 0.0) or 0.0)
+            ema1 = float(emas.get(span1, 0.0) or 0.0)
+            ema2 = float(emas.get(span2, 0.0) or 0.0)
+            if min(ema0, ema1, ema2) <= 0.0:
+                continue
+            ema_lower = min(ema0, ema1, ema2)
+            ema_upper = max(ema0, ema1, ema2)
+            side_hint: dict[str, float] = {
+                "lower": float(ema_lower),
+                "upper": float(ema_upper),
+                "entry_trigger_price": float(
+                    ema_lower * (1.0 - entry_dist) if pside == "long" else ema_upper * (1.0 + entry_dist)
+                ),
+                "unstuck_trigger_price": float(
+                    ema_upper * (1.0 + unstuck_ema_dist)
+                    if pside == "long"
+                    else ema_lower * (1.0 - unstuck_ema_dist)
+                ),
+            }
+            if last_price is not None and float(last_price) > 0.0:
+                side_hint["last_price"] = float(last_price)
+            per_side[pside] = side_hint
+        if per_side:
+            hint["ema_bands"] = per_side
+            out[symbol] = hint
+    return out
+
+
+def _build_monitor_runtime_unstuck_hints(
+    self,
+    idx_to_symbol: dict[int, str],
+    orders: list[dict[str, Any]],
+    last_prices: dict[str, float],
+    market_hints: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {"long": {}, "short": {}}
+    for order in orders:
+        order_type_str = str(order.get("order_type", ""))
+        if "close_unstuck" not in order_type_str:
+            continue
+        symbol = idx_to_symbol.get(int(order.get("symbol_idx", -1)))
+        if symbol is None:
+            continue
+        pside = "long" if "long" in order_type_str else "short"
+        target_price = float(order.get("price", 0.0) or 0.0)
+        current_price = float(last_prices.get(symbol, 0.0) or 0.0)
+        distance_ratio = None
+        if current_price > 0.0 and target_price > 0.0:
+            distance_ratio = float(target_price / current_price - 1.0)
+        hint = {
+            "next_symbol": symbol,
+            "next_target_price": target_price,
+            "next_target_distance_ratio": distance_ratio,
+        }
+        market_hint = market_hints.get(symbol, {})
+        if isinstance(market_hint, dict):
+            ema_bands = market_hint.get("ema_bands", {})
+            if isinstance(ema_bands, dict) and isinstance(ema_bands.get(pside), dict):
+                side_ema_bands = deepcopy(ema_bands.get(pside))
+                hint["ema_bands"] = side_ema_bands
+                trigger_price = float(side_ema_bands.get("unstuck_trigger_price", 0.0) or 0.0)
+                if current_price > 0.0 and trigger_price > 0.0:
+                    hint["next_unstuck_trigger_distance_ratio"] = float(
+                        trigger_price / current_price - 1.0
+                    )
+        out[pside] = hint
+        break
+    return out
+
+
+def _update_monitor_runtime_hints(
+    self,
+    *,
+    symbols: Iterable[str],
+    last_prices: dict[str, float],
+    m1_close_emas: dict[str, dict[float, float]],
+    h1_log_range_emas: dict[str, dict[float, float]],
+    idx_to_symbol: dict[int, str],
+    orders: list[dict[str, Any]],
+) -> None:
+    market_hints = self._build_monitor_runtime_market_hints(symbols, last_prices, m1_close_emas)
+    self._monitor_runtime_market_hints = market_hints
+    self._monitor_runtime_h1_log_range_emas = deepcopy(h1_log_range_emas)
+    self._monitor_runtime_unstuck_hints = self._build_monitor_runtime_unstuck_hints(
+        idx_to_symbol,
+        orders,
+        last_prices,
+        market_hints,
+    )
+
+
 def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict[str, Any]:
     now_ms = utc_ms() if now_ms is None else int(now_ms)
     balance_raw = float(self.get_raw_balance())
@@ -338,7 +445,7 @@ def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict[str, 
                 "short": dict(getattr(self, "_runtime_forced_modes", {}).get("short", {})),
             },
         },
-        "hsl": self._monitor_hsl_payload(),
+        "hsl": {pside: self._monitor_hsl_payload(pside) for pside in ("long", "short")},
         "market": market,
         "recent": {
             "order_executions": self._monitor_recent_orders_payload(

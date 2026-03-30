@@ -31,13 +31,16 @@ from cli_utils import (
     get_cli_prog,
     help_all_requested,
 )
-from candlestick_manager import CandlestickManager, CANDLE_DTYPE
+from candlestick_manager import CandlestickManager, CANDLE_DTYPE, synthesize_1m_from_higher_tf
 from fill_events_manager import (
     FillEventsManager,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
+    compute_psize_pprice,
 )
 from monitor_publisher import MonitorPublisher
+from passivbot_exceptions import RestartBotException
+import passivbot_hsl as pb_hsl
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
 from logging_setup import configure_logging, resolve_log_level
@@ -84,6 +87,7 @@ from config_utils import (
     require_live_value,
     merge_negative_cli_values,
     normalize_hsl_cooldown_position_policy,
+    normalize_hsl_signal_mode,
 )
 from procedures import (
     load_broker_code,
@@ -118,12 +122,6 @@ PARTIAL_FILL_MERGE_MAX_DELAY_MS = 60_000
 FILL_EVENT_FETCH_OVERLAP_COUNT = 20
 FILL_EVENT_FETCH_OVERLAP_MAX_MS = 86_400_000  # 24 hours
 FILL_EVENT_FETCH_LIMIT_DEFAULT = 20
-
-
-class RestartBotException(Exception):
-    """Raised to trigger a clean bot restart without incrementing error counts."""
-
-    pass
 
 
 # Match "...0xABCD..." anywhere (case-insensitive)
@@ -750,24 +748,33 @@ class Passivbot:
         self._loss_gate_log_interval_ms = 5 * 60 * 1000  # 5 minutes
         self._orchestrator_prev_close_ema = {}
         self._orchestrator_close_ema_fallback_counts = {}
-        self.equity_hard_stop_loss = self._parse_equity_hard_stop_loss_config()
+        self.hsl = self._parse_hsl_config()
         self._runtime_forced_modes = {"long": {}, "short": {}}
-        self._equity_hard_stop_runtime = pbr.EquityHardStopRuntime()
-        self._equity_hard_stop_strategy_pnl_peak = pbr.EquityHardStopRollingPeak()
         self._equity_hard_stop_supervisor_running = False
-        self._equity_hard_stop_last_metrics = None
-        self._equity_hard_stop_last_red_progress = None
-        self._equity_hard_stop_red_flat_confirmations = 0
-        self._equity_hard_stop_pending_red_since_ms = None
-        self._equity_hard_stop_halted = False
-        self._equity_hard_stop_no_restart_latched = False
-        self._equity_hard_stop_halted_until_ms = None
-        self._equity_hard_stop_cooldown_intervention_active = False
-        self._equity_hard_stop_cooldown_repanic_reset_pending = False
-        self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
-        self._equity_hard_stop_cooldown_log_interval_ms = 15 * 60 * 1000
-        self._equity_hard_stop_pending_stop_event = None
-        self._equity_hard_stop_last_stop_event = None
+        self._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
+        self._equity_hard_stop_cooldown_log_interval_ms = 60 * 1000
+        self._equity_hard_stop = {
+            pside: {
+                "runtime": pbr.EquityHardStopRuntime(),
+                "strategy_pnl_peak": pbr.EquityHardStopRollingPeak(),
+                "halted": False,
+                "no_restart_latched": False,
+                "last_metrics": None,
+                "last_red_progress": None,
+                "red_flat_confirmations": 0,
+                "pending_red_since_ms": None,
+                "cooldown_until_ms": None,
+                "pending_stop_event": None,
+                "last_stop_event": None,
+                "last_status_log_ms": 0,
+                "last_cooldown_log_ms": 0,
+                "cooldown_intervention_active": False,
+                "cooldown_repanic_reset_pending": False,
+                "last_cooldown_intervention_log_ms": 0,
+                "cooldown_unresolved_residue": False,
+            }
+            for pside in ("long", "short")
+        }
 
     _monitor_record_event = pb_monitor._monitor_record_event
     _monitor_record_error = pb_monitor._monitor_record_error
@@ -780,6 +787,9 @@ class Passivbot:
     _monitor_handle_candlestick_persist = pb_monitor._monitor_handle_candlestick_persist
     _build_health_summary_payload = pb_monitor._build_health_summary_payload
     _monitor_recent_orders_payload = pb_monitor._monitor_recent_orders_payload
+    _build_monitor_runtime_market_hints = pb_monitor._build_monitor_runtime_market_hints
+    _build_monitor_runtime_unstuck_hints = pb_monitor._build_monitor_runtime_unstuck_hints
+    _update_monitor_runtime_hints = pb_monitor._update_monitor_runtime_hints
     _build_monitor_snapshot = pb_monitor._build_monitor_snapshot
     _monitor_flush_snapshot = pb_monitor._monitor_flush_snapshot
 
@@ -788,108 +798,6 @@ class Passivbot:
 
     def bot_value(self, pside: str, key: str):
         return require_config_value(self.config, f"bot.{pside}.{key}")
-
-    def bot_common_value(self, key: str):
-        return require_config_value(self.config, f"bot.common.{key}")
-
-    def _parse_equity_hard_stop_loss_config(self) -> dict[str, Any]:
-        """Parse and validate bot.common.equity_hard_stop_loss config."""
-        raw = self.bot_common_value("equity_hard_stop_loss")
-        if not isinstance(raw, dict):
-            raise TypeError(
-                f"bot.common.equity_hard_stop_loss must be a dict, got {type(raw).__name__}"
-            )
-
-        enabled = bool(self.bot_common_value("equity_hard_stop_loss.enabled"))
-        red_threshold = float(self.bot_common_value("equity_hard_stop_loss.red_threshold"))
-        ema_span_minutes = float(self.bot_common_value("equity_hard_stop_loss.ema_span_minutes"))
-        cooldown_minutes_after_red = float(
-            self.bot_common_value("equity_hard_stop_loss.cooldown_minutes_after_red")
-        )
-        no_restart_drawdown_threshold = float(
-            self.bot_common_value("equity_hard_stop_loss.no_restart_drawdown_threshold")
-        )
-
-        tier_ratios_raw = self.bot_common_value("equity_hard_stop_loss.tier_ratios")
-        if not isinstance(tier_ratios_raw, dict):
-            raise TypeError(
-                "bot.common.equity_hard_stop_loss.tier_ratios must be a dict, "
-                f"got {type(tier_ratios_raw).__name__}"
-            )
-        ratio_yellow = float(self.bot_common_value("equity_hard_stop_loss.tier_ratios.yellow"))
-        ratio_orange = float(self.bot_common_value("equity_hard_stop_loss.tier_ratios.orange"))
-
-        orange_tier_mode = str(self.bot_common_value("equity_hard_stop_loss.orange_tier_mode"))
-        panic_close_order_type = str(
-            self.bot_common_value("equity_hard_stop_loss.panic_close_order_type")
-        )
-
-        if enabled and red_threshold <= 0.0:
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.red_threshold must be > 0.0 when enabled"
-            )
-        if enabled and ema_span_minutes <= 0.0:
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.ema_span_minutes must be > 0.0 when enabled"
-            )
-        if cooldown_minutes_after_red < 0.0:
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.cooldown_minutes_after_red must be >= 0.0"
-            )
-        if no_restart_drawdown_threshold < red_threshold:
-            logging.info(
-                "[config] clamped bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold "
-                "%.6f -> %.6f to match red_threshold",
-                no_restart_drawdown_threshold,
-                red_threshold,
-            )
-            no_restart_drawdown_threshold = red_threshold
-        if not (red_threshold <= no_restart_drawdown_threshold <= 1.0):
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold must satisfy "
-                "red_threshold <= no_restart_drawdown_threshold <= 1.0"
-            )
-        if not (0.0 < ratio_yellow < ratio_orange < 1.0):
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.tier_ratios must satisfy 0 < yellow < orange < 1"
-            )
-        if orange_tier_mode not in {"graceful_stop", "tp_only_with_active_entry_cancellation"}:
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.orange_tier_mode must be one of "
-                "{graceful_stop, tp_only_with_active_entry_cancellation}"
-            )
-        if panic_close_order_type not in {"market", "limit"}:
-            raise ValueError(
-                "bot.common.equity_hard_stop_loss.panic_close_order_type must be one of "
-                "{market, limit}"
-            )
-
-        out = {
-            "enabled": enabled,
-            "red_threshold": red_threshold,
-            "ema_span_minutes": ema_span_minutes,
-            "cooldown_minutes_after_red": cooldown_minutes_after_red,
-            "no_restart_drawdown_threshold": no_restart_drawdown_threshold,
-            "tier_ratios": {"yellow": ratio_yellow, "orange": ratio_orange},
-            "orange_tier_mode": orange_tier_mode,
-            "panic_close_order_type": panic_close_order_type,
-        }
-        if enabled:
-            logging.info(
-                "[risk] equity hard stop enabled | red_threshold=%.6f ema_span_minutes=%.3f "
-                "cooldown_minutes_after_red=%.3f "
-                "no_restart_drawdown_threshold=%.6f yellow_ratio=%.3f orange_ratio=%.3f "
-                "orange_mode=%s panic_close=%s",
-                red_threshold,
-                ema_span_minutes,
-                cooldown_minutes_after_red,
-                no_restart_drawdown_threshold,
-                ratio_yellow,
-                ratio_orange,
-                orange_tier_mode,
-                panic_close_order_type,
-            )
-        return out
 
     def _equity_hard_stop_enabled(self) -> bool:
         return bool(self.equity_hard_stop_loss["enabled"])
@@ -1754,6 +1662,62 @@ class Passivbot:
                         continue
                     if current_mode in ("normal", "graceful_stop"):
                         self.PB_modes[pside][symbol] = "tp_only_with_active_entry_cancellation"
+
+    _hsl_psides = pb_hsl._hsl_psides
+    _hsl_state = pb_hsl._hsl_state
+    _parse_hsl_config = pb_hsl._parse_hsl_config
+    _equity_hard_stop_enabled = pb_hsl._equity_hard_stop_enabled
+    _equity_hard_stop_signal_mode = pb_hsl._equity_hard_stop_signal_mode
+    _equity_hard_stop_cooldown_position_policy = pb_hsl._equity_hard_stop_cooldown_position_policy
+    _equity_hard_stop_halted_mode = pb_hsl._equity_hard_stop_halted_mode
+    _equity_hard_stop_panic_close_order_type = pb_hsl._equity_hard_stop_panic_close_order_type
+    _equity_hard_stop_signal_values = pb_hsl._equity_hard_stop_signal_values
+    _equity_hard_stop_latch_path = pb_hsl._equity_hard_stop_latch_path
+    _equity_hard_stop_write_latch = pb_hsl._equity_hard_stop_write_latch
+    _equity_hard_stop_remove_latch_file = pb_hsl._equity_hard_stop_remove_latch_file
+    _equity_hard_stop_reset_state = pb_hsl._equity_hard_stop_reset_state
+    _equity_hard_stop_runtime_initialized = pb_hsl._equity_hard_stop_runtime_initialized
+    _equity_hard_stop_runtime_red_latched = pb_hsl._equity_hard_stop_runtime_red_latched
+    _equity_hard_stop_runtime_tier = pb_hsl._equity_hard_stop_runtime_tier
+    _equity_hard_stop_fill_pside = staticmethod(pb_hsl._equity_hard_stop_fill_pside)
+    _calc_upnl_sum_strict = pb_hsl._calc_upnl_sum_strict
+    _equity_hard_stop_fee_cost = staticmethod(pb_hsl._equity_hard_stop_fee_cost)
+    _get_exchange_fee_rates = pb_hsl._get_exchange_fee_rates
+    _orchestrator_exchange_params = pb_hsl._orchestrator_exchange_params
+    _equity_hard_stop_realized_pnl_now = pb_hsl._equity_hard_stop_realized_pnl_now
+    _equity_hard_stop_lookback_ms = pb_hsl._equity_hard_stop_lookback_ms
+    _equity_hard_stop_apply_sample = pb_hsl._equity_hard_stop_apply_sample
+    _equity_hard_stop_log_transition = pb_hsl._equity_hard_stop_log_transition
+    _equity_hard_stop_format_remaining_time = staticmethod(
+        pb_hsl._equity_hard_stop_format_remaining_time
+    )
+    _equity_hard_stop_build_latch_payload = pb_hsl._equity_hard_stop_build_latch_payload
+    _equity_hard_stop_compute_stop_event = pb_hsl._equity_hard_stop_compute_stop_event
+    _equity_hard_stop_infer_replay_contract = pb_hsl._equity_hard_stop_infer_replay_contract
+    _equity_hard_stop_log_cooldown_status = pb_hsl._equity_hard_stop_log_cooldown_status
+    _equity_hard_stop_position_symbols = pb_hsl._equity_hard_stop_position_symbols
+    _equity_hard_stop_refresh_cooldown_after_repanic = (
+        pb_hsl._equity_hard_stop_refresh_cooldown_after_repanic
+    )
+    _equity_hard_stop_handle_position_during_cooldown = (
+        pb_hsl._equity_hard_stop_handle_position_during_cooldown
+    )
+    _equity_hard_stop_reset_after_restart = pb_hsl._equity_hard_stop_reset_after_restart
+    _equity_hard_stop_replay_from_boundary = pb_hsl._equity_hard_stop_replay_from_boundary
+    _equity_hard_stop_refresh_halted_runtime_forced_modes = (
+        pb_hsl._equity_hard_stop_refresh_halted_runtime_forced_modes
+    )
+    _equity_hard_stop_initialize_from_history = pb_hsl._equity_hard_stop_initialize_from_history
+    _equity_hard_stop_log_status = pb_hsl._equity_hard_stop_log_status
+    _equity_hard_stop_check = pb_hsl._equity_hard_stop_check
+    _equity_hard_stop_set_red_runtime_forced_modes = pb_hsl._equity_hard_stop_set_red_runtime_forced_modes
+    _equity_hard_stop_clear_runtime_forced_modes = pb_hsl._equity_hard_stop_clear_runtime_forced_modes
+    _equity_hard_stop_count_open_positions = pb_hsl._equity_hard_stop_count_open_positions
+    _equity_hard_stop_count_blocking_open_orders = pb_hsl._equity_hard_stop_count_blocking_open_orders
+    _equity_hard_stop_log_red_progress = pb_hsl._equity_hard_stop_log_red_progress
+    _equity_hard_stop_finalize_red_stop = pb_hsl._equity_hard_stop_finalize_red_stop
+    _equity_hard_stop_run_red_supervisor = pb_hsl._equity_hard_stop_run_red_supervisor
+    _apply_equity_hard_stop_orange_overlay = pb_hsl._apply_equity_hard_stop_orange_overlay
 
     def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
         """Hook: exchange-specific filtering for approved symbols used for new entries."""
@@ -3815,94 +3779,14 @@ class Passivbot:
 
     async def execution_cycle(self):
         """Prepare bot state before talking to the exchange in an execution loop."""
-        # called before every execution to exchange
-        # assumes positions, open orders are up to date
-        # determine coins with position and open orders
-        # determine eligible/ineligible coins
-        # determine approved/ignored coins
-        #   from external ignored/approved coins files
-        #   from coin age
-        #   from effective min cost (only if has updated price info)
-        # determine and set special t,p,m modes and forced modes
-        # determine ideal coins from log range and volume
-        # determine coins with pos for normal or gs modes
-        # determine coins from ideal coins for normal modes
-
         await self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
         self.set_wallet_exposure_limits()
+        if any(self.is_forager_mode(pside) for pside in ("long", "short")):
+            await self.update_first_timestamps()
         self._assert_supported_live_state()
-        previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, "PB_modes") else None
-        self.PB_modes = {"long": {}, "short": {}}
-        # Compute a shared forager fetch budget once per cycle and split it fairly by side.
-        # This avoids deterministic long->short starvation when budget is tight.
-        side_fetch_budgets: Dict[str, int] = {}
-        max_calls = get_optional_live_value(self.config, "max_ohlcv_fetches_per_minute", 0)
-        try:
-            max_calls = int(max_calls) if max_calls is not None else 0
-        except Exception:
-            max_calls = 0
-        if max_calls > 0:
-            forager_sides = [pside for pside in ("long", "short") if self.is_forager_mode(pside)]
-            if forager_sides:
-                total_budget = self._forager_refresh_budget(max_calls)
-                side_fetch_budgets = self._split_forager_budget_by_side(total_budget, forager_sides)
-        for pside, other_pside in [("long", "short"), ("short", "long")]:
-            if self.is_forager_mode(pside):
-                await self.update_first_timestamps()
-            for symbol in self.coin_overrides:
-                if flag := self.get_forced_PB_mode(pside, symbol):
-                    self.PB_modes[pside][symbol] = flag
-            ideal_coins = await self.get_filtered_coins(
-                pside,
-                max_network_fetches=(
-                    side_fetch_budgets[pside] if pside in side_fetch_budgets else None
-                ),
-            )
-            slots_filled = {
-                k for k, v in self.PB_modes[pside].items() if v in ["normal", "graceful_stop"]
-            }
-            max_n_positions = self.get_max_n_positions(pside)
-            symbols_with_pos = self.get_symbols_with_pos(pside)
-            for symbol in symbols_with_pos:
-                if symbol in self.PB_modes[pside]:
-                    continue
-                elif forced_mode := self.get_forced_PB_mode(pside, symbol):
-                    self.PB_modes[pside][symbol] = forced_mode
-                else:
-                    if symbol in self.ineligible_symbols:
-                        if self.ineligible_symbols[symbol] == "not active":
-                            self.PB_modes[pside][symbol] = "tp_only"
-                        else:
-                            self.PB_modes[pside][symbol] = "manual"
-                    elif len(symbols_with_pos) > max_n_positions:
-                        self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
-                    elif symbol in ideal_coins:
-                        self.PB_modes[pside][symbol] = "normal"
-                    else:
-                        self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
-                    slots_filled.add(symbol)
-            for symbol in ideal_coins:
-                if len(slots_filled) >= max_n_positions:
-                    break
-                if symbol in self.PB_modes[pside]:
-                    continue
-                if not self.hedge_mode and self.has_position(other_pside, symbol):
-                    continue
-                self.PB_modes[pside][symbol] = "normal"
-                slots_filled.add(symbol)
-            for symbol in self.open_orders:
-                if symbol in self.PB_modes[pside]:
-                    continue
-                self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
-        self._apply_equity_hard_stop_orange_overlay()
-        self.active_symbols = sorted(
-            {s for subdict in self.PB_modes.values() for s in subdict.keys()}
-        )
+        self.active_symbols = self._build_live_symbol_universe()
         for symbol in self.active_symbols:
-            for pside in self.PB_modes:
-                if symbol not in self.PB_modes[pside]:
-                    self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
             if symbol not in self.positions:
                 self.positions[symbol] = {
                     "long": {"size": 0.0, "price": 0.0},
@@ -3912,8 +3796,6 @@ class Passivbot:
                 self.open_orders[symbol] = []
         self.set_wallet_exposure_limits()
         await self.update_trailing_data()
-        res = log_dict_changes(previous_PB_modes, self.PB_modes)
-        self._log_mode_changes(res, previous_PB_modes)
 
     def _log_mode_changes(self, res: dict, previous_PB_modes: dict) -> None:
         """Log mode changes with DEBUG for all details and INFO for user-relevant events.
@@ -4287,12 +4169,16 @@ class Passivbot:
 
     def get_forced_PB_mode(self, pside, symbol=None):
         """Return an explicitly forced mode for the side or symbol, if configured."""
+        if self._equity_hard_stop_enabled(pside):
+            state = self._hsl_state(pside)
+            if self._equity_hard_stop_runtime_red_latched(pside) and not state["halted"]:
+                return "panic"
+            if state["halted"]:
+                if symbol is None:
+                    return "graceful_stop"
+                return self._equity_hard_stop_halted_mode(pside, symbol)
         if symbol is not None:
-            runtime_forced = (
-                getattr(self, "_runtime_forced_modes", {})
-                .get(pside, {})
-                .get(symbol)
-            )
+            runtime_forced = getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
             if runtime_forced:
                 return str(runtime_forced)
         mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
@@ -4781,7 +4667,6 @@ class Passivbot:
         self, fill_events: Optional[List[dict]] = None, current_balance: Optional[float] = None
     ) -> Dict[str, Any]:
         """Replay canonical fill events to produce historical balance/equity curves."""
-
         await self.init_pnls()
 
         def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -4898,14 +4783,39 @@ class Passivbot:
                 )
             return sorted(out, key=lambda x: x["timestamp"])
 
+        def _current_position_state() -> Dict[Tuple[str, str], Tuple[float, float]]:
+            out: Dict[Tuple[str, str], Tuple[float, float]] = {}
+            for symbol, slots in (self.positions or {}).items():
+                norm_symbol = _normalize_symbol(symbol)
+                if not norm_symbol or not isinstance(slots, dict):
+                    continue
+                for pside in ("long", "short"):
+                    pos = slots.get(pside, {})
+                    if not isinstance(pos, dict):
+                        continue
+                    size = abs(_safe_float(pos.get("size"), 0.0))
+                    price = _safe_float(pos.get("price"), 0.0) if size > 1e-12 else 0.0
+                    out[(norm_symbol, pside)] = (size, price)
+            return out
+
         if fill_events is None:
-            # Use FillEventsManager events converted to dict format
             if self._pnls_manager:
                 fill_events = [ev.to_dict() for ev in self._pnls_manager.get_events()]
             else:
                 fill_events = []
 
         events = _extract_events(fill_events)
+        current_position_state = _current_position_state()
+        if events:
+            try:
+                compute_psize_pprice(
+                    events,
+                    final_state=current_position_state,
+                    log_discrepancies=True,
+                    log_prefix=f"{self.exchange}:{self.user} balance-equity replay",
+                )
+            except TypeError:
+                compute_psize_pprice(events)
         if not events:
             ts_now = self.get_exchange_time()
             balance_now = (
@@ -4917,14 +4827,26 @@ class Passivbot:
                 "equity": balance_now,
                 "unrealized_pnl": 0.0,
                 "realized_pnl": 0.0,
+                "unrealized_pnl_long": 0.0,
+                "unrealized_pnl_short": 0.0,
+                "realized_pnl_long": 0.0,
+                "realized_pnl_short": 0.0,
                 "is_flat": True,
+                "is_flat_long": True,
+                "is_flat_short": True,
                 "panic_fill_count": 0,
             }
             return {
                 "timeline": [point],
+                "panic_flatten_events": [],
+                "fill_events": [],
                 "balances": [{"timestamp": point["timestamp"], "balance": balance_now}],
                 "equities": [
-                    {"timestamp": point["timestamp"], "equity": balance_now, "unrealized_pnl": 0.0}
+                    {
+                        "timestamp": point["timestamp"],
+                        "equity": balance_now,
+                        "unrealized_pnl": 0.0,
+                    }
                 ],
                 "metadata": {
                     "lookback_days": float(self.live_value("pnls_max_lookback_days")),
@@ -4958,6 +4880,7 @@ class Passivbot:
 
         symbols = {evt["symbol"] for evt in events if evt["symbol"]}
         price_lookup: Dict[str, Dict[int, float]] = {}
+        approximate_price_sources: Dict[str, Dict[str, int]] = {}
         if symbols and getattr(self, "cm", None) is not None:
             tasks = {
                 sym: asyncio.create_task(
@@ -4974,13 +4897,82 @@ class Passivbot:
                 price_lookup[sym] = {
                     int(row["ts"]): float(row["c"]) for row in arr if float(row["c"]) > 0.0
                 }
+            is_hyperliquid = str(getattr(self, "exchange", "")).lower() == "hyperliquid"
+            if is_hyperliquid:
+                lookback_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
+                tf_plan: list[tuple[str, int]] = []
+                if lookback_minutes > 5000:
+                    tf_plan.append(("5m", 5))
+                if lookback_minutes > 5000 * 5:
+                    tf_plan.append(("15m", 15))
+                for timeframe, tf_minutes in tf_plan:
+                    tf_tasks = {
+                        sym: asyncio.create_task(
+                            self.cm.get_candles(
+                                sym,
+                                start_ts=start_minute,
+                                end_ts=end_minute,
+                                strict=False,
+                                timeframe=timeframe,
+                            )
+                        )
+                        for sym in symbols
+                    }
+                    for sym, task in tf_tasks.items():
+                        try:
+                            arr = await task
+                        except Exception as exc:
+                            logging.error(
+                                "error fetching %s candles for %s during equity history replay: %s",
+                                timeframe,
+                                sym,
+                                exc,
+                            )
+                            continue
+                        if arr is None or arr.size == 0:
+                            continue
+                        synth = synthesize_1m_from_higher_tf(arr, tf_minutes)
+                        if synth.size == 0:
+                            continue
+                        added = 0
+                        lookup = price_lookup.setdefault(sym, {})
+                        for row in synth:
+                            ts = int(row["ts"])
+                            close = float(row["c"])
+                            if ts < start_minute or ts > end_minute:
+                                continue
+                            if ts in lookup:
+                                continue
+                            lookup[ts] = float(close)
+                            added += 1
+                        if added > 0:
+                            approximate_price_sources.setdefault(sym, {})[timeframe] = added
         else:
             price_lookup = {sym: {} for sym in symbols}
 
         positions: Dict[str, Dict[str, Dict[str, float]]] = {}
         active_symbols: set[str] = set()
         timeline: List[Dict[str, float]] = []
+        panic_flatten_events: List[Dict[str, Any]] = []
         missing_price_symbols: set[str] = set()
+        realized_pnl_pside_running = {"long": 0.0, "short": 0.0}
+        actual_pside_flat = {
+            pside: not any(
+                size > 1e-12
+                for (sym, ps), (size, _price) in current_position_state.items()
+                if ps == pside
+            )
+            for pside in ("long", "short")
+        }
+        last_event_ts_by_pside = {
+            pside: max((evt["timestamp"] for evt in events if evt["pside"] == pside), default=None)
+            for pside in ("long", "short")
+        }
+
+        def _pside_is_flat(pside: str) -> bool:
+            return not any(
+                positions.get(sym, {}).get(pside, {}).get("size", 0.0) > 1e-12 for sym in positions
+            )
 
         def _apply_event(evt: dict):
             slot = _ensure_slot(positions, evt["symbol"])[evt["pside"]]
@@ -4994,7 +4986,10 @@ class Passivbot:
                 elif old_size <= 0.0:
                     slot["size"], slot["price"] = new_size, price
                 else:
-                    slot["price"] = max((old_size * slot["price"] + qty * price) / new_size, 0.0)
+                    slot["price"] = max(
+                        (old_size * slot["price"] + qty * price) / new_size,
+                        0.0,
+                    )
                     slot["size"] = new_size
             else:
                 slot["size"] = max(slot["size"] - qty, 0.0)
@@ -5003,7 +4998,9 @@ class Passivbot:
             has_pos = slot["size"] > 1e-12
             if has_pos:
                 active_symbols.add(evt["symbol"])
-            elif not any(positions[evt["symbol"]][ps]["size"] > 1e-12 for ps in ("long", "short")):
+            elif not any(
+                positions[evt["symbol"]][ps]["size"] > 1e-12 for ps in ("long", "short")
+            ):
                 active_symbols.discard(evt["symbol"])
 
         balance = baseline_balance
@@ -5017,11 +5014,42 @@ class Passivbot:
             while event_idx < len(events) and events[event_idx]["timestamp"] < boundary:
                 evt = events[event_idx]
                 _apply_event(evt)
-                balance += evt["pnl"] + evt.get("fee", 0.0)
+                realized_delta = evt["pnl"] + evt.get("fee", 0.0)
+                balance += realized_delta
+                realized_pnl_pside_running[evt["pside"]] += realized_delta
                 if "panic" in str(evt.get("pb_order_type") or ""):
                     panic_fill_count += 1
+                    after_psize = _safe_float(evt.get("psize"), math.nan)
+                    authoritative_flat_override = (
+                        actual_pside_flat.get(evt["pside"], False)
+                        and last_event_ts_by_pside.get(evt["pside"]) == evt["timestamp"]
+                    )
+                    if authoritative_flat_override and (
+                        not math.isfinite(after_psize) or after_psize > 1e-12
+                    ):
+                        logging.warning(
+                            "[risk] balance-equity replay trusting current flat %s state over residual panic replay size | timestamp=%s replay_after_psize=%s symbol=%s",
+                            evt["pside"],
+                            evt["timestamp"],
+                            f"{after_psize:.12f}" if math.isfinite(after_psize) else "nan",
+                            evt["symbol"],
+                        )
+                    if (
+                        (math.isfinite(after_psize) and after_psize <= 1e-12)
+                        or authoritative_flat_override
+                        or _pside_is_flat(evt["pside"])
+                    ):
+                        panic_flatten_events.append(
+                            {
+                                "timestamp": int(evt["timestamp"]),
+                                "minute_timestamp": int(minute),
+                                "pside": str(evt["pside"]),
+                                "symbol": str(evt["symbol"]),
+                            }
+                        )
                 event_idx += 1
             upnl = 0.0
+            upnl_by_pside = {"long": 0.0, "short": 0.0}
             for symbol in list(active_symbols):
                 price = price_lookup.get(symbol, {}).get(minute)
                 if price is None:
@@ -5042,7 +5070,9 @@ class Passivbot:
                     if avg_price <= 0.0:
                         continue
                     c_mult = self.c_mults.get(symbol, 1.0)
-                    upnl += calc_pnl(pside, avg_price, price, size, self.inverse, c_mult)
+                    pside_upnl = calc_pnl(pside, avg_price, price, size, self.inverse, c_mult)
+                    upnl += pside_upnl
+                    upnl_by_pside[pside] += pside_upnl
             if minute >= record_start_minute:
                 timeline.append(
                     {
@@ -5051,7 +5081,19 @@ class Passivbot:
                         "equity": balance + upnl,
                         "unrealized_pnl": upnl,
                         "realized_pnl": balance - baseline_balance,
+                        "unrealized_pnl_long": upnl_by_pside["long"],
+                        "unrealized_pnl_short": upnl_by_pside["short"],
+                        "realized_pnl_long": realized_pnl_pside_running["long"],
+                        "realized_pnl_short": realized_pnl_pside_running["short"],
                         "is_flat": len(active_symbols) == 0,
+                        "is_flat_long": not any(
+                            positions.get(sym, {}).get("long", {}).get("size", 0.0) > 1e-12
+                            for sym in positions
+                        ),
+                        "is_flat_short": not any(
+                            positions.get(sym, {}).get("short", {}).get("size", 0.0) > 1e-12
+                            for sym in positions
+                        ),
                         "panic_fill_count": int(panic_fill_count),
                     }
                 )
@@ -5064,6 +5106,13 @@ class Passivbot:
                 "equity": balance_now,
                 "unrealized_pnl": 0.0,
                 "realized_pnl": 0.0,
+                "unrealized_pnl_long": 0.0,
+                "unrealized_pnl_short": 0.0,
+                "realized_pnl_long": 0.0,
+                "realized_pnl_short": 0.0,
+                "is_flat": True,
+                "is_flat_long": True,
+                "is_flat_short": True,
             }
             timeline = [point]
 
@@ -5082,9 +5131,12 @@ class Passivbot:
             "events_used": len(events),
             "symbols_covered": sorted(symbols),
             "missing_price_symbols": sorted(missing_price_symbols),
+            "approximate_price_sources": approximate_price_sources,
         }
         return {
             "timeline": timeline,
+            "panic_flatten_events": panic_flatten_events,
+            "fill_events": events,
             "balances": balances,
             "equities": equities,
             "metadata": metadata,
@@ -5485,9 +5537,9 @@ class Passivbot:
             "entry_trailing_threshold_we_weight",
             "entry_trailing_threshold_volatility_weight",
             "filter_volatility_ema_span",
-            "filter_volatility_drop_pct",
             "filter_volume_ema_span",
-            "filter_volume_drop_pct",
+            "forager_volume_drop_pct",
+            "forager_score_weights",
             "ema_span_0",
             "ema_span_1",
             "n_positions",
@@ -5521,6 +5573,25 @@ class Passivbot:
                 out[key] = int(round(val or 0.0))
             else:
                 out[key] = float(val or 0.0)
+        out.update(
+            {
+                "hsl_enabled": bool(self.bot_value(pside, "hsl_enabled")),
+                "hsl_red_threshold": float(self.bot_value(pside, "hsl_red_threshold")),
+                "hsl_ema_span_minutes": float(self.bot_value(pside, "hsl_ema_span_minutes")),
+                "hsl_cooldown_minutes_after_red": float(
+                    self.bot_value(pside, "hsl_cooldown_minutes_after_red")
+                ),
+                "hsl_no_restart_drawdown_threshold": float(
+                    self.bot_value(pside, "hsl_no_restart_drawdown_threshold")
+                ),
+                "hsl_tier_ratio_yellow": float(self.bot_value(pside, "hsl_tier_ratios.yellow")),
+                "hsl_tier_ratio_orange": float(self.bot_value(pside, "hsl_tier_ratios.orange")),
+                "hsl_orange_tier_mode": str(self.bot_value(pside, "hsl_orange_tier_mode")),
+                "hsl_panic_close_order_type": str(
+                    self.bot_value(pside, "hsl_panic_close_order_type")
+                ),
+            }
+        )
         return out
 
     def _pb_mode_to_orchestrator_mode(self, mode: str) -> str:
@@ -5530,6 +5601,147 @@ class Passivbot:
         if m in {"normal", "panic", "graceful_stop", "tp_only", "manual"}:
             return m
         return "manual"
+
+    def _pside_blocks_new_entries(self, pside: str) -> bool:
+        forced_mode = self.get_forced_PB_mode(pside)
+        return forced_mode in {
+            "panic",
+            "graceful_stop",
+            "tp_only",
+            "tp_only_with_active_entry_cancellation",
+            "manual",
+        }
+
+    def _build_live_symbol_universe(self) -> list[str]:
+        symbols: set[str] = set()
+        symbols |= set(getattr(self, "positions", {}))
+        symbols |= set(getattr(self, "open_orders", {}))
+        symbols |= set(getattr(self, "coin_overrides", {}))
+        for pside in ("long", "short"):
+            if self._pside_blocks_new_entries(pside):
+                continue
+            approved = self.approved_coins_minus_ignored_coins.get(pside, set())
+            for symbol in approved:
+                if self.is_approved(pside, symbol):
+                    symbols.add(symbol)
+        return sorted(symbols)
+
+    def _mode_override_to_orchestrator_mode(self, mode: Optional[str]) -> Optional[str]:
+        if mode is None:
+            return None
+        m = str(mode).strip().lower()
+        if m == "tp_only_with_active_entry_cancellation":
+            return "tp_only"
+        if m in {"normal", "panic", "graceful_stop", "tp_only", "manual"}:
+            return m
+        return "manual"
+
+    def _python_mode_from_orchestrator_state(
+        self,
+        pside: str,
+        symbol: str,
+        side_state: dict,
+        explicit_override: Optional[str],
+    ) -> str:
+        if explicit_override:
+            return str(explicit_override)
+        if bool(side_state.get("active", False)):
+            return "normal"
+        return self.PB_mode_stop[pside]
+
+    def _apply_orchestrator_symbol_states(
+        self,
+        diagnostics: dict,
+        idx_to_symbol: dict[int, str],
+        explicit_overrides: dict[str, dict[str, Optional[str]]],
+    ) -> None:
+        previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, "PB_modes") else None
+        symbol_states = diagnostics.get("symbol_states", []) if isinstance(diagnostics, dict) else []
+        if not symbol_states:
+            return
+        pb_modes = {"long": {}, "short": {}}
+        for row in symbol_states:
+            if not isinstance(row, dict):
+                continue
+            symbol = idx_to_symbol.get(int(row.get("symbol_idx", -1)))
+            if symbol is None:
+                continue
+            for pside in ("long", "short"):
+                side_state = row.get(pside, {})
+                explicit_override = explicit_overrides.get(pside, {}).get(symbol)
+                pb_modes[pside][symbol] = self._python_mode_from_orchestrator_state(
+                    pside,
+                    symbol,
+                    side_state if isinstance(side_state, dict) else {},
+                    explicit_override,
+                )
+
+        for symbol in set(self.positions) | set(self.open_orders) | set(pb_modes["long"]) | set(pb_modes["short"]):
+            for pside in ("long", "short"):
+                if symbol not in pb_modes[pside]:
+                    explicit_override = explicit_overrides.get(pside, {}).get(symbol)
+                    if explicit_override:
+                        pb_modes[pside][symbol] = str(explicit_override)
+                    else:
+                        pb_modes[pside][symbol] = self.PB_mode_stop[pside]
+
+        self.PB_modes = pb_modes
+        self.active_symbols = sorted(set(pb_modes["long"]) | set(pb_modes["short"]) | set(self.open_orders))
+        res = log_dict_changes(previous_PB_modes, self.PB_modes)
+        self._log_mode_changes(res, previous_PB_modes)
+
+    def _orchestrator_mode_override(self, pside: str, symbol: str) -> Optional[str]:
+        if self._equity_hard_stop_enabled(pside):
+            state = self._hsl_state(pside)
+            if self._equity_hard_stop_runtime_red_latched(pside) and not state["halted"]:
+                return "panic"
+            if state["halted"]:
+                return self._equity_hard_stop_halted_mode(pside, symbol)
+            if self._equity_hard_stop_runtime_tier(pside) == "orange":
+                orange_mode = str(self.hsl[pside]["orange_tier_mode"])
+                if orange_mode == "graceful_stop":
+                    return "graceful_stop"
+                if orange_mode == "tp_only_with_active_entry_cancellation":
+                    size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
+                    if size != 0.0:
+                        return "tp_only_with_active_entry_cancellation"
+
+        runtime_forced = getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
+        if runtime_forced:
+            return str(runtime_forced)
+
+        forced_mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
+        if forced_mode:
+            return expand_PB_mode(forced_mode)
+        if not self.markets_dict.get(symbol, {}).get("active", True):
+            return "tp_only"
+        ineligible_reason = getattr(self, "ineligible_symbols", {}).get(symbol)
+        if ineligible_reason is not None:
+            return "tp_only" if ineligible_reason == "not active" else "manual"
+        return None
+
+    def _build_orchestrator_mode_overrides(
+        self, symbols: Iterable[str]
+    ) -> dict[str, dict[str, Optional[str]]]:
+        overrides: dict[str, dict[str, Optional[str]]] = {"long": {}, "short": {}}
+        for pside in ("long", "short"):
+            for symbol in symbols:
+                overrides[pside][symbol] = self._orchestrator_mode_override(pside, symbol)
+        return overrides
+
+    def _build_orchestrator_mode_overrides_fallback(
+        self, symbols: Iterable[str]
+    ) -> dict[str, dict[str, Optional[str]]]:
+        overrides: dict[str, dict[str, Optional[str]]] = {"long": {}, "short": {}}
+        pb_modes = getattr(self, "PB_modes", {})
+        for pside in ("long", "short"):
+            pside_modes = pb_modes.get(pside, {}) if isinstance(pb_modes, dict) else {}
+            for symbol in symbols:
+                mode = pside_modes.get(symbol)
+                overrides[pside][symbol] = (
+                    Passivbot._pb_mode_to_orchestrator_mode(self, mode) if mode else None
+                )
+        return overrides
 
     def _calc_unstuck_allowances_live(self, allow_new_unstuck: bool) -> dict[str, float]:
         """Calculate unstuck allowances using FillEventsManager."""
@@ -5549,6 +5761,10 @@ class Passivbot:
         unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
         realized_pnl_cumsum = snapshot.get("realized_pnl_cumsum", {"max": 0.0, "last": 0.0})
         max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
+        if hasattr(self, "_build_orchestrator_mode_overrides"):
+            mode_overrides = self._build_orchestrator_mode_overrides(symbols)
+        else:
+            mode_overrides = Passivbot._build_orchestrator_mode_overrides_fallback(self, symbols)
 
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
@@ -5567,7 +5783,11 @@ class Passivbot:
                     self.live_value("market_order_near_touch_threshold")
                 ),
                 "panic_close_market": bool(
-                    str(self.equity_hard_stop_loss["panic_close_order_type"]) == "market"
+                    any(
+                        Passivbot._equity_hard_stop_panic_close_order_type(self, pside) == "market"
+                        for pside in ("long", "short")
+                        if Passivbot._equity_hard_stop_enabled(self, pside)
+                    )
                 ),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
@@ -5604,8 +5824,8 @@ class Passivbot:
                 )
 
             def side_input(pside: str) -> dict:
-                mode = self._pb_mode_to_orchestrator_mode(
-                    self.PB_modes.get(pside, {}).get(symbol, "manual")
+                mode = Passivbot._mode_override_to_orchestrator_mode(
+                    self, mode_overrides[pside].get(symbol)
                 )
                 pos = self.positions.get(symbol, {}).get(pside, {"size": 0.0, "price": 0.0})
                 trailing = self.trailing_prices.get(symbol, {}).get(pside)
@@ -5679,6 +5899,12 @@ class Passivbot:
             raise
         out = json.loads(out_json)
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
+        if hasattr(self, "_apply_orchestrator_symbol_states"):
+            self._apply_orchestrator_symbol_states(
+                out.get("diagnostics", {}),
+                idx_to_symbol,
+                mode_overrides,
+            )
         orders = out.get("orders", [])
 
         ideal_orders: dict[str, list] = {}
@@ -5759,18 +5985,13 @@ class Passivbot:
         - h1_log_range_emas[symbol][span] = ema_log_range (1h)
         - volumes_long[symbol], log_ranges_long[symbol] (for convenience)
         """
-        # Determine which symbols/psides need full EMA context.
+        # Gather full EMA context for the live symbol universe.
+        # Python should provide the market-state bundle; Rust decides which branches use it.
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
 
         for pside in ["long", "short"]:
             for symbol in symbols:
-                mode = self._pb_mode_to_orchestrator_mode(modes.get(pside, {}).get(symbol, "manual"))
-                has_pos = self.has_position(pside, symbol)
-                if mode == "panic":
-                    continue
-                if mode == "manual" and not has_pos:
-                    continue
                 span0 = float(self.bp(pside, "ema_span_0", symbol))
                 span1 = float(self.bp(pside, "ema_span_1", symbol))
                 span2 = float((span0 * span1) ** 0.5) if span0 > 0.0 and span1 > 0.0 else 0.0
@@ -5996,10 +6217,10 @@ class Passivbot:
 
     async def calc_ideal_orders_orchestrator(self, *, return_snapshot: bool = False):
         """Compute desired orders using Rust orchestrator (JSON API)."""
-        # Use the same symbol universe as legacy live path (pre-selected in execution_cycle).
-        symbols = sorted(set(getattr(self, "active_symbols", []) or []))
+        symbols = sorted(set(getattr(self, "active_symbols", []) or self._build_live_symbol_universe()))
         if not symbols:
             return ({}, None) if return_snapshot else {}
+        mode_overrides = self._build_orchestrator_mode_overrides(symbols)
 
         # Get latest prices: prefer bulk allMids (1 API call for all symbols)
         # over per-symbol get_current_close (N API calls). Falls back to CM if unavailable.
@@ -6060,7 +6281,7 @@ class Passivbot:
             h1_log_range_emas,
             _volumes_long,
             _log_ranges_long,
-        ) = await self._load_orchestrator_ema_bundle(symbols, self.PB_modes)
+        ) = await self._load_orchestrator_ema_bundle(symbols, mode_overrides)
 
         unstuck_allowances = self._calc_unstuck_allowances_live(
             allow_new_unstuck=not self.has_open_unstuck_order()
@@ -6085,7 +6306,11 @@ class Passivbot:
                     self.live_value("market_order_near_touch_threshold")
                 ),
                 "panic_close_market": bool(
-                    str(self.equity_hard_stop_loss["panic_close_order_type"]) == "market"
+                    any(
+                        Passivbot._equity_hard_stop_panic_close_order_type(self, pside) == "market"
+                        for pside in ("long", "short")
+                        if Passivbot._equity_hard_stop_enabled(self, pside)
+                    )
                 ),
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
@@ -6120,9 +6345,7 @@ class Passivbot:
                 )
 
             def side_input(pside: str) -> dict:
-                mode = self._pb_mode_to_orchestrator_mode(
-                    self.PB_modes.get(pside, {}).get(symbol, "manual")
-                )
+                mode = self._mode_override_to_orchestrator_mode(mode_overrides[pside].get(symbol))
                 pos = self.positions.get(symbol, {}).get(pside, {"size": 0.0, "price": 0.0})
                 trailing = self.trailing_prices.get(symbol, {}).get(pside)
                 if not trailing:
@@ -6196,7 +6419,22 @@ class Passivbot:
             raise
         out = json.loads(out_json)
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
+        if hasattr(self, "_apply_orchestrator_symbol_states"):
+            self._apply_orchestrator_symbol_states(
+                out.get("diagnostics", {}),
+                idx_to_symbol,
+                mode_overrides,
+            )
         orders = out.get("orders", [])
+        if hasattr(self, "_update_monitor_runtime_hints"):
+            self._update_monitor_runtime_hints(
+                symbols=symbols,
+                last_prices=last_prices,
+                m1_close_emas=m1_close_emas,
+                h1_log_range_emas=h1_log_range_emas,
+                idx_to_symbol=idx_to_symbol,
+                orders=orders,
+            )
 
         ideal_orders: dict[str, list] = {}
         for o in orders:
@@ -6322,7 +6560,9 @@ class Passivbot:
                     execution_type = str(order[4]).lower()
                 else:
                     execution_type = "limit"
-                    panic_close_pref = str(self.equity_hard_stop_loss["panic_close_order_type"])
+                    panic_close_pref = self._equity_hard_stop_panic_close_order_type(
+                        position_side
+                    )
                     if "panic" in pb_order_type:
                         execution_type = "market" if panic_close_pref == "market" else "limit"
                 if execution_type not in {"limit", "market"}:

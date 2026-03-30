@@ -146,6 +146,38 @@
     return state.snapshot && state.snapshot.payload ? state.snapshot.payload : null;
   }
 
+  function messageKey(message) {
+    if (!message) return null;
+    if (message.exchange && message.user) return `${message.exchange}/${message.user}`;
+    const payload = message.payload || {};
+    const meta = payload.meta || {};
+    if (meta.exchange && meta.user) return `${meta.exchange}/${meta.user}`;
+    return null;
+  }
+
+  function shouldAcceptMessage(message) {
+    const key = messageKey(message);
+    if (!key) return true;
+    if (state.exchange && state.user) return key === `${state.exchange}/${state.user}`;
+    const [exchange, user] = key.split("/");
+    state.exchange = exchange;
+    state.user = user;
+    if (!qs.get("exchange")) qs.set("exchange", exchange);
+    if (!qs.get("user")) qs.set("user", user);
+    return true;
+  }
+
+  function selectSnapshotFromBundle(bundle) {
+    const bots = Array.isArray(bundle && bundle.bots) ? bundle.bots : [];
+    if (!bots.length) return null;
+    if (state.exchange && state.user) {
+      const wanted = `${state.exchange}/${state.user}`;
+      const matched = bots.find((entry) => messageKey(entry) === wanted);
+      if (matched) return matched;
+    }
+    return bots[0];
+  }
+
   function availableSymbols() {
     const payload = currentPayload();
     if (!payload || !payload.market) return [];
@@ -533,7 +565,9 @@
     if (qs.get("user")) params.set("user", qs.get("user"));
     const response = await fetch(`/snapshot?${params.toString()}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`snapshot HTTP ${response.status}`);
-    state.snapshot = await response.json();
+    const payload = await response.json();
+    state.snapshot = payload.type === "snapshot_bundle" ? selectSnapshotFromBundle(payload) : payload;
+    if (!state.snapshot) throw new Error("snapshot bundle was empty");
     if (!qs.get("exchange")) qs.set("exchange", state.snapshot.exchange);
     if (!qs.get("user")) qs.set("user", state.snapshot.user);
     render();
@@ -563,6 +597,7 @@
     ws.onmessage = (event) => {
       const message = JSON.parse(event.data);
       state.lastWsTs = Date.now();
+      if (!shouldAcceptMessage(message)) return;
       if (message.type === "snapshot") {
         state.snapshot = message;
       } else if (message.type === "event") {

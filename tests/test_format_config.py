@@ -31,18 +31,6 @@ def test_detect_flavor_variants():
     }
     assert detect_flavor(pb_multi, tmpl) == "pb_multi"
 
-    v7_legacy = {
-        "common": {
-            "approved_symbols": ["BTC"],
-            "symbol_flags": {"BTC": "--long_mode n"},
-        },
-        "bot": tmpl["bot"],
-        "live": tmpl["live"],
-        "optimize": tmpl["optimize"],
-        "backtest": tmpl["backtest"],
-    }
-    assert detect_flavor(v7_legacy, tmpl) == "v7_legacy"
-
     current = copy.deepcopy(tmpl)
     assert detect_flavor(current, tmpl) == "current"
 
@@ -79,23 +67,6 @@ def test_build_base_config_pb_multi():
     # total_wallet_exposure_limit derived from TWE_x when enabled by default
     assert base["bot"]["long"]["total_wallet_exposure_limit"] == 1.2
     assert base["bot"]["short"]["total_wallet_exposure_limit"] == 1.5
-
-
-def test_build_base_config_v7_legacy():
-    tmpl = _template()
-    cfg = {
-        "common": {
-            "approved_symbols": ["BTC"],
-            "symbol_flags": {"BTC": "--long_mode n"},
-        },
-        "bot": tmpl["bot"],
-        "live": tmpl["live"],
-        "optimize": tmpl["optimize"],
-        "backtest": tmpl["backtest"],
-    }
-    base = build_base_config_from_flavor(cfg, tmpl, "v7_legacy", verbose=True)
-    assert base["live"]["approved_coins"] == ["BTC"]
-    assert base["live"]["coin_flags"] == {"BTC": "--long_mode n"}
 
 
 def test_format_config_live_only_adds_sections():
@@ -320,17 +291,17 @@ def test_format_config_is_idempotent_for_lean_live_config():
 def test_format_config_preserves_live_optimize_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["optimize"]["bounds"]["common_equity_hard_stop_loss_red_threshold"] = [0.1, 0.3, 0.01]
-    current["optimize"]["bounds"]["common_equity_hard_stop_loss_ema_span_minutes"] = [10.0, 120.0, 5.0]
+    current["optimize"]["bounds"]["long_hsl_red_threshold"] = [0.1, 0.3, 0.01]
+    current["optimize"]["bounds"]["long_hsl_ema_span_minutes"] = [10.0, 120.0, 5.0]
 
     out = format_config(current, verbose=False)
 
-    assert out["optimize"]["bounds"]["common_equity_hard_stop_loss_red_threshold"] == [
+    assert out["optimize"]["bounds"]["long_hsl_red_threshold"] == [
         0.1,
         0.3,
         0.01,
     ]
-    assert out["optimize"]["bounds"]["common_equity_hard_stop_loss_ema_span_minutes"] == [
+    assert out["optimize"]["bounds"]["long_hsl_ema_span_minutes"] == [
         10.0,
         120.0,
         5.0,

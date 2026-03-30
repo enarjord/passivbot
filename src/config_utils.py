@@ -100,6 +100,18 @@ SHARED_METRICS = {
 
 Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
 BOT_POSITION_SIDES = ("long", "short")
+HSL_TIER_RATIO_KEYS = ("yellow", "orange")
+HSL_PSIDE_KEYS = (
+    "hsl_enabled",
+    "hsl_red_threshold",
+    "hsl_ema_span_minutes",
+    "hsl_cooldown_minutes_after_red",
+    "hsl_no_restart_drawdown_threshold",
+    "hsl_orange_tier_mode",
+    "hsl_panic_close_order_type",
+    "hsl_tier_ratios",
+)
+HSL_SIGNAL_MODES = ("pside", "unified")
 
 
 # Template-aligned config cleaning normally treats non-empty dict templates as closed schemas.
@@ -200,6 +212,14 @@ def normalize_hsl_cooldown_position_policy(
         allowed = ", ".join(HSL_COOLDOWN_POSITION_POLICIES)
         raise ValueError(f"{path} must be one of {{{allowed}}}, got {policy!r}")
     return policy
+
+
+def normalize_hsl_signal_mode(value, path: str = "live.hsl_signal_mode") -> str:
+    mode = str(value)
+    if mode not in HSL_SIGNAL_MODES:
+        allowed = ", ".join(HSL_SIGNAL_MODES)
+        raise ValueError(f"{path} must be one of {{{allowed}}}, got {mode!r}")
+    return mode
 
 
 def _normalize_monitor_config(config: dict) -> None:
@@ -616,8 +636,8 @@ PB_MULTI_FIELD_MAP = {
     "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_we_weight",
     "ema_span_0": "ema_span_0",
     "ema_span_1": "ema_span_1",
-    "filter_noisiness_rolling_window": "filter_volatility_ema_span",
-    "filter_volume_rolling_window": "filter_volume_ema_span",
+    "filter_noisiness_rolling_window": "forager_volatility_ema_span",
+    "filter_volume_rolling_window": "forager_volume_ema_span",
 }
 PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
 
@@ -673,22 +693,6 @@ def _build_from_pb_multi(config: dict, template: dict) -> dict:
     return result
 
 
-def _build_from_v7_legacy(config: dict, template: dict) -> dict:
-    result = deepcopy(template)
-    for section in ("backtest", "live", "optimize", "bot"):
-        source_section = config.get(section, {})
-        for key, value in source_section.items():
-            if key in result[section]:
-                result[section][key] = value
-    common = config.get("common", {})
-    for key, value in common.items():
-        if key in result["live"]:
-            result["live"][key] = value
-    result["live"]["approved_coins"] = common.get("approved_symbols", [])
-    result["live"]["coin_flags"] = common.get("symbol_flags", {})
-    return result
-
-
 def _build_from_live_only(config: dict, template: dict) -> dict:
     result = deepcopy(config)
     for section in ("optimize", "backtest"):
@@ -698,10 +702,20 @@ def _build_from_live_only(config: dict, template: dict) -> dict:
 
 
 LEGACY_FILTER_KEYS = {
-    "filter_noisiness_rolling_window": "filter_volatility_ema_span",
-    "filter_noisiness_ema_span": "filter_volatility_ema_span",
-    "filter_log_range_ema_span": "filter_volatility_ema_span",
-    "filter_volume_rolling_window": "filter_volume_ema_span",
+    "filter_noisiness_rolling_window": "forager_volatility_ema_span",
+    "filter_noisiness_ema_span": "forager_volatility_ema_span",
+    "filter_log_range_ema_span": "forager_volatility_ema_span",
+    "filter_volatility_ema_span": "forager_volatility_ema_span",
+    "filter_volume_rolling_window": "forager_volume_ema_span",
+    "filter_volume_ema_span": "forager_volume_ema_span",
+}
+
+LEGACY_FORAGER_KEYS = {
+    "filter_volume_drop_pct": "forager_volume_drop_pct",
+}
+
+OBSOLETE_BOT_KEYS = {
+    "filter_volatility_drop_pct",
 }
 
 LEGACY_ENTRY_GRID_KEYS = {
@@ -714,14 +728,20 @@ LEGACY_ENTRY_GRID_KEYS = {
 }
 
 LEGACY_BOUNDS_KEYS = {
-    "long_filter_noisiness_rolling_window": "long_filter_volatility_ema_span",
-    "long_filter_noisiness_ema_span": "long_filter_volatility_ema_span",
-    "long_filter_volume_rolling_window": "long_filter_volume_ema_span",
-    "long_filter_log_range_ema_span": "long_filter_volatility_ema_span",
-    "short_filter_noisiness_rolling_window": "short_filter_volatility_ema_span",
-    "short_filter_noisiness_ema_span": "short_filter_volatility_ema_span",
-    "short_filter_volume_rolling_window": "short_filter_volume_ema_span",
-    "short_filter_log_range_ema_span": "short_filter_volatility_ema_span",
+    "long_filter_noisiness_rolling_window": "long_forager_volatility_ema_span",
+    "long_filter_noisiness_ema_span": "long_forager_volatility_ema_span",
+    "long_filter_volume_rolling_window": "long_forager_volume_ema_span",
+    "long_filter_log_range_ema_span": "long_forager_volatility_ema_span",
+    "long_filter_volatility_ema_span": "long_forager_volatility_ema_span",
+    "long_filter_volume_ema_span": "long_forager_volume_ema_span",
+    "short_filter_noisiness_rolling_window": "short_forager_volatility_ema_span",
+    "short_filter_noisiness_ema_span": "short_forager_volatility_ema_span",
+    "short_filter_volume_rolling_window": "short_forager_volume_ema_span",
+    "short_filter_log_range_ema_span": "short_forager_volatility_ema_span",
+    "short_filter_volatility_ema_span": "short_forager_volatility_ema_span",
+    "short_filter_volume_ema_span": "short_forager_volume_ema_span",
+    "long_filter_volume_drop_pct": "long_forager_volume_drop_pct",
+    "short_filter_volume_drop_pct": "short_forager_volume_drop_pct",
     "long_entry_grid_spacing_weight": "long_entry_grid_spacing_we_weight",
     "short_entry_grid_spacing_weight": "short_entry_grid_spacing_we_weight",
     "long_entry_grid_spacing_log_span_hours": "long_entry_volatility_ema_span_hours",
@@ -736,6 +756,23 @@ LEGACY_BOUNDS_KEYS = {
     "short_entry_trailing_threshold_log_weight": "short_entry_trailing_threshold_volatility_weight",
 }
 
+OBSOLETE_BOUND_KEYS = {
+    "long_filter_volatility_drop_pct",
+    "short_filter_volatility_drop_pct",
+}
+
+FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
+    "forager_volatility_ema_span": "filter_volatility_ema_span",
+    "forager_volume_ema_span": "filter_volume_ema_span",
+}
+
+FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
+    "long_forager_volatility_ema_span": "long_filter_volatility_ema_span",
+    "long_forager_volume_ema_span": "long_filter_volume_ema_span",
+    "short_forager_volatility_ema_span": "short_filter_volatility_ema_span",
+    "short_forager_volume_ema_span": "short_filter_volume_ema_span",
+}
+
 
 def _apply_backward_compatibility_renames(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
@@ -746,6 +783,21 @@ def _apply_backward_compatibility_renames(
         if not isinstance(bot_cfg, dict):
             continue
         for old, new in LEGACY_FILTER_KEYS.items():
+            if old in bot_cfg:
+                moved_value = bot_cfg[old]
+                if new not in bot_cfg:
+                    bot_cfg[new] = moved_value
+                    _log_config(
+                        verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new
+                    )
+                    if tracker is not None:
+                        tracker.rename(
+                            ["bot", pside, old],
+                            ["bot", pside, new],
+                            moved_value,
+                        )
+                del bot_cfg[old]
+        for old, new in LEGACY_FORAGER_KEYS.items():
             if old in bot_cfg:
                 moved_value = bot_cfg[old]
                 if new not in bot_cfg:
@@ -775,6 +827,18 @@ def _apply_backward_compatibility_renames(
                             moved_value,
                         )
                 del bot_cfg[old]
+        for old in OBSOLETE_BOT_KEYS:
+            if old in bot_cfg:
+                removed_value = bot_cfg.pop(old)
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "dropping obsolete parameter bot.%s.%s",
+                    pside,
+                    old,
+                )
+                if tracker is not None:
+                    tracker.remove(["bot", pside, old], removed_value)
 
     bounds = result.get("optimize", {}).get("bounds", {})
     for old, new in LEGACY_BOUNDS_KEYS.items():
@@ -792,6 +856,17 @@ def _apply_backward_compatibility_renames(
                         moved_value,
                     )
             del bounds[old]
+    for old in OBSOLETE_BOUND_KEYS:
+        if old in bounds:
+            removed_value = bounds.pop(old)
+            _log_config(
+                verbose,
+                logging.INFO,
+                "dropping obsolete parameter optimize.bounds.%s",
+                old,
+            )
+            if tracker is not None:
+                tracker.remove(["optimize", "bounds", old], removed_value)
 
     live_cfg = result.get("live")
     logging_cfg = result.setdefault("logging", {})
@@ -962,7 +1037,7 @@ def _migrate_btc_collateral_settings(
 def detect_flavor(config: dict, template: dict) -> str:
     """Detect incoming config flavor to drive the builder.
 
-    Returns one of: "pb_multi", "v7_legacy", "current", "nested_current", "live_only", or "unknown".
+    Returns one of: "pb_multi", "current", "nested_current", "live_only", or "unknown".
     """
     # PB multi live config signature
     pb_keys = {
@@ -977,8 +1052,6 @@ def detect_flavor(config: dict, template: dict) -> str:
     }
     if all(k in config for k in pb_keys):
         return "pb_multi"
-    if "common" in config:
-        return "v7_legacy"
     required_current = {"bot", "live", "backtest", "optimize"}
     if required_current.issubset(config):
         return "current"
@@ -1002,9 +1075,6 @@ def build_base_config_from_flavor(config: dict, template: dict, flavor: str, ver
 
     if flavor == "pb_multi":
         return _build_from_pb_multi(config, template)
-
-    if flavor == "v7_legacy":
-        return _build_from_v7_legacy(config, template)
 
     if flavor == "current":
         return deepcopy(config)
@@ -1032,23 +1102,29 @@ def _ensure_bot_defaults_and_bounds(
                 [0.01, 3.0],
             ),
             (
-                "filter_volatility_ema_span",
+                "forager_volatility_ema_span",
                 result["bot"][pside].get(
-                    "filter_volatility_ema_span",
+                    "forager_volatility_ema_span",
                     result["bot"][pside].get(
-                        "filter_rolling_window",
-                        result["live"].get("ohlcv_rolling_window", 60.0),
+                        "filter_volatility_ema_span",
+                        result["bot"][pside].get(
+                            "filter_rolling_window",
+                            result["live"].get("ohlcv_rolling_window", 60.0),
+                        ),
                     ),
                 ),
                 [10.0, 1440.0],
             ),
             (
-                "filter_volume_ema_span",
+                "forager_volume_ema_span",
                 result["bot"][pside].get(
-                    "filter_volume_ema_span",
+                    "forager_volume_ema_span",
                     result["bot"][pside].get(
-                        "filter_rolling_window",
-                        result["live"].get("ohlcv_rolling_window", 60.0),
+                        "filter_volume_ema_span",
+                        result["bot"][pside].get(
+                            "filter_rolling_window",
+                            result["live"].get("ohlcv_rolling_window", 60.0),
+                        ),
                     ),
                 ),
                 [10.0, 1440.0],
@@ -1065,13 +1141,8 @@ def _ensure_bot_defaults_and_bounds(
                 bounds.get(f"{pside}_close_grid_min_markup", [0.001, 0.03]),
             ),
             (
-                "filter_volume_drop_pct",
+                "forager_volume_drop_pct",
                 result["live"].get("filter_relative_volume_clip_pct", 0.5),
-                [0.0, 1.0],
-            ),
-            (
-                "filter_volatility_drop_pct",
-                0.0,
                 [0.0, 1.0],
             ),
         ]:
@@ -1100,6 +1171,153 @@ def _ensure_bot_defaults_and_bounds(
                 )
                 if tracker is not None:
                     tracker.add(["optimize", "bounds", opt_key], v_opt)
+        if "forager_score_weights" not in result["bot"][pside]:
+            weights = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
+            result["bot"][pside]["forager_score_weights"] = weights
+            _log_config(
+                verbose,
+                logging.INFO,
+                "adding missing backtest parameter %s forager_score_weights: %s",
+                pside,
+                weights,
+            )
+            if tracker is not None:
+                tracker.add(["bot", pside, "forager_score_weights"], weights)
+        for weight_key in ("volume", "ema_readiness", "volatility"):
+            opt_key = f"{pside}_forager_score_weights_{weight_key}"
+            if opt_key not in bounds:
+                bounds[opt_key] = [0.0, 1.0]
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "adding missing optimize parameter %s %s: %s",
+                    pside,
+                    opt_key,
+                    bounds[opt_key],
+                )
+                if tracker is not None:
+                    tracker.add(["optimize", "bounds", opt_key], bounds[opt_key])
+
+
+def _apply_forager_internal_aliases(result: dict) -> None:
+    for pside in BOT_POSITION_SIDES:
+        bot_cfg = result.get("bot", {}).get(pside, {})
+        if not isinstance(bot_cfg, dict):
+            continue
+        for canonical_key, internal_key in FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS.items():
+            if canonical_key in bot_cfg and internal_key not in bot_cfg:
+                bot_cfg[internal_key] = deepcopy(bot_cfg[canonical_key])
+
+    bounds = result.get("optimize", {}).get("bounds", {})
+    if not isinstance(bounds, dict):
+        return
+    for canonical_key, internal_key in FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS.items():
+        if canonical_key in bounds and internal_key not in bounds:
+            bounds[internal_key] = deepcopy(bounds[canonical_key])
+
+
+def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
+    required_weight_keys = {"volume", "ema_readiness", "volatility"}
+    if not isinstance(weights, dict):
+        raise TypeError(f"{path} must be a dict")
+    missing = sorted(required_weight_keys - set(weights))
+    if missing:
+        raise ValueError(f"{path} missing required keys: {', '.join(missing)}")
+    extra = sorted(set(weights) - required_weight_keys)
+    if extra:
+        raise ValueError(f"{path} has unsupported keys: {', '.join(extra)}")
+
+    normalized = {}
+    total = 0.0
+    for key in ("volume", "ema_readiness", "volatility"):
+        try:
+            value = float(weights[key])
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{path}.{key} must be numeric") from exc
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"{path}.{key} must be finite and non-negative")
+        normalized[key] = value
+        total += value
+
+    if total <= 0.0:
+        return {
+            "volume": 1.0,
+            "ema_readiness": 0.0,
+            "volatility": 0.0,
+        }
+
+    return {key: normalized[key] / total for key in ("volume", "ema_readiness", "volatility")}
+
+
+def _validate_forager_config(
+    result: dict,
+    verbose: bool = True,
+    tracker: Optional[ConfigTransformTracker] = None,
+) -> None:
+    required_weight_keys = {"volume", "ema_readiness", "volatility"}
+    for pside in ("long", "short"):
+        bot_cfg = result["bot"][pside]
+        drop_pct = bot_cfg["forager_volume_drop_pct"]
+        try:
+            drop_pct = float(drop_pct)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"bot.{pside}.forager_volume_drop_pct must be numeric") from exc
+        if not math.isfinite(drop_pct) or not (0.0 <= drop_pct <= 1.0):
+            raise ValueError(f"bot.{pside}.forager_volume_drop_pct must be within [0.0, 1.0]")
+        bot_cfg["forager_volume_drop_pct"] = drop_pct
+        pside_enabled = (
+            float(bot_cfg["total_wallet_exposure_limit"]) > 0.0
+            and int(round(float(bot_cfg["n_positions"]))) > 0
+        )
+
+        weights = bot_cfg["forager_score_weights"]
+        normalized = normalize_forager_score_weights(
+            weights,
+            path=f"bot.{pside}.forager_score_weights",
+        )
+        if normalized != weights:
+            raw_total = 0.0
+            if isinstance(weights, dict):
+                for key in required_weight_keys:
+                    try:
+                        raw_total += float(weights[key])
+                    except (TypeError, ValueError, KeyError):
+                        raw_total = math.nan
+                        break
+            if raw_total <= 0.0:
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "normalizing bot.%s.forager_score_weights all-zero vector to volume-only",
+                    pside,
+                )
+            else:
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "normalizing bot.%s.forager_score_weights to relative unit-sum weights: %s",
+                    pside,
+                    normalized,
+                )
+            if tracker is not None:
+                tracker.update(["bot", pside, "forager_score_weights"], weights, normalized)
+        bot_cfg["forager_score_weights"] = normalized
+
+        if pside_enabled and (normalized["volume"] > 0.0 or drop_pct > 0.0):
+            volume_span = float(bot_cfg["forager_volume_ema_span"])
+            if not math.isfinite(volume_span) or volume_span <= 0.0:
+                raise ValueError(
+                    f"bot.{pside}.forager_volume_ema_span must be > 0 when "
+                    "forager volume ranking or volume pruning is enabled"
+                )
+
+        if pside_enabled and normalized["volatility"] > 0.0:
+            volatility_span = float(bot_cfg["forager_volatility_ema_span"])
+            if not math.isfinite(volatility_span) or volatility_span <= 0.0:
+                raise ValueError(
+                    f"bot.{pside}.forager_volatility_ema_span must be > 0 when "
+                    "forager volatility ranking is enabled"
+                )
 
 
 def _rename_config_keys(
@@ -1134,67 +1352,6 @@ def _rename_config_keys(
                 [exchange],
             )
         del result["backtest"]["exchange"]
-    optimize_bounds = result.get("optimize", {}).get("bounds", {})
-    for old, new in [
-        (
-            "live_equity_hard_stop_loss_cooldown_minutes_after_red",
-            "common_equity_hard_stop_loss_cooldown_minutes_after_red",
-        ),
-        (
-            "live_equity_hard_stop_loss_ema_span_minutes",
-            "common_equity_hard_stop_loss_ema_span_minutes",
-        ),
-        (
-            "live_equity_hard_stop_loss_no_restart_drawdown_threshold",
-            "common_equity_hard_stop_loss_no_restart_drawdown_threshold",
-        ),
-        (
-            "live_equity_hard_stop_loss_red_threshold",
-            "common_equity_hard_stop_loss_red_threshold",
-        ),
-    ]:
-        if old in optimize_bounds and new not in optimize_bounds:
-            optimize_bounds[new] = deepcopy(optimize_bounds[old])
-            _log_config(
-                verbose, logging.INFO, "renaming parameter optimize.bounds.%s -> %s", old, new
-            )
-            if tracker is not None:
-                tracker.rename(["optimize", "bounds", old], ["optimize", "bounds", new], optimize_bounds[new])
-            del optimize_bounds[old]
-
-
-def _migrate_bot_common_hsl(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    live = result.setdefault("live", {})
-    bot = result.setdefault("bot", {})
-    common = bot.setdefault("common", {})
-    live_hsl = live.get("equity_hard_stop_loss")
-    common_hsl = common.get("equity_hard_stop_loss")
-    if live_hsl is None:
-        return
-    if common_hsl is None:
-        common["equity_hard_stop_loss"] = deepcopy(live_hsl)
-        _log_config(
-            verbose,
-            logging.INFO,
-            "migrating parameter live.equity_hard_stop_loss -> bot.common.equity_hard_stop_loss",
-        )
-        if tracker is not None:
-            tracker.rename(
-                ["live", "equity_hard_stop_loss"],
-                ["bot", "common", "equity_hard_stop_loss"],
-                common["equity_hard_stop_loss"],
-            )
-    else:
-        _log_config(
-            verbose,
-            logging.INFO,
-            "dropping legacy live.equity_hard_stop_loss because bot.common.equity_hard_stop_loss is present",
-        )
-        if tracker is not None:
-            tracker.remove(["live", "equity_hard_stop_loss"], live_hsl)
-    del live["equity_hard_stop_loss"]
 
 
 def _sync_with_template(
@@ -1435,14 +1592,16 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     result["bot"] = sort_dict_keys(result["bot"])
 
     _rename_config_keys(result, verbose=verbose, tracker=tracker)
-    _migrate_bot_common_hsl(result, verbose=verbose, tracker=tracker)
 
     _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
     require_config_dict(result, "monitor")
+    result["live"]["hsl_signal_mode"] = normalize_hsl_signal_mode(result["live"]["hsl_signal_mode"])
     result["live"]["hsl_position_during_cooldown_policy"] = normalize_hsl_cooldown_position_policy(
         result["live"]["hsl_position_during_cooldown_policy"]
     )
     _normalize_monitor_config(result)
+    _validate_forager_config(result, verbose=verbose, tracker=tracker)
+    _apply_forager_internal_aliases(result)
 
     _normalize_position_counts(result, tracker=tracker)
     if coin_sources_input is not None:
@@ -2916,21 +3075,6 @@ def get_template_config():
             "volume_normalization": True,
         },
         "bot": {
-            "common": {
-                "equity_hard_stop_loss": {
-                    "enabled": False,
-                    "red_threshold": 0.25,
-                    "ema_span_minutes": 60.0,
-                    "cooldown_minutes_after_red": 0.0,
-                    "no_restart_drawdown_threshold": 1.0,
-                    "tier_ratios": {
-                        "yellow": 0.5,
-                        "orange": 0.75,
-                    },
-                    "orange_tier_mode": "tp_only_with_active_entry_cancellation",
-                    "panic_close_order_type": "market",
-                },
-            },
             "long": {
                 "close_grid_markup_end": 0.0089,
                 "close_grid_markup_start": 0.0344,
@@ -2941,6 +3085,14 @@ def get_template_config():
                 "close_trailing_threshold_pct": 0.008,
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
+                "hsl_cooldown_minutes_after_red": 0.0,
+                "hsl_ema_span_minutes": 60.0,
+                "hsl_enabled": False,
+                "hsl_no_restart_drawdown_threshold": 1.0,
+                "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                "hsl_panic_close_order_type": "market",
+                "hsl_red_threshold": 0.25,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
                 "entry_grid_double_down_factor": 0.894,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_volatility_weight": 0.0,
@@ -2956,10 +3108,14 @@ def get_template_config():
                 "entry_trailing_threshold_volatility_weight": 0.0,
                 "entry_trailing_threshold_we_weight": 0.0,
                 "entry_volatility_ema_span_hours": 72,
-                "filter_volatility_drop_pct": 0.0,
-                "filter_volatility_ema_span": 60.0,
-                "filter_volume_drop_pct": 0.95,
-                "filter_volume_ema_span": 60.0,
+                "forager_volatility_ema_span": 60.0,
+                "forager_volume_ema_span": 60.0,
+                "forager_volume_drop_pct": 0.95,
+                "forager_score_weights": {
+                    "volume": 0.0,
+                    "ema_readiness": 0.0,
+                    "volatility": 1.0,
+                },
                 "n_positions": 10.0,
                 "risk_twel_enforcer_threshold": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
@@ -2980,6 +3136,14 @@ def get_template_config():
                 "close_trailing_threshold_pct": 0.008,
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
+                "hsl_cooldown_minutes_after_red": 0.0,
+                "hsl_ema_span_minutes": 60.0,
+                "hsl_enabled": False,
+                "hsl_no_restart_drawdown_threshold": 1.0,
+                "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                "hsl_panic_close_order_type": "market",
+                "hsl_red_threshold": 0.25,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
                 "entry_grid_double_down_factor": 0.894,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_volatility_weight": 0.0,
@@ -2995,10 +3159,14 @@ def get_template_config():
                 "entry_trailing_threshold_volatility_weight": 0.0,
                 "entry_trailing_threshold_we_weight": 0.0,
                 "entry_volatility_ema_span_hours": 72,
-                "filter_volatility_drop_pct": 0.0,
-                "filter_volatility_ema_span": 60.0,
-                "filter_volume_drop_pct": 0.95,
-                "filter_volume_ema_span": 60.0,
+                "forager_volatility_ema_span": 60.0,
+                "forager_volume_ema_span": 60.0,
+                "forager_volume_drop_pct": 0.95,
+                "forager_score_weights": {
+                    "volume": 0.0,
+                    "ema_readiness": 0.0,
+                    "volatility": 1.0,
+                },
                 "n_positions": 10.0,
                 "risk_twel_enforcer_threshold": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
@@ -3025,6 +3193,7 @@ def get_template_config():
             "forced_mode_short": "",
             "hedge_mode": True,
             "hsl_position_during_cooldown_policy": "panic",
+            "hsl_signal_mode": "pside",
             "ignored_coins": {"long": [], "short": []},
             "inactive_coin_candle_ttl_minutes": 10.0,
             "leverage": 10.0,
@@ -3074,9 +3243,9 @@ def get_template_config():
         },
         "optimize": {
             "bounds": {
-                "common_equity_hard_stop_loss_cooldown_minutes_after_red": [0.0, 0.0],
-                "common_equity_hard_stop_loss_ema_span_minutes": [60.0, 60.0],
-                "common_equity_hard_stop_loss_red_threshold": [0.25, 0.25],
+                "long_hsl_cooldown_minutes_after_red": [0.0, 0.0],
+                "long_hsl_ema_span_minutes": [60.0, 60.0],
+                "long_hsl_red_threshold": [0.25, 0.25],
                 "long_close_grid_markup_end": [0.001, 0.03],
                 "long_close_grid_markup_start": [0.001, 0.03],
                 "long_close_grid_qty_pct": [0.05, 1.0],
@@ -3101,10 +3270,12 @@ def get_template_config():
                 "long_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
                 "long_entry_trailing_threshold_we_weight": [0.0, 20.0],
                 "long_entry_volatility_ema_span_hours": [24.0, 336.0],
-                "long_filter_volatility_drop_pct": [0.0, 1.0],
-                "long_filter_volatility_ema_span": [10.0, 1440.0],
-                "long_filter_volume_drop_pct": [0.0, 1.0],
-                "long_filter_volume_ema_span": [10.0, 1440.0],
+                "long_forager_volatility_ema_span": [10.0, 1440.0],
+                "long_forager_volume_ema_span": [10.0, 1440.0],
+                "long_forager_volume_drop_pct": [0.0, 1.0],
+                "long_forager_score_weights_volume": [0.0, 1.0],
+                "long_forager_score_weights_ema_readiness": [0.0, 1.0],
+                "long_forager_score_weights_volatility": [0.0, 1.0],
                 "long_n_positions": [1.0, 20.0],
                 "long_risk_twel_enforcer_threshold": [0.9, 1.01],
                 "long_risk_we_excess_allowance_pct": [0.0, 0.5],
@@ -3138,10 +3309,15 @@ def get_template_config():
                 "short_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
                 "short_entry_trailing_threshold_we_weight": [0.0, 20.0],
                 "short_entry_volatility_ema_span_hours": [24.0, 336.0],
-                "short_filter_volatility_drop_pct": [0.0, 1.0],
-                "short_filter_volatility_ema_span": [10.0, 1440.0],
-                "short_filter_volume_drop_pct": [0.0, 1.0],
-                "short_filter_volume_ema_span": [10.0, 1440.0],
+                "short_forager_volatility_ema_span": [10.0, 1440.0],
+                "short_forager_volume_ema_span": [10.0, 1440.0],
+                "short_forager_volume_drop_pct": [0.0, 1.0],
+                "short_forager_score_weights_volume": [0.0, 1.0],
+                "short_forager_score_weights_ema_readiness": [0.0, 1.0],
+                "short_forager_score_weights_volatility": [0.0, 1.0],
+                "short_hsl_cooldown_minutes_after_red": [0.0, 0.0],
+                "short_hsl_ema_span_minutes": [60.0, 60.0],
+                "short_hsl_red_threshold": [0.25, 0.25],
                 "short_n_positions": [1.0, 20.0],
                 "short_risk_twel_enforcer_threshold": [0.9, 1.01],
                 "short_risk_we_excess_allowance_pct": [0.0, 0.5],
@@ -3155,12 +3331,9 @@ def get_template_config():
             "backend": "deap",
             "compress_results_file": True,
             "crossover_eta": 20.0,
-            "crossover_probability": 0.7,
+            "crossover_probability": 0.64,
             "enable_overrides": [],
             "fixed_params": [],
-            "fixed_runtime_overrides": {
-                "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold": 1.0
-            },
             "iters": 30000,
             "limits": [
                 {
@@ -3197,11 +3370,15 @@ def get_template_config():
             ],
             "mutation_eta": 20.0,
             "mutation_indpb": 0.0,
-            "mutation_probability": 0.45,
+            "mutation_probability": 0.34,
             "n_cpus": 5,
             "offspring_multiplier": 1.0,
             "pareto_max_size": 300,
             "population_size": 1000,
+            "fixed_runtime_overrides": {
+                "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
+                "bot.short.hsl_no_restart_drawdown_threshold": 1.0,
+            },
             "round_to_n_significant_digits": 5,
             "scoring": ["adg", "sharpe_ratio"],
             "write_all_results": True,

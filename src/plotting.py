@@ -942,11 +942,20 @@ def create_forager_hard_stop_drawdown_figure(
     return_figures: bool | None = None,
 ) -> dict:
     figures: dict = {}
-    hard_stop_cfg = (((config or {}).get("bot") or {}).get("common") or {}).get(
-        "equity_hard_stop_loss", {}
-    )
-    if not isinstance(hard_stop_cfg, dict) or not bool(hard_stop_cfg.get("enabled", False)):
-        return figures
+
+    def _resolve_pside_cfg(pside: str) -> dict:
+        bot = ((config or {}).get("bot") or {})
+        pside_cfg = bot.get(pside) or {}
+        if not isinstance(pside_cfg, dict):
+            return {}
+        twel = float(pside_cfg.get("total_wallet_exposure_limit", 0.0) or 0.0)
+        n_positions = int(round(float(pside_cfg.get("n_positions", 0.0) or 0.0)))
+        return {
+            "enabled": bool(pside_cfg.get("hsl_enabled", False)) and twel > 0.0 and n_positions > 0,
+            "red_threshold": float(pside_cfg.get("hsl_red_threshold", 0.0) or 0.0),
+            "ema_span_minutes": float(pside_cfg.get("hsl_ema_span_minutes", 0.0) or 0.0),
+            "tier_ratios": pside_cfg.get("hsl_tier_ratios", {}) or {},
+        }
 
     def _minute_quantized_drawdown_ema(trace_df: pd.DataFrame, ema_span_minutes: float) -> pd.Series:
         drawdown_raw = trace_df["drawdown_raw"].clip(lower=0.0).astype(float)
@@ -974,6 +983,9 @@ def create_forager_hard_stop_drawdown_figure(
     if return_figures is None:
         return_figures = not autoplot
 
+    hard_stop_cfg = _resolve_pside_cfg("long")
+    if not bool(hard_stop_cfg.get("enabled", False)):
+        return figures
     red_threshold = float(hard_stop_cfg.get("red_threshold", 0.0) or 0.0)
     ema_span_minutes = float(hard_stop_cfg.get("ema_span_minutes", 0.0) or 0.0)
     if red_threshold <= 0.0 or ema_span_minutes <= 0.0:

@@ -5,7 +5,7 @@ Passivbot configurations can be optimized using a multi-objective evolutionary a
 Optimization requires the full install profile:
 
 ```bash
-python3 -m pip install -e ".[full]"
+pip install -e ".[full]"
 ```
 
 ## Running Optimization
@@ -74,13 +74,15 @@ operator-risk settings such as:
 ```json
 "optimize": {
   "fixed_runtime_overrides": {
-    "bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold": 1.0
+    "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
+    "bot.short.hsl_no_restart_drawdown_threshold": 1.0
   }
 }
 ```
 
 That default override disables terminal no-restart during optimizer evaluations so candidates can
-be constrained through `drawdown_worst_hsl`, `drawdown_worst_mean_1pct_hsl`, and
+be constrained through `drawdown_worst_hsl`, `drawdown_worst_ema_hsl`,
+`drawdown_worst_mean_1pct_hsl`, `drawdown_worst_mean_1pct_ema_hsl`, and
 `peak_recovery_hours_hsl` instead of being prematurely truncated.
 
 When you provide many starting configs, optimizer now also bounds how many seed evaluations may be
@@ -112,6 +114,7 @@ For each loaded starting config, the optimizer attempts an extra variant where b
 `bot.long.total_wallet_exposure_limit` and `bot.short.total_wallet_exposure_limit` are multiplied
 by this factor before deduplication. Default `0.75`. Set it to `1.0` to disable the extra
 variants entirely.
+
 ### Optimizer Suites
 
 The optimizer reuses the backtest suite configuration and allows every candidate to
@@ -166,6 +169,7 @@ mode is enabled) instead of the older `analyses_combined` / per-exchange analysi
 - Enforces constraints via `optimize.limits`
 - Optimizes for multiple metrics via `optimize.scoring`
 - Avoids duplicates through hash tracking and perturbation
+- Logs starting-config dedup statistics at startup, including how many raw configs collapsed after quantization and how many extra TWEL-scaled variants survived
 
 ## Output Structure
 
@@ -180,6 +184,9 @@ Contents:
   - Named `{hash}.json`
   - Files are added/removed over time as the Pareto front updates and is pruned to `optimize.pareto_max_size`
 - `index.json`: List of Pareto member hashes
+
+Each recorded result now also includes runtime provenance so later replay mismatches can be
+diagnosed directly from the artifact.
 
 ## Analyzing Results
 
@@ -203,7 +210,7 @@ python3 src/pareto_store.py optimize_results/.../pareto/
 - Streaming history chart sourced from `all_results.bin`
 - CSV export of the current run's dataset for offline analysis
 
-Use the full install profile (`python3 -m pip install -e ".[full]"`) if the dashboard dependencies are not already present.
+Use the full install profile (`pip install -e ".[full]"`) if the dashboard dependencies are not already present.
 The legacy `pareto_store.py` script still supports quick 2D/3D matplotlib plots if a GUI
 isn't needed.
 
@@ -218,7 +225,7 @@ objects. Each object describes when to penalize a result:
 - `value`: numeric threshold for `<`/`>` limits.
 - `range`: `[low, high]` for the range-based operators.
 - Optional `stat`: override the statistic to compare against (`min`, `max`, `mean`, `std`).
-  Defaults mirror the legacy behaviour (`>` checks use `_max`, `<` checks use `_min`, range checks use `_mean`).
+  The default is `_max` for `>` checks, `_min` for `<` checks, and `_mean` for range checks.
 
 Example:
 
@@ -236,9 +243,11 @@ CLI overrides accept the same JSON/HJSON payload:
 passivbot optimize --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
 
-For quick-and-dirty tweaks, the legacy format (`--penalize_if_greater_than_drawdown_worst 0.3`) is still recognized and converted to the new schema at runtime.
+For quick CLI tweaks, Passivbot also accepts shorthand flags such as `--penalize_if_greater_than_drawdown_worst 0.3` and converts them to the structured schema at runtime.
 
 Penalties are added to every objective as a positive modifier; they do not disqualify a config but will push it far from the Pareto front when violated. Metric names may include `_usd` / `_btc` suffixes to lock a denomination; when omitted, USD is assumed.
+
+Pareto logging also includes the top violated constraints and their penalties so you can see which limits are driving a bad candidate.
 
 ## Performance Metrics
 
@@ -272,6 +281,8 @@ over all exchanges before scoring.
 | `adg`, `adg_w` | Average Daily Gain (smoothed geometric) and its recency-biased counterpart |
 | `mdg`, `mdg_w` | Median Daily Gain and its recency-biased counterpart |
 | `gain` | Final balance gain (end/start ratio) |
+| `adg_strategy_pnl_rebased`, `adg_strategy_pnl_rebased_w` | Collateral-agnostic geometric growth on the strategy-PnL rebased equity curve |
+| `mdg_strategy_pnl_rebased`, `mdg_strategy_pnl_rebased_w` | Median-day version of the same rebased growth family |
 | `*_per_exposure_{long,short}` | Above metrics divided by the configured exposure limit per side |
 
 ### Risk Metrics
@@ -279,6 +290,10 @@ over all exchanges before scoring.
 |--------|-------------|
 | `drawdown_worst` | Maximum peak-to-trough drawdown |
 | `drawdown_worst_mean_1pct` | Mean of worst 1% drawdowns (daily) |
+| `drawdown_worst_hsl` | Worst account-level HSL drawdown |
+| `drawdown_worst_ema_hsl` | Worst EMA-smoothed HSL drawdown, shared as `max(long, short)` |
+| `drawdown_worst_mean_1pct_hsl` | Mean of worst 1% HSL drawdown samples |
+| `drawdown_worst_mean_1pct_ema_hsl` | Mean of worst 1% EMA-smoothed HSL drawdown samples, shared as `max(long, short)` |
 | `expected_shortfall_1pct` | Mean of worst 1% daily losses (CVaR) |
 | `equity_balance_diff_neg_max` / `pos_max` | Largest divergence between equity and account balance (negative side tracks only drawdowns below balance; positive side tracks only run-ups above balance) |
 | `equity_balance_diff_neg_mean` / `pos_mean` | Average divergence between equity and balance (split by sign as above) |
@@ -291,6 +306,7 @@ over all exchanges before scoring.
 | `calmar_ratio`, `calmar_ratio_w` | Return divided by maximum drawdown |
 | `sterling_ratio`, `sterling_ratio_w` | Return divided by the average of the worst 1% drawdowns |
 | `omega_ratio`, `omega_ratio_w` | Sum of positive returns / sum of absolute negative returns |
+| `*_strategy_pnl_rebased`, `*_strategy_pnl_rebased_w` ratios | Collateral-agnostic ratio family using the strategy-PnL rebased equity curve |
 
 ### Position & Execution Metrics
 | Metric | Description |
@@ -301,6 +317,7 @@ over all exchanges before scoring.
 | `volume_pct_per_day_avg`, `volume_pct_per_day_avg_w` | Average traded volume as % of account per day, with recency bias |
 | `peak_recovery_hours_equity_usd`, `_btc` | Longest time (in hours) the equity curve stayed below its prior peak before recovering, per denomination. Available for scoring and limit checks (e.g. `{"metric": "peak_recovery_hours_equity_usd", "penalize_if": ">", "value": 168}`). |
 | `peak_recovery_hours_pnl` | Longest recovery time (hours) of cumulative realised PnL (USD). Useful for monitoring realised drawdown recovery latency. |
+| `peak_recovery_hours_hsl` | Longest time below the all-time rebased HSL peak before recovery. Intended for optimizer risk limits. |
 | `high_exposure_hours_{mean,max}_long` | Mean / maximum duration (hours) of continuous periods where total long wallet exposure exceeded the daily-resampled average long TWE |
 | `high_exposure_hours_{mean,max}_short` | Mean / maximum duration (hours) of continuous periods where total short wallet exposure exceeded the daily-resampled average short TWE |
 

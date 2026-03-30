@@ -1,5 +1,5 @@
 {
-  name: hsl_long_cooldown_manual_entry_tp_only
+  name: hsl_long_cooldown_manual_entry_resume_normal
   exchange: fake
   start_time: "2026-01-01T00:00:00Z"
   boot_index: 1
@@ -95,19 +95,21 @@
       "BTC/USDT:USDT|long": 1.0
     }
     hsl_paths: {
-      long.halted: true
+      long.halted: false
       long.no_restart_latched: false
-      long.cooldown_intervention_active: true
+      long.cooldown_intervention_active: false
       long.cooldown_repanic_reset_pending: false
-      long.cooldown_until_ms: 1767225810000
+      long.cooldown_until_ms: null
     }
     summary_paths: {
       step_count: 5
       last.step_index: 6
+      last.open_orders: 4
     }
     log_contains: [
-      "detected non-flat position during RED cooldown | policy=tp_only"
-      "changed long.BTC/USDT:USDT: panic -> tp_only"
+      "detected non-flat position during RED cooldown | policy=normal"
+      "operator override during RED cooldown: resumed normal operation and reset drawdown tracker"
+      "changed long.BTC/USDT:USDT: panic -> normal"
     ]
   }
 }

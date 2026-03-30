@@ -3,7 +3,7 @@
 Passivbot's monitor stack is split into two layers:
 
 1. The live bot can publish local monitor artifacts under `monitor/<exchange>/<user>/`.
-2. The relay can expose those artifacts over a read-only HTTP/websocket interface for local tools.
+2. The relay can auto-discover those artifacts and expose them over a read-only HTTP/websocket interface for local tools.
 
 ## Start The Relay
 
@@ -19,24 +19,31 @@ python src/tools/monitor_relay.py --monitor-root monitor
 
 Default bind address is `127.0.0.1:8765`.
 
+The relay is intended to be a single long-running process per repo checkout:
+
+1. Start it before or after any bot.
+2. It auto-detects active monitor publishers under `monitor/`.
+3. It keeps relaying as bots start, stop, or restart.
+4. One relay can fan in any number of bots from the same repo.
+
 ## Endpoints
 
 - `GET /health`
-  - Returns discovered monitor roots plus relay health metadata.
+  - Returns discovered monitor roots, active status, and relay health metadata.
 - `GET /snapshot`
-  - Returns the latest snapshot envelope for the selected bot.
-  - If multiple monitor roots exist, pass `?exchange=<exchange>&user=<user>`.
+  - Returns the latest snapshot envelope for one selected bot when `exchange` and `user` are provided.
+  - Otherwise returns a `snapshot_bundle` containing the latest snapshot envelopes for all active bots.
 - `GET /dashboard`
   - Serves a static browser dashboard bootstrapped from the same relay contract.
 - `GET /ws`
-  - Sends the latest snapshot first.
-  - Replays recent messages from current event/history files.
-  - Then streams live updates as new lines are appended by the publisher.
+  - With `exchange` and `user`, streams one selected bot.
+  - Without filters, sends startup snapshots for all active bots, replays recent messages across all active bots, then streams live updates from all active bots on one websocket.
+  - All snapshot, event, and history messages carry `exchange` and `user` so consumers can differentiate bots.
 
 ## Notes
 
 - The relay is read-only. It does not mutate monitor artifacts.
-- The websocket stream is intended for local dashboards, TUIs, and replay tooling.
+- The websocket stream is intended for local dashboards, TUIs, replay tooling, and other fan-in consumers.
 - The browser dashboard and TUI both consume the same read-only `/snapshot` + `/ws` surface.
 
 ## Web Dashboard

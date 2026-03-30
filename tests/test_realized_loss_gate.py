@@ -213,6 +213,17 @@ class TestLogRealizedLossGateBlocks:
 
 class TestPrepBacktestArgsMaxRealizedLossPct:
     def _make_config(self, max_realized_loss_pct=None):
+        hsl_long = {
+            "hsl_enabled": False,
+            "hsl_red_threshold": 0.25,
+            "hsl_ema_span_minutes": 60.0,
+            "hsl_cooldown_minutes_after_red": 0.0,
+            "hsl_no_restart_drawdown_threshold": 1.0,
+            "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+            "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+            "hsl_panic_close_order_type": "market",
+        }
+        hsl_short = deepcopy(hsl_long)
         config = {
             "backtest": {
                 "coins": {"binance": ["BTC"]},
@@ -223,24 +234,14 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
                 "dynamic_wel_by_tradability": True,
             },
             "bot": {
-                "common": {
-                    "equity_hard_stop_loss": {
-                        "enabled": False,
-                        "red_threshold": 0.25,
-                        "ema_span_minutes": 60.0,
-                        "cooldown_minutes_after_red": 0.0,
-                        "no_restart_drawdown_threshold": 1.0,
-                        "tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                        "orange_tier_mode": "tp_only_with_active_entry_cancellation",
-                        "panic_close_order_type": "market",
-                    },
-                },
                 "long": {
+                    **hsl_long,
                     "n_positions": 1,
                     "total_wallet_exposure_limit": 1.0,
                     "wallet_exposure_limit": 0.5,
                 },
                 "short": {
+                    **hsl_short,
                     "n_positions": 1,
                     "total_wallet_exposure_limit": 0.0,
                     "wallet_exposure_limit": 0.0,
@@ -290,6 +291,17 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
 
 class TestPrepBacktestArgsEquityHardStopLoss:
     def _make_config(self, hard_stop_block=None):
+        hsl_long = {
+            "hsl_enabled": False,
+            "hsl_red_threshold": 0.25,
+            "hsl_ema_span_minutes": 60.0,
+            "hsl_cooldown_minutes_after_red": 0.0,
+            "hsl_no_restart_drawdown_threshold": 1.0,
+            "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+            "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+            "hsl_panic_close_order_type": "market",
+        }
+        hsl_short = deepcopy(hsl_long)
         config = {
             "backtest": {
                 "coins": {"binance": ["BTC"]},
@@ -300,24 +312,14 @@ class TestPrepBacktestArgsEquityHardStopLoss:
                 "dynamic_wel_by_tradability": True,
             },
             "bot": {
-                "common": {
-                    "equity_hard_stop_loss": {
-                        "enabled": False,
-                        "red_threshold": 0.25,
-                        "ema_span_minutes": 60.0,
-                        "cooldown_minutes_after_red": 0.0,
-                        "no_restart_drawdown_threshold": 1.0,
-                        "tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                        "orange_tier_mode": "tp_only_with_active_entry_cancellation",
-                        "panic_close_order_type": "market",
-                    },
-                },
                 "long": {
+                    **hsl_long,
                     "n_positions": 1,
                     "total_wallet_exposure_limit": 1.0,
                     "wallet_exposure_limit": 0.5,
                 },
                 "short": {
+                    **hsl_short,
                     "n_positions": 1,
                     "total_wallet_exposure_limit": 0.0,
                     "wallet_exposure_limit": 0.0,
@@ -331,13 +333,37 @@ class TestPrepBacktestArgsEquityHardStopLoss:
             "coin_overrides": {},
         }
         if hard_stop_block is not None:
-            merged = deepcopy(config["bot"]["common"]["equity_hard_stop_loss"])
+            merged = {
+                "enabled": bool(config["bot"]["long"]["hsl_enabled"]),
+                "red_threshold": float(config["bot"]["long"]["hsl_red_threshold"]),
+                "ema_span_minutes": float(config["bot"]["long"]["hsl_ema_span_minutes"]),
+                "cooldown_minutes_after_red": float(
+                    config["bot"]["long"]["hsl_cooldown_minutes_after_red"]
+                ),
+                "no_restart_drawdown_threshold": float(
+                    config["bot"]["long"]["hsl_no_restart_drawdown_threshold"]
+                ),
+                "tier_ratios": deepcopy(config["bot"]["long"]["hsl_tier_ratios"]),
+                "orange_tier_mode": str(config["bot"]["long"]["hsl_orange_tier_mode"]),
+                "panic_close_order_type": str(config["bot"]["long"]["hsl_panic_close_order_type"]),
+            }
             for key, value in hard_stop_block.items():
                 if key == "tier_ratios" and isinstance(value, dict):
                     merged["tier_ratios"].update(value)
                 else:
                     merged[key] = value
-            config["bot"]["common"]["equity_hard_stop_loss"] = merged
+            config["bot"]["long"]["hsl_enabled"] = merged["enabled"]
+            config["bot"]["long"]["hsl_red_threshold"] = merged["red_threshold"]
+            config["bot"]["long"]["hsl_ema_span_minutes"] = merged["ema_span_minutes"]
+            config["bot"]["long"]["hsl_cooldown_minutes_after_red"] = merged[
+                "cooldown_minutes_after_red"
+            ]
+            config["bot"]["long"]["hsl_no_restart_drawdown_threshold"] = merged[
+                "no_restart_drawdown_threshold"
+            ]
+            config["bot"]["long"]["hsl_tier_ratios"] = merged["tier_ratios"]
+            config["bot"]["long"]["hsl_orange_tier_mode"] = merged["orange_tier_mode"]
+            config["bot"]["long"]["hsl_panic_close_order_type"] = merged["panic_close_order_type"]
         return config
 
     def _make_mss(self):

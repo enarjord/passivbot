@@ -93,7 +93,14 @@ async def test_monitor_relay_health_handler_reports_available_bots(tmp_path):
     assert response.status == 200
     data = json.loads(response.text)
     assert data["status"] == "ok"
-    assert data["bots"] == [{"exchange": "bybit", "user": "user01"}]
+    assert data["bots"] == [
+        {
+            "exchange": "bybit",
+            "user": "user01",
+            "active": True,
+            "last_activity_ts_ms": data["bots"][0]["last_activity_ts_ms"],
+        }
+    ]
     assert data["subscribers"]["bybit/user01"] == 0
 
 
@@ -112,14 +119,20 @@ async def test_monitor_relay_snapshot_handler_returns_snapshot_message(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_monitor_relay_snapshot_requires_exchange_and_user_when_multiple_roots(tmp_path):
+async def test_monitor_relay_snapshot_returns_bundle_when_multiple_roots(tmp_path):
     monitor_root = _make_monitor_root(tmp_path, exchange="bybit", user="user01")
     _make_monitor_root(tmp_path, exchange="bitget", user="user02")
     app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
 
-    with pytest.raises(web.HTTPBadRequest) as exc_info:
-        await _handle_snapshot(_make_request(app, "/snapshot"))
-    assert "multiple monitor roots available" in exc_info.value.text
+    response = await _handle_snapshot(_make_request(app, "/snapshot"))
+    data = json.loads(response.text)
+    assert response.status == 200
+    assert data["type"] == "snapshot_bundle"
+    assert len(data["bots"]) == 2
+    assert {f"{entry['exchange']}/{entry['user']}" for entry in data["bots"]} == {
+        "bybit/user01",
+        "bitget/user02",
+    }
 
     response = await _handle_snapshot(
         _make_request(app, "/snapshot?exchange=bybit&user=user01")
@@ -219,7 +232,9 @@ async def test_monitor_relay_websocket_sends_snapshot_then_live_updates(tmp_path
         task = asyncio.create_task(_handle_ws(_make_request(app, "/ws")))
 
         for _ in range(50):
-            if len(fake_ws.messages) >= 1 and relay._subscribers.get(("bybit", "user01")):
+            if len(fake_ws.messages) >= 1 and any(
+                subscription == ("bybit", "user01") for subscription in relay._subscribers.values()
+            ):
                 break
             await asyncio.sleep(0.01)
         else:
@@ -262,6 +277,68 @@ async def test_monitor_relay_websocket_sends_snapshot_then_live_updates(tmp_path
         assert fake_ws.messages[2]["stream"] == "price_ticks"
         assert fake_ws.messages[2]["symbol"] == "BTC/USDT:USDT"
         assert fake_ws.messages[2]["payload"]["last"] == pytest.approx(100000.0)
+    finally:
+        await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_monitor_relay_websocket_without_filter_streams_all_active_bots(tmp_path, monkeypatch):
+    monitor_root = _make_monitor_root(tmp_path, exchange="bybit", user="user01")
+    _make_monitor_root(tmp_path, exchange="bitget", user="user02")
+    app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
+    relay = app[RELAY_APP_KEY]
+    root = monitor_root
+    fake_ws = FakeWebSocket(close_after_messages=4)
+
+    monkeypatch.setattr(monitor_relay.web, "WebSocketResponse", lambda heartbeat=30.0: fake_ws)
+
+    await relay.start()
+    try:
+        task = asyncio.create_task(_handle_ws(_make_request(app, "/ws")))
+
+        for _ in range(50):
+            if len(fake_ws.messages) >= 2 and relay._subscribers:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("websocket handler did not subscribe in time")
+
+        _append_json_line(
+            root / "bybit" / "user01" / "events" / "current.ndjson",
+            {
+                "ts": 2000,
+                "seq": 6,
+                "kind": "bot.ready",
+                "tags": ["bot", "lifecycle"],
+                "exchange": "bybit",
+                "user": "user01",
+                "payload": {"status": "ready"},
+            },
+        )
+        _append_json_line(
+            root / "bitget" / "user02" / "events" / "current.ndjson",
+            {
+                "ts": 2100,
+                "seq": 7,
+                "kind": "bot.ready",
+                "tags": ["bot", "lifecycle"],
+                "exchange": "bitget",
+                "user": "user02",
+                "payload": {"status": "ready"},
+            },
+        )
+
+        await relay.poll_once()
+        await asyncio.wait_for(task, timeout=1.0)
+
+        assert fake_ws.messages[0]["type"] == "snapshot"
+        assert fake_ws.messages[1]["type"] == "snapshot"
+        assert fake_ws.messages[2]["type"] == "event"
+        assert fake_ws.messages[3]["type"] == "event"
+        assert {f"{msg['exchange']}/{msg['user']}" for msg in fake_ws.messages[:4]} == {
+            "bybit/user01",
+            "bitget/user02",
+        }
     finally:
         await relay.stop()
 

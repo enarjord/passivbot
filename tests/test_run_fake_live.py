@@ -8,6 +8,7 @@ import pytest
 
 from config_utils import load_config
 from exchanges.fake import FakeCCXTClient
+from passivbot import setup_bot
 from tools.run_fake_live import (
     _async_main,
     _apply_assertions,
@@ -48,34 +49,33 @@ def _scenario() -> dict:
 class _StubBot:
     def __init__(self) -> None:
         self.loop_calls = 0
-        self._equity_hard_stop_halted = False
-        self._equity_hard_stop_no_restart_latched = False
-        self._equity_hard_stop_halted_until_ms = None
-        self._equity_hard_stop_pending_red_since_ms = None
-        self._equity_hard_stop_red_flat_confirmations = 0
-        self._equity_hard_stop_cooldown_intervention_active = False
-        self._equity_hard_stop_cooldown_repanic_reset_pending = False
-        self._equity_hard_stop_last_metrics = None
-        self._equity_hard_stop_last_stop_event = None
+        self._equity_hard_stop = {
+            "long": {"halted": False, "no_restart_latched": False, "last_metrics": None},
+            "short": {"halted": True, "no_restart_latched": False, "last_metrics": None},
+        }
 
     async def update_pos_oos_pnls_ohlcvs(self):
         return True
 
-    def _equity_hard_stop_enabled(self):
+    def _equity_hard_stop_enabled(self, pside: str | None = None):
+        return False if pside is not None else False
+
+    def _equity_hard_stop_runtime_red_latched(self, pside: str):
         return False
 
-    def _equity_hard_stop_runtime_red_latched(self):
-        return False
-
-    def _equity_hard_stop_runtime_tier(self):
-        return "green"
+    def _hsl_psides(self):
+        return ("long", "short")
 
     async def execute_to_exchange(self):
         self.loop_calls += 1
         return {"cycle": self.loop_calls}
 
+    def _hsl_state(self, pside: str):
+        return self._equity_hard_stop[pside]
+
 
 @pytest.mark.asyncio
+@pytest.mark.fake_live
 async def test_run_fake_bot_advances_until_timeline_end():
     bot = _StubBot()
     client = FakeCCXTClient(_scenario(), quote="USDT")
@@ -84,7 +84,8 @@ async def test_run_fake_bot_advances_until_timeline_end():
     assert [row["step_index"] for row in summaries] == [0, 1, 2]
 
 
-def test_apply_assertions_validates_positions_and_hsl_state():
+@pytest.mark.fake_live
+def test_apply_assertions_validates_positions_and_halted_psides():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     bot = _StubBot()
     scenario = {
@@ -93,12 +94,13 @@ def test_apply_assertions_validates_positions_and_hsl_state():
             "final_balance": {"approx": 1000.0, "tolerance": 1e-9},
             "last_prices": {"BTC/USDT:USDT": 100.0},
             "final_positions": {"BTC/USDT:USDT|long": 0.0},
-            "hsl_paths": {"halted": False, "runtime_tier": "green"},
+            "halted_psides": {"long": False, "short": True},
         }
     }
     _apply_assertions(bot, client, scenario, step_summaries=[], log_text="")
 
 
+@pytest.mark.fake_live
 def test_apply_assertions_supports_path_assertions_and_logs():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     bot = _StubBot()
@@ -109,7 +111,7 @@ def test_apply_assertions_supports_path_assertions_and_logs():
                 "current_index": 0,
                 "prices.BTC/USDT:USDT": {"approx": 100.0, "tolerance": 1e-9},
             },
-            "hsl_paths": {"halted": False, "runtime_tier": "green"},
+            "hsl_paths": {"short.halted": True},
             "summary_paths": {"step_count": 1, "last.step_index": 0},
             "log_contains": ["READY", "fake"],
         }
@@ -123,6 +125,7 @@ def test_apply_assertions_supports_path_assertions_and_logs():
     )
 
 
+@pytest.mark.fake_live
 def test_install_fake_user_override_restores_original_loader():
     import passivbot as passivbot_mod
 
@@ -138,13 +141,15 @@ def test_install_fake_user_override_restores_original_loader():
     assert passivbot_mod.load_user_info is original
 
 
+@pytest.mark.fake_live
 def test_extract_hsl_trace_returns_serializable_state():
     bot = _StubBot()
     trace = _extract_hsl_trace(bot)
-    assert trace["halted"] is False
-    assert trace["runtime_tier"] == "green"
+    assert trace["long"]["halted"] is False
+    assert trace["short"]["halted"] is True
 
 
+@pytest.mark.fake_live
 def test_prime_fake_fill_cache_writes_fake_fill_events(tmp_path):
     scenario = _scenario()
     scenario["account"]["fills"] = [
@@ -167,6 +172,7 @@ def test_prime_fake_fill_cache_writes_fake_fill_events(tmp_path):
     assert "boot_entry" in payload
 
 
+@pytest.mark.fake_live
 def test_prime_fake_candles_seeds_candlestick_manager_cache():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     cm = type("CM", (), {"_cache": {}, "_ema_cache": {}, "_current_close_cache": {}, "_tf_range_cache": {}})()
@@ -178,7 +184,43 @@ def test_prime_fake_candles_seeds_candlestick_manager_cache():
     assert float(arr[0]["c"]) == pytest.approx(100.0)
 
 
-def test_bot_params_to_rust_dict_includes_core_orchestrator_fields():
+@pytest.mark.fake_live
+def test_resume_normal_cooldown_does_not_preauthorize_flat_halted_side():
+    scenario_path = (
+        REPO_ROOT
+        / "scenarios"
+        / "fake_live"
+        / "hsl_long_cooldown_resume_normal_bot_self_entry_bug.hjson"
+    )
+    cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
+    cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = 2.0
+    cfg["live"]["hsl_position_during_cooldown_policy"] = "normal"
+    cfg["live"]["hsl_signal_mode"] = "unified"
+    cfg["bot"]["short"] = json.loads(json.dumps(cfg["bot"]["long"]))
+    cfg["bot"]["short"]["hsl_enabled"] = False
+    cfg["live"]["approved_coins"]["long"] = ["XMR"]
+    cfg["live"]["approved_coins"]["short"] = ["XMR"]
+    cfg["live"]["fake_scenario_path"] = str(scenario_path)
+
+    _, restore_user_override = _install_fake_user_override(
+        cfg,
+        str(scenario_path),
+        "fake_hsl_resume_normal_self_entry_bug",
+    )
+    try:
+        bot = setup_bot(cfg)
+        state = bot._hsl_state("long")
+        state["halted"] = True
+        state["cooldown_until_ms"] = 1
+
+        symbol = "XMR/USDT:USDT"
+        assert bot._equity_hard_stop_halted_mode("long", symbol) == "graceful_stop"
+        assert bot._orchestrator_mode_override("long", symbol) == "graceful_stop"
+    finally:
+        restore_user_override()
+
+
+def test_bot_params_to_rust_dict_includes_hsl_fields():
     from passivbot import Passivbot
 
     class _Stub:
@@ -216,6 +258,14 @@ def test_bot_params_to_rust_dict_includes_core_orchestrator_fields():
                 },
                 "ema_span_0": 2.0,
                 "ema_span_1": 4.0,
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.05,
+                "hsl_ema_span_minutes": 1.0,
+                "hsl_cooldown_minutes_after_red": 1.0,
+                "hsl_no_restart_drawdown_threshold": 0.9,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+                "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                "hsl_panic_close_order_type": "market",
                 "n_positions": 1.0,
                 "total_wallet_exposure_limit": 5.0,
                 "wallet_exposure_limit": 5.0,
@@ -229,16 +279,27 @@ def test_bot_params_to_rust_dict_includes_core_orchestrator_fields():
             }
 
         def bot_value(self, _pside, key):
+            if key == "hsl_tier_ratios.yellow":
+                return self.values["hsl_tier_ratios"]["yellow"]
+            if key == "hsl_tier_ratios.orange":
+                return self.values["hsl_tier_ratios"]["orange"]
             return self.values.get(key, 0.0)
 
         def bp(self, _pside, key, _symbol=None):
             return self.values.get(key, 0.0)
 
     out = Passivbot._bot_params_to_rust_dict(_Stub(), "long", None)
-    assert out["n_positions"] == 1
-    assert out["wallet_exposure_limit"] == pytest.approx(5.0)
-    assert out["ema_span_0"] == pytest.approx(2.0)
-    assert out["ema_span_1"] == pytest.approx(4.0)
+    assert out["hsl_enabled"] is True
+    assert out["hsl_red_threshold"] == pytest.approx(0.05)
+    assert out["hsl_tier_ratio_yellow"] == pytest.approx(0.5)
+    assert out["hsl_tier_ratio_orange"] == pytest.approx(0.75)
+    assert out["hsl_orange_tier_mode"] == "tp_only_with_active_entry_cancellation"
+    assert out["hsl_panic_close_order_type"] == "market"
+    assert out["forager_score_weights"] == {
+        "volume": pytest.approx(1.0),
+        "ema_readiness": pytest.approx(0.0),
+        "volatility": pytest.approx(0.0),
+    }
 
 
 def test_install_runtime_overrides_sets_exchange_time_override():
@@ -248,16 +309,34 @@ def test_install_runtime_overrides_sets_exchange_time_override():
     assert bot.get_exchange_time() == client.now_ms
 
 
-def test_refresh_halted_runtime_forced_modes_uses_halted_mode_for_all_symbols():
+def test_refresh_halted_runtime_forced_modes_keeps_active_red_pside_in_panic():
     from passivbot import Passivbot
 
     class _Stub:
         def __init__(self):
             self.positions = {"BTC/USDT:USDT": {"long": {"size": 5.0}, "short": {"size": 0.0}}}
             self.open_orders = {}
-            self.active_symbols = {"BTC/USDT:USDT", "ETH/USDT:USDT"}
+            self.active_symbols = {"BTC/USDT:USDT"}
             self._runtime_forced_modes = {"long": {}, "short": {}}
-            self._equity_hard_stop_halted = True
+            self._states = {
+                "long": {"halted": False},
+                "short": {"halted": False},
+            }
+
+        def _hsl_psides(self):
+            return ("long", "short")
+
+        def _equity_hard_stop_enabled(self, pside=None):
+            return pside == "long"
+
+        def _hsl_state(self, pside):
+            return self._states[pside]
+
+        def _equity_hard_stop_runtime_red_latched(self, pside):
+            return pside == "long"
+
+        def _equity_hard_stop_set_red_runtime_forced_modes(self, pside):
+            self._runtime_forced_modes[pside] = {"BTC/USDT:USDT": "panic"}
 
         def _equity_hard_stop_halted_mode(self, pside, symbol):
             del pside
@@ -272,10 +351,55 @@ def test_refresh_halted_runtime_forced_modes_uses_halted_mode_for_all_symbols():
     stub = _Stub()
     Passivbot._equity_hard_stop_refresh_halted_runtime_forced_modes(stub)
     assert stub._runtime_forced_modes["long"]["BTC/USDT:USDT"] == "panic"
+
+
+def test_refresh_halted_runtime_forced_modes_keeps_halted_pside_in_panic_or_graceful_stop():
+    from passivbot import Passivbot
+
+    class _Stub:
+        def __init__(self):
+            self.positions = {"BTC/USDT:USDT": {"long": {"size": 5.0}, "short": {"size": 0.0}}}
+            self.open_orders = {}
+            self.active_symbols = {"BTC/USDT:USDT", "ETH/USDT:USDT"}
+            self._runtime_forced_modes = {"long": {}, "short": {}}
+            self._states = {
+                "long": {"halted": True},
+                "short": {"halted": False},
+            }
+
+        def _hsl_psides(self):
+            return ("long", "short")
+
+        def _equity_hard_stop_enabled(self, pside=None):
+            return pside == "long"
+
+        def _hsl_state(self, pside):
+            return self._states[pside]
+
+        def _equity_hard_stop_runtime_red_latched(self, pside):
+            return pside == "long"
+
+        def _equity_hard_stop_clear_runtime_forced_modes(self, pside=None):
+            if pside is None:
+                self._runtime_forced_modes = {"long": {}, "short": {}}
+            else:
+                self._runtime_forced_modes[pside] = {}
+
+        def _equity_hard_stop_set_red_runtime_forced_modes(self, pside):
+            raise AssertionError("halted pside should use halted-mode mapping, not active RED panic map")
+
+        def _equity_hard_stop_halted_mode(self, pside, symbol):
+            del pside
+            return "panic" if symbol == "BTC/USDT:USDT" else "graceful_stop"
+
+    stub = _Stub()
+    Passivbot._equity_hard_stop_refresh_halted_runtime_forced_modes(stub)
+    assert stub._runtime_forced_modes["long"]["BTC/USDT:USDT"] == "panic"
     assert stub._runtime_forced_modes["long"]["ETH/USDT:USDT"] == "graceful_stop"
 
 
 @pytest.mark.asyncio
+@pytest.mark.fake_live
 @pytest.mark.parametrize(
     (
         "scenario_rel",
@@ -303,32 +427,24 @@ def test_refresh_halted_runtime_forced_modes_uses_halted_mode_for_all_symbols():
             None,
         ),
         (
-            "scenarios/fake_live/hsl_long_cooldown_manual_entry_panic.hjson",
-            "fake_hsl_manual_panic_test",
+            "scenarios/fake_live/hsl_long_cooldown_manual_entry_repanic_reset.hjson",
+            "fake_hsl_manual_cooldown_test",
             5,
             "cooldown violation repanic flattened; cooldown reset",
             2.0,
             "panic",
         ),
         (
-            "scenarios/fake_live/hsl_long_cooldown_manual_entry_normal.hjson",
-            "fake_hsl_manual_normal_test",
+            "scenarios/fake_live/hsl_long_cooldown_manual_entry_resume_normal.hjson",
+            "fake_hsl_manual_resume_normal_test",
             5,
             "operator override during RED cooldown: resumed normal operation and reset drawdown tracker",
             2.0,
             "normal",
         ),
         (
-            "scenarios/fake_live/hsl_long_cooldown_manual_entry_graceful_stop.hjson",
-            "fake_hsl_manual_graceful_stop_test",
-            5,
-            "detected non-flat position during RED cooldown | policy=graceful_stop",
-            2.0,
-            "graceful_stop",
-        ),
-        (
-            "scenarios/fake_live/hsl_long_cooldown_manual_entry_manual.hjson",
-            "fake_hsl_manual_manual_test",
+            "scenarios/fake_live/hsl_long_cooldown_manual_entry_manual_quarantine.hjson",
+            "fake_hsl_manual_quarantine_test",
             5,
             "detected non-flat position during RED cooldown | policy=manual",
             2.0,
@@ -341,6 +457,14 @@ def test_refresh_halted_runtime_forced_modes_uses_halted_mode_for_all_symbols():
             "detected non-flat position during RED cooldown | policy=tp_only",
             2.0,
             "tp_only",
+        ),
+        (
+            "scenarios/fake_live/hsl_long_cooldown_manual_entry_graceful_stop.hjson",
+            "fake_hsl_manual_graceful_stop_test",
+            5,
+            "detected non-flat position during RED cooldown | policy=graceful_stop",
+            2.0,
+            "graceful_stop",
         ),
     ],
 )
@@ -361,9 +485,7 @@ async def test_hsl_replay_scenarios_run_end_to_end(
     config_path = REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"
     if cooldown_override is not None:
         cfg = load_config(str(config_path), verbose=False)
-        cfg["bot"]["common"]["equity_hard_stop_loss"]["cooldown_minutes_after_red"] = float(
-            cooldown_override
-        )
+        cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = float(cooldown_override)
         if policy_override is not None:
             cfg["live"]["hsl_position_during_cooldown_policy"] = str(policy_override)
         config_path = tmp_path / "fake_live_hsl_btc_override.json"
