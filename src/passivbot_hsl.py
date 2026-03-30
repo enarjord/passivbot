@@ -406,14 +406,15 @@ def _get_exchange_fee_rates(self, symbol: str) -> tuple[float, float]:
 
 
 def _orchestrator_exchange_params(self, symbol: str) -> dict:
-    # maker_fee/taker_fee deferred: current Rust OrchestratorInput schema does not yet
-    # accept these fields. They will be re-enabled once the Rust side is updated.
+    maker_fee, taker_fee = self._get_exchange_fee_rates(symbol)
     return {
         "qty_step": float(self.qty_steps[symbol]),
         "price_step": float(self.price_steps[symbol]),
         "min_qty": float(self.min_qtys[symbol]),
         "min_cost": float(self.min_costs[symbol]),
         "c_mult": float(self.c_mults[symbol]),
+        "maker_fee": float(maker_fee),
+        "taker_fee": float(taker_fee),
     }
 
 
@@ -901,7 +902,8 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
         return
     prev_phase = getattr(self, "_log_silence_watchdog_phase", "runtime")
     prev_stage = getattr(self, "_log_silence_watchdog_stage", "idle")
-    self._set_log_silence_watchdog_context(phase=prev_phase, stage="equity_hard_stop_initialize_from_history")
+    if hasattr(self, "_set_log_silence_watchdog_context"):
+        self._set_log_silence_watchdog_context(phase=prev_phase, stage="equity_hard_stop_initialize_from_history")
     try:
         self._equity_hard_stop_reset_state()
         signal_mode = self._equity_hard_stop_signal_mode()
@@ -1206,7 +1208,8 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 state["pending_red_since_ms"] = int(current_metrics["timestamp_ms"])
         self._equity_hard_stop_refresh_halted_runtime_forced_modes()
     finally:
-        self._set_log_silence_watchdog_context(phase=prev_phase, stage=prev_stage)
+        if hasattr(self, "_set_log_silence_watchdog_context"):
+            self._set_log_silence_watchdog_context(phase=prev_phase, stage=prev_stage)
 
 
 def _equity_hard_stop_log_status(self, pside: str, metrics: dict) -> None:

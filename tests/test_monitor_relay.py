@@ -91,7 +91,9 @@ async def test_monitor_relay_health_handler_reports_available_bots(tmp_path):
     assert response.status == 200
     data = json.loads(response.text)
     assert data["status"] == "ok"
-    assert data["bots"] == [{"exchange": "bybit", "user": "user01"}]
+    assert len(data["bots"]) == 1
+    assert data["bots"][0]["exchange"] == "bybit"
+    assert data["bots"][0]["user"] == "user01"
     assert data["subscribers"]["bybit/user01"] == 0
 
 
@@ -110,15 +112,20 @@ async def test_monitor_relay_snapshot_handler_returns_snapshot_message(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_monitor_relay_snapshot_requires_exchange_and_user_when_multiple_roots(tmp_path):
+async def test_monitor_relay_snapshot_returns_bundle_for_multiple_roots(tmp_path):
     monitor_root = _make_monitor_root(tmp_path, exchange="bybit", user="user01")
     _make_monitor_root(tmp_path, exchange="bitget", user="user02")
     app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)
 
-    with pytest.raises(web.HTTPBadRequest) as exc_info:
-        await _handle_snapshot(_make_request(app, "/snapshot"))
-    assert "multiple monitor roots available" in exc_info.value.text
+    # No params: returns a snapshot bundle with all active bots
+    response = await _handle_snapshot(_make_request(app, "/snapshot"))
+    assert response.status == 200
+    data = json.loads(response.text)
+    assert data["type"] == "snapshot_bundle"
+    exchanges = {b["exchange"] for b in data["bots"]}
+    assert exchanges == {"bybit", "bitget"}
 
+    # With exchange+user: returns that bot's snapshot directly
     response = await _handle_snapshot(
         _make_request(app, "/snapshot?exchange=bybit&user=user01")
     )
@@ -217,7 +224,7 @@ async def test_monitor_relay_websocket_sends_snapshot_then_live_updates(tmp_path
         task = asyncio.create_task(_handle_ws(_make_request(app, "/ws")))
 
         for _ in range(50):
-            if len(fake_ws.messages) >= 1 and relay._subscribers.get(("bybit", "user01")):
+            if len(fake_ws.messages) >= 1 and relay._subscribers:
                 break
             await asyncio.sleep(0.01)
         else:
