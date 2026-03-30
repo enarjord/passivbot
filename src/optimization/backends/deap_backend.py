@@ -19,6 +19,19 @@ from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
 )
 
+DEFAULT_DEAP_POPULATION_SIZE = 500
+
+
+def _resolve_deap_population_size(config: dict[str, Any]) -> int:
+    raw = config["optimize"].get("population_size")
+    if raw is None:
+        logging.info(
+            "optimize.population_size=null is not supported by deap; using %d",
+            DEFAULT_DEAP_POPULATION_SIZE,
+        )
+        return DEFAULT_DEAP_POPULATION_SIZE
+    return max(1, int(raw))
+
 
 def run_backend(
     *,
@@ -149,7 +162,7 @@ def run_backend(
                 raise
             return completed
 
-        population_size = config["optimize"]["population_size"]
+        population_size = _resolve_deap_population_size(config)
         starting_configs = get_starting_configs(starting_configs_path)
         if starting_configs:
             logging.info(
@@ -202,11 +215,11 @@ def run_backend(
         hof = tools.ParetoFront()
 
         logging.info("Starting optimize...")
-        lambda_size = max(1, int(round(config["optimize"]["population_size"] * offspring_multiplier)))
+        lambda_size = max(1, int(round(population_size * offspring_multiplier)))
         population, logbook = run_evolution(
             population,
             toolbox,
-            mu=config["optimize"]["population_size"],
+            mu=population_size,
             lambda_=lambda_size,
             cxpb=config["optimize"]["crossover_probability"],
             mutpb=config["optimize"]["mutation_probability"],

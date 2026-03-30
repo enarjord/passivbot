@@ -1723,6 +1723,18 @@ def _apply_non_live_adjustments(
             f"optimize.backend must be one of ['deap', 'pymoo']; got {result['optimize'].get('backend')!r}"
         )
     result["optimize"]["backend"] = backend
+    population_size = result["optimize"].get("population_size")
+    if isinstance(population_size, str):
+        normalized_population_size = population_size.strip().lower()
+        if normalized_population_size in {"", "none", "null", "auto"}:
+            population_size = None
+        else:
+            population_size = int(population_size)
+    elif population_size is not None:
+        population_size = int(population_size)
+    if population_size is not None and population_size <= 0:
+        raise ValueError("optimize.population_size must be > 0 when set")
+    result["optimize"]["population_size"] = population_size
 
     current_limits = deepcopy(result["optimize"].get("limits", []))
     limits_snapshot = deepcopy(current_limits)
@@ -3584,8 +3596,8 @@ def get_template_config():
             "mutation_probability": 0.34,
             "n_cpus": 5,
             "offspring_multiplier": 1.0,
-            "pareto_max_size": 300,
-            "population_size": 1000,
+            "pareto_max_size": 500,
+            "population_size": None,
             "pymoo": {
                 "algorithm": "nsga3",
                 "shared": {

@@ -87,20 +87,52 @@ def _ignore_sigint():
 
 def test_build_algorithm_uses_nsga3_with_auto_reference_directions():
     bounds = [Bound(0.0, 1.0, 0.1) for _ in range(6)]
+    config = {
+        "optimize": {
+            "backend": "pymoo",
+            "population_size": 500,
+            "pymoo": {
+                "algorithm": "nsga3",
+                "shared": {
+                    "crossover_eta": 20.0,
+                    "crossover_prob_var": 0.5,
+                    "mutation_eta": 20.0,
+                    "mutation_prob_var": "auto",
+                    "eliminate_duplicates": True,
+                },
+                "algorithms": {
+                    "nsga3": {
+                        "ref_dirs": {
+                            "method": "das_dennis",
+                            "n_partitions": "auto",
+                        }
+                    }
+                },
+            },
+        }
+    }
+    population_plan = pymoo_backend._resolve_pymoo_population_plan(config, n_obj=8)
     algorithm = pymoo_backend._build_algorithm(
+        config=config,
+        sampling=np.zeros((500, len(bounds)), dtype=np.float64),
+        bounds=bounds,
+        sig_digits=4,
+        population_plan=population_plan,
+    )
+
+    assert algorithm.__class__.__name__ == "NSGA3"
+    assert algorithm.pop_size == 500
+    assert len(algorithm.ref_dirs) == 330
+
+
+def test_resolve_population_plan_uses_auto_nsga3_population_when_null():
+    plan = pymoo_backend._resolve_pymoo_population_plan(
         config={
             "optimize": {
                 "backend": "pymoo",
-                "population_size": 500,
+                "population_size": None,
                 "pymoo": {
                     "algorithm": "nsga3",
-                    "shared": {
-                        "crossover_eta": 20.0,
-                        "crossover_prob_var": 0.5,
-                        "mutation_eta": 20.0,
-                        "mutation_prob_var": "auto",
-                        "eliminate_duplicates": True,
-                    },
                     "algorithms": {
                         "nsga3": {
                             "ref_dirs": {
@@ -112,33 +144,33 @@ def test_build_algorithm_uses_nsga3_with_auto_reference_directions():
                 },
             }
         },
-        sampling=np.zeros((500, len(bounds)), dtype=np.float64),
-        bounds=bounds,
-        sig_digits=4,
         n_obj=8,
     )
 
-    assert algorithm.__class__.__name__ == "NSGA3"
-    assert algorithm.pop_size == 500
-    assert len(algorithm.ref_dirs) == 330
+    assert plan["requested_population_size"] is None
+    assert plan["actual_population_size"] == 330
+    assert plan["n_partitions"] == 4
+    assert len(plan["ref_dirs"]) == 330
 
 
 def test_build_algorithm_falls_back_to_nsga2_for_single_objective():
     bounds = [Bound(0.0, 1.0, 0.1) for _ in range(4)]
+    config = {
+        "optimize": {
+            "backend": "pymoo",
+            "population_size": 16,
+            "pymoo": {
+                "algorithm": "nsga3",
+            },
+        }
+    }
+    population_plan = pymoo_backend._resolve_pymoo_population_plan(config, n_obj=1)
     algorithm = pymoo_backend._build_algorithm(
-        config={
-            "optimize": {
-                "backend": "pymoo",
-                "population_size": 16,
-                "pymoo": {
-                    "algorithm": "nsga3",
-                },
-            }
-        },
+        config=config,
         sampling=np.zeros((16, len(bounds)), dtype=np.float64),
         bounds=bounds,
         sig_digits=4,
-        n_obj=1,
+        population_plan=population_plan,
     )
 
     assert algorithm.__class__.__name__ == "NSGA2"

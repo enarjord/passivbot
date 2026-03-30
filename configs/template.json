@@ -477,7 +477,7 @@
         "max_pending_starting_evals_per_cpu": 1,
         "n_cpus": 6,
         "pareto_max_size": 500,
-        "population_size": 500,
+        "population_size": null,
         "pymoo": {
             "algorithm": "nsga3",
             "shared": {

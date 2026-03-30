@@ -37,6 +37,7 @@ DEFAULT_PYMOO_REF_DIRS = {
     "method": "das_dennis",
     "n_partitions": "auto",
 }
+DEFAULT_AUTO_REF_DIR_TARGET = 330
 SUPPORTED_PYMOO_ALGORITHMS = {"nsga2", "nsga3"}
 SUPPORTED_REF_DIR_METHODS = {"das_dennis"}
 
@@ -88,6 +89,13 @@ def _extend_sampling_to_size(sampling: np.ndarray, bounds, target_size: int) -> 
     if not extra:
         return sampling
     return np.vstack([sampling, np.asarray(extra, dtype=np.float64)])
+
+
+def _resolve_requested_population_size(config: dict[str, Any]) -> int | None:
+    raw = config["optimize"].get("population_size")
+    if raw is None:
+        return None
+    return max(1, int(raw))
 
 
 def _resolve_pymoo_algorithm_name(config: dict[str, Any]) -> str:
@@ -146,16 +154,20 @@ def _reference_direction_count(n_obj: int, n_partitions: int) -> int:
 def _resolve_auto_n_partitions(
     *,
     n_obj: int,
-    population_size: int,
+    population_size: int | None,
+    target_ref_dirs: int = DEFAULT_AUTO_REF_DIR_TARGET,
     max_partitions: int = 32,
 ) -> int:
     if n_obj <= 1:
         return 1
     best = 1
-    upper = max(1, min(int(max_partitions), int(population_size)))
+    upper = max(1, int(max_partitions))
     for n_partitions in range(1, upper + 1):
         count = _reference_direction_count(n_obj, n_partitions)
-        if count > population_size:
+        if population_size is None:
+            if count > int(target_ref_dirs):
+                break
+        elif count > population_size:
             break
         best = n_partitions
     return best
@@ -165,7 +177,7 @@ def _resolve_nsga3_ref_dirs(
     config: dict[str, Any],
     *,
     n_obj: int,
-    population_size: int,
+    population_size: int | None,
 ) -> tuple[np.ndarray, int, str]:
     if get_reference_directions is None:  # pragma: no cover
         raise ModuleNotFoundError("pymoo is required for the pymoo optimizer backend")
@@ -200,20 +212,66 @@ def _resolve_nsga3_ref_dirs(
     return ref_dirs, n_partitions, resolution
 
 
+def _resolve_pymoo_population_plan(
+    config: dict[str, Any],
+    *,
+    n_obj: int,
+) -> dict[str, Any]:
+    algorithm_name = _resolve_pymoo_algorithm_name(config)
+    requested_population_size = _resolve_requested_population_size(config)
+
+    if algorithm_name == "nsga3" and n_obj < 2:
+        logging.warning(
+            "optimize.pymoo.algorithm=nsga3 requested with %d objective; falling back to nsga2",
+            n_obj,
+        )
+        algorithm_name = "nsga2"
+
+    if algorithm_name == "nsga3":
+        ref_dirs, n_partitions, resolution = _resolve_nsga3_ref_dirs(
+            config,
+            n_obj=n_obj,
+            population_size=requested_population_size,
+        )
+        actual_population_size = (
+            int(len(ref_dirs))
+            if requested_population_size is None
+            else max(requested_population_size, int(len(ref_dirs)))
+        )
+        return {
+            "algorithm_name": algorithm_name,
+            "requested_population_size": requested_population_size,
+            "actual_population_size": actual_population_size,
+            "ref_dirs": ref_dirs,
+            "n_partitions": n_partitions,
+            "resolution": resolution,
+        }
+
+    if requested_population_size is None:
+        raise ValueError("optimize.population_size must be set when optimize.pymoo.algorithm=nsga2")
+
+    return {
+        "algorithm_name": algorithm_name,
+        "requested_population_size": requested_population_size,
+        "actual_population_size": requested_population_size,
+        "ref_dirs": None,
+        "n_partitions": None,
+        "resolution": None,
+    }
+
+
 def _build_algorithm(
     *,
     config: dict[str, Any],
     sampling: np.ndarray,
     bounds,
     sig_digits: int | None,
-    n_obj: int,
+    population_plan: dict[str, Any],
 ):
     if NSGA2 is None:  # pragma: no cover
         raise ModuleNotFoundError("pymoo is required for the pymoo optimizer backend")
 
-    optimize_cfg = config["optimize"]
     shared = _resolve_pymoo_shared(config)
-    requested_population_size = max(1, int(optimize_cfg["population_size"]))
     repair = BoundsRepair(bounds, sig_digits)
     crossover = SBX(
         prob_var=float(shared["crossover_prob_var"]),
@@ -225,41 +283,41 @@ def _build_algorithm(
     )
     eliminate_duplicates = bool(shared["eliminate_duplicates"])
 
-    algorithm_name = _resolve_pymoo_algorithm_name(config)
-    if algorithm_name == "nsga3" and n_obj < 2:
-        logging.warning(
-            "optimize.pymoo.algorithm=nsga3 requested with %d objective; falling back to nsga2",
-            n_obj,
-        )
-        algorithm_name = "nsga2"
+    algorithm_name = population_plan["algorithm_name"]
+    requested_population_size = population_plan["requested_population_size"]
 
     if algorithm_name == "nsga3":
         if NSGA3 is None:  # pragma: no cover
             raise ModuleNotFoundError("pymoo NSGA3 is required for the pymoo optimizer backend")
-        ref_dirs, n_partitions, resolution = _resolve_nsga3_ref_dirs(
-            config,
-            n_obj=n_obj,
-            population_size=requested_population_size,
-        )
-        actual_population_size = max(requested_population_size, int(len(ref_dirs)))
-        if actual_population_size != requested_population_size:
+        ref_dirs = population_plan["ref_dirs"]
+        n_partitions = population_plan["n_partitions"]
+        resolution = population_plan["resolution"]
+        actual_population_size = population_plan["actual_population_size"]
+        if requested_population_size is None:
+            logging.info(
+                "Using pymoo nsga3 auto population size=%d from %d reference directions",
+                actual_population_size,
+                len(ref_dirs),
+            )
+        elif actual_population_size != requested_population_size:
             logging.info(
                 "Adjusted pymoo nsga3 population size from %d to %d to cover %d reference directions",
                 requested_population_size,
                 actual_population_size,
                 len(ref_dirs),
             )
-        sampling = _extend_sampling_to_size(sampling, bounds, actual_population_size)
+        if len(sampling) < actual_population_size:
+            sampling = _extend_sampling_to_size(sampling, bounds, actual_population_size)
         logging.info(
             "Using pymoo nsga3 | n_obj=%d | ref_dirs=%d | n_partitions=%d (%s)",
-            n_obj,
+            ref_dirs.shape[1],
             len(ref_dirs),
             n_partitions,
             resolution,
         )
         algorithm = NSGA3(
             ref_dirs=ref_dirs,
-            pop_size=actual_population_size,
+            pop_size=None if requested_population_size is None else actual_population_size,
             sampling=sampling,
             crossover=crossover,
             mutation=mutation,
@@ -268,9 +326,9 @@ def _build_algorithm(
         )
         return algorithm
 
-    logging.info("Using pymoo nsga2 | n_obj=%d", n_obj)
+    logging.info("Using pymoo nsga2")
     return NSGA2(
-        pop_size=requested_population_size,
+        pop_size=population_plan["actual_population_size"],
         sampling=sampling,
         crossover=crossover,
         mutation=mutation,
@@ -312,9 +370,13 @@ def run_backend(
     try:
         bounds = base_evaluator.bounds
         sig_digits = config["optimize"]["round_to_n_significant_digits"]
+        population_plan = _resolve_pymoo_population_plan(
+            config,
+            n_obj=len(config["optimize"]["scoring"]),
+        )
         sampling = _build_initial_population(
             bounds=bounds,
-            population_size=config["optimize"]["population_size"],
+            population_size=population_plan["actual_population_size"],
             get_starting_configs=get_starting_configs,
             configs_to_individuals=configs_to_individuals,
             starting_configs_path=starting_configs_path,
@@ -346,9 +408,9 @@ def run_backend(
             sampling=sampling,
             bounds=bounds,
             sig_digits=sig_digits,
-            n_obj=len(config["optimize"]["scoring"]),
+            population_plan=population_plan,
         )
-        population_size = max(1, int(config["optimize"]["population_size"]))
+        population_size = population_plan["actual_population_size"]
         ngen = max(1, int(config["optimize"]["iters"] / population_size))
         logging.info("Starting optimize...")
         pymoo_minimize(

@@ -10,6 +10,10 @@ from config_utils import (
     update_config_with_args,
 )
 from optimization.backends import get_backend_runner
+from optimization.backends.deap_backend import (
+    DEFAULT_DEAP_POPULATION_SIZE,
+    _resolve_deap_population_size,
+)
 from optimization.backends.deap_backend import run_backend as run_deap_backend
 from optimization.backends.pymoo_backend import run_backend as run_pymoo_backend
 
@@ -100,6 +104,27 @@ def test_format_config_normalizes_pymoo_nested_defaults_and_legacy_fallbacks():
         "method": "das_dennis",
         "n_partitions": "auto",
     }
+
+
+def test_template_defaults_use_null_population_and_pareto_500():
+    current = get_template_config()
+
+    assert current["optimize"]["population_size"] is None
+    assert current["optimize"]["pareto_max_size"] == 500
+
+
+def test_format_config_preserves_null_population_size_for_pymoo():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["backend"] = "pymoo"
+    current["optimize"]["population_size"] = None
+
+    out = format_config(current, verbose=False)
+
+    assert out["optimize"]["population_size"] is None
+
+
+def test_resolve_deap_population_size_uses_fallback_for_null():
+    assert _resolve_deap_population_size({"optimize": {"population_size": None}}) == DEFAULT_DEAP_POPULATION_SIZE
 
 
 def test_get_backend_runner_resolves_supported_backends():

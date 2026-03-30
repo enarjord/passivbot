@@ -56,7 +56,7 @@ Pymoo-specific settings live under `optimize.pymoo`:
 {
   "optimize": {
     "backend": "pymoo",
-    "population_size": 500,
+    "population_size": null,
     "pymoo": {
       "algorithm": "nsga3",
       "shared": {
@@ -104,14 +104,20 @@ Current meaning of the main pymoo knobs:
   - Currently `das_dennis`.
 - `optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions`
   - Controls how dense the NSGA-III reference-direction grid is.
-  - `"auto"` chooses the largest partition count that still fits within the configured population size, which is the sensible default for typical Passivbot jobs.
+  - `"auto"` chooses a practical default grid density. If `optimize.population_size` is set, it chooses the largest partition count that still fits within that population size. If `optimize.population_size` is `null`, it targets a moderate many-objective grid and then lets NSGA-III use that reference-direction count as the population size.
+
+- `optimize.population_size`
+  - For `pymoo` + `nsga3`, `null` means “auto”: use the number of resolved reference directions as the population size.
+  - For `pymoo` + `nsga2`, set an explicit integer.
+  - For `deap`, Passivbot currently falls back to its legacy fixed default when `null` is left in place.
 
 Recommended defaults for typical Passivbot runs:
 
 - Use `optimize.backend: pymoo` with `optimize.pymoo.algorithm: nsga3` when optimizing many metrics.
 - Keep `mutation_prob_var: "auto"`.
 - Keep `crossover_eta: 20` and `mutation_eta: 20` unless you have a specific reason to make variation much more local or much more aggressive.
-- Start with `population_size` in the low hundreds and leave `ref_dirs.n_partitions: "auto"` so NSGA-III can size its reference grid to the run.
+- Leave `population_size: null` and `ref_dirs.n_partitions: "auto"` for the default Passivbot NSGA-III behavior.
+- If you need more or less exploration pressure, override `population_size` explicitly instead of changing mutation defaults first.
 
 ### Candle Interval
 
