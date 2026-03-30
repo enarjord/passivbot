@@ -1,18 +1,15 @@
 (() => {
+  const qs = new URLSearchParams(window.location.search);
   const state = {
-    snapshot: null,
-    exchange: null,
-    user: null,
-    focusSymbol: "",
-    recentEvents: [],
-    recentTicks: new Map(),
+    bots: new Map(),
+    focusedBotKey: null,
+    focusSymbols: new Map(),
     ws: null,
     reconnectTimer: null,
     snapshotTimer: null,
     lastWsTs: null,
   };
 
-  const qs = new URLSearchParams(window.location.search);
   const els = {
     heroTitle: document.getElementById("hero-title"),
     heroSubtitle: document.getElementById("hero-subtitle"),
@@ -22,6 +19,9 @@
     snapshotStatus: document.getElementById("snapshot-status"),
     focusStatus: document.getElementById("focus-status"),
     relayStatus: document.getElementById("relay-status"),
+    botsMeta: document.getElementById("bots-meta"),
+    botOverview: document.getElementById("bot-overview"),
+    summaryMeta: document.getElementById("summary-meta"),
     summaryCards: document.getElementById("summary-cards"),
     focusLabel: document.getElementById("focus-label"),
     focusDetails: document.getElementById("focus-details"),
@@ -35,11 +35,6 @@
     ordersList: document.getElementById("orders-list"),
     emptyTemplate: document.getElementById("empty-state-template"),
   };
-
-  function fmtNumber(value, digits = 4) {
-    if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
-    return Number(value).toFixed(digits);
-  }
 
   function fmtCompact(value, digits = 4) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
@@ -86,19 +81,6 @@
     }
   }
 
-  function escapeHtml(text) {
-    return String(text)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;");
-  }
-
-  function shortSymbol(symbol) {
-    if (!symbol) return "-";
-    return String(symbol).replace(":USDT", "").replace(":USDC", "");
-  }
-
   function fmtShortTs(tsMs) {
     if (!tsMs) return "-";
     try {
@@ -110,6 +92,19 @@
     } catch {
       return String(tsMs);
     }
+  }
+
+  function escapeHtml(text) {
+    return String(text)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
+
+  function shortSymbol(symbol) {
+    if (!symbol) return "-";
+    return String(symbol).replace(":USDT", "").replace(":USDC", "");
   }
 
   function compactEntries(entries) {
@@ -141,11 +136,6 @@
     return classes.join(" ");
   }
 
-  function setFocusSymbol(symbol) {
-    state.focusSymbol = symbol || "";
-    render();
-  }
-
   function emptyNode() {
     return els.emptyTemplate.content.firstElementChild.cloneNode(true);
   }
@@ -156,50 +146,174 @@
     if (tone) el.classList.add(tone);
   }
 
-  function currentPayload() {
-    return state.snapshot && state.snapshot.payload ? state.snapshot.payload : null;
+  function botKey(exchange, user) {
+    if (!exchange || !user) return null;
+    return `${exchange}/${user}`;
+  }
+
+  function splitBotKey(key) {
+    if (!key) return [null, null];
+    const slash = key.indexOf("/");
+    if (slash === -1) return [key, null];
+    return [key.slice(0, slash), key.slice(slash + 1)];
   }
 
   function messageKey(message) {
     if (!message) return null;
-    if (message.exchange && message.user) return `${message.exchange}/${message.user}`;
+    if (message.exchange && message.user) return botKey(message.exchange, message.user);
     const payload = message.payload || {};
     const meta = payload.meta || {};
-    if (meta.exchange && meta.user) return `${meta.exchange}/${meta.user}`;
-    return null;
+    return botKey(meta.exchange, meta.user);
   }
 
-  function shouldAcceptMessage(message) {
-    const key = messageKey(message);
-    if (!key) return true;
-    if (state.exchange && state.user) return key === `${state.exchange}/${state.user}`;
-    const [exchange, user] = key.split("/");
-    state.exchange = exchange;
-    state.user = user;
-    if (!qs.get("exchange")) qs.set("exchange", exchange);
-    if (!qs.get("user")) qs.set("user", user);
-    return true;
+  function preferredBotKeyFromQs() {
+    return botKey(qs.get("exchange"), qs.get("user"));
   }
 
-  function selectSnapshotFromBundle(bundle) {
-    const bots = Array.isArray(bundle && bundle.bots) ? bundle.bots : [];
-    if (!bots.length) return null;
-    if (state.exchange && state.user) {
-      const wanted = `${state.exchange}/${state.user}`;
-      const matched = bots.find((entry) => messageKey(entry) === wanted);
-      if (matched) return matched;
+  function ensureBotState(key) {
+    if (!state.bots.has(key)) {
+      state.bots.set(key, {
+        snapshot: null,
+        recentEvents: [],
+        recentTicks: new Map(),
+        lastMessageTs: 0,
+      });
     }
-    return bots[0];
+    return state.bots.get(key);
   }
 
-  function availableSymbols() {
-    const payload = currentPayload();
+  function sortedBotEntries() {
+    return Array.from(state.bots.entries())
+      .filter(([, entry]) => entry.snapshot && entry.snapshot.payload)
+      .sort((a, b) => {
+        const ta = Number(a[1].snapshot.ts || 0);
+        const tb = Number(b[1].snapshot.ts || 0);
+        if (tb !== ta) return tb - ta;
+        return a[0].localeCompare(b[0]);
+      });
+  }
+
+  function ensureFocusedBotKey() {
+    if (state.focusedBotKey && state.bots.has(state.focusedBotKey)) return state.focusedBotKey;
+    const preferred = preferredBotKeyFromQs();
+    if (preferred && state.bots.has(preferred)) {
+      state.focusedBotKey = preferred;
+      return preferred;
+    }
+    const first = sortedBotEntries()[0];
+    state.focusedBotKey = first ? first[0] : null;
+    return state.focusedBotKey;
+  }
+
+  function setFocusedBotKey(key) {
+    state.focusedBotKey = key || null;
+    if (state.focusedBotKey) {
+      const [exchange, user] = splitBotKey(state.focusedBotKey);
+      qs.set("exchange", exchange || "");
+      qs.set("user", user || "");
+    } else {
+      qs.delete("exchange");
+      qs.delete("user");
+    }
+    render();
+  }
+
+  function focusSymbolForKey(key) {
+    if (!key) return "";
+    if (state.focusSymbols.has(key)) return state.focusSymbols.get(key) || "";
+    const preferred = preferredBotKeyFromQs();
+    if (preferred && key === preferred) {
+      return qs.get("symbol") || "";
+    }
+    return "";
+  }
+
+  function setFocusSymbol(symbol) {
+    const key = ensureFocusedBotKey();
+    if (!key) return;
+    if (symbol) {
+      state.focusSymbols.set(key, symbol);
+      qs.set("symbol", symbol);
+    } else {
+      state.focusSymbols.delete(key);
+      qs.delete("symbol");
+    }
+    render();
+  }
+
+  function currentBotEntry() {
+    const key = ensureFocusedBotKey();
+    return key ? state.bots.get(key) || null : null;
+  }
+
+  function currentSnapshot() {
+    return currentBotEntry()?.snapshot || null;
+  }
+
+  function currentPayload() {
+    return currentSnapshot()?.payload || null;
+  }
+
+  function normalizeSnapshotMessages(payload) {
+    if (payload?.type === "snapshot_bundle" && Array.isArray(payload.bots)) return payload.bots;
+    if (payload?.type === "snapshot") return [payload];
+    return [];
+  }
+
+  function ingestSnapshotPayload(payload) {
+    const messages = normalizeSnapshotMessages(payload);
+    const seenKeys = new Set();
+    for (const message of messages) {
+      const key = messageKey(message);
+      if (!key) continue;
+      seenKeys.add(key);
+      const bot = ensureBotState(key);
+      bot.snapshot = message;
+      bot.lastMessageTs = Number(message.ts || Date.now());
+    }
+    if (messages.length) {
+      for (const key of Array.from(state.bots.keys())) {
+        if (!seenKeys.has(key)) {
+          state.bots.delete(key);
+          state.focusSymbols.delete(key);
+        }
+      }
+    }
+    ensureFocusedBotKey();
+  }
+
+  function pushEvent(message) {
+    const key = messageKey(message);
+    if (!key) return;
+    const bot = ensureBotState(key);
+    bot.recentEvents = [
+      message,
+      ...bot.recentEvents.filter(
+        (entry) =>
+          !(entry.kind === message.kind && entry.ts === message.ts && entry.symbol === message.symbol)
+      ),
+    ].slice(0, 60);
+    bot.lastMessageTs = Number(message.ts || Date.now());
+  }
+
+  function pushTick(message) {
+    const key = messageKey(message);
+    if (!key || !message.symbol) return;
+    const bot = ensureBotState(key);
+    bot.recentTicks.set(message.symbol, message);
+    const sorted = Array.from(bot.recentTicks.entries())
+      .sort((a, b) => Number(b[1].ts || 0) - Number(a[1].ts || 0))
+      .slice(0, 60);
+    bot.recentTicks = new Map(sorted);
+    bot.lastMessageTs = Number(message.ts || Date.now());
+  }
+
+  function availableSymbols(payload) {
     if (!payload || !payload.market) return [];
     return Object.keys(payload.market).sort();
   }
 
-  function activePositionRows() {
-    const payload = currentPayload();
+  function activePositionRows(payload) {
     if (!payload || !payload.positions) return [];
     const rows = [];
     const openOrders = payload.open_orders || {};
@@ -211,24 +325,28 @@
           symbol,
           pside,
           side,
-          orderCount: Array.isArray(openOrders[symbol]) ? openOrders[symbol].filter((order) => order.position_side === pside).length : 0,
+          orderCount: Array.isArray(openOrders[symbol])
+            ? openOrders[symbol].filter((order) => order.position_side === pside).length
+            : 0,
         });
       }
     }
-    rows.sort((a, b) => Math.abs(Number(b.side.wallet_exposure || 0)) - Math.abs(Number(a.side.wallet_exposure || 0)));
+    rows.sort(
+      (a, b) => Math.abs(Number(b.side.wallet_exposure || 0)) - Math.abs(Number(a.side.wallet_exposure || 0))
+    );
     return rows;
   }
 
-  function selectedFocusSymbol() {
-    if (state.focusSymbol) return state.focusSymbol;
-    const rows = activePositionRows();
+  function selectedFocusSymbol(botKeyValue, payload) {
+    const explicit = focusSymbolForKey(botKeyValue);
+    const symbols = availableSymbols(payload);
+    if (explicit && symbols.includes(explicit)) return explicit;
+    const rows = activePositionRows(payload);
     if (rows.length) return rows[0].symbol;
-    const symbols = availableSymbols();
     return symbols[0] || "";
   }
 
-  function filteredTrailingRows(focusSymbol) {
-    const payload = currentPayload();
+  function filteredTrailingRows(payload, focusSymbol) {
     const trailing = payload && payload.trailing ? payload.trailing : {};
     const rows = [];
     for (const [symbol, sides] of Object.entries(trailing || {})) {
@@ -236,9 +354,7 @@
         const side = sides && sides[pside];
         if (!side || typeof side !== "object") continue;
         for (const kind of ["entry", "close"]) {
-          if (side[kind]) {
-            rows.push({ symbol, pside, kind, payload: side[kind] });
-          }
+          if (side[kind]) rows.push({ symbol, pside, kind, payload: side[kind] });
         }
       }
     }
@@ -250,8 +366,8 @@
     return rows;
   }
 
-  function filteredEvents(focusSymbol) {
-    const events = [...state.recentEvents];
+  function filteredEvents(botEntry, focusSymbol) {
+    const events = [...(botEntry?.recentEvents || [])];
     const focused = focusSymbol ? events.filter((event) => event.symbol === focusSymbol) : [];
     const others = focusSymbol ? events.filter((event) => event.symbol !== focusSymbol) : events;
     const ordered = [...focused, ...others];
@@ -262,26 +378,27 @@
     return result.slice(0, 8);
   }
 
-  function filteredTicks(focusSymbol) {
-    const items = Array.from(state.recentTicks.entries()).sort((a, b) => Number(b[1].ts || 0) - Number(a[1].ts || 0));
+  function filteredTicks(botEntry, focusSymbol) {
+    const items = Array.from((botEntry?.recentTicks || new Map()).entries()).sort(
+      (a, b) => Number(b[1].ts || 0) - Number(a[1].ts || 0)
+    );
     if (!focusSymbol) return items.slice(0, 8);
     const focused = items.filter(([symbol]) => symbol === focusSymbol);
     const others = items.filter(([symbol]) => symbol !== focusSymbol);
     return [...focused, ...others].slice(0, 8);
   }
 
-  function recentOrders(focusSymbol) {
-    const payload = currentPayload();
+  function recentOrders(payload, focusSymbol) {
     const recent = payload && payload.recent ? payload.recent : {};
     const merged = [];
     for (const [key, action] of [["order_executions", "executed"], ["order_cancellations", "canceled"]]) {
       const rows = Array.isArray(recent[key]) ? recent[key] : [];
-      for (const entry of rows) {
-        merged.push({ ...entry, action });
-      }
+      for (const entry of rows) merged.push({ ...entry, action });
     }
     merged.sort((a, b) => Number(b.execution_timestamp || 0) - Number(a.execution_timestamp || 0));
-    const filtered = focusSymbol ? merged.filter((entry) => entry.symbol === focusSymbol).concat(merged.filter((entry) => entry.symbol !== focusSymbol)) : merged;
+    const filtered = focusSymbol
+      ? merged.filter((entry) => entry.symbol === focusSymbol).concat(merged.filter((entry) => entry.symbol !== focusSymbol))
+      : merged;
     return filtered.slice(0, 8);
   }
 
@@ -292,32 +409,42 @@
         return compactEntries([
           ["eq", fmtCompact(payload.equity, 2)],
           ["bal", fmtCompact(payload.balance_raw ?? payload.balance_snapped, 2)],
-        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
+        ])
+          .map(([key, value]) => `${key} ${value}`)
+          .join(" · ");
       case "position.changed":
         return compactEntries([
           ["size", fmtCompact(payload.new_size ?? payload.size, 4)],
           ["price", fmtCompact(payload.new_price ?? payload.price, 4)],
           ["upnl", fmtCompact(payload.upnl, 2)],
-        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
+        ])
+          .map(([key, value]) => `${key} ${value}`)
+          .join(" · ");
       case "order.executed":
       case "order.canceled":
         return compactEntries([
           ["qty", fmtCompact(payload.qty, 4)],
           ["px", fmtCompact(payload.price, 4)],
           ["type", payload.pb_order_type],
-        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
+        ])
+          .map(([key, value]) => `${key} ${value}`)
+          .join(" · ");
       case "hsl.transition":
         return compactEntries([
           ["tier", payload.tier],
           ["score", fmtCompact(payload.drawdown_score, 4)],
           ["halted", payload.halted],
-        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
+        ])
+          .map(([key, value]) => `${key} ${value}`)
+          .join(" · ");
       case "health.summary":
         return compactEntries([
           ["loop", `${fmtCompact(payload.last_loop_duration_ms, 0)}ms`],
           ["fills", fmtCompact(payload.fills, 0)],
           ["orders", fmtCompact(payload.orders_placed, 0)],
-        ]).map(([key, value]) => `${key} ${value}`).join(" · ");
+        ])
+          .map(([key, value]) => `${key} ${value}`)
+          .join(" · ");
       default:
         return summarizeObject(payload, 4);
     }
@@ -327,6 +454,72 @@
     if (status === "triggered") return "is-ok";
     if (status === "waiting_threshold" || status === "waiting_retracement") return "is-warn";
     return "";
+  }
+
+  function positionCounts(payload) {
+    let longCount = 0;
+    let shortCount = 0;
+    const positions = payload?.positions || {};
+    for (const position of Object.values(positions)) {
+      const longPos = position?.long || {};
+      const shortPos = position?.short || {};
+      if (Number(longPos.size || 0)) longCount += 1;
+      if (Number(shortPos.size || 0)) shortCount += 1;
+    }
+    return { longCount, shortCount };
+  }
+
+  function botDisplayLabel(key) {
+    const [exchange, user] = splitBotKey(key);
+    return `${exchange || "-"} / ${user || "-"}`;
+  }
+
+  function renderBotOverview(botEntries) {
+    els.botOverview.innerHTML = "";
+    els.botsMeta.textContent = `${botEntries.length} ${botEntries.length === 1 ? "bot" : "bots"}`;
+    if (!botEntries.length) {
+      els.botOverview.appendChild(emptyNode());
+      return;
+    }
+    for (const [key, botEntry] of botEntries) {
+      const payload = botEntry.snapshot?.payload || {};
+      const account = payload.account || {};
+      const health = payload.health || {};
+      const hsl = payload.hsl || {};
+      const counts = positionCounts(payload);
+      const card = document.createElement("article");
+      card.className = focusClasses(key, state.focusedBotKey, "overview-card");
+      card.dataset.botKey = key;
+      card.innerHTML = `
+        <div class="overview-head">
+          <div>
+            <p class="overview-title">${escapeHtml(botDisplayLabel(key))}</p>
+            <p class="overview-subtitle">snapshot ${escapeHtml(fmtAgeMs(botEntry.snapshot?.ts))} · ${escapeHtml(fmtTs(botEntry.snapshot?.ts))}</p>
+          </div>
+          <span class="pill ${key === state.focusedBotKey ? "is-ok" : ""}">${escapeHtml(key === state.focusedBotKey ? "focused" : "available")}</span>
+        </div>
+        <div class="overview-metrics">
+          <div class="overview-metric">
+            <p class="label">Equity</p>
+            <p class="value">${escapeHtml(fmtCompact(account.equity, 2))}</p>
+          </div>
+          <div class="overview-metric">
+            <p class="label">Loop</p>
+            <p class="value">${escapeHtml(`${fmtCompact(health.last_loop_duration_ms, 0)} ms`)}</p>
+          </div>
+          <div class="overview-metric">
+            <p class="label">Positions</p>
+            <p class="value">${escapeHtml(`L ${counts.longCount} / S ${counts.shortCount}`)}</p>
+          </div>
+          <div class="overview-metric">
+            <p class="label">HSL</p>
+            <p class="value">${escapeHtml(`L ${hsl.long?.tier || "-"} / S ${hsl.short?.tier || "-"}`)}</p>
+          </div>
+        </div>
+        <p class="overview-foot">events ${escapeHtml(String(botEntry.recentEvents.length))} · ticks ${escapeHtml(String(botEntry.recentTicks.size))} · uptime ${escapeHtml(fmtUptimeMs(health.uptime_ms))}</p>
+      `;
+      els.botOverview.appendChild(card);
+    }
   }
 
   function buildSummaryCards(payload) {
@@ -364,12 +557,12 @@
     const long = position.long || {};
     const short = position.short || {};
     const detailRows = [
-      [`Last`, `${fmtCompact(market.last_price)} (${fmtAgeMs(market.last_price_ts_ms)})`],
-      [`Tradable`, `${market.tradable} | active=${market.active_symbol}`],
-      [`Long`, `${fmtCompact(long.size)} @ ${fmtCompact(long.price)} | WE ${fmtCompact(long.wallet_exposure)} | uPnL ${fmtCompact(long.upnl, 2)}`],
-      [`Short`, `${fmtCompact(short.size)} @ ${fmtCompact(short.price)} | WE ${fmtCompact(short.wallet_exposure)} | uPnL ${fmtCompact(short.upnl, 2)}`],
-      [`EMA`, `lo ${fmtCompact(market.ema_bands?.long?.lower)} | hi ${fmtCompact(market.ema_bands?.long?.upper)}`],
-      [`Approvals`, `L ${market.approved?.long} / S ${market.approved?.short} | ignored L ${market.ignored?.long} / S ${market.ignored?.short}`],
+      ["Last", `${fmtCompact(market.last_price)} (${fmtAgeMs(market.last_price_ts_ms)})`],
+      ["Tradable", `${market.tradable} | active=${market.active_symbol}`],
+      ["Long", `${fmtCompact(long.size)} @ ${fmtCompact(long.price)} | WE ${fmtCompact(long.wallet_exposure)} | uPnL ${fmtCompact(long.upnl, 2)}`],
+      ["Short", `${fmtCompact(short.size)} @ ${fmtCompact(short.price)} | WE ${fmtCompact(short.wallet_exposure)} | uPnL ${fmtCompact(short.upnl, 2)}`],
+      ["EMA", `lo ${fmtCompact(market.ema_bands?.long?.lower)} | hi ${fmtCompact(market.ema_bands?.long?.upper)}`],
+      ["Approvals", `L ${market.approved?.long} / S ${market.approved?.short} | ignored L ${market.ignored?.long} / S ${market.ignored?.short}`],
     ];
     for (const [label, value] of detailRows) {
       const row = document.createElement("div");
@@ -380,9 +573,13 @@
   }
 
   function renderPositions(payload, focusSymbol) {
-    const rows = activePositionRows();
-    const totalLong = rows.filter((row) => row.pside === "long").reduce((acc, row) => acc + Number(row.side.wallet_exposure || 0), 0);
-    const totalShort = rows.filter((row) => row.pside === "short").reduce((acc, row) => acc + Number(row.side.wallet_exposure || 0), 0);
+    const rows = activePositionRows(payload);
+    const totalLong = rows
+      .filter((row) => row.pside === "long")
+      .reduce((acc, row) => acc + Number(row.side.wallet_exposure || 0), 0);
+    const totalShort = rows
+      .filter((row) => row.pside === "short")
+      .reduce((acc, row) => acc + Number(row.side.wallet_exposure || 0), 0);
     const twelLong = rows.find((row) => row.pside === "long")?.side.total_wallet_exposure_limit || 0;
     const twelShort = rows.find((row) => row.pside === "short")?.side.total_wallet_exposure_limit || 0;
     els.positionsMeta.textContent = `TWE L ${fmtCompact(totalLong)}/${fmtCompact(twelLong)} | S ${fmtCompact(totalShort)}/${fmtCompact(twelShort)}`;
@@ -418,7 +615,7 @@
 
   function renderTrailing(payload, focusSymbol) {
     els.trailingList.innerHTML = "";
-    const rows = filteredTrailingRows(focusSymbol);
+    const rows = filteredTrailingRows(payload, focusSymbol);
     if (!rows.length) {
       els.trailingList.appendChild(emptyNode());
       return;
@@ -449,7 +646,7 @@
       const item = document.createElement("article");
       item.className = "detail-row";
       item.innerHTML = `
-        <p class="headline"><span>${escapeHtml(pside)}</span><span class="pill ${side.enabled ? "is-ok" : "is-warn"}">${side.enabled ? "enabled" : "off"}</span></p>
+        <p class="headline"><span>${escapeHtml(pside)}</span><span class="pill ${side.enabled ? "is-ok" : "is-warn"}">${escapeHtml(side.enabled ? "enabled" : "off")}</span></p>
         <p class="subline">slots ${escapeHtml(String(side.slots?.current || 0))}/${escapeHtml(String(side.slots?.max || 0))} · open ${escapeHtml(String(side.slots?.open || 0))} · next ${escapeHtml(shortSymbol(side.next_symbol))}</p>
         <p class="minor">rank total ${escapeHtml(rankingLabel(side.ranking?.top_total))} · vol ${escapeHtml(rankingLabel(side.ranking?.top_volume))} · vola ${escapeHtml(rankingLabel(side.ranking?.top_volatility))} · ema ${escapeHtml(rankingLabel(side.ranking?.top_ema_readiness))}</p>
       `;
@@ -476,9 +673,9 @@
     if (!els.unstuckDetails.children.length) els.unstuckDetails.appendChild(emptyNode());
   }
 
-  function renderEvents(focusSymbol) {
+  function renderEvents(botEntry, focusSymbol) {
     els.eventsList.innerHTML = "";
-    const rows = filteredEvents(focusSymbol);
+    const rows = filteredEvents(botEntry, focusSymbol);
     if (!rows.length) {
       els.eventsList.appendChild(emptyNode());
       return;
@@ -496,9 +693,9 @@
     }
   }
 
-  function renderTicks(payload, focusSymbol) {
+  function renderTicks(payload, botEntry, focusSymbol) {
     els.ticksList.innerHTML = "";
-    const rows = filteredTicks(focusSymbol);
+    const rows = filteredTicks(botEntry, focusSymbol);
     if (!rows.length) {
       els.ticksList.appendChild(emptyNode());
       return;
@@ -516,9 +713,9 @@
     }
   }
 
-  function renderOrders(focusSymbol) {
+  function renderOrders(payload, focusSymbol) {
     els.ordersList.innerHTML = "";
-    const rows = recentOrders(focusSymbol);
+    const rows = recentOrders(payload, focusSymbol);
     if (!rows.length) {
       els.ordersList.appendChild(emptyNode());
       return;
@@ -536,68 +733,98 @@
     }
   }
 
-  function updateFocusOptions() {
-    const symbols = availableSymbols();
-    const current = state.focusSymbol;
-    els.focusSelect.innerHTML = `<option value="">Auto</option>${symbols.map((symbol) => `<option value="${escapeHtml(symbol)}">${escapeHtml(symbol)}</option>`).join("")}`;
+  function updateFocusOptions(payload, botKeyValue) {
+    const symbols = availableSymbols(payload);
+    const current = focusSymbolForKey(botKeyValue);
+    els.focusSelect.innerHTML = `<option value="">Auto</option>${symbols
+      .map((symbol) => `<option value="${escapeHtml(symbol)}">${escapeHtml(symbol)}</option>`)
+      .join("")}`;
     els.focusSelect.value = current && symbols.includes(current) ? current : "";
   }
 
-  function render() {
-    const payload = currentPayload();
-    if (!payload) return;
-    const focusSymbol = selectedFocusSymbol();
-    const health = payload.health || {};
-    const account = payload.account || {};
-    state.exchange = state.snapshot.exchange;
-    state.user = state.snapshot.user;
-    els.heroTitle.textContent = `${state.exchange} / ${state.user}`;
-    els.heroSubtitle.textContent = `Snapshot ${state.snapshot.seq ?? "-"} · ${fmtAgeMs(state.snapshot.ts)} old · equity ${fmtCompact(account.equity, 2)} · loop ${fmtCompact(health.last_loop_duration_ms, 0)} ms`;
-    setChip(els.snapshotStatus, `Snapshot: seq ${state.snapshot.seq ?? "-" } · age ${fmtAgeMs(state.snapshot.ts)}`, "is-ok");
-    setChip(els.focusStatus, `Focus: ${focusSymbol || "auto"}`, focusSymbol ? "is-ok" : "");
+  function renderNoBots() {
+    els.heroTitle.textContent = "Waiting for active bots...";
+    els.heroSubtitle.textContent = "The relay is up, but no active monitor snapshots are available yet.";
+    els.botsMeta.textContent = "0 bots";
+    els.summaryMeta.textContent = "-";
+    setChip(els.snapshotStatus, "Snapshot: waiting", "is-warn");
+    setChip(els.focusStatus, "Focus: none", "");
     setChip(els.relayStatus, `Relay: ${window.location.origin}`, "");
+    els.botOverview.innerHTML = "";
+    els.botOverview.appendChild(emptyNode());
+    for (const container of [
+      els.summaryCards,
+      els.focusDetails,
+      els.foragerDetails,
+      els.unstuckDetails,
+      els.eventsList,
+      els.ticksList,
+      els.ordersList,
+      els.trailingList,
+    ]) {
+      container.innerHTML = "";
+      container.appendChild(emptyNode());
+    }
+    els.positionsBody.innerHTML = `<tr><td colspan="8"><div class="empty-state">No active positions.</div></td></tr>`;
+    els.positionsMeta.textContent = "-";
+    els.focusLabel.textContent = "auto";
+    els.focusSelect.innerHTML = `<option value="">Auto</option>`;
+  }
+
+  function render() {
+    const botEntries = sortedBotEntries();
+    if (!botEntries.length) {
+      renderNoBots();
+      return;
+    }
+
+    renderBotOverview(botEntries);
+    const focusedKey = ensureFocusedBotKey();
+    const botEntry = currentBotEntry();
+    const snapshot = botEntry?.snapshot || null;
+    const payload = snapshot?.payload || null;
+    if (!focusedKey || !botEntry || !snapshot || !payload) {
+      renderNoBots();
+      return;
+    }
+
+    const focusSymbol = selectedFocusSymbol(focusedKey, payload);
+    const account = payload.account || {};
+    const health = payload.health || {};
+    els.heroTitle.textContent = `${botEntries.length} ${botEntries.length === 1 ? "bot" : "bots"} live`;
+    els.heroSubtitle.textContent = `Focused ${botDisplayLabel(focusedKey)} · equity ${fmtCompact(account.equity, 2)} · loop ${fmtCompact(health.last_loop_duration_ms, 0)} ms · snapshot ${fmtAgeMs(snapshot.ts)} old`;
+    els.summaryMeta.textContent = botDisplayLabel(focusedKey);
+    setChip(els.snapshotStatus, `Snapshot: ${botEntries.length} bots · focused ${fmtAgeMs(snapshot.ts)}`, "is-ok");
+    setChip(
+      els.focusStatus,
+      `Focus: ${botDisplayLabel(focusedKey)}${focusSymbol ? ` · ${shortSymbol(focusSymbol)}` : " · auto"}`,
+      "is-ok"
+    );
+    setChip(els.relayStatus, `Relay: ${window.location.origin}`, "");
+
     buildSummaryCards(payload);
     renderFocus(payload, focusSymbol);
     renderPositions(payload, focusSymbol);
     renderTrailing(payload, focusSymbol);
     renderForager(payload);
     renderUnstuck(payload);
-    renderEvents(focusSymbol);
-    renderTicks(payload, focusSymbol);
-    renderOrders(focusSymbol);
-    updateFocusOptions();
+    renderEvents(botEntry, focusSymbol);
+    renderTicks(payload, botEntry, focusSymbol);
+    renderOrders(payload, focusSymbol);
+    updateFocusOptions(payload, focusedKey);
   }
 
   async function fetchSnapshot() {
-    const params = new URLSearchParams();
-    if (qs.get("exchange")) params.set("exchange", qs.get("exchange"));
-    if (qs.get("user")) params.set("user", qs.get("user"));
-    const response = await fetch(`/snapshot?${params.toString()}`, { cache: "no-store" });
+    const response = await fetch("/snapshot", { cache: "no-store" });
     if (!response.ok) throw new Error(`snapshot HTTP ${response.status}`);
     const payload = await response.json();
-    state.snapshot = payload.type === "snapshot_bundle" ? selectSnapshotFromBundle(payload) : payload;
-    if (!state.snapshot) throw new Error("snapshot bundle was empty");
-    if (!qs.get("exchange")) qs.set("exchange", state.snapshot.exchange);
-    if (!qs.get("user")) qs.set("user", state.snapshot.user);
+    ingestSnapshotPayload(payload);
     render();
-  }
-
-  function pushEvent(message) {
-    state.recentEvents = [message, ...state.recentEvents.filter((entry) => !(entry.kind === message.kind && entry.ts === message.ts && entry.symbol === message.symbol))].slice(0, 60);
-  }
-
-  function pushTick(message) {
-    state.recentTicks.set(message.symbol, message);
-    const sorted = Array.from(state.recentTicks.entries()).sort((a, b) => Number(b[1].ts || 0) - Number(a[1].ts || 0)).slice(0, 60);
-    state.recentTicks = new Map(sorted);
   }
 
   function connectWs() {
     if (state.ws) state.ws.close();
-    const params = new URLSearchParams();
-    if (qs.get("exchange")) params.set("exchange", qs.get("exchange"));
-    if (qs.get("user")) params.set("user", qs.get("user"));
-    const url = new URL(`/ws?${params.toString()}`, window.location.href);
+    const url = new URL("/ws", window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(url);
     state.ws = ws;
@@ -606,9 +833,8 @@
     ws.onmessage = (event) => {
       const message = JSON.parse(event.data);
       state.lastWsTs = Date.now();
-      if (!shouldAcceptMessage(message)) return;
-      if (message.type === "snapshot") {
-        state.snapshot = message;
+      if (message.type === "snapshot" || message.type === "snapshot_bundle") {
+        ingestSnapshotPayload(message);
       } else if (message.type === "event") {
         pushEvent(message);
       } else if (message.type === "history" && message.stream === "price_ticks") {
@@ -634,6 +860,11 @@
       } catch (error) {
         setChip(els.snapshotStatus, `Snapshot: ${error.message}`, "is-bad");
       }
+    });
+    els.botOverview.addEventListener("click", (event) => {
+      const target = event.target.closest("[data-bot-key]");
+      if (!target) return;
+      setFocusedBotKey(target.dataset.botKey || "");
     });
     for (const container of [
       els.positionsBody,

@@ -48,25 +48,32 @@ The relay is intended to be a single long-running process per repo checkout:
 
 ## Web Dashboard
 
-The relay also serves a first browser dashboard:
+The relay also serves the main browser monitor:
+
+```bash
+passivbot tool monitor-web
+```
+
+If you prefer to manage the relay yourself:
 
 ```bash
 passivbot tool monitor-relay --monitor-root monitor
 ```
 
-Then open:
-
-```text
-http://127.0.0.1:8765/dashboard?exchange=bitget&user=bitget_01
-```
-
 Current behavior:
 
-1. Bootstraps current-state panels from `/snapshot`
-2. Keeps recent events and price ticks live via `/ws`
-3. Provides a browser focus-symbol selector without changing bot state
-4. Renders summary, focus, positions, trailing, forager, unstuck, recent events, recent ticks, and recent orders from the current snapshot plus live websocket tail
-5. Uses compact card summaries and clickable symbol-bearing rows so operators can refocus quickly without leaving the browser
+1. Connects to the aggregate `/snapshot` + `/ws` relay feed for all active bots
+2. Shows a dense overview card for every active bot discovered by the relay
+3. Lets operators click any bot card to focus it without restarting the dashboard
+4. Keeps a focused-bot detail view for summary, focus, positions, trailing, forager, unstuck, recent events, recent ticks, and recent orders
+5. Preserves a separate symbol focus inside the currently selected bot
+6. Accepts optional `exchange`, `user`, and `symbol` query params for initial focus only; the dashboard still consumes the multiplexed relay feed
+
+Example initial-focus URL:
+
+```text
+http://127.0.0.1:8765/dashboard?exchange=bitget&user=bitget_01&symbol=BTC/USDT:USDT
+```
 
 ## Terminal TUI
 

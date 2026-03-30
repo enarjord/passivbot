@@ -85,6 +85,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "launch relay if needed and attach the terminal monitor (requires full install)",
         requires_full=True,
     ),
+    "monitor-web": CommandSpec(
+        "tools.monitor_web",
+        "launch relay if needed and keep the web dashboard available (requires full install)",
+        requires_full=True,
+    ),
     "monitor-tui": CommandSpec(
         "tools.monitor_tui",
         "launch terminal monitor reader (requires full install)",

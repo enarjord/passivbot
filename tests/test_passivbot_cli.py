@@ -65,6 +65,7 @@ def test_tool_help_lists_supported_tools(capsys):
     out = capsys.readouterr().out
     assert "monitor-dev" in out
     assert "monitor-relay" in out
+    assert "monitor-web" in out
     assert "monitor-tui" in out
     assert "pareto-dash" in out
     assert "streamline-json" in out
@@ -204,6 +205,25 @@ def test_monitor_dev_tool_dispatch_forwards_module_and_prog(monkeypatch):
     assert captured["module_name"] == "tools.monitor_dev"
     assert captured["argv"] == ["passivbot tool monitor-dev", "--exchange", "bitget"]
     assert captured["prog_env"] == "passivbot tool monitor-dev"
+
+
+def test_monitor_web_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "monitor-web", "--open-browser"]) == 0
+
+    assert captured["module_name"] == "tools.monitor_web"
+    assert captured["argv"] == ["passivbot tool monitor-web", "--open-browser"]
+    assert captured["prog_env"] == "passivbot tool monitor-web"
 
 
 def test_monitor_tui_tool_dispatch_forwards_module_and_prog(monkeypatch):

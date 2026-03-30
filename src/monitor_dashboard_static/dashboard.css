@@ -155,6 +155,7 @@ body {
   overflow: hidden;
 }
 
+.panel-bots { grid-column: span 12; }
 .panel-summary { grid-column: span 12; }
 .panel-focus { grid-column: span 4; }
 .panel-forager { grid-column: span 4; }
@@ -192,6 +193,74 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 0.8rem;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.8rem;
+}
+
+.overview-card {
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--line);
+}
+
+.overview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.8rem;
+  margin: 0 0 0.4rem;
+}
+
+.overview-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.overview-subtitle {
+  margin: 0.12rem 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.overview-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem 0.65rem;
+  margin-top: 0.75rem;
+}
+
+.overview-metric {
+  min-width: 0;
+}
+
+.overview-metric .label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.overview-metric .value {
+  margin: 0.12rem 0 0;
+  font-size: 0.97rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-foot {
+  margin: 0.7rem 0 0;
+  color: var(--muted);
+  font-size: 0.83rem;
+  line-height: 1.35;
 }
 
 .stat-card {
