@@ -69,6 +69,9 @@ cleanly separable.
    - WEL auto-reduce
    - TWEL enforcer
    - unstuck
+   - equity hard stop loss tier controllers
+   - orange-tier mode overrides
+   - red-tier panic close, halt, cooldown, and restart handling
    - panic close
    - realized-loss gate
    - dust/min-cost trimming
@@ -126,6 +129,7 @@ Responsibilities:
 - one-way blocking
 - side enablement and trading-mode interpretation
 - TWEL/WEL enforcement
+- equity hard stop loss controllers
 - realized-loss gate
 - panic / auto-reduce / unstuck actions
 - min-cost / dust guards
@@ -140,10 +144,37 @@ Suggested new files:
 - `passivbot-rust/src/engine/selection.rs`
 - `passivbot-rust/src/engine/one_way.rs`
 - `passivbot-rust/src/engine/risk.rs`
+- `passivbot-rust/src/engine/hard_stop.rs`
 - `passivbot-rust/src/engine/order_postprocess.rs`
 
 The existing logic in `orchestrator.rs` should be gradually moved into these modules, then
 `orchestrator.rs` becomes a coordinator rather than the place where everything lives.
+
+### Shared Protection Controllers
+
+Hard stop loss should be modeled as a shared engine protection controller, not as a strategy.
+
+Why:
+
+- it supervises strategy behavior rather than defining entry/exit logic
+- it must work consistently across multiple strategies
+- it needs access to account- or side-level strategy equity, realized PnL, panic-close flow, halt
+  state, cooldown state, and restart replay
+- it can override strategy mode at ORANGE and RED without strategy-specific knowledge
+
+Recommended responsibilities of the hard-stop controller:
+
+- maintain per-side HSL state machines
+- support both `pside` and `unified` signal modes
+- compute raw and EMA-smoothed drawdown on rebased strategy equity
+- derive `green / yellow / orange / red` tiers
+- apply ORANGE mode overrides as a shared protection policy
+- trigger RED panic-close and per-side halts
+- manage cooldown and no-restart rules
+- expose backtest/live diagnostics and optimizer-facing metrics
+
+This controller should live beside TWEL/WEL/unstuck in the shared engine, not in
+`strategies/*` and not in Python.
 
 ### 2. Strategy Runtime Layer
 
@@ -233,6 +264,32 @@ pub struct SharedBotParams {
 ```
 
 Only keep fields here if they are truly shared engine/risk/close policy concepts.
+
+That includes side-level protection settings such as:
+
+- TWEL/WEL thresholds
+- unstuck settings
+- hard stop loss settings
+
+The HSL-specific shape should remain grouped rather than flattened into many unrelated scalar
+fields.
+
+Recommended nested concept:
+
+```rust
+pub struct ProtectionParams {
+    pub wel_enforcer_threshold: f64,
+    pub twel_enforcer_threshold: f64,
+    pub unstuck: UnstuckParams,
+    pub hard_stop: HardStopParams,
+}
+```
+
+The hard-stop controller will also need a small shared runtime-global config for items that are not
+side-local strategy params, such as:
+
+- HSL signal mode (`pside` vs `unified`)
+- live-only cooldown intervention policy
 
 ### StrategyParams
 
@@ -350,6 +407,13 @@ With it:
 - the engine provides them
 - new indicators become one new provider implementation and one request enum
 
+Important boundary:
+
+- strategy features are for strategy modules
+- hard stop loss should consume shared equity/PnL/account streams from the engine directly
+- HSL should not be represented as a strategy feature request unless a future strategy explicitly
+  needs read-only access to HSL state for diagnostics
+
 ### Feature Requests
 
 Recommended request enums:
@@ -458,7 +522,11 @@ Recommended:
 ```json
 {
   "live": {
-    "strategy_kind": "simple_ema_mm"
+    "strategy_kind": "simple_ema_mm",
+    "protection": {
+      "hsl_signal_mode": "pside",
+      "hsl_position_during_cooldown_policy": "panic"
+    }
   },
   "bot": {
     "long": {
@@ -486,7 +554,20 @@ Recommended:
         "unstuck_close_pct": 0.001,
         "unstuck_ema_dist": 0.0,
         "unstuck_loss_allowance_pct": 0.03,
-        "unstuck_threshold": 0.916
+        "unstuck_threshold": 0.916,
+        "hard_stop": {
+          "enabled": true,
+          "red_threshold": 0.2,
+          "ema_span_minutes": 60.0,
+          "cooldown_minutes_after_red": 0.0,
+          "no_restart_drawdown_threshold": 1.0,
+          "tier_ratios": {
+            "yellow": 0.5,
+            "orange": 0.75
+          },
+          "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+          "panic_close_order_type": "market"
+        }
       }
     },
     "short": {
@@ -556,11 +637,14 @@ During migration:
 - allow `simple_ema_mm` to read old mapped config on the research branch
 - normalize legacy config into the new grouped structure before Rust sees it
 - resolve all `mirror_from` references during normalization
+- normalize legacy HSL keys into `protection.hard_stop.*`
+- keep live-level HSL runtime policy keys under normalized `live.protection.*`
 - Rust should receive:
   - `selection_params`
   - `portfolio_params`
   - `strategy_params`
   - `protection_params`
+  - `runtime_protection_params`
   - `strategy_kind`
 
 ## Python Changes
@@ -581,6 +665,7 @@ The Python side should remain an orchestrator/data-loader, not a strategy implem
 
 4. Payload builder changes
    - payload should include strategy params map
+   - payload should include shared protection/runtime-protection params
    - payload should remain generic across strategies
 
 ### Not Required
@@ -606,10 +691,16 @@ Instead:
 
 - keep shared risk/portfolio state as typed params
 - pass strategy params separately into the orchestrator runtime
+- keep protection-controller state and config separate from strategy params
 - let the strategy runtime define sizing semantics explicitly
 
 This is the key fix for cases like `simple_ema_mm`, where configured sizing semantics should not
 implicitly inherit dynamic-WEL behavior unless the strategy explicitly opts into that.
+
+Hard stop loss adds two concrete backtester requirements that should stay in the shared engine:
+
+- side-level controller state, cooldown state, and replay-safe reset semantics
+- exported account-level and side-level HSL metrics for plotting and optimization
 
 ## Migration Plan
 
@@ -634,12 +725,14 @@ Tasks:
 3. Move adaptive-grid entry/close generation behind the strategy contract.
 
 4. Keep shared orchestrator policy intact.
+5. Keep hard stop loss and other protection systems outside strategy modules.
 
 Success criteria:
 
 - no behavior change for adaptive-grid
 - `simple_ema_mm` still runs
 - orchestrator no longer contains inline strategy math branches
+- HSL remains a shared protection controller rather than becoming a strategy-specific branch
 
 ### Phase 2: Introduce Feature Provider
 
@@ -668,6 +761,7 @@ Tasks:
 2. Introduce `StrategyParams`
 3. Add config normalization from current schema to the new internal shape
 4. Keep backwards compatibility for `adaptive_trailing_grid`
+5. Normalize HSL into shared protection/runtime-protection config rather than strategy params
 
 Success criteria:
 
@@ -748,6 +842,7 @@ The refactor is successful when all of the following are true:
 5. Feature derivation for existing indicators is centralized and reusable.
 
 6. Shared risk/portfolio behavior remains centralized.
+7. Hard stop loss remains a shared protection controller with no strategy-specific plumbing.
 
 ## Recommended First Implementation Scope
 
