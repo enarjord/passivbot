@@ -50,6 +50,12 @@ def _parse_args() -> argparse.Namespace:
         help="Per-subscriber outbound queue size before a resync is required.",
     )
     parser.add_argument(
+        "--ws-replay-limit",
+        type=int,
+        default=50,
+        help="How many recent lines per current event/history file to replay on websocket connect.",
+    )
+    parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
@@ -65,13 +71,15 @@ def main() -> None:
         monitor_root=args.monitor_root,
         poll_interval_ms=args.poll_interval_ms,
         subscriber_queue_size=args.queue_size,
+        ws_replay_limit=args.ws_replay_limit,
     )
     logging.info(
-        "[monitor-relay] serving monitor_root=%s host=%s port=%s poll_interval_ms=%s",
+        "[monitor-relay] serving monitor_root=%s host=%s port=%s poll_interval_ms=%s ws_replay_limit=%s",
         args.monitor_root,
         args.host,
         args.port,
         args.poll_interval_ms,
+        args.ws_replay_limit,
     )
     web.run_app(app, host=args.host, port=args.port)
 

@@ -158,11 +158,8 @@ from optimization.bounds import (
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.backends import get_backend_runner
 from optimization.config_adapter import get_optimization_key_paths, OPTIMIZABLE_COMMON_KEY_PATHS
-from optimization.deap_adapters import (
-    mutPolynomialBoundedWrapper,
-    cxSimulatedBinaryBoundedWrapper,
-)
 from rust_utils import collect_runtime_provenance
+from optimization.backends import get_backend_runner
 
 
 def _ignore_sigint_in_worker():
@@ -834,6 +831,7 @@ class Evaluator:
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
         self.use_duplicate_guard = True
         self.last_constraint_details: List[Dict[str, Any]] = []
+        self.use_duplicate_guard = True
 
         shared_metric_weights = {
             "positions_held_per_day": 1.0,
@@ -1145,7 +1143,12 @@ class Evaluator:
             )
         if self.last_constraint_details:
             metrics_payload["constraint_details"] = deepcopy(self.last_constraint_details)
-        individual.evaluation_metrics = metrics_payload
+        if self.config["optimize"]["backend"] == "pymoo":
+            logging.info(
+                "Eval complete | objectives=%s | constraint=%s",
+                _format_objectives(objectives),
+                pbr.round_dynamic(total_penalty, 3),
+            )
         actual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
             self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
@@ -1552,6 +1555,12 @@ class SuiteEvaluator:
             )
         if self.base.last_constraint_details:
             metrics_payload["constraint_details"] = deepcopy(self.base.last_constraint_details)
+        if self.base.config["optimize"]["backend"] == "pymoo":
+            logging.info(
+                "Eval complete | objectives=%s | constraint=%s",
+                _format_objectives(objectives),
+                pbr.round_dynamic(total_penalty, 3),
+            )
 
         actual_hash = calc_hash(individual)
         if self.base.use_duplicate_guard:

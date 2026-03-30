@@ -5,7 +5,7 @@ import platform
 import sys
 
 if __name__ == "__main__":
-    min_version = (3, 12)
+    min_version = (3, 10)
     if sys.version_info < min_version:
         current = ".".join(map(str, sys.version_info[:3]))
         required = ".".join(map(str, min_version))

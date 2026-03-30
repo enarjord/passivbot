@@ -99,15 +99,15 @@ def _build_remote_tar_cmd(remote_tmp: str, remote_dir: str, remote_base: str) ->
     )
 
 
-def create_archive(source_dir: Path, archive_path: Path) -> None:
-    """Create a gzipped tar archive containing ``source_dir``."""
-    if not source_dir.is_dir():
-        raise FileNotFoundError(f"Source directory not found: {source_dir}")
+def create_archive(source_path: Path, archive_path: Path) -> None:
+    """Create a gzipped tar archive containing ``source_path``."""
+    if not source_path.exists():
+        raise FileNotFoundError(f"Source path not found: {source_path}")
     archive_path = archive_path.resolve()
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Creating archive {archive_path} from {source_dir} ...")
+    print(f"Creating archive {archive_path} from {source_path} ...")
     with tarfile.open(archive_path, "w:gz") as tf:
-        tf.add(source_dir, arcname=source_dir.name)
+        tf.add(source_path, arcname=source_path.name)
     print("Archive created.")
 
 
@@ -248,13 +248,13 @@ def handle_extract(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Archive and transfer directories via scp.")
+    parser = argparse.ArgumentParser(description="Archive and transfer files or directories via scp.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     push = subparsers.add_parser(
-        "push", help="Archive a local directory and push it to a remote host."
+        "push", help="Archive a local file or directory and push it to a remote host."
     )
-    push.add_argument("source", help="Local source directory to archive and transfer.")
+    push.add_argument("source", help="Local source file or directory to archive and transfer.")
     push.add_argument("remote", help="Remote host (can be SSH alias, host, or user@host).")
     push.add_argument(
         "remote_path",

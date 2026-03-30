@@ -2,10 +2,16 @@
 
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
+Optimization requires the full install profile:
+
+```bash
+pip install -e ".[full]"
+```
+
 ## Running Optimization
 
 ```bash
-python3 src/optimize.py [path/to/config.json]
+passivbot optimize [path/to/config.json]
 ```
 
 - Defaults to `configs/template.json` if no config is specified
@@ -15,10 +21,10 @@ python3 src/optimize.py [path/to/config.json]
 
 Example:
 ```bash
-python3 src/optimize.py configs/template.json --start configs/starting_pool/
+passivbot optimize configs/template.json --start configs/starting_pool/
 ```
 
-Most config parameters can be modified via CLI. `python3 src/optimize.py -h` for more info.
+Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
 
 ### Candle Interval
 
@@ -48,7 +54,7 @@ keys to keep tunable; all other bounds are locked to their current config values
 the run starts.
 
 ```bash
-python3 src/optimize.py configs/template.json \
+passivbot optimize configs/template.json \
   --fine_tune_params long_entry_grid_spacing_pct,long_entry_initial_qty_pct
 ```
 
@@ -75,7 +81,8 @@ operator-risk settings such as:
 ```
 
 That default override disables terminal no-restart during optimizer evaluations so candidates can
-be constrained through `drawdown_worst_hsl`, `drawdown_worst_mean_1pct_hsl`, and
+be constrained through `drawdown_worst_hsl`, `drawdown_worst_ema_hsl`,
+`drawdown_worst_mean_1pct_hsl`, `drawdown_worst_mean_1pct_ema_hsl`, and
 `peak_recovery_hours_hsl` instead of being prematurely truncated.
 
 When you provide many starting configs, optimizer now also bounds how many seed evaluations may be
@@ -187,7 +194,7 @@ Full analysis is included in each member of the Pareto front. Two helper tools a
 
 ```bash
 # Interactive dashboard (recommended)
-python3 src/tools/pareto_dash.py --data-root optimize_results
+passivbot tool pareto-dash --data-root optimize_results
 
 # Static matplotlib plotter
 python3 src/pareto_store.py optimize_results/.../pareto/
@@ -203,8 +210,9 @@ python3 src/pareto_store.py optimize_results/.../pareto/
 - Streaming history chart sourced from `all_results.bin`
 - CSV export of the current run's dataset for offline analysis
 
-Install the dependencies via `pip install dash plotly` if they are not already present.
-`pareto_store.py` is also available for quick 2D/3D matplotlib plots when you do not need the interactive dashboard.
+Use the full install profile (`pip install -e ".[full]"`) if the dashboard dependencies are not already present.
+The legacy `pareto_store.py` script still supports quick 2D/3D matplotlib plots if a GUI
+isn't needed.
 
 ## Optimization Limits
 
@@ -232,7 +240,7 @@ Example:
 CLI overrides accept the same JSON/HJSON payload:
 
 ```bash
-python3 src/optimize.py --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
+passivbot optimize --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
 
 For quick CLI tweaks, Passivbot also accepts shorthand flags such as `--penalize_if_greater_than_drawdown_worst 0.3` and converts them to the structured schema at runtime.
@@ -283,7 +291,9 @@ over all exchanges before scoring.
 | `drawdown_worst` | Maximum peak-to-trough drawdown |
 | `drawdown_worst_mean_1pct` | Mean of worst 1% drawdowns (daily) |
 | `drawdown_worst_hsl` | Worst account-level HSL drawdown |
+| `drawdown_worst_ema_hsl` | Worst EMA-smoothed HSL drawdown, shared as `max(long, short)` |
 | `drawdown_worst_mean_1pct_hsl` | Mean of worst 1% HSL drawdown samples |
+| `drawdown_worst_mean_1pct_ema_hsl` | Mean of worst 1% EMA-smoothed HSL drawdown samples, shared as `max(long, short)` |
 | `expected_shortfall_1pct` | Mean of worst 1% daily losses (CVaR) |
 | `equity_balance_diff_neg_max` / `pos_max` | Largest divergence between equity and account balance (negative side tracks only drawdowns below balance; positive side tracks only run-ups above balance) |
 | `equity_balance_diff_neg_mean` / `pos_mean` | Average divergence between equity and balance (split by sign as above) |

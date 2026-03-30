@@ -12,3 +12,4 @@ dash-bootstrap-components==1.6.0
 psutil==5.9.8
 requests==2.32.3
 dictdiffer==0.9.0
+pymoo==0.6.1.6

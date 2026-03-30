@@ -104,6 +104,8 @@ def test_monitor_tui_prefers_focus_symbol_in_rendering():
                             "size": 0.01,
                             "price": 70000.0,
                             "wallet_exposure": 0.7,
+                            "total_wallet_exposure": 0.7,
+                            "total_wallet_exposure_limit": 1.7,
                             "wel_ratio": 3.5,
                             "wele_ratio": 2.8,
                             "twel_ratio": 0.41,
@@ -117,6 +119,8 @@ def test_monitor_tui_prefers_focus_symbol_in_rendering():
                             "size": 0.5,
                             "price": 3500.0,
                             "wallet_exposure": 1.75,
+                            "total_wallet_exposure": 1.75,
+                            "total_wallet_exposure_limit": 1.7,
                             "wel_ratio": 8.75,
                             "wele_ratio": 7.0,
                             "twel_ratio": 1.03,
@@ -330,6 +334,8 @@ def test_monitor_tui_render_screen_includes_core_panels():
                             "size": 0.01,
                             "price": 70000.0,
                             "wallet_exposure": 0.7,
+                            "total_wallet_exposure": 0.7,
+                            "total_wallet_exposure_limit": 1.7,
                             "wel_ratio": 3.5,
                             "wele_ratio": 2.8,
                             "twel_ratio": 0.41,
@@ -354,7 +360,15 @@ def test_monitor_tui_render_screen_includes_core_panels():
                         "selected_symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
                         "pending_symbols": ["ETH/USDT:USDT"],
                         "next_symbol": "ETH/USDT:USDT",
+                        "next_entry_trigger_price": 3500.0,
+                        "next_entry_distance_ratio": -0.0125,
                         "candidate_universe": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+                        "ranking": {
+                            "top_total": {"symbol": "ETH/USDT:USDT", "total_score": 1.25},
+                            "top_volume": {"symbol": "SOL/USDT:USDT", "raw_score": 120.0},
+                            "top_volatility": {"symbol": "BTC/USDT:USDT", "raw_score": 0.08},
+                            "top_ema_readiness": {"symbol": "ETH/USDT:USDT", "raw_score": -0.0125},
+                        },
                     },
                     "short": {
                         "enabled": False,
@@ -392,6 +406,46 @@ def test_monitor_tui_render_screen_includes_core_panels():
                             "long": {"lower": 70000.0, "upper": 70600.0},
                             "short": {"lower": 69900.0, "upper": 70500.0},
                         },
+                        "trailing": {
+                            "long": {
+                                "min_since_open": 69000.0,
+                                "max_since_min": 70200.0,
+                                "max_since_open": 70800.0,
+                                "min_since_max": 70100.0,
+                            }
+                        },
+                    }
+                },
+                "trailing": {
+                    "BTC/USDT:USDT": {
+                        "long": {
+                            "extrema": {
+                                "min_since_open": 69000.0,
+                                "max_since_min": 70200.0,
+                                "max_since_open": 70800.0,
+                                "min_since_max": 70100.0,
+                            },
+                            "entry": {
+                                "status": "waiting_retracement",
+                                "price": 0.0,
+                                "qty": 0.0,
+                                "current_price": 70501.0,
+                                "threshold_price": 69300.0,
+                                "threshold_met": True,
+                                "retracement_price": 70380.0,
+                                "retracement_met": False,
+                            },
+                            "close": {
+                                "status": "waiting_threshold",
+                                "price": 0.0,
+                                "qty": 0.0,
+                                "current_price": 70501.0,
+                                "threshold_price": 70700.0,
+                                "threshold_met": False,
+                                "retracement_price": 70092.0,
+                                "retracement_met": False,
+                            },
+                        }
                     }
                 },
             },
@@ -430,22 +484,145 @@ def test_monitor_tui_render_screen_includes_core_panels():
     assert "| Summary" in rendered
     assert "Account raw=1000.00 snapped=999.50 equity=1001.25 realized=12.00" in rendered
     assert "| Positions" in rendered
-    assert "TWE total | long=0.7000/1.7073 ( 41%) | short=0.0000/- (-)" in rendered
+    assert "TWE total | long=0.7000/1.7000 ( 41%) | short=0.0000/- (-)" in rendered
     assert "BTC/USDT" in rendered
-    assert "WE= 0.7000" in rendered
-    assert "PA=  0.0071" in rendered
+    assert "WE=   0.7" in rendered
+    assert "PA= 0.0071" in rendered
     assert "TWEL" not in rendered
     assert "| Forager" in rendered
-    assert "pending=1 next=ETH/USDT" in rendered
+    assert "pend=1" in rendered
+    assert "next=ETH/USDT | dist=-1.25% | trg=3500 | uni=3" in rendered
+    assert "ranking:" in rendered
+    assert "vol=SOL/USDT(120)" in rendered
     assert "| Unstuck" in rendered
     assert "next=BTC/USDT" in rendered
+    assert "| Trailing" in rendered
+    assert "BTC/USDT   long  entry waiting_retracement" in rendered
+    assert "thr=69300" in rendered
+    assert "min_open=69000" in rendered
     assert "| Recent Events" in rendered
     assert "order.opened" in rendered
     assert "| Price Ticks" in rendered
     assert "last= 70501.0000" in rendered
-    assert "L=70000.0000..70600.0000" in rendered
+    assert "lo=69900" in rendered
+    assert "hi=70600" in rendered
     assert "Bot Log | logs/example.log" in rendered
     assert "READY" in rendered
+
+
+def test_monitor_tui_recent_events_collapses_balance_spam():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765", exchange="bitget", user="bitget_01")
+    state.apply_message(
+        {
+            "type": "snapshot",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "seq": 1,
+            "ts": 1774057000000,
+            "payload": {
+                "meta": {"exchange": "bitget", "user": "bitget_01", "seq": 1},
+                "account": {},
+                "health": {},
+                "positions": {},
+                "open_orders": {},
+                "hsl": {},
+                "forager": {},
+                "unstuck": {},
+            },
+        }
+    )
+    for ts in (1774057000100, 1774057000200, 1774057000300):
+        state.apply_message(
+            {
+                "type": "event",
+                "ts": ts,
+                "kind": "account.balance",
+                "exchange": "bitget",
+                "user": "bitget_01",
+                "payload": {"equity": 1000.0 + ts / 1000.0},
+            }
+        )
+    state.apply_message(
+        {
+            "type": "event",
+            "ts": 1774057000400,
+            "kind": "order.opened",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "symbol": "BTC/USDT:USDT",
+            "payload": {"price": 70000.0, "qty": 0.01},
+        }
+    )
+
+    rendered = render_screen(state, width=140)
+
+    assert rendered.count("account.balance") == 1
+    assert "order.opened" in rendered
+
+
+def test_monitor_tui_render_screen_shows_help_status():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765")
+
+    should_stop = execute_tui_command(state, "help")
+
+    assert not should_stop
+    rendered = render_screen(state, width=120)
+    assert "Status: Help:" in rendered
+    assert "focus <coin|symbol> | focus auto|next|prev" in rendered
+    assert "pause | resume | dump | clear | help | quit" in rendered
+    assert "> help" in rendered
+
+
+def test_monitor_tui_skips_disabled_short_forager_and_unstuck_rows():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765")
+    state.apply_message(
+        {
+            "type": "snapshot",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "seq": 1,
+            "ts": 1774057000000,
+            "payload": {
+                "meta": {"exchange": "bitget", "user": "bitget_01", "seq": 1},
+                "account": {},
+                "health": {},
+                "positions": {},
+                "open_orders": {},
+                "hsl": {},
+                "market": {},
+                "recent": {},
+                "forager": {
+                    "long": {
+                        "enabled": True,
+                        "slots": {"current": 1, "max": 2, "open": 1},
+                        "selected_symbols": [],
+                        "pending_symbols": [],
+                        "candidate_universe": ["BTC/USDT:USDT"],
+                    },
+                    "short": {
+                        "enabled": False,
+                        "slots": {"current": 0, "max": 0, "open": 0},
+                        "selected_symbols": ["BTC/USDT:USDT"],
+                        "pending_symbols": ["BTC/USDT:USDT"],
+                        "candidate_universe": [],
+                    },
+                },
+                "unstuck": {
+                    "has_open_order": False,
+                    "open_orders": [],
+                    "sides": {
+                        "long": {"status": "ok", "allowance_live": 0.0},
+                        "short": {"status": "disabled"},
+                    },
+                },
+            },
+        }
+    )
+
+    rendered = render_screen(state, width=120)
+
+    assert "short off slots=0/0" not in rendered
+    assert "short status=disabled" not in rendered
 
 
 def test_monitor_tui_renders_account_realized_from_nested_payload():

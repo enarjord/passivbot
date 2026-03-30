@@ -7,6 +7,7 @@ See also:
 1. [Equity Hard Stop Loss](equity_hard_stop_loss.md)
 2. [Risk Management](risk_management.md)
 3. [Configuration](configuration.md)
+4. [HSL Cooldown Contracts](equity_hard_stop_loss_cooldown_contracts.md)
 
 ## Current Scope
 
