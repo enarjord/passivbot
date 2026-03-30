@@ -479,13 +479,13 @@
         "pareto_max_size": 500,
         "population_size": 500,
         "pymoo": {
-            "algorithm": "nsga2",
+            "algorithm": "nsga3",
             "shared": {
                 "crossover_eta": 20,
-                "crossover_prob_var": 0.64,
+                "crossover_prob_var": 0.5,
                 "eliminate_duplicates": true,
                 "mutation_eta": 20,
-                "mutation_prob_var": 0.0135135135
+                "mutation_prob_var": "auto"
             },
             "algorithms": {
                 "nsga2": {},

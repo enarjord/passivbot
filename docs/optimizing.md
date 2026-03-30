@@ -26,6 +26,93 @@ passivbot optimize configs/template.json --start configs/starting_pool/
 
 Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
 
+### Backend Selection
+
+Passivbot supports two optimizer backends:
+
+- `optimize.backend: deap`
+  - Uses the existing DEAP evolutionary backend.
+- `optimize.backend: pymoo`
+  - Uses pymoo. The default pymoo algorithm is `nsga3`, which is the better fit for Passivbot's typical many-objective optimize runs.
+
+Example:
+
+```json
+{
+  "optimize": {
+    "backend": "pymoo",
+    "pymoo": {
+      "algorithm": "nsga3"
+    }
+  }
+}
+```
+
+### Pymoo Configuration
+
+Pymoo-specific settings live under `optimize.pymoo`:
+
+```json
+{
+  "optimize": {
+    "backend": "pymoo",
+    "population_size": 500,
+    "pymoo": {
+      "algorithm": "nsga3",
+      "shared": {
+        "crossover_eta": 20.0,
+        "crossover_prob_var": 0.5,
+        "mutation_eta": 20.0,
+        "mutation_prob_var": "auto",
+        "eliminate_duplicates": true
+      },
+      "algorithms": {
+        "nsga2": {},
+        "nsga3": {
+          "ref_dirs": {
+            "method": "das_dennis",
+            "n_partitions": "auto"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Current meaning of the main pymoo knobs:
+
+- `optimize.pymoo.algorithm`
+  - `nsga2` or `nsga3`.
+  - `nsga3` is the default and is recommended when optimizing many metrics at once.
+- `optimize.pymoo.shared.crossover_prob_var`
+  - Per-variable SBX crossover probability.
+  - Higher values mix more parameters between parents on each crossover.
+- `optimize.pymoo.shared.crossover_eta`
+  - SBX distribution index.
+  - Higher values keep offspring closer to the parents; lower values explore more aggressively.
+- `optimize.pymoo.shared.mutation_prob_var`
+  - Per-variable polynomial-mutation probability.
+  - `"auto"` means `1 / n_params`, which is the default and usually the right choice for Passivbot's parameter counts.
+- `optimize.pymoo.shared.mutation_eta`
+  - Polynomial-mutation distribution index.
+  - Higher values make smaller, more local mutations.
+- `optimize.pymoo.shared.eliminate_duplicates`
+  - Skip duplicate candidates before wasting a full backtest on them.
+- `optimize.pymoo.algorithms.nsga3.ref_dirs.method`
+  - Reference-direction generator for NSGA-III.
+  - Currently `das_dennis`.
+- `optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions`
+  - Controls how dense the NSGA-III reference-direction grid is.
+  - `"auto"` chooses the largest partition count that still fits within the configured population size, which is the sensible default for typical Passivbot jobs.
+
+Recommended defaults for typical Passivbot runs:
+
+- Use `optimize.backend: pymoo` with `optimize.pymoo.algorithm: nsga3` when optimizing many metrics.
+- Keep `mutation_prob_var: "auto"`.
+- Keep `crossover_eta: 20` and `mutation_eta: 20` unless you have a specific reason to make variation much more local or much more aggressive.
+- Start with `population_size` in the low hundreds and leave `ref_dirs.n_partitions: "auto"` so NSGA-III can size its reference grid to the run.
+
 ### Candle Interval
 
 For faster optimization runs, you can aggregate 1-minute data into coarser candles before the
@@ -162,7 +249,8 @@ mode is enabled) instead of the older `analyses_combined` / per-exchange analysi
 
 ## Optimization Process
 
-- Uses NSGA-II genetic algorithm to evolve configurations
+- Uses a multi-objective evolutionary backend (`deap` or `pymoo`)
+- `pymoo` defaults to NSGA-III for many-objective runs, with NSGA-II still available explicitly
 - Backtests across historical OHLCV data
 - Uses multiprocessing with shared memory for reduced RAM load
 - Maintains Pareto front of best-performing configurations

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import multiprocessing
 from typing import Any
 
@@ -8,17 +9,36 @@ import numpy as np
 
 try:
     from pymoo.algorithms.moo.nsga2 import NSGA2
+    from pymoo.algorithms.moo.nsga3 import NSGA3
     from pymoo.optimize import minimize as pymoo_minimize
     from pymoo.operators.crossover.sbx import SBX
     from pymoo.operators.mutation.pm import PM
     from pymoo.parallelization.starmap import StarmapParallelization
     from pymoo.termination import get_termination
+    from pymoo.util.ref_dirs import get_reference_directions
 except ImportError:  # pragma: no cover
     NSGA2 = None
+    NSGA3 = None
+    get_reference_directions = None
 
-from optimization.problem import PassivbotProblem, PymooEvaluatorAdapter
 from optimization.callback import PymooRecorderCallback
+from optimization.problem import PassivbotProblem, PymooEvaluatorAdapter
 from optimization.repair import BoundsRepair
+
+DEFAULT_PYMOO_ALGORITHM = "nsga3"
+DEFAULT_PYMOO_SHARED = {
+    "crossover_eta": 20.0,
+    "crossover_prob_var": 0.5,
+    "mutation_eta": 20.0,
+    "mutation_prob_var": "auto",
+    "eliminate_duplicates": True,
+}
+DEFAULT_PYMOO_REF_DIRS = {
+    "method": "das_dennis",
+    "n_partitions": "auto",
+}
+SUPPORTED_PYMOO_ALGORITHMS = {"nsga2", "nsga3"}
+SUPPORTED_REF_DIR_METHODS = {"das_dennis"}
 
 
 def _build_initial_population(
@@ -55,6 +75,208 @@ def _build_initial_population(
         for idx, individual in enumerate(trimmed):
             population[idx] = list(individual)
     return np.asarray(population, dtype=np.float64)
+
+
+def _extend_sampling_to_size(sampling: np.ndarray, bounds, target_size: int) -> np.ndarray:
+    current_size = int(len(sampling))
+    if current_size >= target_size:
+        return sampling
+    extra = [
+        [bound.random_on_grid() for bound in bounds]
+        for _ in range(int(target_size) - current_size)
+    ]
+    if not extra:
+        return sampling
+    return np.vstack([sampling, np.asarray(extra, dtype=np.float64)])
+
+
+def _resolve_pymoo_algorithm_name(config: dict[str, Any]) -> str:
+    pymoo_cfg = config["optimize"].get("pymoo", {})
+    raw = pymoo_cfg.get("algorithm", DEFAULT_PYMOO_ALGORITHM)
+    algorithm = str(raw).strip().lower()
+    if algorithm not in SUPPORTED_PYMOO_ALGORITHMS:
+        allowed = ", ".join(sorted(SUPPORTED_PYMOO_ALGORITHMS))
+        raise ValueError(f"unsupported optimize.pymoo.algorithm {raw!r}; expected one of {{{allowed}}}")
+    return algorithm
+
+
+def _resolve_pymoo_shared(config: dict[str, Any]) -> dict[str, Any]:
+    optimize_cfg = config["optimize"]
+    pymoo_cfg = optimize_cfg.get("pymoo", {})
+    shared = pymoo_cfg.get("shared", {}) if isinstance(pymoo_cfg, dict) else {}
+    if not isinstance(shared, dict):
+        shared = {}
+
+    def _fallback(name: str, legacy_name: str | None = None):
+        legacy_name = legacy_name or name
+        if name in shared and shared[name] is not None:
+            return shared[name]
+        if legacy_name in optimize_cfg and optimize_cfg[legacy_name] is not None:
+            return optimize_cfg[legacy_name]
+        return DEFAULT_PYMOO_SHARED[name]
+
+    mutation_prob = shared.get("mutation_prob_var")
+    if mutation_prob is None:
+        legacy_mutation = optimize_cfg.get("mutation_indpb")
+        if isinstance(legacy_mutation, (int, float)) and float(legacy_mutation) > 0.0:
+            mutation_prob = float(legacy_mutation)
+        else:
+            mutation_prob = DEFAULT_PYMOO_SHARED["mutation_prob_var"]
+
+    return {
+        "crossover_eta": float(_fallback("crossover_eta")),
+        "crossover_prob_var": float(_fallback("crossover_prob_var", "crossover_probability")),
+        "mutation_eta": float(_fallback("mutation_eta")),
+        "mutation_prob_var": mutation_prob,
+        "eliminate_duplicates": bool(_fallback("eliminate_duplicates")),
+    }
+
+
+def _resolve_mutation_prob(shared: dict[str, Any], n_params: int) -> float:
+    raw = shared.get("mutation_prob_var", DEFAULT_PYMOO_SHARED["mutation_prob_var"])
+    if isinstance(raw, str) and raw.strip().lower() == "auto":
+        return 1.0 / max(1, int(n_params))
+    return max(0.0, min(1.0, float(raw)))
+
+
+def _reference_direction_count(n_obj: int, n_partitions: int) -> int:
+    return math.comb(int(n_obj) + int(n_partitions) - 1, int(n_partitions))
+
+
+def _resolve_auto_n_partitions(
+    *,
+    n_obj: int,
+    population_size: int,
+    max_partitions: int = 32,
+) -> int:
+    if n_obj <= 1:
+        return 1
+    best = 1
+    upper = max(1, min(int(max_partitions), int(population_size)))
+    for n_partitions in range(1, upper + 1):
+        count = _reference_direction_count(n_obj, n_partitions)
+        if count > population_size:
+            break
+        best = n_partitions
+    return best
+
+
+def _resolve_nsga3_ref_dirs(
+    config: dict[str, Any],
+    *,
+    n_obj: int,
+    population_size: int,
+) -> tuple[np.ndarray, int, str]:
+    if get_reference_directions is None:  # pragma: no cover
+        raise ModuleNotFoundError("pymoo is required for the pymoo optimizer backend")
+    pymoo_cfg = config["optimize"].get("pymoo", {})
+    algorithms = pymoo_cfg.get("algorithms", {}) if isinstance(pymoo_cfg, dict) else {}
+    nsga3_cfg = algorithms.get("nsga3", {}) if isinstance(algorithms, dict) else {}
+    ref_dirs_cfg = nsga3_cfg.get("ref_dirs", {}) if isinstance(nsga3_cfg, dict) else {}
+    if not isinstance(ref_dirs_cfg, dict):
+        ref_dirs_cfg = {}
+
+    method = str(ref_dirs_cfg.get("method", DEFAULT_PYMOO_REF_DIRS["method"])).strip().lower()
+    method = method.replace("-", "_")
+    if method not in SUPPORTED_REF_DIR_METHODS:
+        allowed = ", ".join(sorted(SUPPORTED_REF_DIR_METHODS))
+        raise ValueError(
+            f"unsupported optimize.pymoo.algorithms.nsga3.ref_dirs.method {method!r}; "
+            f"expected one of {{{allowed}}}"
+        )
+
+    raw_n_partitions = ref_dirs_cfg.get("n_partitions", DEFAULT_PYMOO_REF_DIRS["n_partitions"])
+    if isinstance(raw_n_partitions, str) and raw_n_partitions.strip().lower() == "auto":
+        n_partitions = _resolve_auto_n_partitions(
+            n_obj=n_obj,
+            population_size=population_size,
+        )
+        resolution = "auto"
+    else:
+        n_partitions = max(1, int(raw_n_partitions))
+        resolution = "explicit"
+
+    ref_dirs = get_reference_directions(method.replace("_", "-"), n_obj, n_partitions=n_partitions)
+    return ref_dirs, n_partitions, resolution
+
+
+def _build_algorithm(
+    *,
+    config: dict[str, Any],
+    sampling: np.ndarray,
+    bounds,
+    sig_digits: int | None,
+    n_obj: int,
+):
+    if NSGA2 is None:  # pragma: no cover
+        raise ModuleNotFoundError("pymoo is required for the pymoo optimizer backend")
+
+    optimize_cfg = config["optimize"]
+    shared = _resolve_pymoo_shared(config)
+    requested_population_size = max(1, int(optimize_cfg["population_size"]))
+    repair = BoundsRepair(bounds, sig_digits)
+    crossover = SBX(
+        prob_var=float(shared["crossover_prob_var"]),
+        eta=float(shared["crossover_eta"]),
+    )
+    mutation = PM(
+        prob=_resolve_mutation_prob(shared, len(bounds)),
+        eta=float(shared["mutation_eta"]),
+    )
+    eliminate_duplicates = bool(shared["eliminate_duplicates"])
+
+    algorithm_name = _resolve_pymoo_algorithm_name(config)
+    if algorithm_name == "nsga3" and n_obj < 2:
+        logging.warning(
+            "optimize.pymoo.algorithm=nsga3 requested with %d objective; falling back to nsga2",
+            n_obj,
+        )
+        algorithm_name = "nsga2"
+
+    if algorithm_name == "nsga3":
+        if NSGA3 is None:  # pragma: no cover
+            raise ModuleNotFoundError("pymoo NSGA3 is required for the pymoo optimizer backend")
+        ref_dirs, n_partitions, resolution = _resolve_nsga3_ref_dirs(
+            config,
+            n_obj=n_obj,
+            population_size=requested_population_size,
+        )
+        actual_population_size = max(requested_population_size, int(len(ref_dirs)))
+        if actual_population_size != requested_population_size:
+            logging.info(
+                "Adjusted pymoo nsga3 population size from %d to %d to cover %d reference directions",
+                requested_population_size,
+                actual_population_size,
+                len(ref_dirs),
+            )
+        sampling = _extend_sampling_to_size(sampling, bounds, actual_population_size)
+        logging.info(
+            "Using pymoo nsga3 | n_obj=%d | ref_dirs=%d | n_partitions=%d (%s)",
+            n_obj,
+            len(ref_dirs),
+            n_partitions,
+            resolution,
+        )
+        algorithm = NSGA3(
+            ref_dirs=ref_dirs,
+            pop_size=actual_population_size,
+            sampling=sampling,
+            crossover=crossover,
+            mutation=mutation,
+            repair=repair,
+            eliminate_duplicates=eliminate_duplicates,
+        )
+        return algorithm
+
+    logging.info("Using pymoo nsga2 | n_obj=%d", n_obj)
+    return NSGA2(
+        pop_size=requested_population_size,
+        sampling=sampling,
+        crossover=crossover,
+        mutation=mutation,
+        repair=repair,
+        eliminate_duplicates=eliminate_duplicates,
+    )
 
 
 def run_backend(
@@ -119,19 +341,12 @@ def run_backend(
             overrides_fn=overrides_fn,
             overrides_list=overrides_list,
         )
-        algorithm = NSGA2(
-            pop_size=config["optimize"]["population_size"],
+        algorithm = _build_algorithm(
+            config=config,
             sampling=sampling,
-            crossover=SBX(
-                prob_var=float(config["optimize"].get("crossover_probability", 0.7)),
-                eta=float(config["optimize"].get("crossover_eta", 20.0)),
-            ),
-            mutation=PM(
-                prob=_resolve_mutation_prob(config, len(bounds)),
-                eta=float(config["optimize"].get("mutation_eta", 20.0)),
-            ),
-            repair=BoundsRepair(bounds, sig_digits),
-            eliminate_duplicates=True,
+            bounds=bounds,
+            sig_digits=sig_digits,
+            n_obj=len(config["optimize"]["scoring"]),
         )
         population_size = max(1, int(config["optimize"]["population_size"]))
         ngen = max(1, int(config["optimize"]["iters"] / population_size))
@@ -154,10 +369,3 @@ def run_backend(
             pool.terminate()
             pool.join()
         raise
-
-
-def _resolve_mutation_prob(config: dict[str, Any], n_params: int) -> float:
-    raw = config["optimize"].get("mutation_indpb", 0.0)
-    if isinstance(raw, (int, float)) and raw > 0.0:
-        return max(0.0, min(1.0, float(raw)))
-    return 1.0 / max(1, int(n_params))

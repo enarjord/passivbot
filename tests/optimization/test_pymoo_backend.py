@@ -1,5 +1,7 @@
 import copy
 
+import numpy as np
+
 from optimization.bounds import Bound
 from optimization.backends import pymoo_backend
 from opt_utils import load_results
@@ -83,6 +85,65 @@ def _ignore_sigint():
     return None
 
 
+def test_build_algorithm_uses_nsga3_with_auto_reference_directions():
+    bounds = [Bound(0.0, 1.0, 0.1) for _ in range(6)]
+    algorithm = pymoo_backend._build_algorithm(
+        config={
+            "optimize": {
+                "backend": "pymoo",
+                "population_size": 500,
+                "pymoo": {
+                    "algorithm": "nsga3",
+                    "shared": {
+                        "crossover_eta": 20.0,
+                        "crossover_prob_var": 0.5,
+                        "mutation_eta": 20.0,
+                        "mutation_prob_var": "auto",
+                        "eliminate_duplicates": True,
+                    },
+                    "algorithms": {
+                        "nsga3": {
+                            "ref_dirs": {
+                                "method": "das_dennis",
+                                "n_partitions": "auto",
+                            }
+                        }
+                    },
+                },
+            }
+        },
+        sampling=np.zeros((500, len(bounds)), dtype=np.float64),
+        bounds=bounds,
+        sig_digits=4,
+        n_obj=8,
+    )
+
+    assert algorithm.__class__.__name__ == "NSGA3"
+    assert algorithm.pop_size == 500
+    assert len(algorithm.ref_dirs) == 330
+
+
+def test_build_algorithm_falls_back_to_nsga2_for_single_objective():
+    bounds = [Bound(0.0, 1.0, 0.1) for _ in range(4)]
+    algorithm = pymoo_backend._build_algorithm(
+        config={
+            "optimize": {
+                "backend": "pymoo",
+                "population_size": 16,
+                "pymoo": {
+                    "algorithm": "nsga3",
+                },
+            }
+        },
+        sampling=np.zeros((16, len(bounds)), dtype=np.float64),
+        bounds=bounds,
+        sig_digits=4,
+        n_obj=1,
+    )
+
+    assert algorithm.__class__.__name__ == "NSGA2"
+
+
 def test_run_backend_records_entries(monkeypatch):
     monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
     evaluator = FakeEvaluator(["adg", "drawdown_worst"])
@@ -97,10 +158,16 @@ def test_run_backend_records_entries(monkeypatch):
                 "n_cpus": 1,
                 "round_to_n_significant_digits": 4,
                 "scoring": ["adg", "drawdown_worst"],
-                "crossover_probability": 0.7,
-                "crossover_eta": 20.0,
-                "mutation_eta": 20.0,
-                "mutation_indpb": 0.5,
+                "pymoo": {
+                    "algorithm": "nsga3",
+                    "shared": {
+                        "crossover_prob_var": 0.5,
+                        "crossover_eta": 20.0,
+                        "mutation_eta": 20.0,
+                        "mutation_prob_var": 0.5,
+                        "eliminate_duplicates": True,
+                    },
+                },
             }
         },
         evaluator=evaluator,
@@ -141,10 +208,16 @@ def test_run_backend_supports_single_objective(monkeypatch):
                 "n_cpus": 1,
                 "round_to_n_significant_digits": 4,
                 "scoring": ["adg"],
-                "crossover_probability": 0.7,
-                "crossover_eta": 20.0,
-                "mutation_eta": 20.0,
-                "mutation_indpb": 0.5,
+                "pymoo": {
+                    "algorithm": "nsga3",
+                    "shared": {
+                        "crossover_prob_var": 0.5,
+                        "crossover_eta": 20.0,
+                        "mutation_eta": 20.0,
+                        "mutation_prob_var": 0.5,
+                        "eliminate_duplicates": True,
+                    },
+                },
             }
         },
         evaluator=evaluator,
@@ -190,10 +263,16 @@ def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
                 "n_cpus": 1,
                 "round_to_n_significant_digits": 4,
                 "scoring": ["adg", "drawdown_worst"],
-                "crossover_probability": 0.7,
-                "crossover_eta": 20.0,
-                "mutation_eta": 20.0,
-                "mutation_indpb": 0.5,
+                "pymoo": {
+                    "algorithm": "nsga3",
+                    "shared": {
+                        "crossover_prob_var": 0.5,
+                        "crossover_eta": 20.0,
+                        "mutation_eta": 20.0,
+                        "mutation_prob_var": 0.5,
+                        "eliminate_duplicates": True,
+                    },
+                },
             }
         },
         evaluator=evaluator,

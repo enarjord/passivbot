@@ -77,6 +77,31 @@ def test_optimizer_backend_cli_explicit_deap_matches_default():
     assert out["optimize"]["backend"] == "deap"
 
 
+def test_format_config_normalizes_pymoo_nested_defaults_and_legacy_fallbacks():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["backend"] = "pymoo"
+    current["optimize"]["crossover_eta"] = 17.0
+    current["optimize"]["crossover_probability"] = 0.33
+    current["optimize"]["mutation_eta"] = 11.0
+    current["optimize"]["mutation_indpb"] = 0.07
+    current["optimize"].pop("pymoo", None)
+
+    out = format_config(current, verbose=False)
+
+    assert out["optimize"]["pymoo"]["algorithm"] == "nsga3"
+    assert out["optimize"]["pymoo"]["shared"] == {
+        "crossover_eta": 17.0,
+        "crossover_prob_var": 0.33,
+        "mutation_eta": 11.0,
+        "mutation_prob_var": 0.07,
+        "eliminate_duplicates": True,
+    }
+    assert out["optimize"]["pymoo"]["algorithms"]["nsga3"]["ref_dirs"] == {
+        "method": "das_dennis",
+        "n_partitions": "auto",
+    }
+
+
 def test_get_backend_runner_resolves_supported_backends():
     assert get_backend_runner("deap") is run_deap_backend
     assert get_backend_runner("pymoo") is run_pymoo_backend

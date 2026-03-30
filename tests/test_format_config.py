@@ -150,7 +150,7 @@ def test_format_config_adds_monitor_defaults():
     out = format_config(current, verbose=False, live_only=True)
 
     assert out["monitor"] == {
-        "enabled": False,
+        "enabled": True,
         "root_dir": "monitor",
         "snapshot_interval_seconds": 1.0,
         "checkpoint_interval_minutes": 10.0,
