@@ -153,6 +153,7 @@ class BitgetBot(CCXTBot):
             elm["qty"] = elm["amount"]
             elm["custom_id"] = elm["clientOrderId"]
             elm["side"] = self._determine_side(elm)
+            self._record_live_margin_mode_from_payload(elm)
         return sorted(fetched, key=lambda x: x["timestamp"])
 
     async def fetch_positions(self):
@@ -162,6 +163,10 @@ class BitgetBot(CCXTBot):
             elm["position_side"] = elm["side"]
             elm["size"] = elm["contracts"]
             elm["price"] = elm["entryPrice"]
+            margin_mode = self._extract_live_margin_mode(elm)
+            if margin_mode is not None:
+                elm["margin_mode"] = margin_mode
+                self._record_live_margin_mode(elm["symbol"], margin_mode)
         return fetched
 
     def _get_balance(self, fetched: dict) -> float:
@@ -547,20 +552,19 @@ class BitgetBot(CCXTBot):
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
         for symbol in symbols:
+            margin_mode = self._get_margin_mode_for_symbol(symbol)
             try:
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode(
-                        "cross",
+                        margin_mode,
                         symbol=symbol,
                     )
                 )
             except Exception as e:
-                logging.error(f"{symbol}: error setting cross mode {e}")
+                logging.error(f"{symbol}: error setting {margin_mode} mode {e}")
             try:
                 coros_to_call_lev[symbol] = asyncio.create_task(
-                    self.cca.set_leverage(
-                        int(self.config_get(["live", "leverage"], symbol=symbol)), symbol=symbol
-                    )
+                    self.cca.set_leverage(self._calc_leverage_for_symbol(symbol), symbol=symbol)
                 )
             except Exception as e:
                 logging.error(f"{symbol}: error setting leverage {e}")
@@ -577,7 +581,9 @@ class BitgetBot(CCXTBot):
                 res = await coros_to_call_margin_mode[symbol]
                 to_print += f"margin={format_exchange_config_response(res)}"
             except Exception as e:
-                logging.error(f"{symbol} error setting cross mode {e}")
+                logging.error(
+                    f"{symbol} error setting {self._get_margin_mode_for_symbol(symbol)} mode {e}"
+                )
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 

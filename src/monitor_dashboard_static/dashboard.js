@@ -36,6 +36,11 @@
     emptyTemplate: document.getElementById("empty-state-template"),
   };
 
+  function fmtNumber(value, digits = 4) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+    return Number(value).toFixed(digits);
+  }
+
   function fmtCompact(value, digits = 4) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
     const text = Number(value).toFixed(digits).replace(/\.?0+$/, "");
@@ -53,11 +58,11 @@
     if (!tsMs) return "-";
     const delta = Math.max(0, Date.now() - Number(tsMs));
     if (delta < 1000) return `${Math.round(delta)}ms`;
-    const seconds = delta / 1000;
-    if (seconds < 60) return `${seconds.toFixed(1)}s`;
-    const minutes = seconds / 60;
-    if (minutes < 60) return `${minutes.toFixed(1)}m`;
-    return `${(minutes / 60).toFixed(1)}h`;
+    const s = delta / 1000;
+    if (s < 60) return `${s.toFixed(1)}s`;
+    const m = s / 60;
+    if (m < 60) return `${m.toFixed(1)}m`;
+    return `${(m / 60).toFixed(1)}h`;
   }
 
   function fmtUptimeMs(value) {
@@ -70,6 +75,15 @@
     if (hours) return `${hours}h${String(minutes).padStart(2, "0")}m${String(seconds).padStart(2, "0")}s`;
     if (minutes) return `${minutes}m${String(seconds).padStart(2, "0")}s`;
     return `${seconds}s`;
+  }
+
+  function fmtTs(tsMs) {
+    if (!tsMs) return "-";
+    try {
+      return new Date(Number(tsMs)).toLocaleString();
+    } catch {
+      return String(tsMs);
+    }
   }
 
   function escapeHtml(text) {
@@ -197,9 +211,7 @@
           symbol,
           pside,
           side,
-          orderCount: Array.isArray(openOrders[symbol])
-            ? openOrders[symbol].filter((order) => order.position_side === pside).length
-            : 0,
+          orderCount: Array.isArray(openOrders[symbol]) ? openOrders[symbol].filter((order) => order.position_side === pside).length : 0,
         });
       }
     }
@@ -269,9 +281,7 @@
       }
     }
     merged.sort((a, b) => Number(b.execution_timestamp || 0) - Number(a.execution_timestamp || 0));
-    const filtered = focusSymbol
-      ? merged.filter((entry) => entry.symbol === focusSymbol).concat(merged.filter((entry) => entry.symbol !== focusSymbol))
-      : merged;
+    const filtered = focusSymbol ? merged.filter((entry) => entry.symbol === focusSymbol).concat(merged.filter((entry) => entry.symbol !== focusSymbol)) : merged;
     return filtered.slice(0, 8);
   }
 
@@ -354,12 +364,12 @@
     const long = position.long || {};
     const short = position.short || {};
     const detailRows = [
-      ["Last", `${fmtCompact(market.last_price)} (${fmtAgeMs(market.last_price_ts_ms)})`],
-      ["Tradable", `${market.tradable} | active=${market.active_symbol}`],
-      ["Long", `${fmtCompact(long.size)} @ ${fmtCompact(long.price)} | WE ${fmtCompact(long.wallet_exposure)} | uPnL ${fmtCompact(long.upnl, 2)}`],
-      ["Short", `${fmtCompact(short.size)} @ ${fmtCompact(short.price)} | WE ${fmtCompact(short.wallet_exposure)} | uPnL ${fmtCompact(short.upnl, 2)}`],
-      ["EMA", `lo ${fmtCompact(market.ema_bands?.long?.lower)} | hi ${fmtCompact(market.ema_bands?.long?.upper)}`],
-      ["Approvals", `L ${market.approved?.long} / S ${market.approved?.short} | ignored L ${market.ignored?.long} / S ${market.ignored?.short}`],
+      [`Last`, `${fmtCompact(market.last_price)} (${fmtAgeMs(market.last_price_ts_ms)})`],
+      [`Tradable`, `${market.tradable} | active=${market.active_symbol}`],
+      [`Long`, `${fmtCompact(long.size)} @ ${fmtCompact(long.price)} | WE ${fmtCompact(long.wallet_exposure)} | uPnL ${fmtCompact(long.upnl, 2)}`],
+      [`Short`, `${fmtCompact(short.size)} @ ${fmtCompact(short.price)} | WE ${fmtCompact(short.wallet_exposure)} | uPnL ${fmtCompact(short.upnl, 2)}`],
+      [`EMA`, `lo ${fmtCompact(market.ema_bands?.long?.lower)} | hi ${fmtCompact(market.ema_bands?.long?.upper)}`],
+      [`Approvals`, `L ${market.approved?.long} / S ${market.approved?.short} | ignored L ${market.ignored?.long} / S ${market.ignored?.short}`],
     ];
     for (const [label, value] of detailRows) {
       const row = document.createElement("div");
@@ -440,7 +450,6 @@
       item.className = "detail-row";
       item.innerHTML = `
         <p class="headline"><span>${escapeHtml(pside)}</span><span class="pill ${side.enabled ? "is-ok" : "is-warn"}">${side.enabled ? "enabled" : "off"}</span></p>
-        <p class="subline">selected ${escapeHtml((side.selected_symbols || []).map(shortSymbol).join(", ") || "-")}</p>
         <p class="subline">slots ${escapeHtml(String(side.slots?.current || 0))}/${escapeHtml(String(side.slots?.max || 0))} · open ${escapeHtml(String(side.slots?.open || 0))} · next ${escapeHtml(shortSymbol(side.next_symbol))}</p>
         <p class="minor">rank total ${escapeHtml(rankingLabel(side.ranking?.top_total))} · vol ${escapeHtml(rankingLabel(side.ranking?.top_volume))} · vola ${escapeHtml(rankingLabel(side.ranking?.top_volatility))} · ema ${escapeHtml(rankingLabel(side.ranking?.top_ema_readiness))}</p>
       `;
@@ -544,7 +553,7 @@
     state.user = state.snapshot.user;
     els.heroTitle.textContent = `${state.exchange} / ${state.user}`;
     els.heroSubtitle.textContent = `Snapshot ${state.snapshot.seq ?? "-"} · ${fmtAgeMs(state.snapshot.ts)} old · equity ${fmtCompact(account.equity, 2)} · loop ${fmtCompact(health.last_loop_duration_ms, 0)} ms`;
-    setChip(els.snapshotStatus, `Snapshot: seq ${state.snapshot.seq ?? "-"} · age ${fmtAgeMs(state.snapshot.ts)}`, "is-ok");
+    setChip(els.snapshotStatus, `Snapshot: seq ${state.snapshot.seq ?? "-" } · age ${fmtAgeMs(state.snapshot.ts)}`, "is-ok");
     setChip(els.focusStatus, `Focus: ${focusSymbol || "auto"}`, focusSymbol ? "is-ok" : "");
     setChip(els.relayStatus, `Relay: ${window.location.origin}`, "");
     buildSummaryCards(payload);

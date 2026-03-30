@@ -398,6 +398,74 @@ class TestCCXTBotUpdateExchangeConfigBySymbols:
         with pytest.raises(Exception, match="Margin API error"):
             await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
 
+    def test_cross_only_blocks_isolated_only_symbol_for_entries(self, caplog):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot.markets_dict = {
+            "ISO/USDT:USDT": {
+                "info": {"onlyIsolated": True},
+                "marginModes": {"cross": False, "isolated": True},
+            }
+        }
+
+        with caplog.at_level("WARNING"):
+            filtered = bot._filter_approved_symbols("long", {"ISO/USDT:USDT"})
+
+        assert filtered == set()
+        assert bot._get_margin_mode_for_symbol("ISO/USDT:USDT") == "isolated"
+        assert "isolated margin support is currently disabled" in caplog.text
+
+    def test_live_margin_mode_is_preserved_when_symbol_has_existing_state(self):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot.markets_dict = {
+            "ISO/USDT:USDT": {
+                "marginModes": {"cross": True, "isolated": True},
+                "info": {},
+            }
+        }
+        bot.positions = {
+            "ISO/USDT:USDT": {
+                "long": {"size": 1.0, "price": 100.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+        }
+        bot.open_orders = {}
+        bot._live_margin_modes = {"ISO/USDT:USDT": "isolated"}
+
+        policy = bot._resolve_margin_policy_for_symbol("ISO/USDT:USDT")
+
+        assert policy["mode"] == "isolated"
+        assert policy["blocked"] is False
+        assert policy["live_margin_mode"] == "isolated"
+
+    def test_normalize_positions_records_live_margin_mode(self):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot._live_margin_modes = {}
+        positions = bot._normalize_positions(
+            [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "long",
+                    "contracts": 1.0,
+                    "entryPrice": 100.0,
+                    "marginMode": "isolated",
+                }
+            ]
+        )
+
+        assert positions[0]["margin_mode"] == "isolated"
+        assert bot._live_margin_modes["BTC/USDT:USDT"] == "isolated"
+
 
 class TestCCXTBotSetMarketSpecificSettings:
     """Tests for set_market_specific_settings."""
