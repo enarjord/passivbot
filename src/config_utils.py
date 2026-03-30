@@ -3260,7 +3260,7 @@ def get_template_config():
             "volume_refresh_info_threshold_seconds": 30.0,
         },
         "monitor": {
-            "enabled": False,
+            "enabled": True,
             "root_dir": "monitor",
             "snapshot_interval_seconds": 1.0,
             "checkpoint_interval_minutes": 10.0,
