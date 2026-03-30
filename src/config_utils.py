@@ -151,63 +151,6 @@ HSL_COOLDOWN_POSITION_POLICIES = (
     "graceful_stop_keep_cooldown",
     "manual_quarantine",
 )
-MONITOR_BOOL_KEYS = (
-    "enabled",
-    "retain_price_ticks",
-    "retain_candles",
-    "retain_fills",
-    "compress_rotated_segments",
-    "emit_completed_candles",
-    "include_raw_fill_payloads",
-)
-
-
-def normalize_hsl_signal_mode(value, path: str = "live.hsl_signal_mode") -> str:
-    mode = str(value)
-    if mode not in HSL_SIGNAL_MODES:
-        allowed = ", ".join(HSL_SIGNAL_MODES)
-        raise ValueError(f"{path} must be one of {{{allowed}}}, got {mode!r}")
-    return mode
-
-
-def normalize_hsl_cooldown_position_policy(
-    value, path: str = "live.hsl_position_during_cooldown_policy"
-) -> str:
-    policy = str(value)
-    if policy not in HSL_COOLDOWN_POSITION_POLICIES:
-        allowed = ", ".join(HSL_COOLDOWN_POSITION_POLICIES)
-        raise ValueError(f"{path} must be one of {{{allowed}}}, got {policy!r}")
-    return policy
-
-
-def _normalize_monitor_config(config: dict) -> None:
-    monitor_cfg = require_config_dict(config, "monitor")
-
-    root_dir = str(monitor_cfg["root_dir"]).strip()
-    if not root_dir:
-        raise ValueError("config.monitor.root_dir must be a non-empty string")
-    monitor_cfg["root_dir"] = root_dir
-
-    for key in MONITOR_BOOL_KEYS:
-        monitor_cfg[key] = bool(monitor_cfg[key])
-
-    numeric_rules = (
-        ("snapshot_interval_seconds", float, lambda x: x > 0.0, "must be > 0"),
-        ("checkpoint_interval_minutes", float, lambda x: x >= 0.0, "must be >= 0"),
-        ("event_rotation_mb", float, lambda x: x > 0.0, "must be > 0"),
-        ("event_rotation_minutes", float, lambda x: x > 0.0, "must be > 0"),
-        ("retain_days", float, lambda x: x >= 0.0, "must be >= 0"),
-        ("max_total_bytes", int, lambda x: x > 0, "must be > 0"),
-        ("price_tick_min_interval_ms", int, lambda x: x >= 0, "must be >= 0"),
-    )
-    for key, caster, predicate, message in numeric_rules:
-        try:
-            value = caster(monitor_cfg[key])
-        except Exception as exc:
-            raise ValueError(f"config.monitor.{key} {message}") from exc
-        if not predicate(value):
-            raise ValueError(f"config.monitor.{key} {message}")
-        monitor_cfg[key] = value
 
 
 def _legacy_hsl_to_pside_fields(hsl_cfg: dict) -> dict:
@@ -1941,37 +1884,40 @@ def _apply_non_live_adjustments(
             f"or 'auto'; got {ref_dirs.get('n_partitions')!r}"
         )
 
-    current_limits = deepcopy(result["optimize"].get("limits", []))
-    limits_snapshot = deepcopy(current_limits)
-    if raw_optimize_limits_present is None:
-        raw_optimize_limits_present = "limits" in result.get("optimize", {})
-        if raw_optimize_limits is None and raw_optimize_limits_present:
-            raw_optimize_limits = deepcopy(result["optimize"].get("limits"))
-    template_limits = deepcopy(get_template_config()["optimize"]["limits"])
-    resolved_limits, resolution = _resolve_optimize_limits_for_load(
-        raw_optimize_limits=raw_optimize_limits,
-        raw_optimize_limits_present=raw_optimize_limits_present,
-        template_limits=template_limits,
-    )
-    result["optimize"]["limits"] = resolved_limits
-    if resolution == "normalized_legacy":
-        _log_config(
-            verbose,
-            logging.INFO,
-            "normalized optimize.limits to canonical schema (%d entries)",
-            len(resolved_limits),
-        )
-        if tracker is not None:
-            tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
-    elif resolution == "fallback_template":
+    existing_limits = deepcopy(result["optimize"].get("limits", []))
+    limits_snapshot = deepcopy(existing_limits)
+    try:
+        normalized_limits = normalize_limit_entries(existing_limits)
+    except Exception:
+        normalized_limits = deepcopy(get_template_config()["optimize"].get("limits", []))
         _log_config(
             verbose,
             logging.WARNING,
             "optimize.limits malformed or unsupported; falling back to template defaults (%d entries)",
-            len(template_limits),
+            len(normalized_limits),
         )
-        if tracker is not None:
-            tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
+    default_limits = normalize_limit_entries(get_template_config()["optimize"].get("limits", []))
+    merged_limits = _merge_missing_default_limits(normalized_limits, default_limits)
+    if len(merged_limits) != len(normalized_limits):
+        _log_config(
+            verbose,
+            logging.INFO,
+            "added missing default optimize.limits entries (%d -> %d)",
+            len(normalized_limits),
+            len(merged_limits),
+        )
+        normalized_limits = merged_limits
+    changed_limits = not _limits_structurally_equal(existing_limits, normalized_limits)
+    result["optimize"]["limits"] = normalized_limits
+    if changed_limits and tracker is not None:
+        tracker.update(["optimize", "limits"], limits_snapshot, normalized_limits)
+    if changed_limits:
+        _log_config(
+            verbose,
+            logging.INFO,
+            "normalized optimize.limits to canonical schema (%d entries)",
+            len(normalized_limits),
+        )
     for key, value in sorted(result["optimize"]["bounds"].items()):
         if isinstance(value, list):
             if len(value) == 1:
@@ -2032,6 +1978,18 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     require_config_dict(result, "logging")
     require_config_dict(result, "monitor")
     _normalize_monitor_config(result)
+
+    _validate_forager_config(result, verbose=verbose, tracker=tracker)
+    _apply_forager_internal_aliases(result)
+
+    # Validate live HSL fields that have a constrained enum
+    live_cfg = result.get("live", {})
+    if "hsl_position_during_cooldown_policy" in live_cfg:
+        live_cfg["hsl_position_during_cooldown_policy"] = normalize_hsl_cooldown_position_policy(
+            live_cfg["hsl_position_during_cooldown_policy"]
+        )
+    if "hsl_signal_mode" in live_cfg:
+        live_cfg["hsl_signal_mode"] = normalize_hsl_signal_mode(live_cfg["hsl_signal_mode"])
 
     _normalize_position_counts(result, tracker=tracker)
     if coin_sources_input is not None:

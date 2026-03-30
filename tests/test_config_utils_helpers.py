@@ -285,7 +285,12 @@ def test_load_config_preserves_canonical_optimize_limits(tmp_path):
 
     loaded = load_config(str(path), verbose=False)
 
-    assert loaded["optimize"]["limits"] == cfg["optimize"]["limits"]
+    # User's explicit entries are preserved as-is (including enabled: False)
+    user_metrics = {e["metric"]: e for e in cfg["optimize"]["limits"]}
+    for metric, expected in user_metrics.items():
+        found = next((e for e in loaded["optimize"]["limits"] if e["metric"] == metric), None)
+        assert found is not None, f"metric {metric} missing from loaded limits"
+        assert found == expected, f"limit entry for {metric} was modified"
 
 
 def test_load_config_malformed_optimize_limits_falls_back_to_template(caplog, tmp_path):

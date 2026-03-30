@@ -95,7 +95,10 @@ def _import_target_compiled_path() -> Optional[Path]:
     `maturin develop`, where `find_spec("passivbot_rust")` resolves to `__init__.py` and the
     compiled extension lives alongside it.
     """
-    spec = importlib.util.find_spec(PYTHON_MODULE_NAME)
+    try:
+        spec = importlib.util.find_spec(PYTHON_MODULE_NAME)
+    except ValueError:
+        return None
     if spec is None:
         return None
 
@@ -151,75 +154,6 @@ def preferred_compiled_path() -> Optional[Path]:
     import_target = _import_target_compiled_path()
     if import_target is not None and import_target.exists():
         return import_target
-    for group in (
-        _local_extension_candidates(),
-        _installed_extension_candidates(),
-        _target_extension_candidates(),
-    ):
-        existing = [p for p in group if p.exists()]
-        if existing:
-            return max(existing, key=lambda p: p.stat().st_mtime)
-    return None
-
-
-def sha256_file(path: str | Path | None) -> Optional[str]:
-    if path is None:
-        return None
-    file_path = Path(path)
-    if not file_path.exists() or not file_path.is_file():
-        return None
-    digest = hashlib.sha256()
-    with file_path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def collect_runtime_provenance() -> dict:
-    preferred_path = preferred_compiled_path()
-    preferred_str = str(preferred_path) if preferred_path is not None else None
-    preferred_hash = sha256_file(preferred_str)
-    runtime_path = None
-    runtime_hash = None
-    runtime_mtime = None
-    module_loaded = False
-    module_name = PYTHON_MODULE_NAME
-    module = sys.modules.get(module_name)
-    if module is not None:
-        module_loaded = True
-        runtime_path = getattr(module, "__file__", None)
-        runtime_hash = sha256_file(runtime_path)
-        try:
-            runtime_mtime = Path(runtime_path).stat().st_mtime if runtime_path else None
-        except OSError:
-            runtime_mtime = None
-    preferred_mtime = None
-    try:
-        preferred_mtime = Path(preferred_str).stat().st_mtime if preferred_str else None
-    except OSError:
-        preferred_mtime = None
-    return {
-        "module_name": module_name,
-        "module_loaded": module_loaded,
-        "runtime_module_path": runtime_path,
-        "runtime_module_sha256": runtime_hash,
-        "runtime_module_mtime": runtime_mtime,
-        "preferred_compiled_path": preferred_str,
-        "preferred_compiled_sha256": preferred_hash,
-        "preferred_compiled_mtime": preferred_mtime,
-        "runtime_matches_preferred": (
-            runtime_hash is not None and preferred_hash is not None and runtime_hash == preferred_hash
-        ),
-        "pid": os.getpid(),
-    }
-
-
-def preferred_compiled_path() -> Optional[Path]:
-    """
-    Path of the extension artifact that is *most likely* to be imported.
-
-    Priority matches `preferred_compiled_mtime()`.
-    """
     for group in (
         _local_extension_candidates(),
         _installed_extension_candidates(),

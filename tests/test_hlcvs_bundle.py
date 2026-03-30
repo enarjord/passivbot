@@ -3,8 +3,8 @@ import pytest
 
 pbr = pytest.importorskip("passivbot_rust")
 
-if not hasattr(pbr, "HlcvsBundle"):
-    pytest.skip("passivbot_rust built without HlcvsBundle", allow_module_level=True)
+if getattr(pbr, "__is_stub__", False) or not hasattr(pbr, "HlcvsBundle"):
+    pytest.skip("passivbot_rust built without HlcvsBundle or is stub", allow_module_level=True)
 
 from backtest import (
     BacktestPayload,

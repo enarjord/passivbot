@@ -575,6 +575,7 @@ def _update_monitor_runtime_hints(
     m1_close_emas: dict[str, dict[float, float]],
     idx_to_symbol: dict[int, str],
     orders: list[dict[str, Any]],
+    h1_log_range_emas: dict[str, dict[float, float]] | None = None,
 ) -> None:
     market_hints = self._build_monitor_runtime_market_hints(symbols, last_prices, m1_close_emas)
     self._monitor_runtime_market_hints = market_hints

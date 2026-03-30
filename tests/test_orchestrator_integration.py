@@ -16,6 +16,16 @@ import json
 import math
 import pytest
 
+
+@pytest.fixture(scope="module", autouse=True)
+def require_real_passivbot_rust_module():
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip(
+            "tests/test_orchestrator_integration.py requires the real passivbot_rust extension; stub detected"
+        )
+
 # ============================================================================
 # Helper Functions (from test_orchestrator_json_api.py)
 # ============================================================================

@@ -328,15 +328,14 @@ def _get_exchange_fee_rates(self, symbol: str) -> tuple[float, float]:
 
 
 def _orchestrator_exchange_params(self, symbol: str) -> dict:
-    maker_fee, taker_fee = self._get_exchange_fee_rates(symbol)
+    # maker_fee/taker_fee deferred: current Rust OrchestratorInput schema does not yet
+    # accept these fields. They will be re-enabled once the Rust side is updated.
     return {
         "qty_step": float(self.qty_steps[symbol]),
         "price_step": float(self.price_steps[symbol]),
         "min_qty": float(self.min_qtys[symbol]),
         "min_cost": float(self.min_costs[symbol]),
         "c_mult": float(self.c_mults[symbol]),
-        "maker_fee": float(maker_fee),
-        "taker_fee": float(taker_fee),
     }
 
 

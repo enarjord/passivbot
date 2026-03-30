@@ -62,11 +62,17 @@ def _install_passivbot_rust_stub():
         return math.floor(value / step) * step
 
     stub.calc_diff = lambda price, reference: price - reference
-    stub.calc_order_price_diff = lambda side, price, market: (
-        (0.0 if not market else (1 - price / market))
-        if str(side).lower() in ("buy", "long")
-        else (0.0 if not market else (price / market - 1))
-    )
+
+    def _calc_order_price_diff(side, price, market):
+        s = str(side).strip().lower()
+        if s in ("buy", "long"):
+            return 0.0 if not market else (1 - price / market)
+        elif s in ("sell", "short"):
+            return 0.0 if not market else (price / market - 1)
+        else:
+            raise ValueError(f"invalid side: {side!r}")
+
+    stub.calc_order_price_diff = _calc_order_price_diff
     stub.calc_min_entry_qty = lambda *args, **kwargs: 0.0
     stub.calc_min_entry_qty_py = stub.calc_min_entry_qty
     stub.round_ = _round
@@ -81,7 +87,18 @@ def _install_passivbot_rust_stub():
     stub.calc_pnl_short = (
         lambda entry_price, close_price, qty, c_mult=1.0: (entry_price - close_price) * qty
     )
-    stub.calc_pprice_diff_int = lambda *args, **kwargs: 0
+
+    def _calc_pprice_diff_int(pside, pprice, price):
+        if not pprice or not math.isfinite(pprice) or pprice <= 0:
+            return 0.0
+        if pside == 0:  # LONG
+            return (pprice - price) / pprice
+        else:  # SHORT
+            return (price - pprice) / pprice
+
+    stub.calc_pprice_diff_int = _calc_pprice_diff_int
+    stub.calc_pside_price_diff_int = _calc_pprice_diff_int
+    stub.calc_price_diff_pside_int = _calc_pprice_diff_int
 
     def _calc_auto_unstuck_allowance(balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last):
         balance_peak = balance + (pnl_cumsum_max - pnl_cumsum_last)
@@ -97,7 +114,20 @@ def _install_passivbot_rust_stub():
     )
     stub.qty_to_cost = lambda qty, price, c_mult=1.0: qty * price * (c_mult if c_mult else 1.0)
 
-    stub.hysteresis = _identity
+    def _hysteresis(value, previous, pct):
+        if previous is None or abs(previous) < 1e-12:
+            return value
+        if abs(value - previous) / abs(previous) <= pct:
+            return previous
+        return value
+
+    stub.hysteresis = _hysteresis
+    stub.trailing_bundle_default_py = lambda: (0.0, 0.0, 0.0, 0.0)
+    stub.update_trailing_bundle_py = lambda *args, **kwargs: (0.0, 0.0, 0.0, 0.0)
+    stub.calc_next_entry_long_py = lambda *args, **kwargs: (0.0, 0.0, "entry_trailing_normal_long")
+    stub.calc_next_entry_short_py = lambda *args, **kwargs: (0.0, 0.0, "entry_trailing_normal_short")
+    stub.calc_next_close_long_py = lambda *args, **kwargs: (0.0, 0.0, "close_trailing_long")
+    stub.calc_next_close_short_py = lambda *args, **kwargs: (0.0, 0.0, "close_trailing_short")
     stub.calc_entries_long_py = lambda *args, **kwargs: []
     stub.calc_entries_short_py = lambda *args, **kwargs: []
     stub.calc_closes_long_py = lambda *args, **kwargs: []

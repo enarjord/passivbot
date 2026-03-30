@@ -179,6 +179,8 @@ def type_token(type_id: int, with_marker: bool = True) -> str:
 
 def snake_of(type_id: int) -> str:
     """Map an order type id to its snake_case string representation."""
+    if type_id is None:
+        return "unknown"
     try:
         return pbr.order_type_id_to_snake(type_id)
     except Exception:
@@ -794,6 +796,10 @@ class Passivbot:
         """Hook: exchange-specific filtering for approved symbols used for new entries."""
         return symbols
 
+    def _assert_supported_live_state(self) -> None:
+        """Hook: exchange-specific startup/runtime validation for unsupported live state."""
+        return None
+
     def _build_ccxt_options(self, overrides: Optional[dict] = None) -> dict:
         options = {"adjustForTimeDifference": True}
         recv_window = get_optional_live_value(self.config, "recv_window_ms", None)
@@ -1383,7 +1389,6 @@ class Passivbot:
     _build_health_summary_payload = pb_monitor._build_health_summary_payload
     _monitor_recent_orders_payload = pb_monitor._monitor_recent_orders_payload
     _build_monitor_market_section = pb_monitor._build_monitor_market_section
-    _build_monitor_trailing_section = pb_monitor._build_monitor_trailing_section
     _build_monitor_forager_section = pb_monitor._build_monitor_forager_section
     _build_monitor_unstuck_section = pb_monitor._build_monitor_unstuck_section
     _build_monitor_runtime_market_hints = pb_monitor._build_monitor_runtime_market_hints

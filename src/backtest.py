@@ -204,7 +204,18 @@ ANALYSIS_SHARED_PREFIXES = ("hard_stop_",)
 if not hasattr(pbr, "HlcvsBundle"):  # pragma: no cover
 
     class HlcvsBundle:
-        pass
+        def __init__(self, hlcvs=None, btc_usd=None, timestamps=None, meta=None):
+            self.hlcvs = hlcvs
+            self.btc_usd = btc_usd
+            self.timestamps = timestamps
+            self.meta = meta or {}
+
+        def coins_len(self):
+            coins = self.meta.get("coins", [])
+            return len(coins) if isinstance(coins, list) else 0
+
+        def coin_meta(self, symbol):
+            return {}
 
     pbr.HlcvsBundle = HlcvsBundle  # type: ignore
 
