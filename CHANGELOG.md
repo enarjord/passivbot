@@ -7,6 +7,7 @@ All notable user-facing changes will be documented in this file.
 ### Added
 - **Pymoo optimizer backend** - Optimization can now run with `optimize.backend: pymoo` in addition to DEAP, with shared backend dispatch and dedicated backend coverage.
 - **Pymoo NSGA-III config is now live** - `optimize.pymoo.algorithm`, nested `optimize.pymoo.shared.*`, and NSGA-III reference-direction settings are now actually honored at runtime, with auto-sized NSGA-III reference directions and `"auto"` per-variable mutation probability support.
+- **Repro and sync sidecar tools** - Added `src/repro_harness.py`, `src/analysis_visibility.py`, `src/tools/capture_optimize_memory.py`, root-level `sync_tar.py`, `vpssync.sh`, and a current-schema `configs/hsl.json` sample for replay/debug/VPS workflows.
 - **Standalone trailing diagnostics explorer** - Added `src/tools/trailing_diagnostics.py` plus reusable helpers for recomputing next-entry and next-close trailing behavior from `config + monitor snapshot` or manual inputs.
 - **HSL events per-year metrics** - Backtest HSL analysis now also exports `hard_stop_triggers_per_year` and `hard_stop_restarts_per_year` so runs with different date ranges can be compared more directly without losing the absolute trigger/restart counts.
 - **Fake-live exchange harness for HSL replay** - Added a deterministic `fake` exchange, `src/tools/run_fake_live.py`, and scenario-driven tests/docs so live HSL RED, cooldown restart, terminal halt, and cooldown-position policies can be replayed locally against scripted candles and manual interventions.
@@ -27,6 +28,7 @@ All notable user-facing changes will be documented in this file.
 - **Live HSL cooldown interventions are now configurable** - RED cooldown no longer blocks the runtime in one wait path. Live now keeps the halt active while enforcing `live.hsl_position_during_cooldown_policy` (`panic`, `normal`, `manual`, `tp_only`, or `graceful_stop`) until cooldown expires or trading is resumed.
 - **Browser monitor is now multi-bot first-class** - The web dashboard now consumes the multiplexed relay feed directly, shows a dense overview for all active bots in one page, and lets operators switch focused bot detail views without separate relay instances or per-bot dashboard sessions.
 - **Monitor relay presence is now sticky** - Auto-discovered bots now degrade from `active` to `stale` before being pruned, and the browser overview keeps a stable bot order instead of reshuffling on every freshness blip.
+- **HSL cooldown contracts are now documented explicitly** - Added a dedicated cooldown-contract reference covering RED replay, restart, and cooldown-position intervention behavior so operator/runtime expectations are easier to verify against logs.
 
 ### Fixed
 - **Optimizer multiprocessing now works under the unified CLI on spawn-based platforms** - `passivbot optimize ...` no longer fails at pool startup with a pickling error for the SIGINT worker initializer when launched through the unified CLI on macOS/Python spawn multiprocessing.

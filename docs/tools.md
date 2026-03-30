@@ -40,6 +40,33 @@ passivbot tool iterative-history-plot backtests/.../fills.csv
 - `passivbot tool verify-hlcvs-data` – Validates cached OHLCV data (gaps, duplicates) before long optimizations/backtests.
 - `passivbot tool streamline-json` – Normalizes/compacts JSON configs (`passivbot tool streamline-json configs/template.json`).
 
+## Repro and diagnostics helpers
+
+`src/repro_harness.py` replays a stored config or Pareto JSON through both the optimizer-evaluation path and the backtest path in one process, then compares the resulting metrics and Rust binary provenance.
+
+```shell
+PYTHONPATH=src python3 src/repro_harness.py optimize_results/.../pareto/<hash>.json --json
+```
+
+`src/tools/capture_optimize_memory.py` samples process-tree RSS, `/dev/shm`, and host memory state while an optimizer run is active.
+
+```shell
+PYTHONPATH=src python3 src/tools/capture_optimize_memory.py --wait --output tmp/optimize_memory.json
+```
+
+`src/analysis_visibility.py` is a reusable helper module for resolving `backtest.visible_metrics` against optimize scoring/limits so analysis views can consistently show only the requested metric surface.
+
+## VPS sync helpers
+
+`sync_tar.py` and `vpssync.sh` provide a simple tar-over-ssh/scp workflow for moving configs, logs, backtests, or optimize results between this repo and a VPS tree.
+
+```shell
+python3 sync_tar.py push optimize_results/2026-... vps3 /root/passivbot/optimize_results --remote-extract
+sh vpssync.sh pull vps3 "logs/20260318*"
+```
+
+The archive helper also supports symmetric `pull` and local `extract` modes, including wildcard remote matches.
+
 ## Market-cap based approved coins
 
 `src/tools/generate_mcap_list.py` emits a JSON list of coins filtered by market cap and optionally by exchange availability.
