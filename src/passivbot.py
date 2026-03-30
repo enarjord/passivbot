@@ -3030,13 +3030,20 @@ class Passivbot:
         """Main execution loop coordinating order generation and exchange interaction."""
         failed_update_pos_oos_pnls_ohlcvs_count = 0
         max_n_fails = 10
-        if self._equity_hard_stop_enabled() and not self._equity_hard_stop_runtime_initialized():
+        if self._equity_hard_stop_enabled() and not all(
+            self._equity_hard_stop_runtime_initialized(pside)
+            or not self._equity_hard_stop_enabled(pside)
+            for pside in self._hsl_psides()
+        ):
             await self._equity_hard_stop_initialize_from_history()
         while not self.stop_signal_received:
             try:
                 loop_start_ms = utc_ms()
                 self.execution_scheduled = False
                 self.state_change_detected_by_symbol = set()
+                self._set_log_silence_watchdog_context(
+                    phase="runtime", stage="update_pos_oos_pnls_ohlcvs"
+                )
                 if not await self.update_pos_oos_pnls_ohlcvs():
                     await asyncio.sleep(0.5)
                     failed_update_pos_oos_pnls_ohlcvs_count += 1
@@ -3046,9 +3053,15 @@ class Passivbot:
                 failed_update_pos_oos_pnls_ohlcvs_count = 0
                 if self._equity_hard_stop_enabled():
                     await self._equity_hard_stop_check()
-                    if self._equity_hard_stop_runtime_red_latched() and not self._equity_hard_stop_halted:
+                    if any(
+                        self._equity_hard_stop_runtime_red_latched(pside)
+                        and not self._hsl_state(pside)["halted"]
+                        for pside in self._hsl_psides()
+                        if self._equity_hard_stop_enabled(pside)
+                    ):
                         await self._equity_hard_stop_run_red_supervisor()
                         continue
+                self._set_log_silence_watchdog_context(phase="runtime", stage="execute_to_exchange")
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
                     return res
@@ -3057,9 +3070,12 @@ class Passivbot:
                 # Periodic health summary
                 self._maybe_log_health_summary()
                 self._maybe_log_unstuck_status()
+                self._set_log_silence_watchdog_context(phase="runtime", stage="flush_snapshot")
                 await self._monitor_flush_snapshot()
+                self._set_log_silence_watchdog_context(phase="runtime", stage="execution_delay")
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
                 sleep_duration = 30
+                self._set_log_silence_watchdog_context(phase="runtime", stage="scheduled_wait")
                 for i in range(sleep_duration * 10):
                     if self.execution_scheduled:
                         break
