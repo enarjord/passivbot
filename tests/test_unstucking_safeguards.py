@@ -1615,12 +1615,47 @@ def test_hard_stop_apply_sample_unified_uses_total_signal(monkeypatch):
     assert metrics["strategy_equity"] == pytest.approx(825.0)
 
 
-def test_hard_stop_apply_sample_same_minute_returns_cached_metrics_without_recomputing_peak():
+def test_hard_stop_apply_sample_same_minute_recomputes_when_inputs_change(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+
+    calls = []
+
+    def fake_apply_sample(**kwargs):
+        calls.append(dict(kwargs))
+        return {
+            "initialized": True,
+            "red_latched": False,
+            "peak_strategy_equity": kwargs["peak_strategy_equity"],
+            "rolling_peak_strategy_equity": kwargs["peak_strategy_equity"],
+            "drawdown_ema": max(0.0, 1.0 - kwargs["equity"] / max(kwargs["peak_strategy_equity"], 1e-12)),
+            "tier": "green",
+            "drawdown_raw": max(0.0, 1.0 - kwargs["equity"] / max(kwargs["peak_strategy_equity"], 1e-12)),
+            "drawdown_score": max(0.0, 1.0 - kwargs["equity"] / max(kwargs["peak_strategy_equity"], 1e-12)),
+            "changed": True,
+            "alpha": 0.01,
+            "elapsed_minutes": 0,
+        }
+
+    monkeypatch.setattr(_hsl_state(bot)["runtime"], "apply_sample", fake_apply_sample)
+
+    first = bot._equity_hard_stop_apply_sample("long", 60_000, 100.0, 0.0, 0.0, 0.0)
+    second = bot._equity_hard_stop_apply_sample("long", 60_500, 90.0, 0.0, 0.0, 0.0)
+
+    assert len(calls) == 2
+    assert calls[0]["equity"] == pytest.approx(100.0)
+    assert calls[1]["equity"] == pytest.approx(90.0)
+    assert first["timestamp_ms"] == 60_000
+    assert second["timestamp_ms"] == 60_500
+    assert second["strategy_equity"] == pytest.approx(90.0)
+
+
+def test_hard_stop_apply_sample_same_minute_returns_cached_metrics_when_inputs_match():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
 
     first = bot._equity_hard_stop_apply_sample("long", 60_000, 100.0, 0.0, 0.0, 0.0)
-    second = bot._equity_hard_stop_apply_sample("long", 60_500, 90.0, 0.0, 0.0, 0.0)
+    second = bot._equity_hard_stop_apply_sample("long", 60_500, 100.0, 0.0, 0.0, 0.0)
 
     assert first["timestamp_ms"] == 60_000
     assert second["timestamp_ms"] == 60_000

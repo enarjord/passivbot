@@ -460,12 +460,6 @@ def _equity_hard_stop_apply_sample(
     state = self._hsl_state(pside)
     last_metrics = state["last_metrics"]
     current_minute = int(timestamp_ms) // 60_000
-    if last_metrics is not None and int(last_metrics["timestamp_ms"]) // 60_000 == current_minute:
-        cached = dict(last_metrics)
-        cached["changed"] = False
-        cached["elapsed_minutes"] = 0
-        state["last_metrics"] = cached
-        return cached
 
     signal_mode, realized_pnl_signal, unrealized_pnl_signal = self._equity_hard_stop_signal_values(
         pside,
@@ -474,6 +468,20 @@ def _equity_hard_stop_apply_sample(
         unrealized_pnl_pside=unrealized_pnl_pside,
         unrealized_pnl_total=unrealized_pnl_total,
     )
+    if last_metrics is not None and int(last_metrics["timestamp_ms"]) // 60_000 == current_minute:
+        same_inputs = (
+            str(last_metrics.get("signal_mode")) == str(signal_mode)
+            and float(last_metrics.get("balance", 0.0)) == float(balance)
+            and float(last_metrics.get("realized_pnl_total", 0.0)) == float(realized_pnl_total)
+            and float(last_metrics.get("realized_pnl", 0.0)) == float(realized_pnl_signal)
+            and float(last_metrics.get("unrealized_pnl", 0.0)) == float(unrealized_pnl_signal)
+        )
+        if same_inputs:
+            cached = dict(last_metrics)
+            cached["changed"] = False
+            cached["elapsed_minutes"] = 0
+            state["last_metrics"] = cached
+            return cached
     cfg = self.hsl[pside]
     lookback_ms = self._equity_hard_stop_lookback_ms()
     prev_tier = self._equity_hard_stop_runtime_tier(pside)
