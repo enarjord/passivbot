@@ -80,6 +80,43 @@ Pymoo-specific settings live under `optimize.pymoo`:
 }
 ```
 
+#### NSGA-III, Reference Directions, and `das_dennis`
+
+`nsga3` is a many-objective evolutionary algorithm. Unlike NSGA-II, it does not rely only on
+crowding distance to spread candidates across the Pareto front. Instead, it uses a set of
+reference directions in objective space and tries to keep the population distributed across them.
+
+Passivbot uses the `das_dennis` method to generate those reference directions. This is the
+standard simplex-partition method for NSGA-III and is a sensible default for Passivbot optimize
+runs.
+
+The main NSGA-III-specific knob is:
+
+- `optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions`
+  - Controls how fine the reference-direction grid is.
+  - Higher values generate more reference directions, which increases diversity resolution but also
+    makes each generation heavier.
+  - With the default 8-objective Passivbot scoring set, common reference-direction counts are:
+    - `n_partitions = 3` -> `120`
+    - `n_partitions = 4` -> `330`
+    - `n_partitions = 5` -> `792`
+  - Default is `"auto"`. For the default 8-objective setup, Passivbot currently resolves that to
+    `n_partitions = 4`, which gives `330` reference directions.
+
+- `optimize.population_size`
+  - For `pymoo` + `nsga3`, `null` means “auto”.
+  - In that case Passivbot resolves the NSGA-III reference directions first and then uses the
+    number of reference directions as the population size.
+  - For the default 8-objective setup, that means `population_size = 330`.
+  - For `pymoo` + `nsga2`, set an explicit integer.
+  - For `deap`, Passivbot currently falls back to its legacy fixed default when `null` is left in
+    place.
+
+#### Shared Pymoo Hyperparameters
+
+The `shared` block controls the SBX crossover and polynomial mutation operators used by both
+`nsga2` and `nsga3`.
+
 Current meaning of the main pymoo knobs:
 
 - `optimize.pymoo.algorithm`
@@ -88,36 +125,66 @@ Current meaning of the main pymoo knobs:
 - `optimize.pymoo.shared.crossover_prob_var`
   - Per-variable SBX crossover probability.
   - Higher values mix more parameters between parents on each crossover.
+  - Default `0.5` is a conservative middle ground for Passivbot's parameter space.
 - `optimize.pymoo.shared.crossover_eta`
   - SBX distribution index.
   - Higher values keep offspring closer to the parents; lower values explore more aggressively.
+  - Default `20` is a standard conservative setting and is usually a good starting point.
 - `optimize.pymoo.shared.mutation_prob_var`
   - Per-variable polynomial-mutation probability.
-  - `"auto"` means `1 / n_params`, which is the default and usually the right choice for Passivbot's parameter counts.
+  - `"auto"` means `1 / n_params`.
+  - This is the default and is usually the right choice for Passivbot's parameter counts because
+    it scales automatically with the number of tunable parameters.
 - `optimize.pymoo.shared.mutation_eta`
   - Polynomial-mutation distribution index.
   - Higher values make smaller, more local mutations.
+  - Default `20` keeps mutation fairly local, which is usually appropriate for expensive
+    backtests.
 - `optimize.pymoo.shared.eliminate_duplicates`
   - Skip duplicate candidates before wasting a full backtest on them.
+  - Default `true`.
+  - Recommended for Passivbot because each evaluation is relatively expensive.
 - `optimize.pymoo.algorithms.nsga3.ref_dirs.method`
   - Reference-direction generator for NSGA-III.
   - Currently `das_dennis`.
-- `optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions`
-  - Controls how dense the NSGA-III reference-direction grid is.
-  - `"auto"` chooses a practical default grid density. If `optimize.population_size` is set, it chooses the largest partition count that still fits within that population size. If `optimize.population_size` is `null`, it targets a moderate many-objective grid and then lets NSGA-III use that reference-direction count as the population size.
-
-- `optimize.population_size`
-  - For `pymoo` + `nsga3`, `null` means “auto”: use the number of resolved reference directions as the population size.
-  - For `pymoo` + `nsga2`, set an explicit integer.
-  - For `deap`, Passivbot currently falls back to its legacy fixed default when `null` is left in place.
 
 Recommended defaults for typical Passivbot runs:
 
 - Use `optimize.backend: pymoo` with `optimize.pymoo.algorithm: nsga3` when optimizing many metrics.
 - Keep `mutation_prob_var: "auto"`.
-- Keep `crossover_eta: 20` and `mutation_eta: 20` unless you have a specific reason to make variation much more local or much more aggressive.
+- Keep `crossover_eta: 20` and `mutation_eta: 20` unless you have a specific reason to make
+  variation much more local or much more aggressive.
+- Keep `crossover_prob_var: 0.5` unless you have evidence that crossover is either too timid or
+  too disruptive for your runs.
 - Leave `population_size: null` and `ref_dirs.n_partitions: "auto"` for the default Passivbot NSGA-III behavior.
-- If you need more or less exploration pressure, override `population_size` explicitly instead of changing mutation defaults first.
+- If you need more or less exploration pressure, change `n_partitions` or override
+  `population_size` explicitly before you start tuning crossover/mutation hyperparameters.
+
+Practical interpretation for the default shared block:
+
+```json
+"shared": {
+  "crossover_eta": 20,
+  "crossover_prob_var": 0.5,
+  "eliminate_duplicates": true,
+  "mutation_eta": 20,
+  "mutation_prob_var": "auto"
+}
+```
+
+- `crossover_eta: 20`
+  - conservative crossover; offspring stay fairly close to parents
+- `crossover_prob_var: 0.5`
+  - each parameter has a 50% chance of participating in crossover
+- `mutation_eta: 20`
+  - conservative mutation; most mutations are relatively local
+- `mutation_prob_var: "auto"`
+  - mutate each parameter with probability `1 / n_params`
+- `eliminate_duplicates: true`
+  - do not spend backtests on duplicate candidates
+
+These defaults are intentionally conservative. For most Passivbot optimize runs, scoring choice,
+suite design, and evaluation budget matter more than fine-tuning these operator settings.
 
 ### Candle Interval
 
