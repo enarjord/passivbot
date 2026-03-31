@@ -380,7 +380,10 @@ mod tests {
             s.drawdown_raw < state.drawdown_ema,
             "raw should be lower after recovery"
         );
-        assert!((s.drawdown_score - s.drawdown_raw).abs() < 1e-12, "score should follow raw (min)");
+        assert!(
+            (s.drawdown_score - s.drawdown_raw).abs() < 1e-12,
+            "score should follow raw (min)"
+        );
     }
 
     #[test]
