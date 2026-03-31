@@ -72,11 +72,7 @@ def _population_from_payloads(
             [payload.get("G", np.asarray([-1.0], dtype=np.float64)) for payload in payloads],
             dtype=np.float64,
         )
-    pop = Population.new(*sum(([key, value] for key, value in kwargs.items()), []))
-    for individual, payload in zip(pop, payloads):
-        individual.data["metrics"] = payload.get("metrics", {})
-        individual.data["evaluation_vector"] = payload.get("evaluation_vector")
-    return pop
+    return Population.new(*sum(([key, value] for key, value in kwargs.items()), []))
 
 
 def _reduce_starting_population(
@@ -142,7 +138,10 @@ def _evaluate_starting_individuals(
             payload.get("evaluation_vector", vector),
             payload.get("metrics") or {},
         )
-        ordered_payloads[idx] = payload
+        slim_payload = {"F": payload["F"]}
+        if has_constraints and "G" in payload:
+            slim_payload["G"] = payload["G"]
+        ordered_payloads[idx] = slim_payload
         completed["count"] += 1
         logging.info("Evaluated %d/%d starting configs", completed["count"], len(starting_individuals))
 

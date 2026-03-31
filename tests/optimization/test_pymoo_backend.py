@@ -371,6 +371,44 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
     assert captured["sampling"].shape == (4, 2)
 
 
+def test_starting_payloads_are_slimmed_after_recording(monkeypatch):
+    monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
+    evaluator = FakeEvaluator(["adg", "drawdown_worst"])
+    recorder = FakeRecorder()
+    runner = pymoo_backend.PymooAsyncRecordingRunner(
+        evaluator=evaluator,
+        has_constraints=False,
+        n_obj=2,
+        pool=FakePool(processes=1),
+        recorder=recorder,
+        template=evaluator.config,
+        build_config_fn=_build_config,
+        overrides_fn=object(),
+        overrides_list=[],
+    )
+
+    payloads = pymoo_backend._evaluate_starting_individuals(
+        starting_individuals=_many_starting_individuals(None, None, None),
+        config={"optimize": {"n_cpus": 1, "max_pending_starting_evals_per_cpu": 1}},
+        evaluator=evaluator,
+        overrides_list=[],
+        runner=runner,
+        n_obj=2,
+        has_constraints=False,
+    )
+
+    assert len(recorder.entries) == 6
+    assert payloads
+    assert all(set(payload) == {"F"} for payload in payloads)
+
+    pop = pymoo_backend._population_from_payloads(
+        np.asarray(_many_starting_individuals(None, None, None), dtype=np.float64),
+        payloads,
+        has_constraints=False,
+    )
+    assert all(not individual.data for individual in pop)
+
+
 def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
     monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
     evaluator = FakeEvaluator(["adg", "drawdown_worst"])
