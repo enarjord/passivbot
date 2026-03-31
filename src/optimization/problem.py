@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Sequence
 
 import numpy as np
 from pymoo.core.problem import ElementwiseProblem
 
 from optimization.bounds import Bound
+from optimization.callback import build_pymoo_record_entry
 
 
 class PymooEvaluatorAdapter:
@@ -32,6 +34,65 @@ class PymooEvaluatorAdapter:
             "metrics": metrics or {},
             "evaluation_vector": np.asarray(evaluated_vector, dtype=np.float64),
         }
+
+
+class PymooAsyncRecordingRunner:
+    def __init__(
+        self,
+        *,
+        pool,
+        recorder,
+        template: dict,
+        build_config_fn,
+        overrides_fn,
+        overrides_list: Sequence[str] | None = None,
+        poll_interval_seconds: float = 0.05,
+    ):
+        self.pool = pool
+        self.recorder = recorder
+        self.template = template
+        self.build_config_fn = build_config_fn
+        self.overrides_fn = overrides_fn
+        self.overrides_list = list(overrides_list or [])
+        self.poll_interval_seconds = max(0.0, float(poll_interval_seconds))
+
+    def _record_result(self, vector, metrics) -> None:
+        entry = build_pymoo_record_entry(
+            vector=vector,
+            metrics=metrics,
+            template=self.template,
+            build_config_fn=self.build_config_fn,
+            overrides_fn=self.overrides_fn,
+            overrides_list=self.overrides_list,
+        )
+        self.recorder.record(entry)
+
+    def __call__(self, f, X):
+        xs = list(X)
+        ordered_results: list[dict[str, Any] | None] = [None] * len(xs)
+        pending = {
+            self.pool.apply_async(f, (x,)): (idx, x)
+            for idx, x in enumerate(xs)
+        }
+
+        while pending:
+            ready = [res for res in pending if res.ready()]
+            if not ready:
+                time.sleep(self.poll_interval_seconds)
+                continue
+            for res in ready:
+                idx, x = pending.pop(res)
+                payload = res.get()
+                self._record_result(
+                    payload.get("evaluation_vector", x),
+                    payload.get("metrics") or {},
+                )
+                slim_payload = dict(payload)
+                slim_payload.pop("metrics", None)
+                slim_payload.pop("evaluation_vector", None)
+                ordered_results[idx] = slim_payload
+
+        return [payload for payload in ordered_results if payload is not None]
 
 
 class PassivbotProblem(ElementwiseProblem):

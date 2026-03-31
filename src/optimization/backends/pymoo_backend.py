@@ -13,7 +13,6 @@ try:
     from pymoo.optimize import minimize as pymoo_minimize
     from pymoo.operators.crossover.sbx import SBX
     from pymoo.operators.mutation.pm import PM
-    from pymoo.parallelization.starmap import StarmapParallelization
     from pymoo.termination import get_termination
     from pymoo.util.ref_dirs import get_reference_directions
 except ImportError:  # pragma: no cover
@@ -21,8 +20,11 @@ except ImportError:  # pragma: no cover
     NSGA3 = None
     get_reference_directions = None
 
-from optimization.callback import PymooRecorderCallback
-from optimization.problem import PassivbotProblem, PymooEvaluatorAdapter
+from optimization.problem import (
+    PassivbotProblem,
+    PymooAsyncRecordingRunner,
+    PymooEvaluatorAdapter,
+)
 from optimization.repair import BoundsRepair
 
 DEFAULT_PYMOO_ALGORITHM = "nsga3"
@@ -386,7 +388,14 @@ def run_backend(
             processes=config["optimize"]["n_cpus"],
             initializer=ignore_sigint_in_worker,
         )
-        runner = StarmapParallelization(pool.starmap)
+        runner = PymooAsyncRecordingRunner(
+            pool=pool,
+            recorder=recorder,
+            template=base_evaluator.config,
+            build_config_fn=build_config_fn,
+            overrides_fn=overrides_fn,
+            overrides_list=overrides_list,
+        )
         problem = PassivbotProblem(
             bounds=bounds,
             scoring_keys=config["optimize"]["scoring"],
@@ -395,13 +404,6 @@ def run_backend(
                 overrides_list=overrides_list,
             ),
             elementwise_runner=runner,
-        )
-        callback = PymooRecorderCallback(
-            recorder=recorder,
-            template=base_evaluator.config,
-            build_config_fn=build_config_fn,
-            overrides_fn=overrides_fn,
-            overrides_list=overrides_list,
         )
         algorithm = _build_algorithm(
             config=config,
@@ -419,7 +421,6 @@ def run_backend(
             get_termination("n_gen", ngen),
             seed=1,
             verbose=False,
-            callback=callback,
         )
         logging.info("Optimization complete.")
         return {

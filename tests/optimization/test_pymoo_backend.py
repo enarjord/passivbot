@@ -21,6 +21,19 @@ class FakePool:
     def starmap(self, fn, iterable):
         return [fn(*args) for args in iterable]
 
+    def apply_async(self, fn, args=()):
+        class _Result:
+            def __init__(self, value):
+                self._value = value
+
+            def ready(self):
+                return True
+
+            def get(self):
+                return self._value
+
+        return _Result(fn(*args))
+
     def close(self):
         self.closed = True
 
