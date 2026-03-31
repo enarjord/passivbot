@@ -33,6 +33,7 @@ All notable user-facing changes will be documented in this file.
 - **HSL cooldown contracts are now documented explicitly** - Added a dedicated cooldown-contract reference covering RED replay, restart, and cooldown-position intervention behavior so operator/runtime expectations are easier to verify against logs.
 
 ### Fixed
+- **Exchange config refresh now retries per symbol** - Live bots no longer mark exchange-config updates as complete when a symbol fails or hits a rate limit; failed symbols now back off and retry while successful symbols continue to progress.
 - **Live forager key mapping** - Live runtime now consistently reads canonical `forager_*` config keys while still exporting Rust orchestrator payload fields under the internal `filter_*` names expected at the Python/Rust boundary.
 - **Pymoo optimizer now records results incrementally during each generation** - Completed pymoo evaluations are now drained in the main process as workers finish, immediately written to `all_results.bin` / Pareto storage, and stripped from the generation payload before pymoo continues. This improves progress visibility and avoids retaining full metrics payloads until the entire generation completes.
 - **Optimizer multiprocessing now works under the unified CLI on spawn-based platforms** - `passivbot optimize ...` no longer fails at pool startup with a pickling error for the SIGINT worker initializer when launched through the unified CLI on macOS/Python spawn multiprocessing.
