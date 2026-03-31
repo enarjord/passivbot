@@ -19,6 +19,7 @@ All notable user-facing changes will be documented in this file.
 - **Monitor dev wrapper** - Added a `monitor-dev` helper that reuses or launches the local relay and opens the terminal monitor with the newest bot log tailed by default.
 
 ### Changed
+- **Realized-loss gate now ships disabled by default** - `live.max_realized_loss_pct` now defaults to `1.0`, so the gate is opt-in unless the operator explicitly chooses a tighter peak-relative realized-loss floor.
 - **Executable min-cost filtering now matches actual order sizing** - `filter_by_min_effective_cost` now uses the executable minimum entry qty after `qty_step` rounding instead of raw `min_qty/min_cost` metadata, and CCXT markets reporting nonpositive `min_qty` now clamp it to `qty_step`. This fixes GateIO symbols such as `SOL/USDT:USDT` being admitted when the smallest executable order would exceed the intended initial entry size.
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.
 - **ADG terminal smoothing simplified** - Backtest `gain`/`adg` now smooth the terminal value by taking the mean of the last up to 3 daily equity samples instead of running an EMA over the full daily-equity series. This preserves end-of-run drawdown smoothing while reducing computation.

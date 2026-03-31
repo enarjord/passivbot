@@ -157,6 +157,24 @@ def test_apply_non_live_adjustments_supports_legacy_coins_file():
     assert config["live"]["approved_coins"]["long"] == expected
 
 
+def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatting():
+    template = get_template_config()
+    assert template["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
+
+    sparse = {
+        "live": {},
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "optimize": {"bounds": {}},
+        "coin_overrides": {},
+    }
+    formatted = format_config(sparse, verbose=False)
+    assert formatted["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
+
+    loaded = load_config("configs/template.json", verbose=False)
+    assert loaded["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
+
+
 def test_migrate_btc_collateral_settings_converts_bool():
     config = {"backtest": {"use_btc_collateral": True}}
     _migrate_btc_collateral_settings(config, verbose=False)

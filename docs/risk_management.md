@@ -159,6 +159,7 @@ Behavior by value:
 * `max_realized_loss_pct >= 1.0`: disabled.
 
 Operational notes:
+* The shipped default is `1.0`, which keeps the gate disabled until you opt in explicitly.
 * Live bot logs visible warnings whenever an order is blocked by this gate.
 * This can intentionally block automatic reducers if they would realize too much loss.
 * If you need immediate forced reduction regardless of realized loss, use panic mode.
