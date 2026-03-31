@@ -426,8 +426,8 @@ def compute_live_warmup_windows(
             if (pside == "long" and is_forager_long) or (pside == "short" and is_forager_short):
                 max_1m_span = max(
                     max_1m_span,
-                    _get_bp(pside, "filter_volume_ema_span", sym),
-                    _get_bp(pside, "filter_volatility_ema_span", sym),
+                    _get_bp(pside, "forager_volume_ema_span", sym),
+                    _get_bp(pside, "forager_volatility_ema_span", sym),
                 )
             max_h1_span = max(max_h1_span, _get_bp(pside, "entry_volatility_ema_span_hours", sym))
 
@@ -4148,8 +4148,8 @@ class Passivbot:
         trigger a network fetch.  The remaining symbols receive a very large TTL so they
         return cached data (or 0.0 if nothing is cached) without hitting the API.
         """
-        span_volume = int(round(self.bot_value(pside, "filter_volume_ema_span")))
-        span_volatility = int(round(self.bot_value(pside, "filter_volatility_ema_span")))
+        span_volume = int(round(self.bot_value(pside, "forager_volume_ema_span")))
+        span_volatility = int(round(self.bot_value(pside, "forager_volatility_ema_span")))
         try:
             warmup_ratio = float(get_optional_live_value(self.config, "warmup_ratio", 0.0))
         except Exception:
@@ -5679,8 +5679,8 @@ class Passivbot:
             "entry_trailing_threshold_pct",
             "entry_trailing_threshold_we_weight",
             "entry_trailing_threshold_volatility_weight",
-            "filter_volatility_ema_span",
-            "filter_volume_ema_span",
+            "forager_volatility_ema_span",
+            "forager_volume_ema_span",
             "forager_volume_drop_pct",
             "forager_score_weights",
             "ema_span_0",
@@ -5702,20 +5702,25 @@ class Passivbot:
                 val = self.bot_value(pside, key)
             else:
                 val = self.bp(pside, key, symbol) if symbol is not None else self.bp(pside, key)
+            out_key = key
+            if key == "forager_volatility_ema_span":
+                out_key = "filter_volatility_ema_span"
+            elif key == "forager_volume_ema_span":
+                out_key = "filter_volume_ema_span"
             if key == "forager_score_weights":
                 if not isinstance(val, dict):
                     raise TypeError(
                         f"bot.{pside}.forager_score_weights must be a dict, got {type(val).__name__}"
                     )
-                out[key] = {
+                out[out_key] = {
                     "volume": float(val["volume"]),
                     "ema_readiness": float(val["ema_readiness"]),
                     "volatility": float(val["volatility"]),
                 }
             elif key == "n_positions":
-                out[key] = int(round(val or 0.0))
+                out[out_key] = int(round(val or 0.0))
             else:
-                out[key] = float(val or 0.0)
+                out[out_key] = float(val or 0.0)
         out.update(
             {
                 "hsl_enabled": bool(self.bot_value(pside, "hsl_enabled")),
@@ -6146,10 +6151,10 @@ class Passivbot:
                     need_h1_lr_spans[symbol].add(h1_span)
 
         # Forager metrics use global spans (per side); include them for all symbols.
-        vol_span_long = float(self.bot_value("long", "filter_volume_ema_span") or 0.0)
-        lr_span_long = float(self.bot_value("long", "filter_volatility_ema_span") or 0.0)
-        vol_span_short = float(self.bot_value("short", "filter_volume_ema_span") or 0.0)
-        lr_span_short = float(self.bot_value("short", "filter_volatility_ema_span") or 0.0)
+        vol_span_long = float(self.bot_value("long", "forager_volume_ema_span") or 0.0)
+        lr_span_long = float(self.bot_value("long", "forager_volatility_ema_span") or 0.0)
+        vol_span_short = float(self.bot_value("short", "forager_volume_ema_span") or 0.0)
+        lr_span_short = float(self.bot_value("short", "forager_volatility_ema_span") or 0.0)
         m1_volume_spans = sorted(
             {s for s in (vol_span_long, vol_span_short) if s > 0.0 and math.isfinite(s)}
         )
@@ -7436,11 +7441,11 @@ class Passivbot:
                     if sym not in syms:
                         continue
                     try:
-                        span_v = self.bp(pside, "filter_volume_ema_span", sym)
+                        span_v = self.bp(pside, "forager_volume_ema_span", sym)
                     except Exception:
                         span_v = None
                     try:
-                        span_lr = self.bp(pside, "filter_volatility_ema_span", sym)
+                        span_lr = self.bp(pside, "forager_volatility_ema_span", sym)
                     except Exception:
                         span_lr = None
                     for span in (span_v, span_lr):
@@ -7624,7 +7629,7 @@ class Passivbot:
         """
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
-        span = int(round(self.bot_value(pside, "filter_volatility_ema_span")))
+        span = int(round(self.bot_value(pside, "forager_volatility_ema_span")))
         try:
             warmup_ratio = float(get_optional_live_value(self.config, "warmup_ratio", 0.0))
         except Exception:
@@ -7724,7 +7729,7 @@ class Passivbot:
 
         Returns mapping symbol -> ema_quote_volume; non-finite/failed computations yield 0.0.
         """
-        span = int(round(self.bot_value(pside, "filter_volume_ema_span")))
+        span = int(round(self.bot_value(pside, "forager_volume_ema_span")))
         try:
             warmup_ratio = float(get_optional_live_value(self.config, "warmup_ratio", 0.0))
         except Exception:
