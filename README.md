@@ -4,7 +4,7 @@
 
 :warning: **Used at one's own risk** :warning:
 
-v7.8.5
+v7.9.0
 
 
 ## Overview
@@ -178,12 +178,19 @@ Coming soon...
 
 See also https://pbconfigdb.scud.dedyn.io/
 
-## Documentation:
+## Documentation
 
 For more detailed information about Passivbot, see documentation files here: [docs/](docs/)
 
-- Installation details: [docs/installation.md](docs/installation.md)
-- Common setup and CLI issues: [docs/troubleshooting.md](docs/troubleshooting.md)
+Useful entry points:
+
+- [Installation](docs/installation.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Backtesting](docs/backtesting.md)
+- [Optimizing](docs/optimizing.md)
+- [Metrics reference](docs/metrics.md)
+- [Equity Hard Stop Loss](docs/equity_hard_stop_loss.md)
+- [Monitor output](docs/monitor.md)
 
 ## Support
 

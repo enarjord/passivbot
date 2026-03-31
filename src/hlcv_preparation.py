@@ -328,9 +328,35 @@ class HLCVManager:
         except Exception:
             pass
 
+    @staticmethod
+    def _market_lookup_forms(value: str) -> set[str]:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return set()
+        return {
+            normalized,
+            normalized.replace("-", ":"),
+            normalized.replace(":", "-"),
+        }
+
     def get_symbol(self, coin: str) -> str:
         assert self.markets, "needs to call load_markets() first"
-        return coin_to_symbol(coin, self.exchange)
+        symbol = coin_to_symbol(coin, self.exchange)
+        if symbol in self.markets:
+            return symbol
+
+        coin_forms = self._market_lookup_forms(coin)
+        symbol_forms = self._market_lookup_forms(symbol)
+        for market_symbol, market in self.markets.items():
+            market_forms = self._market_lookup_forms(market_symbol)
+            base_forms = self._market_lookup_forms(market.get("base", ""))
+            if market_forms & symbol_forms:
+                return market_symbol
+            if base_forms & coin_forms:
+                return market_symbol
+            if base_forms & symbol_forms:
+                return market_symbol
+        return symbol
 
     def has_coin(self, coin: str) -> bool:
         symbol = self.get_symbol(coin)

@@ -1481,6 +1481,9 @@ def format_bot_config(
     for path in ("bot.long", "bot.short"):
         require_config_dict(result, path)
     _apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
+    # Preserve legacy-derived values before template hydration can seed concrete defaults
+    # into fields such as close_grid_markup_start/end and entry_trailing_double_down_factor.
+    _ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
     add_missing_keys_recursively(
         template["bot"],
         result["bot"],
@@ -1488,7 +1491,6 @@ def format_bot_config(
         verbose=verbose,
         tracker=tracker,
     )
-    _ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
     _validate_forager_config(result, verbose=verbose, tracker=tracker)
     _apply_forager_internal_aliases(result)
     _normalize_position_counts(result, tracker=tracker)
