@@ -27,7 +27,7 @@ from optimization.problem import (
 )
 from optimization.repair import BoundsRepair
 
-DEFAULT_PYMOO_ALGORITHM = "nsga3"
+DEFAULT_PYMOO_ALGORITHM = "auto"
 DEFAULT_PYMOO_SHARED = {
     "crossover_eta": 20.0,
     "crossover_prob_var": 0.5,
@@ -40,7 +40,7 @@ DEFAULT_PYMOO_REF_DIRS = {
     "n_partitions": "auto",
 }
 DEFAULT_AUTO_REF_DIR_TARGET = 330
-SUPPORTED_PYMOO_ALGORITHMS = {"nsga2", "nsga3"}
+SUPPORTED_PYMOO_ALGORITHMS = {"auto", "nsga2", "nsga3"}
 SUPPORTED_REF_DIR_METHODS = {"das_dennis"}
 
 
@@ -100,13 +100,17 @@ def _resolve_requested_population_size(config: dict[str, Any]) -> int | None:
     return max(1, int(raw))
 
 
-def _resolve_pymoo_algorithm_name(config: dict[str, Any]) -> str:
+def _resolve_pymoo_algorithm_name(config: dict[str, Any], *, n_obj: int | None = None) -> str:
     pymoo_cfg = config["optimize"].get("pymoo", {})
     raw = pymoo_cfg.get("algorithm", DEFAULT_PYMOO_ALGORITHM)
     algorithm = str(raw).strip().lower()
     if algorithm not in SUPPORTED_PYMOO_ALGORITHMS:
         allowed = ", ".join(sorted(SUPPORTED_PYMOO_ALGORITHMS))
         raise ValueError(f"unsupported optimize.pymoo.algorithm {raw!r}; expected one of {{{allowed}}}")
+    if algorithm == "auto":
+        if n_obj is None:
+            return "auto"
+        return "nsga2" if int(n_obj) <= 3 else "nsga3"
     return algorithm
 
 
@@ -219,7 +223,7 @@ def _resolve_pymoo_population_plan(
     *,
     n_obj: int,
 ) -> dict[str, Any]:
-    algorithm_name = _resolve_pymoo_algorithm_name(config)
+    algorithm_name = _resolve_pymoo_algorithm_name(config, n_obj=n_obj)
     requested_population_size = _resolve_requested_population_size(config)
 
     if algorithm_name == "nsga3" and n_obj < 2:

@@ -328,7 +328,7 @@
         "include_raw_fill_payloads": false
     },
     "optimize": {
-        "backend": "deap",
+        "backend": "pymoo",
         "bounds": {
             "long_close_grid_markup_end": [-0.1, 0.02, 1e-05],
             "long_close_grid_markup_start": [0.001, 0.02, 1e-05],
@@ -490,7 +490,7 @@
         "pareto_max_size": 500,
         "population_size": null,
         "pymoo": {
-            "algorithm": "nsga3",
+            "algorithm": "auto",
             "shared": {
                 "crossover_eta": 20.0,
                 "crossover_prob_var": 0.5,

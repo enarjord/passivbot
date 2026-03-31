@@ -146,7 +146,7 @@ HSL_PSIDE_KEYS = (
     "hsl_tier_ratios",
 )
 HSL_SIGNAL_MODES = ("pside", "unified")
-PYMOO_ALGORITHMS = ("nsga2", "nsga3")
+PYMOO_ALGORITHMS = ("auto", "nsga2", "nsga3")
 PYMOO_REF_DIR_METHODS = ("das_dennis",)
 
 
@@ -1721,7 +1721,7 @@ def _apply_non_live_adjustments(
             canonical_scoring.append(canon)
             seen.add(canon)
     result["optimize"]["scoring"] = canonical_scoring
-    backend = str(result["optimize"].get("backend", "deap") or "deap").strip().lower()
+    backend = str(result["optimize"].get("backend", "pymoo") or "pymoo").strip().lower()
     if backend not in {"deap", "pymoo"}:
         raise ValueError(
             f"optimize.backend must be one of ['deap', 'pymoo']; got {result['optimize'].get('backend')!r}"
@@ -3562,7 +3562,7 @@ def get_template_config():
                 "short_unstuck_loss_allowance_pct": [0.001, 0.05],
                 "short_unstuck_threshold": [0.4, 0.95],
             },
-            "backend": "deap",
+            "backend": "pymoo",
             "compress_results_file": True,
             "crossover_eta": 20.0,
             "crossover_probability": 0.64,
@@ -3610,7 +3610,7 @@ def get_template_config():
             "pareto_max_size": 500,
             "population_size": None,
             "pymoo": {
-                "algorithm": "nsga3",
+                "algorithm": "auto",
                 "shared": {
                     "crossover_eta": 20.0,
                     "crossover_prob_var": 0.5,

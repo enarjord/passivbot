@@ -33,13 +33,13 @@ def _optimize_parser():
     return parser
 
 
-def test_format_config_defaults_backend_to_deap():
+def test_format_config_defaults_backend_to_pymoo():
     current = copy.deepcopy(get_template_config())
     current["optimize"].pop("backend", None)
 
     out = format_config(current, verbose=False)
 
-    assert out["optimize"]["backend"] == "deap"
+    assert out["optimize"]["backend"] == "pymoo"
 
 
 def test_format_config_normalizes_backend_name():
@@ -92,7 +92,7 @@ def test_format_config_normalizes_pymoo_nested_defaults_and_legacy_fallbacks():
 
     out = format_config(current, verbose=False)
 
-    assert out["optimize"]["pymoo"]["algorithm"] == "nsga3"
+    assert out["optimize"]["pymoo"]["algorithm"] == "auto"
     assert out["optimize"]["pymoo"]["shared"] == {
         "crossover_eta": 17.0,
         "crossover_prob_var": 0.33,
@@ -109,6 +109,7 @@ def test_format_config_normalizes_pymoo_nested_defaults_and_legacy_fallbacks():
 def test_template_defaults_use_null_population_and_pareto_500():
     current = get_template_config()
 
+    assert current["optimize"]["backend"] == "pymoo"
     assert current["optimize"]["population_size"] is None
     assert current["optimize"]["pareto_max_size"] == 500
 

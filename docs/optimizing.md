@@ -33,7 +33,8 @@ Passivbot supports two optimizer backends:
 - `optimize.backend: deap`
   - Uses the existing DEAP evolutionary backend.
 - `optimize.backend: pymoo`
-  - Uses pymoo. The default pymoo algorithm is `nsga3`, which is the better fit for Passivbot's typical many-objective optimize runs.
+  - Uses pymoo. This is now the default optimizer backend.
+  - The default pymoo algorithm mode is `auto`: Passivbot uses `nsga2` when optimizing `3` or fewer objectives, and `nsga3` when optimizing more than `3`.
 
 Example:
 
@@ -42,7 +43,7 @@ Example:
   "optimize": {
     "backend": "pymoo",
     "pymoo": {
-      "algorithm": "nsga3"
+      "algorithm": "auto"
     }
   }
 }
@@ -58,7 +59,7 @@ Pymoo-specific settings live under `optimize.pymoo`:
     "backend": "pymoo",
     "population_size": null,
     "pymoo": {
-      "algorithm": "nsga3",
+      "algorithm": "auto",
       "shared": {
         "crossover_eta": 20.0,
         "crossover_prob_var": 0.5,
@@ -120,8 +121,10 @@ The `shared` block controls the SBX crossover and polynomial mutation operators 
 Current meaning of the main pymoo knobs:
 
 - `optimize.pymoo.algorithm`
-  - `nsga2` or `nsga3`.
-  - `nsga3` is the default and is recommended when optimizing many metrics at once.
+  - `auto`, `nsga2`, or `nsga3`.
+  - Default is `auto`.
+  - `auto` chooses `nsga2` when `len(optimize.scoring) <= 3`, otherwise `nsga3`.
+  - Use explicit `nsga2` or `nsga3` only when you want to override that default selection.
 - `optimize.pymoo.shared.crossover_prob_var`
   - Per-variable SBX crossover probability.
   - Higher values mix more parameters between parents on each crossover.
@@ -150,7 +153,7 @@ Current meaning of the main pymoo knobs:
 
 Recommended defaults for typical Passivbot runs:
 
-- Use `optimize.backend: pymoo` with `optimize.pymoo.algorithm: nsga3` when optimizing many metrics.
+- Use `optimize.backend: pymoo` with `optimize.pymoo.algorithm: auto`.
 - Keep `mutation_prob_var: "auto"`.
 - Keep `crossover_eta: 20` and `mutation_eta: 20` unless you have a specific reason to make
   variation much more local or much more aggressive.
@@ -185,6 +188,14 @@ Practical interpretation for the default shared block:
 
 These defaults are intentionally conservative. For most Passivbot optimize runs, scoring choice,
 suite design, and evaluation budget matter more than fine-tuning these operator settings.
+
+Algorithm selection under the default `auto` mode:
+
+- `1` to `3` objectives -> `nsga2`
+- `4+` objectives -> `nsga3`
+
+That means the default 8-objective Passivbot template uses `nsga3`, while small custom scoring
+lists automatically fall back to `nsga2`.
 
 ### Candle Interval
 

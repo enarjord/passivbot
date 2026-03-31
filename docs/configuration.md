@@ -524,12 +524,13 @@ Risk should be constrained through `*_hsl` metrics instead.
 - **offspring_multiplier**: Multiplier applied to `population_size` to determine how many offspring (`λ`) are produced each generation in the μ+λ evolution strategy. Values >1.0 increase exploration by sampling more children per generation. Default is `1.0`.
 - **pareto_max_size**: Maximum number of Pareto-optimal configs kept on disk under `optimize_results/.../pareto/`. Members are pruned by crowding (least diverse removed first, while per-objective extremes are preserved), not by age.
 - **population_size**: Size of population for genetic optimization algorithm.
+- **backend**: Optimizer backend. Default is `pymoo`. With the default `optimize.pymoo.algorithm: "auto"`, Passivbot uses `nsga2` for `3` or fewer objectives and `nsga3` for `4+`.
 - **round_to_n_significant_digits**: Quantization precision used when hashing configs, deduplicating candidates, and writing optimizer artifacts. Lower values collapse near-identical candidates more aggressively; higher values preserve more distinct variants.
 - **scoring**:
   - The optimizer uses two objectives and finds the Pareto front.
   - Chooses the optimal candidate based on the lowest Euclidean distance to the ideal point.
   - Default values are median daily gain and Sharpe ratio.
-  - Uses the NSGA-II algorithm (Non-dominated Sorting Genetic Algorithm II) for multi-objective optimization.
+  - With the default `pymoo` backend, Passivbot uses `nsga2` for `3` or fewer objectives and `nsga3` for `4+` objectives unless explicitly overridden.
   - The fitness function minimizes both objectives (converted to negative values internally).
   - Full list of options: `[adg, adg_w, calmar_ratio, calmar_ratio_w, drawdown_worst, drawdown_worst_mean_1pct, equity_balance_diff_neg_max, equity_balance_diff_neg_mean, equity_balance_diff_pos_max, equity_balance_diff_pos_mean, expected_shortfall_1pct, gain, hard_stop_duration_minutes_max, hard_stop_duration_minutes_mean, hard_stop_flatten_time_minutes_mean, hard_stop_halt_to_restart_equity_loss_pct, hard_stop_panic_close_loss_max, hard_stop_panic_close_loss_sum, hard_stop_post_restart_retrigger_pct, hard_stop_time_in_orange_pct, hard_stop_time_in_red_pct, hard_stop_time_in_yellow_pct, hard_stop_trigger_drawdown_mean, loss_profit_ratio, loss_profit_ratio_w, mdg, mdg_w, omega_ratio, omega_ratio_w, peak_recovery_hours_equity, peak_recovery_hours_pnl, position_held_hours_max, position_held_hours_mean, position_held_hours_median, position_unchanged_hours_max, positions_held_per_day, sharpe_ratio, sharpe_ratio_w, sortino_ratio, sortino_ratio_w, sterling_ratio, sterling_ratio_w]`
   - Suffix `_w` indicates mean across 10 temporal subsets (whole, last_half, last_third, ..., last_tenth) to weigh recent data more heavily.

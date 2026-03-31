@@ -138,6 +138,20 @@ def test_build_algorithm_uses_nsga3_with_auto_reference_directions():
     assert len(algorithm.ref_dirs) == 330
 
 
+def test_resolve_algorithm_auto_selects_nsga2_for_three_or_fewer_objectives():
+    config = {"optimize": {"backend": "pymoo", "pymoo": {"algorithm": "auto"}}}
+
+    assert pymoo_backend._resolve_pymoo_algorithm_name(config, n_obj=1) == "nsga2"
+    assert pymoo_backend._resolve_pymoo_algorithm_name(config, n_obj=3) == "nsga2"
+
+
+def test_resolve_algorithm_auto_selects_nsga3_for_many_objectives():
+    config = {"optimize": {"backend": "pymoo", "pymoo": {"algorithm": "auto"}}}
+
+    assert pymoo_backend._resolve_pymoo_algorithm_name(config, n_obj=4) == "nsga3"
+    assert pymoo_backend._resolve_pymoo_algorithm_name(config, n_obj=8) == "nsga3"
+
+
 def test_resolve_population_plan_uses_auto_nsga3_population_when_null():
     plan = pymoo_backend._resolve_pymoo_population_plan(
         config={
@@ -145,7 +159,7 @@ def test_resolve_population_plan_uses_auto_nsga3_population_when_null():
                 "backend": "pymoo",
                 "population_size": None,
                 "pymoo": {
-                    "algorithm": "nsga3",
+                    "algorithm": "auto",
                     "algorithms": {
                         "nsga3": {
                             "ref_dirs": {
@@ -170,13 +184,13 @@ def test_build_algorithm_falls_back_to_nsga2_for_single_objective():
     bounds = [Bound(0.0, 1.0, 0.1) for _ in range(4)]
     config = {
         "optimize": {
-            "backend": "pymoo",
-            "population_size": 16,
-            "pymoo": {
-                "algorithm": "nsga3",
-            },
+                "backend": "pymoo",
+                "population_size": 16,
+                "pymoo": {
+                    "algorithm": "auto",
+                },
+            }
         }
-    }
     population_plan = pymoo_backend._resolve_pymoo_population_plan(config, n_obj=1)
     algorithm = pymoo_backend._build_algorithm(
         config=config,
