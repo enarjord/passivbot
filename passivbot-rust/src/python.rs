@@ -1450,8 +1450,19 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
             "forager_volume_ema_span",
             "filter_volume_ema_span",
         )?,
-        forager_volume_drop_pct: extract_value(dict, "forager_volume_drop_pct")?,
-        forager_score_weights: extract_forager_score_weights(dict)?,
+        _legacy_filter_volatility_drop_pct: 0.0,
+        forager_volume_drop_pct: extract_value_with_fallback(
+            dict,
+            "forager_volume_drop_pct",
+            "filter_volume_drop_pct",
+        )?,
+        forager_score_weights: dict
+            .get_item("forager_score_weights")
+            .ok()
+            .flatten()
+            .map(|_| extract_forager_score_weights(dict))
+            .transpose()?
+            .unwrap_or_default(),
         ema_span_0: extract_value(dict, "ema_span_0")?,
         ema_span_1: extract_value(dict, "ema_span_1")?,
         hsl_enabled,

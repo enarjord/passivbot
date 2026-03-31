@@ -4037,8 +4037,17 @@ class Passivbot:
             slots_open = False
         if self.is_forager_mode(pside):
             # filter coins by relative volume and log range
-            clip_pct = self.bot_value(pside, "filter_volume_drop_pct")
+            clip_pct = self.bot_value(pside, "forager_volume_drop_pct")
+            if not clip_pct:
+                clip_pct = self.bot_value(pside, "filter_volume_drop_pct")
             volatility_drop = self.bot_value(pside, "filter_volatility_drop_pct")
+            weights = self.bot_value(pside, "forager_score_weights")
+            if not isinstance(weights, dict):
+                weights = {
+                    "volume": 0.0,
+                    "ema_readiness": 0.0,
+                    "volatility": 1.0,
+                }
             max_n_positions = self.get_max_n_positions(pside)
             # Apply max_ohlcv_fetches_per_minute in all cases (slots open or full).
             max_calls = get_optional_live_value(self.config, "max_ohlcv_fetches_per_minute", 0)
@@ -4078,12 +4087,26 @@ class Passivbot:
                     max_age_ms=max_age_ms,
                     max_network_fetches=fetch_budget,
                 )
+            if volatility_drop > 0.0:
+                ranked = sorted(
+                    candidates,
+                    key=lambda symbol: float(log_ranges.get(symbol, 0.0)),
+                    reverse=True,
+                )
+                keep_from = min(
+                    len(ranked),
+                    max(0, int(round(len(ranked) * float(volatility_drop)))),
+                )
+                candidates = ranked[keep_from:]
+                if not candidates:
+                    return []
             features = [
                 {
                     "index": idx,
                     "enabled": min_cost_flags.get(symbol, True),
                     "volume_score": volumes.get(symbol, 0.0),
                     "volatility_score": log_ranges.get(symbol, 0.0),
+                    "ema_readiness_score": 0.0,
                 }
                 for idx, symbol in enumerate(candidates)
             ]
@@ -4091,7 +4114,7 @@ class Passivbot:
                 features,
                 max_n_positions,
                 clip_pct,
-                volatility_drop,
+                weights,
                 True,
             )
             ideal_coins = [candidates[i] for i in selected]

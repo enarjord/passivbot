@@ -437,6 +437,9 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
     assert "--population-size INT, -ps INT" in help_text
     assert "--backend BACKEND, -ob BACKEND" in help_text
+    assert "--minimum-coin-age-days FLOAT, -mcad FLOAT" in help_text
+    assert "--hedge-mode Y/N, -hm Y/N" not in help_text
+    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" not in help_text
     assert "--optimize_population_size" not in help_text
     assert "--optimize.bounds.long_close_grid_markup_end" not in help_text
     assert "Optimize DEAP:" not in help_text
@@ -449,6 +452,8 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
 
     assert "Optimize Bounds:" in help_text
     assert "--optimize.bounds.long_close_grid_markup_end MIN,MAX[,STEP]" in help_text
+    assert "--hedge-mode Y/N, -hm Y/N" in help_text
+    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
 
 
 def test_live_default_help_shows_curated_groups():

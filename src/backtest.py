@@ -1385,6 +1385,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "max_realized_loss_pct": float(require_config_value(config, "live.max_realized_loss_pct")),
             "pnls_max_lookback_days": float(require_config_value(config, "live.pnls_max_lookback_days")),
             "equity_hard_stop_loss": hard_stop_cfg_long,
+            "panic_market_slippage_pct": panic_market_slippage_pct,
             "market_order_slippage_pct": panic_market_slippage_pct,
             "market_orders_allowed": market_orders_allowed,
             "market_order_near_touch_threshold": market_order_near_touch_threshold,

@@ -1262,8 +1262,11 @@ class MonitorTuiClient:
         self.log_file = log_file
         self.log_poll_interval_ms = max(100, int(log_poll_interval_ms))
         self.log_bootstrap_lines = max(0, int(log_bootstrap_lines))
+        self._log_tail_state: Optional[_LogTailState] = None
         self._stop_event = asyncio.Event()
         self._last_painted_screen: Optional[str] = None
+        if self.log_file:
+            self._bootstrap_log_tail(Path(self.log_file))
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -1425,47 +1428,59 @@ class MonitorTuiClient:
             termios.tcsetattr(fd, termios.TCSADRAIN, original_attrs)
 
     async def _log_tail_loop(self, path: Path) -> None:
-        self.state.set_log_file(str(path))
-        path_state: Optional[_LogTailState] = None
-        bootstrapped = False
         while not self._stop_event.is_set():
-            if not bootstrapped:
-                self.state.push_log_lines(_read_last_lines(path, self.log_bootstrap_lines))
-                bootstrapped = True
-            try:
-                stat = path.stat()
-            except FileNotFoundError:
-                try:
-                    await asyncio.wait_for(
-                        self._stop_event.wait(), timeout=self.log_poll_interval_ms / 1000.0
-                    )
-                except asyncio.TimeoutError:
-                    pass
-                continue
-            file_id = (int(stat.st_dev), int(stat.st_ino))
-            size = int(stat.st_size)
-            if path_state is None:
-                path_state = _LogTailState(file_id[0], file_id[1], size)
-            else:
-                reset = size < path_state.offset or (path_state.dev, path_state.ino) != file_id
-                read_from = 0 if reset else path_state.offset
-                if size > read_from:
-                    try:
-                        with open(path, "r", encoding="utf-8") as f:
-                            f.seek(read_from)
-                            lines = f.read().splitlines()
-                            new_offset = int(f.tell())
-                    except FileNotFoundError:
-                        lines = []
-                        new_offset = read_from
-                    if lines:
-                        self.state.push_log_lines(lines)
-                    path_state = _LogTailState(file_id[0], file_id[1], new_offset)
-                else:
-                    path_state = _LogTailState(file_id[0], file_id[1], size)
+            self._poll_log_tail_once(path)
             try:
                 await asyncio.wait_for(
                     self._stop_event.wait(), timeout=self.log_poll_interval_ms / 1000.0
                 )
             except asyncio.TimeoutError:
                 pass
+
+    def _bootstrap_log_tail(self, path: Path) -> None:
+        self.state.set_log_file(str(path))
+        self.state.push_log_lines(_read_last_lines(path, self.log_bootstrap_lines))
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            self._log_tail_state = None
+            return
+        self._log_tail_state = _LogTailState(int(stat.st_dev), int(stat.st_ino), int(stat.st_size))
+
+    def _poll_log_tail_once(self, path: Optional[Path] = None) -> None:
+        if path is None:
+            if not self.log_file:
+                return
+            path = Path(self.log_file)
+        if self.state.followed_log_file != str(path):
+            self._bootstrap_log_tail(path)
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            self._log_tail_state = None
+            return
+        file_id = (int(stat.st_dev), int(stat.st_ino))
+        size = int(stat.st_size)
+        if self._log_tail_state is None:
+            self._log_tail_state = _LogTailState(file_id[0], file_id[1], size)
+            return
+        reset = size < self._log_tail_state.offset or (
+            self._log_tail_state.dev,
+            self._log_tail_state.ino,
+        ) != file_id
+        read_from = 0 if reset else self._log_tail_state.offset
+        if size <= read_from:
+            if reset:
+                self._log_tail_state = _LogTailState(file_id[0], file_id[1], size)
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                f.seek(read_from)
+                lines = f.read().splitlines()
+                new_offset = int(f.tell())
+        except FileNotFoundError:
+            self._log_tail_state = None
+            return
+        if lines:
+            self.state.push_log_lines(lines)
+        self._log_tail_state = _LogTailState(file_id[0], file_id[1], new_offset)

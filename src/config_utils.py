@@ -906,12 +906,12 @@ def _build_from_live_only(config: dict, template: dict) -> dict:
 
 
 LEGACY_FILTER_KEYS = {
+    "filter_volatility_ema_span": "forager_volatility_ema_span",
     "filter_noisiness_rolling_window": "forager_volatility_ema_span",
     "filter_noisiness_ema_span": "forager_volatility_ema_span",
     "filter_log_range_ema_span": "forager_volatility_ema_span",
-    "filter_volatility_ema_span": "forager_volatility_ema_span",
-    "filter_volume_rolling_window": "forager_volume_ema_span",
     "filter_volume_ema_span": "forager_volume_ema_span",
+    "filter_volume_rolling_window": "forager_volume_ema_span",
 }
 
 LEGACY_FORAGER_KEYS = {
@@ -932,17 +932,17 @@ LEGACY_ENTRY_GRID_KEYS = {
 }
 
 LEGACY_BOUNDS_KEYS = {
+    "long_filter_volatility_ema_span": "long_forager_volatility_ema_span",
     "long_filter_noisiness_rolling_window": "long_forager_volatility_ema_span",
     "long_filter_noisiness_ema_span": "long_forager_volatility_ema_span",
     "long_filter_volume_rolling_window": "long_forager_volume_ema_span",
     "long_filter_log_range_ema_span": "long_forager_volatility_ema_span",
-    "long_filter_volatility_ema_span": "long_forager_volatility_ema_span",
     "long_filter_volume_ema_span": "long_forager_volume_ema_span",
+    "short_filter_volatility_ema_span": "short_forager_volatility_ema_span",
     "short_filter_noisiness_rolling_window": "short_forager_volatility_ema_span",
     "short_filter_noisiness_ema_span": "short_forager_volatility_ema_span",
     "short_filter_volume_rolling_window": "short_forager_volume_ema_span",
     "short_filter_log_range_ema_span": "short_forager_volatility_ema_span",
-    "short_filter_volatility_ema_span": "short_forager_volatility_ema_span",
     "short_filter_volume_ema_span": "short_forager_volume_ema_span",
     "long_filter_volume_drop_pct": "long_forager_volume_drop_pct",
     "short_filter_volume_drop_pct": "short_forager_volume_drop_pct",
@@ -1071,6 +1071,10 @@ def _apply_backward_compatibility_renames(
             )
             if tracker is not None:
                 tracker.remove(["optimize", "bounds", old], removed_value)
+
+    # Keep direct callers of this helper aligned with the internal filter-key shape
+    # expected by older tests and downstream runtime code.
+    _apply_forager_internal_aliases(result)
 
     live_cfg = result.get("live")
     logging_cfg = result.setdefault("logging", {})
@@ -2531,8 +2535,11 @@ RESERVED_CLI_ARGS = {
         "hidden": ["--live.minimum_coin_age_days", "--live_minimum_coin_age_days"],
         "type": float,
         "metavar": "FLOAT",
-        "commands": {"live"},
-        "group": {"live": "Coin Selection"},
+        "commands": {"live", "optimize"},
+        "group": {
+            "live": "Coin Selection",
+            "optimize": "Coin Selection",
+        },
         "help": "Minimum coin age in days required before a coin is eligible to trade.",
     },
     "live.filter_by_min_effective_cost": {
@@ -2552,7 +2559,7 @@ RESERVED_CLI_ARGS = {
         "hidden": ["--live.hedge_mode", "--live_hedge_mode"],
         "type": str2bool,
         "metavar": "Y/N",
-        "commands": {"live"},
+        "commands": {"live", "optimize"},
         "group": {"live": "Behavior"},
         "help": (
             "Enable or disable hedge mode. If the exchange does not support simultaneous "
@@ -2582,7 +2589,7 @@ RESERVED_CLI_ARGS = {
         "hidden": ["--live.max_realized_loss_pct", "--live_max_realized_loss_pct"],
         "type": float,
         "metavar": "FLOAT",
-        "commands": {"live"},
+        "commands": {"live", "optimize"},
         "group": {"live": "Behavior"},
         "help": "Maximum realized loss percentage allowed before trading is halted.",
     },
@@ -2994,7 +3001,11 @@ def add_reserved_arguments(
             required=False,
             default=None,
             metavar=spec["metavar"],
-            help=spec["help"] if visible_group is not None or command is None else argparse.SUPPRESS,
+            help=(
+                spec["help"]
+                if help_all or visible_group is not None or command is None
+                else argparse.SUPPRESS
+            ),
         )
         if "choices" in spec:
             register_kwargs["choices"] = spec["choices"]

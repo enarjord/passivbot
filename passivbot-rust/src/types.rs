@@ -400,7 +400,11 @@ pub struct BotParams {
     pub entry_trailing_threshold_volatility_weight: f64,
     pub filter_volatility_ema_span: f64,
     pub filter_volume_ema_span: f64,
+    #[serde(default, skip_serializing, rename = "filter_volatility_drop_pct")]
+    pub _legacy_filter_volatility_drop_pct: f64,
+    #[serde(default, alias = "filter_volume_drop_pct")]
     pub forager_volume_drop_pct: f64,
+    #[serde(default)]
     pub forager_score_weights: ForagerScoreWeights,
     pub ema_span_0: f64,
     pub ema_span_1: f64,
