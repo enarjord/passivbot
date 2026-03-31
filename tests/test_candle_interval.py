@@ -78,7 +78,9 @@ def test_backtest_with_candle_interval():
     from config_utils import load_config
 
     root = Path(__file__).resolve().parents[1]
-    config = load_config(str(root / "configs" / "examples" / "template.json"), verbose=False)
+    config = load_config(
+        str(root / "configs" / "examples" / "forager_long_only.json"), verbose=False
+    )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
     config["backtest"]["candle_interval_minutes"] = 5
@@ -144,7 +146,9 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
     from config_utils import load_config
 
     root = Path(__file__).resolve().parents[1]
-    config = load_config(str(root / "configs" / "examples" / "template.json"), verbose=False)
+    config = load_config(
+        str(root / "configs" / "examples" / "forager_long_only.json"), verbose=False
+    )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
     config["backtest"]["candle_interval_minutes"] = 5
@@ -200,7 +204,9 @@ def test_backtest_rejects_invalid_liquidation_threshold():
     from config_utils import load_config
 
     root = Path(__file__).resolve().parents[1]
-    config = load_config(str(root / "configs" / "examples" / "template.json"), verbose=False)
+    config = load_config(
+        str(root / "configs" / "examples" / "forager_long_only.json"), verbose=False
+    )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
     config["backtest"]["filter_by_min_effective_cost"] = False

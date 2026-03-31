@@ -12,8 +12,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from config import load_prepared_config
 from config_utils import (
-    load_config,
     parse_overrides,
     require_config_value,
     require_live_value,
@@ -541,11 +541,11 @@ async def prepare_suite_contexts(
 
 
 def ensure_suite_config(config_path: Path, suite_path: Optional[Path]) -> Dict[str, Any]:
-    config = load_config(str(config_path), verbose=False)
+    config = load_prepared_config(str(config_path), verbose=False)
     config = parse_overrides(config, verbose=False)
     suite_override = None
     if suite_path:
-        override_config = load_config(str(suite_path), verbose=False)
+        override_config = load_prepared_config(str(suite_path), verbose=False)
         override_backtest = override_config.get("backtest", {})
         # Support both new (scenarios at top level) and legacy (suite wrapper) formats
         if "scenarios" in override_backtest:

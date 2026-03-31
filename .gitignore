@@ -343,6 +343,8 @@ backtests/
 !config/optimize/default.hjson
 !config/backtest/default.hjson
 config/
+!src/config/
+!src/config/**/*.py
 historical_data/
 results*
 

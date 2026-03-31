@@ -7,7 +7,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-from config_utils import format_config, load_config, parse_overrides, require_config_value
+from config import load_prepared_config
+from config_utils import parse_overrides, require_config_value
 from logging_setup import configure_logging, resolve_log_level
 from rust_utils import collect_runtime_provenance, sha256_file
 from suite_runner import extract_suite_config
@@ -334,10 +335,9 @@ async def async_main(args: argparse.Namespace) -> int:
             raw_loaded = json.loads(raw_path.read_text())
         except json.JSONDecodeError:
             raw_loaded = None
-    raw_config = load_config(args.config_path, verbose=False)
+    raw_config = load_prepared_config(args.config_path, verbose=False)
     stored_metrics = extract_metric_means(raw_loaded or raw_config)
     config = deepcopy(raw_config)
-    config = format_config(config, verbose=False)
     config = parse_overrides(config, verbose=False)
     rust = collect_rust_binary_provenance()
     optimizer = await run_optimizer_replay(config)

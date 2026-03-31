@@ -1,3 +1,4 @@
+from .load import load_input_config, load_prepared_config, prepare_config
 from .normalize import normalize_config
 from .parse import load_raw_config
 from .project import project_config
@@ -9,8 +10,11 @@ __all__ = [
     "DEFAULT_EXAMPLE_CONFIG_PATH",
     "compile_runtime_config",
     "get_template_config",
+    "load_input_config",
+    "load_prepared_config",
     "load_raw_config",
     "normalize_config",
+    "prepare_config",
     "project_config",
     "validate_config",
 ]

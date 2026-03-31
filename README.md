@@ -136,7 +136,7 @@ To start the bot with the default settings, run:
 passivbot live -u {account_name_from_api-keys.json}
 ```
 
-or make a new configuration file, using `configs/template.json` as a template, and start the bot with:
+or make a new configuration file, using `configs/examples/forager_long_only.json` as a starting point, and start the bot with:
 
 
 ```sh

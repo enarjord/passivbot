@@ -28,6 +28,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 from prettytable import PrettyTable
+from config import load_prepared_config  # noqa: E402
 
 # Ensure we can import modules from src/
 SRC_ROOT = Path(__file__).resolve().parents[1]
@@ -36,8 +37,6 @@ if str(SRC_ROOT) not in sys.path:
 
 from backtest import prepare_hlcvs_mss, run_backtest  # noqa: E402
 from config_utils import (  # noqa: E402
-    format_config,
-    load_config,
     parse_overrides,
     require_config_value,
     get_optional_config_value,
@@ -443,8 +442,7 @@ class IterativeBacktestSession:
     async def _load_config(self) -> Dict[str, Any]:
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
-        config = load_config(str(self.config_path), verbose=False)
-        config = format_config(config, verbose=False)
+        config = load_prepared_config(str(self.config_path), verbose=False)
         config = parse_overrides(config, verbose=False)
         # Configure logging lazily based on CLI/debug preference
         level = resolve_log_level(

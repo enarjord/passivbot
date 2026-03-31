@@ -1,6 +1,6 @@
 # Passivbot Parameters Explanation
 
-This document provides an overview of the parameters found in the canonical in-code config schema and the example config at `configs/examples/template.json`.
+This document provides an overview of the parameters found in the canonical in-code config schema and the example config at `configs/examples/forager_long_only.json`.
 
 ## Backtest Settings
 

@@ -43,6 +43,7 @@ from passivbot_exceptions import RestartBotException
 import passivbot_hsl as pb_hsl
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
+from config import load_input_config, prepare_config
 from logging_setup import (
     configure_logging,
     get_last_log_activity_monotonic,
@@ -77,11 +78,8 @@ try:
 except Exception:
     resource = None
 from config_utils import (
-    compile_runtime_config,
-    load_config,
     add_config_arguments,
     update_config_with_args,
-    format_config,
     get_optional_config_value,
     get_optional_live_value,
     normalize_coins_source,
@@ -93,7 +91,6 @@ from config_utils import (
     merge_negative_cli_values,
     normalize_hsl_cooldown_position_policy,
     normalize_hsl_signal_mode,
-    project_config,
 )
 from procedures import (
     load_broker_code,
@@ -8254,8 +8251,8 @@ async def main():
         "config_path",
         type=str,
         nargs="?",
-        default="configs/examples/template.json",
-        help="path to json/hjson passivbot config (defaults to configs/examples/template.json if omitted)",
+        default=None,
+        help="path to json/hjson passivbot config (defaults to in-code schema defaults if omitted)",
     )
     add_help_all_argument(
         parser,
@@ -8315,11 +8312,16 @@ async def main():
     cli_log_level = "debug" if args.verbose else args.log_level
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
-    config = load_config(args.config_path, live_only=True)
-    update_config_with_args(config, args, verbose=True)
-    config = format_config(config, live_only=True)
-    config = project_config(config, "live", record_step=False)
-    config = compile_runtime_config(config, runtime="live", record_step=False)
+    source_config, base_config_path = load_input_config(args.config_path)
+    update_config_with_args(source_config, args, verbose=True)
+    config = prepare_config(
+        source_config,
+        base_config_path=base_config_path,
+        live_only=True,
+        verbose=True,
+        target="live",
+        runtime="live",
+    )
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(cli_log_level, config_logging_value, fallback=1)
     if effective_log_level != initial_log_level:

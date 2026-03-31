@@ -1,10 +1,18 @@
 import logging
 from copy import deepcopy
 
+from .bot import ensure_optimize_bounds_for_bot, format_bot_config
+from .hydrate import (
+    apply_non_live_adjustments,
+    hydrate_missing_template_fields,
+    preserve_coin_sources,
+    seed_missing_compatibility_sections,
+    sync_with_template,
+)
 from .migrations import apply_migrations, build_base_config_from_flavor, detect_flavor
 from .schema import get_template_config
 from .transform_log import ConfigTransformTracker, record_transform
-from .validate import validate_config
+from .validate import normalize_validation_fields, require_config_dict, validate_config
 
 
 def normalize_config(
@@ -15,8 +23,6 @@ def normalize_config(
     verbose: bool = True,
     record_step: bool = True,
 ) -> dict:
-    import config_utils as legacy
-
     raw_snapshot = deepcopy(config["_raw"]) if "_raw" in config else None
     existing_log = config.get("_transform_log")
     if isinstance(existing_log, list):
@@ -46,29 +52,29 @@ def normalize_config(
         if section in result and section not in source_sections:
             tracker.add([section], result[section])
     for path in ("backtest", "bot", "live", "optimize"):
-        legacy.require_config_dict(result, path)
+        require_config_dict(result, path)
 
     apply_migrations(result, verbose=verbose, tracker=tracker)
-    legacy._seed_missing_compatibility_sections(template, result, tracker=tracker)
+    seed_missing_compatibility_sections(template, result, tracker=tracker)
     for path in ("bot.long", "bot.short", "optimize.bounds"):
-        legacy.require_config_dict(result, path)
+        require_config_dict(result, path)
 
-    result["bot"] = legacy.format_bot_config(
+    result["bot"] = format_bot_config(
         result["bot"],
         live_cfg=result["live"],
         verbose=verbose,
         tracker=tracker,
     )
-    legacy._ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
-    legacy._hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
-    result["bot"] = legacy.sort_dict_keys(result["bot"])
-    legacy._sync_with_template(
+    ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
+    hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
+    sync_with_template(
         template,
         result,
         base_config_path,
         verbose=verbose,
         tracker=tracker,
     )
+    normalize_validation_fields(result, raw_optimize=raw_optimize_snapshot)
     validate_config(
         result,
         raw_optimize=raw_optimize_snapshot,
@@ -78,7 +84,7 @@ def normalize_config(
 
     if coin_sources_input is not None:
         result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
-    legacy._preserve_coin_sources(result)
+    preserve_coin_sources(result)
 
     if optimize_suite_defined:
         logging.warning(
@@ -91,7 +97,7 @@ def normalize_config(
             del result["optimize"]["suite"]
 
     if not live_only:
-        legacy._apply_non_live_adjustments(
+        apply_non_live_adjustments(
             result,
             verbose=verbose,
             tracker=tracker,

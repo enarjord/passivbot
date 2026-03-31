@@ -29,9 +29,9 @@ import pandas as pd
 from dateutil import parser
 from tqdm import tqdm
 from cli_utils import get_cli_prog
+from config import load_input_config, prepare_config
 from config_utils import (
     add_config_arguments,
-    load_config,
     get_template_config,
     update_config_with_args,
     require_config_value,
@@ -2141,13 +2141,9 @@ async def main():
     }
     add_config_arguments(parser, template_config)
     args = parser.parse_args()
-    if args.config_path is None:
-        logging.info("loading default example config configs/examples/template.json")
-        config = load_config("configs/examples/template.json", verbose=False)
-    else:
-        logging.info(f"loading config {args.config_path}")
-        config = load_config(args.config_path)
-    update_config_with_args(config, args)
+    source_config, base_config_path = load_input_config(args.config_path)
+    update_config_with_args(source_config, args)
+    config = prepare_config(source_config, base_config_path=base_config_path, verbose=False)
     await format_approved_ignored_coins(config, require_config_value(config, "backtest.exchanges"))
     oms = {}
     try:

@@ -67,12 +67,11 @@ from cli_utils import (
     get_cli_prog,
     help_all_requested,
 )
+from config import load_input_config, load_prepared_config, prepare_config
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from config_utils import (
     get_template_config,
     load_hjson_config,
-    load_config,
-    format_config,
     format_bot_config,
     add_config_arguments,
     update_config_with_args,
@@ -1653,7 +1652,7 @@ async def main():
         usage="%(prog)s [config_path] [options]",
         epilog=(
             "Examples:\n"
-            "  passivbot optimize configs/examples/template.json -s XMR -sd 2025 -c 4 --suite n\n"
+            "  passivbot optimize configs/examples/forager_long_only.json -s XMR -sd 2025 -c 4 --suite n\n"
             "  passivbot optimize -e bybit -s BTC,ETH -i 10000 -ps 200\n"
             "\n"
             "Use --help-all to show every config override flag, including optimize bounds."
@@ -1664,7 +1663,7 @@ async def main():
         type=str,
         default=None,
         nargs="?",
-        help="path to json/hjson passivbot config (defaults to configs/examples/template.json if omitted)",
+        help="path to json/hjson passivbot config (defaults to in-code schema defaults if omitted)",
     )
     add_help_all_argument(
         parser,
@@ -1741,14 +1740,13 @@ async def main():
     args = parser.parse_args(raw_args)
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
-    if args.config_path is None:
-        logging.info("loading default example config configs/examples/template.json")
-        config = load_config("configs/examples/template.json", verbose=True)
-    else:
-        logging.info(f"loading config {args.config_path}")
-        config = load_config(args.config_path, verbose=True)
-    update_config_with_args(config, args, verbose=True)
-    config = format_config(config, verbose=False)
+    source_config, base_config_path = load_input_config(args.config_path)
+    update_config_with_args(source_config, args, verbose=True)
+    config = prepare_config(
+        source_config,
+        base_config_path=base_config_path,
+        verbose=False,
+    )
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(args.log_level, config_logging_value, fallback=1)
     if effective_log_level != initial_log_level:
@@ -1777,7 +1775,7 @@ async def main():
     suite_override = None
     if args.suite_config:
         logging.info("loading suite config %s", args.suite_config)
-        override_cfg = load_config(args.suite_config, verbose=False)
+        override_cfg = load_prepared_config(args.suite_config, verbose=False)
         override_backtest = override_cfg.get("backtest", {})
         # Support both new (scenarios at top level) and legacy (suite wrapper) formats
         if "scenarios" in override_backtest:

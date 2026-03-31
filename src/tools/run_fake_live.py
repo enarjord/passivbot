@@ -15,7 +15,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from candlestick_manager import CANDLE_DTYPE
-from config_utils import compile_runtime_config, format_config, load_config, project_config
+from config import load_prepared_config
 from exchanges.fake import FakeCCXTClient, load_fake_scenario
 from fill_events_manager import FillEvent, FillEventCache
 from logging_setup import configure_logging
@@ -400,10 +400,12 @@ async def _run_fake_cycle(bot):
 
 async def _async_main(args: argparse.Namespace) -> int:
     configure_logging(debug=args.log_level)
-    config = load_config(args.config, verbose=False)
-    config = format_config(config, verbose=False)
-    config = project_config(config, "live", record_step=False)
-    config = compile_runtime_config(config, runtime="live", record_step=False)
+    config = load_prepared_config(
+        args.config,
+        verbose=False,
+        target="live",
+        runtime="live",
+    )
     config.setdefault("live", {})
     config["live"]["fake_scenario_path"] = args.scenario
 

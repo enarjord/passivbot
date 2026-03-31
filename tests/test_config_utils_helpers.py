@@ -7,6 +7,7 @@ import json
 import config_utils
 import pytest
 
+from config import load_input_config, prepare_config
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
 from config_transform import ConfigTransformTracker, record_transform
@@ -27,6 +28,34 @@ from config_utils import (
     parse_overrides,
     format_config,
 )
+
+
+def test_load_input_config_without_path_uses_schema_defaults():
+    source, base_config_path = load_input_config(None, log_info=False)
+
+    assert base_config_path == ""
+    assert source == get_template_config()
+
+
+def test_prepare_config_uses_schema_defaults_and_runtime_projection():
+    source, base_config_path = load_input_config(None, log_info=False)
+    source["live"]["user"] = "test_user"
+
+    prepared = prepare_config(
+        source,
+        base_config_path=base_config_path,
+        live_only=True,
+        verbose=False,
+        target="live",
+        runtime="live",
+    )
+
+    assert "backtest" not in prepared
+    assert prepared["live"]["user"] == "test_user"
+    assert prepared["bot"]["long"]["filter_volume_ema_span"] == pytest.approx(
+        prepared["bot"]["long"]["forager_volume_ema_span"]
+    )
+    assert prepared["_raw"]["live"]["user"] == "test_user"
 
 
 def test_ensure_bot_defaults_and_bounds_adds_missing_values():
@@ -174,7 +203,7 @@ def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatt
     formatted = format_config(sparse, verbose=False)
     assert formatted["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
 
-    loaded = load_config("configs/examples/template.json", verbose=False)
+    loaded = load_config("configs/examples/forager_long_only.json", verbose=False)
     assert loaded["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
 
 
@@ -384,7 +413,7 @@ def test_format_config_emits_coalesced_summary_without_leaf_noise(caplog):
 
 def test_load_example_config_avoids_leaf_add_remove_log_churn(caplog):
     with caplog.at_level(logging.INFO):
-        load_config("configs/examples/template.json", verbose=True)
+        load_config("configs/examples/forager_long_only.json", verbose=True)
 
     messages = [rec.message for rec in caplog.records]
     assert not any("Removed unused key" in msg for msg in messages)

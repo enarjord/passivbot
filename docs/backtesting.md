@@ -32,7 +32,7 @@ Or
 ```shell
 passivbot backtest path/to/config.json
 ```
-If no config is specified, it will default to `configs/examples/template.json`
+If no config is specified, backtesting starts from the in-code schema defaults in `src/config/schema.py`
 
 ## Backtest Results
 

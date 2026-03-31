@@ -38,7 +38,7 @@ Use a short window + one coin for fast review checks on order/risk/EMA/config-fl
 ```bash
 python3 - <<'PY'
 import copy, json
-cfg = copy.deepcopy(json.load(open("configs/examples/template.json")))
+cfg = copy.deepcopy(json.load(open("configs/examples/forager_long_only.json")))
 cfg.setdefault("backtest", {})
 cfg["backtest"]["start_date"] = "2025-01-01"
 cfg["backtest"]["end_date"] = "2025-01-08"

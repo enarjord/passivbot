@@ -54,7 +54,7 @@ cd passivbot-rust && cargo check --tests && cd ..
 ```bash
 passivbot tool pareto-dash --data-root optimize_results
 passivbot tool verify-hlcvs-data
-passivbot tool streamline-json configs/examples/template.json
+passivbot tool streamline-json configs/examples/forager_long_only.json
 ```
 
 ## High-Signal Gotcha

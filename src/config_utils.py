@@ -193,7 +193,6 @@ def load_hjson_config(config_path: str, *, log_errors: bool = True) -> dict:
 
 
 def load_config(filepath: str, live_only=False, verbose=True) -> dict:
-    # loads hjson or json v7 config
     try:
         config_raw = load_hjson_config(filepath)
         config = format_config(

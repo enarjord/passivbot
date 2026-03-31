@@ -27,13 +27,13 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypedDict
 
 from ccxt.base.errors import RateLimitExceeded
+from config import load_input_config, prepare_config
 
 try:
     from utils import ts_to_date  # type: ignore
 except ImportError:  # pragma: no cover - fallback for package-relative execution
     from .utils import ts_to_date
 
-from config_utils import compile_runtime_config, format_config, load_config, project_config
 from logging_setup import configure_logging
 from procedures import load_user_info
 from pure_funcs import ensure_millis
@@ -4581,10 +4581,14 @@ def _instantiate_bot(config: dict):
 
 
 async def _run_cli(args: argparse.Namespace) -> None:
-    config = load_config(args.config, verbose=False)
-    config = format_config(config, verbose=False)
-    config = project_config(config, "live", record_step=False)
-    config = compile_runtime_config(config, runtime="live", record_step=False)
+    source_config, base_config_path = load_input_config(args.config)
+    config = prepare_config(
+        source_config,
+        base_config_path=base_config_path,
+        verbose=False,
+        target="live",
+        runtime="live",
+    )
     live = config.setdefault("live", {})
     if args.user:
         live["user"] = args.user
@@ -4628,7 +4632,11 @@ async def _run_cli(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fill events cache refresher")
     parser.add_argument(
-        "--config", "-c", type=str, default="configs/examples/template.json", help="Config path"
+        "--config",
+        "-c",
+        type=str,
+        default=None,
+        help="Config path (defaults to in-code schema defaults)",
     )
     parser.add_argument("--user", "-u", type=str, required=True, help="Live user identifier")
     parser.add_argument("--start", "-s", type=str, help="Start datetime (ms or ISO)")

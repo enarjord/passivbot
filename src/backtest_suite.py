@@ -15,8 +15,8 @@ def main() -> None:
         "config_path",
         type=Path,
         nargs="?",
-        default=Path("configs/examples/template.json"),
-        help="Path to the base Passivbot config.",
+        default=None,
+        help="Path to the base Passivbot config. Defaults to in-code schema defaults.",
     )
     parser.add_argument(
         "--suite-config",
@@ -25,7 +25,10 @@ def main() -> None:
         help="Optional path to a file containing backtest.suite overrides.",
     )
     args = parser.parse_args()
-    cli_entrypoint(str(args.config_path), str(args.suite_config) if args.suite_config else None)
+    cli_entrypoint(
+        str(args.config_path) if args.config_path else "",
+        str(args.suite_config) if args.suite_config else None,
+    )
 
 
 if __name__ == "__main__":

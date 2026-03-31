@@ -35,6 +35,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, callback_context, dash_table, dcc, html
 from dash.exceptions import PreventUpdate
+from config import load_prepared_config
 
 # Ensure we can import modules from src/
 SRC_ROOT = Path(__file__).resolve().parents[1]
@@ -47,7 +48,6 @@ from fill_events_manager import (
     _extract_symbol_pool,
     _instantiate_bot,
 )
-from config_utils import format_config, load_config
 from logging_setup import configure_logging
 
 # Global log buffer for UI display
@@ -190,8 +190,12 @@ def _build_managers(
     result: Dict[str, Dict[str, Any]] = {}
     for user in users:
         try:
-            config = load_config(config_path, verbose=False)
-            config = format_config(config, verbose=False)
+            config = load_prepared_config(
+                config_path,
+                verbose=False,
+                target="live",
+                runtime="live",
+            )
             config.setdefault("live", {})["user"] = user
             bot = _instantiate_bot(config)
             symbol_pool = _extract_symbol_pool(config, symbols_override)
@@ -226,8 +230,12 @@ def _ensure_loaded(accounts: Dict[str, Dict[str, Any]]) -> None:
 def _rebuild_manager(data: Dict[str, Any]) -> None:
     """Rebuild a manager with fresh bot/fetcher instances to avoid stale connections."""
     try:
-        config = load_config(data["config_path"], verbose=False)
-        config = format_config(config, verbose=False)
+        config = load_prepared_config(
+            data["config_path"],
+            verbose=False,
+            target="live",
+            runtime="live",
+        )
         config.setdefault("live", {})["user"] = data["user"]
         bot = _instantiate_bot(config)
         symbol_pool = _extract_symbol_pool(config, data["symbols_override"])
@@ -1135,7 +1143,11 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fill events dashboard")
-    parser.add_argument("--config", default="configs/examples/template.json", help="Config path")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Config path (defaults to in-code schema defaults)",
+    )
     parser.add_argument(
         "--users",
         required=True,

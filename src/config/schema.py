@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 
-DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/template.json"
+DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/forager_long_only.json"
 
 
 def get_template_config():
