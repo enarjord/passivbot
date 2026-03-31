@@ -179,7 +179,7 @@ python3 src/tools/fill_events_dash.py --users binance_01,bybit_01,gateio_01
 # With options
 python3 src/tools/fill_events_dash.py \
   --users binance_01,bybit_01 \
-  --config configs/template.json \
+  --config configs/examples/template.json \
   --lookback-days 60 \
   --port 8050 \
   --log-level info
@@ -237,7 +237,7 @@ Safely integrate FillEventsManager into the live bot by running it in parallel w
 
 #### Config Option
 Added `pnls_manager_shadow_mode` to `config.live`:
-- **Location**: `configs/template.json` line 225, `src/config_utils.py` line 2014
+- **Location**: `configs/examples/template.json`, `src/config/schema.py`
 - **Default**: `false` (opt-in)
 - **When true**: FillEventsManager runs alongside legacy, logs comparisons
 

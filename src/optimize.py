@@ -1653,7 +1653,7 @@ async def main():
         usage="%(prog)s [config_path] [options]",
         epilog=(
             "Examples:\n"
-            "  passivbot optimize configs/template.json -s XMR -sd 2025 -c 4 --suite n\n"
+            "  passivbot optimize configs/examples/template.json -s XMR -sd 2025 -c 4 --suite n\n"
             "  passivbot optimize -e bybit -s BTC,ETH -i 10000 -ps 200\n"
             "\n"
             "Use --help-all to show every config override flag, including optimize bounds."
@@ -1664,7 +1664,7 @@ async def main():
         type=str,
         default=None,
         nargs="?",
-        help="path to json/hjson passivbot config (defaults to configs/template.json if omitted)",
+        help="path to json/hjson passivbot config (defaults to configs/examples/template.json if omitted)",
     )
     add_help_all_argument(
         parser,
@@ -1742,8 +1742,8 @@ async def main():
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     if args.config_path is None:
-        logging.info(f"loading default template config configs/template.json")
-        config = load_config("configs/template.json", verbose=True)
+        logging.info("loading default example config configs/examples/template.json")
+        config = load_config("configs/examples/template.json", verbose=True)
     else:
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path, verbose=True)

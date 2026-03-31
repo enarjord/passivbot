@@ -52,6 +52,7 @@ from config_utils import (
     format_config,
     get_template_config,
     parse_overrides,
+    compile_runtime_config,
     require_config_value,
     require_live_value,
     get_optional_config_value,
@@ -666,18 +667,27 @@ def execute_backtest(payload: BacktestPayload, config: dict):
     Execute a prepared backtest payload and expand the resulting analysis.
     """
 
-    (
-        fills,
-        equities_array,
-        analysis_usd,
-        analysis_btc,
-        hard_stop_plot_data,
-    ) = pbr.run_backtest_bundle(
+    backtest_result = pbr.run_backtest_bundle(
         payload.bundle,
         payload.bot_params_list,
         payload.exchange_params,
         payload.backtest_params,
     )
+    if len(backtest_result) == 5:
+        (
+            fills,
+            equities_array,
+            analysis_usd,
+            analysis_btc,
+            hard_stop_plot_data,
+        ) = backtest_result
+    elif len(backtest_result) == 4:
+        fills, equities_array, analysis_usd, analysis_btc = backtest_result
+        hard_stop_plot_data = {}
+    else:
+        raise ValueError(
+            f"run_backtest_bundle returned {len(backtest_result)} values; expected 4 or 5"
+        )
 
     equities_array = np.asarray(equities_array)
     payload.hard_stop_plot_data = dict(hard_stop_plot_data or {})
@@ -1229,6 +1239,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
 
 
 def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
+    config = compile_runtime_config(config, runtime="backtest", record_step=False)
     coins = sorted(set(require_config_value(config, f"backtest.coins.{exchange}")))
     candle_interval = int(config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
     bot_params_list = []
@@ -1600,7 +1611,7 @@ async def main():
         usage="%(prog)s [config_path] [options]",
         epilog=(
             "Examples:\n"
-            "  passivbot backtest configs/template.json -s XMR -sd 2025 --suite n\n"
+            "  passivbot backtest configs/examples/template.json -s XMR -sd 2025 --suite n\n"
             "  passivbot backtest -e bybit -s BTC,ETH -sd 2024-01 -ed 2024-06\n"
             "\n"
             "Use --help-all to show every config override flag."
@@ -1611,7 +1622,7 @@ async def main():
         type=str,
         default=None,
         nargs="?",
-        help="path to json/hjson passivbot config (defaults to configs/template.json if omitted)",
+        help="path to json/hjson passivbot config (defaults to configs/examples/template.json if omitted)",
     )
     add_help_all_argument(
         parser,
@@ -1751,8 +1762,8 @@ async def main():
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     if args.config_path is None:
-        logging.info(f"loading default template config configs/template.json")
-        config = load_config("configs/template.json", verbose=False)
+        logging.info("loading default example config configs/examples/template.json")
+        config = load_config("configs/examples/template.json", verbose=False)
     else:
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path)

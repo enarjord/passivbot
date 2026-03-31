@@ -1,0 +1,115 @@
+import logging
+from copy import deepcopy
+
+from .migrations import apply_migrations, build_base_config_from_flavor, detect_flavor
+from .schema import get_template_config
+from .transform_log import ConfigTransformTracker, record_transform
+from .validate import validate_config
+
+
+def normalize_config(
+    config: dict,
+    *,
+    base_config_path: str = "",
+    live_only: bool = False,
+    verbose: bool = True,
+    record_step: bool = True,
+) -> dict:
+    import config_utils as legacy
+
+    raw_snapshot = deepcopy(config["_raw"]) if "_raw" in config else None
+    existing_log = config.get("_transform_log")
+    if isinstance(existing_log, list):
+        existing_log = deepcopy(existing_log)
+    else:
+        existing_log = []
+    tracker = ConfigTransformTracker()
+    optimize_suite_defined = (
+        isinstance(config.get("optimize"), dict) and "suite" in config["optimize"]
+    )
+    raw_optimize_limits_present = (
+        isinstance(config.get("optimize"), dict) and "limits" in config["optimize"]
+    )
+    raw_optimize_limits = deepcopy(config.get("optimize", {}).get("limits"))
+    raw_optimize_snapshot = (
+        deepcopy(config.get("optimize")) if isinstance(config.get("optimize"), dict) else {}
+    )
+    coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
+    template = get_template_config()
+    flavor = detect_flavor(config, template)
+    result = build_base_config_from_flavor(config, template, flavor, verbose)
+    if flavor == "nested_current" and isinstance(config.get("config"), dict):
+        source_sections = set(config["config"])
+    else:
+        source_sections = set(config) if isinstance(config, dict) else set()
+    for section in ("backtest", "bot", "coin_overrides", "live", "logging", "monitor", "optimize"):
+        if section in result and section not in source_sections:
+            tracker.add([section], result[section])
+    for path in ("backtest", "bot", "live", "optimize"):
+        legacy.require_config_dict(result, path)
+
+    apply_migrations(result, verbose=verbose, tracker=tracker)
+    legacy._seed_missing_compatibility_sections(template, result, tracker=tracker)
+    for path in ("bot.long", "bot.short", "optimize.bounds"):
+        legacy.require_config_dict(result, path)
+
+    result["bot"] = legacy.format_bot_config(
+        result["bot"],
+        live_cfg=result["live"],
+        verbose=verbose,
+        tracker=tracker,
+    )
+    legacy._ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
+    legacy._hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
+    result["bot"] = legacy.sort_dict_keys(result["bot"])
+    legacy._sync_with_template(
+        template,
+        result,
+        base_config_path,
+        verbose=verbose,
+        tracker=tracker,
+    )
+    validate_config(
+        result,
+        raw_optimize=raw_optimize_snapshot,
+        verbose=verbose,
+        tracker=tracker,
+    )
+
+    if coin_sources_input is not None:
+        result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
+    legacy._preserve_coin_sources(result)
+
+    if optimize_suite_defined:
+        logging.warning(
+            "Config contains optimize.suite, but suite configuration is now defined via "
+            "backtest.scenarios. optimize.suite will be ignored and deleted; backtest.scenarios "
+            "will be used. If you need different suite definitions, pass --suite-config with a "
+            "file containing backtest.scenarios."
+        )
+        if isinstance(result.get("optimize"), dict) and "suite" in result["optimize"]:
+            del result["optimize"]["suite"]
+
+    if not live_only:
+        legacy._apply_non_live_adjustments(
+            result,
+            verbose=verbose,
+            tracker=tracker,
+            raw_optimize_limits=raw_optimize_limits,
+            raw_optimize_limits_present=raw_optimize_limits_present,
+        )
+
+    result["_transform_log"] = existing_log
+    if raw_snapshot is not None and "_raw" not in result:
+        result["_raw"] = deepcopy(raw_snapshot)
+
+    if record_step:
+        details = tracker.merge_details(
+            {
+                "live_only": live_only,
+                "base_config_path": base_config_path,
+                "flavor": flavor,
+            }
+        )
+        record_transform(result, "normalize_config", details)
+    return result

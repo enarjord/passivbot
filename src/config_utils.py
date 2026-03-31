@@ -7,21 +7,44 @@ import re
 from copy import deepcopy
 from typing import Any, Dict, Tuple, List, Union, Optional, Iterable
 
-import hjson
-
-from pure_funcs import remove_OD, sort_dict_keys, str2bool
+from config.normalize import normalize_config
+from config.parse import load_raw_config
+from config.project import project_config
+from config.runtime_compile import compile_runtime_config
+from config.schema import get_template_config as get_schema_template_config
+from config.transform_log import ConfigTransformTracker, record_transform
+from config.validate import validate_config
+from config.logging_summary import emit_transform_summary
+from config.migrations import (
+    apply_backward_compatibility_renames as apply_migration_renames,
+    build_base_config_from_flavor as build_migration_base_config_from_flavor,
+    detect_flavor as detect_migration_flavor,
+    migrate_btc_collateral_settings as migrate_btc_collateral_settings_v7,
+    migrate_suite_to_scenarios as migrate_suite_to_scenarios_v7,
+    rename_config_keys as rename_migration_config_keys,
+)
+from pure_funcs import sort_dict_keys, str2bool
 from utils import (
     format_end_date,
     symbol_to_coin,
     normalize_coins_source,
     dump_json_streamlined,
 )
-from config_transform import ConfigTransformTracker, record_transform
 
 
 def _log_config(verbose: bool, level: int, message: str, *args) -> None:
     prefixed_message = "[config] " + message
-    if verbose or level >= logging.WARNING:
+    noisy_info_prefixes = (
+        "Added missing ",
+        "Removed unused key",
+        "adding missing ",
+        "renaming parameter ",
+        "dropping obsolete parameter ",
+        "Skipping template subtree ",
+    )
+    if level == logging.INFO and any(message.startswith(prefix) for prefix in noisy_info_prefixes):
+        logging.debug(prefixed_message, *args)
+    elif verbose or level >= logging.WARNING:
         logging.log(level, prefixed_message, *args)
     else:
         logging.debug(prefixed_message, *args)
@@ -166,13 +189,7 @@ TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
 
 
 def load_hjson_config(config_path: str, *, log_errors: bool = True) -> dict:
-    try:
-        with open(config_path, encoding="utf-8") as f:
-            return remove_OD(hjson.load(f))
-    except Exception as e:
-        if log_errors:
-            logging.exception("failed to load config file %s", config_path)
-        raise
+    return load_raw_config(config_path, log_errors=log_errors)
 
 
 def load_config(filepath: str, live_only=False, verbose=True) -> dict:
@@ -969,332 +986,43 @@ OBSOLETE_BOUND_KEYS = {
 FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
     "forager_volatility_ema_span": "filter_volatility_ema_span",
     "forager_volume_ema_span": "filter_volume_ema_span",
+    "forager_volume_drop_pct": "filter_volume_drop_pct",
 }
 
 FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
     "long_forager_volatility_ema_span": "long_filter_volatility_ema_span",
     "long_forager_volume_ema_span": "long_filter_volume_ema_span",
+    "long_forager_volume_drop_pct": "long_filter_volume_drop_pct",
     "short_forager_volatility_ema_span": "short_filter_volatility_ema_span",
     "short_forager_volume_ema_span": "short_filter_volume_ema_span",
+    "short_forager_volume_drop_pct": "short_filter_volume_drop_pct",
 }
 
 
 def _apply_backward_compatibility_renames(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    """Translate legacy rolling_window keys to their EMA-span counterparts."""
-
-    for pside, bot_cfg in result.get("bot", {}).items():
-        if not isinstance(bot_cfg, dict):
-            continue
-        for old, new in LEGACY_FILTER_KEYS.items():
-            if old in bot_cfg:
-                moved_value = bot_cfg[old]
-                if new not in bot_cfg:
-                    bot_cfg[new] = moved_value
-                    _log_config(
-                        verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new
-                    )
-                    if tracker is not None:
-                        tracker.rename(
-                            ["bot", pside, old],
-                            ["bot", pside, new],
-                            moved_value,
-                        )
-                del bot_cfg[old]
-        for old, new in LEGACY_FORAGER_KEYS.items():
-            if old in bot_cfg:
-                moved_value = bot_cfg[old]
-                if new not in bot_cfg:
-                    bot_cfg[new] = moved_value
-                    _log_config(
-                        verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new
-                    )
-                    if tracker is not None:
-                        tracker.rename(
-                            ["bot", pside, old],
-                            ["bot", pside, new],
-                            moved_value,
-                        )
-                del bot_cfg[old]
-        for old, new in LEGACY_ENTRY_GRID_KEYS.items():
-            if old in bot_cfg:
-                moved_value = bot_cfg[old]
-                if new not in bot_cfg:
-                    bot_cfg[new] = moved_value
-                    _log_config(
-                        verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new
-                    )
-                    if tracker is not None:
-                        tracker.rename(
-                            ["bot", pside, old],
-                            ["bot", pside, new],
-                            moved_value,
-                        )
-                del bot_cfg[old]
-        for old in OBSOLETE_BOT_KEYS:
-            if old in bot_cfg:
-                removed_value = bot_cfg.pop(old)
-                _log_config(
-                    verbose,
-                    logging.INFO,
-                    "dropping obsolete parameter bot.%s.%s",
-                    pside,
-                    old,
-                )
-                if tracker is not None:
-                    tracker.remove(["bot", pside, old], removed_value)
-
-    bounds = result.get("optimize", {}).get("bounds", {})
-    for old, new in LEGACY_BOUNDS_KEYS.items():
-        if old in bounds:
-            moved_value = bounds[old]
-            if new not in bounds:
-                bounds[new] = moved_value
-                _log_config(
-                    verbose, logging.INFO, "renaming parameter optimize.bounds.%s -> %s", old, new
-                )
-                if tracker is not None:
-                    tracker.rename(
-                        ["optimize", "bounds", old],
-                        ["optimize", "bounds", new],
-                        moved_value,
-                    )
-            del bounds[old]
-    for old in OBSOLETE_BOUND_KEYS:
-        if old in bounds:
-            removed_value = bounds.pop(old)
-            _log_config(
-                verbose,
-                logging.INFO,
-                "dropping obsolete parameter optimize.bounds.%s",
-                old,
-            )
-            if tracker is not None:
-                tracker.remove(["optimize", "bounds", old], removed_value)
-
-    # Keep direct callers of this helper aligned with the internal filter-key shape
-    # expected by older tests and downstream runtime code.
-    _apply_forager_internal_aliases(result)
-
-    live_cfg = result.get("live")
-    logging_cfg = result.setdefault("logging", {})
-    if isinstance(live_cfg, dict) and "memory_snapshot_interval_minutes" in live_cfg:
-        val = live_cfg.pop("memory_snapshot_interval_minutes")
-        if "memory_snapshot_interval_minutes" not in logging_cfg:
-            logging_cfg["memory_snapshot_interval_minutes"] = val
-            _log_config(
-                verbose,
-                logging.INFO,
-                "moved live.memory_snapshot_interval_minutes -> logging.memory_snapshot_interval_minutes",
-            )
-            if tracker is not None:
-                tracker.rename(
-                    ["live", "memory_snapshot_interval_minutes"],
-                    ["logging", "memory_snapshot_interval_minutes"],
-                    val,
-                )
+    apply_migration_renames(result, verbose=verbose, tracker=tracker)
 
 
 def _migrate_suite_to_scenarios(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    """Migrate legacy backtest.suite structure to flattened scenarios structure.
-
-    Old format:
-        backtest.suite.enabled, backtest.suite.scenarios, backtest.suite.aggregate,
-        backtest.suite.include_base_scenario, backtest.suite.base_label, backtest.combine_ohlcvs
-
-    New format:
-        backtest.scenarios, backtest.aggregate, backtest.volume_normalization
-        (behavior derived from scenario exchange count - single = one exchange, multiple = best-per-coin)
-    """
-    backtest = result.setdefault("backtest", {})
-
-    # Migrate suite.scenarios -> scenarios, suite.aggregate -> aggregate
-    suite = backtest.pop("suite", None)
-    if suite and isinstance(suite, dict):
-        old_scenarios = suite.get("scenarios", [])
-        aggregate = suite.get("aggregate", {"default": "mean"})
-        include_base = suite.get("include_base_scenario", False)
-        base_label = suite.get("base_label", "base")
-        suite_enabled = suite.get("enabled", False)
-
-        # Only migrate if suite was actually in use (enabled or has scenarios)
-        if suite_enabled or old_scenarios:
-            # Move aggregate up (merge with existing, suite values take precedence)
-            existing_aggregate = backtest.get("aggregate", {})
-            merged_aggregate = {**existing_aggregate, **aggregate}
-            backtest["aggregate"] = merged_aggregate
-            _log_config(
-                verbose,
-                logging.INFO,
-                "migrated backtest.suite.aggregate -> backtest.aggregate",
-            )
-            if tracker is not None:
-                tracker.rename(
-                    ["backtest", "suite", "aggregate"],
-                    ["backtest", "aggregate"],
-                    merged_aggregate,
-                )
-
-            # Move scenarios up
-            new_scenarios = list(old_scenarios)
-
-            # If include_base_scenario was True, prepend implicit base scenario
-            # even when no explicit scenarios were provided.
-            if include_base:
-                base_scenario = {"label": base_label}
-                new_scenarios = [base_scenario] + new_scenarios
-                _log_config(
-                    verbose,
-                    logging.INFO,
-                    "prepended base scenario '%s' (from include_base_scenario=True)",
-                    base_label,
-                )
-
-            if "scenarios" not in backtest or not backtest["scenarios"]:
-                backtest["scenarios"] = new_scenarios
-                _log_config(
-                    verbose,
-                    logging.INFO,
-                    "migrated backtest.suite.scenarios -> backtest.scenarios (%d scenarios)",
-                    len(new_scenarios),
-                )
-                if tracker is not None:
-                    tracker.rename(
-                        ["backtest", "suite", "scenarios"],
-                        ["backtest", "scenarios"],
-                        new_scenarios,
-                    )
-        else:
-            # Suite existed but was disabled with no scenarios - just remove it
-            if tracker is not None:
-                tracker.remove(["backtest", "suite"], suite)
-
-    # Migrate combine_ohlcvs (just remove it, behavior is now derived from exchange count)
-    if "combine_ohlcvs" in backtest:
-        old_value = backtest.pop("combine_ohlcvs")
-        _log_config(
-            verbose,
-            logging.INFO,
-            "removed backtest.combine_ohlcvs=%s (behavior now derived from scenario exchange count)",
-            old_value,
-        )
-        if tracker is not None:
-            tracker.remove(["backtest", "combine_ohlcvs"], old_value)
-
-    # Ensure new defaults exist
-    if "aggregate" not in backtest:
-        backtest["aggregate"] = {"default": "mean"}
-    if "scenarios" not in backtest:
-        backtest["scenarios"] = []
-    if "volume_normalization" not in backtest:
-        backtest["volume_normalization"] = True
+    migrate_suite_to_scenarios_v7(result, verbose=verbose, tracker=tracker)
 
 
 def _migrate_btc_collateral_settings(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    """Convert legacy bool collateral flag to fractional settings and ensure defaults."""
-    backtest = result.setdefault("backtest", {})
-
-    if "use_btc_collateral" in backtest:
-        use_btc = backtest.pop("use_btc_collateral")
-        try:
-            use_btc_bool = bool(int(use_btc))
-        except (TypeError, ValueError):
-            use_btc_bool = bool(use_btc)
-        if "btc_collateral_cap" not in backtest:
-            backtest["btc_collateral_cap"] = 1.0 if use_btc_bool else 0.0
-            _log_config(
-                verbose,
-                logging.INFO,
-                "changed backtest.use_btc_collateral -> backtest.btc_collateral_cap = %s",
-                backtest["btc_collateral_cap"],
-            )
-            if tracker is not None:
-                tracker.rename(
-                    ["backtest", "use_btc_collateral"],
-                    ["backtest", "btc_collateral_cap"],
-                    backtest["btc_collateral_cap"],
-                )
-        elif tracker is not None:
-            tracker.remove(["backtest", "use_btc_collateral"], use_btc)
-        if "btc_collateral_ltv_cap" not in backtest:
-            backtest["btc_collateral_ltv_cap"] = None
-            if tracker is not None:
-                tracker.add(["backtest", "btc_collateral_ltv_cap"], None)
-
-    cap = backtest.get("btc_collateral_cap")
-    try:
-        cap_float = float(cap)
-        if tracker is not None and cap != cap_float:
-            tracker.update(["backtest", "btc_collateral_cap"], cap, cap_float)
-        backtest["btc_collateral_cap"] = cap_float
-    except (TypeError, ValueError):
-        if tracker is not None:
-            tracker.update(["backtest", "btc_collateral_cap"], cap, 0.0)
-        backtest["btc_collateral_cap"] = 0.0
-
-    if "btc_collateral_ltv_cap" not in backtest:
-        backtest["btc_collateral_ltv_cap"] = None
-        if tracker is not None:
-            tracker.add(["backtest", "btc_collateral_ltv_cap"], None)
+    migrate_btc_collateral_settings_v7(result, verbose=verbose, tracker=tracker)
 
 
 def detect_flavor(config: dict, template: dict) -> str:
-    """Detect incoming config flavor to drive the builder.
-
-    Returns one of: "pb_multi", "current", "nested_current", "live_only", or "unknown".
-    """
-    # PB multi live config signature
-    pb_keys = {
-        "user",
-        "pnls_max_lookback_days",
-        "loss_allowance_pct",
-        "stuck_threshold",
-        "unstuck_close_pct",
-        "TWE_long",
-        "TWE_short",
-        "universal_live_config",
-    }
-    if all(k in config for k in pb_keys):
-        return "pb_multi"
-    required_current = {"bot", "live", "backtest", "optimize"}
-    if required_current.issubset(config):
-        return "current"
-    if (
-        "config" in config
-        and isinstance(config["config"], dict)
-        and required_current.issubset(config["config"])
-    ):
-        return "nested_current"
-    if "bot" in config and "live" in config:
-        return "live_only"
-    return "unknown"
+    return detect_migration_flavor(config, template)
 
 
 def build_base_config_from_flavor(config: dict, template: dict, flavor: str, verbose: bool) -> dict:
-    """Return a base v7-shaped config based on detected flavor.
-
-    This function only assembles the skeleton and copies values.
-    It intentionally avoids broader migrations/renames.
-    """
-
-    if flavor == "pb_multi":
-        return _build_from_pb_multi(config, template)
-
-    if flavor == "current":
-        return deepcopy(config)
-
-    if flavor == "nested_current":
-        return deepcopy(config["config"])
-
-    if flavor == "live_only":
-        return _build_from_live_only(config, template)
-
-    raise Exception("failed to format config: unknown flavor")
+    return build_migration_base_config_from_flavor(config, template, flavor, verbose)
 
 
 def _ensure_bot_defaults_and_bounds(
@@ -1492,19 +1220,32 @@ def format_bot_config(
         tracker=tracker,
     )
     _validate_forager_config(result, verbose=verbose, tracker=tracker)
-    _apply_forager_internal_aliases(result)
     _normalize_position_counts(result, tracker=tracker)
     return sort_dict_keys(result["bot"])
 
 
 def _apply_forager_internal_aliases(result: dict) -> None:
-    for pside in BOT_POSITION_SIDES:
-        bot_cfg = result.get("bot", {}).get(pside, {})
-        if not isinstance(bot_cfg, dict):
-            continue
+    def _alias_bot_cfg(bot_cfg: dict) -> None:
         for canonical_key, internal_key in FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS.items():
             if canonical_key in bot_cfg and internal_key not in bot_cfg:
                 bot_cfg[internal_key] = deepcopy(bot_cfg[canonical_key])
+        bot_cfg.setdefault("filter_volatility_drop_pct", 0.0)
+
+    for pside in BOT_POSITION_SIDES:
+        bot_cfg = result.get("bot", {}).get(pside, {})
+        if isinstance(bot_cfg, dict):
+            _alias_bot_cfg(bot_cfg)
+
+    for override in (result.get("coin_overrides") or {}).values():
+        if not isinstance(override, dict):
+            continue
+        override_bot = override.get("bot", {})
+        if not isinstance(override_bot, dict):
+            continue
+        for pside in BOT_POSITION_SIDES:
+            bot_cfg = override_bot.get(pside, {})
+            if isinstance(bot_cfg, dict):
+                _alias_bot_cfg(bot_cfg)
 
     bounds = result.get("optimize", {}).get("bounds", {})
     if not isinstance(bounds, dict):
@@ -1621,35 +1362,7 @@ def _validate_forager_config(
 def _rename_config_keys(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    """Rename legacy keys to their current names."""
-    for section, src, dst in [
-        ("live", "minimum_market_age_days", "minimum_coin_age_days"),
-        ("live", "noisiness_rolling_mean_window_size", "ohlcv_rolling_window"),
-        ("live", "ohlcvs_1m_update_after_minutes", "inactive_coin_candle_ttl_minutes"),
-    ]:
-        if src in result[section]:
-            result[section][dst] = deepcopy(result[section][src])
-            _log_config(verbose, logging.INFO, "renaming parameter %s %s -> %s", section, src, dst)
-            if tracker is not None:
-                tracker.rename([section, src], [section, dst], result[section][dst])
-            del result[section][src]
-    if "exchange" in result["backtest"] and isinstance(result["backtest"]["exchange"], str):
-        exchange = result["backtest"]["exchange"]
-        result["backtest"]["exchanges"] = [exchange]
-        _log_config(
-            verbose,
-            logging.INFO,
-            "changed backtest.exchange: %s -> backtest.exchanges: [%s]",
-            exchange,
-            exchange,
-        )
-        if tracker is not None:
-            tracker.rename(
-                ["backtest", "exchange"],
-                ["backtest", "exchanges"],
-                [exchange],
-            )
-        del result["backtest"]["exchange"]
+    rename_migration_config_keys(result, verbose=verbose, tracker=tracker)
 
 
 def _sync_with_template(
@@ -1870,98 +1583,27 @@ def _apply_non_live_adjustments(
 
 
 def format_config(config: dict, verbose=True, live_only=False, base_config_path: str = "") -> dict:
-    # attempts to format a config to v7 config
-    raw_snapshot = deepcopy(config["_raw"]) if "_raw" in config else None
-    existing_log = config.get("_transform_log")
-    if isinstance(existing_log, list):
-        existing_log = deepcopy(existing_log)
-    else:
-        existing_log = []
-    tracker = ConfigTransformTracker()
-    optimize_suite_defined = (
-        isinstance(config.get("optimize"), dict) and "suite" in config["optimize"]
-    )
-    raw_optimize_limits_present = (
-        isinstance(config.get("optimize"), dict) and "limits" in config["optimize"]
-    )
-    raw_optimize_limits = deepcopy(config.get("optimize", {}).get("limits"))
-    raw_optimize_snapshot = (
-        deepcopy(config.get("optimize"))
-        if isinstance(config.get("optimize"), dict)
-        else {}
-    )
-    coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
-    template = get_template_config()
-    flavor = detect_flavor(config, template)
-    result = build_base_config_from_flavor(config, template, flavor, verbose)
-    for path in ("backtest", "bot", "live", "optimize"):
-        require_config_dict(result, path)
-    _apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
-    _migrate_btc_collateral_settings(result, verbose=verbose, tracker=tracker)
-    _migrate_suite_to_scenarios(result, verbose=verbose, tracker=tracker)
-    _seed_missing_compatibility_sections(template, result, tracker=tracker)
-    for path in ("bot.long", "bot.short", "optimize.bounds"):
-        require_config_dict(result, path)
-    result["bot"] = format_bot_config(
-        result["bot"],
-        live_cfg=result["live"],
+    result = normalize_config(
+        config,
+        base_config_path=base_config_path,
+        live_only=live_only,
         verbose=verbose,
-        tracker=tracker,
+        record_step=True,
     )
-    _ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
-    _hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
-    result["bot"] = sort_dict_keys(result["bot"])
-
-    _rename_config_keys(result, verbose=verbose, tracker=tracker)
-
-    _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
-    require_config_dict(result, "monitor")
-    result["live"]["hsl_signal_mode"] = normalize_hsl_signal_mode(result["live"]["hsl_signal_mode"])
-    result["live"]["hsl_position_during_cooldown_policy"] = normalize_hsl_cooldown_position_policy(
-        result["live"]["hsl_position_during_cooldown_policy"]
-    )
-    _normalize_monitor_config(result)
-    _normalize_pymoo_config(result, raw_optimize=raw_optimize_snapshot)
-    if coin_sources_input is not None:
-        result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
-    _preserve_coin_sources(result)
-
-    if optimize_suite_defined:
-        logging.warning(
-            "Config contains optimize.suite, but suite configuration is now defined via "
-            "backtest.scenarios. optimize.suite will be ignored and deleted; backtest.scenarios "
-            "will be used. If you need different suite definitions, pass --suite-config with a "
-            "file containing backtest.scenarios."
-        )
-        if isinstance(result.get("optimize"), dict) and "suite" in result["optimize"]:
-            del result["optimize"]["suite"]
-
-    if not live_only:
-        # unneeded adjustments if running live
-        _apply_non_live_adjustments(
-            result,
-            verbose=verbose,
-            tracker=tracker,
-            raw_optimize_limits=raw_optimize_limits,
-            raw_optimize_limits_present=raw_optimize_limits_present,
-        )
-
-    result["_transform_log"] = existing_log
-    details = {
-        "live_only": live_only,
-        "base_config_path": base_config_path,
-        "flavor": flavor,
-    }
-    details = tracker.merge_details(details)
+    latest_details = {}
+    existing_log = result.get("_transform_log")
+    if isinstance(existing_log, list) and existing_log:
+        latest_details = deepcopy(existing_log[-1].get("details", {}))
     record_transform(
         result,
         "format_config",
-        details,
+        latest_details
+        or {
+            "live_only": live_only,
+            "base_config_path": base_config_path,
+        },
     )
-
-    if raw_snapshot is not None and "_raw" not in result:
-        result["_raw"] = deepcopy(raw_snapshot)
-
+    emit_transform_summary(result, step="format_config", verbose=verbose)
     return result
 
 
@@ -3381,361 +3023,4 @@ def get_optional_live_value(config: dict, key: str, default=None):
 
 
 def get_template_config():
-    return {
-        "backtest": {
-            "aggregate": {"default": "mean"},
-            "balance_sample_divider": 60,
-            "base_dir": "backtests",
-            "btc_collateral_cap": 1.0,
-            "btc_collateral_ltv_cap": None,
-            "compress_cache": True,
-            "coin_sources": {},
-            "ohlcv_source_dir": None,
-            "market_settings_sources": {},
-            "end_date": "now",
-            "exchanges": ["binance", "bybit", "gateio", "bitget"],
-            "filter_by_min_effective_cost": None,
-            "dynamic_wel_by_tradability": True,
-            "candle_interval_minutes": 1,
-            "gap_tolerance_ohlcvs_minutes": 120.0,
-            "liquidation_threshold": 0.05,
-            "maker_fee_override": None,
-            "panic_market_slippage_pct": 0.0005,
-            "taker_fee_override": None,
-            "max_warmup_minutes": 0.0,
-            "scenarios": [],
-            "start_date": "2021-04-01",
-            "starting_balance": 100000.0,
-            "suite_enabled": True,
-            "volume_normalization": True,
-        },
-        "bot": {
-            "long": {
-                "close_grid_markup_end": 0.0089,
-                "close_grid_markup_start": 0.0344,
-                "close_grid_qty_pct": 0.125,
-                "close_trailing_grid_ratio": 0.5,
-                "close_trailing_qty_pct": 0.125,
-                "close_trailing_retracement_pct": 0.002,
-                "close_trailing_threshold_pct": 0.008,
-                "ema_span_0": 1318.0,
-                "ema_span_1": 1435.0,
-                "hsl_cooldown_minutes_after_red": 0.0,
-                "hsl_ema_span_minutes": 60.0,
-                "hsl_enabled": False,
-                "hsl_no_restart_drawdown_threshold": 1.0,
-                "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
-                "hsl_panic_close_order_type": "market",
-                "hsl_red_threshold": 0.25,
-                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                "entry_grid_double_down_factor": 0.894,
-                "entry_grid_spacing_pct": 0.04,
-                "entry_grid_spacing_volatility_weight": 0.0,
-                "entry_grid_spacing_we_weight": 0.697,
-                "entry_initial_ema_dist": -0.00738,
-                "entry_initial_qty_pct": 0.00592,
-                "entry_trailing_double_down_factor": 0.894,
-                "entry_trailing_grid_ratio": 0.5,
-                "entry_trailing_retracement_pct": 0.01,
-                "entry_trailing_retracement_volatility_weight": 0.0,
-                "entry_trailing_retracement_we_weight": 0.0,
-                "entry_trailing_threshold_pct": 0.05,
-                "entry_trailing_threshold_volatility_weight": 0.0,
-                "entry_trailing_threshold_we_weight": 0.0,
-                "entry_volatility_ema_span_hours": 72,
-                "forager_volatility_ema_span": 60.0,
-                "forager_volume_ema_span": 60.0,
-                "forager_volume_drop_pct": 0.95,
-                "forager_score_weights": {
-                    "volume": 0.0,
-                    "ema_readiness": 0.0,
-                    "volatility": 1.0,
-                },
-                "n_positions": 10.0,
-                "risk_twel_enforcer_threshold": 1.0,
-                "risk_we_excess_allowance_pct": 0.0,
-                "risk_wel_enforcer_threshold": 1.0,
-                "total_wallet_exposure_limit": 1.7,
-                "unstuck_close_pct": 0.001,
-                "unstuck_ema_dist": 0.0,
-                "unstuck_loss_allowance_pct": 0.03,
-                "unstuck_threshold": 0.916,
-            },
-            "short": {
-                "close_grid_markup_end": 0.0089,
-                "close_grid_markup_start": 0.0344,
-                "close_grid_qty_pct": 0.125,
-                "close_trailing_grid_ratio": 0.5,
-                "close_trailing_qty_pct": 0.125,
-                "close_trailing_retracement_pct": 0.002,
-                "close_trailing_threshold_pct": 0.008,
-                "ema_span_0": 1318.0,
-                "ema_span_1": 1435.0,
-                "hsl_cooldown_minutes_after_red": 0.0,
-                "hsl_ema_span_minutes": 60.0,
-                "hsl_enabled": False,
-                "hsl_no_restart_drawdown_threshold": 1.0,
-                "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
-                "hsl_panic_close_order_type": "market",
-                "hsl_red_threshold": 0.25,
-                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
-                "entry_grid_double_down_factor": 0.894,
-                "entry_grid_spacing_pct": 0.04,
-                "entry_grid_spacing_volatility_weight": 0.0,
-                "entry_grid_spacing_we_weight": 0.697,
-                "entry_initial_ema_dist": -0.00738,
-                "entry_initial_qty_pct": 0.00592,
-                "entry_trailing_double_down_factor": 0.894,
-                "entry_trailing_grid_ratio": 0.5,
-                "entry_trailing_retracement_pct": 0.01,
-                "entry_trailing_retracement_volatility_weight": 0.0,
-                "entry_trailing_retracement_we_weight": 0.0,
-                "entry_trailing_threshold_pct": 0.05,
-                "entry_trailing_threshold_volatility_weight": 0.0,
-                "entry_trailing_threshold_we_weight": 0.0,
-                "entry_volatility_ema_span_hours": 72,
-                "forager_volatility_ema_span": 60.0,
-                "forager_volume_ema_span": 60.0,
-                "forager_volume_drop_pct": 0.95,
-                "forager_score_weights": {
-                    "volume": 0.0,
-                    "ema_readiness": 0.0,
-                    "volatility": 1.0,
-                },
-                "n_positions": 10.0,
-                "risk_twel_enforcer_threshold": 1.0,
-                "risk_we_excess_allowance_pct": 0.0,
-                "risk_wel_enforcer_threshold": 1.0,
-                "total_wallet_exposure_limit": 1.7,
-                "unstuck_close_pct": 0.001,
-                "unstuck_ema_dist": 0.0,
-                "unstuck_loss_allowance_pct": 0.03,
-                "unstuck_threshold": 0.916,
-            },
-        },
-        "coin_overrides": {},
-        "live": {
-            "approved_coins": {"long": [], "short": []},
-            "auto_gs": True,
-            "balance_hysteresis_snap_pct": 0.02,
-            "balance_override": None,
-            "candle_lock_timeout_seconds": 10.0,
-            "empty_means_all_approved": False,
-            "enable_archive_candle_fetch": False,
-            "execution_delay_seconds": 2.0,
-            "filter_by_min_effective_cost": True,
-            "forced_mode_long": "",
-            "forced_mode_short": "",
-            "hedge_mode": True,
-            "hsl_position_during_cooldown_policy": "panic",
-            "hsl_signal_mode": "pside",
-            "ignored_coins": {"long": [], "short": []},
-            "inactive_coin_candle_ttl_minutes": 10.0,
-            "leverage": 10.0,
-            "margin_mode_preference": "cross",
-            "market_orders_allowed": True,
-            "max_disk_candles_per_symbol_per_tf": 2000000,
-            "max_memory_candles_per_symbol": 20000,
-            "max_n_cancellations_per_batch": 5,
-            "max_n_creations_per_batch": 3,
-            "max_n_restarts_per_day": 10,
-            "max_ohlcv_fetches_per_minute": 30,
-            "max_realized_loss_pct": 1.0,
-            "max_warmup_minutes": 0.0,
-            "market_order_near_touch_threshold": 0.001,
-            "minimum_coin_age_days": 7.0,
-            "order_match_tolerance_pct": 0.0002,
-            "pnls_max_lookback_days": 30.0,
-            "price_distance_threshold": 0.002,
-            "recv_window_ms": 5000,
-            "time_in_force": "good_till_cancelled",
-            "user": "bybit_01",
-            "warmup_jitter_seconds": 30.0,
-            "warmup_ratio": 0.2,
-            "warmup_concurrency": 0,
-            "max_concurrent_api_requests": None,
-        },
-        "logging": {
-            "level": 1,
-            "memory_snapshot_interval_minutes": 30.0,
-            "volume_refresh_info_threshold_seconds": 30.0,
-        },
-        "monitor": {
-            "enabled": True,
-            "root_dir": "monitor",
-            "snapshot_interval_seconds": 1.0,
-            "checkpoint_interval_minutes": 10.0,
-            "event_rotation_mb": 128.0,
-            "event_rotation_minutes": 60.0,
-            "retain_days": 7.0,
-            "max_total_bytes": 1073741824,
-            "retain_price_ticks": True,
-            "retain_candles": True,
-            "retain_fills": True,
-            "compress_rotated_segments": True,
-            "price_tick_min_interval_ms": 500,
-            "emit_completed_candles": True,
-            "include_raw_fill_payloads": False,
-        },
-        "optimize": {
-            "bounds": {
-                "long_hsl_cooldown_minutes_after_red": [0.0, 0.0],
-                "long_hsl_ema_span_minutes": [60.0, 60.0],
-                "long_hsl_red_threshold": [0.25, 0.25],
-                "long_close_grid_markup_end": [0.001, 0.03],
-                "long_close_grid_markup_start": [0.001, 0.03],
-                "long_close_grid_qty_pct": [0.05, 1.0],
-                "long_close_trailing_grid_ratio": [-1.0, 1.0],
-                "long_close_trailing_qty_pct": [0.05, 1.0],
-                "long_close_trailing_retracement_pct": [0.001, 0.1],
-                "long_close_trailing_threshold_pct": [0.001, 0.1],
-                "long_ema_span_0": [200.0, 1440.0],
-                "long_ema_span_1": [200.0, 1440.0],
-                "long_entry_grid_double_down_factor": [0.1, 3.0],
-                "long_entry_grid_spacing_pct": [0.005, 0.12],
-                "long_entry_grid_spacing_volatility_weight": [0.0, 400.0],
-                "long_entry_grid_spacing_we_weight": [0.0, 20.0],
-                "long_entry_initial_ema_dist": [-0.1, 0.002],
-                "long_entry_initial_qty_pct": [0.005, 0.1],
-                "long_entry_trailing_double_down_factor": [0.1, 3.0],
-                "long_entry_trailing_grid_ratio": [-1.0, 1.0],
-                "long_entry_trailing_retracement_pct": [0.001, 0.1],
-                "long_entry_trailing_retracement_volatility_weight": [0.0, 400.0],
-                "long_entry_trailing_retracement_we_weight": [0.0, 20.0],
-                "long_entry_trailing_threshold_pct": [0.001, 0.1],
-                "long_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
-                "long_entry_trailing_threshold_we_weight": [0.0, 20.0],
-                "long_entry_volatility_ema_span_hours": [24.0, 336.0],
-                "long_forager_volatility_ema_span": [10.0, 1440.0],
-                "long_forager_volume_ema_span": [10.0, 1440.0],
-                "long_forager_volume_drop_pct": [0.0, 1.0],
-                "long_forager_score_weights_volume": [0.0, 1.0],
-                "long_forager_score_weights_ema_readiness": [0.0, 1.0],
-                "long_forager_score_weights_volatility": [0.0, 1.0],
-                "long_n_positions": [1.0, 20.0],
-                "long_risk_twel_enforcer_threshold": [0.9, 1.01],
-                "long_risk_we_excess_allowance_pct": [0.0, 0.5],
-                "long_risk_wel_enforcer_threshold": [0.8, 1.05],
-                "long_total_wallet_exposure_limit": [0.0, 2.0],
-                "long_unstuck_close_pct": [0.001, 0.1],
-                "long_unstuck_ema_dist": [-0.1, 0.01],
-                "long_unstuck_loss_allowance_pct": [0.001, 0.05],
-                "long_unstuck_threshold": [0.4, 0.95],
-                "short_close_grid_markup_end": [0.001, 0.03],
-                "short_close_grid_markup_start": [0.001, 0.03],
-                "short_close_grid_qty_pct": [0.05, 1.0],
-                "short_close_trailing_grid_ratio": [-1.0, 1.0],
-                "short_close_trailing_qty_pct": [0.05, 1.0],
-                "short_close_trailing_retracement_pct": [0.001, 0.1],
-                "short_close_trailing_threshold_pct": [0.001, 0.1],
-                "short_ema_span_0": [200.0, 1440.0],
-                "short_ema_span_1": [200.0, 1440.0],
-                "short_entry_grid_double_down_factor": [0.1, 3.0],
-                "short_entry_grid_spacing_pct": [0.005, 0.12],
-                "short_entry_grid_spacing_volatility_weight": [0.0, 400.0],
-                "short_entry_grid_spacing_we_weight": [0.0, 20.0],
-                "short_entry_initial_ema_dist": [-0.1, 0.002],
-                "short_entry_initial_qty_pct": [0.005, 0.1],
-                "short_entry_trailing_double_down_factor": [0.1, 3.0],
-                "short_entry_trailing_grid_ratio": [-1.0, 1.0],
-                "short_entry_trailing_retracement_pct": [0.001, 0.1],
-                "short_entry_trailing_retracement_volatility_weight": [0.0, 400.0],
-                "short_entry_trailing_retracement_we_weight": [0.0, 20.0],
-                "short_entry_trailing_threshold_pct": [0.001, 0.1],
-                "short_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
-                "short_entry_trailing_threshold_we_weight": [0.0, 20.0],
-                "short_entry_volatility_ema_span_hours": [24.0, 336.0],
-                "short_forager_volatility_ema_span": [10.0, 1440.0],
-                "short_forager_volume_ema_span": [10.0, 1440.0],
-                "short_forager_volume_drop_pct": [0.0, 1.0],
-                "short_forager_score_weights_volume": [0.0, 1.0],
-                "short_forager_score_weights_ema_readiness": [0.0, 1.0],
-                "short_forager_score_weights_volatility": [0.0, 1.0],
-                "short_hsl_cooldown_minutes_after_red": [0.0, 0.0],
-                "short_hsl_ema_span_minutes": [60.0, 60.0],
-                "short_hsl_red_threshold": [0.25, 0.25],
-                "short_n_positions": [1.0, 20.0],
-                "short_risk_twel_enforcer_threshold": [0.9, 1.01],
-                "short_risk_we_excess_allowance_pct": [0.0, 0.5],
-                "short_risk_wel_enforcer_threshold": [0.8, 1.05],
-                "short_total_wallet_exposure_limit": [0.0, 2.0],
-                "short_unstuck_close_pct": [0.001, 0.1],
-                "short_unstuck_ema_dist": [-0.1, 0.01],
-                "short_unstuck_loss_allowance_pct": [0.001, 0.05],
-                "short_unstuck_threshold": [0.4, 0.95],
-            },
-            "backend": "pymoo",
-            "compress_results_file": True,
-            "crossover_eta": 20.0,
-            "crossover_probability": 0.64,
-            "enable_overrides": [],
-            "fixed_params": [],
-            "iters": 30000,
-            "limits": [
-                {
-                    "metric": "drawdown_worst_usd",
-                    "penalize_if": "greater_than",
-                    "value": 0.85,
-                    "enabled": True
-                },
-                {
-                    "metric": "loss_profit_ratio",
-                    "penalize_if": "greater_than",
-                    "value": 0.85,
-                    "enabled": True
-                },
-                {
-                    "metric": "adg_pnl",
-                    "penalize_if": "less_than",
-                    "stat": "mean",
-                    "value": 0,
-                    "enabled": False
-                },
-                {
-                    "metric": "peak_recovery_hours_pnl",
-                    "penalize_if": "greater_than",
-                    "value": 1680,
-                    "enabled": False
-                },
-                {
-                    "metric": "position_held_hours_max",
-                    "penalize_if": "greater_than",
-                    "value": 840,
-                    "enabled": False
-                }
-            ],
-            "mutation_eta": 20.0,
-            "mutation_indpb": 0.0,
-            "mutation_probability": 0.34,
-            "n_cpus": 5,
-            "offspring_multiplier": 1.0,
-            "pareto_max_size": 1000,
-            "population_size": None,
-            "pymoo": {
-                "algorithm": "auto",
-                "shared": {
-                    "crossover_eta": 20.0,
-                    "crossover_prob_var": 0.5,
-                    "eliminate_duplicates": True,
-                    "mutation_eta": 20.0,
-                    "mutation_prob_var": "auto",
-                },
-                "algorithms": {
-                    "nsga2": {},
-                    "nsga3": {
-                        "ref_dirs": {
-                            "method": "das_dennis",
-                            "n_partitions": "auto",
-                        }
-                    },
-                },
-            },
-            "fixed_runtime_overrides": {
-                "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
-                "bot.short.hsl_no_restart_drawdown_threshold": 1.0,
-            },
-            "round_to_n_significant_digits": 5,
-            "scoring": ["adg", "sharpe_ratio"],
-            "write_all_results": True,
-        },
-    }
+    return get_schema_template_config()

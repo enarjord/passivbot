@@ -14,14 +14,14 @@ pip install -e ".[full]"
 passivbot optimize [path/to/config.json]
 ```
 
-- Defaults to `configs/template.json` if no config is specified
+- Defaults to `configs/examples/template.json` if no config is specified
 - Use existing configs as starting points: `--start path/to/config(s)`
 - Enable suite scenarios defined in `backtest.scenarios` with `--suite [y/n]` (omit value to enable)
 - Layer additional scenario definitions via `--suite-config path/to/file.json`
 
 Example:
 ```bash
-passivbot optimize configs/template.json --start configs/starting_pool/
+passivbot optimize configs/examples/template.json --start configs/starting_pool/
 ```
 
 Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
@@ -227,7 +227,7 @@ keys to keep tunable; all other bounds are locked to their current config values
 the run starts.
 
 ```bash
-passivbot optimize configs/template.json \
+passivbot optimize configs/examples/template.json \
   --fine_tune_params long_entry_grid_spacing_pct,long_entry_initial_qty_pct
 ```
 

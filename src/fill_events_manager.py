@@ -33,7 +33,7 @@ try:
 except ImportError:  # pragma: no cover - fallback for package-relative execution
     from .utils import ts_to_date
 
-from config_utils import format_config, load_config
+from config_utils import compile_runtime_config, format_config, load_config, project_config
 from logging_setup import configure_logging
 from procedures import load_user_info
 from pure_funcs import ensure_millis
@@ -4583,6 +4583,8 @@ def _instantiate_bot(config: dict):
 async def _run_cli(args: argparse.Namespace) -> None:
     config = load_config(args.config, verbose=False)
     config = format_config(config, verbose=False)
+    config = project_config(config, "live", record_step=False)
+    config = compile_runtime_config(config, runtime="live", record_step=False)
     live = config.setdefault("live", {})
     if args.user:
         live["user"] = args.user
@@ -4626,7 +4628,7 @@ async def _run_cli(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fill events cache refresher")
     parser.add_argument(
-        "--config", "-c", type=str, default="configs/template.json", help="Config path"
+        "--config", "-c", type=str, default="configs/examples/template.json", help="Config path"
     )
     parser.add_argument("--user", "-u", type=str, required=True, help="Live user identifier")
     parser.add_argument("--start", "-s", type=str, help="Start datetime (ms or ISO)")

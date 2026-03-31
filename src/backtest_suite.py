@@ -15,7 +15,7 @@ def main() -> None:
         "config_path",
         type=Path,
         nargs="?",
-        default=Path("configs/template.json"),
+        default=Path("configs/examples/template.json"),
         help="Path to the base Passivbot config.",
     )
     parser.add_argument(

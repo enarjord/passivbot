@@ -77,6 +77,7 @@ try:
 except Exception:
     resource = None
 from config_utils import (
+    compile_runtime_config,
     load_config,
     add_config_arguments,
     update_config_with_args,
@@ -92,6 +93,7 @@ from config_utils import (
     merge_negative_cli_values,
     normalize_hsl_cooldown_position_policy,
     normalize_hsl_signal_mode,
+    project_config,
 )
 from procedures import (
     load_broker_code,
@@ -8252,8 +8254,8 @@ async def main():
         "config_path",
         type=str,
         nargs="?",
-        default="configs/template.json",
-        help="path to json/hjson passivbot config (defaults to configs/template.json if omitted)",
+        default="configs/examples/template.json",
+        help="path to json/hjson passivbot config (defaults to configs/examples/template.json if omitted)",
     )
     add_help_all_argument(
         parser,
@@ -8316,6 +8318,8 @@ async def main():
     config = load_config(args.config_path, live_only=True)
     update_config_with_args(config, args, verbose=True)
     config = format_config(config, live_only=True)
+    config = project_config(config, "live", record_step=False)
+    config = compile_runtime_config(config, runtime="live", record_step=False)
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(cli_log_level, config_logging_value, fallback=1)
     if effective_log_level != initial_log_level:

@@ -1,3 +1,4 @@
+import logging
 import argparse
 from copy import deepcopy
 from types import SimpleNamespace
@@ -6,6 +7,8 @@ import json
 import config_utils
 import pytest
 
+from config.project import project_config
+from config.runtime_compile import compile_runtime_config
 from config_transform import ConfigTransformTracker, record_transform
 from config_utils import (
     _apply_backward_compatibility_renames,
@@ -171,7 +174,7 @@ def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatt
     formatted = format_config(sparse, verbose=False)
     assert formatted["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
 
-    loaded = load_config("configs/template.json", verbose=False)
+    loaded = load_config("configs/examples/template.json", verbose=False)
     assert loaded["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
 
 
@@ -325,14 +328,67 @@ def test_apply_backward_compatibility_renames_moves_filter_keys():
     _apply_backward_compatibility_renames(config, verbose=False)
 
     assert "filter_noisiness_rolling_window" not in config["bot"]["long"]
-    assert config["bot"]["long"]["filter_volatility_ema_span"] == 84
-    assert config["bot"]["long"]["filter_volume_ema_span"] == 21
-    assert config["bot"]["short"]["filter_volume_ema_span"] == 11
+    assert config["bot"]["long"]["forager_volatility_ema_span"] == 84
+    assert config["bot"]["long"]["forager_volume_ema_span"] == 21
+    assert config["bot"]["short"]["forager_volume_ema_span"] == 11
     bounds = config["optimize"]["bounds"]
     assert "long_filter_noisiness_rolling_window" not in bounds
-    assert bounds["long_filter_volatility_ema_span"] == [10, 20]
+    assert bounds["long_forager_volatility_ema_span"] == [10, 20]
     assert "short_filter_volume_rolling_window" not in bounds
-    assert bounds["short_filter_volume_ema_span"] == [30, 40]
+    assert bounds["short_forager_volume_ema_span"] == [30, 40]
+
+
+def test_compile_runtime_config_adds_internal_forager_aliases():
+    config = format_config(get_template_config(), verbose=False)
+
+    assert "filter_volume_ema_span" not in config["bot"]["long"]
+    assert "long_filter_volume_ema_span" not in config["optimize"]["bounds"]
+
+    compiled = compile_runtime_config(config, runtime="live")
+
+    assert compiled["bot"]["long"]["filter_volume_ema_span"] == config["bot"]["long"][
+        "forager_volume_ema_span"
+    ]
+    assert compiled["bot"]["long"]["filter_volatility_ema_span"] == config["bot"]["long"][
+        "forager_volatility_ema_span"
+    ]
+    assert compiled["optimize"]["bounds"]["long_filter_volume_ema_span"] == config["optimize"][
+        "bounds"
+    ]["long_forager_volume_ema_span"]
+
+
+def test_project_config_prunes_unrelated_sections():
+    config = format_config(get_template_config(), verbose=False)
+
+    projected = project_config(config, "live", record_step=False)
+
+    assert "backtest" not in projected
+    assert "optimize" not in projected
+    assert "monitor" in projected
+    assert "live" in projected
+    assert "bot" in projected
+
+
+def test_format_config_emits_coalesced_summary_without_leaf_noise(caplog):
+    tmpl = get_template_config()
+    lean_live = {"bot": deepcopy(tmpl["bot"]), "live": deepcopy(tmpl["live"])}
+
+    with caplog.at_level(logging.INFO):
+        format_config(lean_live, verbose=True, live_only=True)
+
+    messages = [rec.message for rec in caplog.records]
+    assert any("Added missing backtest section from defaults" in msg for msg in messages)
+    assert not any("Added missing backtest.aggregate" in msg for msg in messages)
+    assert not any("renaming parameter" in msg for msg in messages)
+
+
+def test_load_example_config_avoids_leaf_add_remove_log_churn(caplog):
+    with caplog.at_level(logging.INFO):
+        load_config("configs/examples/template.json", verbose=True)
+
+    messages = [rec.message for rec in caplog.records]
+    assert not any("Removed unused key" in msg for msg in messages)
+    assert not any("Added missing optimize.bounds.long_" in msg for msg in messages)
 
 
 def test_update_config_with_args_updates_coin_sources():

@@ -1135,7 +1135,7 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fill events dashboard")
-    parser.add_argument("--config", default="configs/template.json", help="Config path")
+    parser.add_argument("--config", default="configs/examples/template.json", help="Config path")
     parser.add_argument(
         "--users",
         required=True,

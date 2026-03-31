@@ -32,7 +32,7 @@ Or
 ```shell
 passivbot backtest path/to/config.json
 ```
-If no config is specified, it will default to `configs/template.json`
+If no config is specified, it will default to `configs/examples/template.json`
 
 ## Backtest Results
 
