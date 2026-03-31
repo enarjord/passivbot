@@ -429,18 +429,20 @@
             {
                 "metric": "drawdown_worst_hsl",
                 "penalize_if": "greater_than",
-                "value": 0.9
+                "value": 0.8,
+                "enabled": true
             },
             {
                 "metric": "drawdown_worst_mean_1pct_hsl",
                 "penalize_if": "greater_than",
-                "value": 0.9
+                "value": 0.7,
+                "enabled": false
             },
             {
                 "metric": "loss_profit_ratio",
                 "penalize_if": "greater_than",
                 "value": 0.9,
-                "enabled": true
+                "enabled": false
             },
             {
                 "metric": "high_exposure_hours_max_long",
@@ -451,30 +453,32 @@
             {
                 "metric": "peak_recovery_hours_hsl",
                 "penalize_if": "greater_than",
-                "value": 3000,
+                "value": 900,
                 "enabled": false
             },
             {
                 "metric": "position_held_hours_max",
                 "penalize_if": "greater_than",
-                "value": 3000,
+                "value": 900,
                 "enabled": false
             },
             {
                 "metric": "backtest_completion_ratio",
                 "penalize_if": "less_than",
-                "value": 0.99
+                "value": 0.99,
+                "enabled": true
             },
             {
                 "metric": "adg_strategy_pnl_rebased",
                 "penalize_if": "less_than",
                 "value": 0.0003,
-                "enabled": true
+                "enabled": false
             },
             {
                 "metric": "hard_stop_restarts_per_year",
                 "penalize_if": "less_than",
-                "value": 0.1
+                "value": 0.1,
+                "enabled": true
             }
         ],
         "max_pending_starting_evals_per_cpu": 1,
@@ -484,7 +488,7 @@
         "n_cpus": 6,
         "offspring_multiplier": 1.0,
         "pareto_max_size": 500,
-        "population_size": 500,
+        "population_size": null,
         "pymoo": {
             "algorithm": "nsga3",
             "shared": {
