@@ -696,6 +696,25 @@ class TestExtractConfigs:
             result = extract_configs(path)
             assert len(result) == 1
             assert "bot" in result[0]
+            assert "live" not in result[0]
+        finally:
+            os.unlink(path)
+
+    def test_json_file_with_malformed_optimize_limits_still_loads_bot(self):
+        from config_utils import get_template_config
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            template = get_template_config()
+            import json
+
+            template["optimize"]["limits"] = [{"metric": "drawdown_worst_hsl", "enabled": False}]
+            f.write(json.dumps(template))
+            path = f.name
+        try:
+            result = extract_configs(path)
+            assert len(result) == 1
+            assert "bot" in result[0]
+            assert result[0]["bot"]["long"]["forager_score_weights"]["volatility"] == 1.0
         finally:
             os.unlink(path)
 
@@ -743,6 +762,7 @@ class TestGetStartingConfigs:
         try:
             result = get_starting_configs(path)
             assert len(result) == 1
+            assert "bot" in result[0]
         finally:
             os.unlink(path)
 
@@ -781,6 +801,18 @@ class TestConfigsToIndividuals:
         result = configs_to_individuals([config], bounds, 6)
 
         # Should return 2 individuals: original + one with lowered TWE
+        assert len(result) >= 1
+        assert len(result[0]) == len(bounds)
+
+    def test_bot_only_config(self):
+        from config_utils import get_template_config
+
+        config = get_template_config()
+        from optimization.config_adapter import extract_bounds_tuple_list_from_config
+
+        bounds = extract_bounds_tuple_list_from_config(config)
+        result = configs_to_individuals([deepcopy(config["bot"])], bounds, 6)
+
         assert len(result) >= 1
         assert len(result[0]) == len(bounds)
 

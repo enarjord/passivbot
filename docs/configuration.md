@@ -522,7 +522,7 @@ Risk should be constrained through `*_hsl` metrics instead.
 - **mutation_indpb**: Probability that each attribute mutates when a mutation is triggered. Set to `0` (default) to auto-scale to `1 / number_of_parameters`, or supply an explicit probability between `0` and `1`.
 - **n_cpus**: Number of CPU cores utilized in parallel.
 - **offspring_multiplier**: Multiplier applied to `population_size` to determine how many offspring (`λ`) are produced each generation in the μ+λ evolution strategy. Values >1.0 increase exploration by sampling more children per generation. Default is `1.0`.
-- **pareto_max_size**: Maximum number of Pareto-optimal configs kept on disk under `optimize_results/.../pareto/`. Members are pruned by crowding (least diverse removed first, while per-objective extremes are preserved), not by age.
+- **pareto_max_size**: Maximum number of Pareto-optimal configs kept on disk under `optimize_results/.../pareto/`. Members are pruned by crowding (least diverse removed first, while per-objective extremes are preserved), not by age. Default is `1000`.
 - **population_size**: Size of population for genetic optimization algorithm.
 - **backend**: Optimizer backend. Default is `pymoo`. With the default `optimize.pymoo.algorithm: "auto"`, Passivbot uses `nsga2` for `3` or fewer objectives and `nsga3` for `4+`.
 - **round_to_n_significant_digits**: Quantization precision used when hashing configs, deduplicating candidates, and writing optimizer artifacts. Lower values collapse near-identical candidates more aggressively; higher values preserve more distinct variants.

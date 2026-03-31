@@ -246,6 +246,24 @@ def test_load_config_malformed_optimize_limits_falls_back_to_template(caplog, tm
     assert any("optimize.limits malformed or unsupported" in rec.message for rec in caplog.records)
 
 
+def test_load_config_disabled_sparse_optimize_limits_are_normalized(caplog, tmp_path):
+    cfg = get_template_config()
+    cfg["optimize"]["limits"] = [
+        {"metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.9},
+        {"metric": "peak_recovery_hours_hsl", "enabled": False},
+        {"metric": "position_held_hours_max", "enabled": False},
+    ]
+    path = tmp_path / "disabled_sparse_limits.json"
+    path.write_text(json.dumps(cfg))
+
+    loaded = load_config(str(path), verbose=False)
+
+    assert loaded["optimize"]["limits"][1]["metric"] == "peak_recovery_hours_hsl"
+    assert loaded["optimize"]["limits"][1]["enabled"] is False
+    assert loaded["optimize"]["limits"][2]["enabled"] is False
+    assert not any("optimize.limits malformed or unsupported" in rec.message for rec in caplog.records)
+
+
 def test_normalize_limit_entries_preserves_integers():
     raw = {"penalize_if_greater_than_position_held_hours_max": 2016}
     normalized = config_utils.normalize_limit_entries(raw)

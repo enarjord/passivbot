@@ -94,6 +94,21 @@ def _configs_to_individuals(_cfgs, _bounds, _sig_digits):
     return []
 
 
+def _many_starting_configs(_path):
+    return [{"seed": idx} for idx in range(6)]
+
+
+def _many_starting_individuals(_cfgs, _bounds, _sig_digits):
+    return [
+        [0.1, 0.1],
+        [0.2, 0.2],
+        [0.3, 0.3],
+        [0.4, 0.4],
+        [0.5, 0.5],
+        [0.6, 0.6],
+    ]
+
+
 def _ignore_sigint():
     return None
 
@@ -298,6 +313,62 @@ def test_run_backend_supports_single_objective(monkeypatch):
     assert result["pool_terminated"] is False
     assert recorder.entries
     assert list(recorder.entries[0]["metrics"]["objectives"]) == ["w_0"]
+
+
+def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
+    monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
+    captured = {}
+
+    def _fake_minimize(problem, algorithm, termination, seed, verbose):
+        del problem, termination, seed, verbose
+        captured["sampling"] = np.asarray(algorithm.initialization.sampling, dtype=np.float64)
+        return None
+
+    monkeypatch.setattr(pymoo_backend, "pymoo_minimize", _fake_minimize)
+    evaluator = FakeEvaluator(["adg", "drawdown_worst"])
+    recorder = FakeRecorder()
+
+    result = pymoo_backend.run_backend(
+        config={
+            "optimize": {
+                "backend": "pymoo",
+                "population_size": 4,
+                "iters": 8,
+                "n_cpus": 1,
+                "max_pending_starting_evals_per_cpu": 1,
+                "round_to_n_significant_digits": 4,
+                "scoring": ["adg", "drawdown_worst"],
+                "pymoo": {
+                    "algorithm": "nsga2",
+                    "shared": {
+                        "crossover_prob_var": 0.5,
+                        "crossover_eta": 20.0,
+                        "mutation_eta": 20.0,
+                        "mutation_prob_var": 0.5,
+                        "eliminate_duplicates": True,
+                    },
+                },
+            }
+        },
+        evaluator=evaluator,
+        evaluator_for_pool=evaluator,
+        recorder=recorder,
+        overrides_list=[],
+        duplicate_counter={},
+        starting_configs_path="dummy",
+        constraint_fitness_cls=None,
+        ignore_sigint_in_worker=_ignore_sigint,
+        get_starting_configs=_many_starting_configs,
+        configs_to_individuals=_many_starting_individuals,
+        record_individual_result=None,
+        run_evolution=None,
+        build_config_fn=_build_config,
+        overrides_fn=object(),
+    )
+
+    assert result["pool_terminated"] is False
+    assert len(recorder.entries) == 6
+    assert captured["sampling"].shape == (4, 2)
 
 
 def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):

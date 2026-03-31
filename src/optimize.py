@@ -73,6 +73,7 @@ from config_utils import (
     load_hjson_config,
     load_config,
     format_config,
+    format_bot_config,
     add_config_arguments,
     update_config_with_args,
     recursive_config_update,
@@ -154,6 +155,7 @@ from optimization.bounds import (
     Bound,
     enforce_bounds,
 )
+from optimization.backend_shared import cancel_pending_async_results, drain_async_results
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.backends import get_backend_runner
 from optimization.config_adapter import get_optimization_key_paths, OPTIMIZABLE_BOT_KEY_PATHS
@@ -253,7 +255,7 @@ class ResultRecorder:
         scoring_keys: Sequence[str],
         compress: bool,
         write_all_results: bool,
-        pareto_max_size: int = 300,
+        pareto_max_size: int = 1000,
         bounds: Optional[Sequence[Bound]] = None,
     ):
         self.store = ParetoStore(
@@ -337,6 +339,7 @@ logging.basicConfig(
 
 TEMPLATE_CONFIG_MODE = "v7"
 INVALID_BACKTEST_CANDIDATE_PENALTY = 1e18
+DEFAULT_PARETO_MAX_SIZE = 1000
 _RECOVERABLE_BACKTEST_PANIC_PATTERNS = (
     "hard-stop evaluation failed",
     "equity must be finite and > 0",
@@ -469,67 +472,64 @@ def ea_mu_plus_lambda_stream(
         for idx, ind in enumerate(individuals):
             pending[pool.apply_async(toolbox.evaluate, (ind,))] = idx
 
-        completed = 0
-        try:
-            while pending:
-                ready = [res for res in pending if res.ready()]
-                if not ready:
-                    time.sleep(0.1)
-                    continue
-                for res in ready:
-                    idx = pending.pop(res)
-                    fit_values, penalty, metrics = res.get()
-                    ind = individuals[idx]
-                    ind.fitness.values = fit_values
-                    ind.fitness.constraint_violation = penalty
-                    ind.constraint_violation = penalty
-                    if metrics and isinstance(metrics, dict):
-                        suite = metrics.get("suite_metrics", {}) or {}
-                        metric_map = suite.get("metrics", {}) or {}
-                        adg_entry = metric_map.get("adg_pnl", {}) or {}
-                        prh_entry = metric_map.get("peak_recovery_hours_pnl", {}) or {}
-                        logging.debug(
-                            "Eval metrics | idx=%d adg_pnl=%s peak_recovery_hours_pnl=%s",
-                            idx,
-                            adg_entry.get("aggregated"),
-                            prh_entry.get("aggregated"),
-                        )
-                        scenario_labels = suite.get("scenario_labels") or []
-                        if not scenario_labels and isinstance(adg_entry, dict):
-                            scenario_labels = list((adg_entry.get("scenarios") or {}).keys())
-                        for label in scenario_labels:
-                            adg_val = (adg_entry.get("scenarios") or {}).get(label)
-                            prh_val = (prh_entry.get("scenarios") or {}).get(label)
-                            logging.debug(
-                                "Eval metrics scenario | idx=%d label=%s adg_pnl=%s peak_recovery_hours_pnl=%s",
-                                idx,
-                                label,
-                                adg_val,
-                                prh_val,
-                            )
-                    if metrics is not None:
-                        if bool(metrics.get("liquidated")):
-                            liquidation_total += 1
-                        _set_candidate_metrics(ind, metrics)
-                        _record_individual_result(ind, evaluator_config, overrides_list, recorder)
-                    else:
-                        _clear_candidate_metrics(ind)
-                    completed += 1
-        except KeyboardInterrupt:
+        completed = {"count": 0}
+
+        def _on_result(idx, payload):
+            nonlocal liquidation_total
+            fit_values, penalty, metrics = payload
+            ind = individuals[idx]
+            ind.fitness.values = fit_values
+            ind.fitness.constraint_violation = penalty
+            ind.constraint_violation = penalty
+            if metrics and isinstance(metrics, dict):
+                suite = metrics.get("suite_metrics", {}) or {}
+                metric_map = suite.get("metrics", {}) or {}
+                adg_entry = metric_map.get("adg_pnl", {}) or {}
+                prh_entry = metric_map.get("peak_recovery_hours_pnl", {}) or {}
+                logging.debug(
+                    "Eval metrics | idx=%d adg_pnl=%s peak_recovery_hours_pnl=%s",
+                    idx,
+                    adg_entry.get("aggregated"),
+                    prh_entry.get("aggregated"),
+                )
+                scenario_labels = suite.get("scenario_labels") or []
+                if not scenario_labels and isinstance(adg_entry, dict):
+                    scenario_labels = list((adg_entry.get("scenarios") or {}).keys())
+                for label in scenario_labels:
+                    adg_val = (adg_entry.get("scenarios") or {}).get(label)
+                    prh_val = (prh_entry.get("scenarios") or {}).get(label)
+                    logging.debug(
+                        "Eval metrics scenario | idx=%d label=%s adg_pnl=%s peak_recovery_hours_pnl=%s",
+                        idx,
+                        label,
+                        adg_val,
+                        prh_val,
+                    )
+            if metrics is not None:
+                if bool(metrics.get("liquidated")):
+                    liquidation_total += 1
+                _set_candidate_metrics(ind, metrics)
+                _record_individual_result(ind, evaluator_config, overrides_list, recorder)
+            else:
+                _clear_candidate_metrics(ind)
+            completed["count"] += 1
+
+        def _on_interrupt(still_pending):
             logging.info("Evaluation interrupted; terminating pending tasks...")
-            for res in pending:
-                try:
-                    res.cancel()
-                except Exception:
-                    pass
+            cancel_pending_async_results(still_pending)
             if not pool_state["terminated"]:
                 logging.info("Terminating worker pool immediately due to interrupt...")
                 pool.terminate()
                 pool_state["terminated"] = True
-            raise
+        drain_async_results(
+            pending,
+            poll_interval_seconds=0.1,
+            on_result=_on_result,
+            on_interrupt=_on_interrupt,
+        )
 
-        total_evals += completed
-        return completed
+        total_evals += completed["count"]
+        return completed["count"]
 
     dup_prev_total = 0
     dup_prev_resolved = 0
@@ -1554,19 +1554,62 @@ def extract_configs(path):
             return []
         if path.endswith(".json"):
             try:
-                cfgs.append(load_config(path, verbose=False))
+                raw = load_hjson_config(path, log_errors=False)
+                cfgs.append(_extract_starting_config(raw, source=path))
                 return cfgs
-            except:
+            except Exception as e:
+                logging.warning(f"failed to extract bot config from starting config {path}: {e}")
                 return []
         if path.endswith("_pareto.txt"):
             with open(path) as f:
                 for line in f.readlines():
                     try:
                         cfg = json.loads(line)
-                        cfgs.append(format_config(cfg, verbose=False))
+                        cfgs.append(_extract_starting_config(cfg, source=path))
                     except Exception as e:
-                        logging.error(f"Failed to load starting config {line} {e}")
+                        logging.warning(f"failed to extract bot config from starting config {path}: {e}")
     return cfgs
+
+
+def _extract_starting_config(raw_config, *, source: str = "<memory>"):
+    if not isinstance(raw_config, dict):
+        raise TypeError(f"expected dict, got {type(raw_config).__name__}")
+    current = raw_config
+    if isinstance(current.get("config"), dict):
+        current = current["config"]
+    bot_cfg = current.get("bot")
+    if not isinstance(bot_cfg, dict):
+        raise KeyError("missing bot config")
+    extracted = {
+        "bot": format_bot_config(
+            bot_cfg,
+            live_cfg=current.get("live"),
+            verbose=False,
+        )
+    }
+    optimize_cfg = current.get("optimize")
+    if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
+        extracted["optimize"] = {"bounds": deepcopy(optimize_cfg["bounds"])}
+    record_source = source or "<memory>"
+    extracted["_starting_config_source"] = record_source
+    return extracted
+
+
+def _build_starting_seed_config(cfg):
+    if not isinstance(cfg, dict):
+        raise TypeError(f"expected dict, got {type(cfg).__name__}")
+    if all(pside in cfg and isinstance(cfg.get(pside), dict) for pside in ("long", "short")):
+        extracted = {"bot": format_bot_config(cfg, verbose=False)}
+    elif "bot" in cfg and isinstance(cfg.get("bot"), dict):
+        extracted = cfg
+    else:
+        extracted = _extract_starting_config(cfg)
+    seed = get_template_config()
+    seed["bot"] = deepcopy(extracted["bot"])
+    optimize_cfg = extracted.get("optimize")
+    if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
+        seed["optimize"]["bounds"] = deepcopy(optimize_cfg["bounds"])
+    return seed
 
 
 def get_starting_configs(starting_configs: str):
@@ -1586,7 +1629,7 @@ def configs_to_individuals(cfgs, bounds, sig_digits=0):
     inds = set()
     for cfg in cfgs:
         try:
-            fcfg = format_config(cfg, verbose=False)
+            fcfg = _build_starting_seed_config(cfg)
             individual = config_to_individual(fcfg, bounds, sig_digits)
             inds.add(tuple(individual))
             # add duplicate of config, but with lowered total wallet exposure limit
@@ -1597,7 +1640,7 @@ def configs_to_individuals(cfgs, bounds, sig_digits=0):
             individual2 = config_to_individual(fcfg2, bounds, sig_digits)
             inds.add(tuple(individual2))
         except Exception as e:
-            logging.error(f"error loading starting config: {e}")
+            logging.warning(f"failed to use starting config as optimizer seed: {e}")
     return list(inds)
 
 
@@ -1957,7 +2000,7 @@ async def main():
         logging.info(f"Finished initializing evaluator...")
         flush_interval = 60  # or read from your config
         sig_digits = config["optimize"]["round_to_n_significant_digits"]
-        pareto_max = config["optimize"].get("pareto_max_size", 300)
+        pareto_max = config["optimize"].get("pareto_max_size", DEFAULT_PARETO_MAX_SIZE)
         recorder = ResultRecorder(
             results_dir=results_dir,
             sig_digits=sig_digits,

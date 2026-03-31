@@ -160,6 +160,8 @@ Recommended defaults for typical Passivbot runs:
 - Keep `crossover_prob_var: 0.5` unless you have evidence that crossover is either too timid or
   too disruptive for your runs.
 - Leave `population_size: null` and `ref_dirs.n_partitions: "auto"` for the default Passivbot NSGA-III behavior.
+- Keep `pareto_max_size: 1000` unless archived front updates become a measured bottleneck for your
+  machine or workflow.
 - If you need more or less exploration pressure, change `n_partitions` or override
   `population_size` explicitly before you start tuning crossover/mutation hyperparameters.
 
@@ -268,6 +270,8 @@ in flight at once:
 Effective cap:
 
 - `max_pending = n_cpus * max_pending_starting_evals_per_cpu`
+- All provided starting configs are still evaluated before the optimizer trims them down to the
+  backend's initial population.
 
 This is mainly a memory-control knob for large seed pools, especially in suite mode where each
 candidate returns a larger metrics payload. Lower it first if the VPS spikes RAM during initial

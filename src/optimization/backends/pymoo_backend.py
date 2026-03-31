@@ -10,6 +10,7 @@ import numpy as np
 try:
     from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.algorithms.moo.nsga3 import NSGA3
+    from pymoo.core.population import Population
     from pymoo.optimize import minimize as pymoo_minimize
     from pymoo.operators.crossover.sbx import SBX
     from pymoo.operators.mutation.pm import PM
@@ -18,12 +19,19 @@ try:
 except ImportError:  # pragma: no cover
     NSGA2 = None
     NSGA3 = None
+    Population = None
     get_reference_directions = None
 
+from optimization.backend_shared import (
+    cancel_pending_async_results,
+    load_starting_individuals,
+    stream_async_results,
+)
 from optimization.problem import (
     PassivbotProblem,
     PymooAsyncRecordingRunner,
     PymooEvaluatorAdapter,
+    _evaluate_pymoo_worker,
 )
 from optimization.repair import BoundsRepair
 
@@ -44,40 +52,126 @@ SUPPORTED_PYMOO_ALGORITHMS = {"auto", "nsga2", "nsga3"}
 SUPPORTED_REF_DIR_METHODS = {"das_dennis"}
 
 
-def _build_initial_population(
-    *,
-    bounds,
-    population_size: int,
-    get_starting_configs,
-    configs_to_individuals,
-    starting_configs_path: str | None,
-    sig_digits: int | None,
-) -> np.ndarray:
-    starting_configs = get_starting_configs(starting_configs_path)
-    if starting_configs:
-        logging.info(
-            "Loaded %d starting configs before quantization (population size=%d)",
-            len(starting_configs),
-            population_size,
-        )
-    else:
-        logging.info("No starting configs provided; population will be random-initialized")
-    starting_individuals = configs_to_individuals(
-        starting_configs,
-        bounds,
-        sig_digits,
-    )
+def _build_random_sampling(bounds, population_size: int) -> np.ndarray:
     population = [[bound.random_on_grid() for bound in bounds] for _ in range(population_size)]
-    if starting_individuals:
-        trimmed = starting_individuals[:population_size]
-        if len(starting_individuals) > population_size:
-            logging.info(
-                "Trimmed starting configs to population size for pymoo backend (kept %d)",
-                len(trimmed),
-            )
-        for idx, individual in enumerate(trimmed):
-            population[idx] = list(individual)
     return np.asarray(population, dtype=np.float64)
+
+
+def _population_from_payloads(
+    vectors: np.ndarray,
+    payloads: list[dict[str, Any]],
+    *,
+    has_constraints: bool,
+) -> Population:
+    kwargs: dict[str, Any] = {
+        "X": np.asarray(vectors, dtype=np.float64),
+        "F": np.asarray([payload["F"] for payload in payloads], dtype=np.float64),
+    }
+    if has_constraints:
+        kwargs["G"] = np.asarray(
+            [payload.get("G", np.asarray([-1.0], dtype=np.float64)) for payload in payloads],
+            dtype=np.float64,
+        )
+    pop = Population.new(*sum(([key, value] for key, value in kwargs.items()), []))
+    for individual, payload in zip(pop, payloads):
+        individual.data["metrics"] = payload.get("metrics", {})
+        individual.data["evaluation_vector"] = payload.get("evaluation_vector")
+    return pop
+
+
+def _reduce_starting_population(
+    *,
+    problem,
+    algorithm,
+    starting_individuals: list,
+    payloads: list[dict[str, Any]],
+    population_size: int,
+    bounds,
+) -> np.ndarray:
+    if not starting_individuals:
+        return _build_random_sampling(bounds, population_size)
+
+    seed_vectors = np.asarray(starting_individuals, dtype=np.float64)
+    if len(seed_vectors) <= population_size:
+        return _extend_sampling_to_size(seed_vectors, bounds, population_size)
+
+    pop = _population_from_payloads(
+        seed_vectors,
+        payloads,
+        has_constraints=bool(problem.n_ieq_constr),
+    )
+    reduced = algorithm.survival.do(
+        problem,
+        pop,
+        n_survive=population_size,
+        algorithm=algorithm,
+        seed=1,
+    )
+    logging.info(
+        "Trimmed starting configs to population size via pymoo %s survival (kept %d)",
+        algorithm.__class__.__name__.lower(),
+        len(reduced),
+    )
+    reduced_vectors = np.asarray(reduced.get("X"), dtype=np.float64)
+    return _extend_sampling_to_size(reduced_vectors, bounds, population_size)
+
+
+def _evaluate_starting_individuals(
+    *,
+    starting_individuals: list,
+    config: dict[str, Any],
+    evaluator,
+    overrides_list,
+    runner: PymooAsyncRecordingRunner,
+    n_obj: int,
+    has_constraints: bool,
+) -> list[dict[str, Any]]:
+    if not starting_individuals:
+        return []
+    max_pending = max(
+        1,
+        int(config["optimize"]["n_cpus"])
+        * int(config["optimize"].get("max_pending_starting_evals_per_cpu", 1)),
+    )
+    ordered_payloads: list[dict[str, Any] | None] = [None] * len(starting_individuals)
+    completed = {"count": 0}
+
+    def _on_result(context, payload):
+        idx, vector = context
+        runner._record_result(
+            payload.get("evaluation_vector", vector),
+            payload.get("metrics") or {},
+        )
+        ordered_payloads[idx] = payload
+        completed["count"] += 1
+        logging.info("Evaluated %d/%d starting configs", completed["count"], len(starting_individuals))
+
+    def _on_interrupt(still_pending):
+        logging.info("Evaluation interrupted; terminating pending starting configs...")
+        cancel_pending_async_results(still_pending)
+        runner.pool.terminate()
+
+    stream_async_results(
+        list(enumerate(starting_individuals)),
+        submit=lambda item: (
+            runner.pool.apply_async(
+                _evaluate_pymoo_worker,
+                (
+                    evaluator,
+                    item[1],
+                    overrides_list,
+                    n_obj,
+                    has_constraints,
+                ),
+            ),
+            item,
+        ),
+        on_result=_on_result,
+        max_pending=max_pending,
+        poll_interval_seconds=runner.poll_interval_seconds,
+        on_interrupt=_on_interrupt,
+    )
+    return [payload for payload in ordered_payloads if payload is not None]
 
 
 def _extend_sampling_to_size(sampling: np.ndarray, bounds, target_size: int) -> np.ndarray:
@@ -380,19 +474,28 @@ def run_backend(
             config,
             n_obj=len(config["optimize"]["scoring"]),
         )
-        sampling = _build_initial_population(
-            bounds=bounds,
-            population_size=population_plan["actual_population_size"],
+        population_size = population_plan["actual_population_size"]
+        starting_individuals = load_starting_individuals(
+            starting_configs_path=starting_configs_path,
+            population_size=population_size,
             get_starting_configs=get_starting_configs,
             configs_to_individuals=configs_to_individuals,
-            starting_configs_path=starting_configs_path,
+            bounds=bounds,
             sig_digits=sig_digits,
         )
+        sampling = _build_random_sampling(bounds, population_size)
         pool = multiprocessing.Pool(
             processes=config["optimize"]["n_cpus"],
             initializer=ignore_sigint_in_worker,
         )
+        evaluator_adapter = PymooEvaluatorAdapter(
+            evaluator_for_pool,
+            overrides_list=overrides_list,
+        )
         runner = PymooAsyncRecordingRunner(
+            evaluator=evaluator_for_pool,
+            has_constraints=evaluator_adapter.has_constraints,
+            n_obj=len(config["optimize"]["scoring"]),
             pool=pool,
             recorder=recorder,
             template=base_evaluator.config,
@@ -403,10 +506,7 @@ def run_backend(
         problem = PassivbotProblem(
             bounds=bounds,
             scoring_keys=config["optimize"]["scoring"],
-            evaluator_adapter=PymooEvaluatorAdapter(
-                evaluator_for_pool,
-                overrides_list=overrides_list,
-            ),
+            evaluator_adapter=evaluator_adapter,
             elementwise_runner=runner,
         )
         algorithm = _build_algorithm(
@@ -416,7 +516,25 @@ def run_backend(
             sig_digits=sig_digits,
             population_plan=population_plan,
         )
-        population_size = population_plan["actual_population_size"]
+        if starting_individuals:
+            seed_payloads = _evaluate_starting_individuals(
+                starting_individuals=starting_individuals,
+                config=config,
+                evaluator=evaluator_for_pool,
+                overrides_list=overrides_list,
+                runner=runner,
+                n_obj=len(config["optimize"]["scoring"]),
+                has_constraints=evaluator_adapter.has_constraints,
+            )
+            logging.info("Evaluated %d starting configs", len(seed_payloads))
+            algorithm.initialization.sampling = _reduce_starting_population(
+                problem=problem,
+                algorithm=algorithm,
+                starting_individuals=starting_individuals,
+                payloads=seed_payloads,
+                population_size=population_size,
+                bounds=bounds,
+            )
         ngen = max(1, int(config["optimize"]["iters"] / population_size))
         logging.info("Starting optimize...")
         pymoo_minimize(

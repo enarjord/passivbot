@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
-import time
 from copy import deepcopy
 from typing import Any, Callable
 
@@ -14,6 +13,11 @@ except ImportError:  # pragma: no cover - allow import in minimal test envs
     base = creator = tools = None
 
 from optimization.bounds import enforce_bounds
+from optimization.backend_shared import (
+    cancel_pending_async_results,
+    load_starting_individuals,
+    stream_async_results,
+)
 from optimization.deap_adapters import (
     cxSimulatedBinaryBoundedWrapper,
     mutPolynomialBoundedWrapper,
@@ -120,62 +124,58 @@ def run_backend(
             if not individuals:
                 return 0
             total = len(individuals)
-            pending = {}
-            for ind in individuals:
-                pending[pool.apply_async(toolbox.evaluate, (ind,))] = ind
-            completed = 0
-            try:
-                while pending:
-                    ready = [res for res in pending if res.ready()]
-                    if not ready:
-                        time.sleep(0.05)
-                        continue
-                    for res in ready:
-                        ind = pending.pop(res)
-                        fit_values, penalty, metrics = res.get()
-                        ind.fitness.values = fit_values
-                        ind.fitness.constraint_violation = penalty
-                        ind.constraint_violation = penalty
-                        if metrics is not None:
-                            ind.evaluation_metrics = metrics
-                            record_individual_result(
-                                ind,
-                                evaluator.config,
-                                overrides_list,
-                                recorder,
-                            )
-                        elif hasattr(ind, "evaluation_metrics"):
-                            delattr(ind, "evaluation_metrics")
-                        completed += 1
-                        logging.info("Evaluated %d/%d starting configs", completed, total)
-            except KeyboardInterrupt:
+            max_pending = max(
+                1,
+                int(config["optimize"]["n_cpus"])
+                * int(config["optimize"].get("max_pending_starting_evals_per_cpu", 1)),
+            )
+
+            completed = {"count": 0}
+
+            def _on_result(ind, payload):
+                fit_values, penalty, metrics = payload
+                ind.fitness.values = fit_values
+                ind.fitness.constraint_violation = penalty
+                ind.constraint_violation = penalty
+                if metrics is not None:
+                    ind.evaluation_metrics = metrics
+                    record_individual_result(
+                        ind,
+                        evaluator.config,
+                        overrides_list,
+                        recorder,
+                    )
+                elif hasattr(ind, "evaluation_metrics"):
+                    delattr(ind, "evaluation_metrics")
+                completed["count"] += 1
+                logging.info("Evaluated %d/%d starting configs", completed["count"], total)
+
+            def _on_interrupt(still_pending):
                 logging.info("Evaluation interrupted; terminating pending starting configs...")
-                for res in pending:
-                    try:
-                        res.cancel()
-                    except Exception:
-                        pass
+                cancel_pending_async_results(still_pending)
                 if not pool_state["terminated"]:
                     logging.info("Terminating worker pool immediately due to interrupt...")
                     pool.terminate()
                     pool_state["terminated"] = True
-                raise
-            return completed
+
+            stream_async_results(
+                individuals,
+                submit=lambda ind: (pool.apply_async(toolbox.evaluate, (ind,)), ind),
+                max_pending=max_pending,
+                poll_interval_seconds=0.05,
+                on_result=_on_result,
+                on_interrupt=_on_interrupt,
+            )
+            return completed["count"]
 
         population_size = _resolve_deap_population_size(config)
-        starting_configs = get_starting_configs(starting_configs_path)
-        if starting_configs:
-            logging.info(
-                "Loaded %d starting configs before quantization (population size=%d)",
-                len(starting_configs),
-                population_size,
-            )
-        else:
-            logging.info("No starting configs provided; population will be random-initialized")
-        starting_individuals = configs_to_individuals(
-            starting_configs,
-            bounds,
-            sig_digits,
+        starting_individuals = load_starting_individuals(
+            starting_configs_path=starting_configs_path,
+            population_size=population_size,
+            get_starting_configs=get_starting_configs,
+            configs_to_individuals=configs_to_individuals,
+            bounds=bounds,
+            sig_digits=sig_digits,
         )
 
         def _make_random_individual():

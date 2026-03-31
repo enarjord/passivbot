@@ -476,7 +476,7 @@
         ],
         "max_pending_starting_evals_per_cpu": 1,
         "n_cpus": 6,
-        "pareto_max_size": 500,
+        "pareto_max_size": 1000,
         "population_size": null,
         "pymoo": {
             "algorithm": "auto",

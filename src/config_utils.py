@@ -165,12 +165,13 @@ TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
 )
 
 
-def load_hjson_config(config_path: str) -> dict:
+def load_hjson_config(config_path: str, *, log_errors: bool = True) -> dict:
     try:
         with open(config_path, encoding="utf-8") as f:
             return remove_OD(hjson.load(f))
     except Exception as e:
-        logging.exception("failed to load config file %s", config_path)
+        if log_errors:
+            logging.exception("failed to load config file %s", config_path)
         raise
 
 
@@ -1300,14 +1301,20 @@ def _ensure_bot_defaults_and_bounds(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
     """Ensure required bot defaults and optimize bounds exist for each position side."""
-    bounds = result["optimize"]["bounds"]
+    _ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
+    _ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
+
+
+def _ensure_bot_defaults(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    """Ensure required bot defaults exist for each position side."""
     for pside in ("long", "short"):
-        for k0, v_bt, v_opt in [
-            ("close_trailing_qty_pct", 1.0, [0.05, 1.0]),
+        for k0, v_bt in [
+            ("close_trailing_qty_pct", 1.0),
             (
                 "entry_trailing_double_down_factor",
                 result["bot"][pside].get("entry_grid_double_down_factor", 1.0),
-                [0.01, 3.0],
             ),
             (
                 "forager_volatility_ema_span",
@@ -1321,7 +1328,6 @@ def _ensure_bot_defaults_and_bounds(
                         ),
                     ),
                 ),
-                [10.0, 1440.0],
             ),
             (
                 "forager_volume_ema_span",
@@ -1335,23 +1341,19 @@ def _ensure_bot_defaults_and_bounds(
                         ),
                     ),
                 ),
-                [10.0, 1440.0],
             ),
             (
                 "close_grid_markup_start",
                 result["bot"][pside].get("close_grid_min_markup", 0.001)
                 + result["bot"][pside].get("close_grid_markup_range", 0.001),
-                bounds.get(f"{pside}_min_markup", [0.001, 0.03]),
             ),
             (
                 "close_grid_markup_end",
                 result["bot"][pside].get("close_grid_min_markup", 0.001),
-                bounds.get(f"{pside}_close_grid_min_markup", [0.001, 0.03]),
             ),
             (
                 "forager_volume_drop_pct",
                 result["live"].get("filter_relative_volume_clip_pct", 0.5),
-                [0.0, 1.0],
             ),
         ]:
             if k0 not in result["bot"][pside]:
@@ -1366,6 +1368,53 @@ def _ensure_bot_defaults_and_bounds(
                 )
                 if tracker is not None:
                     tracker.add(["bot", pside, k0], v_bt)
+        if "forager_score_weights" not in result["bot"][pside]:
+            weights = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
+            result["bot"][pside]["forager_score_weights"] = weights
+            _log_config(
+                verbose,
+                logging.INFO,
+                "adding missing backtest parameter %s forager_score_weights: %s",
+                pside,
+                weights,
+            )
+            if tracker is not None:
+                tracker.add(["bot", pside, "forager_score_weights"], weights)
+
+
+def _ensure_optimize_bounds_for_bot(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    """Ensure optimize bounds include required bot-derived defaults."""
+    bounds = result["optimize"]["bounds"]
+    for pside in ("long", "short"):
+        for k0, v_opt in [
+            ("close_trailing_qty_pct", [0.05, 1.0]),
+            (
+                "entry_trailing_double_down_factor",
+                [0.01, 3.0],
+            ),
+            (
+                "forager_volatility_ema_span",
+                [10.0, 1440.0],
+            ),
+            (
+                "forager_volume_ema_span",
+                [10.0, 1440.0],
+            ),
+            (
+                "close_grid_markup_start",
+                bounds.get(f"{pside}_min_markup", [0.001, 0.03]),
+            ),
+            (
+                "close_grid_markup_end",
+                bounds.get(f"{pside}_close_grid_min_markup", [0.001, 0.03]),
+            ),
+            (
+                "forager_volume_drop_pct",
+                [0.0, 1.0],
+            ),
+        ]:
             opt_key = f"{pside}_{k0}"
             if opt_key not in bounds:
                 bounds[opt_key] = v_opt
@@ -1405,6 +1454,45 @@ def _ensure_bot_defaults_and_bounds(
                 )
                 if tracker is not None:
                     tracker.add(["optimize", "bounds", opt_key], bounds[opt_key])
+
+
+def format_bot_config(
+    bot_cfg: dict,
+    *,
+    live_cfg: Optional[dict] = None,
+    verbose: bool = True,
+    tracker: Optional[ConfigTransformTracker] = None,
+) -> dict:
+    """Normalize only config.bot using the same bot-side rules as the main config loader."""
+    if not isinstance(bot_cfg, dict):
+        raise TypeError(f"config.bot must be a dict; got {type(bot_cfg).__name__}")
+    template = get_template_config()
+    result = {
+        "bot": deepcopy(bot_cfg),
+        "live": deepcopy(live_cfg) if isinstance(live_cfg, dict) else deepcopy(template["live"]),
+        "optimize": {"bounds": {}},
+    }
+    for pside in ("long", "short"):
+        if pside not in result["bot"]:
+            seeded = deepcopy(template["bot"][pside])
+            result["bot"][pside] = seeded
+            if tracker is not None:
+                tracker.add(["bot", pside], seeded)
+    for path in ("bot.long", "bot.short"):
+        require_config_dict(result, path)
+    _apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
+    add_missing_keys_recursively(
+        template["bot"],
+        result["bot"],
+        parent=["bot"],
+        verbose=verbose,
+        tracker=tracker,
+    )
+    _ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
+    _validate_forager_config(result, verbose=verbose, tracker=tracker)
+    _apply_forager_internal_aliases(result)
+    _normalize_position_counts(result, tracker=tracker)
+    return sort_dict_keys(result["bot"])
 
 
 def _apply_forager_internal_aliases(result: dict) -> None:
@@ -1812,7 +1900,13 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     _seed_missing_compatibility_sections(template, result, tracker=tracker)
     for path in ("bot.long", "bot.short", "optimize.bounds"):
         require_config_dict(result, path)
-    _ensure_bot_defaults_and_bounds(result, verbose=verbose, tracker=tracker)
+    result["bot"] = format_bot_config(
+        result["bot"],
+        live_cfg=result["live"],
+        verbose=verbose,
+        tracker=tracker,
+    )
+    _ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
     _hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
     result["bot"] = sort_dict_keys(result["bot"])
 
@@ -1826,10 +1920,6 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     )
     _normalize_monitor_config(result)
     _normalize_pymoo_config(result, raw_optimize=raw_optimize_snapshot)
-    _validate_forager_config(result, verbose=verbose, tracker=tracker)
-    _apply_forager_internal_aliases(result)
-
-    _normalize_position_counts(result, tracker=tracker)
     if coin_sources_input is not None:
         result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
     _preserve_coin_sources(result)
@@ -2186,7 +2276,13 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
     if not metric:
         raise ValueError("Limit entries must include a 'metric' field.")
     metric = canonicalize_metric_name(str(metric))
-    penalize_if = _normalize_penalize_if(payload.get("penalize_if"))
+    enabled = payload.get("enabled")
+    enabled = True if enabled is None else bool(enabled)
+    raw_penalize_if = payload.get("penalize_if")
+    if raw_penalize_if is None and not enabled:
+        penalize_if = "greater_than"
+    else:
+        penalize_if = _normalize_penalize_if(raw_penalize_if)
     stat = payload.get("stat") or payload.get("field")
     normalized_stat: Optional[str] = None
     if stat is not None:
@@ -2203,6 +2299,8 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
             bound = payload.get("threshold")
         if bound is None:
             bound = payload.get("bound")
+        if bound is None and not enabled:
+            bound = 0.0
         numeric_bound = _ensure_float(bound)
         if numeric_bound is None:
             raise ValueError(f"Limit for {metric} requires a numeric 'value'.")
@@ -2215,6 +2313,8 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
             range_payload = payload.get("bounds")
         if range_payload is None and isinstance(payload.get("value"), (list, tuple)):
             range_payload = payload.get("value")
+        if range_payload is None and not enabled:
+            range_payload = [0.0, 0.0]
         bounds = _extract_range(range_payload)
         if bounds is None:
             raise ValueError(f"Limit for {metric} requires a two-value 'range'.")
@@ -3607,7 +3707,7 @@ def get_template_config():
             "mutation_probability": 0.34,
             "n_cpus": 5,
             "offspring_multiplier": 1.0,
-            "pareto_max_size": 500,
+            "pareto_max_size": 1000,
             "population_size": None,
             "pymoo": {
                 "algorithm": "auto",

@@ -106,12 +106,12 @@ def test_format_config_normalizes_pymoo_nested_defaults_and_legacy_fallbacks():
     }
 
 
-def test_template_defaults_use_null_population_and_pareto_500():
+def test_template_defaults_use_null_population_and_pareto_1000():
     current = get_template_config()
 
     assert current["optimize"]["backend"] == "pymoo"
     assert current["optimize"]["population_size"] is None
-    assert current["optimize"]["pareto_max_size"] == 500
+    assert current["optimize"]["pareto_max_size"] == 1000
 
 
 def test_format_config_preserves_null_population_size_for_pymoo():

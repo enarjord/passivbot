@@ -1,4 +1,5 @@
 import numpy as np
+from multiprocessing.reduction import ForkingPickler
 from unittest.mock import MagicMock
 
 from optimization.bounds import Bound
@@ -55,6 +56,12 @@ class FakeAsyncPool:
         return FakeAsyncResult(fn(*args))
 
 
+class PickleCheckingPool(FakeAsyncPool):
+    def apply_async(self, fn, args=()):
+        ForkingPickler.dumps((fn, args))
+        return super().apply_async(fn, args)
+
+
 def test_problem_evaluate_passthroughs_metrics_and_vector():
     evaluator = FakeEvaluator(has_constraints=True)
     adapter = PymooEvaluatorAdapter(evaluator, overrides_list=["foo"])
@@ -91,8 +98,12 @@ def test_problem_without_constraints_omits_g():
 
 
 def test_async_recording_runner_records_and_strips_metrics():
+    evaluator = FakeEvaluator(has_constraints=True)
     recorder = MagicMock()
     runner = PymooAsyncRecordingRunner(
+        evaluator=evaluator,
+        has_constraints=True,
+        n_obj=2,
         pool=FakeAsyncPool(),
         recorder=recorder,
         template={"optimize": {"backend": "pymoo"}},
@@ -105,20 +116,35 @@ def test_async_recording_runner_records_and_strips_metrics():
         overrides_list=["x"],
     )
 
-    def fake_eval(x):
-        return {
-            "F": np.asarray([-float(x[0])]),
-            "G": np.asarray([0.0]),
-            "metrics": {
-                "objectives": {"w_0": -float(x[0])},
-                "constraint_violation": 0.0,
-            },
-            "evaluation_vector": np.asarray([float(x[0])]),
-        }
-
-    results = runner(fake_eval, [np.asarray([0.25]), np.asarray([0.5])])
+    results = runner(object(), [np.asarray([0.25]), np.asarray([0.5])])
 
     assert len(results) == 2
     assert "metrics" not in results[0]
     assert "evaluation_vector" not in results[0]
     assert recorder.record.call_count == 2
+
+
+def test_async_recording_runner_uses_picklable_worker_target():
+    evaluator = FakeEvaluator(has_constraints=True)
+    recorder = MagicMock()
+    runner = PymooAsyncRecordingRunner(
+        evaluator=evaluator,
+        has_constraints=True,
+        n_obj=2,
+        pool=PickleCheckingPool(),
+        recorder=recorder,
+        template={"optimize": {"backend": "pymoo"}},
+        build_config_fn=lambda vector, overrides_fn, overrides_list, template: {
+            "bot": {"long": {"a": float(vector[0])}},
+            "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
+            **template,
+        },
+        overrides_fn=object(),
+        overrides_list=["x"],
+    )
+
+    results = runner(lambda x: x, [np.asarray([0.25, 0.5])])
+
+    assert len(results) == 1
+    assert results[0]["F"].tolist() == [-1.5, 0.2]
+    assert results[0]["G"].tolist() == [0.3]
