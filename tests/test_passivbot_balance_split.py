@@ -261,6 +261,30 @@ def test_effective_min_cost_filter_uses_snapped_balance():
     assert bot.effective_min_cost_is_low_enough("long", "BTC/USDT:USDT") is True
 
 
+@pytest.mark.asyncio
+async def test_update_effective_min_cost_uses_executable_min_qty():
+    symbol = "SOL/USDT:USDT"
+    bot = Passivbot.__new__(Passivbot)
+    bot.effective_min_cost = {}
+    bot.min_qtys = {symbol: 0.0}
+    bot.qty_steps = {symbol: 1.0}
+    bot.min_costs = {symbol: 0.1}
+    bot.c_mults = {symbol: 1.0}
+    bot.cm = types.SimpleNamespace(
+        get_last_prices=lambda symbols, max_age_ms=600_000: {symbol: 88.165}
+    )
+    bot.get_symbols_approved_or_has_pos = lambda: [symbol]
+
+    async def fake_get_last_prices(symbols, max_age_ms=600_000):
+        return {symbol: 88.165}
+
+    bot.cm.get_last_prices = fake_get_last_prices
+
+    await bot.update_effective_min_cost()
+
+    assert bot.effective_min_cost[symbol] == pytest.approx(88.165)
+
+
 def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     import passivbot as pb_mod
 

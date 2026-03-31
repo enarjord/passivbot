@@ -803,12 +803,16 @@ class CCXTBot(Passivbot):
         for symbol, market in self.markets_dict.items():
             self.symbol_ids[symbol] = market["id"]
             self.min_costs[symbol] = market["limits"]["cost"]["min"] or 0.1
-            self.min_qtys[symbol] = (
+            raw_min_qty = (
                 market["precision"]["amount"]
                 if market["limits"]["amount"]["min"] is None
                 else market["limits"]["amount"]["min"]
             )
-            self.qty_steps[symbol] = market["precision"]["amount"]
+            qty_step = market["precision"]["amount"]
+            if raw_min_qty <= 0.0 and qty_step is not None and qty_step > 0.0:
+                raw_min_qty = qty_step
+            self.min_qtys[symbol] = raw_min_qty
+            self.qty_steps[symbol] = qty_step
             self.price_steps[symbol] = market["precision"]["price"]
             self.c_mults[symbol] = market.get("contractSize", 1)
 

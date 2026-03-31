@@ -510,3 +510,89 @@ async def test_hsl_replay_scenarios_run_end_to_end(
     assert len(step_summaries) == expected_steps
     assert (run_dir / "hsl_trace.json").exists()
     assert expected_log_fragment in (run_dir / "fake_live.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
+async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_symbol(tmp_path):
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    scenario = {
+        "name": "min_effective_cost_zero_min_qty_guard",
+        "start_time": "2026-03-31T15:18:00Z",
+        "tick_interval_seconds": 60,
+        "boot_index": 4,
+        "account": {"balance": 363.52606},
+        "symbols": {
+            "SOL/USDT:USDT": {
+                "qty_step": 1.0,
+                "price_step": 0.01,
+                "min_qty": 0.0,
+                "min_cost": 0.1,
+                "contractSize": 1.0,
+                "maker_fee": 0.0002,
+                "taker_fee": 0.00055,
+            }
+        },
+        "timeline": [
+            {"t": 0, "prices": {"SOL/USDT:USDT": 88.165}},
+            {"t": 1, "prices": {"SOL/USDT:USDT": 88.165}},
+            {"t": 2, "prices": {"SOL/USDT:USDT": 88.165}},
+            {"t": 3, "prices": {"SOL/USDT:USDT": 88.165}},
+            {"t": 4, "prices": {"SOL/USDT:USDT": 88.165}},
+        ],
+    }
+    scenario_path = tmp_path / "fake_min_effective_cost.hjson"
+    scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
+
+    cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
+    cfg["bot"]["long"]["hsl_enabled"] = False
+    cfg["bot"]["short"]["hsl_enabled"] = False
+    cfg["bot"]["long"]["entry_initial_qty_pct"] = 0.0276
+    cfg["bot"]["long"]["n_positions"] = 5.0
+    cfg["bot"]["long"]["total_wallet_exposure_limit"] = 1.8
+    cfg["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.37
+    cfg["bot"]["short"]["n_positions"] = 0.0
+    cfg["bot"]["short"]["total_wallet_exposure_limit"] = 0.0
+    cfg["live"]["approved_coins"]["long"] = ["SOL"]
+    cfg["live"]["approved_coins"]["short"] = []
+    cfg["live"]["ignored_coins"]["long"] = []
+    cfg["live"]["ignored_coins"]["short"] = []
+    cfg["live"]["filter_by_min_effective_cost"] = True
+    cfg["live"]["market_orders_allowed"] = False
+    cfg["live"]["fake_scenario_path"] = str(scenario_path)
+    config_path = tmp_path / "fake_live_min_effective_cost.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    args = argparse.Namespace(
+        config=str(config_path),
+        scenario=str(scenario_path),
+        user="fake_min_effective_cost_guard",
+        max_steps=1,
+        output_dir=str(tmp_path),
+        log_level=1,
+        snapshot_each_step=False,
+    )
+    assert await _async_main(args) == 0
+
+    output_dirs = sorted(path for path in tmp_path.iterdir() if path.is_dir())
+    assert len(output_dirs) == 1
+    run_dir = output_dirs[0]
+
+    step_summaries = json.loads((run_dir / "step_summaries.json").read_text(encoding="utf-8"))
+    state = json.loads((run_dir / "fake_exchange_state.json").read_text(encoding="utf-8"))
+    positions = json.loads((run_dir / "positions.json").read_text(encoding="utf-8"))
+    fills = json.loads((run_dir / "fills.json").read_text(encoding="utf-8"))
+    log_text = (run_dir / "fake_live.log").read_text(encoding="utf-8")
+
+    assert len(step_summaries) == 1
+    assert step_summaries[0]["open_orders"] == 0
+    assert step_summaries[0]["fills"] == 0
+    assert step_summaries[0]["positions"] == []
+    assert state["open_orders"] == []
+    assert positions == []
+    assert fills == []
+    assert "[order]   post SOL" not in log_text

@@ -102,6 +102,10 @@ struct UnstuckCalcDebug {
     close_qty_final_bits: u64,
 }
 
+fn calc_effective_min_cost(price: f64, exchange: &ExchangeParams) -> f64 {
+    qty_to_cost(calc_min_entry_qty(price, exchange), price, exchange.c_mult)
+}
+
 #[derive(Clone, Default, Copy, Debug)]
 pub struct EmaAlphas {
     pub long: Alphas,
@@ -1040,9 +1044,7 @@ impl<'a> Backtest<'a> {
                     ask: close_price,
                 };
                 let exchange = self.exchange_params_list[idx].clone();
-                let effective_min_cost =
-                    qty_to_cost(exchange.min_qty, close_price, exchange.c_mult)
-                        .max(exchange.min_cost);
+                let effective_min_cost = calc_effective_min_cost(close_price, &exchange);
 
                 let tradable = self.coin_is_tradeable_at(idx, k);
                 let next_candle = if k + 1 < self.hlcvs.shape()[0] {
@@ -1339,8 +1341,7 @@ impl<'a> Backtest<'a> {
             };
 
             let exchange = &sym.exchange;
-            sym.effective_min_cost =
-                qty_to_cost(exchange.min_qty, close_price, exchange.c_mult).max(exchange.min_cost);
+            sym.effective_min_cost = calc_effective_min_cost(close_price, exchange);
 
             let pos_long = *self
                 .positions
@@ -2124,7 +2125,7 @@ impl<'a> Backtest<'a> {
             return false;
         }
         let exchange = &self.exchange_params_list[idx];
-        let min_cost = qty_to_cost(exchange.min_qty, price, exchange.c_mult).max(exchange.min_cost);
+        let min_cost = calc_effective_min_cost(price, exchange);
         let bot = self.bp(idx, pside);
         if bot.entry_initial_qty_pct <= 0.0 {
             return false;
@@ -4531,6 +4532,20 @@ mod tests {
     use super::*;
     use crate::types::EquityHardStopLossConfig;
     use ndarray::{Array1, Array3};
+
+    #[test]
+    fn effective_min_cost_uses_executable_min_qty() {
+        let exchange = ExchangeParams {
+            qty_step: 1.0,
+            min_qty: 0.0,
+            min_cost: 0.1,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let price = 88.165;
+        let effective_min_cost = calc_effective_min_cost(price, &exchange);
+        assert!((effective_min_cost - price).abs() < 1e-12);
+    }
 
     #[test]
     fn hard_stop_orange_overrides_to_graceful_stop() {

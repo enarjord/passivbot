@@ -543,6 +543,40 @@ class TestCCXTBotSetMarketSpecificSettings:
         assert bot.min_costs["ETH/USDT:USDT"] == 0.1  # Default fallback
         assert bot.c_mults["ETH/USDT:USDT"] == 1  # Default when missing
 
+    def test_clamps_nonpositive_min_qty_to_qty_step(self):
+        """Test that zero min_qty is normalized to qty_step for executable sizing."""
+        from exchanges.ccxt_bot import CCXTBot
+        from passivbot import Passivbot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.symbol_ids = {}
+        bot.min_costs = {}
+        bot.min_qtys = {}
+        bot.qty_steps = {}
+        bot.price_steps = {}
+        bot.c_mults = {}
+
+        bot.markets_dict = {
+            "SOL/USDT:USDT": {
+                "id": "SOLUSDT",
+                "limits": {
+                    "cost": {"min": 0.1},
+                    "amount": {"min": 0.0},
+                },
+                "precision": {
+                    "amount": 1.0,
+                    "price": 0.01,
+                },
+                "contractSize": 1.0,
+            }
+        }
+
+        with patch.object(Passivbot, "set_market_specific_settings", lambda self: None):
+            bot.set_market_specific_settings()
+
+        assert bot.min_qtys["SOL/USDT:USDT"] == 1.0
+        assert bot.qty_steps["SOL/USDT:USDT"] == 1.0
+
 
 class TestCCXTBotFetchTickers:
     """Tests for fetch_tickers."""

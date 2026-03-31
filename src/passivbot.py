@@ -5619,6 +5619,27 @@ class Passivbot:
             await self.handle_balance_update(source="REST")
         return balance_ok, positions_ok
 
+    def _calc_effective_min_cost_at_price(self, symbol: str, price: float) -> float:
+        """Return executable min order cost at the given price for filter/gating logic."""
+        qty_step = float(self.qty_steps[symbol])
+        min_qty = float(self.min_qtys[symbol])
+        min_cost = float(self.min_costs[symbol])
+        c_mult = float(self.c_mults[symbol])
+        if min_qty <= 0.0 and qty_step > 0.0:
+            min_qty = qty_step
+        calc_min_entry_qty = getattr(pbr, "calc_min_entry_qty_py", None)
+        if calc_min_entry_qty is not None:
+            min_entry_qty = float(calc_min_entry_qty(price, c_mult, qty_step, min_qty, min_cost))
+        else:
+            if price <= 0.0 or c_mult <= 0.0:
+                min_entry_qty = min_qty
+            else:
+                min_cost_qty = min_cost / price / c_mult
+                if qty_step > 0.0:
+                    min_cost_qty = math.ceil(max(0.0, min_cost_qty) / qty_step) * qty_step
+                min_entry_qty = max(min_qty, min_cost_qty)
+        return float(pbr.qty_to_cost(min_entry_qty, price, c_mult))
+
     async def update_effective_min_cost(self, symbol=None):
         """Update the effective minimum order cost for one or all symbols."""
         if not hasattr(self, "effective_min_cost"):
@@ -5630,13 +5651,8 @@ class Passivbot:
         last_prices = await self.cm.get_last_prices(symbols, max_age_ms=600_000)
         for symbol in symbols:
             try:
-                self.effective_min_cost[symbol] = max(
-                    pbr.qty_to_cost(
-                        self.min_qtys[symbol],
-                        last_prices[symbol],
-                        self.c_mults[symbol],
-                    ),
-                    self.min_costs[symbol],
+                self.effective_min_cost[symbol] = self._calc_effective_min_cost_at_price(
+                    symbol, float(last_prices[symbol])
                 )
             except Exception as e:
                 logging.error(f"error with {get_function_name()} for {symbol}: {e}")
@@ -5964,12 +5980,7 @@ class Passivbot:
                 getattr(self, "effective_min_cost", {}).get(symbol, 0.0) or 0.0
             )
             if effective_min_cost <= 0.0:
-                effective_min_cost = float(
-                    max(
-                        pbr.qty_to_cost(self.min_qtys[symbol], mprice, self.c_mults[symbol]),
-                        self.min_costs[symbol],
-                    )
-                )
+                effective_min_cost = self._calc_effective_min_cost_at_price(symbol, mprice)
 
             def side_input(pside: str) -> dict:
                 mode = Passivbot._mode_override_to_orchestrator_mode(
@@ -6485,12 +6496,7 @@ class Passivbot:
             active = bool(self.markets_dict.get(symbol, {}).get("active", True))
             effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
             if effective_min_cost <= 0.0:
-                effective_min_cost = float(
-                    max(
-                        pbr.qty_to_cost(self.min_qtys[symbol], mprice, self.c_mults[symbol]),
-                        self.min_costs[symbol],
-                    )
-                )
+                effective_min_cost = self._calc_effective_min_cost_at_price(symbol, mprice)
 
             def side_input(pside: str) -> dict:
                 mode = self._mode_override_to_orchestrator_mode(mode_overrides[pside].get(symbol))
