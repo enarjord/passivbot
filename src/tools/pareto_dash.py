@@ -137,17 +137,47 @@ def _extract_suite_metrics(
     return metrics, scenario_values, scenario_labels
 
 
-def _extract_objectives(entry: dict) -> Dict[str, float]:
+OBJECTIVE_PREFIX = "objective."
+
+
+def _resolve_objective_columns(entry: dict, objective_keys: Iterable[str]) -> List[Tuple[str, str, str]]:
+    objective_keys_set = {str(key) for key in objective_keys}
+    scoring_metrics = list(entry.get("optimize", {}).get("scoring", []) or [])
+    resolved: List[Tuple[str, str, str]] = []
+    seen: set[str] = set()
+
+    for idx, metric_name in enumerate(scoring_metrics):
+        key = f"w_{idx}"
+        if key not in objective_keys_set:
+            continue
+        resolved.append((key, f"{OBJECTIVE_PREFIX}{metric_name}", metric_name))
+        seen.add(key)
+
+    for key in sorted(objective_keys_set):
+        if key in seen:
+            continue
+        resolved.append((key, f"{OBJECTIVE_PREFIX}{key}", key))
+    return resolved
+
+
+def _extract_objectives(entry: dict) -> Tuple[Dict[str, float], Dict[str, str], List[str]]:
     metrics_block = entry.get("metrics") or {}
     objectives = metrics_block.get("objectives") or {}
-    flattened = {}
-    for key, value in objectives.items():
+    flattened: Dict[str, float] = {}
+    display_labels: Dict[str, str] = {}
+    scoring_columns: List[str] = []
+    for key, column, label in _resolve_objective_columns(entry, objectives.keys()):
+        value = objectives.get(key)
         numeric = _ensure_float(value)
         if numeric is not None:
-            flattened[f"objective_{key}"] = numeric
+            flattened[column] = numeric
+            display_labels[column] = label
+            scoring_columns.append(column)
     if not flattened and isinstance(metrics_block.get("stats"), dict):
         flattened.update(_flatten_stats_block(metrics_block["stats"]))
-    return flattened
+        display_labels.update({column: column for column in flattened})
+        scoring_columns.extend(flattened.keys())
+    return flattened, display_labels, scoring_columns
 
 
 @dataclass
@@ -159,6 +189,25 @@ class RunData:
     aggregated_metrics: List[str]
     param_metrics: List[str]
     raw_configs: Dict[str, dict]  # _id -> full JSON config
+    display_labels: Dict[str, str]
+
+
+def _metric_label(run_data: RunData, metric: Optional[str]) -> Optional[str]:
+    if metric is None:
+        return None
+    return run_data.display_labels.get(metric, metric)
+
+
+def _metric_options(run_data: RunData, metrics: Iterable[str]) -> List[Dict[str, str]]:
+    return [{"label": _metric_label(run_data, metric), "value": metric} for metric in metrics]
+
+
+def _plot_metric_labels(run_data: RunData, metrics: Iterable[Optional[str]]) -> Dict[str, str]:
+    return {
+        metric: _metric_label(run_data, metric)
+        for metric in metrics
+        if metric is not None and _metric_label(run_data, metric) is not None
+    }
 
 
 def load_pareto_dataframe(run_dir: str) -> RunData:
@@ -170,6 +219,7 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
     aggregated_cols: set[str] = set()
     param_cols: set[str] = set()
     raw_configs: Dict[str, dict] = {}
+    display_labels: Dict[str, str] = {}
 
     for path in sorted(glob(os.path.join(pareto_dir, "*.json"))):
         with open(path) as f:
@@ -178,9 +228,10 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         raw_configs[config_id] = entry
         base = {"_id": config_id}
         suite_values, scenario_values, scenario_labels = _extract_suite_metrics(entry)
+        objective_values, objective_labels, objective_cols = _extract_objectives(entry)
         params = _flatten_numeric(entry.get("bot", {}), prefix="bot")
         row = {**base, **suite_values, **params}
-        row.update(_extract_objectives(entry))
+        row.update(objective_values)
         for key in row:
             if key.startswith("bot."):
                 param_cols.add(key)
@@ -193,12 +244,13 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         for label in scenario_labels:
             scenario_metric_map.setdefault(label, set())
         rows.append(row)
+        display_labels.update(objective_labels)
         if not scoring_metrics:
-            scoring_metrics = list(entry.get("optimize", {}).get("scoring", []) or [])
+            scoring_metrics = objective_cols.copy()
             limits_cfg = entry.get("optimize", {}).get("limits", {})
             default_limits = _limits_to_exprs(limits_cfg)
     if not rows:
-        return RunData(pd.DataFrame(), {}, scoring_metrics, default_limits, [], [], {})
+        return RunData(pd.DataFrame(), {}, scoring_metrics, default_limits, [], [], {}, display_labels)
     df = pd.DataFrame(rows)
     df = df.dropna(axis=1, how="all")
     scenario_metrics = {name: sorted(metrics) for name, metrics in scenario_metric_map.items()}
@@ -210,6 +262,7 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         sorted(aggregated_cols),
         sorted(param_cols),
         raw_configs,
+        display_labels,
     )
 
 
@@ -227,7 +280,8 @@ def load_history_dataframe(run_dir: str, max_points: int = 400) -> pd.DataFrame:
             stats = metrics_block.get("stats")
             if isinstance(stats, dict):
                 row.update(_flatten_stats_block(stats))
-        row.update(_extract_objectives(record))
+        objective_values, _, _ = _extract_objectives(record)
+        row.update(objective_values)
         for scenario, metric_values in scenario_values.items():
             for metric, value in metric_values.items():
                 row[f"{scenario}__{metric}"] = value
@@ -1044,7 +1098,7 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
             and not _looks_like_stat_column(c)
             and not c.startswith("bot.")
         ]
-        options = [{"label": col, "value": col} for col in numeric_cols]
+        options = _metric_options(run_data, numeric_cols)
         # Add weighted score option if weights have been set
         color_options = options.copy()
         if scoring_weights:
@@ -1087,11 +1141,13 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         scenario_metrics_set = set()
         for metrics in run_data.scenario_metrics.values():
             scenario_metrics_set.update(metrics)
-        scenario_metric_options = [{"label": m, "value": m} for m in sorted(scenario_metrics_set)]
-        scenario_metric_value = (
-            run_data.scoring_metrics[0]
-            if run_data.scoring_metrics
-            else (scenario_metric_options[0]["value"] if scenario_metric_options else None)
+        scenario_metric_options = _metric_options(run_data, sorted(scenario_metrics_set))
+        scoring_metric_names = [
+            _metric_label(run_data, metric) for metric in run_data.scoring_metrics if metric is not None
+        ]
+        scenario_metric_value = next(
+            (metric for metric in scoring_metric_names if metric in scenario_metrics_set),
+            scenario_metric_options[0]["value"] if scenario_metric_options else None,
         )
 
         # Parameters
@@ -1100,7 +1156,7 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
             for c in run_data.param_metrics
             if c in df.columns and pd.api.types.is_numeric_dtype(df[c])
         ]
-        param_options = [{"label": col, "value": col} for col in param_cols]
+        param_options = _metric_options(run_data, param_cols)
         param_value = param_cols[0] if param_cols else None
 
         # Metrics for Y axis
@@ -1109,7 +1165,7 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
             for c in run_data.aggregated_metrics
             if c in df.columns and pd.api.types.is_numeric_dtype(df[c])
         ]
-        metric_options = [{"label": col, "value": col} for col in metric_cols]
+        metric_options = _metric_options(run_data, metric_cols)
         metric_value = (
             run_data.scoring_metrics[0]
             if run_data.scoring_metrics and run_data.scoring_metrics[0] in metric_cols
@@ -1119,7 +1175,7 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         limits_default = "\n".join(run_data.default_limits)
 
         # Frontier metrics - default to scoring metrics
-        frontier_options = [{"label": col, "value": col} for col in metric_cols]
+        frontier_options = _metric_options(run_data, metric_cols)
         frontier_default = (
             run_data.scoring_metrics[:3] if run_data.scoring_metrics else metric_cols[:3]
         )
@@ -1134,7 +1190,7 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
                 range_sliders.append(
                     html.Div(
                         [
-                            dbc.Label(metric, style={"fontSize": "11px"}),
+                            dbc.Label(_metric_label(run_data, metric), style={"fontSize": "11px"}),
                             dcc.RangeSlider(
                                 id={"type": "range-slider", "metric": metric},
                                 min=col_min,
@@ -1155,7 +1211,7 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
             weight_inputs.append(
                 dbc.Row(
                     [
-                        dbc.Col(dbc.Label(metric[:20], style={"fontSize": "10px"}), width=8),
+                        dbc.Col(dbc.Label(_metric_label(run_data, metric), style={"fontSize": "10px"}), width=8),
                         dbc.Col(
                             dbc.Input(
                                 id={"type": "weight-input", "metric": metric},
@@ -1266,6 +1322,9 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         df_filtered["_selected"] = df_filtered["_id"] == selected_id
 
         # Determine color and symbol based on frontier status
+        x_label = _metric_label(run_data, x_metric) or x_metric
+        y_label = _metric_label(run_data, y_metric) or y_metric
+        plot_labels = _plot_metric_labels(run_data, [x_metric, y_metric, color_metric])
         if highlight_frontier and "highlight" in highlight_frontier:
             # Use different colors for frontier vs non-frontier
             df_filtered["_frontier_label"] = df_filtered["_is_frontier"].map(
@@ -1278,8 +1337,13 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
                 color="_frontier_label",
                 color_discrete_map={"Frontier": "#2ecc71", "Dominated": "#95a5a6"},
                 hover_data=["_id"],
-                title=f"{y_metric} vs {x_metric} ({is_frontier.sum()} on frontier)",
+                title=f"{y_label} vs {x_label} ({is_frontier.sum()} on frontier)",
                 custom_data=["_id"],
+                labels={
+                    x_metric: x_label,
+                    y_metric: y_label,
+                    "_frontier_label": "Pareto Status",
+                },
             )
             # Make frontier points larger
             fig.for_each_trace(
@@ -1297,8 +1361,9 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
                 y=y_metric,
                 color=color_metric if color_metric and color_metric in df_filtered.columns else None,
                 hover_data=["_id"],
-                title=f"{y_metric} vs {x_metric}",
+                title=f"{y_label} vs {x_label}",
                 custom_data=["_id"],
+                labels=plot_labels,
             )
 
         # Highlight selected point
@@ -1465,7 +1530,9 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
                 if metric in row.columns:
                     val = row[metric].values[0]
                     if pd.notna(val):
-                        summary_items.append(html.Div(f"{metric}: {val:.4f}"))
+                        summary_items.append(
+                            html.Div(f"{_metric_label(run_data, metric)}: {val:.4f}")
+                        )
         return html.Div(summary_items, style={"fontSize": "12px"})
 
     @app.callback(
@@ -1520,7 +1587,10 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
                     val = row[metric].values[0]
                     if pd.notna(val):
                         details_items.append(
-                            html.Div(f"{metric}: {val:.4f}", style={"fontSize": "11px"})
+                            html.Div(
+                                f"{_metric_label(run_data, metric)}: {val:.4f}",
+                                style={"fontSize": "11px"},
+                            )
                         )
 
         return html.Div(details_items)
@@ -1542,7 +1612,12 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
             return px.histogram(title="Select a metric")
         mask = _apply_limits(df, limit_exprs)
         df_filtered = df.loc[mask]
-        fig = px.histogram(df_filtered, x=metric, title=f"Distribution of {metric}")
+        fig = px.histogram(
+            df_filtered,
+            x=metric,
+            title=f"Distribution of {_metric_label(run_data, metric)}",
+            labels={metric: _metric_label(run_data, metric)},
+        )
         return fig
 
     @app.callback(
@@ -1569,7 +1644,12 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
             return px.box(title="No scenario data")
         plot_df = pd.DataFrame(records)
         fig = px.box(
-            plot_df, x="scenario", y="value", points="all", title=f"{metric_name} by Scenario"
+            plot_df,
+            x="scenario",
+            y="value",
+            points="all",
+            title=f"{_metric_label(run_data, metric_name)} by Scenario",
+            labels={"value": _metric_label(run_data, metric_name), "scenario": "Scenario"},
         )
         return fig
 
@@ -1600,8 +1680,12 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
             x=param_col,
             y=metric_col,
             hover_data=["_id"],
-            title=f"{metric_col} vs {param_col}",
+            title=f"{_metric_label(run_data, metric_col)} vs {_metric_label(run_data, param_col)}",
             custom_data=["_id"],
+            labels={
+                param_col: _metric_label(run_data, param_col),
+                metric_col: _metric_label(run_data, metric_col),
+            },
         )
         # Highlight selected
         if selected_id and selected_id in df_filtered["_id"].values:
@@ -1635,6 +1719,9 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         if corr_df.empty:
             return px.imshow([[0]], title="No data for correlation")
         matrix = corr_df.corr()
+        display_names = [_metric_label(run_data, col) for col in matrix.columns]
+        matrix.index = display_names
+        matrix.columns = display_names
         fig = px.imshow(
             matrix,
             x=matrix.columns,
@@ -1677,7 +1764,7 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
             if col != "_id" and pd.api.types.is_numeric_dtype(display_df[col]):
                 display_df[col] = display_df[col].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "")
 
-        columns = [{"name": col, "id": col} for col in show_cols]
+        columns = [{"name": _metric_label(run_data, col), "id": col} for col in show_cols]
         data = display_df.to_dict("records")
         return data, columns
 
@@ -1925,7 +2012,8 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
                 radar_fig.add_trace(
                     go.Scatterpolar(
                         r=data["values"],
-                        theta=available_metrics + [available_metrics[0]],
+                        theta=[_metric_label(run_data, metric) for metric in available_metrics]
+                        + [_metric_label(run_data, available_metrics[0])],
                         fill="toself",
                         name=data["name"],
                         line_color=colors[i % len(colors)],
@@ -1947,7 +2035,9 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
 
         table_rows = []
         for metric in metrics_to_show:
-            row_data = [html.Td(metric, style={"fontWeight": "bold", "fontSize": "11px"})]
+            row_data = [
+                html.Td(_metric_label(run_data, metric), style={"fontWeight": "bold", "fontSize": "11px"})
+            ]
             for _, config_row in selected_df.iterrows():
                 val = config_row[metric]
                 formatted = f"{val:.4f}" if pd.notna(val) else "-"
