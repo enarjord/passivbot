@@ -1545,7 +1545,15 @@ def test_hard_stop_apply_sample_delegates_to_rust(monkeypatch):
 
     monkeypatch.setattr(_hsl_state(bot)["runtime"], "apply_sample", fake_apply_sample)
 
-    metrics = bot._equity_hard_stop_apply_sample("long", 1_700_000_000_000, 900.0, 25.0, 25.0, 50.0)
+    metrics = bot._equity_hard_stop_apply_sample(
+        "long",
+        1_700_000_000_000,
+        900.0,
+        25.0,
+        25.0,
+        50.0,
+        unrealized_pnl_total=50.0,
+    )
 
     assert captured["equity"] == 950.0
     assert captured["peak_strategy_equity"] == pytest.approx(950.0)
@@ -1559,8 +1567,12 @@ def test_hard_stop_apply_sample_rolling_peak_prunes_by_lookback():
     cfg["live"]["pnls_max_lookback_days"] = 0.0
     bot = _make_dummy_bot(cfg)
 
-    m0 = bot._equity_hard_stop_apply_sample("long", 1_000, 100.0, 0.0, 0.0, 0.0)
-    m1 = bot._equity_hard_stop_apply_sample("long", 61_000, 95.0, 0.0, 0.0, 0.0)
+    m0 = bot._equity_hard_stop_apply_sample(
+        "long", 1_000, 100.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
+    m1 = bot._equity_hard_stop_apply_sample(
+        "long", 61_000, 95.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
 
     assert m0["peak_strategy_equity"] == pytest.approx(100.0)
     assert m1["peak_strategy_equity"] == pytest.approx(95.0)
@@ -1638,8 +1650,12 @@ def test_hard_stop_apply_sample_same_minute_recomputes_when_inputs_change(monkey
 
     monkeypatch.setattr(_hsl_state(bot)["runtime"], "apply_sample", fake_apply_sample)
 
-    first = bot._equity_hard_stop_apply_sample("long", 60_000, 100.0, 0.0, 0.0, 0.0)
-    second = bot._equity_hard_stop_apply_sample("long", 60_500, 90.0, 0.0, 0.0, 0.0)
+    first = bot._equity_hard_stop_apply_sample(
+        "long", 60_000, 100.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
+    second = bot._equity_hard_stop_apply_sample(
+        "long", 60_500, 90.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
 
     assert len(calls) == 2
     assert calls[0]["equity"] == pytest.approx(100.0)
@@ -1653,8 +1669,12 @@ def test_hard_stop_apply_sample_same_minute_returns_cached_metrics_when_inputs_m
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
 
-    first = bot._equity_hard_stop_apply_sample("long", 60_000, 100.0, 0.0, 0.0, 0.0)
-    second = bot._equity_hard_stop_apply_sample("long", 60_500, 100.0, 0.0, 0.0, 0.0)
+    first = bot._equity_hard_stop_apply_sample(
+        "long", 60_000, 100.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
+    second = bot._equity_hard_stop_apply_sample(
+        "long", 60_500, 100.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
 
     assert first["timestamp_ms"] == 60_000
     assert second["timestamp_ms"] == 60_000
