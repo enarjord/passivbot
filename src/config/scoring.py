@@ -260,6 +260,16 @@ def from_engine_value(spec: ObjectiveSpec, engine_value: float) -> float:
     return float(engine_value) * spec.engine_sign
 
 
+def engine_space_fitness_weights(config_or_scoring: Any) -> tuple[float, ...]:
+    """
+    Shared optimizer fitness weights for engine-space objectives.
+
+    Engine-space values are already normalized so that lower is better for every
+    objective, regardless of the original raw metric goal.
+    """
+    return tuple(-1.0 for _ in extract_objective_specs(config_or_scoring))
+
+
 def dominates_objectives(
     lhs: Sequence[float],
     rhs: Sequence[float],

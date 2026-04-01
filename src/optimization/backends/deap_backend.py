@@ -22,7 +22,7 @@ from optimization.deap_adapters import (
     cxSimulatedBinaryBoundedWrapper,
     mutPolynomialBoundedWrapper,
 )
-from config.scoring import extract_objective_specs
+from config.scoring import engine_space_fitness_weights
 
 DEFAULT_DEAP_POPULATION_SIZE = 500
 
@@ -64,8 +64,7 @@ def run_backend(
     pool = None
     pool_state = {"terminated": False}
     try:
-        objective_specs = extract_objective_specs(config)
-        deap_weights = tuple(1.0 if spec.goal == "max" else -1.0 for spec in objective_specs)
+        deap_weights = engine_space_fitness_weights(config)
         n_objectives = len(deap_weights)
         if not hasattr(creator, "FitnessMulti"):
             creator.create(
