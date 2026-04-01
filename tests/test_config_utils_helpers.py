@@ -86,7 +86,7 @@ def test_rename_config_keys_moves_legacy_fields():
             "minimum_market_age_days": 12,
             "noisiness_rolling_mean_window_size": 34,
         },
-        "backtest": {"exchange": "binance"},
+        "backtest": {"exchange": "binance", "panic_market_slippage_pct": 0.0015},
     }
 
     _rename_config_keys(config, verbose=False)
@@ -95,13 +95,15 @@ def test_rename_config_keys_moves_legacy_fields():
     assert config["live"]["minimum_coin_age_days"] == 12
     assert config["live"]["ohlcv_rolling_window"] == 34
     assert config["backtest"]["exchanges"] == ["binance"]
+    assert config["backtest"]["market_order_slippage_pct"] == pytest.approx(0.0015)
     assert "exchange" not in config["backtest"]
+    assert "panic_market_slippage_pct" not in config["backtest"]
 
 
 def test_rename_config_keys_records_tracker_events():
     config = {
         "live": {"minimum_market_age_days": 5},
-        "backtest": {"exchange": "binance"},
+        "backtest": {"exchange": "binance", "panic_market_slippage_pct": 0.0015},
     }
     tracker = ConfigTransformTracker()
 
@@ -120,6 +122,29 @@ def test_rename_config_keys_records_tracker_events():
         and event["to"] == "backtest.exchanges"
         for event in summary
     )
+    assert any(
+        event["action"] == "rename"
+        and event["from"] == "backtest.panic_market_slippage_pct"
+        and event["to"] == "backtest.market_order_slippage_pct"
+        for event in summary
+    )
+
+
+def test_load_config_renames_legacy_panic_market_slippage_pct(tmp_path):
+    raw = {
+        "backtest": {"panic_market_slippage_pct": 0.0015},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+    path = tmp_path / "legacy_slippage.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    loaded = load_config(str(path), verbose=False)
+
+    assert loaded["backtest"]["market_order_slippage_pct"] == pytest.approx(0.0015)
+    assert "panic_market_slippage_pct" not in loaded["backtest"]
 
 
 def test_hydrate_then_sync_with_template_adds_missing_and_removes_extras():

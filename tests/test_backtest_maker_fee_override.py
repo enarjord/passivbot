@@ -5,6 +5,8 @@ from backtest import prep_backtest_args
 def _base_config():
     cfg = get_template_config()
     cfg["backtest"]["coins"] = {"binance": ["BTC/USDT:USDT"]}
+    cfg["backtest"]["maker_fee_override"] = None
+    cfg["backtest"]["taker_fee_override"] = None
     return cfg
 
 
@@ -45,12 +47,12 @@ def test_prep_backtest_args_uses_taker_fee_override_when_set():
     assert backtest_params["taker_fee"] == 0.0008
 
 
-def test_prep_backtest_args_passes_panic_market_slippage_pct():
+def test_prep_backtest_args_passes_market_order_slippage_pct():
     config = _base_config()
-    config["backtest"]["panic_market_slippage_pct"] = 0.0015
+    config["backtest"]["market_order_slippage_pct"] = 0.0015
     mss = _base_mss()
     _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["panic_market_slippage_pct"] == 0.0015
+    assert backtest_params["market_order_slippage_pct"] == 0.0015
 
 
 def test_prep_backtest_args_passes_market_order_near_touch_threshold_from_live():

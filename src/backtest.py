@@ -1341,11 +1341,11 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
 
         hard_stop_cfg_long = _normalize_hsl_cfg(hard_stop_cfg_long, "bot.long.hsl")
         hard_stop_cfg_short = _normalize_hsl_cfg(hard_stop_cfg_short, "bot.short.hsl")
-        panic_market_slippage_pct = float(
-            get_optional_config_value(config, "backtest.panic_market_slippage_pct", 0.0005) or 0.0
+        market_order_slippage_pct = float(
+            get_optional_config_value(config, "backtest.market_order_slippage_pct", 0.0005) or 0.0
         )
-        if panic_market_slippage_pct < 0.0:
-            raise ValueError("backtest.panic_market_slippage_pct must be >= 0.0")
+        if market_order_slippage_pct < 0.0:
+            raise ValueError("backtest.market_order_slippage_pct must be >= 0.0")
         market_orders_allowed = bool(
             get_optional_config_value(config, "live.market_orders_allowed", False)
         )
@@ -1398,8 +1398,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "max_realized_loss_pct": float(require_config_value(config, "live.max_realized_loss_pct")),
             "pnls_max_lookback_days": float(require_config_value(config, "live.pnls_max_lookback_days")),
             "equity_hard_stop_loss": hard_stop_cfg_long,
-            "panic_market_slippage_pct": panic_market_slippage_pct,
-            "market_order_slippage_pct": panic_market_slippage_pct,
+            "market_order_slippage_pct": market_order_slippage_pct,
             "market_orders_allowed": market_orders_allowed,
             "market_order_near_touch_threshold": market_order_near_touch_threshold,
             "liquidation_threshold": liquidation_threshold,

@@ -32,7 +32,7 @@ def get_template_config():
                 "market_settings_sources": {},
                 "max_warmup_minutes": 0,
                 "ohlcv_source_dir": None,
-                "panic_market_slippage_pct": 0.0005,
+                "market_order_slippage_pct": 0.0005,
                 "scenarios": [
                     {"label": "base"},
                     {

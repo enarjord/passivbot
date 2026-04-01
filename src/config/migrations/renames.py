@@ -157,6 +157,7 @@ def rename_config_keys(
         ("live", "minimum_market_age_days", "minimum_coin_age_days"),
         ("live", "noisiness_rolling_mean_window_size", "ohlcv_rolling_window"),
         ("live", "ohlcvs_1m_update_after_minutes", "inactive_coin_candle_ttl_minutes"),
+        ("backtest", "panic_market_slippage_pct", "market_order_slippage_pct"),
     ]:
         if src in result[section]:
             result[section][dst] = deepcopy(result[section][src])
