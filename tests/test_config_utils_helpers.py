@@ -31,14 +31,15 @@ from config_utils import (
 
 
 def test_load_input_config_without_path_uses_schema_defaults():
-    source, base_config_path = load_input_config(None, log_info=False)
+    source, base_config_path, raw_snapshot = load_input_config(None, log_info=False)
 
     assert base_config_path == ""
     assert source == get_template_config()
+    assert raw_snapshot == get_template_config()
 
 
-def test_prepare_config_uses_schema_defaults_and_runtime_projection():
-    source, base_config_path = load_input_config(None, log_info=False)
+def test_prepare_config_preserves_raw_snapshot_and_effective_input():
+    source, base_config_path, raw_snapshot = load_input_config(None, log_info=False)
     source["live"]["user"] = "test_user"
 
     prepared = prepare_config(
@@ -48,6 +49,7 @@ def test_prepare_config_uses_schema_defaults_and_runtime_projection():
         verbose=False,
         target="live",
         runtime="live",
+        raw_snapshot=raw_snapshot,
     )
 
     assert "backtest" not in prepared
@@ -55,7 +57,9 @@ def test_prepare_config_uses_schema_defaults_and_runtime_projection():
     assert prepared["bot"]["long"]["filter_volume_ema_span"] == pytest.approx(
         prepared["bot"]["long"]["forager_volume_ema_span"]
     )
-    assert prepared["_raw"]["live"]["user"] == "test_user"
+    assert prepared["_raw"] == raw_snapshot
+    assert prepared["_raw_effective"]["live"]["user"] == "test_user"
+    assert prepared["_raw"]["live"]["user"] != "test_user"
 
 
 def test_ensure_bot_defaults_and_bounds_adds_missing_values():

@@ -1661,10 +1661,10 @@ def clean_config(config: dict) -> dict:
 def strip_config_metadata(config: dict, *, keys: Iterable[str] | None = None) -> dict:
     """
     Return a deep-copied config with the provided metadata keys removed recursively.
-    Defaults to removing `_raw` and `_transform_log`.
+    Defaults to removing `_raw`, `_raw_effective`, and `_transform_log`.
     """
 
-    removal = set(keys or ("_raw", "_transform_log", "_coins_sources"))
+    removal = set(keys or ("_raw", "_raw_effective", "_transform_log", "_coins_sources"))
 
     def _strip(node):
         if isinstance(node, dict):

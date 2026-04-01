@@ -4581,13 +4581,14 @@ def _instantiate_bot(config: dict):
 
 
 async def _run_cli(args: argparse.Namespace) -> None:
-    source_config, base_config_path = load_input_config(args.config)
+    source_config, base_config_path, raw_snapshot = load_input_config(args.config)
     config = prepare_config(
         source_config,
         base_config_path=base_config_path,
         verbose=False,
         target="live",
         runtime="live",
+        raw_snapshot=raw_snapshot,
     )
     live = config.setdefault("live", {})
     if args.user:

@@ -22,7 +22,7 @@ def project_config(config: dict, target: str, *, record_step: bool = True) -> di
     for section in _TARGET_SECTION_MAP[normalized_target]:
         if section in config:
             result[section] = deepcopy(config[section])
-    for key in ("_coins_sources", "_raw", "_transform_log"):
+    for key in ("_coins_sources", "_raw", "_raw_effective", "_transform_log"):
         if key in config:
             result[key] = deepcopy(config[key])
 

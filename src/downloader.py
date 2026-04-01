@@ -2141,9 +2141,14 @@ async def main():
     }
     add_config_arguments(parser, template_config)
     args = parser.parse_args()
-    source_config, base_config_path = load_input_config(args.config_path)
+    source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
     update_config_with_args(source_config, args)
-    config = prepare_config(source_config, base_config_path=base_config_path, verbose=False)
+    config = prepare_config(
+        source_config,
+        base_config_path=base_config_path,
+        verbose=False,
+        raw_snapshot=raw_snapshot,
+    )
     await format_approved_ignored_coins(config, require_config_value(config, "backtest.exchanges"))
     oms = {}
     try:

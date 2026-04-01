@@ -19,12 +19,14 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
         },
         "_transform_log": ["noise"],
         "_raw": {"bot": {}},
+        "_raw_effective": {"bot": {"long": {"n_positions": 7}}},
     }
 
     cleaned = clean_config(deepcopy(config))
 
     assert "_transform_log" not in cleaned
     assert "_raw" not in cleaned
+    assert "_raw_effective" not in cleaned
     assert cleaned["bot"]["long"]["n_positions"] == 5
     assert cleaned["bot"]["short"]["n_positions"] == 3
     assert cleaned["bot"]["long"]["ema_span_0"] == template["bot"]["long"]["ema_span_0"]
@@ -50,12 +52,14 @@ def test_strip_config_metadata_removes_known_keys_recursively():
             "_coins_sources": {"BTC": "binance"},
         },
         "_raw": {"bot": {}},
+        "_raw_effective": {"bot": {"long": {"n_positions": 5}}},
         "_transform_log": ["load"],
         "nested": {"_raw": 123, "value": 5},
         "_coins_sources": {"ADA": "bybit"},
     }
     stripped = strip_config_metadata(config)
     assert "_raw" not in stripped
+    assert "_raw_effective" not in stripped
     assert "_transform_log" not in stripped
     assert "_coins_sources" not in stripped
     assert "_coins_sources" not in stripped["bot"]

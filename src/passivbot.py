@@ -8312,7 +8312,7 @@ async def main():
     cli_log_level = "debug" if args.verbose else args.log_level
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
-    source_config, base_config_path = load_input_config(args.config_path)
+    source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
     update_config_with_args(source_config, args, verbose=True)
     config = prepare_config(
         source_config,
@@ -8321,6 +8321,7 @@ async def main():
         verbose=True,
         target="live",
         runtime="live",
+        raw_snapshot=raw_snapshot,
     )
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(cli_log_level, config_logging_value, fallback=1)
