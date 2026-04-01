@@ -55,6 +55,10 @@ from config.parse import load_raw_config
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
 from config.schema import get_template_config as get_schema_template_config
+from config.tree_ops import (
+    add_missing_keys_recursively,
+    remove_unused_keys_recursively,
+)
 from config.transform_log import ConfigTransformTracker, record_transform
 from config.logging_summary import emit_transform_summary
 from config.migrations import (

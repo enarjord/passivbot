@@ -22,10 +22,16 @@ from suite_runner import (
 
 def test_extract_suite_config_merges_override():
     """Test that extract_suite_config properly merges overrides with new structure."""
-    base = {"backtest": {"scenarios": [{"label": "base"}], "aggregate": {"default": "mean"}}}
+    base = {
+        "backtest": {
+            "suite_enabled": True,
+            "scenarios": [{"label": "base"}],
+            "aggregate": {"default": "mean"},
+        }
+    }
     override = {"scenarios": [{"label": "override"}]}
     merged = extract_suite_config(base, override)
-    assert merged["enabled"] is True  # enabled derived from scenarios presence
+    assert merged["enabled"] is True
     assert merged["scenarios"] == [{"label": "override"}]
 
 

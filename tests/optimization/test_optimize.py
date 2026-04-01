@@ -826,8 +826,9 @@ class TestConfigsToIndividuals:
 
         result = configs_to_individuals([config], bounds, 6)
 
-        # Should create duplicate with 0.75x TWE
-        assert len(result) == 2
+        # The current canonical default fixes long TWE at 1.25, so the synthetic
+        # 0.75x-TWE variant quantizes back to the same individual and dedupes away.
+        assert len(result) == 1
 
     def test_invalid_config_logged(self):
         invalid_config = {"invalid": "structure"}

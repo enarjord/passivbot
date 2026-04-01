@@ -10,13 +10,14 @@ from optimize_suite import ensure_suite_config
 def test_optimizer_suite_reads_backtest_scenarios(tmp_path: Path):
     """Test that optimizer reads suite config from new backtest.scenarios structure."""
     base_cfg = get_template_config()
+    base_cfg["backtest"]["suite_enabled"] = True
     base_cfg["backtest"]["scenarios"] = [{"label": "test_scenario"}]
     base_cfg["backtest"]["aggregate"] = {"default": "mean"}
     config_path = tmp_path / "base.json"
     config_path.write_text(json.dumps(base_cfg))
 
     suite_cfg = ensure_suite_config(config_path, None)
-    assert suite_cfg["enabled"] is True  # enabled derived from scenarios presence
+    assert suite_cfg["enabled"] is True
     assert suite_cfg["aggregate"]["default"] == "mean"
     assert suite_cfg["scenarios"] == [{"label": "test_scenario"}]
 
@@ -24,6 +25,7 @@ def test_optimizer_suite_reads_backtest_scenarios(tmp_path: Path):
 def test_optimizer_suite_config_override_uses_backtest_scenarios(tmp_path: Path):
     """Test that suite config override properly merges with base config."""
     base_cfg = get_template_config()
+    base_cfg["backtest"]["suite_enabled"] = True
     base_cfg["backtest"]["scenarios"] = [{"label": "base_scenario"}]
     base_cfg["backtest"]["aggregate"] = {"default": "mean"}
 
@@ -46,6 +48,7 @@ def test_optimizer_suite_config_override_uses_backtest_scenarios(tmp_path: Path)
 def test_optimizer_suite_legacy_override_format(tmp_path: Path):
     """Test that legacy backtest.suite format in override config still works."""
     base_cfg = get_template_config()
+    base_cfg["backtest"]["suite_enabled"] = True
     base_cfg["backtest"]["scenarios"] = [{"label": "base_scenario"}]
 
     # Legacy format with suite wrapper - needs to be a full valid config

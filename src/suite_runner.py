@@ -87,7 +87,7 @@ def extract_suite_config(
     - backtest.aggregate (aggregation settings)
     - backtest.exchanges (default exchanges for scenarios)
     - backtest.volume_normalization (bool, default True)
-    - backtest.suite_enabled (bool, default True) - master switch for suite mode
+    - backtest.suite_enabled (bool, default False) - master switch for suite mode
 
     Args:
         base_config: Full config dict
@@ -118,9 +118,9 @@ def extract_suite_config(
             cfg["volume_normalization"] = suite_override["volume_normalization"]
 
     # Determine if suite mode is enabled:
-    # - suite_enabled config param must be true (default: true)
+    # - suite_enabled config param must be true (default: false)
     # - AND scenarios must exist
-    suite_enabled_config = backtest.get("suite_enabled", True)
+    suite_enabled_config = backtest.get("suite_enabled", False)
     has_scenarios = bool(cfg.get("scenarios"))
     cfg["enabled"] = suite_enabled_config and has_scenarios
 

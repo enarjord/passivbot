@@ -35,7 +35,7 @@ def migrate_suite_to_scenarios(
                 base_scenario = {"label": base_label}
                 new_scenarios = [base_scenario] + new_scenarios
                 _log_config(verbose, logging.INFO, "prepended base scenario '%s' (from include_base_scenario=True)", base_label)
-            if "scenarios" not in backtest or not backtest["scenarios"]:
+            if old_scenarios or include_base:
                 backtest["scenarios"] = new_scenarios
                 _log_config(verbose, logging.INFO, "migrated backtest.suite.scenarios -> backtest.scenarios (%d scenarios)", len(new_scenarios))
                 if tracker is not None:
