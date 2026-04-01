@@ -18,6 +18,7 @@ from config.bot import (
     format_bot_config as staged_format_bot_config,
     normalize_position_counts as staged_normalize_position_counts,
 )
+from config.load import load_prepared_config as staged_load_prepared_config
 from config.coerce import (
     HSL_COOLDOWN_POSITION_POLICIES,
     HSL_SIGNAL_MODES,
@@ -85,11 +86,14 @@ def load_hjson_config(config_path: str, *, log_errors: bool = True) -> dict:
 
 def load_config(filepath: str, live_only=False, verbose=True) -> dict:
     try:
-        config_raw = load_hjson_config(filepath)
-        config = format_config(
-            config_raw, live_only=live_only, verbose=verbose, base_config_path=filepath
+        config = staged_load_prepared_config(
+            filepath,
+            live_only=live_only,
+            verbose=verbose,
+            target="canonical",
+            runtime=None,
+            log_info=False,
         )
-        config["_raw"] = deepcopy(config_raw)
         existing_log = config.get("_transform_log", [])
         config["_transform_log"] = []
         record_transform(config, "load_config", {"path": filepath})

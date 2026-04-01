@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from config_utils import load_config
+from config import load_prepared_config
 from trailing_diagnostics import (
     CLOSE_CONFIG_KEYS,
     ENTRY_CONFIG_KEYS,
@@ -377,7 +377,11 @@ def create_state_from_sources(
         user=user,
         snapshot_path=snapshot_path,
     )
-    config = load_config(config_path, live_only=True, verbose=False) if config_path else None
+    config = (
+        load_prepared_config(config_path, live_only=True, verbose=False, target="canonical")
+        if config_path
+        else None
+    )
     snapshot = _load_snapshot_from_path(resolved_snapshot) if resolved_snapshot and resolved_snapshot.exists() else None
     if snapshot is not None:
         if symbol:

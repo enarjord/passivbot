@@ -455,35 +455,24 @@ def test_update_config_with_args_replaces_path_coin_source():
     assert entry["details"]["diffs"][0]["path"] == "live.ignored_coins"
 
 
-def test_load_config_stores_raw_snapshot(monkeypatch):
-    import copy
+def test_load_config_preserves_raw_and_effective_snapshots(tmp_path):
+    raw = get_template_config()
+    raw["live"]["approved_coins"] = ["BTC"]
+    path = tmp_path / "raw_config.json"
+    path.write_text(json.dumps(raw))
 
-    raw = {"live": {"approved_coins": ["BTC"]}}
-
-    monkeypatch.setattr(
-        config_utils,
-        "load_hjson_config",
-        lambda path: copy.deepcopy(raw),
-    )
-
-    def fake_format(cfg, **kwargs):
-        # return a new dict to simulate normalization
-        result = {"live": {"approved_coins": cfg["live"]["approved_coins"][:]}}
-        result["_transform_log"] = []
-        record_transform(result, "format_config", {"mock": True})
-        return result
-
-    monkeypatch.setattr(config_utils, "format_config", fake_format)
-
-    loaded = config_utils.load_config("dummy.json", verbose=False)
+    loaded = config_utils.load_config(str(path), verbose=False)
     assert loaded["_raw"] == raw
+    assert loaded["_raw_effective"] == raw
 
-    # Mutating runtime view must not mutate the raw snapshot
-    loaded["live"]["approved_coins"].append("ETH")
+    # Mutating runtime view must not mutate the stored snapshots
+    loaded["live"]["approved_coins"]["long"].append("ETH")
+    loaded["live"]["approved_coins"]["short"].append("ETH")
     assert loaded["_raw"]["live"]["approved_coins"] == ["BTC"]
+    assert loaded["_raw_effective"]["live"]["approved_coins"] == ["BTC"]
     log_steps = [entry["step"] for entry in loaded["_transform_log"]]
     assert log_steps[0] == "load_config"
-    assert "format_config" in log_steps
+    assert "normalize_config" in log_steps
 
 
 def test_parse_overrides_records_transform_log():
