@@ -70,7 +70,7 @@
         ],
         "start_date": "2021-01-01",
         "starting_balance": 100000,
-        "suite_enabled": true,
+        "suite_enabled": false,
         "taker_fee_override": null,
         "volume_normalization": true
     },

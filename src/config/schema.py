@@ -152,7 +152,7 @@ def get_template_config():
                 ],
                 "start_date": "2021-01-01",
                 "starting_balance": 100000,
-                "suite_enabled": True,
+                "suite_enabled": False,
                 "taker_fee_override": None,
                 "volume_normalization": True,
             },
