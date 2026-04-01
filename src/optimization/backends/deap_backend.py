@@ -22,6 +22,7 @@ from optimization.deap_adapters import (
     cxSimulatedBinaryBoundedWrapper,
     mutPolynomialBoundedWrapper,
 )
+from config.scoring import extract_objective_specs
 
 DEFAULT_DEAP_POPULATION_SIZE = 500
 
@@ -63,15 +64,17 @@ def run_backend(
     pool = None
     pool_state = {"terminated": False}
     try:
-        n_objectives = len(config["optimize"]["scoring"])
+        objective_specs = extract_objective_specs(config)
+        deap_weights = tuple(1.0 if spec.goal == "max" else -1.0 for spec in objective_specs)
+        n_objectives = len(deap_weights)
         if not hasattr(creator, "FitnessMulti"):
             creator.create(
                 "FitnessMulti",
                 constraint_fitness_cls,
-                weights=(-1.0,) * n_objectives,
+                weights=deap_weights,
             )
         else:
-            creator.FitnessMulti.weights = (-1.0,) * n_objectives
+            creator.FitnessMulti.weights = deap_weights
         if not hasattr(creator, "Individual"):
             creator.create("Individual", list, fitness=creator.FitnessMulti)
 

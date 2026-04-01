@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 import passivbot_rust as pbr
+from config.scoring import extract_objective_specs
 from opt_utils import round_floats
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
@@ -61,9 +62,11 @@ def _resolve_limit_value(
     metric_map: Dict[str, str],
 ) -> Optional[float]:
     metric = spec.metric
-    if metric.startswith("w_"):
+    if metric in objectives:
         return objectives.get(metric)
     resolved_metric = _resolve_metric_name(metric, metric_map)
+    if resolved_metric in objectives:
+        return objectives.get(resolved_metric)
     field = spec.field
     if field == "auto":
         if aggregated_values and resolved_metric in aggregated_values:
@@ -197,6 +200,7 @@ class ParetoStore:
         self._lock = threading.RLock()
 
         self.scoring_keys = None
+        self.scoring_specs = None
 
         # bootstrap from disk if any
         self._bootstrap_from_disk()
@@ -208,7 +212,8 @@ class ParetoStore:
         """
         self.n_iters += 1
         if self.scoring_keys is None:
-            self.scoring_keys = entry["optimize"]["scoring"]
+            self.scoring_specs = extract_objective_specs(entry)
+            self.scoring_keys = [spec.metric for spec in self.scoring_specs]
         rounded = round_floats(entry, self.sig_digits)
         if self.bounds is not None:
             rounded = _quantize_entry_params_with_bounds(rounded, self.bounds, self._log)
@@ -218,8 +223,9 @@ class ParetoStore:
                 return False
 
             metrics_block = rounded.get("metrics", {}) or {}
-            scoring_keys = self.scoring_keys or entry.get("optimize", {}).get("scoring")
-            obj, _ = extract_objectives(rounded, scoring_keys=scoring_keys)
+            obj, _ = extract_objectives(
+                rounded, scoring_keys=self.scoring_specs or entry.get("optimize", {}).get("scoring")
+            )
             violation = extract_violation(rounded)
 
             # ───────────── NEW: dedupe on the objective vector ──────────────
@@ -244,6 +250,7 @@ class ParetoStore:
                     self._violations.get(idx, 0.0),
                     obj,
                     violation,
+                    objective_specs=self.scoring_specs,
                 )
                 for idx in self._front
             ):
@@ -254,7 +261,11 @@ class ParetoStore:
                 idx
                 for idx in self._front
                 if dominates_with_violation(
-                    obj, violation, self._objectives[idx], self._violations.get(idx, 0.0)
+                    obj,
+                    violation,
+                    self._objectives[idx],
+                    self._violations.get(idx, 0.0),
+                    objective_specs=self.scoring_specs,
                 )
             ]
             for idx in dominated:
@@ -460,8 +471,9 @@ def main():
             "Examples:\n"
             "  python3 src/pareto_store.py\n"
             "  python3 src/pareto_store.py optimize_results/<run>/pareto\n"
-            '  python3 src/pareto_store.py -l "w_4<800" "peak_recovery_hours_pnl.max<600"\n'
-            "  python3 src/pareto_store.py -o adg_btc,mdg_btc -w 1,1\n"
+            '  python3 src/pareto_store.py -l "peak_recovery_hours_pnl<800"\n'
+            '  python3 src/pareto_store.py -l "peak_recovery_hours_pnl.max<600"\n'
+            "  python3 src/pareto_store.py -o adg_btc,mdg_btc -w 0.1,0.1\n"
         ),
     )
     parser.add_argument(
@@ -489,8 +501,8 @@ def main():
         default=None,
         help=(
             "Comma-separated weights for the ideal-point offset. Defaults to zeros\n"
-            "which corresponds to the pure component-wise minimum. Fewer weights than\n"
-            "objectives reuse the last provided value."
+            "which corresponds to the pure component-wise ideal according to each\n"
+            "objective goal. Fewer weights than objectives reuse the last provided value."
         ),
     )
     parser.add_argument(
@@ -502,8 +514,8 @@ def main():
         default="weighted",
         help=(
             "Mode for ideal point computation:\n"
-            "  min       – component-wise minima (default)\n"
-            "  weighted  – honour the --weights offset\n"
+            "  min       – component-wise ideal according to each objective goal\n"
+            "  weighted  – honour the --weights offset from the ideal\n"
             "  geomedian – geometric median in objective space"
         ),
     )
@@ -515,9 +527,10 @@ def main():
         action="append",
         help=(
             "Limit filters applied before ranking. Repeat for multiple expressions:\n"
-            '  -l "w_4<800" -l "position_held_hours_max<400"\n'
+            '  -l "peak_recovery_hours_pnl<800" -l "position_held_hours_max<400"\n'
             "Metrics accept optional suffixes (.min/.max/.mean/.std). Without a suffix\n"
-            "suite-level aggregates (if available) are used; otherwise the mean."
+            "suite-level aggregates (if available) are used; otherwise the mean.\n"
+            "Legacy w_i identifiers are still accepted for old result files."
         ),
     )
     parser.add_argument(
@@ -526,8 +539,8 @@ def main():
         type=str,
         help=(
             "Restrict the objective vector to the provided comma-separated list\n"
-            "(names or w_i identifiers). By default all objectives stored in the\n"
-            "Pareto entry are used."
+            "(metric names for new results; legacy w_i identifiers are still accepted\n"
+            "for old runs). By default all stored objectives are used."
         ),
     )
     args = parser.parse_args()
@@ -551,8 +564,9 @@ def main():
             entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))
     points = []
     filenames = {}
-    w_keys = []
+    objective_keys: list[str] = []
     metric_names, metric_name_map = None, None
+    objective_specs = None
 
     import operator
     import re
@@ -588,10 +602,15 @@ def main():
                 entry = json.load(f)
             h = os.path.splitext(os.path.basename(entry_path))[0].split("_")[-1]
             if metric_names is None:
-                metric_names = entry.get("optimize", {}).get("scoring", [])
-                metric_name_map = {f"w_{i}": name for i, name in enumerate(metric_names)}
+                objective_specs = extract_objective_specs(entry)
+                metric_names = [spec.metric for spec in objective_specs]
+                metric_name_map = {f"w_{i}": spec.metric for i, spec in enumerate(objective_specs)}
             metrics_block = entry.get("metrics", {}) or {}
-            objectives = dict(metrics_block.get("objectives", metrics_block))
+            objective_values, extracted_keys = extract_objectives(
+                entry,
+                scoring_keys=objective_specs or entry.get("optimize", {}).get("scoring"),
+            )
+            objectives = dict(zip(extracted_keys, objective_values))
             aggregate_cfg = entry.get("backtest", {}).get("aggregate")
             stats_flat: Dict[str, float] = {}
             aggregated_values: Dict[str, float] = {}
@@ -604,41 +623,26 @@ def main():
                 )
                 stats_flat.update(stats_flat_suite)
                 aggregated_values.update(aggregated_values_suite)
-            if not w_keys:
-                all_w_keys = sorted(k for k in objectives if k.startswith("w_"))
-
-                # Filter w_keys based on --objectives argument
+            if not objective_keys:
+                all_objective_keys = list(extracted_keys)
                 if args.objectives:
                     requested_objectives = [obj.strip() for obj in args.objectives.split(",")]
-                    # Map objective names to w_keys using metric_name_map
-                    if metric_names is None:
-                        metric_names = entry.get("optimize", {}).get("scoring", [])
-                        metric_name_map = {f"w_{i}": name for i, name in enumerate(metric_names)}
-
-                    # Create reverse mapping: objective name -> w_key
-                    reverse_map = {name: key for key, name in metric_name_map.items()}
-
-                    # Filter w_keys to only include requested objectives
-                    w_keys = []
+                    objective_keys = []
                     for obj_name in requested_objectives:
-                        if obj_name in reverse_map:
-                            w_keys.append(reverse_map[obj_name])
-                        else:
-                            # Check if user provided w_key directly
-                            if obj_name in all_w_keys:
-                                w_keys.append(obj_name)
-                            else:
-                                print(
-                                    f"Warning: Objective '{obj_name}' not found. Available objectives: {list(reverse_map.keys())}"
-                                )
+                        resolved_name = (metric_name_map or {}).get(obj_name, obj_name)
+                        if resolved_name in all_objective_keys:
+                            objective_keys.append(resolved_name)
+                            continue
+                        available = list(all_objective_keys)
+                        print(
+                            f"Warning: Objective '{obj_name}' not found. Available objectives: {available}"
+                        )
 
-                    if not w_keys:
+                    if not objective_keys:
                         print("Error: No valid objectives found. Exiting.")
                         exit(1)
-
-                    w_keys = sorted(w_keys)
                 else:
-                    w_keys = all_w_keys
+                    objective_keys = all_objective_keys
             if limit_specs and not _evaluate_limits(
                 limit_specs,
                 stats_flat,
@@ -647,7 +651,7 @@ def main():
                 metric_name_map or {},
             ):
                 continue
-            values = [objectives.get(k) for k in w_keys]
+            values = [objectives.get(_resolve_metric_name(k, metric_name_map or {})) for k in objective_keys]
             if all(v is not None for v in values):
                 points.append((*values, h))
                 filenames[h] = os.path.split(entry_path)[-1]
@@ -655,22 +659,33 @@ def main():
             print(f"Error loading {h}: {e}")
     print(f"Found {len(entries)} Pareto members.")
     if args.objectives:
-        print(f"Using objectives: {[metric_name_map.get(k, k) for k in w_keys]}")
+        print(f"Using objectives: {[metric_name_map.get(k, k) for k in objective_keys]}")
     if not points:
         print("No valid Pareto points found.")
         exit(0)
 
     values_matrix = np.array([p[:-1] for p in points])
     hashes = [p[-1] for p in points]
-    if values_matrix.shape[1] != len(w_keys):
+    if values_matrix.shape[1] != len(objective_keys):
         print("Mismatch between values and keys!")
         exit(1)
 
     weights = tuple([0.0] * values_matrix.shape[1]) if args.weights is None else args.weights
     if len(weights) == 1:
         weights = tuple([weights[0]] * values_matrix.shape[1])
+    selected_specs = None
+    if objective_specs:
+        spec_by_metric = {spec.metric: spec for spec in objective_specs}
+        selected_specs = [
+            spec_by_metric[key] for key in objective_keys if key in spec_by_metric
+        ] or None
 
-    ideal = compute_ideal(values_matrix, mode=args.mode, weights=weights)
+    ideal = compute_ideal(
+        values_matrix,
+        mode=args.mode,
+        weights=weights,
+        objective_specs=selected_specs,
+    )
     mins = np.min(values_matrix, axis=0)
     maxs = np.max(values_matrix, axis=0)
 
@@ -692,25 +707,30 @@ def main():
     closest_idx = int(np.argmin(dists))
 
     print(f"Ideal point ({args.mode}{' ' + str(weights) if args.mode == 'weighted' else ''})")
-    paddings = {k: len(v) for k, v in metric_name_map.items()}
+    paddings = {k: len(v) for k, v in (metric_name_map or {}).items()} or {"": 0}
     paddings = {k: max(paddings.values()) - v for k, v in paddings.items()}
-    for i, key in enumerate(w_keys):
-        print(f"  {key} ({metric_name_map[key]}) {' ' * paddings[key]} = {ideal[i]:.5f}")
+    for i, key in enumerate(objective_keys):
+        print(f"  {metric_name_map.get(key, key)} {' ' * paddings.get(key, 0)} = {ideal[i]:.5f}")
     print(
         f"Closest to ideal: {pareto_dir}/{filenames[hashes[closest_idx]]} | norm_dist={dists[closest_idx]:.5f}"
     )
-    for i, key in enumerate(w_keys):
+    for i, key in enumerate(objective_keys):
         print(
-            f"  {key} ({metric_name_map[key]}) {' ' * paddings[key]} = {values_matrix[closest_idx][i]:.5f}"
+            f"  {metric_name_map.get(key, key)} {' ' * paddings.get(key, 0)} = {values_matrix[closest_idx][i]:.5f}"
         )
 
     if args.json:
         summary = {
             "n_members": len(hashes),
-            "ideal": {k: float(ideal[i]) for i, k in enumerate(w_keys)},
+            "ideal": {
+                metric_name_map.get(k, k): float(ideal[i]) for i, k in enumerate(objective_keys)
+            },
             "closest": {
                 "hash": hashes[closest_idx],
-                **{k: float(values_matrix[closest_idx][i]) for i, k in enumerate(w_keys)},
+                **{
+                    metric_name_map.get(k, k): float(values_matrix[closest_idx][i])
+                    for i, k in enumerate(objective_keys)
+                },
                 "normalized_distance": float(dists[closest_idx]),
             },
         }
@@ -718,7 +738,7 @@ def main():
 
     fig = plt.figure(figsize=(12, 4))
 
-    if len(w_keys) == 2:
+    if len(objective_keys) == 2:
         ax = fig.add_subplot(111)
         ax.scatter(values_matrix[:, 0], values_matrix[:, 1], label="Pareto Members")
         ax.scatter(*ideal, color="green", label="Ideal Point", zorder=5)
@@ -729,8 +749,8 @@ def main():
             label="Closest to Ideal",
             zorder=5,
         )
-        ax.set_xlabel(w_keys[0])
-        ax.set_ylabel(w_keys[1])
+        ax.set_xlabel(metric_name_map.get(objective_keys[0], objective_keys[0]))
+        ax.set_ylabel(metric_name_map.get(objective_keys[1], objective_keys[1]))
         ax.set_title("Pareto Front")
         ax.legend()
         ax.grid(True)
@@ -738,18 +758,9 @@ def main():
         plt.grid(True)
         plt.tight_layout()
         plt.show()
-    elif len(w_keys) == 3:
+    elif len(objective_keys) == 3:
         import plotly.graph_objs as go
         import plotly.io as pio
-
-        # Load a config to get metric names
-        sample_entry_path = entries[0]
-        with open(sample_entry_path) as f:
-            sample_entry = json.load(f)
-
-        # Try to read optimize.scoring if available
-        metric_names = sample_entry.get("optimize", {}).get("scoring", [])
-        metric_name_map = {f"w_{i}": name for i, name in enumerate(metric_names)}
 
         fig = go.Figure()
 
@@ -794,22 +805,22 @@ def main():
         fig.update_layout(
             title="Pareto Front (3D Interactive)",
             scene=dict(
-                xaxis_title=metric_name_map.get(w_keys[0], w_keys[0]),
-                yaxis_title=metric_name_map.get(w_keys[1], w_keys[1]),
-                zaxis_title=metric_name_map.get(w_keys[2], w_keys[2]),
+                xaxis_title=metric_name_map.get(objective_keys[0], objective_keys[0]),
+                yaxis_title=metric_name_map.get(objective_keys[1], objective_keys[1]),
+                zaxis_title=metric_name_map.get(objective_keys[2], objective_keys[2]),
             ),
             margin=dict(l=0, r=0, b=0, t=40),
             legend=dict(x=0.01, y=0.99),
         )
 
         fig.show()
-    elif len(w_keys) > 3:
+    elif len(objective_keys) > 3:
         # More efficient implementation for high-dimensional Pareto fronts
         # Focus only on essential visualizations and optimize performance
         import pandas as pd
 
         # Convert data to pandas DataFrame for easier handling
-        df = pd.DataFrame(values_matrix, columns=w_keys)
+        df = pd.DataFrame(values_matrix, columns=objective_keys)
         df["hash"] = hashes
         df["dist_from_ideal"] = dists
 
@@ -828,16 +839,20 @@ def main():
         # Plot in one batch for better performance
         for i in top_indices:
             if i == closest_idx:
-                ax.plot(range(len(w_keys)), norm_matrix[i], "r-", linewidth=2.5, alpha=0.9, zorder=5)
+                ax.plot(
+                    range(len(objective_keys)), norm_matrix[i], "r-", linewidth=2.5, alpha=0.9, zorder=5
+                )
             else:
-                ax.plot(range(len(w_keys)), norm_matrix[i], "b-", linewidth=1, alpha=0.3)
+                ax.plot(range(len(objective_keys)), norm_matrix[i], "b-", linewidth=1, alpha=0.3)
 
         # Plot ideal point
-        ax.plot(range(len(w_keys)), ideal_norm, "go--", linewidth=2, markersize=8)
+        ax.plot(range(len(objective_keys)), ideal_norm, "go--", linewidth=2, markersize=8)
 
         # Customize appearance
-        ax.set_xticks(range(len(w_keys)))
-        ax.set_xticklabels([metric_name_map.get(k, k) for k in w_keys], rotation=45, ha="right")
+        ax.set_xticks(range(len(objective_keys)))
+        ax.set_xticklabels(
+            [metric_name_map.get(k, k) for k in objective_keys], rotation=45, ha="right"
+        )
         ax.set_ylim([0, 1])
         ax.set_title(f"Parallel Coordinates (Top {len(top_indices)} Solutions)")
         ax.grid(True, alpha=0.3)
@@ -846,9 +861,9 @@ def main():
         ax = axes[1]
 
         # Create correlation matrix
-        corr_matrix = np.zeros((len(w_keys), len(w_keys)))
-        for i, key1 in enumerate(w_keys):
-            for j, key2 in enumerate(w_keys):
+        corr_matrix = np.zeros((len(objective_keys), len(objective_keys)))
+        for i, key1 in enumerate(objective_keys):
+            for j, key2 in enumerate(objective_keys):
                 vals1 = values_matrix[:, i]
                 vals2 = values_matrix[:, j]
 
@@ -870,14 +885,16 @@ def main():
         cbar.set_label("Correlation")
 
         # Add labels
-        ax.set_xticks(range(len(w_keys)))
-        ax.set_yticks(range(len(w_keys)))
-        ax.set_xticklabels([metric_name_map.get(k, k) for k in w_keys], rotation=45, ha="right")
-        ax.set_yticklabels([metric_name_map.get(k, k) for k in w_keys])
+        ax.set_xticks(range(len(objective_keys)))
+        ax.set_yticks(range(len(objective_keys)))
+        ax.set_xticklabels(
+            [metric_name_map.get(k, k) for k in objective_keys], rotation=45, ha="right"
+        )
+        ax.set_yticklabels([metric_name_map.get(k, k) for k in objective_keys])
 
         # Add correlation values as text
-        for i in range(len(w_keys)):
-            for j in range(len(w_keys)):
+        for i in range(len(objective_keys)):
+            for j in range(len(objective_keys)):
                 ax.text(
                     j,
                     i,
@@ -894,13 +911,13 @@ def main():
         print("\nTop 5 Solutions Closest to Ideal:")
         print("-" * 80)
         header = f"{'Rank':<5} {'Hash':<16} {'Distance':<10} " + " ".join(
-            [f"{shorten_str(metric_name_map.get(k, k))[:8]:<10}" for k in w_keys]
+            [f"{shorten_str(metric_name_map.get(k, k))[:8]:<10}" for k in objective_keys]
         )
         print(header)
         print("-" * 80)
 
         for rank, (idx, row) in enumerate(df_sorted.head(5).iterrows(), 1):
-            values_str = " ".join([f"{row[k]:<10.4f}" for k in w_keys])
+            values_str = " ".join([f"{row[k]:<10.4f}" for k in objective_keys])
             print(f"{rank:<5} {row['hash']:<16} {row['dist_from_ideal']:<10.4f} {values_str}")
 
         # Print key insights
@@ -909,12 +926,14 @@ def main():
 
         # Find strongly correlated objectives
         strong_correlations = []
-        for i in range(len(w_keys)):
-            for j in range(i + 1, len(w_keys)):
+        for i in range(len(objective_keys)):
+            for j in range(i + 1, len(objective_keys)):
                 corr = corr_matrix[i, j]
                 if abs(corr) > 0.65:
                     relation = "positively correlated with" if corr > 0 else "trade-off with"
-                    strong_correlations.append((w_keys[i], w_keys[j], corr, relation))
+                    strong_correlations.append(
+                        (objective_keys[i], objective_keys[j], corr, relation)
+                    )
 
         if strong_correlations:
             print("Strong relationships between objectives:")
@@ -927,12 +946,12 @@ def main():
 
         # Calculate diversity of solutions
         diversity_scores = []
-        for i in range(len(w_keys)):
+        for i in range(len(objective_keys)):
             col_values = values_matrix[:, i]
             min_val = min(col_values)
             max_val = max(col_values)
             diversity = max_val - min_val
-            diversity_scores.append((w_keys[i], diversity))
+            diversity_scores.append((objective_keys[i], diversity))
 
         diversity_scores.sort(key=lambda x: x[1], reverse=True)
         print("\nObjective diversity (range of values):")

@@ -7,11 +7,14 @@ import numpy as np
 from pymoo.util.display.column import Column
 from pymoo.util.display.output import Output
 
+from config.scoring import extract_objective_specs, from_engine_value
+
 
 class OptimizeOutput(Output):
     def __init__(self, scoring_keys: Sequence[str]):
         super().__init__()
-        self.scoring_keys = list(scoring_keys)
+        self.scoring_specs = extract_objective_specs(scoring_keys)
+        self.scoring_keys = [spec.metric for spec in self.scoring_specs]
         self.front = Column("front", width=8)
         self.obj_columns = []
         for key in self.scoring_keys:
@@ -30,7 +33,8 @@ class OptimizeOutput(Output):
             if objectives is not None and len(objectives) > 0:
                 best = np.min(objectives, axis=0)
                 for idx, col in enumerate(self.obj_columns):
-                    col.set(f"{abs(float(best[idx])):.4f}")
+                    raw_value = from_engine_value(self.scoring_specs[idx], float(best[idx]))
+                    col.set(f"{raw_value:.4f}")
             else:
                 for col in self.obj_columns:
                     col.set("-")

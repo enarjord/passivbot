@@ -70,6 +70,14 @@ from cli_utils import (
 from config import load_input_config, load_prepared_config, prepare_config
 from config.access import get_optional_config_value, require_config_value
 from config.bot import normalize_forager_score_weights
+from config.scoring import (
+    ObjectiveSpec,
+    default_scoring_weights,
+    extract_objective_specs,
+    objective_index_map,
+    objective_metric_names,
+    to_engine_value,
+)
 from config.parse import load_raw_config as load_hjson_config
 from config.schema import get_template_config
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
@@ -274,7 +282,8 @@ class ResultRecorder:
             self.packer = msgpack.Packer(use_bin_type=True)
         self.prev_data = None
         self.counter = 0
-        self.scoring_keys = list(scoring_keys)
+        self.scoring_specs = extract_objective_specs(scoring_keys)
+        self.scoring_keys = [spec.metric for spec in self.scoring_specs]
 
     def record(self, data: dict) -> None:
         if self.write_all and self.results_file:
@@ -302,11 +311,6 @@ class ResultRecorder:
         else:
             if updated:
                 objectives_block = metrics_block.get("objectives", {})
-                objective_values = [
-                    objectives_block[key]
-                    for key in sorted(objectives_block)
-                    if objectives_block.get(key) is not None
-                ]
                 violation_str = (
                     f" | constraint={pbr.round_dynamic(violation, 3)}"
                     if isinstance(violation, (int, float))
@@ -316,7 +320,7 @@ class ResultRecorder:
                     "Pareto update | eval=%d | front=%d | objectives=%s%s",
                     self.store.n_iters,
                     len(self.store._front),
-                    _format_objectives(objective_values),
+                    _format_objectives(objectives_block, scoring_keys=self.scoring_keys),
                     violation_str,
                 )
 
@@ -345,7 +349,20 @@ _RECOVERABLE_BACKTEST_PANIC_PATTERNS = (
 )
 
 
-def _format_objectives(values: Sequence[float]) -> str:
+def _format_objectives(
+    values: Sequence[float] | dict[str, float],
+    *,
+    scoring_keys: Sequence[str] | None = None,
+) -> str:
+    if isinstance(values, dict):
+        order = list(scoring_keys or values.keys())
+        parts = []
+        for key in order:
+            value = values.get(key)
+            if value is None:
+                continue
+            parts.append(f"{key}={float(value):.3g}")
+        return "[" + ", ".join(parts) + "]" if parts else "[]"
     if isinstance(values, np.ndarray):
         values = values.tolist()
     if not values:
@@ -368,9 +385,11 @@ def _build_invalid_candidate_metrics(
     include_stats: bool = True,
     include_suite_metrics: bool = False,
 ) -> tuple[tuple[float, ...], float, dict]:
-    objectives = tuple(0.0 for _ in scoring_keys)
+    specs = extract_objective_specs(scoring_keys)
+    raw_objectives = {spec.metric: 0.0 for spec in specs}
+    objectives = tuple(to_engine_value(spec, 0.0) for spec in specs)
     metrics_payload = {
-        "objectives": {f"w_{i}": val for i, val in enumerate(objectives)},
+        "objectives": raw_objectives,
         "constraint_violation": INVALID_BACKTEST_CANDIDATE_PENALTY,
         "error": error,
     }
@@ -726,107 +745,8 @@ class Evaluator:
         self.bounds = extract_bounds_tuple_list_from_config(self.config)
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
         self.use_duplicate_guard = True
-
-        shared_metric_weights = {
-            "positions_held_per_day": 1.0,
-            "positions_held_per_day_w": 1.0,
-            "position_held_hours_mean": 1.0,
-            "position_held_hours_max": 1.0,
-            "position_held_hours_median": 1.0,
-            "position_unchanged_hours_max": 1.0,
-            "high_exposure_hours_mean_long": 1.0,
-            "high_exposure_hours_max_long": 1.0,
-            "high_exposure_hours_mean_short": 1.0,
-            "high_exposure_hours_max_short": 1.0,
-            "adg_pnl": -1.0,
-            "adg_pnl_w": -1.0,
-            "gain_strategy_pnl_rebased": -1.0,
-            "adg_strategy_pnl_rebased": -1.0,
-            "mdg_strategy_pnl_rebased": -1.0,
-            "sharpe_ratio_strategy_pnl_rebased": -1.0,
-            "sortino_ratio_strategy_pnl_rebased": -1.0,
-            "omega_ratio_strategy_pnl_rebased": -1.0,
-            "expected_shortfall_1pct_strategy_pnl_rebased": 1.0,
-            "calmar_ratio_strategy_pnl_rebased": -1.0,
-            "sterling_ratio_strategy_pnl_rebased": -1.0,
-            "adg_strategy_pnl_rebased_w": -1.0,
-            "mdg_strategy_pnl_rebased_w": -1.0,
-            "sharpe_ratio_strategy_pnl_rebased_w": -1.0,
-            "sortino_ratio_strategy_pnl_rebased_w": -1.0,
-            "omega_ratio_strategy_pnl_rebased_w": -1.0,
-            "calmar_ratio_strategy_pnl_rebased_w": -1.0,
-            "sterling_ratio_strategy_pnl_rebased_w": -1.0,
-            "drawdown_worst_hsl": 1.0,
-            "drawdown_worst_mean_1pct_hsl": 1.0,
-            "peak_recovery_hours_hsl": 1.0,
-            "mdg_pnl": -1.0,
-            "mdg_pnl_w": -1.0,
-            "sharpe_ratio_pnl": -1.0,
-            "sharpe_ratio_pnl_w": -1.0,
-            "sortino_ratio_pnl": -1.0,
-            "sortino_ratio_pnl_w": -1.0,
-        }
-
-        currency_metric_weights = {
-            "adg": -1.0,
-            "adg_per_exposure_long": -1.0,
-            "adg_per_exposure_short": -1.0,
-            "adg_w": -1.0,
-            "adg_w_per_exposure_long": -1.0,
-            "adg_w_per_exposure_short": -1.0,
-            "calmar_ratio": -1.0,
-            "calmar_ratio_w": -1.0,
-            "drawdown_worst": 1.0,
-            "drawdown_worst_mean_1pct": 1.0,
-            "equity_balance_diff_neg_max": 1.0,
-            "equity_balance_diff_neg_mean": 1.0,
-            "equity_balance_diff_pos_max": 1.0,
-            "equity_balance_diff_pos_mean": 1.0,
-            "equity_choppiness": 1.0,
-            "equity_choppiness_w": 1.0,
-            "equity_jerkiness": 1.0,
-            "equity_jerkiness_w": 1.0,
-            "peak_recovery_hours_equity": 1.0,
-            "expected_shortfall_1pct": 1.0,
-            "exponential_fit_error": 1.0,
-            "exponential_fit_error_w": 1.0,
-            "gain": -1.0,
-            "gain_per_exposure_long": -1.0,
-            "gain_per_exposure_short": -1.0,
-            "loss_profit_ratio": 1.0,
-            "loss_profit_ratio_w": 1.0,
-            "mdg": -1.0,
-            "mdg_per_exposure_long": -1.0,
-            "mdg_per_exposure_short": -1.0,
-            "mdg_w": -1.0,
-            "mdg_w_per_exposure_long": -1.0,
-            "mdg_w_per_exposure_short": -1.0,
-            "omega_ratio": -1.0,
-            "omega_ratio_w": -1.0,
-            "sharpe_ratio": -1.0,
-            "sharpe_ratio_w": -1.0,
-            "sortino_ratio": -1.0,
-            "sortino_ratio_w": -1.0,
-            "sterling_ratio": -1.0,
-            "sterling_ratio_w": -1.0,
-            "total_wallet_exposure_max": 1.0,
-            "total_wallet_exposure_mean": 1.0,
-            "total_wallet_exposure_median": 1.0,
-            "volume_pct_per_day_avg": -1.0,
-            "volume_pct_per_day_avg_w": -1.0,
-            "entry_initial_balance_pct_long": -1.0,
-            "entry_initial_balance_pct_short": -1.0,
-        }
-
-        self.scoring_weights = {}
-        self.scoring_weights.update(shared_metric_weights)
-
-        for metric, weight in currency_metric_weights.items():
-            self.scoring_weights[f"{metric}_usd"] = weight
-            self.scoring_weights[f"{metric}_btc"] = weight
-            self.scoring_weights.setdefault(metric, weight)
-            self.scoring_weights.setdefault(f"usd_{metric}", weight)
-            self.scoring_weights.setdefault(f"btc_{metric}", weight)
+        self.scoring_specs = extract_objective_specs(self.config)
+        self.scoring_weights = default_scoring_weights()
 
         self.build_limit_checks()
 
@@ -1021,11 +941,12 @@ class Evaluator:
         scenario_metrics = build_scenario_metrics(analyses)
         aggregate_stats = scenario_metrics.get("stats", {})
         flat_stats = flatten_metric_stats(aggregate_stats)
-        objectives, total_penalty = self.calc_fitness(flat_stats)
-        objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
+        objectives, total_penalty, raw_objectives = self.calc_fitness(
+            flat_stats, return_raw_objectives=True
+        )
         metrics_payload = {
             "stats": aggregate_stats,
-            "objectives": objectives_map,
+            "objectives": raw_objectives,
             "constraint_violation": total_penalty,
             "liquidated": liquidated,
         }
@@ -1037,19 +958,15 @@ class Evaluator:
 
     def build_limit_checks(self):
         limits = self.config["optimize"].get("limits", [])
-        objective_index_map: Dict[str, List[int]] = {}
-        for idx, metric in enumerate(self.config["optimize"].get("scoring", [])):
-            objective_index_map.setdefault(metric, []).append(idx)
         self.limit_checks = expand_limit_checks(
             limits,
             self.scoring_weights,
             penalty_weight=1e6,
-            objective_index_map=objective_index_map,
+            objective_index_map=objective_index_map(self.scoring_specs),
         )
 
-    def calc_fitness(self, analyses_combined):
-        scoring_keys = self.config["optimize"]["scoring"]
-        per_objective_modifier = [0.0] * len(scoring_keys)
+    def calc_fitness(self, analyses_combined, *, return_raw_objectives: bool = False):
+        per_objective_modifier = [0.0] * len(self.scoring_specs)
         global_modifier = 0.0
         for check in self.limit_checks:
             val = analyses_combined.get(check["metric_key"])
@@ -1065,17 +982,13 @@ class Evaluator:
                 global_modifier += penalty
 
         total_penalty = global_modifier + sum(per_objective_modifier)
-        scores = []
-        for idx, sk in enumerate(scoring_keys):
-            penalty_total = global_modifier + per_objective_modifier[idx]
-            if penalty_total:
-                scores.append(penalty_total)
-                continue
-
-            parts = sk.split("_")
+        engine_scores = []
+        raw_objectives: Dict[str, float] = {}
+        for idx, spec in enumerate(self.scoring_specs):
+            parts = spec.metric.split("_")
             candidates = []
             if len(parts) <= 1:
-                candidates = [sk]
+                candidates = [spec.metric]
             else:
                 base, rest = parts[0], parts[1:]
                 base_candidate = "_".join([base, *rest])
@@ -1083,6 +996,9 @@ class Evaluator:
                 for perm in permutations(rest):
                     candidate = "_".join([base, *perm])
                     candidates.append(candidate)
+            if spec.metric.endswith(("_usd", "_btc")):
+                base_metric = spec.metric.rsplit("_", 1)[0]
+                candidates.append(base_metric)
 
             extended_candidates = []
             seen = set()
@@ -1103,24 +1019,27 @@ class Evaluator:
                             seen.add(inserted)
 
             val = None
-            weight = None
             selected_metric = None
             for candidate in extended_candidates:
                 metric_key = f"{candidate}_mean"
                 if val is None and metric_key in analyses_combined:
                     val = analyses_combined[metric_key]
                     selected_metric = candidate
-                if weight is None and candidate in self.scoring_weights:
-                    weight = self.scoring_weights[candidate]
-                if val is not None and weight is not None:
+                if val is not None:
                     break
 
             if val is None:
                 val = 0
-            if weight is None:
-                weight = 1.0
-            scores.append(val * weight)
-        return tuple(scores), total_penalty
+            raw_value = float(val)
+            raw_objectives[spec.metric] = raw_value
+            penalty_total = global_modifier + per_objective_modifier[idx]
+            if penalty_total:
+                engine_scores.append(penalty_total)
+            else:
+                engine_scores.append(to_engine_value(spec, raw_value))
+        if return_raw_objectives:
+            return tuple(engine_scores), total_penalty, raw_objectives
+        return tuple(engine_scores), total_penalty
 
     def __del__(self):
         for attachment_map in self._attachments.values():
@@ -1754,7 +1673,7 @@ async def main():
     logging.info(
         "Config normalized for optimization | template=%s | scoring=%s",
         TEMPLATE_CONFIG_MODE,
-        ",".join(config["optimize"].get("scoring", [])),
+        ",".join(objective_metric_names(config)),
     )
     fine_tune_params = (
         [p.strip() for p in (args.fine_tune_params or "").split(",") if p.strip()]

@@ -198,7 +198,7 @@ def test_format_config_current_with_optimize_missing_bounds_adds_defaults():
 
     out = format_config(current, verbose=False, live_only=True)
 
-    assert out["optimize"]["scoring"] == ["adg"]
+    assert out["optimize"]["scoring"] == [{"metric": "adg_usd", "goal": "max"}]
     assert "long_close_grid_qty_pct" in out["optimize"]["bounds"]
     assert "short_close_grid_qty_pct" in out["optimize"]["bounds"]
 

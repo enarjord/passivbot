@@ -38,6 +38,7 @@ def summarize_transform_events(events: Iterable[dict]) -> List[str]:
         elif action == "update":
             path = str(event.get("path", ""))
             if path in {
+                "optimize.scoring",
                 "optimize.limits",
                 "optimize.backend",
                 "optimize.population_size",

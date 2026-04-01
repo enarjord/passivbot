@@ -6,7 +6,7 @@ from utils import format_end_date, normalize_coins_source, symbol_to_coin
 
 from .limits import _resolve_optimize_limits_for_load
 from .log_output import log_config_message
-from .metrics import canonicalize_metric_name
+from .scoring import extract_objective_specs
 from .schema import get_template_config
 from .tree_ops import add_missing_keys_recursively, remove_unused_keys_recursively
 
@@ -156,14 +156,7 @@ def apply_non_live_adjustments(
             result["live"].get("filter_by_min_effective_cost", False)
         )
 
-    canonical_scoring = []
-    seen = set()
-    for metric in result["optimize"].get("scoring", []):
-        canon = canonicalize_metric_name(metric)
-        if canon not in seen:
-            canonical_scoring.append(canon)
-            seen.add(canon)
-    result["optimize"]["scoring"] = canonical_scoring
+    result["optimize"]["scoring"] = [spec.to_config() for spec in extract_objective_specs(result)]
     backend = str(result["optimize"].get("backend", "pymoo") or "pymoo").strip().lower()
     if backend not in {"deap", "pymoo"}:
         raise ValueError(

@@ -19,7 +19,6 @@ from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
     resolve_custom_endpoint_override,
 )
-from config_transform import record_transform
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
@@ -1133,6 +1132,8 @@ async def format_approved_ignored_coins(config, exchanges: [str], quote=None, ve
     ignored_diff = _diff_snapshot(before_ignored, config["live"]["ignored_coins"])
     sources_diff = _diff_snapshot(before_sources, config.get("_coins_sources", {}))
     if approved_diff or ignored_diff or sources_diff:
+        from config_transform import record_transform
+
         details = {"exchanges": list(exchanges)}
         if approved_diff:
             details["approved_coins"] = approved_diff

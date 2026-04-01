@@ -11,6 +11,7 @@ from .hydrate import (
 )
 from .coerce import normalize_validation_fields
 from .migrations import apply_migrations, build_base_config_from_flavor, detect_flavor
+from .scoring import normalize_scoring_config
 from .schema import get_template_config
 from .transform_log import ConfigTransformTracker, record_transform
 from .access import require_config_dict
@@ -77,6 +78,7 @@ def normalize_config(
         tracker=tracker,
     )
     normalize_validation_fields(result, raw_optimize=raw_optimize_snapshot)
+    normalize_scoring_config(result, verbose=verbose, tracker=tracker)
     validate_config(
         result,
         raw_optimize=raw_optimize_snapshot,

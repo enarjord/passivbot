@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 from config.metrics import CURRENCY_METRICS, SHARED_METRICS
+from config.scoring import extract_objective_specs
 from utils import trim_analysis_aliases
 
 
@@ -17,7 +18,12 @@ class VisibleAnalysis:
 
 def collect_visible_metric_requests(config: dict) -> tuple[list[str], list[str], object]:
     optimize_cfg = (config or {}).get("optimize", {}) or {}
-    derived = list(optimize_cfg.get("scoring", []) or [])
+    derived = []
+    for spec in extract_objective_specs(optimize_cfg.get("scoring", []) or []):
+        metric = spec.metric
+        if metric.endswith(("_usd", "_btc")) and metric.rsplit("_", 1)[0] in CURRENCY_METRICS:
+            metric = metric.rsplit("_", 1)[0]
+        derived.append(metric)
     derived.extend(
         limit["metric"]
         for limit in (optimize_cfg.get("limits", []) or [])

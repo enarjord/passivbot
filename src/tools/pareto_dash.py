@@ -25,6 +25,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from opt_utils import load_results
 from config.limits import normalize_limit_entries
+from config.scoring import extract_objective_specs, from_engine_value
 
 
 def discover_runs(root: str) -> List[str]:
@@ -142,11 +143,16 @@ OBJECTIVE_PREFIX = "objective."
 
 def _resolve_objective_columns(entry: dict, objective_keys: Iterable[str]) -> List[Tuple[str, str, str]]:
     objective_keys_set = {str(key) for key in objective_keys}
-    scoring_metrics = list(entry.get("optimize", {}).get("scoring", []) or [])
+    scoring_specs = extract_objective_specs(entry)
     resolved: List[Tuple[str, str, str]] = []
     seen: set[str] = set()
 
-    for idx, metric_name in enumerate(scoring_metrics):
+    for idx, spec in enumerate(scoring_specs):
+        metric_name = spec.metric
+        if metric_name in objective_keys_set:
+            resolved.append((metric_name, f"{OBJECTIVE_PREFIX}{metric_name}", metric_name))
+            seen.add(metric_name)
+            continue
         key = f"w_{idx}"
         if key not in objective_keys_set:
             continue
@@ -166,8 +172,12 @@ def _extract_objectives(entry: dict) -> Tuple[Dict[str, float], Dict[str, str], 
     flattened: Dict[str, float] = {}
     display_labels: Dict[str, str] = {}
     scoring_columns: List[str] = []
+    scoring_specs = extract_objective_specs(entry)
+    spec_map = {f"w_{idx}": spec for idx, spec in enumerate(scoring_specs)}
     for key, column, label in _resolve_objective_columns(entry, objectives.keys()):
         value = objectives.get(key)
+        if value is not None and key in spec_map:
+            value = from_engine_value(spec_map[key], float(value))
         numeric = _ensure_float(value)
         if numeric is not None:
             flattened[column] = numeric

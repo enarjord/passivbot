@@ -39,6 +39,14 @@ from backtest import prepare_hlcvs_mss, run_backtest  # noqa: E402
 from config.access import get_optional_config_value, require_config_value  # noqa: E402
 from config.limits import normalize_limit_entries  # noqa: E402
 from config.overrides import parse_overrides  # noqa: E402
+from config.scoring import (  # noqa: E402
+    ObjectiveSpec,
+    default_scoring_weights,
+    dominates_objectives,
+    extract_objective_specs,
+    objective_index_map,
+    to_engine_value,
+)
 from logging_setup import configure_logging, resolve_log_level  # noqa: E402
 from pure_funcs import calc_hash, denumpyize  # noqa: E402
 from utils import (  # noqa: E402
@@ -50,68 +58,6 @@ from utils import (  # noqa: E402
 )
 from metrics_schema import build_scenario_metrics, flatten_metric_stats  # noqa: E402
 from limit_utils import expand_limit_checks, compute_limit_violation  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# Constants mirroring optimizer scoring preferences
-# ---------------------------------------------------------------------------
-SHARED_METRIC_WEIGHTS = {
-    "positions_held_per_day": 1.0,
-    "position_held_hours_mean": 1.0,
-    "position_held_hours_max": 1.0,
-    "position_held_hours_median": 1.0,
-    "position_unchanged_hours_max": 1.0,
-    "loss_profit_ratio": 1.0,
-    "loss_profit_ratio_w": 1.0,
-    "volume_pct_per_day_avg": -1.0,
-    "volume_pct_per_day_avg_w": -1.0,
-    "peak_recovery_hours_pnl": 1.0,
-    "high_exposure_hours_mean_long": 1.0,
-    "high_exposure_hours_max_long": 1.0,
-    "high_exposure_hours_mean_short": 1.0,
-    "high_exposure_hours_max_short": 1.0,
-}
-
-CURRENCY_METRIC_WEIGHTS = {
-    "adg": -1.0,
-    "adg_per_exposure_long": -1.0,
-    "adg_per_exposure_short": -1.0,
-    "adg_w": -1.0,
-    "adg_w_per_exposure_long": -1.0,
-    "adg_w_per_exposure_short": -1.0,
-    "calmar_ratio": -1.0,
-    "calmar_ratio_w": -1.0,
-    "drawdown_worst": 1.0,
-    "drawdown_worst_mean_1pct": 1.0,
-    "equity_balance_diff_neg_max": 1.0,
-    "equity_balance_diff_neg_mean": 1.0,
-    "equity_balance_diff_pos_max": 1.0,
-    "equity_balance_diff_pos_mean": 1.0,
-    "equity_choppiness": 1.0,
-    "equity_choppiness_w": 1.0,
-    "equity_jerkiness": 1.0,
-    "equity_jerkiness_w": 1.0,
-    "peak_recovery_hours_equity": 1.0,
-    "expected_shortfall_1pct": 1.0,
-    "exponential_fit_error": 1.0,
-    "exponential_fit_error_w": 1.0,
-    "gain": -1.0,
-    "gain_per_exposure_long": -1.0,
-    "gain_per_exposure_short": -1.0,
-    "mdg": -1.0,
-    "mdg_per_exposure_long": -1.0,
-    "mdg_per_exposure_short": -1.0,
-    "mdg_w": -1.0,
-    "mdg_w_per_exposure_long": -1.0,
-    "mdg_w_per_exposure_short": -1.0,
-    "omega_ratio": -1.0,
-    "omega_ratio_w": -1.0,
-    "sharpe_ratio": -1.0,
-    "sharpe_ratio_w": -1.0,
-    "sortino_ratio": -1.0,
-    "sortino_ratio_w": -1.0,
-    "sterling_ratio": -1.0,
-    "sterling_ratio_w": -1.0,
-}
 
 PENALTY_WEIGHT = 1e6
 
@@ -135,6 +81,7 @@ class MetricInfo:
     value: Optional[float]
     resolved_key: Optional[str]
     weight: Optional[float]
+    goal: Optional[str] = None
 
 
 @dataclass
@@ -170,14 +117,7 @@ class RunSummary:
 # Utility helpers
 # ---------------------------------------------------------------------------
 def build_scoring_weights() -> Dict[str, float]:
-    weights = dict(SHARED_METRIC_WEIGHTS)
-    for metric, weight in CURRENCY_METRIC_WEIGHTS.items():
-        weights[f"{metric}_usd"] = weight
-        weights[f"{metric}_btc"] = weight
-        weights.setdefault(metric, weight)
-        weights.setdefault(f"usd_{metric}", weight)
-        weights.setdefault(f"btc_{metric}", weight)
-    return weights
+    return default_scoring_weights()
 
 
 def ensure_float(value: Optional[float]) -> Optional[float]:
@@ -348,13 +288,13 @@ def resolve_metric_value(
 
 
 def calc_score_vector(
-    scoring_keys: Iterable[str],
+    objective_specs: Iterable[ObjectiveSpec],
     combined: Dict[str, Any],
     scoring_weights: Dict[str, float],
     limit_checks: List[Dict[str, Any]],
 ) -> Tuple[Tuple[float, ...], float]:
-    scoring_keys = list(scoring_keys)
-    per_objective_modifier = [0.0] * len(scoring_keys)
+    objective_specs = list(objective_specs)
+    per_objective_modifier = [0.0] * len(objective_specs)
     modifier = 0.0
     for check in limit_checks:
         val = ensure_float(combined.get(check["metric_key"]))
@@ -370,22 +310,16 @@ def calc_score_vector(
             modifier += penalty
 
     scores: List[float] = []
-    for idx, key in enumerate(scoring_keys):
+    for idx, spec in enumerate(objective_specs):
         penalty_total = modifier + per_objective_modifier[idx]
         if penalty_total:
             scores.append(penalty_total)
             continue
-        value, resolved = resolve_metric_value(key, combined)
+        value, resolved = resolve_metric_value(spec.metric, combined)
         if value is None:
             scores.append(float("inf"))
             continue
-        weight = scoring_weights.get(resolved or key)
-        if weight is None:
-            scores.append(value)
-        elif weight < 0:
-            scores.append(-value)
-        else:
-            scores.append(value)
+        scores.append(to_engine_value(spec, float(value)))
     return tuple(scores), modifier
 
 
@@ -418,6 +352,7 @@ class IterativeBacktestSession:
         self.config_cache: Dict[str, RunSummary] = {}
         self.last_bot_flat: Optional[Dict[str, Any]] = None
         self.scoring_keys: List[str] = []
+        self.scoring_specs: List[ObjectiveSpec] = []
         self.backtest_durations: List[float] = []
         self.pareto_front_indices: List[int] = []
         self.scoring_weights = build_scoring_weights()
@@ -520,6 +455,7 @@ class IterativeBacktestSession:
         self.pareto_front_indices = []
         self.backtest_durations.clear()
         self.scoring_keys = []
+        self.scoring_specs = []
         self.datasets = await self._prepare_datasets(config)
         self.backtest_signature = make_backtest_signature(config)
         logging.info("Datasets reloaded.")
@@ -580,29 +516,30 @@ class IterativeBacktestSession:
 
         combined = combine_analyses(analyses)
         combined_flat = flatten_metric_stats(combined.get("stats", {}))
-        scoring_keys = list(config.get("optimize", {}).get("scoring", []))
-        scoring_index_map: Dict[str, List[int]] = {}
-        for idx, key in enumerate(scoring_keys):
-            scoring_index_map.setdefault(key, []).append(idx)
+        objective_specs = extract_objective_specs(config)
+        scoring_keys = [spec.metric for spec in objective_specs]
         self.scoring_keys = scoring_keys
+        self.scoring_specs = objective_specs
         limits_cfg = config.get("optimize", {}).get("limits", [])
         limit_checks = build_limit_checks(
             limits_cfg,
             self.scoring_weights,
-            scoring_index_map,
+            objective_index_map(objective_specs),
         )
         score_vector, modifier = calc_score_vector(
-            scoring_keys, combined_flat, self.scoring_weights, limit_checks
+            objective_specs, combined_flat, self.scoring_weights, limit_checks
         )
 
         scoring_metrics: Dict[str, MetricInfo] = {}
-        for key in scoring_keys:
+        for spec in objective_specs:
+            key = spec.metric
             value, resolved = resolve_metric_value(key, combined_flat)
             weight = self.scoring_weights.get(resolved or key)
             scoring_metrics[key] = MetricInfo(
                 value=ensure_float(value),
                 resolved_key=resolved,
                 weight=weight,
+                goal=spec.goal,
             )
 
         limit_metrics: List[LimitInfo] = []
@@ -632,20 +569,13 @@ class IterativeBacktestSession:
                     param_deltas[key] = (prev_val, new_val)
 
         objectives: List[float] = []
-        for key in scoring_keys:
+        for spec in objective_specs:
+            key = spec.metric
             info = scoring_metrics.get(key)
             if info is None or info.value is None:
                 objectives.append(float("inf"))
                 continue
-            weight = info.weight
-            if weight is None:
-                weight = self.scoring_weights.get(info.resolved_key or key)
-            if weight is None:
-                objectives.append(info.value)
-            elif weight < 0:
-                objectives.append(-info.value)
-            else:
-                objectives.append(info.value)
+            objectives.append(float(info.value))
 
         run_index = len(self.history) + 1
         run_ts = utc_ms()
@@ -747,7 +677,7 @@ class IterativeBacktestSession:
                 vec_other = objective_map.get(other.index)
                 if vec_other is None or len(vec_other) == 0:
                     continue
-                if self._dominates(vec_other, vec_candidate):
+                if self._dominates(vec_other, vec_candidate, self.scoring_specs):
                     dominated = True
                     break
             if not dominated:
@@ -756,29 +686,22 @@ class IterativeBacktestSession:
 
     # ------------------------------------------------------------------
     @staticmethod
-    def _dominates(vector_a: Tuple[float, ...], vector_b: Tuple[float, ...]) -> bool:
-        if not vector_a or not vector_b:
+    def _dominates(
+        vector_a: Tuple[float, ...], vector_b: Tuple[float, ...], specs: Sequence[ObjectiveSpec]
+    ) -> bool:
+        if not vector_a or not vector_b or not specs:
             return False
         if len(vector_a) != len(vector_b):
             return False
-        better_or_equal = True
-        strictly_better = False
-        for a, b in zip(vector_a, vector_b):
-            if a > b:
-                better_or_equal = False
-                break
-            if a < b:
-                strictly_better = True
-        return better_or_equal and strictly_better
+        return dominates_objectives(vector_a, vector_b, specs)
 
     # ------------------------------------------------------------------
     def _goal_symbol(self, metric: str, info: MetricInfo) -> str:
-        weight = info.weight
-        if weight is None:
-            weight = self.scoring_weights.get(info.resolved_key or metric)
-        if weight is None:
-            return "?"
-        return "↑" if weight < 0 else "↓"
+        if info.goal == "max":
+            return "↑"
+        if info.goal == "min":
+            return "↓"
+        return "?"
 
     # ------------------------------------------------------------------
     def _append_history_log(self, run: RunSummary) -> None:
@@ -933,7 +856,7 @@ class IterativeBacktestSession:
                     r.index
                     for r in pareto_runs
                     if r.index != run.index
-                    and self._dominates(r.objective_vector, run.objective_vector)
+                    and self._dominates(r.objective_vector, run.objective_vector, self.scoring_specs)
                 ]
                 if dominators:
                     print(f"Dominated by: {', '.join('#' + str(idx) for idx in dominators)}")
