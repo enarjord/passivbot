@@ -23,6 +23,9 @@ passivbot optimize [path/to/config.json]
 - Enable suite scenarios defined in `backtest.scenarios` with `--suite [y/n]` (omit value to enable)
 - Layer additional scenario definitions via `--suite-config path/to/file.json`
 
+The canonical default profile keeps `backtest.suite_enabled = false`, so optimize runs are
+single-scenario by default unless you explicitly enable suite mode.
+
 Example:
 ```bash
 passivbot optimize configs/examples/default_trailing_grid_long_npos10.json --start configs/starting_pool/
@@ -308,6 +311,8 @@ Key fields (directly under `backtest`):
 - `backtest.scenarios`: list of scenario dictionaries (same schema as backtest scenarios)
 - `backtest.aggregate`: how to combine per-scenario metrics (default: `{"default": "mean"}`)
 
+Suite mode is opt-in. The default schema/example config does not enable it automatically.
+
 During evaluation the optimizer records:
 
 - Per-scenario combined metrics (the same mean/min/max/std set produced by standalone
@@ -315,8 +320,8 @@ During evaluation the optimizer records:
 - Aggregated metrics computed with the `backtest.aggregate` rules (default `mean`).
   These aggregated values feed directly into `optimize.scoring` and `optimize.limits`.
 
-See [Suite Examples](suite_examples.md) for comprehensive scenario configurations including
-exchange comparisons, date range testing, and parameter sensitivity analysis.
+See [Suite Examples](suite_examples.md) for practical scenario configurations including exchange
+comparisons, date range testing, and parameter sensitivity analysis.
 
 Result directories stay under `optimize_results/`, but the coin portion of the folder
 name switches to `suite_{n}_coins` to make suite runs easy to locate.

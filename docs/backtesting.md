@@ -47,6 +47,9 @@ Standalone runs write metrics and plots to `backtests/{exchange}/timestamp/`. Su
 - `--scenarios label1,label2,...` to run only specific scenarios by label (implies `--suite y`).
 - `--suite-config path/to/overrides.json` to merge an additional suite definition onto the base config. Useful when you want to keep suite definitions outside the main config file.
 
+The canonical default profile keeps `backtest.suite_enabled = false`. A normal backtest run is
+therefore a single run unless you explicitly enable suite mode in the config or via `--suite`.
+
 For a comprehensive list of CLI args:
 ```shell
 passivbot backtest -h
@@ -65,6 +68,10 @@ Suite mode evaluates multiple scenario slices in one invocation. Configuration u
   ...
 }
 ```
+
+Suite mode is off by default in the hardcoded schema and in
+`configs/examples/default_trailing_grid_long_npos10.json`. Enable it only when you deliberately
+want multi-scenario evaluation.
 
 Each scenario may override:
 
@@ -90,7 +97,8 @@ backtests/suite_runs/<timestamp>/<scenario_label>/
 Every suite also receives a `suite_summary.json` containing per-scenario metrics and the aggregated statistics defined in `backtest.aggregate`.
 Each scenario's entry exposes `metrics.stats[metric] = {mean,min,max,std}` so you can inspect exchange-combined performance without digging through `analysis.json` files.
 
-See [Suite Examples](suite_examples.md) for comprehensive examples including exchange comparisons, date range scenarios, long-only/short-only configurations, and parameter sensitivity testing.
+See [Suite Examples](suite_examples.md) for practical configurations including exchange
+comparisons, date range scenarios, and parameter sensitivity testing.
 
 ### Data Strategy
 

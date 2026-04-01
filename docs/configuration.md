@@ -42,7 +42,7 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 
 Suite configuration uses a flattened structure directly under `backtest`:
 
-- **backtest.suite_enabled**: Master switch for suite runs (`--suite [y/n]` overrides it at runtime).
+- **backtest.suite_enabled**: Master switch for suite runs (`--suite [y/n]` overrides it at runtime). Default `false` in the canonical schema and example config.
 - **backtest.scenarios**: List of scenario dicts. Supported per-scenario keys:
   - `label`: Directory name under `backtests/suite_runs/<timestamp>/`.
   - `start_date`, `end_date`: Override the global date window.
@@ -52,7 +52,7 @@ Suite configuration uses a flattened structure directly under `backtest`:
   - `overrides`: Arbitrary config path overrides (e.g., `{"bot.long.total_wallet_exposure_limit": 2}`).
 - **backtest.aggregate**: Dict of metric-specific aggregation modes (default `mean`). Keys fall back to the `default` entry if unspecified.
 
-See `docs/suite_examples.md` for comprehensive examples and use cases.
+See [Suite Examples](suite_examples.md) for practical examples and suggested usage.
 
 Example per-metric aggregation:
 
