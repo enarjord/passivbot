@@ -32,7 +32,9 @@ Or
 ```shell
 passivbot backtest path/to/config.json
 ```
-If no config is specified, backtesting starts from the in-code schema defaults in `src/config/schema.py`
+If no config is specified, backtesting starts from the in-code schema defaults in `src/config/schema.py`.
+The example config `configs/examples/default_trailing_grid_long_npos10.json` mirrors those defaults exactly.
+See [Config Workflow](config_workflow.md) for the recommended way to copy and customize configs.
 
 ## Backtest Results
 

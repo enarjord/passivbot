@@ -2,6 +2,10 @@
 
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
+The canonical defaults live in `src/config/schema.py`. The example config
+`configs/examples/default_trailing_grid_long_npos10.json` mirrors those defaults exactly. For the
+recommended config workflow, see [Config Workflow](config_workflow.md).
+
 Optimization requires the full install profile:
 
 ```bash
@@ -21,7 +25,7 @@ passivbot optimize [path/to/config.json]
 
 Example:
 ```bash
-passivbot optimize configs/examples/forager_long_only.json --start configs/starting_pool/
+passivbot optimize configs/examples/default_trailing_grid_long_npos10.json --start configs/starting_pool/
 ```
 
 Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
@@ -227,7 +231,7 @@ keys to keep tunable; all other bounds are locked to their current config values
 the run starts.
 
 ```bash
-passivbot optimize configs/examples/forager_long_only.json \
+passivbot optimize configs/examples/default_trailing_grid_long_npos10.json \
   --fine_tune_params long_entry_grid_spacing_pct,long_entry_initial_qty_pct
 ```
 
