@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
-from config_utils import CURRENCY_METRICS, SHARED_METRICS
+from config.metrics import CURRENCY_METRICS, SHARED_METRICS
 from utils import trim_analysis_aliases
 
 

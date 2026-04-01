@@ -30,12 +30,11 @@ from dateutil import parser
 from tqdm import tqdm
 from cli_utils import get_cli_prog
 from config import load_input_config, prepare_config
+from config.access import require_config_value, require_live_value
+from config.schema import get_template_config
 from config_utils import (
     add_config_arguments,
-    get_template_config,
     update_config_with_args,
-    require_config_value,
-    require_live_value,
 )
 from pure_funcs import (
     safe_filename,

@@ -43,7 +43,18 @@ from passivbot_exceptions import RestartBotException
 import passivbot_hsl as pb_hsl
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
-from config import load_input_config, prepare_config
+from config import get_template_config, load_input_config, prepare_config
+from config.access import (
+    get_optional_config_value,
+    get_optional_live_value,
+    require_config_value,
+    require_live_value,
+)
+from config.coerce import (
+    normalize_hsl_cooldown_position_policy,
+    normalize_hsl_signal_mode,
+)
+from config.overrides import parse_overrides
 from logging_setup import (
     configure_logging,
     get_last_log_activity_monotonic,
@@ -60,6 +71,7 @@ from utils import (
     filter_markets,
     to_ccxt_exchange_id,
     coin_symbol_warning_counts,
+    normalize_coins_source,
 )
 from prettytable import PrettyTable
 from uuid import uuid4
@@ -80,17 +92,8 @@ except Exception:
 from config_utils import (
     add_config_arguments,
     update_config_with_args,
-    get_optional_config_value,
-    get_optional_live_value,
-    normalize_coins_source,
     expand_PB_mode,
-    get_template_config,
-    parse_overrides,
-    require_config_value,
-    require_live_value,
     merge_negative_cli_values,
-    normalize_hsl_cooldown_position_policy,
-    normalize_hsl_signal_mode,
 )
 from procedures import (
     load_broker_code,

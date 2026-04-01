@@ -43,22 +43,24 @@ from cli_utils import (
     get_cli_prog,
     help_all_requested,
 )
-from config import load_input_config, load_prepared_config, prepare_config
+from config import (
+    compile_runtime_config,
+    get_template_config,
+    load_input_config,
+    load_prepared_config,
+    prepare_config,
+)
+from config.access import get_optional_config_value, require_config_value, require_live_value
+from config.coerce import normalize_hsl_signal_mode
+from config.overrides import parse_overrides
 from config_utils import (
     dump_config,
     add_config_arguments,
     update_config_with_args,
     recursive_config_update,
     format_config,
-    get_template_config,
-    parse_overrides,
-    compile_runtime_config,
-    require_config_value,
-    require_live_value,
-    get_optional_config_value,
     strip_config_metadata,
     HSL_PSIDE_KEYS,
-    normalize_hsl_signal_mode,
 )
 from utils import (
     utc_ms,

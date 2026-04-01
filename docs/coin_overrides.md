@@ -10,7 +10,7 @@ Allowed fields are intentionally limited:
 
 - **Bot params** (per side): grid spacing, double-down factors, EMA spans, initial qty/EMA dist,
   trailing/unstuck settings, wallet exposure limits, selected risk knobs (see the allowlist in
-  `config_utils.get_allowed_modifications` for the full set).
+  `src/config/overrides.py:get_allowed_modifications()` for the full set).
 - **Live flags**: `forced_mode_long`, `forced_mode_short`, `leverage`.
 
 Not overrideable: approved/ignored coins, exchange settings, arbitrary new keys—anything outside the

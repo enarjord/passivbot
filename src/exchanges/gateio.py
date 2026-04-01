@@ -2,7 +2,7 @@ from exchanges.ccxt_bot import CCXTBot
 from passivbot import logging
 
 from utils import ts_to_date, utc_ms
-from config_utils import require_live_value
+from config.access import require_live_value
 
 
 class GateIOBot(CCXTBot):

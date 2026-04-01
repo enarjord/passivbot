@@ -1,7 +1,7 @@
 import math
 from typing import Iterator, Tuple
 
-from config_utils import require_config_value, require_live_value
+from config.access import require_config_value, require_live_value
 
 
 def _to_float(value) -> float:

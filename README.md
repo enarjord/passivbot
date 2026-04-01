@@ -201,7 +201,7 @@ Useful entry points:
 ## Third Party Links, Referrals and Tip Jar
 
 **Hyperliquid Reference Vault**
-Passivbot's default template config running on a Hyperliquid Vault:  
+Passivbot's reference long-only config profile running on a Hyperliquid Vault:  
 https://app.hyperliquid.xyz/vaults/0x490af7d4a048a81db0f677517ed6373565b42349
 
 **Passivbot GUI**

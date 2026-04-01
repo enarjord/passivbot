@@ -64,7 +64,7 @@ class ProgressTracker:
         _pct_log("info", 100, f"{self.context} done {self.processed}/{self.total} in {elapsed}s")
 
 
-from config_utils import require_config_value, require_live_value
+from config.access import require_config_value, require_live_value
 from ohlcv_utils import dump_ohlcv_data, get_days_in_between, load_ohlcv_data
 from procedures import get_first_timestamps_unified
 from utils import (

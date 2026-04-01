@@ -36,12 +36,9 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.append(str(SRC_ROOT))
 
 from backtest import prepare_hlcvs_mss, run_backtest  # noqa: E402
-from config_utils import (  # noqa: E402
-    parse_overrides,
-    require_config_value,
-    get_optional_config_value,
-    normalize_limit_entries,
-)
+from config.access import get_optional_config_value, require_config_value  # noqa: E402
+from config.limits import normalize_limit_entries  # noqa: E402
+from config.overrides import parse_overrides  # noqa: E402
 from logging_setup import configure_logging, resolve_log_level  # noqa: E402
 from pure_funcs import calc_hash, denumpyize  # noqa: E402
 from utils import (  # noqa: E402

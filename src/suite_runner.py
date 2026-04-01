@@ -19,12 +19,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from config import load_prepared_config
-
-from config_utils import (
-    parse_overrides,
-    require_config_value,
-    require_live_value,
-)
+from config.access import require_config_value, require_live_value
+from config.overrides import parse_overrides
 from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
 from utils import (

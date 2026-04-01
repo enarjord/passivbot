@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 from config import load_prepared_config
-from config_utils import parse_overrides, require_config_value
+from config.access import require_config_value
+from config.overrides import parse_overrides
 from logging_setup import configure_logging, resolve_log_level
 from rust_utils import collect_runtime_provenance, sha256_file
 from suite_runner import extract_suite_config

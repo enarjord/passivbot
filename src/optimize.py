@@ -68,19 +68,18 @@ from cli_utils import (
     help_all_requested,
 )
 from config import load_input_config, load_prepared_config, prepare_config
+from config.access import get_optional_config_value, require_config_value
+from config.bot import normalize_forager_score_weights
+from config.parse import load_raw_config as load_hjson_config
+from config.schema import get_template_config
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from config_utils import (
-    get_template_config,
-    load_hjson_config,
     format_bot_config,
     add_config_arguments,
     update_config_with_args,
     recursive_config_update,
-    require_config_value,
     merge_negative_cli_values,
     strip_config_metadata,
-    get_optional_config_value,
-    normalize_forager_score_weights,
 )
 from pure_funcs import (
     denumpyize,

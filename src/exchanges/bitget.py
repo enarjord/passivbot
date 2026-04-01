@@ -5,7 +5,7 @@ import json
 import os
 from typing import Dict, List, Tuple
 from utils import utc_ms, ts_to_date
-from config_utils import require_live_value
+from config.access import require_live_value
 from pure_funcs import calc_hash
 import passivbot_rust as pbr
 

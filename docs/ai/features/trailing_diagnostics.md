@@ -35,7 +35,7 @@ Implemented now:
 
 1. Exact recomputation needs more than the current trailing payload; it also needs market metadata such as `qty_step`, `price_step`, `min_qty`, `min_cost`, `c_mult`, EMA bands, and the active `h1` log-range EMA.
 2. The monitor snapshot now includes `market[*].c_mult` and `market[*].entry_volatility_logrange_ema` so the tool can seed exact diagnostics from live monitor output.
-3. The tool uses formatted config values from `load_config()`. It does not instantiate a live `Passivbot`.
+3. The tool loads canonical config through the staged loader (`load_prepared_config(..., live_only=True, target="canonical")`). It does not instantiate a live `Passivbot`.
 4. Manual mode exists because historical snapshots or offline experiments may not have all required fields.
 5. The wizard asks for the core trailing inputs first and only prompts for the extra sizing/grid parameters when the user opts into advanced mode.
 

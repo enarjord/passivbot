@@ -4,7 +4,7 @@ import passivbot_rust as pbr
 
 import asyncio
 from utils import ts_to_date, utc_ms
-from config_utils import require_live_value
+from config.access import require_live_value
 
 calc_order_price_diff = pbr.calc_order_price_diff
 

@@ -5,7 +5,7 @@ import asyncio
 import ccxt
 from collections import defaultdict
 from utils import ts_to_date, utc_ms
-from config_utils import require_live_value
+from config.access import require_live_value
 from pure_funcs import (
     floatify,
     calc_hash,

@@ -6,7 +6,7 @@ import random
 from utils import ts_to_date, utc_ms
 from pure_funcs import flatten
 from procedures import load_broker_code
-from config_utils import require_live_value
+from config.access import require_live_value
 
 
 class BinanceBot(CCXTBot):

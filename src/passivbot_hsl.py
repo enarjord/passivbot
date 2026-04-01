@@ -11,11 +11,13 @@ from typing import Any, Optional
 
 import passivbot_rust as pbr
 
-from config_utils import (
+from config.access import (
     get_optional_live_value,
+    require_live_value,
+)
+from config.coerce import (
     normalize_hsl_cooldown_position_policy,
     normalize_hsl_signal_mode,
-    require_live_value,
 )
 from passivbot_exceptions import RestartBotException
 from utils import make_get_filepath

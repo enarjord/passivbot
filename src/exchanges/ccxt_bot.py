@@ -40,7 +40,7 @@ from passivbot import Passivbot, logging, custom_id_to_snake
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 from procedures import assert_correct_ccxt_version
-from config_utils import get_optional_live_value, require_live_value
+from config.access import get_optional_live_value, require_live_value
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 

@@ -24,7 +24,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.append(str(SRC_ROOT))
 
 from opt_utils import load_results
-from config_utils import normalize_limit_entries
+from config.limits import normalize_limit_entries
 
 
 def discover_runs(root: str) -> List[str]:

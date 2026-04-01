@@ -7,7 +7,7 @@ optimization-specific bounds logic.
 
 from typing import List, Tuple
 
-from config_utils import get_template_config
+from config.schema import get_template_config
 from optimization.bounds import Bound
 
 OPTIMIZABLE_BOT_KEY_PATHS = {
