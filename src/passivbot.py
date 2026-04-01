@@ -552,7 +552,6 @@ class Passivbot:
         self._last_plan_detail: dict[str, tuple[int, int, int]] = {}
         self._last_action_summary: dict[tuple[str, str], str] = {}
         self.start_time_ms = utc_ms()
-        self.utc_offset = 0
         self._bot_ready = False
         self._monitor_last_equity = float(self.balance_raw)
         self._monitor_stop_emitted = False
@@ -2185,7 +2184,6 @@ class Passivbot:
         self.markets_dict = await load_markets(
             self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote
         )
-        await self.determine_utc_offset(verbose)
         # ineligible symbols cannot open new positions
         eligible, _, reasons = filter_markets(
             self.markets_dict, self.exchange, quote=self.quote, verbose=verbose
@@ -5417,12 +5415,6 @@ class Passivbot:
             print_async_exception(res)
             traceback.print_exc()
             return False
-
-    async def determine_utc_offset(self, verbose=True):
-        """Use direct UTC epoch milliseconds for exchange time calculations."""
-        self.utc_offset = 0
-        if verbose:
-            logging.info("Exchange time uses direct UTC epoch milliseconds (no offset applied)")
 
     def get_exchange_time(self):
         """Return current exchange time in milliseconds."""

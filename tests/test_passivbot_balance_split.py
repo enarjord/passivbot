@@ -28,20 +28,9 @@ def test_get_exchange_time_uses_direct_utc_ms(monkeypatch):
     import passivbot as pb_mod
 
     bot = Passivbot.__new__(Passivbot)
-    bot.utc_offset = 3_600_000
     monkeypatch.setattr(pb_mod, "utc_ms", lambda: 123_456.0)
 
     assert bot.get_exchange_time() == pytest.approx(123_456.0)
-
-
-@pytest.mark.asyncio
-async def test_determine_utc_offset_is_noop_and_resets_to_zero():
-    bot = Passivbot.__new__(Passivbot)
-    bot.utc_offset = 3_600_000
-
-    await bot.determine_utc_offset(verbose=False)
-
-    assert bot.utc_offset == 0
 
 
 @pytest.mark.asyncio

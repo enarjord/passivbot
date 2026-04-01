@@ -103,9 +103,6 @@ class BitgetBot(CCXTBot):
         self.symbol_ids[symbol] = symbol
         return symbol
 
-    async def determine_utc_offset(self, verbose=True):
-        await super().determine_utc_offset(verbose=verbose)
-
     def set_market_specific_settings(self):
         """Bitget override: higher minimum cost floor (5.1 USDT)."""
         super().set_market_specific_settings()

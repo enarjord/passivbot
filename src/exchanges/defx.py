@@ -127,9 +127,6 @@ class DefxBot(CCXTBot):
         """Defx uses one-way mode; no hedge mode configuration needed."""
         pass
 
-    async def determine_utc_offset(self, verbose=True):
-        await super().determine_utc_offset(verbose=verbose)
-
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_leverage = {}
         for symbol in symbols:

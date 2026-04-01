@@ -339,7 +339,6 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.user = cfg["live"]["user"]
             self.user_info = {"exchange": "test_exchange"}
             self.exchange = self.user_info["exchange"]
-            self.utc_offset = 0
             self.broker_code = ""
             self.custom_id_max_length = 36
             self.sym_padding = 17

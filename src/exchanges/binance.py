@@ -392,9 +392,6 @@ class BinanceBot(CCXTBot):
             else:
                 logging.error("[config] error setting hedge mode: %s", e)
 
-    async def determine_utc_offset(self, verbose=True):
-        await super().determine_utc_offset(verbose=verbose)
-
     def format_custom_id_single(self, order_type_id: int) -> str:
         formatted = super().format_custom_id_single(order_type_id)
         return ("x-" + self.broker_code + formatted)[: self.custom_id_max_length]

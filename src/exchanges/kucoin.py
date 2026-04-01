@@ -437,9 +437,6 @@ class KucoinBot(CCXTBot):
         except (KeyError, TypeError, AttributeError):
             return False
 
-    async def determine_utc_offset(self, verbose=True):
-        await super().determine_utc_offset(verbose=verbose)
-
     async def update_exchange_config(self):
         """Ensure account-level settings (hedge mode) are applied."""
         try:

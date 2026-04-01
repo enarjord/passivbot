@@ -43,9 +43,6 @@ class GateIOBot(CCXTBot):
 
     # ═══════════════════ GATEIO-SPECIFIC METHODS ═══════════════════
 
-    async def determine_utc_offset(self, verbose=True):
-        await super().determine_utc_offset(verbose=verbose)
-
     async def fetch_balance(self) -> float:
         """GateIO: Fetch balance with special UID logic for websockets.
 

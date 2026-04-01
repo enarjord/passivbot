@@ -273,12 +273,6 @@ class CCXTBot(Passivbot):
         else:
             logging.info(f"{self.exchange}: watchOrders not supported in CCXT, using REST polling")
 
-    async def determine_utc_offset(self, verbose=True):
-        """Use direct UTC epoch milliseconds for exchange time calculations."""
-        self.utc_offset = 0
-        if verbose:
-            logging.info("Exchange time uses direct UTC epoch milliseconds (no offset applied)")
-
     async def fetch_balance(self) -> float:
         """Template method: Fetch account balance for quote currency.
 
