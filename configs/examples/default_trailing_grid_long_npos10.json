@@ -339,7 +339,7 @@
             {"enabled": false, "metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.8},
             {"enabled": false, "metric": "drawdown_worst_mean_1pct_hsl", "penalize_if": "greater_than", "value": 0.6},
             {"enabled": false, "metric": "loss_profit_ratio", "penalize_if": "greater_than", "value": 0.85},
-            {"enabled": false, "metric": "backtest_completion_ratio", "penalize_if": "less_than", "value": 0.9},
+            {"enabled": true, "metric": "backtest_completion_ratio", "penalize_if": "less_than", "value": 0.99},
             {"enabled": false, "metric": "high_exposure_hours_max_long", "penalize_if": "greater_than", "value": 2160},
             {"enabled": false, "metric": "position_held_hours_max", "penalize_if": "greater_than", "value": 2160},
             {"enabled": false, "metric": "peak_recovery_hours_hsl", "penalize_if": "greater_than", "value": 2160},
