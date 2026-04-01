@@ -76,7 +76,7 @@
   function fmtTs(tsMs) {
     if (!tsMs) return "-";
     try {
-      return new Date(Number(tsMs)).toLocaleString();
+      return new Date(Number(tsMs)).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "Z");
     } catch {
       return String(tsMs);
     }
@@ -85,11 +85,7 @@
   function fmtShortTs(tsMs) {
     if (!tsMs) return "-";
     try {
-      return new Date(Number(tsMs)).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      });
+      return new Date(Number(tsMs)).toISOString().slice(11, 19) + "Z";
     } catch {
       return String(tsMs);
     }

@@ -11,7 +11,7 @@ import tty
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
@@ -75,10 +75,10 @@ def _fmt_ts_ms(value: Any) -> str:
     if value is None:
         return "-"
     try:
-        dt = datetime.fromtimestamp(float(value) / 1000.0).astimezone()
+        dt = datetime.fromtimestamp(float(value) / 1000.0, tz=timezone.utc)
     except (TypeError, ValueError, OSError):
         return str(value)
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return dt.strftime("%Y-%m-%d %H:%M:%SZ")
 
 
 def _fmt_age_ms(ts_ms: Any) -> str:
@@ -1026,7 +1026,7 @@ def execute_tui_command(
     if lowered == "dump":
         base_dir = Path(dump_dir)
         base_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
         path = base_dir / f"monitor_tui_dump_{ts}.txt"
         screen = state.last_rendered_screen or render_screen(
             state, display_data=state.paused_render_data

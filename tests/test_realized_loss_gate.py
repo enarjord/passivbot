@@ -25,9 +25,24 @@ def _make_bot_with_events(events, balance=10000.0):
     """Return a Passivbot instance with a mocked FillEventsManager."""
     bot = object.__new__(Passivbot)
     bot._pnls_manager = MagicMock()
-    bot._pnls_manager.get_events.return_value = events
+    def _get_events(start_ms=None, end_ms=None, symbol=None):
+        out = list(events)
+        if start_ms is not None:
+            out = [ev for ev in out if getattr(ev, "timestamp", 0.0) >= start_ms]
+        if end_ms is not None:
+            out = [ev for ev in out if getattr(ev, "timestamp", 0.0) <= end_ms]
+        if symbol is not None:
+            out = [ev for ev in out if getattr(ev, "symbol", None) == symbol]
+        return out
+
+    bot._pnls_manager.get_events.side_effect = _get_events
     bot.balance = balance
     return bot
+
+
+def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
+    bot.config = {"live": {"pnls_max_lookback_days": float(lookback_days)}}
+    bot.get_exchange_time = lambda: now_ms
 
 
 def _make_bot_for_logging():
@@ -80,6 +95,37 @@ class TestGetRealizedPnlCumsumStats:
         result = bot._get_realized_pnl_cumsum_stats()
         assert result["max"] == pytest.approx(-10.0)
         assert result["last"] == pytest.approx(-30.0)
+
+    def test_uses_only_events_inside_configured_lookback_window(self):
+        now_ms = 10 * 86_400_000
+        events = [
+            _make_fill_event(100.0, timestamp=now_ms - 3 * 86_400_000),
+            _make_fill_event(-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
+            _make_fill_event(10.0, timestamp=now_ms - 60_000),
+            _make_fill_event(-5.0, timestamp=now_ms - 30_000),
+        ]
+        bot = _make_bot_with_events(events)
+        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+        result = bot._get_realized_pnl_cumsum_stats()
+
+        assert result["max"] == pytest.approx(10.0)
+        assert result["last"] == pytest.approx(5.0)
+
+    def test_zero_lookback_uses_full_history_like_backtest(self):
+        now_ms = 10 * 86_400_000
+        events = [
+            _make_fill_event(100.0, timestamp=now_ms - 3 * 86_400_000),
+            _make_fill_event(-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
+            _make_fill_event(10.0, timestamp=now_ms - 60_000),
+        ]
+        bot = _make_bot_with_events(events)
+        _set_pnl_lookback(bot, lookback_days=0.0, now_ms=now_ms)
+
+        result = bot._get_realized_pnl_cumsum_stats()
+
+        assert result["max"] == pytest.approx(100.0)
+        assert result["last"] == pytest.approx(30.0)
 
 
 # ---------------------------------------------------------------------------

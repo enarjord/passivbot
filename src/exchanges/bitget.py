@@ -104,16 +104,7 @@ class BitgetBot(CCXTBot):
         return symbol
 
     async def determine_utc_offset(self, verbose=True):
-        # returns millis to add to utc to get exchange timestamp
-        # call some endpoint which includes timestamp for exchange's server
-        # if timestamp is not included in self.cca.fetch_balance(),
-        # implement method in exchange child class
-        result = await self.cca.fetch_ticker("BTC/USDT:USDT")
-        self.utc_offset = round((result["timestamp"] - utc_ms()) / (1000 * 60 * 60)) * (
-            1000 * 60 * 60
-        )
-        if verbose:
-            logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
+        await super().determine_utc_offset(verbose=verbose)
 
     def set_market_specific_settings(self):
         """Bitget override: higher minimum cost floor (5.1 USDT)."""

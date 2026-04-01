@@ -274,21 +274,10 @@ class CCXTBot(Passivbot):
             logging.info(f"{self.exchange}: watchOrders not supported in CCXT, using REST polling")
 
     async def determine_utc_offset(self, verbose=True):
-        """Derive the exchange server time offset using CCXT's fetch_time().
-
-        Overrides base class which expects fetch_balance() to return timestamp.
-        """
-        from utils import utc_ms
-
-        try:
-            server_time = await self.cca.fetch_time()
-            self.utc_offset = round((server_time - utc_ms()) / (1000 * 60 * 60)) * (1000 * 60 * 60)
-            if verbose:
-                logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
-        except Exception as e:
-            # Log once per session to avoid hourly noise (e.g., Hyperliquid doesn't support fetchTime)
-            self.log_once(f"Could not fetch server time: {e}, using 0 offset")
-            self.utc_offset = 0
+        """Use direct UTC epoch milliseconds for exchange time calculations."""
+        self.utc_offset = 0
+        if verbose:
+            logging.info("Exchange time uses direct UTC epoch milliseconds (no offset applied)")
 
     async def fetch_balance(self) -> float:
         """Template method: Fetch account balance for quote currency.

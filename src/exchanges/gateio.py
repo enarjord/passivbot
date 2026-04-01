@@ -44,13 +44,7 @@ class GateIOBot(CCXTBot):
     # ═══════════════════ GATEIO-SPECIFIC METHODS ═══════════════════
 
     async def determine_utc_offset(self, verbose=True):
-        # returns millis to add to utc to get exchange timestamp
-        # call some endpoint which includes timestamp for exchange's server
-        # GateIO uses fetch_ohlcv for this
-        result = await self.cca.fetch_ohlcv("BTC/USDT:USDT", timeframe="1m")
-        self.utc_offset = round((result[-1][0] - utc_ms()) / (1000 * 60 * 60)) * (1000 * 60 * 60)
-        if verbose:
-            logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
+        await super().determine_utc_offset(verbose=verbose)
 
     async def fetch_balance(self) -> float:
         """GateIO: Fetch balance with special UID logic for websockets.

@@ -552,6 +552,7 @@ class Passivbot:
         self._last_plan_detail: dict[str, tuple[int, int, int]] = {}
         self._last_action_summary: dict[tuple[str, str], str] = {}
         self.start_time_ms = utc_ms()
+        self.utc_offset = 0
         self._bot_ready = False
         self._monitor_last_equity = float(self.balance_raw)
         self._monitor_stop_emitted = False
@@ -1006,6 +1007,27 @@ class Passivbot:
             realized += float(getattr(event, "pnl", 0.0) or 0.0)
             realized += self._equity_hard_stop_fee_cost(event)
         return realized
+
+    def _pnls_lookback_start_ms(self) -> Optional[int]:
+        config = getattr(self, "config", None)
+        if config is None:
+            return None
+        lookback_days_raw = float(require_live_value(config, "pnls_max_lookback_days"))
+        if not math.isfinite(lookback_days_raw):
+            raise ValueError("live.pnls_max_lookback_days must be finite for pnl lookback logic")
+        lookback_days = max(0.0, lookback_days_raw)
+        if lookback_days == 0.0:
+            return None
+        lookback_ms = max(1, int(round(lookback_days * 86_400_000.0)))
+        return self.get_exchange_time() - lookback_ms
+
+    def _get_effective_pnl_events(self) -> list:
+        if self._pnls_manager is None:
+            return []
+        start_ms = self._pnls_lookback_start_ms()
+        if start_ms is None:
+            return self._pnls_manager.get_events()
+        return self._pnls_manager.get_events(start_ms=start_ms)
 
     def _equity_hard_stop_lookback_ms(self) -> int:
         lookback_days_raw = float(require_live_value(self.config, "pnls_max_lookback_days"))
@@ -1994,7 +2016,7 @@ class Passivbot:
         if self._pnls_manager is None:
             return {"status": "no_pnl_manager"}
 
-        events = self._pnls_manager.get_events()
+        events = self._get_effective_pnl_events()
         if not events:
             return {"status": "no_history"}
 
@@ -4779,7 +4801,7 @@ class Passivbot:
         if not allow_new_unstuck or self._pnls_manager is None:
             return {"long": 0.0, "short": 0.0}
 
-        events = self._pnls_manager.get_events()
+        events = self._get_effective_pnl_events()
         if not events:
             return {"long": 0.0, "short": 0.0}
 
@@ -4806,7 +4828,7 @@ class Passivbot:
         """Return gross realized pnl cumsum peak/current from FillEventsManager history."""
         if self._pnls_manager is None:
             return {"max": 0.0, "last": 0.0}
-        events = self._pnls_manager.get_events()
+        events = self._get_effective_pnl_events()
         if not events:
             return {"max": 0.0, "last": 0.0}
         pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
@@ -5397,17 +5419,14 @@ class Passivbot:
             return False
 
     async def determine_utc_offset(self, verbose=True):
-        """Derive the exchange server time offset in milliseconds."""
-        result = await self.cca.fetch_balance()
-        self.utc_offset = round((result["timestamp"] - utc_ms()) / (1000 * 60 * 60)) * (
-            1000 * 60 * 60
-        )
+        """Use direct UTC epoch milliseconds for exchange time calculations."""
+        self.utc_offset = 0
         if verbose:
-            logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
+            logging.info("Exchange time uses direct UTC epoch milliseconds (no offset applied)")
 
     def get_exchange_time(self):
         """Return current exchange time in milliseconds."""
-        return utc_ms() + self.utc_offset
+        return utc_ms()
 
     async def log_position_changes(self, positions_old, positions_new, rd=6):
         """Log position transitions for debugging when differences are detected."""

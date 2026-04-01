@@ -2,6 +2,7 @@ from pathlib import Path
 
 from monitor_tui import (
     MonitorTuiState,
+    _fmt_ts_ms,
     _render_screen_diff,
     execute_tui_command,
     render_screen,
@@ -337,6 +338,8 @@ def test_execute_tui_command_supports_pause_resume_and_dump(tmp_path: Path):
     assert "Dumped screen to" in state.command_status
     dumped = sorted(tmp_path.glob("monitor_tui_dump_*.txt"))
     assert len(dumped) == 1
+    assert dumped[0].name.startswith("monitor_tui_dump_")
+    assert dumped[0].stem.endswith("Z")
     assert dumped[0].read_text(encoding="utf-8") == "screen line one\nscreen line two\n"
 
     should_stop = execute_tui_command(state, "resume")
@@ -344,6 +347,10 @@ def test_execute_tui_command_supports_pause_resume_and_dump(tmp_path: Path):
     assert state.paused is False
     assert state.paused_render_data is None
     assert state.command_status == "Resumed monitor TUI."
+
+
+def test_monitor_tui_formats_timestamps_in_utc():
+    assert _fmt_ts_ms(0) == "1970-01-01 00:00:00Z"
 
 
 def test_monitor_tui_state_tracks_recent_log_lines():

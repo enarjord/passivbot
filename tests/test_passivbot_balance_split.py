@@ -19,6 +19,31 @@ sys.modules.setdefault(
 from passivbot import Passivbot
 
 
+def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
+    bot.config = {"live": {"pnls_max_lookback_days": float(lookback_days)}}
+    bot.get_exchange_time = lambda: now_ms
+
+
+def test_get_exchange_time_uses_direct_utc_ms(monkeypatch):
+    import passivbot as pb_mod
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.utc_offset = 3_600_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: 123_456.0)
+
+    assert bot.get_exchange_time() == pytest.approx(123_456.0)
+
+
+@pytest.mark.asyncio
+async def test_determine_utc_offset_is_noop_and_resets_to_zero():
+    bot = Passivbot.__new__(Passivbot)
+    bot.utc_offset = 3_600_000
+
+    await bot.determine_utc_offset(verbose=False)
+
+    assert bot.utc_offset == 0
+
+
 @pytest.mark.asyncio
 async def test_update_positions_only_updates_positions(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
@@ -322,6 +347,52 @@ def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     assert calls[0][0] == pytest.approx(200.0)  # raw balance
 
 
+def test_unstuck_allowance_uses_only_configured_pnl_lookback(monkeypatch):
+    import passivbot as pb_mod
+
+    now_ms = 10 * 86_400_000
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance_raw = 1000.0
+    bot.get_raw_balance = lambda: float(bot.balance_raw)
+    _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+    bot._pnls_manager = types.SimpleNamespace(
+        get_events=lambda start_ms=None, end_ms=None, symbol=None: [
+            ev
+            for ev in [
+                types.SimpleNamespace(pnl=100.0, timestamp=now_ms - 3 * 86_400_000),
+                types.SimpleNamespace(pnl=-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
+                types.SimpleNamespace(pnl=10.0, timestamp=now_ms - 60_000),
+            ]
+            if start_ms is None or ev.timestamp >= start_ms
+        ]
+    )
+
+    def bot_value(pside, key):
+        if key == "unstuck_loss_allowance_pct":
+            return 0.01 if pside == "long" else 0.0
+        if key == "total_wallet_exposure_limit":
+            return 1.0
+        return 0.0
+
+    bot.bot_value = bot_value
+
+    calls = []
+
+    def fake_calc_auto_unstuck_allowance(
+        balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last
+    ):
+        calls.append((balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last))
+        return 10.0
+
+    monkeypatch.setattr(pb_mod.pbr, "calc_auto_unstuck_allowance", fake_calc_auto_unstuck_allowance)
+
+    out = bot._calc_unstuck_allowances(allow_new_unstuck=True)
+
+    assert out["long"] == pytest.approx(10.0)
+    assert len(calls) == 1
+    assert calls[0] == pytest.approx((1000.0, 0.01, 10.0, 10.0))
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
     import passivbot as pb_mod
@@ -514,6 +585,41 @@ def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_
     assert info_b["status"] == "ok"
     assert info_a["peak"] == pytest.approx(200.0)
     assert info_b["peak"] == pytest.approx(200.0)
+
+
+def test_unstuck_logging_uses_only_configured_pnl_lookback():
+    now_ms = 10 * 86_400_000
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = 1000.0
+    bot.balance_raw = 1000.0
+    _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+    def bot_value(pside, key):
+        if key == "total_wallet_exposure_limit":
+            return 1.0
+        if key == "unstuck_loss_allowance_pct":
+            return 0.01
+        return 0.0
+
+    bot.bot_value = bot_value
+    bot._pnls_manager = types.SimpleNamespace(
+        get_events=lambda start_ms=None, end_ms=None, symbol=None: [
+            ev
+            for ev in [
+                types.SimpleNamespace(pnl=100.0, timestamp=now_ms - 3 * 86_400_000),
+                types.SimpleNamespace(pnl=-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
+                types.SimpleNamespace(pnl=10.0, timestamp=now_ms - 60_000),
+            ]
+            if start_ms is None or ev.timestamp >= start_ms
+        ]
+    )
+
+    info = bot._calc_unstuck_allowance_for_logging("long")
+
+    assert info["status"] == "ok"
+    assert info["peak"] == pytest.approx(1000.0)
+    assert info["pct_from_peak"] == pytest.approx(0.0)
+    assert info["allowance"] == pytest.approx(10.0)
 
 
 @pytest.mark.asyncio

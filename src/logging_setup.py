@@ -13,7 +13,7 @@ TRACE_LEVEL_NAME = "TRACE"
 
 DEFAULT_FORMAT = "%(asctime)s %(levelname)-8s %(message)s"
 DEFAULT_FORMAT_WITH_PREFIX = "%(asctime)s %(levelname)-8s [%(log_prefix)s] %(message)s"
-DEFAULT_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+DEFAULT_DATEFMT = "%Y-%m-%dT%H:%M:%SZ"
 _LAST_LOG_ACTIVITY_MONOTONIC = time.monotonic()
 
 
@@ -156,6 +156,7 @@ def configure_logging(
         fmt = DEFAULT_FORMAT_WITH_PREFIX if prefix else DEFAULT_FORMAT
 
     formatter = logging.Formatter(fmt=fmt, datefmt=datefmt)
+    formatter.converter = time.gmtime
     handlers: list[logging.Handler] = []
 
     # Create prefix filter if needed
