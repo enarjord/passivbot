@@ -9,10 +9,12 @@ from .hydrate import (
     seed_missing_compatibility_sections,
     sync_with_template,
 )
+from .coerce import normalize_validation_fields
 from .migrations import apply_migrations, build_base_config_from_flavor, detect_flavor
 from .schema import get_template_config
 from .transform_log import ConfigTransformTracker, record_transform
-from .validate import normalize_validation_fields, require_config_dict, validate_config
+from .access import require_config_dict
+from .validate import validate_config
 
 
 def normalize_config(

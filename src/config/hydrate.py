@@ -4,7 +4,11 @@ from typing import Any, Dict, Iterable, Optional
 
 from utils import format_end_date, normalize_coins_source, symbol_to_coin
 
+from .limits import _resolve_optimize_limits_for_load
+from .log_output import log_config_message
+from .metrics import canonicalize_metric_name
 from .schema import get_template_config
+from .tree_ops import add_missing_keys_recursively, remove_unused_keys_recursively
 
 
 Path = tuple[str, ...]
@@ -21,55 +25,6 @@ TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
     *tuple(PARTIALLY_OPEN_CONFIG_PATHS),
 )
 
-
-def _log_config(verbose: bool, level: int, message: str, *args) -> None:
-    from config_utils import _log_config as legacy_log_config
-
-    legacy_log_config(verbose, level, message, *args)
-
-
-def _add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=None):
-    from config_utils import add_missing_keys_recursively
-
-    add_missing_keys_recursively(src, dst, parent=parent, verbose=verbose, tracker=tracker)
-
-
-def _remove_unused_keys_recursively(
-    src,
-    dst,
-    parent=None,
-    verbose=True,
-    preserve: Optional[Iterable[Iterable[str]]] = None,
-    tracker=None,
-):
-    from config_utils import remove_unused_keys_recursively
-
-    remove_unused_keys_recursively(
-        src,
-        dst,
-        parent=parent,
-        verbose=verbose,
-        preserve=preserve,
-        tracker=tracker,
-    )
-
-
-def _canonicalize_metric_name(metric: str) -> str:
-    from config_utils import canonicalize_metric_name
-
-    return canonicalize_metric_name(metric)
-
-
-def _resolve_optimize_limits_for_load(*, raw_optimize_limits, raw_optimize_limits_present, template_limits):
-    from config_utils import _resolve_optimize_limits_for_load as legacy_resolve
-
-    return legacy_resolve(
-        raw_optimize_limits=raw_optimize_limits,
-        raw_optimize_limits_present=raw_optimize_limits_present,
-        template_limits=template_limits,
-    )
-
-
 def hydrate_missing_template_fields(
     template: dict,
     result: dict,
@@ -77,7 +32,7 @@ def hydrate_missing_template_fields(
     verbose: bool = True,
     tracker=None,
 ) -> None:
-    _add_missing_keys_recursively(template, result, verbose=verbose, tracker=tracker)
+    add_missing_keys_recursively(template, result, verbose=verbose, tracker=tracker)
 
 
 def seed_missing_compatibility_sections(template: dict, result: dict, *, tracker=None) -> None:
@@ -118,15 +73,15 @@ def sync_with_template(
         for key in result.get("optimize", {}).get("bounds", {})
         if isinstance(key, str) and key.startswith("live_")
     ]
-    _remove_unused_keys_recursively(
+    remove_unused_keys_recursively(
         template_with_extras,
         result,
         verbose=verbose,
         preserve=TEMPLATE_SYNC_PRESERVE_PATHS + tuple(preserved_live_optimize_bounds),
         tracker=tracker,
     )
-    _remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose, tracker=tracker)
-    _remove_unused_keys_recursively(
+    remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose, tracker=tracker)
+    remove_unused_keys_recursively(
         template["optimize"]["bounds"],
         result["optimize"]["bounds"],
         verbose=verbose,
@@ -137,7 +92,7 @@ def sync_with_template(
         ],
         tracker=tracker,
     )
-    _remove_unused_keys_recursively(
+    remove_unused_keys_recursively(
         template.get("optimize", {}).get("limits", []),
         result["optimize"].setdefault("limits", []),
         verbose=verbose,
@@ -204,7 +159,7 @@ def apply_non_live_adjustments(
     canonical_scoring = []
     seen = set()
     for metric in result["optimize"].get("scoring", []):
-        canon = _canonicalize_metric_name(metric)
+        canon = canonicalize_metric_name(metric)
         if canon not in seen:
             canonical_scoring.append(canon)
             seen.add(canon)
@@ -242,7 +197,7 @@ def apply_non_live_adjustments(
     )
     result["optimize"]["limits"] = resolved_limits
     if resolution == "normalized_legacy":
-        _log_config(
+        log_config_message(
             verbose,
             logging.INFO,
             "normalized optimize.limits to canonical schema (%d entries)",
@@ -251,7 +206,7 @@ def apply_non_live_adjustments(
         if tracker is not None:
             tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
     elif resolution == "fallback_template":
-        _log_config(
+        log_config_message(
             verbose,
             logging.WARNING,
             "optimize.limits malformed or unsupported; falling back to template defaults (%d entries)",

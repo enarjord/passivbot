@@ -3,9 +3,13 @@ import math
 from copy import deepcopy
 from typing import Optional
 
+from pure_funcs import sort_dict_keys
+
+from .log_output import log_config_message
 from .migrations import apply_backward_compatibility_renames
 from .schema import get_template_config
-from .validate import require_config_dict
+from .access import require_config_dict
+from .tree_ops import add_missing_keys_recursively
 
 
 BOT_POSITION_SIDES = ("long", "short")
@@ -24,25 +28,6 @@ FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
     "short_forager_volume_ema_span": "short_filter_volume_ema_span",
     "short_forager_volume_drop_pct": "short_filter_volume_drop_pct",
 }
-
-
-def _log_config(verbose: bool, level: int, message: str, *args) -> None:
-    from config_utils import _log_config as legacy_log_config
-
-    legacy_log_config(verbose, level, message, *args)
-
-
-def _add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=None):
-    from config_utils import add_missing_keys_recursively
-
-    add_missing_keys_recursively(src, dst, parent=parent, verbose=verbose, tracker=tracker)
-
-
-def _sort_dict_keys(config: dict) -> dict:
-    from pure_funcs import sort_dict_keys
-
-    return sort_dict_keys(config)
-
 
 def ensure_bot_defaults(
     result: dict, *, verbose: bool = True, tracker: Optional[object] = None
@@ -96,7 +81,7 @@ def ensure_bot_defaults(
         ]:
             if key not in result["bot"][pside]:
                 result["bot"][pside][key] = default_value
-                _log_config(
+                log_config_message(
                     verbose,
                     logging.INFO,
                     "adding missing backtest parameter %s %s: %s",
@@ -109,7 +94,7 @@ def ensure_bot_defaults(
         if "forager_score_weights" not in result["bot"][pside]:
             weights = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
             result["bot"][pside]["forager_score_weights"] = weights
-            _log_config(
+            log_config_message(
                 verbose,
                 logging.INFO,
                 "adding missing backtest parameter %s forager_score_weights: %s",
@@ -137,7 +122,7 @@ def ensure_optimize_bounds_for_bot(
             opt_key = f"{pside}_{key}"
             if opt_key not in bounds:
                 bounds[opt_key] = default_value
-                _log_config(
+                log_config_message(
                     verbose,
                     logging.INFO,
                     "adding missing optimize parameter %s %s: %s",
@@ -156,7 +141,7 @@ def ensure_optimize_bounds_for_bot(
             opt_key = f"{pside}_forager_score_weights_{weight_key}"
             if opt_key not in bounds:
                 bounds[opt_key] = [0.0, 1.0]
-                _log_config(
+                log_config_message(
                     verbose,
                     logging.INFO,
                     "adding missing optimize parameter %s %s: %s",
@@ -231,14 +216,14 @@ def normalize_bot_forager_config(
                         raw_total = math.nan
                         break
             if raw_total <= 0.0:
-                _log_config(
+                log_config_message(
                     verbose,
                     logging.INFO,
                     "normalizing bot.%s.forager_score_weights all-zero vector to volume-only",
                     pside,
                 )
             else:
-                _log_config(
+                log_config_message(
                     verbose,
                     logging.INFO,
                     "normalizing bot.%s.forager_score_weights to relative unit-sum weights: %s",
@@ -331,7 +316,7 @@ def format_bot_config(
         require_config_dict(result, path)
     apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
     ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
-    _add_missing_keys_recursively(
+    add_missing_keys_recursively(
         template["bot"],
         result["bot"],
         parent=["bot"],
@@ -340,7 +325,7 @@ def format_bot_config(
     )
     normalize_bot_forager_config(result, verbose=verbose, tracker=tracker)
     normalize_position_counts(result, tracker=tracker)
-    return _sort_dict_keys(result["bot"])
+    return sort_dict_keys(result["bot"])
 
 
 def apply_forager_internal_aliases(result: dict) -> None:

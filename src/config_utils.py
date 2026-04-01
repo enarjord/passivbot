@@ -1,19 +1,53 @@
 import argparse
-import json
 import logging
-import math
 import os
 import re
 from copy import deepcopy
 from typing import Any, Dict, Tuple, List, Union, Optional, Iterable
 
+from config.access import (
+    get_optional_config_value,
+    get_optional_live_value,
+    require_config_dict,
+    require_config_value,
+    require_live_value,
+)
+from config.bot import (
+    ensure_bot_defaults as staged_ensure_bot_defaults,
+    ensure_optimize_bounds_for_bot as staged_ensure_optimize_bounds_for_bot,
+    format_bot_config as staged_format_bot_config,
+    normalize_position_counts as staged_normalize_position_counts,
+)
+from config.coerce import (
+    HSL_COOLDOWN_POSITION_POLICIES,
+    HSL_SIGNAL_MODES,
+    MONITOR_BOOL_KEYS,
+    PYMOO_ALGORITHMS,
+    PYMOO_REF_DIR_METHODS,
+    normalize_hsl_cooldown_position_policy,
+    normalize_hsl_signal_mode,
+)
+from config.hydrate import (
+    PARTIALLY_OPEN_CONFIG_PATHS,
+    TEMPLATE_SYNC_PRESERVE_PATHS,
+    apply_non_live_adjustments as staged_apply_non_live_adjustments,
+    hydrate_missing_template_fields as staged_hydrate_missing_template_fields,
+    sync_with_template as staged_sync_with_template,
+)
+from config.limits import (
+    _resolve_optimize_limits_for_load,
+    normalize_limit_entries,
+    parse_limits_string,
+)
+from config.log_output import log_config_message
+from config.metrics import CURRENCY_METRICS, SHARED_METRICS, canonicalize_limit_name, canonicalize_metric_name
 from config.normalize import normalize_config
 from config.parse import load_raw_config
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
 from config.schema import get_template_config as get_schema_template_config
 from config.transform_log import ConfigTransformTracker, record_transform
-from config.validate import validate_config
+from config.tree_ops import add_missing_keys_recursively, remove_unused_keys_recursively
 from config.logging_summary import emit_transform_summary
 from config.migrations import (
     apply_backward_compatibility_renames as apply_migration_renames,
@@ -24,139 +58,14 @@ from config.migrations import (
     rename_config_keys as rename_migration_config_keys,
 )
 from pure_funcs import sort_dict_keys, str2bool
-from utils import (
-    format_end_date,
-    symbol_to_coin,
-    normalize_coins_source,
-    dump_json_streamlined,
-)
+from utils import dump_json_streamlined, normalize_coins_source, symbol_to_coin
 
 
 def _log_config(verbose: bool, level: int, message: str, *args) -> None:
-    prefixed_message = "[config] " + message
-    noisy_info_prefixes = (
-        "Added missing ",
-        "Removed unused key",
-        "adding missing ",
-        "renaming parameter ",
-        "dropping obsolete parameter ",
-        "Skipping template subtree ",
-    )
-    if level == logging.INFO and any(message.startswith(prefix) for prefix in noisy_info_prefixes):
-        logging.debug(prefixed_message, *args)
-    elif verbose or level >= logging.WARNING:
-        logging.log(level, prefixed_message, *args)
-    else:
-        logging.debug(prefixed_message, *args)
-
-
-CURRENCY_METRICS = {
-    "adg",
-    "adg_per_exposure_long",
-    "adg_per_exposure_short",
-    "adg_w",
-    "adg_w_per_exposure_long",
-    "adg_w_per_exposure_short",
-    "calmar_ratio",
-    "calmar_ratio_w",
-    "drawdown_worst",
-    "drawdown_worst_mean_1pct",
-    "equity_balance_diff_neg_max",
-    "equity_balance_diff_neg_mean",
-    "equity_balance_diff_pos_max",
-    "equity_balance_diff_pos_mean",
-    "equity_choppiness",
-    "equity_choppiness_w",
-    "equity_jerkiness",
-    "equity_jerkiness_w",
-    "peak_recovery_hours_equity",
-    "expected_shortfall_1pct",
-    "exponential_fit_error",
-    "exponential_fit_error_w",
-    "gain",
-    "gain_per_exposure_long",
-    "gain_per_exposure_short",
-    "mdg",
-    "mdg_per_exposure_long",
-    "mdg_per_exposure_short",
-    "mdg_w",
-    "mdg_w_per_exposure_long",
-    "mdg_w_per_exposure_short",
-    "omega_ratio",
-    "omega_ratio_w",
-    "sharpe_ratio",
-    "sharpe_ratio_w",
-    "sortino_ratio",
-    "sortino_ratio_w",
-    "sterling_ratio",
-    "sterling_ratio_w",
-}
-
-SHARED_METRICS = {
-    "positions_held_per_day",
-    "positions_held_per_day_w",
-    "position_held_hours_mean",
-    "position_held_hours_max",
-    "position_held_hours_median",
-    "position_unchanged_hours_max",
-    "volume_pct_per_day_avg",
-    "volume_pct_per_day_avg_w",
-    "loss_profit_ratio",
-    "loss_profit_ratio_w",
-    "peak_recovery_hours_pnl",
-    "high_exposure_hours_mean_long",
-    "high_exposure_hours_max_long",
-    "high_exposure_hours_mean_short",
-    "high_exposure_hours_max_short",
-    "adg_pnl",
-    "adg_pnl_w",
-    "mdg_pnl",
-    "mdg_pnl_w",
-    "sharpe_ratio_pnl",
-    "sharpe_ratio_pnl_w",
-    "sortino_ratio_pnl",
-    "sortino_ratio_pnl_w",
-    "gain_strategy_pnl_rebased",
-    "adg_strategy_pnl_rebased",
-    "mdg_strategy_pnl_rebased",
-    "sharpe_ratio_strategy_pnl_rebased",
-    "sortino_ratio_strategy_pnl_rebased",
-    "omega_ratio_strategy_pnl_rebased",
-    "expected_shortfall_1pct_strategy_pnl_rebased",
-    "calmar_ratio_strategy_pnl_rebased",
-    "sterling_ratio_strategy_pnl_rebased",
-    "adg_strategy_pnl_rebased_w",
-    "mdg_strategy_pnl_rebased_w",
-    "sharpe_ratio_strategy_pnl_rebased_w",
-    "sortino_ratio_strategy_pnl_rebased_w",
-    "omega_ratio_strategy_pnl_rebased_w",
-    "calmar_ratio_strategy_pnl_rebased_w",
-    "sterling_ratio_strategy_pnl_rebased_w",
-    "drawdown_worst_hsl",
-    "drawdown_worst_ema_hsl",
-    "drawdown_worst_mean_1pct_hsl",
-    "drawdown_worst_mean_1pct_ema_hsl",
-    "peak_recovery_hours_hsl",
-    "hard_stop_triggers_per_year",
-    "hard_stop_restarts_per_year",
-    "hard_stop_restarts_per_year_long",
-    "hard_stop_restarts_per_year_short",
-    "hard_stop_halt_to_restart_equity_loss_pct",
-    "hard_stop_time_in_yellow_pct",
-    "hard_stop_time_in_orange_pct",
-    "hard_stop_time_in_red_pct",
-    "hard_stop_duration_minutes_mean",
-    "hard_stop_duration_minutes_max",
-    "hard_stop_trigger_drawdown_mean",
-    "hard_stop_panic_close_loss_sum",
-    "hard_stop_panic_close_loss_max",
-    "hard_stop_flatten_time_minutes_mean",
-    "hard_stop_post_restart_retrigger_pct",
-}
+    log_config_message(verbose, level, message, *args)
 
 
 Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
-BOT_POSITION_SIDES = ("long", "short")
 HSL_TIER_RATIO_KEYS = ("yellow", "orange")
 HSL_PSIDE_KEYS = (
     "hsl_enabled",
@@ -167,24 +76,6 @@ HSL_PSIDE_KEYS = (
     "hsl_orange_tier_mode",
     "hsl_panic_close_order_type",
     "hsl_tier_ratios",
-)
-HSL_SIGNAL_MODES = ("pside", "unified")
-PYMOO_ALGORITHMS = ("auto", "nsga2", "nsga3")
-PYMOO_REF_DIR_METHODS = ("das_dennis",)
-
-
-# Template-aligned config cleaning normally treats non-empty dict templates as closed schemas.
-# These paths are exceptions: they have required template keys plus arbitrary user-defined keys.
-PARTIALLY_OPEN_CONFIG_PATHS: set[Path] = {
-    ("backtest", "aggregate"),
-}
-
-TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
-    ("coin_overrides",),
-    ("backtest", "suite", "aggregate"),
-    ("backtest", "suite", "scenarios"),
-    ("backtest", "market_settings_sources"),
-    *tuple(PARTIALLY_OPEN_CONFIG_PATHS),
 )
 
 
@@ -236,241 +127,6 @@ def expand_PB_mode(mode: str) -> str:
         return "tp_only"
     else:
         raise Exception(f"unknown passivbot mode {mode}")
-
-
-HSL_COOLDOWN_POSITION_POLICIES = (
-    "normal",
-    "panic",
-    "tp_only",
-    "graceful_stop",
-    "manual",
-)
-
-MONITOR_BOOL_KEYS = (
-    "enabled",
-    "retain_price_ticks",
-    "retain_candles",
-    "retain_fills",
-    "compress_rotated_segments",
-    "emit_completed_candles",
-    "include_raw_fill_payloads",
-)
-
-
-def normalize_hsl_cooldown_position_policy(
-    value, path: str = "live.hsl_position_during_cooldown_policy"
-) -> str:
-    policy = str(value)
-    if policy not in HSL_COOLDOWN_POSITION_POLICIES:
-        allowed = ", ".join(HSL_COOLDOWN_POSITION_POLICIES)
-        raise ValueError(f"{path} must be one of {{{allowed}}}, got {policy!r}")
-    return policy
-
-
-def normalize_hsl_signal_mode(value, path: str = "live.hsl_signal_mode") -> str:
-    mode = str(value)
-    if mode not in HSL_SIGNAL_MODES:
-        allowed = ", ".join(HSL_SIGNAL_MODES)
-        raise ValueError(f"{path} must be one of {{{allowed}}}, got {mode!r}")
-    return mode
-
-
-def _normalize_monitor_config(config: dict) -> None:
-    monitor_cfg = require_config_dict(config, "monitor")
-
-    root_dir = str(monitor_cfg["root_dir"]).strip()
-    if not root_dir:
-        raise ValueError("config.monitor.root_dir must be a non-empty string")
-    monitor_cfg["root_dir"] = root_dir
-
-    for key in MONITOR_BOOL_KEYS:
-        monitor_cfg[key] = bool(monitor_cfg[key])
-
-    numeric_rules = (
-        ("snapshot_interval_seconds", float, lambda x: x > 0.0, "must be > 0"),
-        ("checkpoint_interval_minutes", float, lambda x: x >= 0.0, "must be >= 0"),
-        ("event_rotation_mb", float, lambda x: x > 0.0, "must be > 0"),
-        ("event_rotation_minutes", float, lambda x: x > 0.0, "must be > 0"),
-        ("retain_days", float, lambda x: x >= 0.0, "must be >= 0"),
-        ("max_total_bytes", int, lambda x: x > 0, "must be > 0"),
-        ("price_tick_min_interval_ms", int, lambda x: x >= 0, "must be >= 0"),
-    )
-    for key, caster, predicate, message in numeric_rules:
-        try:
-            value = caster(monitor_cfg[key])
-        except Exception as exc:
-            raise ValueError(f"config.monitor.{key} {message}") from exc
-        if not predicate(value):
-            raise ValueError(f"config.monitor.{key} {message}")
-        monitor_cfg[key] = value
-
-
-def normalize_pymoo_algorithm(
-    value, path: str = "config.optimize.pymoo.algorithm"
-) -> str:
-    algorithm = str(value).strip().lower()
-    if algorithm not in PYMOO_ALGORITHMS:
-        allowed = ", ".join(PYMOO_ALGORITHMS)
-        raise ValueError(f"{path} must be one of {{{allowed}}}, got {value!r}")
-    return algorithm
-
-
-def normalize_pymoo_ref_dir_method(
-    value, path: str = "config.optimize.pymoo.algorithms.nsga3.ref_dirs.method"
-) -> str:
-    method = str(value).strip().lower().replace("-", "_")
-    if method not in PYMOO_REF_DIR_METHODS:
-        allowed = ", ".join(PYMOO_REF_DIR_METHODS)
-        raise ValueError(f"{path} must be one of {{{allowed}}}, got {value!r}")
-    return method
-
-
-def normalize_pymoo_probability(
-    value,
-    path: str,
-    *,
-    allow_auto: bool = False,
-) -> str | float:
-    if allow_auto and isinstance(value, str) and value.strip().lower() == "auto":
-        return "auto"
-    try:
-        normalized = float(value)
-    except Exception as exc:
-        allowed = "a number in [0, 1]" + (" or 'auto'" if allow_auto else "")
-        raise ValueError(f"{path} must be {allowed}, got {value!r}") from exc
-    if not 0.0 <= normalized <= 1.0:
-        allowed = "a number in [0, 1]" + (" or 'auto'" if allow_auto else "")
-        raise ValueError(f"{path} must be {allowed}, got {value!r}")
-    return normalized
-
-
-def normalize_pymoo_positive_float(value, path: str) -> float:
-    try:
-        normalized = float(value)
-    except Exception as exc:
-        raise ValueError(f"{path} must be > 0, got {value!r}") from exc
-    if normalized <= 0.0:
-        raise ValueError(f"{path} must be > 0, got {value!r}")
-    return normalized
-
-
-def normalize_pymoo_n_partitions(
-    value,
-    path: str = "config.optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions",
-) -> str | int:
-    if isinstance(value, str):
-        stripped = value.strip().lower()
-        if stripped == "auto":
-            return "auto"
-        try:
-            value = int(stripped)
-        except Exception as exc:
-            raise ValueError(f"{path} must be 'auto' or an integer >= 1, got {value!r}") from exc
-    try:
-        normalized = int(value)
-    except Exception as exc:
-        raise ValueError(f"{path} must be 'auto' or an integer >= 1, got {value!r}") from exc
-    if normalized < 1:
-        raise ValueError(f"{path} must be 'auto' or an integer >= 1, got {value!r}")
-    return normalized
-
-
-def _normalize_pymoo_config(config: dict, raw_optimize: Optional[dict] = None) -> None:
-    optimize_cfg = require_config_dict(config, "optimize")
-    template_pymoo = get_template_config()["optimize"]["pymoo"]
-
-    source_optimize = raw_optimize if isinstance(raw_optimize, dict) else optimize_cfg
-    raw_pymoo = source_optimize.get("pymoo", {})
-    pymoo_cfg = deepcopy(raw_pymoo) if isinstance(raw_pymoo, dict) else {}
-    shared = deepcopy(pymoo_cfg.get("shared", {})) if isinstance(pymoo_cfg.get("shared"), dict) else {}
-    algorithms = (
-        deepcopy(pymoo_cfg.get("algorithms", {}))
-        if isinstance(pymoo_cfg.get("algorithms"), dict)
-        else {}
-    )
-    nsga3_cfg = (
-        deepcopy(algorithms.get("nsga3", {})) if isinstance(algorithms.get("nsga3"), dict) else {}
-    )
-    ref_dirs_cfg = (
-        deepcopy(nsga3_cfg.get("ref_dirs", {}))
-        if isinstance(nsga3_cfg.get("ref_dirs"), dict)
-        else {}
-    )
-
-    legacy_crossover_eta = source_optimize.get("crossover_eta")
-    legacy_crossover_probability = source_optimize.get("crossover_probability")
-    legacy_mutation_eta = source_optimize.get("mutation_eta")
-    legacy_mutation_indpb = source_optimize.get("mutation_indpb")
-
-    shared_defaults = template_pymoo["shared"]
-    ref_dir_defaults = template_pymoo["algorithms"]["nsga3"]["ref_dirs"]
-
-    mutation_prob_var = shared.get("mutation_prob_var")
-    if mutation_prob_var is None:
-        if legacy_mutation_indpb is not None and float(legacy_mutation_indpb) > 0.0:
-            mutation_prob_var = legacy_mutation_indpb
-        else:
-            mutation_prob_var = shared_defaults["mutation_prob_var"]
-
-    normalized_shared = {
-        "crossover_eta": normalize_pymoo_positive_float(
-            shared.get(
-                "crossover_eta",
-                legacy_crossover_eta
-                if legacy_crossover_eta is not None
-                else shared_defaults["crossover_eta"],
-            ),
-            "config.optimize.pymoo.shared.crossover_eta",
-        ),
-        "crossover_prob_var": normalize_pymoo_probability(
-            shared.get(
-                "crossover_prob_var",
-                legacy_crossover_probability
-                if legacy_crossover_probability is not None
-                else shared_defaults["crossover_prob_var"],
-            ),
-            "config.optimize.pymoo.shared.crossover_prob_var",
-        ),
-        "mutation_eta": normalize_pymoo_positive_float(
-            shared.get(
-                "mutation_eta",
-                legacy_mutation_eta
-                if legacy_mutation_eta is not None
-                else shared_defaults["mutation_eta"],
-            ),
-            "config.optimize.pymoo.shared.mutation_eta",
-        ),
-        "mutation_prob_var": normalize_pymoo_probability(
-            mutation_prob_var,
-            "config.optimize.pymoo.shared.mutation_prob_var",
-            allow_auto=True,
-        ),
-        "eliminate_duplicates": bool(
-            shared.get("eliminate_duplicates", shared_defaults["eliminate_duplicates"])
-        ),
-    }
-
-    normalized_ref_dirs = {
-        "method": normalize_pymoo_ref_dir_method(
-            ref_dirs_cfg.get("method", ref_dir_defaults["method"])
-        ),
-        "n_partitions": normalize_pymoo_n_partitions(
-            ref_dirs_cfg.get("n_partitions", ref_dir_defaults["n_partitions"])
-        ),
-    }
-
-    optimize_cfg["pymoo"] = {
-        "algorithm": normalize_pymoo_algorithm(
-            pymoo_cfg.get("algorithm", template_pymoo["algorithm"])
-        ),
-        "shared": normalized_shared,
-        "algorithms": {
-            "nsga2": {},
-            "nsga3": {
-                "ref_dirs": normalized_ref_dirs,
-            },
-        },
-    }
 
 
 def apply_allowed_modifications(src, modifications, allowed_overrides, return_full=True):
@@ -847,157 +503,6 @@ def _build_flag_argparser() -> argparse.ArgumentParser:
     return p
 
 
-PB_MULTI_FIELD_MAP = {
-    "ddown_factor": "entry_grid_double_down_factor",
-    "initial_eprice_ema_dist": "entry_initial_ema_dist",
-    "initial_qty_pct": "entry_initial_qty_pct",
-    "markup_range": "close_grid_markup_range",
-    "min_markup": "close_grid_min_markup",
-    "rentry_pprice_dist": "entry_grid_spacing_pct",
-    "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_we_weight",
-    "ema_span_0": "ema_span_0",
-    "ema_span_1": "ema_span_1",
-    "filter_noisiness_rolling_window": "forager_volatility_ema_span",
-    "filter_volume_rolling_window": "forager_volume_ema_span",
-}
-PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
-
-
-def _build_from_pb_multi(config: dict, template: dict) -> dict:
-    result = deepcopy(template)
-    for key1 in result["live"]:
-        if key1 in config:
-            result["live"][key1] = config[key1]
-    if config.get("approved_symbols") and isinstance(config["approved_symbols"], dict):
-        result["live"]["coin_flags"] = config["approved_symbols"]
-    result["live"]["approved_coins"] = sorted(set(config.get("approved_symbols", [])))
-    result["live"]["ignored_coins"] = sorted(set(config.get("ignored_symbols", [])))
-    for pside in BOT_POSITION_SIDES:
-        universal_cfg = config.get("universal_live_config", {}).get(pside, {})
-        for key in result["bot"][pside]:
-            inverse_key = PB_MULTI_FIELD_MAP_INV.get(key)
-            if inverse_key and inverse_key in universal_cfg:
-                result["bot"][pside][key] = universal_cfg[inverse_key]
-        try:
-            result["bot"][pside]["close_grid_qty_pct"] = 1.0 / round(
-                universal_cfg.get("n_close_orders", 0)
-            )
-        except Exception:
-            pass
-        for key in (
-            "close_trailing_grid_ratio",
-            "close_trailing_retracement_pct",
-            "close_trailing_threshold_pct",
-            "entry_trailing_grid_ratio",
-            "entry_trailing_retracement_pct",
-            "entry_trailing_retracement_we_weight",
-            "entry_trailing_retracement_volatility_weight",
-            "entry_trailing_threshold_pct",
-            "entry_trailing_threshold_we_weight",
-            "entry_trailing_threshold_volatility_weight",
-            "unstuck_ema_dist",
-        ):
-            result["bot"][pside][key] = 0.0
-        if config.get("n_longs", 0) == 0 and config.get("n_shorts", 0) == 0:
-            n_positions = len(result["live"].get("coin_flags", {}))
-        else:
-            n_positions = config.get(f"n_{pside}s", 0)
-        result["bot"][pside]["n_positions"] = n_positions
-        result["bot"][pside]["unstuck_close_pct"] = config.get("unstuck_close_pct", 0.0)
-        result["bot"][pside]["unstuck_loss_allowance_pct"] = config.get("loss_allowance_pct", 0.0)
-        result["bot"][pside]["unstuck_threshold"] = config.get("stuck_threshold", 0.0)
-        twe_key = f"TWE_{pside}"
-        if config.get(f"{pside}_enabled", True):
-            result["bot"][pside]["total_wallet_exposure_limit"] = config.get(twe_key, 0.0)
-        else:
-            result["bot"][pside]["total_wallet_exposure_limit"] = 0.0
-    return result
-
-
-def _build_from_live_only(config: dict, template: dict) -> dict:
-    result = deepcopy(config)
-    for section in ("optimize", "backtest"):
-        if section not in result:
-            result[section] = deepcopy(template[section])
-    return result
-
-
-LEGACY_FILTER_KEYS = {
-    "filter_volatility_ema_span": "forager_volatility_ema_span",
-    "filter_noisiness_rolling_window": "forager_volatility_ema_span",
-    "filter_noisiness_ema_span": "forager_volatility_ema_span",
-    "filter_log_range_ema_span": "forager_volatility_ema_span",
-    "filter_volume_ema_span": "forager_volume_ema_span",
-    "filter_volume_rolling_window": "forager_volume_ema_span",
-}
-
-LEGACY_FORAGER_KEYS = {
-    "filter_volume_drop_pct": "forager_volume_drop_pct",
-}
-
-OBSOLETE_BOT_KEYS = {
-    "filter_volatility_drop_pct",
-}
-
-LEGACY_ENTRY_GRID_KEYS = {
-    "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
-    "entry_grid_spacing_log_span_hours": "entry_volatility_ema_span_hours",
-    "entry_log_range_ema_span_hours": "entry_volatility_ema_span_hours",
-    "entry_grid_spacing_log_weight": "entry_grid_spacing_volatility_weight",
-    "entry_trailing_retracement_log_weight": "entry_trailing_retracement_volatility_weight",
-    "entry_trailing_threshold_log_weight": "entry_trailing_threshold_volatility_weight",
-}
-
-LEGACY_BOUNDS_KEYS = {
-    "long_filter_volatility_ema_span": "long_forager_volatility_ema_span",
-    "long_filter_noisiness_rolling_window": "long_forager_volatility_ema_span",
-    "long_filter_noisiness_ema_span": "long_forager_volatility_ema_span",
-    "long_filter_volume_rolling_window": "long_forager_volume_ema_span",
-    "long_filter_log_range_ema_span": "long_forager_volatility_ema_span",
-    "long_filter_volume_ema_span": "long_forager_volume_ema_span",
-    "short_filter_volatility_ema_span": "short_forager_volatility_ema_span",
-    "short_filter_noisiness_rolling_window": "short_forager_volatility_ema_span",
-    "short_filter_noisiness_ema_span": "short_forager_volatility_ema_span",
-    "short_filter_volume_rolling_window": "short_forager_volume_ema_span",
-    "short_filter_log_range_ema_span": "short_forager_volatility_ema_span",
-    "short_filter_volume_ema_span": "short_forager_volume_ema_span",
-    "long_filter_volume_drop_pct": "long_forager_volume_drop_pct",
-    "short_filter_volume_drop_pct": "short_forager_volume_drop_pct",
-    "long_entry_grid_spacing_weight": "long_entry_grid_spacing_we_weight",
-    "short_entry_grid_spacing_weight": "short_entry_grid_spacing_we_weight",
-    "long_entry_grid_spacing_log_span_hours": "long_entry_volatility_ema_span_hours",
-    "short_entry_grid_spacing_log_span_hours": "short_entry_volatility_ema_span_hours",
-    "long_entry_log_range_ema_span_hours": "long_entry_volatility_ema_span_hours",
-    "short_entry_log_range_ema_span_hours": "short_entry_volatility_ema_span_hours",
-    "long_entry_grid_spacing_log_weight": "long_entry_grid_spacing_volatility_weight",
-    "short_entry_grid_spacing_log_weight": "short_entry_grid_spacing_volatility_weight",
-    "long_entry_trailing_retracement_log_weight": "long_entry_trailing_retracement_volatility_weight",
-    "short_entry_trailing_retracement_log_weight": "short_entry_trailing_retracement_volatility_weight",
-    "long_entry_trailing_threshold_log_weight": "long_entry_trailing_threshold_volatility_weight",
-    "short_entry_trailing_threshold_log_weight": "short_entry_trailing_threshold_volatility_weight",
-}
-
-OBSOLETE_BOUND_KEYS = {
-    "long_filter_volatility_drop_pct",
-    "short_filter_volatility_drop_pct",
-}
-
-FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
-    "forager_volatility_ema_span": "filter_volatility_ema_span",
-    "forager_volume_ema_span": "filter_volume_ema_span",
-    "forager_volume_drop_pct": "filter_volume_drop_pct",
-}
-
-FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
-    "long_forager_volatility_ema_span": "long_filter_volatility_ema_span",
-    "long_forager_volume_ema_span": "long_filter_volume_ema_span",
-    "long_forager_volume_drop_pct": "long_filter_volume_drop_pct",
-    "short_forager_volatility_ema_span": "short_filter_volatility_ema_span",
-    "short_forager_volume_ema_span": "short_filter_volume_ema_span",
-    "short_forager_volume_drop_pct": "short_filter_volume_drop_pct",
-}
-
-
 def _apply_backward_compatibility_renames(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
@@ -1027,7 +532,6 @@ def build_base_config_from_flavor(config: dict, template: dict, flavor: str, ver
 def _ensure_bot_defaults_and_bounds(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    """Ensure required bot defaults and optimize bounds exist for each position side."""
     _ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
     _ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
 
@@ -1035,152 +539,13 @@ def _ensure_bot_defaults_and_bounds(
 def _ensure_bot_defaults(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    """Ensure required bot defaults exist for each position side."""
-    for pside in ("long", "short"):
-        for k0, v_bt in [
-            ("close_trailing_qty_pct", 1.0),
-            (
-                "entry_trailing_double_down_factor",
-                result["bot"][pside].get("entry_grid_double_down_factor", 1.0),
-            ),
-            (
-                "forager_volatility_ema_span",
-                result["bot"][pside].get(
-                    "forager_volatility_ema_span",
-                    result["bot"][pside].get(
-                        "filter_volatility_ema_span",
-                        result["bot"][pside].get(
-                            "filter_rolling_window",
-                            result["live"].get("ohlcv_rolling_window", 60.0),
-                        ),
-                    ),
-                ),
-            ),
-            (
-                "forager_volume_ema_span",
-                result["bot"][pside].get(
-                    "forager_volume_ema_span",
-                    result["bot"][pside].get(
-                        "filter_volume_ema_span",
-                        result["bot"][pside].get(
-                            "filter_rolling_window",
-                            result["live"].get("ohlcv_rolling_window", 60.0),
-                        ),
-                    ),
-                ),
-            ),
-            (
-                "close_grid_markup_start",
-                result["bot"][pside].get("close_grid_min_markup", 0.001)
-                + result["bot"][pside].get("close_grid_markup_range", 0.001),
-            ),
-            (
-                "close_grid_markup_end",
-                result["bot"][pside].get("close_grid_min_markup", 0.001),
-            ),
-            (
-                "forager_volume_drop_pct",
-                result["live"].get("filter_relative_volume_clip_pct", 0.5),
-            ),
-        ]:
-            if k0 not in result["bot"][pside]:
-                result["bot"][pside][k0] = v_bt
-                _log_config(
-                    verbose,
-                    logging.INFO,
-                    "adding missing backtest parameter %s %s: %s",
-                    pside,
-                    k0,
-                    v_bt,
-                )
-                if tracker is not None:
-                    tracker.add(["bot", pside, k0], v_bt)
-        if "forager_score_weights" not in result["bot"][pside]:
-            weights = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
-            result["bot"][pside]["forager_score_weights"] = weights
-            _log_config(
-                verbose,
-                logging.INFO,
-                "adding missing backtest parameter %s forager_score_weights: %s",
-                pside,
-                weights,
-            )
-            if tracker is not None:
-                tracker.add(["bot", pside, "forager_score_weights"], weights)
+    staged_ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
 
 
 def _ensure_optimize_bounds_for_bot(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    """Ensure optimize bounds include required bot-derived defaults."""
-    bounds = result["optimize"]["bounds"]
-    for pside in ("long", "short"):
-        for k0, v_opt in [
-            ("close_trailing_qty_pct", [0.05, 1.0]),
-            (
-                "entry_trailing_double_down_factor",
-                [0.01, 3.0],
-            ),
-            (
-                "forager_volatility_ema_span",
-                [10.0, 1440.0],
-            ),
-            (
-                "forager_volume_ema_span",
-                [10.0, 1440.0],
-            ),
-            (
-                "close_grid_markup_start",
-                bounds.get(f"{pside}_min_markup", [0.001, 0.03]),
-            ),
-            (
-                "close_grid_markup_end",
-                bounds.get(f"{pside}_close_grid_min_markup", [0.001, 0.03]),
-            ),
-            (
-                "forager_volume_drop_pct",
-                [0.0, 1.0],
-            ),
-        ]:
-            opt_key = f"{pside}_{k0}"
-            if opt_key not in bounds:
-                bounds[opt_key] = v_opt
-                _log_config(
-                    verbose,
-                    logging.INFO,
-                    "adding missing optimize parameter %s %s: %s",
-                    pside,
-                    opt_key,
-                    v_opt,
-                )
-                if tracker is not None:
-                    tracker.add(["optimize", "bounds", opt_key], v_opt)
-        if "forager_score_weights" not in result["bot"][pside]:
-            weights = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
-            result["bot"][pside]["forager_score_weights"] = weights
-            _log_config(
-                verbose,
-                logging.INFO,
-                "adding missing backtest parameter %s forager_score_weights: %s",
-                pside,
-                weights,
-            )
-            if tracker is not None:
-                tracker.add(["bot", pside, "forager_score_weights"], weights)
-        for weight_key in ("volume", "ema_readiness", "volatility"):
-            opt_key = f"{pside}_forager_score_weights_{weight_key}"
-            if opt_key not in bounds:
-                bounds[opt_key] = [0.0, 1.0]
-                _log_config(
-                    verbose,
-                    logging.INFO,
-                    "adding missing optimize parameter %s %s: %s",
-                    pside,
-                    opt_key,
-                    bounds[opt_key],
-                )
-                if tracker is not None:
-                    tracker.add(["optimize", "bounds", opt_key], bounds[opt_key])
+    staged_ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
 
 
 def format_bot_config(
@@ -1190,172 +555,12 @@ def format_bot_config(
     verbose: bool = True,
     tracker: Optional[ConfigTransformTracker] = None,
 ) -> dict:
-    """Normalize only config.bot using the same bot-side rules as the main config loader."""
-    if not isinstance(bot_cfg, dict):
-        raise TypeError(f"config.bot must be a dict; got {type(bot_cfg).__name__}")
-    template = get_template_config()
-    result = {
-        "bot": deepcopy(bot_cfg),
-        "live": deepcopy(live_cfg) if isinstance(live_cfg, dict) else deepcopy(template["live"]),
-        "optimize": {"bounds": {}},
-    }
-    for pside in ("long", "short"):
-        if pside not in result["bot"]:
-            seeded = deepcopy(template["bot"][pside])
-            result["bot"][pside] = seeded
-            if tracker is not None:
-                tracker.add(["bot", pside], seeded)
-    for path in ("bot.long", "bot.short"):
-        require_config_dict(result, path)
-    _apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
-    # Preserve legacy-derived values before template hydration can seed concrete defaults
-    # into fields such as close_grid_markup_start/end and entry_trailing_double_down_factor.
-    _ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
-    add_missing_keys_recursively(
-        template["bot"],
-        result["bot"],
-        parent=["bot"],
+    return staged_format_bot_config(
+        bot_cfg,
+        live_cfg=live_cfg,
         verbose=verbose,
         tracker=tracker,
     )
-    _validate_forager_config(result, verbose=verbose, tracker=tracker)
-    _normalize_position_counts(result, tracker=tracker)
-    return sort_dict_keys(result["bot"])
-
-
-def _apply_forager_internal_aliases(result: dict) -> None:
-    def _alias_bot_cfg(bot_cfg: dict) -> None:
-        for canonical_key, internal_key in FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS.items():
-            if canonical_key in bot_cfg and internal_key not in bot_cfg:
-                bot_cfg[internal_key] = deepcopy(bot_cfg[canonical_key])
-        bot_cfg.setdefault("filter_volatility_drop_pct", 0.0)
-
-    for pside in BOT_POSITION_SIDES:
-        bot_cfg = result.get("bot", {}).get(pside, {})
-        if isinstance(bot_cfg, dict):
-            _alias_bot_cfg(bot_cfg)
-
-    for override in (result.get("coin_overrides") or {}).values():
-        if not isinstance(override, dict):
-            continue
-        override_bot = override.get("bot", {})
-        if not isinstance(override_bot, dict):
-            continue
-        for pside in BOT_POSITION_SIDES:
-            bot_cfg = override_bot.get(pside, {})
-            if isinstance(bot_cfg, dict):
-                _alias_bot_cfg(bot_cfg)
-
-    bounds = result.get("optimize", {}).get("bounds", {})
-    if not isinstance(bounds, dict):
-        return
-    for canonical_key, internal_key in FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS.items():
-        if canonical_key in bounds and internal_key not in bounds:
-            bounds[internal_key] = deepcopy(bounds[canonical_key])
-
-
-def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
-    required_weight_keys = {"volume", "ema_readiness", "volatility"}
-    if not isinstance(weights, dict):
-        raise TypeError(f"{path} must be a dict")
-    missing = sorted(required_weight_keys - set(weights))
-    if missing:
-        raise ValueError(f"{path} missing required keys: {', '.join(missing)}")
-    extra = sorted(set(weights) - required_weight_keys)
-    if extra:
-        raise ValueError(f"{path} has unsupported keys: {', '.join(extra)}")
-
-    normalized = {}
-    total = 0.0
-    for key in ("volume", "ema_readiness", "volatility"):
-        try:
-            value = float(weights[key])
-        except (TypeError, ValueError) as exc:
-            raise TypeError(f"{path}.{key} must be numeric") from exc
-        if not math.isfinite(value) or value < 0.0:
-            raise ValueError(f"{path}.{key} must be finite and non-negative")
-        normalized[key] = value
-        total += value
-
-    if total <= 0.0:
-        return {
-            "volume": 1.0,
-            "ema_readiness": 0.0,
-            "volatility": 0.0,
-        }
-
-    return {key: normalized[key] / total for key in ("volume", "ema_readiness", "volatility")}
-
-
-def _validate_forager_config(
-    result: dict,
-    verbose: bool = True,
-    tracker: Optional[ConfigTransformTracker] = None,
-) -> None:
-    required_weight_keys = {"volume", "ema_readiness", "volatility"}
-    for pside in ("long", "short"):
-        bot_cfg = result["bot"][pside]
-        drop_pct = bot_cfg["forager_volume_drop_pct"]
-        try:
-            drop_pct = float(drop_pct)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(f"bot.{pside}.forager_volume_drop_pct must be numeric") from exc
-        if not math.isfinite(drop_pct) or not (0.0 <= drop_pct <= 1.0):
-            raise ValueError(f"bot.{pside}.forager_volume_drop_pct must be within [0.0, 1.0]")
-        bot_cfg["forager_volume_drop_pct"] = drop_pct
-        pside_enabled = (
-            float(bot_cfg["total_wallet_exposure_limit"]) > 0.0
-            and int(round(float(bot_cfg["n_positions"]))) > 0
-        )
-
-        weights = bot_cfg["forager_score_weights"]
-        normalized = normalize_forager_score_weights(
-            weights,
-            path=f"bot.{pside}.forager_score_weights",
-        )
-        if normalized != weights:
-            raw_total = 0.0
-            if isinstance(weights, dict):
-                for key in required_weight_keys:
-                    try:
-                        raw_total += float(weights[key])
-                    except (TypeError, ValueError, KeyError):
-                        raw_total = math.nan
-                        break
-            if raw_total <= 0.0:
-                _log_config(
-                    verbose,
-                    logging.INFO,
-                    "normalizing bot.%s.forager_score_weights all-zero vector to volume-only",
-                    pside,
-                )
-            else:
-                _log_config(
-                    verbose,
-                    logging.INFO,
-                    "normalizing bot.%s.forager_score_weights to relative unit-sum weights: %s",
-                    pside,
-                    normalized,
-                )
-            if tracker is not None:
-                tracker.update(["bot", pside, "forager_score_weights"], weights, normalized)
-        bot_cfg["forager_score_weights"] = normalized
-
-        if pside_enabled and (normalized["volume"] > 0.0 or drop_pct > 0.0):
-            volume_span = float(bot_cfg["forager_volume_ema_span"])
-            if not math.isfinite(volume_span) or volume_span <= 0.0:
-                raise ValueError(
-                    f"bot.{pside}.forager_volume_ema_span must be > 0 when "
-                    "forager volume ranking or volume pruning is enabled"
-                )
-
-        if pside_enabled and normalized["volatility"] > 0.0:
-            volatility_span = float(bot_cfg["forager_volatility_ema_span"])
-            if not math.isfinite(volatility_span) or volatility_span <= 0.0:
-                raise ValueError(
-                    f"bot.{pside}.forager_volatility_ema_span must be > 0 when "
-                    "forager volatility ranking is enabled"
-                )
 
 
 def _rename_config_keys(
@@ -1371,45 +576,10 @@ def _sync_with_template(
     verbose: bool = True,
     tracker: Optional[ConfigTransformTracker] = None,
 ) -> None:
-    """Prune unused keys and enforce final template-aligned structure."""
-    existing_base = result["live"].get("base_config_path") if "live" in result else None
-    had_key = "live" in result and "base_config_path" in result["live"]
-    if base_config_path or "base_config_path" not in result["live"]:
-        result["live"]["base_config_path"] = base_config_path
-        if tracker is not None:
-            if not had_key:
-                tracker.add(["live", "base_config_path"], base_config_path)
-            elif existing_base != base_config_path:
-                tracker.update(["live", "base_config_path"], existing_base, base_config_path)
-    template_with_extras = deepcopy(template)
-    template_with_extras.setdefault("live", {})["base_config_path"] = ""
-    preserved_live_optimize_bounds = [
-        ("optimize", "bounds", key)
-        for key in result.get("optimize", {}).get("bounds", {})
-        if isinstance(key, str) and key.startswith("live_")
-    ]
-    remove_unused_keys_recursively(
-        template_with_extras,
+    staged_sync_with_template(
+        template,
         result,
-        verbose=verbose,
-        preserve=TEMPLATE_SYNC_PRESERVE_PATHS + tuple(preserved_live_optimize_bounds),
-        tracker=tracker,
-    )
-    remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose, tracker=tracker)
-    remove_unused_keys_recursively(
-        template["optimize"]["bounds"],
-        result["optimize"]["bounds"],
-        verbose=verbose,
-        preserve=[
-            (key,)
-            for key in result["optimize"]["bounds"]
-            if isinstance(key, str) and key.startswith("live_")
-        ],
-        tracker=tracker,
-    )
-    remove_unused_keys_recursively(
-        template.get("optimize", {}).get("limits", []),
-        result["optimize"].setdefault("limits", []),
+        base_config_path,
         verbose=verbose,
         tracker=tracker,
     )
@@ -1422,72 +592,13 @@ def _hydrate_missing_template_fields(
     verbose: bool = True,
     tracker: Optional[ConfigTransformTracker] = None,
 ) -> None:
-    """Centralized schema hydration: add all missing template keys before downstream consumers."""
-    add_missing_keys_recursively(template, result, verbose=verbose, tracker=tracker)
-
-
-def _seed_missing_compatibility_sections(
-    template: dict,
-    result: dict,
-    *,
-    tracker: Optional[ConfigTransformTracker] = None,
-) -> None:
-    """Seed missing structural sections without pre-filling legacy-derived leaf values."""
-    for pside in ("long", "short"):
-        if pside not in result["bot"]:
-            seeded = deepcopy(template["bot"][pside])
-            result["bot"][pside] = seeded
-            if tracker is not None:
-                tracker.add(["bot", pside], seeded)
-    if "bounds" not in result["optimize"]:
-        seeded_bounds = deepcopy(template["optimize"]["bounds"])
-        result["optimize"]["bounds"] = seeded_bounds
-        if tracker is not None:
-            tracker.add(["optimize", "bounds"], seeded_bounds)
+    staged_hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
 
 
 def _normalize_position_counts(
     result: dict, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    """Round position counts to integers for each side."""
-    for pside in BOT_POSITION_SIDES:
-        current = result["bot"][pside].get("n_positions")
-        rounded = int(round(current))
-        if tracker is not None and current != rounded:
-            tracker.update(["bot", pside, "n_positions"], current, rounded)
-        result["bot"][pside]["n_positions"] = rounded
-
-
-def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise ValueError("backtest.coin_sources must be a mapping of coin -> exchange")
-    normalized: Dict[str, str] = {}
-    for coin, exchange in raw.items():
-        if exchange is None:
-            continue
-        coin_key = symbol_to_coin(str(coin), verbose=False)
-        if not coin_key:
-            continue
-        exchange_value = str(exchange)
-        existing = normalized.get(coin_key)
-        if existing is not None and existing != exchange_value:
-            raise ValueError(
-                f"backtest.coin_sources maps conflicting exchanges for {coin_key}: "
-                f"{existing} and {exchange_value}"
-            )
-        normalized[coin_key] = exchange_value
-    return normalized
-
-
-def _preserve_coin_sources(result: dict) -> None:
-    """Keep track of original approved/ignored coin sources before normalization."""
-    sources = result.setdefault("_coins_sources", {})
-    live = result.get("live", {})
-    for key in ("approved_coins", "ignored_coins"):
-        if key in live and key not in sources:
-            sources[key] = deepcopy(live[key])
+    staged_normalize_position_counts(result, tracker=tracker)
 
 
 def _apply_non_live_adjustments(
@@ -1497,88 +608,13 @@ def _apply_non_live_adjustments(
     raw_optimize_limits: Any = None,
     raw_optimize_limits_present: Optional[bool] = None,
 ) -> None:
-    """Adjust live/backtest/optimize fields when not running in live-only mode."""
-    for key in ("approved_coins", "ignored_coins"):
-        result["live"][key] = normalize_coins_source(result["live"].get(key, ""))
-    for pside in result["live"]["approved_coins"]:
-        result["live"]["approved_coins"][pside] = [
-            coin
-            for coin in result["live"]["approved_coins"][pside]
-            if coin not in result["live"]["ignored_coins"][pside]
-        ]
-    result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
-    result["backtest"]["coin_sources"] = _normalize_coin_sources(
-        result["backtest"].get("coin_sources", {})
-    )
-    if result["backtest"].get("filter_by_min_effective_cost") is None:
-        result["backtest"]["filter_by_min_effective_cost"] = bool(
-            result["live"].get("filter_by_min_effective_cost", False)
-        )
-
-    canonical_scoring = []
-    seen = set()
-    for metric in result["optimize"].get("scoring", []):
-        canon = canonicalize_metric_name(metric)
-        if canon not in seen:
-            canonical_scoring.append(canon)
-            seen.add(canon)
-    result["optimize"]["scoring"] = canonical_scoring
-    backend = str(result["optimize"].get("backend", "pymoo") or "pymoo").strip().lower()
-    if backend not in {"deap", "pymoo"}:
-        raise ValueError(
-            f"optimize.backend must be one of ['deap', 'pymoo']; got {result['optimize'].get('backend')!r}"
-        )
-    result["optimize"]["backend"] = backend
-    population_size = result["optimize"].get("population_size")
-    if isinstance(population_size, str):
-        normalized_population_size = population_size.strip().lower()
-        if normalized_population_size in {"", "none", "null", "auto"}:
-            population_size = None
-        else:
-            population_size = int(population_size)
-    elif population_size is not None:
-        population_size = int(population_size)
-    if population_size is not None and population_size <= 0:
-        raise ValueError("optimize.population_size must be > 0 when set")
-    result["optimize"]["population_size"] = population_size
-
-    current_limits = deepcopy(result["optimize"].get("limits", []))
-    limits_snapshot = deepcopy(current_limits)
-    if raw_optimize_limits_present is None:
-        raw_optimize_limits_present = "limits" in result.get("optimize", {})
-        if raw_optimize_limits is None and raw_optimize_limits_present:
-            raw_optimize_limits = deepcopy(result["optimize"].get("limits"))
-    template_limits = deepcopy(get_template_config()["optimize"]["limits"])
-    resolved_limits, resolution = _resolve_optimize_limits_for_load(
+    staged_apply_non_live_adjustments(
+        result,
+        verbose=verbose,
+        tracker=tracker,
         raw_optimize_limits=raw_optimize_limits,
         raw_optimize_limits_present=raw_optimize_limits_present,
-        template_limits=template_limits,
     )
-    result["optimize"]["limits"] = resolved_limits
-    if resolution == "normalized_legacy":
-        _log_config(
-            verbose,
-            logging.INFO,
-            "normalized optimize.limits to canonical schema (%d entries)",
-            len(resolved_limits),
-        )
-        if tracker is not None:
-            tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
-    elif resolution == "fallback_template":
-        _log_config(
-            verbose,
-            logging.WARNING,
-            "optimize.limits malformed or unsupported; falling back to template defaults (%d entries)",
-            len(template_limits),
-        )
-        if tracker is not None:
-            tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
-    for key, value in sorted(result["optimize"]["bounds"].items()):
-        if isinstance(value, list):
-            if len(value) == 1:
-                result["optimize"]["bounds"][key] = [value[0], value[0]]
-            elif len(value) == 2:
-                result["optimize"]["bounds"][key] = sorted(value)
 
 
 def format_config(config: dict, verbose=True, live_only=False, base_config_path: str = "") -> dict:
@@ -1676,456 +712,29 @@ def strip_config_metadata(config: dict, *, keys: Iterable[str] | None = None) ->
     return _strip(config)
 
 
-def parse_limits_string(limits_str: Union[str, dict]) -> dict:
-    """
-    Parses a string like "--penalize_if_greater_than_drawdown_worst 0.3 --penalize_if_lower_than_gain 0.005"
-    into a dictionary like:
-    {
-        "penalize_if_greater_than_drawdown_worst": 0.3,
-        "penalize_if_lower_than_gain": 0.005,
-    }
-    """
-    if not limits_str:
-        return {}
-    if isinstance(limits_str, dict):
-        return limits_str
-    tokens = limits_str.replace(":", "").split("--")
-    result = {}
-    for token in tokens:
-        token = token.strip()
-        if not token:
-            continue
-        try:
-            k, v = token.split()
-            result[k] = float(v)
-        except ValueError:
-            raise ValueError(f"Invalid limits format for token: {token}")
-    return result
-
-
-def normalize_limit_entries(
-    raw_limits: Union[str, List[dict], Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """
-    Normalizes optimize.limits into a canonical list of limit clauses.
-    Accepts legacy dicts/CLI strings as well as the new list format.
-    """
-    if raw_limits is None:
-        return []
-    parsed = raw_limits
-    if isinstance(raw_limits, str):
-        stripped = raw_limits.strip()
-        if not stripped:
-            return []
-        if stripped[0] in "[{":
-            try:
-                parsed = json.loads(stripped)
-            except json.JSONDecodeError:
-                parsed = parse_limits_string(stripped)
-        else:
-            parsed = parse_limits_string(stripped)
-    elif isinstance(raw_limits, dict):
-        parsed = deepcopy(raw_limits)
-    elif isinstance(raw_limits, list):
-        parsed = deepcopy(raw_limits)
-    else:
-        raise ValueError(f"Unsupported limits format: {type(raw_limits).__name__}")
-
-    if isinstance(parsed, dict):
-        entries: List[Dict[str, Any]] = _legacy_limits_dict_to_entries(parsed)
-    elif isinstance(parsed, list):
-        entries = parsed
-    else:
-        raise ValueError(f"Unsupported parsed limits payload: {type(parsed).__name__}")
-
-    normalized: List[Dict[str, Any]] = []
-    for entry in entries:
-        normalized.append(_normalize_limit_entry_preserve_extras(entry))
-    return normalized
-
-
-def _normalize_limit_entry_preserve_extras(entry: Any) -> Dict[str, Any]:
-    normalized = _normalize_limit_entry(entry)
-    if not isinstance(entry, dict):
-        return normalized
-    for key, value in entry.items():
-        if key not in normalized:
-            normalized[key] = deepcopy(value)
-    return normalized
-
-
-def _is_canonical_limit_entry(entry: Any) -> bool:
-    if not isinstance(entry, dict):
-        return False
-    try:
-        normalized = _normalize_limit_entry(entry)
-    except Exception:
-        return False
-    for key, norm_val in normalized.items():
-        raw_val = entry.get(key)
-        if key == "range":
-            if not _range_equal(raw_val, norm_val):
-                return False
-        else:
-            if not _numeric_equal(raw_val, norm_val):
-                return False
-    return True
-
-
-def _resolve_optimize_limits_for_load(
-    *,
-    raw_optimize_limits: Any,
-    raw_optimize_limits_present: bool,
-    template_limits: List[Dict[str, Any]],
-) -> Tuple[List[Dict[str, Any]], str]:
-    """
-    Resolve optimize.limits during config load.
-
-    Returns (resolved_limits, resolution) where resolution is one of:
-    - "template_default"
-    - "preserved_canonical"
-    - "normalized_legacy"
-    - "fallback_template"
-    """
-    if not raw_optimize_limits_present:
-        return deepcopy(template_limits), "template_default"
-
-    if isinstance(raw_optimize_limits, list):
-        if all(_is_canonical_limit_entry(entry) for entry in raw_optimize_limits):
-            return deepcopy(raw_optimize_limits), "preserved_canonical"
-        try:
-            return normalize_limit_entries(raw_optimize_limits), "normalized_legacy"
-        except Exception:
-            return deepcopy(template_limits), "fallback_template"
-
-    if isinstance(raw_optimize_limits, (str, dict)):
-        try:
-            return normalize_limit_entries(raw_optimize_limits), "normalized_legacy"
-        except Exception:
-            return deepcopy(template_limits), "fallback_template"
-
-    return deepcopy(template_limits), "fallback_template"
-
-
-def _legacy_limits_dict_to_entries(limits_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
-    entries: List[Dict[str, Any]] = []
-    for key in limits_dict:
-        value = limits_dict[key]
-        canonical_key = canonicalize_limit_name(key)
-        metric: str
-        penalty: str
-        if canonical_key.startswith("penalize_if_greater_than_"):
-            metric = canonical_key[len("penalize_if_greater_than_") :]
-            penalty = "greater_than"
-        elif canonical_key.startswith("penalize_if_lower_than_"):
-            metric = canonical_key[len("penalize_if_lower_than_") :]
-            penalty = "less_than"
-        else:
-            metric = canonical_key
-            penalty = "auto"
-        numeric_value = _ensure_float(value)
-        if numeric_value is None:
-            raise ValueError(f"Limit '{key}' must have a numeric value.")
-        entries.append({"metric": metric, "penalize_if": penalty, "value": numeric_value})
-    return entries
-
-
-def _normalize_penalize_if(value: Any) -> str:
-    if value is None:
-        raise ValueError("limits entries must include 'penalize_if'.")
-    token = str(value).strip().lower()
-    mapping = {
-        ">": "greater_than",
-        "gt": "greater_than",
-        "greater": "greater_than",
-        "greater_than": "greater_than",
-        "above": "greater_than",
-        "<": "less_than",
-        "lt": "less_than",
-        "lower": "less_than",
-        "less": "less_than",
-        "less_than": "less_than",
-        "below": "less_than",
-        "outside": "outside_range",
-        "outside_range": "outside_range",
-        "out_of_range": "outside_range",
-        "inside": "inside_range",
-        "inside_range": "inside_range",
-        "auto": "auto",
-    }
-    normalized = mapping.get(token)
-    if not normalized:
-        raise ValueError(f"Unsupported penalize_if value '{value}'.")
-    return normalized
-
-
-def _ensure_float(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _restore_numeric_precision(value: Optional[float]) -> Optional[Union[int, float]]:
-    if value is None:
-        return None
-    if isinstance(value, float):
-        if math.isfinite(value):
-            rounded = round(value)
-            if abs(value - rounded) < 1e-12:
-                return int(rounded)
-    return value
-
-
-def _extract_range(payload: Any) -> Optional[Tuple[float, float]]:
-    if payload is None:
-        return None
-    if isinstance(payload, dict):
-        low = payload.get("low")
-        high = payload.get("high")
-        if low is None:
-            low = payload.get("min")
-        if low is None:
-            low = payload.get("start")
-        if high is None:
-            high = payload.get("max")
-        if high is None:
-            high = payload.get("end")
-        if low is None or high is None:
-            return None
-        low_f = _ensure_float(low)
-        high_f = _ensure_float(high)
-        if low_f is None or high_f is None:
-            return None
-        return (min(low_f, high_f), max(low_f, high_f))
-    if isinstance(payload, (list, tuple)) and len(payload) == 2:
-        low_f = _ensure_float(payload[0])
-        high_f = _ensure_float(payload[1])
-        if low_f is None or high_f is None:
-            return None
-        return (min(low_f, high_f), max(low_f, high_f))
-    return None
-
-
-def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
-    if not isinstance(entry, dict):
-        raise ValueError(f"Each limit entry must be a dict, got {type(entry).__name__}.")
-    payload = deepcopy(entry)
-    metric = payload.get("metric") or payload.get("name")
-    if not metric:
-        raise ValueError("Limit entries must include a 'metric' field.")
-    metric = canonicalize_metric_name(str(metric))
-    enabled = payload.get("enabled")
-    enabled = True if enabled is None else bool(enabled)
-    raw_penalize_if = payload.get("penalize_if")
-    if raw_penalize_if is None and not enabled:
-        penalize_if = "greater_than"
-    else:
-        penalize_if = _normalize_penalize_if(raw_penalize_if)
-    stat = payload.get("stat") or payload.get("field")
-    normalized_stat: Optional[str] = None
-    if stat is not None:
-        stat = str(stat).lower()
-        if stat not in {"min", "max", "mean", "std"}:
-            raise ValueError(f"Unsupported stat '{stat}' for limit on {metric}.")
-        normalized_stat = stat
-    result: Dict[str, Any] = {"metric": metric, "penalize_if": penalize_if}
-    if normalized_stat:
-        result["stat"] = normalized_stat
-    if penalize_if in {"greater_than", "less_than", "auto"}:
-        bound = payload.get("value")
-        if bound is None:
-            bound = payload.get("threshold")
-        if bound is None:
-            bound = payload.get("bound")
-        if bound is None and not enabled:
-            bound = 0.0
-        numeric_bound = _ensure_float(bound)
-        if numeric_bound is None:
-            raise ValueError(f"Limit for {metric} requires a numeric 'value'.")
-        result["value"] = _restore_numeric_precision(numeric_bound)
-    elif penalize_if in {"outside_range", "inside_range"}:
-        range_payload = payload.get("range")
-        if range_payload is None:
-            range_payload = payload.get("values")
-        if range_payload is None:
-            range_payload = payload.get("bounds")
-        if range_payload is None and isinstance(payload.get("value"), (list, tuple)):
-            range_payload = payload.get("value")
-        if range_payload is None and not enabled:
-            range_payload = [0.0, 0.0]
-        bounds = _extract_range(range_payload)
-        if bounds is None:
-            raise ValueError(f"Limit for {metric} requires a two-value 'range'.")
-        result["range"] = [
-            _restore_numeric_precision(bounds[0]),
-            _restore_numeric_precision(bounds[1]),
-        ]
-    else:
-        raise ValueError(f"Unsupported penalize_if '{penalize_if}' for {metric}.")
-    return result
-
-
-def _numeric_equal(a: Any, b: Any, tol: float = 1e-12) -> bool:
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        return math.isclose(float(a), float(b), rel_tol=0.0, abs_tol=tol)
-    return a == b
-
-
-def _range_equal(a: Any, b: Any, tol: float = 1e-12) -> bool:
-    if not isinstance(a, (list, tuple)) or not isinstance(b, (list, tuple)):
-        return False
-    if len(a) != len(b):
-        return False
-    return all(_numeric_equal(x, y, tol=tol) for x, y in zip(a, b))
-
-
-def _entries_equivalent(raw_entry: Any, normalized_entry: Dict[str, Any]) -> bool:
-    if not isinstance(raw_entry, dict):
-        return False
-    raw_keys = set(raw_entry.keys())
-    norm_keys = set(normalized_entry.keys())
-    if raw_keys != norm_keys:
-        return False
-    for key, norm_val in normalized_entry.items():
-        raw_val = raw_entry.get(key)
-        if key == "range":
-            if not _range_equal(raw_val, norm_val):
-                return False
-        else:
-            if not _numeric_equal(raw_val, norm_val):
-                return False
-    return True
-
-
 def _limits_structurally_equal(raw_limits: Any, normalized_limits: List[Dict[str, Any]]) -> bool:
-    if not isinstance(raw_limits, list):
+    if not isinstance(raw_limits, list) or len(raw_limits) != len(normalized_limits):
         return False
-    if len(raw_limits) != len(normalized_limits):
-        return False
-    return all(_entries_equivalent(raw, norm) for raw, norm in zip(raw_limits, normalized_limits))
 
+    def _scalar_equal(left: Any, right: Any) -> bool:
+        if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+            return abs(float(left) - float(right)) <= 1e-12
+        return left == right
 
-def add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=None):
-    if parent is None:
-        parent = []
-    for k in src:
-        if k not in dst:
-            _log_config(verbose, logging.INFO, "Added missing %s to config.", ".".join(parent + [k]))
-            dst[k] = src[k]
-            if tracker is not None:
-                tracker.add(parent + [k], src[k])
-        # --- NEW: only walk down if both sides are dicts -------------
-        elif isinstance(src[k], dict) and isinstance(dst.get(k), dict):
-            add_missing_keys_recursively(src[k], dst[k], parent + [k], verbose, tracker=tracker)
-        # --------------------------------------------------------------
-        elif isinstance(src[k], dict):
-            # type clash: leave the user’s value untouched
-            _log_config(
-                verbose,
-                logging.INFO,
-                "Skipping template subtree %s (template is dict, config is %s)",
-                ".".join(parent + [k]),
-                type(dst.get(k)).__name__,
+    def _value_equal(left: Any, right: Any) -> bool:
+        if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+            return len(left) == len(right) and all(
+                _scalar_equal(l_item, r_item) for l_item, r_item in zip(left, right)
             )
-            continue
-        else:
-            # previous branches already handle k not in dst; keep safe assignment
-            if k not in dst:
-                _log_config(
-                    verbose,
-                    logging.INFO,
-                    "Adding missing key -> val %s -> %s to config",
-                    ".".join(parent + [k]),
-                    src[k],
-                )
-                dst[k] = src[k]
-                if tracker is not None:
-                    tracker.add(parent + [k], src[k])
+        return _scalar_equal(left, right)
 
-
-def remove_unused_keys_recursively(
-    src,
-    dst,
-    parent=None,
-    verbose=True,
-    preserve: Optional[Iterable[Iterable[str]]] = None,
-    tracker=None,
-):
-    if parent is None:
-        parent = []
-        # normalize preserve spec only once at root invocation
-        if preserve is None:
-            preserve_set = set()
-        else:
-            preserve_set = {tuple(p) for p in preserve}
-    else:
-        preserve_set = getattr(remove_unused_keys_recursively, "_preserve_set", set())
-
-    def _path_is_preserved(path: Iterable[str]) -> bool:
-        if not preserve_set:
+    for raw_entry, normalized_entry in zip(raw_limits, normalized_limits):
+        if not isinstance(raw_entry, dict) or set(raw_entry) != set(normalized_entry):
             return False
-        path_tuple = tuple(path)
-        for preserved in preserve_set:
-            if path_tuple[: len(preserved)] == preserved:
-                return True
-        return False
-
-    # stash preserve set on the function so recursive calls can reuse it without recomputing
-    if parent == []:
-        remove_unused_keys_recursively._preserve_set = preserve_set
-
-    if _path_is_preserved(parent):
-        return
-    if not isinstance(dst, dict) or not isinstance(src, dict):
-        return
-    # Defensive: configs can contain non-string keys (e.g. from user edits or JSON coercions).
-    # Template keys are always strings, so non-string keys are always unused and should be removed.
-    for k in list(dst.keys()):
-        if isinstance(k, str):
-            continue
-        removed = dst.pop(k)
-        current_path = parent + [str(k)]
-        _log_config(
-            verbose, logging.INFO, "Removed unused key from config: %s", ".".join(current_path)
-        )
-        if tracker is not None:
-            tracker.remove(current_path, removed)
-
-    def _sort_key(value) -> tuple[str, str]:
-        """Sort keys by type name, then by string representation."""
-        return (type(value).__name__, str(value))
-
-    for k in sorted(list(dst.keys()), key=_sort_key):
-        current_path = parent + [k]
-        if _path_is_preserved(current_path):
-            continue
-        if isinstance(k, str) and k.startswith("_"):
-            continue
-        if k not in src:
-            removed = dst.pop(k)
-            _log_config(
-                verbose,
-                logging.INFO,
-                "Removed unused key from config: %s",
-                ".".join(map(str, current_path)),
-            )
-            if tracker is not None:
-                tracker.remove(current_path, removed)
-            continue
-        src_val = src[k]
-        dst_val = dst[k]
-        if isinstance(dst_val, dict) and isinstance(src_val, dict):
-            remove_unused_keys_recursively(
-                src_val, dst_val, current_path, verbose=verbose, tracker=tracker
-            )
-
-    if parent == [] and hasattr(remove_unused_keys_recursively, "_preserve_set"):
-        delattr(remove_unused_keys_recursively, "_preserve_set")
+        for key, normalized_value in normalized_entry.items():
+            if not _value_equal(raw_entry.get(key), normalized_value):
+                return False
+    return True
 
 
 def comma_separated_values_float(x):
@@ -2145,41 +754,6 @@ def optional_float(x):
     if isinstance(x, str) and x.strip().lower() in {"none", "null", ""}:
         return None
     return float(x)
-
-
-def canonicalize_metric_name(metric: str) -> str:
-    if metric.endswith("_usd") or metric.endswith("_btc"):
-        return metric
-
-    for prefix, suffix in (("usd_", "usd"), ("btc_", "btc")):
-        if metric.startswith(prefix):
-            core = metric[len(prefix) :]
-            if core in SHARED_METRICS:
-                return core
-            return f"{core}_{suffix}"
-
-    if metric in SHARED_METRICS:
-        return metric
-
-    if metric in CURRENCY_METRICS:
-        return f"{metric}_usd"
-
-    return metric
-
-
-def canonicalize_limit_name(limit_key: str) -> str:
-    if limit_key.startswith("lower_bound_"):
-        metric = limit_key[len("lower_bound_") :]
-        return "penalize_if_greater_than_" + canonicalize_metric_name(metric)
-    if limit_key.startswith("upper_bound_"):
-        metric = limit_key[len("upper_bound_") :]
-        return "penalize_if_lower_than_" + canonicalize_metric_name(metric)
-    prefixes = ["penalize_if_greater_than_", "penalize_if_lower_than_"]
-    for prefix in prefixes:
-        if limit_key.startswith(prefix):
-            metric = limit_key[len(prefix) :]
-            return prefix + canonicalize_metric_name(metric)
-    return canonicalize_metric_name(limit_key)
 
 
 def merge_negative_cli_values(argv):
@@ -2974,51 +1548,6 @@ def update_config_with_args(config, args, verbose=False):
         if diffs:
             details["diffs"] = diffs
         record_transform(config, "update_config_with_args", details)
-
-
-def require_config_value(config: dict, dotted_path: str):
-    parts = dotted_path.split(".")
-    if not parts:
-        raise KeyError("empty dotted_path")
-    current = config
-    traversed = []
-    for part in parts:
-        traversed.append(part)
-        if not isinstance(current, dict):
-            raise KeyError(
-                f"config path {'/'.join(traversed[:-1])} is not a dict (required for '{dotted_path}')"
-            )
-        if part not in current:
-            raise KeyError(f"config missing required key '{'.'.join(traversed)}'")
-        current = current[part]
-    return current
-
-
-def require_config_dict(config: dict, dotted_path: str) -> dict:
-    value = require_config_value(config, dotted_path)
-    if not isinstance(value, dict):
-        raise TypeError(f"config.{dotted_path} must be a dict; got {type(value).__name__}")
-    return value
-
-
-def get_optional_config_value(config: dict, dotted_path: str, default=None):
-    parts = dotted_path.split(".")
-    if not parts:
-        return default
-    current = config
-    for part in parts:
-        if not isinstance(current, dict) or part not in current:
-            return default
-        current = current[part]
-    return current
-
-
-def require_live_value(config: dict, key: str):
-    return require_config_value(config, f"live.{key}")
-
-
-def get_optional_live_value(config: dict, key: str, default=None):
-    return get_optional_config_value(config, f"live.{key}", default)
 
 
 def get_template_config():
