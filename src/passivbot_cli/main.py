@@ -182,12 +182,13 @@ def _active_env_prefix() -> Path | None:
     for name in ("VIRTUAL_ENV", "CONDA_PREFIX"):
         raw = os.environ.get(name)
         if raw:
-            return Path(os.path.abspath(os.path.expanduser(raw)))
+            return _resolve_path(raw)
     return None
 
 
 def _resolve_path(value: str | os.PathLike[str]) -> Path:
-    return Path(os.path.abspath(os.path.expanduser(os.fspath(value))))
+    expanded = os.path.abspath(os.path.expanduser(os.fspath(value)))
+    return Path(os.path.realpath(expanded))
 
 
 def _path_is_within(path: Path, root: Path) -> bool:

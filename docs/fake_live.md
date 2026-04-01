@@ -127,9 +127,9 @@ Minimal shape example:
 
 See:
 
-- [hsl_long_red_restart.hjson](/Users/eiriknarjord/repos/passivbot-3/scenarios/fake_live/hsl_long_red_restart.hjson)
-- [hsl_long_terminal_no_restart.hjson](/Users/eiriknarjord/repos/passivbot-3/scenarios/fake_live/hsl_long_terminal_no_restart.hjson)
-- [minimal.hjson](/Users/eiriknarjord/repos/passivbot-3/scenarios/fake_live/minimal.hjson)
+- [`hsl_long_red_restart.hjson`](../scenarios/fake_live/hsl_long_red_restart.hjson)
+- [`hsl_long_terminal_no_restart.hjson`](../scenarios/fake_live/hsl_long_terminal_no_restart.hjson)
+- [`minimal.hjson`](../scenarios/fake_live/minimal.hjson)
 
 ## HSL Replay Notes
 
@@ -180,14 +180,16 @@ The fake exchange can be selected through `api-keys.json` style user info:
 }
 ```
 
-An example entry is included in [api-keys.json.example](/Users/eiriknarjord/repos/passivbot-3/api-keys.json.example).
+[`api-keys.json.example`](../api-keys.json.example) does not ship with a fake entry by default.
+Add one to your local `api-keys.json` when you want a reusable fake user.
 
 ## Troubleshooting
 
 Common issues:
 
 - `Config user resolved to exchange '...' expected 'fake'`
-  Use `--user <fake_user>` or point `live.user` at a fake entry from [api-keys.json.example](/Users/eiriknarjord/repos/passivbot-3/api-keys.json.example).
+  Use `--user <fake_user>` or point `live.user` at a fake entry you added to your local
+  `api-keys.json`.
 - `Fake exchange requires live.fake_scenario_path or api-keys fake_scenario_path`
   Pass a scenario on the command line and make sure the fake user resolves to `exchange: "fake"`.
 - `Fake scenario must define timeline rows or replay candles`
