@@ -96,6 +96,17 @@ def _tokenize_cli_limit_entry(raw_entry: str) -> List[str]:
     return [metric, op, *rhs_tokens]
 
 
+def _cli_scalar_op_to_internal_penalize_if(token: str) -> Optional[str]:
+    mapping = {
+        ">": "less_than_or_equal",
+        ">=": "less_than",
+        "<": "greater_than_or_equal",
+        "<=": "greater_than",
+        "==": "not_equal",
+    }
+    return mapping.get(token)
+
+
 def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
     if isinstance(raw_entry, dict):
         return _normalize_limit_entry_preserve_extras(raw_entry)
@@ -115,8 +126,10 @@ def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, An
             "'metric outside_range [low,high]'."
         )
 
-    entry: Dict[str, Any] = {"metric": tokens[0], "penalize_if": tokens[1]}
-    penalize_if = _normalize_penalize_if(tokens[1])
+    penalize_if = _cli_scalar_op_to_internal_penalize_if(tokens[1]) or _normalize_penalize_if(
+        tokens[1]
+    )
+    entry: Dict[str, Any] = {"metric": tokens[0], "penalize_if": penalize_if}
 
     if penalize_if in {
         "greater_than",
@@ -124,6 +137,7 @@ def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, An
         "less_than",
         "less_than_or_equal",
         "equal_to",
+        "not_equal",
         "auto",
     }:
         numeric_value = _ensure_float(tokens[2])
@@ -239,6 +253,9 @@ def _normalize_penalize_if(value: Any) -> str:
         "eq": "equal_to",
         "equal": "equal_to",
         "equal_to": "equal_to",
+        "not_equal": "not_equal",
+        "ne": "not_equal",
+        "!=": "not_equal",
         "outside": "outside_range",
         "outside_range": "outside_range",
         "out_of_range": "outside_range",
@@ -283,6 +300,7 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
         "less_than",
         "less_than_or_equal",
         "equal_to",
+        "not_equal",
         "auto",
     }:
         bound = payload.get("value")

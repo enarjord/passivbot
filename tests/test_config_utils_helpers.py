@@ -367,7 +367,7 @@ def test_parse_limit_cli_entry_supports_scalar_syntax():
 
     assert entry == {
         "metric": "drawdown_worst_usd",
-        "penalize_if": "greater_than",
+        "penalize_if": "less_than_or_equal",
         "value": 0.35,
     }
 
@@ -377,7 +377,7 @@ def test_parse_limit_cli_entry_supports_scalar_syntax_without_spaces():
 
     assert entry == {
         "metric": "drawdown_worst_usd",
-        "penalize_if": "less_than_or_equal",
+        "penalize_if": "greater_than",
         "value": 0.35,
     }
 
@@ -388,12 +388,12 @@ def test_parse_limit_cli_entry_supports_extended_scalar_operators():
 
     assert greater_equal == {
         "metric": "adg_strategy_pnl_rebased",
-        "penalize_if": "greater_than_or_equal",
+        "penalize_if": "less_than",
         "value": 0.001,
     }
     assert equal_to == {
         "metric": "adg_strategy_pnl_rebased",
-        "penalize_if": "equal_to",
+        "penalize_if": "not_equal",
         "value": 0,
     }
 

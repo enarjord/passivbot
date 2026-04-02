@@ -598,21 +598,24 @@ For CLI overrides you can replace the full list with a JSON/HJSON payload:
 passivbot optimize --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
 
-For repeatable one-off entries, use `--limit`:
+For repeatable one-off entries, use `--limit`. Symbolic scalar operators in `--limit` are
+written as keep conditions, matching `pareto_store.py` filtering:
 
 ```bash
 passivbot optimize \
   --clear-limits \
-  --limit 'drawdown_worst > 0.35' \
-  --limit 'backtest_completion_ratio<=1.0' \
+  --limit 'drawdown_worst <= 0.35' \
+  --limit 'backtest_completion_ratio>=1.0' \
   --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
-  --limit 'adg < 0.0008 stat=mean'
+  --limit 'adg > 0.0008 stat=mean'
 ```
 
 CLI replacement rules:
 
 - `--limits` replaces `config.optimize.limits` for that run.
 - `--limit` appends one parsed limit entry and may be repeated.
+- `--limit` string expressions use keep-condition semantics for scalar operators (`>`, `>=`, `<`,
+  `<=`, `==`). Explicit JSON/HJSON limit objects still use direct `penalize_if` semantics.
 - `--clear-limits` starts from an empty limit list before any `--limits` or `--limit` entries are applied.
 
 ## Configuration Internals

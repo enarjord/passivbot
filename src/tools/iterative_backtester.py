@@ -178,6 +178,13 @@ def summarize_limit(info: LimitInfo) -> Tuple[str, str, str]:
         diff = abs(info.value - info.bound)
         status = "VIOL" if diff == 0 else "OK"
         return constraint, format_number(diff), status
+    if info.mode == "not_equal":
+        constraint = f"= {format_number(info.bound)}"
+        if info.value is None or info.bound is None:
+            return constraint, "-", "-"
+        diff = abs(info.value - info.bound)
+        status = "VIOL" if diff != 0 else "OK"
+        return constraint, format_number(diff), status
     if info.mode == "outside_range":
         low, high = info.range or (None, None)
         constraint = f"[{format_number(low)}, {format_number(high)}]"

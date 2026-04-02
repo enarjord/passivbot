@@ -40,6 +40,7 @@ def expand_limit_checks(
             "less_than",
             "less_than_or_equal",
             "equal_to",
+            "not_equal",
         }:
             check = _build_single_bound_check(
                 entry,
@@ -100,6 +101,10 @@ def compute_limit_violation(check: Dict[str, Any], value: Optional[float]) -> fl
         bound = check["bound"]
         if value == bound:
             return _BOUNDARY_VIOLATION_EPSILON * weight
+    elif mode == "not_equal":
+        bound = check["bound"]
+        if value != bound:
+            return max(abs(value - bound), _BOUNDARY_VIOLATION_EPSILON) * weight
     elif mode == "outside_range":
         low, high = check["range"]
         if value < low:
@@ -149,6 +154,8 @@ def _build_single_bound_check(
         fallback_stat = "min"
     elif mode in {"greater_than", "greater_than_or_equal"}:
         fallback_stat = "max"
+    elif mode in {"equal_to", "not_equal"}:
+        fallback_stat = "mean"
     else:
         fallback_stat = "mean"
     stat = _normalize_stat(entry.get("stat"), fallback_stat)
