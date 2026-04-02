@@ -1100,7 +1100,7 @@ def add_arguments_recursively(
                     group_map.get(visible_group, parser) if group_map and visible_group else parser
                 )
                 hidden_names = [f"--{full_name.replace('.', '_')}"]
-                if command is None:
+                if command is None or len(acronym) > 1:
                     hidden_names.append(f"-{acronym}")
                 _register_argument(
                     container,
@@ -1163,7 +1163,7 @@ def add_arguments_recursively(
             visible_group = classify_config_argument(full_name, command, help_all)
             container = group_map.get(visible_group, parser) if group_map and visible_group else parser
             hidden_names = [f"--{full_name.replace('.', '_')}"]
-            if command is None:
+            if command is None or len(acronym) > 1:
                 hidden_names.append(f"-{acronym}")
             _register_argument(
                 container,
