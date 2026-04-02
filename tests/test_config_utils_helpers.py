@@ -372,6 +372,32 @@ def test_parse_limit_cli_entry_supports_scalar_syntax():
     }
 
 
+def test_parse_limit_cli_entry_supports_scalar_syntax_without_spaces():
+    entry = config_utils.parse_limit_cli_entry("drawdown_worst<=0.35")
+
+    assert entry == {
+        "metric": "drawdown_worst_usd",
+        "penalize_if": "less_than_or_equal",
+        "value": 0.35,
+    }
+
+
+def test_parse_limit_cli_entry_supports_extended_scalar_operators():
+    greater_equal = config_utils.parse_limit_cli_entry("adg_strategy_pnl_rebased>=0.001")
+    equal_to = config_utils.parse_limit_cli_entry("adg_strategy_pnl_rebased == 0.0")
+
+    assert greater_equal == {
+        "metric": "adg_strategy_pnl_rebased",
+        "penalize_if": "greater_than_or_equal",
+        "value": 0.001,
+    }
+    assert equal_to == {
+        "metric": "adg_strategy_pnl_rebased",
+        "penalize_if": "equal_to",
+        "value": 0,
+    }
+
+
 def test_parse_limit_cli_entry_supports_range_and_extras():
     entry = config_utils.parse_limit_cli_entry(
         "loss_profit_ratio outside_range [0.05,0.7] stat=mean enabled=false"

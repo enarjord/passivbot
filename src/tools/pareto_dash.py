@@ -406,10 +406,22 @@ def _limits_to_exprs(limits_cfg: Any) -> List[str]:
             num = _ensure_float(entry.get("value"))
             if num is not None:
                 exprs.append(f"{metric}<={num}")
+        elif mode == "greater_than_or_equal":
+            num = _ensure_float(entry.get("value"))
+            if num is not None:
+                exprs.append(f"{metric}<{num}")
         elif mode == "less_than":
             num = _ensure_float(entry.get("value"))
             if num is not None:
                 exprs.append(f"{metric}>={num}")
+        elif mode == "less_than_or_equal":
+            num = _ensure_float(entry.get("value"))
+            if num is not None:
+                exprs.append(f"{metric}>{num}")
+        elif mode == "equal_to":
+            num = _ensure_float(entry.get("value"))
+            if num is not None:
+                exprs.append(f"{metric}!={num}")
         elif mode == "outside_range":
             rng = entry.get("range")
             if isinstance(rng, (list, tuple)) and len(rng) == 2:

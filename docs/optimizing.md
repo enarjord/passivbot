@@ -405,7 +405,8 @@ To enforce constraints during optimization, populate `optimize.limits` with a li
 objects. Each object describes when to penalize a result:
 
 - `metric`: canonical metric name (e.g. `drawdown_worst_btc`, `loss_profit_ratio`, `adg`).
-- `penalize_if`: comparison operator. Use `<` / `>` (or `less_than` / `greater_than`), `outside_range`
+- `penalize_if`: comparison operator. Use `<`, `<=`, `>`, `>=`, `==` (or aliases like `less_than`
+  / `greater_than`), `outside_range`
   to keep a metric within `[low, high]`, or `inside_range` to forbid a band.
 - `value`: numeric threshold for `<`/`>` limits.
 - `range`: `[low, high]` for the range-based operators.
@@ -434,6 +435,7 @@ For quicker one-off edits, use repeatable `--limit` entries:
 passivbot optimize \
   --clear-limits \
   --limit 'drawdown_worst > 0.35' \
+  --limit 'backtest_completion_ratio<=1.0' \
   --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
   --limit 'adg < 0.0008 stat=mean'
 ```

@@ -1,6 +1,7 @@
 import json
 import shlex
 import math
+import re
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -75,6 +76,26 @@ def _parse_cli_range_token(token: str) -> List[Union[int, float]]:
     )
 
 
+_INLINE_LIMIT_OP_RE = re.compile(
+    r"^\s*(?P<metric>[^\s<>=!]+)\s*(?P<op><=|>=|==|<|>)\s*(?P<rhs>.+?)\s*$"
+)
+
+
+def _tokenize_cli_limit_entry(raw_entry: str) -> List[str]:
+    tokens = shlex.split(raw_entry)
+    if len(tokens) >= 3:
+        return tokens
+
+    match = _INLINE_LIMIT_OP_RE.match(raw_entry)
+    if not match:
+        return tokens
+
+    metric = match.group("metric")
+    op = match.group("op")
+    rhs_tokens = shlex.split(match.group("rhs"))
+    return [metric, op, *rhs_tokens]
+
+
 def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
     if isinstance(raw_entry, dict):
         return _normalize_limit_entry_preserve_extras(raw_entry)
@@ -87,7 +108,7 @@ def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, An
     if parsed is not None:
         raise ValueError("CLI --limit expects a single limit object, not a list.")
 
-    tokens = shlex.split(raw_entry)
+    tokens = _tokenize_cli_limit_entry(raw_entry)
     if len(tokens) < 3:
         raise ValueError(
             "CLI --limit format must be 'metric <op> value' or "
@@ -97,7 +118,14 @@ def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, An
     entry: Dict[str, Any] = {"metric": tokens[0], "penalize_if": tokens[1]}
     penalize_if = _normalize_penalize_if(tokens[1])
 
-    if penalize_if in {"greater_than", "less_than", "auto"}:
+    if penalize_if in {
+        "greater_than",
+        "greater_than_or_equal",
+        "less_than",
+        "less_than_or_equal",
+        "equal_to",
+        "auto",
+    }:
         numeric_value = _ensure_float(tokens[2])
         if numeric_value is None:
             raise ValueError(f"CLI --limit requires a numeric value, got {tokens[2]!r}")
@@ -186,16 +214,31 @@ def _normalize_penalize_if(value: Any) -> str:
     token = str(value).strip().lower()
     mapping = {
         ">": "greater_than",
+        ">=": "greater_than_or_equal",
         "gt": "greater_than",
+        "gte": "greater_than_or_equal",
+        "ge": "greater_than_or_equal",
         "greater": "greater_than",
         "greater_than": "greater_than",
+        "greater_than_or_equal": "greater_than_or_equal",
+        "greater_or_equal": "greater_than_or_equal",
         "above": "greater_than",
         "<": "less_than",
+        "<=": "less_than_or_equal",
         "lt": "less_than",
+        "lte": "less_than_or_equal",
+        "le": "less_than_or_equal",
         "lower": "less_than",
         "less": "less_than",
         "less_than": "less_than",
+        "less_than_or_equal": "less_than_or_equal",
+        "less_or_equal": "less_than_or_equal",
         "below": "less_than",
+        "==": "equal_to",
+        "=": "equal_to",
+        "eq": "equal_to",
+        "equal": "equal_to",
+        "equal_to": "equal_to",
         "outside": "outside_range",
         "outside_range": "outside_range",
         "out_of_range": "outside_range",
@@ -234,7 +277,14 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
     result: Dict[str, Any] = {"metric": metric, "penalize_if": penalize_if}
     if normalized_stat:
         result["stat"] = normalized_stat
-    if penalize_if in {"greater_than", "less_than", "auto"}:
+    if penalize_if in {
+        "greater_than",
+        "greater_than_or_equal",
+        "less_than",
+        "less_than_or_equal",
+        "equal_to",
+        "auto",
+    }:
         bound = payload.get("value")
         if bound is None:
             bound = payload.get("threshold")

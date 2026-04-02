@@ -566,7 +566,7 @@ The optimizer penalizes backtests whose metric values exceed or fall short of sp
 Any metric listed above (and its `btc_` prefixed counterpart when `backtest.use_btc_collateral=True`) can be used when defining limits. This includes the shared HSL metrics such as `hard_stop_time_in_red_pct`, `hard_stop_post_restart_retrigger_pct`, and `hard_stop_halt_to_restart_equity_loss_pct`, plus `backtest_completion_ratio` for rejecting truncated runs. HSL metrics are account-level shared metrics and therefore remain single-valued rather than being split into `_usd` and `_btc`. Each limit entry is a dictionary with:
 
 - `metric`: canonical metric name (`drawdown_worst_btc`, `loss_profit_ratio`, `peak_recovery_hours_pnl`, etc.).
-- `penalize_if`: one of `<`, `>`, `outside_range`, or `inside_range` (aliases like `less_than`, `greater_than`, `auto`, etc. are also accepted). Use `outside_range` to keep a metric within `[low, high]`, and `inside_range` to forbid a specific band.
+- `penalize_if`: one of `<`, `<=`, `>`, `>=`, `==`, `outside_range`, or `inside_range` (aliases like `less_than`, `greater_than`, `auto`, etc. are also accepted). Use `outside_range` to keep a metric within `[low, high]`, and `inside_range` to forbid a specific band.
 - `value`: numeric threshold for `<`/`>` modes.
 - `range`: two-value list `[low, high]` for the range modes.
 - Optional `enabled`: set to `false` to disable a default limit without deleting it. This prevents config normalization from re-adding that metric's default limit later.
@@ -604,6 +604,7 @@ For repeatable one-off entries, use `--limit`:
 passivbot optimize \
   --clear-limits \
   --limit 'drawdown_worst > 0.35' \
+  --limit 'backtest_completion_ratio<=1.0' \
   --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
   --limit 'adg < 0.0008 stat=mean'
 ```

@@ -150,12 +150,33 @@ def summarize_limit(info: LimitInfo) -> Tuple[str, str, str]:
         diff = info.value - info.bound
         status = "VIOL" if diff > 0 else "OK"
         return constraint, format_number(diff), status
+    if info.mode == "greater_than_or_equal":
+        constraint = f"< {format_number(info.bound)}"
+        if info.value is None or info.bound is None:
+            return constraint, "-", "-"
+        diff = info.value - info.bound
+        status = "VIOL" if diff >= 0 else "OK"
+        return constraint, format_number(diff), status
     if info.mode == "less_than":
         constraint = f"≥ {format_number(info.bound)}"
         if info.value is None or info.bound is None:
             return constraint, "-", "-"
         diff = info.bound - info.value
         status = "VIOL" if diff > 0 else "OK"
+        return constraint, format_number(diff), status
+    if info.mode == "less_than_or_equal":
+        constraint = f"> {format_number(info.bound)}"
+        if info.value is None or info.bound is None:
+            return constraint, "-", "-"
+        diff = info.bound - info.value
+        status = "VIOL" if diff >= 0 else "OK"
+        return constraint, format_number(diff), status
+    if info.mode == "equal_to":
+        constraint = f"≠ {format_number(info.bound)}"
+        if info.value is None or info.bound is None:
+            return constraint, "-", "-"
+        diff = abs(info.value - info.bound)
+        status = "VIOL" if diff == 0 else "OK"
         return constraint, format_number(diff), status
     if info.mode == "outside_range":
         low, high = info.range or (None, None)
