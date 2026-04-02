@@ -209,7 +209,7 @@ class TestResolveCliLimitsOverride:
         args = argparse.Namespace(
             **{
                 "optimize.limits": '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]',
-                "limit_entries": ["adg < 0.0008 stat=mean"],
+                "limit_entries": ["adg > 0.0008 stat=mean"],
                 "clear_limits": False,
             }
         )
@@ -220,7 +220,7 @@ class TestResolveCliLimitsOverride:
             {"metric": "drawdown_worst_usd", "penalize_if": "greater_than", "value": 0.35},
             {
                 "metric": "adg_usd",
-                "penalize_if": "less_than",
+                "penalize_if": "less_than_or_equal",
                 "value": 0.0008,
                 "stat": "mean",
             },
@@ -903,7 +903,7 @@ class TestConfigsToIndividuals:
         assert len(result) >= 1
         assert len(result[0]) == len(bounds)
 
-    def test_creates_twe_variant(self):
+    def test_deduplicates_quantized_seed_individuals(self):
         from config_utils import get_template_config
 
         config = get_template_config()
@@ -911,10 +911,8 @@ class TestConfigsToIndividuals:
 
         bounds = extract_bounds_tuple_list_from_config(config)
 
-        result = configs_to_individuals([config], bounds, 6)
+        result = configs_to_individuals([config, deepcopy(config)], bounds, 6)
 
-        # The current canonical default fixes long TWE at 1.25, so the synthetic
-        # 0.75x-TWE variant quantizes back to the same individual and dedupes away.
         assert len(result) == 1
 
     def test_invalid_config_logged(self):

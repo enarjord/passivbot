@@ -935,7 +935,6 @@ def _classify_optimize_argument(full_name: str, help_all: bool) -> Optional[str]
         "optimize.limits",
         "optimize.max_pending_starting_evals_per_cpu",
         "optimize.round_to_n_significant_digits",
-        "optimize.starting_config_twe_multiplier",
         "optimize.write_all_results",
     }
     optimize_deap = {

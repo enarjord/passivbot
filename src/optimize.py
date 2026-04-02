@@ -1570,13 +1570,6 @@ def configs_to_individuals(cfgs, bounds, sig_digits=0):
             fcfg = _build_starting_seed_config(cfg)
             individual = config_to_individual(fcfg, bounds, sig_digits)
             inds.add(tuple(individual))
-            # add duplicate of config, but with lowered total wallet exposure limit
-            fcfg2 = deepcopy(fcfg)
-            for pside in ["long", "short"]:
-                value = fcfg2["bot"][pside]["total_wallet_exposure_limit"] * 0.75
-                fcfg2["bot"][pside]["total_wallet_exposure_limit"] = value
-            individual2 = config_to_individual(fcfg2, bounds, sig_digits)
-            inds.add(tuple(individual2))
         except Exception as e:
             logging.warning(f"failed to use starting config as optimizer seed: {e}")
     return list(inds)

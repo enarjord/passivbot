@@ -284,19 +284,6 @@ This is mainly a memory-control knob for large seed pools, especially in suite m
 candidate returns a larger metrics payload. Lower it first if the VPS spikes RAM during initial
 seed evaluation.
 
-You can also ask the optimizer to try lower-TWE seed variants of each provided starting config:
-
-```json
-"optimize": {
-  "starting_config_twe_multiplier": 0.75
-}
-```
-
-For each loaded starting config, the optimizer attempts an extra variant where both
-`bot.long.total_wallet_exposure_limit` and `bot.short.total_wallet_exposure_limit` are multiplied
-by this factor before deduplication. Default `0.75`. Set it to `1.0` to disable the extra
-variants entirely.
-
 ### Optimizer Suites
 
 The optimizer reuses the backtest suite configuration and allows every candidate to
@@ -429,15 +416,18 @@ CLI overrides can replace the full limit set with the same JSON/HJSON payload:
 passivbot optimize --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
 
-For quicker one-off edits, use repeatable `--limit` entries:
+For quicker one-off edits, use repeatable `--limit` entries. The symbolic scalar operators
+in `--limit` are written as keep conditions, matching `pareto_store.py` filtering:
+- `--limit 'adg > 0.0008'` means keep only results with `adg > 0.0008`
+- `--limit 'drawdown_worst <= 0.35'` means keep only results with `drawdown_worst <= 0.35`
 
 ```bash
 passivbot optimize \
   --clear-limits \
-  --limit 'drawdown_worst > 0.35' \
-  --limit 'backtest_completion_ratio<=1.0' \
+  --limit 'drawdown_worst <= 0.35' \
+  --limit 'backtest_completion_ratio>=1.0' \
   --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
-  --limit 'adg < 0.0008 stat=mean'
+  --limit 'adg > 0.0008 stat=mean'
 ```
 
 You can also combine both forms. `--limits` loads a whole list first, and each `--limit`
@@ -446,13 +436,15 @@ appends one more canonical entry:
 ```bash
 passivbot optimize \
   --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]' \
-  --limit 'peak_recovery_hours_hsl < 500'
+  --limit 'peak_recovery_hours_hsl <= 500'
 ```
 
 Semantics:
 
 - `--limits` replaces `config.optimize.limits` for that run.
 - `--limit` is repeatable and appends one parsed entry to that replacement set.
+- `--limit` string expressions use keep-condition semantics for scalar operators (`>`, `>=`, `<`,
+  `<=`, `==`). Explicit JSON/HJSON limit objects still use direct `penalize_if` semantics.
 - `--clear-limits` starts from an empty limit list before any `--limits` or `--limit` entries are applied.
 
 Penalties are added to every objective as a positive modifier; they do not disqualify a config but will push it far from the Pareto front when violated. Metric names may include `_usd` / `_btc` suffixes to lock a denomination; when omitted, USD is assumed.
