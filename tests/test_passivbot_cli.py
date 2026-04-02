@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from passivbot_cli import main as cli_main
-from cli_utils import expand_help_all_argv
+from cli_utils import expand_help_all_argv, help_requested
 
 
 def test_root_help_lists_primary_commands(capsys):
@@ -57,6 +57,23 @@ def test_help_subcommand_forwards_to_command_help(monkeypatch):
 
     assert captured["module_name"] == "backtest"
     assert captured["argv"] == ["passivbot backtest", "-h"]
+
+
+def test_help_all_request_skips_full_install_gate(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: ["aiohttp"])
+
+    assert cli_main.main(["backtest", "--help-all"]) == 0
+
+    assert captured["module_name"] == "backtest"
+    assert captured["argv"] == ["passivbot backtest", "--help-all"]
 
 
 def test_tool_help_lists_supported_tools(capsys):
@@ -138,6 +155,30 @@ def test_console_main_accepts_symlinked_virtualenv_python(monkeypatch, tmp_path)
     monkeypatch.delenv(cli_main.ENV_MISMATCH_IGNORE_ENV, raising=False)
     monkeypatch.setattr(cli_main.sys, "executable", str(venv_prefix / "bin" / "python"))
     monkeypatch.setattr(cli_main.sys, "argv", ["passivbot", "-h"])
+    monkeypatch.setattr(cli_main, "main", lambda argv=None: 0)
+
+    with pytest.raises(SystemExit) as exc:
+        cli_main.console_main()
+
+    assert exc.value.code == 0
+
+
+def test_console_main_accepts_venv_with_base_interpreter_realpath(monkeypatch, tmp_path):
+    venv_prefix = tmp_path / "venv"
+    python_path = venv_prefix / "bin" / "python"
+    script_path = venv_prefix / "bin" / "passivbot"
+    script_path.parent.mkdir(parents=True)
+    python_path.write_text("", encoding="utf-8")
+    script_path.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv_prefix))
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    monkeypatch.delenv(cli_main.ENV_REEXEC_GUARD_ENV, raising=False)
+    monkeypatch.delenv(cli_main.ENV_MISMATCH_IGNORE_ENV, raising=False)
+    monkeypatch.setattr(cli_main.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr(cli_main.sys, "prefix", str(venv_prefix))
+    monkeypatch.setattr(cli_main.sys, "exec_prefix", str(venv_prefix))
+    monkeypatch.setattr(cli_main.sys, "argv", [str(script_path), "-h"])
     monkeypatch.setattr(cli_main, "main", lambda argv=None: 0)
 
     with pytest.raises(SystemExit) as exc:
@@ -325,6 +366,13 @@ def test_expand_help_all_argv_appends_help_when_needed():
 
 def test_expand_help_all_argv_preserves_explicit_help():
     assert expand_help_all_argv(["--help-all", "-h"]) == ["--help-all", "-h"]
+
+
+def test_help_requested_treats_help_all_as_help():
+    assert help_requested(["--help-all"]) is True
+    assert help_requested(["-h"]) is True
+    assert help_requested(["--help"]) is True
+    assert help_requested(["--iters", "10"]) is False
 
 
 def _configure_real_cli_module_test(monkeypatch, tmp_path: Path) -> None:

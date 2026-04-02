@@ -11,6 +11,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from cli_utils import help_requested
+
 
 @dataclass(frozen=True)
 class CommandSpec:
@@ -199,6 +201,15 @@ def _path_is_within(path: Path, root: Path) -> bool:
         return False
 
 
+def _current_interpreter_prefixes() -> tuple[Path, ...]:
+    prefixes: list[Path] = []
+    for value in (getattr(sys, "prefix", None), getattr(sys, "exec_prefix", None)):
+        if not value:
+            continue
+        prefixes.append(_resolve_path(value))
+    return tuple(dict.fromkeys(prefixes))
+
+
 def _env_bin_dir(prefix: Path) -> Path:
     return prefix / ("Scripts" if os.name == "nt" else "bin")
 
@@ -258,8 +269,14 @@ def _ensure_expected_environment() -> None:
     actual_python = _resolve_path(sys.executable)
     if _path_is_within(actual_python, prefix):
         return
+    if any(current_prefix == prefix for current_prefix in _current_interpreter_prefixes()):
+        return
 
+    script = _resolve_path(sys.argv[0]) if sys.argv and sys.argv[0] else None
     expected_script = _expected_console_script(prefix)
+    if script is not None and script == expected_script:
+        return
+
     expected_python = _expected_python(prefix)
     if expected_script.exists() and expected_python.exists() and not os.environ.get(ENV_REEXEC_GUARD_ENV):
         os.environ[ENV_REEXEC_GUARD_ENV] = "1"
@@ -285,7 +302,7 @@ def _missing_full_install_markers() -> list[str]:
 
 
 def _is_help_request(argv: list[str]) -> bool:
-    return any(arg in {"-h", "--help"} for arg in argv)
+    return help_requested(argv)
 
 
 def _invoke_module_main(module_name: str) -> tuple[bool, int]:

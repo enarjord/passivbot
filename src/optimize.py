@@ -1,6 +1,7 @@
 import os
 import sys
 import argparse
+from cli_utils import help_requested
 
 if sys.platform.startswith("win"):
     # ==== BEGIN fcntl stub for Windows ====
@@ -24,7 +25,7 @@ if sys.platform.startswith("win"):
     # ==== END fcntl stub for Windows ====
 
 # Rust extension check before importing compiled module
-from rust_utils import check_and_maybe_compile
+from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension
 
 _rust_parser = argparse.ArgumentParser(add_help=False)
 _rust_parser.add_argument("--skip-rust-compile", action="store_true", help="Skip Rust build check.")
@@ -37,9 +38,11 @@ _rust_parser.add_argument(
     help="Abort if Rust extension appears stale instead of attempting rebuild.",
 )
 _rust_known, _rust_remaining = _rust_parser.parse_known_args()
+_help_only = help_requested(_rust_remaining)
 try:
     check_and_maybe_compile(
-        skip=_rust_known.skip_rust_compile
+        skip=_help_only
+        or _rust_known.skip_rust_compile
         or os.environ.get("SKIP_RUST_COMPILE", "").lower() in ("1", "true", "yes"),
         force=_rust_known.force_rust_compile,
         fail_on_stale=_rust_known.fail_on_stale_rust,
@@ -50,6 +53,7 @@ except Exception as exc:
 sys.argv = [sys.argv[0]] + _rust_remaining
 
 import passivbot_rust as pbr
+verify_loaded_runtime_extension()
 from backtest import (
     prepare_hlcvs_mss,
     build_backtest_payload,

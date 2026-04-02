@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import time
+import types
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -14,9 +15,11 @@ from rust_utils import (
     latest_source_mtime,
     check_and_maybe_compile,
     extension_needs_rebuild,
+    prune_shadowing_local_extensions,
     preferred_compiled_path,
     source_fingerprint,
     source_stamp_path,
+    verify_loaded_runtime_extension,
     write_source_stamp,
 )
 
@@ -142,6 +145,18 @@ def test_extension_needs_rebuild_when_source_stamp_missing_or_mismatched(tmp_pat
     write_source_stamp(compiled, "abc123")
     assert extension_needs_rebuild(compiled, source_mtime, "abc123") is False
     assert source_stamp_path(compiled).exists()
+
+
+def test_extension_needs_rebuild_prefers_matching_stamp_over_newer_source_mtime(tmp_path: Path):
+    compiled = tmp_path / "passivbot_rust.cpython-312-darwin.so"
+    compiled.write_text("binary")
+    write_source_stamp(compiled, "abc123")
+
+    newer_source_mtime = compiled.stat().st_mtime + 60.0
+
+    assert extension_needs_rebuild(compiled, newer_source_mtime, "abc123") is False
+
+
 def test_installed_extension_candidates_find_root_level_maturin_module(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -195,3 +210,64 @@ def test_preferred_compiled_path_uses_actual_import_target_for_package_layout(
     )
 
     assert preferred_compiled_path() == installed
+
+
+def test_prune_shadowing_local_extensions_removes_src_copy_when_installed_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    local = src_dir / "passivbot_rust.cpython-312-darwin.so"
+    local.write_text("stale-local")
+    write_source_stamp(local, "old")
+
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    installed = site_packages / "passivbot_rust.cpython-312-darwin.so"
+    installed.write_text("fresh-installed")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("rust_utils._extension_suffixes", lambda: ["cpython-312-darwin.so"])
+    monkeypatch.setattr(
+        "rust_utils.sysconfig.get_paths",
+        lambda: {"platlib": str(site_packages), "purelib": str(site_packages)},
+    )
+
+    prune_shadowing_local_extensions()
+
+    assert installed.exists()
+    assert not local.exists()
+    assert not source_stamp_path(local).exists()
+
+
+def test_verify_loaded_runtime_extension_uses_loaded_package_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    site_packages = tmp_path / "site-packages"
+    package_dir = site_packages / "passivbot_rust"
+    package_dir.mkdir(parents=True)
+    init_py = package_dir / "__init__.py"
+    init_py.write_text("from .passivbot_rust import *\n")
+    installed = package_dir / "passivbot_rust.cpython-312-darwin.so"
+    installed.write_text("binary")
+    write_source_stamp(installed, "abc123")
+
+    module = types.ModuleType("passivbot_rust")
+    module.__file__ = str(init_py)
+    module.__path__ = [str(package_dir)]
+
+    monkeypatch.setitem(sys.modules, "passivbot_rust", module)
+    monkeypatch.setattr("rust_utils._extension_suffixes", lambda: ["cpython-312-darwin.so"])
+
+    info = verify_loaded_runtime_extension(fingerprint="abc123")
+
+    assert info["runtime_compiled_path"] == str(installed)
+    assert info["runtime_compiled_source_stamp"] == "abc123"
+
+
+def test_verify_loaded_runtime_extension_skips_stub_modules(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(sys.modules, "passivbot_rust", types.ModuleType("passivbot_rust"))
+
+    info = verify_loaded_runtime_extension(fingerprint="abc123")
+
+    assert info["skipped"] == "stub_module"

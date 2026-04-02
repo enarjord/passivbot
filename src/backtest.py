@@ -1,7 +1,8 @@
 import os
 import sys
 import argparse
-from rust_utils import check_and_maybe_compile
+from cli_utils import help_requested
+from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension
 
 # Perform Rust compilation check before importing any modules that may load the extension
 _rust_parser = argparse.ArgumentParser(add_help=False)
@@ -15,9 +16,11 @@ _rust_parser.add_argument(
     help="Abort if Rust extension appears stale instead of attempting rebuild.",
 )
 _rust_known, _rust_remaining = _rust_parser.parse_known_args()
+_help_only = help_requested(_rust_remaining)
 try:
     check_and_maybe_compile(
-        skip=_rust_known.skip_rust_compile
+        skip=_help_only
+        or _rust_known.skip_rust_compile
         or os.environ.get("SKIP_RUST_COMPILE", "").lower() in ("1", "true", "yes"),
         force=_rust_known.force_rust_compile,
         fail_on_stale=_rust_known.fail_on_stale_rust,
@@ -98,6 +101,7 @@ import traceback
 from logging_setup import configure_logging, resolve_log_level
 from suite_runner import extract_suite_config, filter_scenarios_by_label, run_backtest_suite_async
 import passivbot_rust as pbr  # noqa: E402
+verify_loaded_runtime_extension()
 from tools.event_loop_policy import set_windows_event_loop_policy
 
 

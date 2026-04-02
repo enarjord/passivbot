@@ -10,6 +10,10 @@ def get_cli_prog(default: str) -> str:
     return override or default
 
 
+def help_requested(argv: list[str]) -> bool:
+    return any(arg in {"-h", "--help", "--help-all"} for arg in argv)
+
+
 def help_all_requested(argv: list[str]) -> bool:
     return "--help-all" in argv
 
