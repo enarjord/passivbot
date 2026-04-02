@@ -169,13 +169,6 @@
                 }
             },
             {
-                "label": "n_positions=10",
-                "overrides": {
-                    "bot.long.n_positions": 10,
-                    "bot.short.n_positions": 10
-                }
-            },
-            {
                 "label": "n_positions=20",
                 "overrides": {
                     "bot.long.n_positions": 20,
@@ -189,7 +182,7 @@
                 }
             },
             {
-                "label": "twel=2",
+                "label": "twel_2",
                 "overrides": {
                     "bot.long.total_wallet_exposure_limit": 2
                 }
@@ -353,7 +346,7 @@
             "long_filter_volatility_ema_span": [10,720,1],
             "long_filter_volume_drop_pct": [0.4,1,0.01],
             "long_filter_volume_ema_span": [360,2880,10],
-            "long_n_positions": [1,20,1],
+            "long_n_positions": [10,10,1],
             "long_risk_twel_enforcer_threshold": [0.95,1.01,0.001],
             "long_risk_we_excess_allowance_pct": [0,0.4,0.01],
             "long_risk_wel_enforcer_threshold": [0.95,1.01,0.001],
@@ -409,38 +402,45 @@
             {
                 "metric": "drawdown_worst_btc",
                 "penalize_if": "greater_than",
-                "value": 0.85
+                "value": 0.85,
+                "enabled": false
             },
             {
                 "metric": "drawdown_worst_usd",
                 "penalize_if": "greater_than",
-                "value": 0.85
+                "value": 0.85,
+                "enabled": false
             },
             {
                 "metric": "loss_profit_ratio",
                 "penalize_if": "greater_than",
-                "value": 0.85
+                "value": 0.85,
+                "enabled": false
             },
             {
                 "metric": "adg_pnl",
                 "penalize_if": "less_than",
                 "stat": "mean",
-                "value": 0
+                "value": 0,
+                "enabled": false
             },
             {
                 "metric": "high_exposure_hours_max_long",
                 "penalize_if": "greater_than",
-                "value": 840
+                "value": 840,
+                "enabled": false
             },
             {
                 "metric": "peak_recovery_hours_pnl",
                 "penalize_if": "greater_than",
-                "value": 1680
+                "value": 1680,
+                "enabled": false
             },
             {
                 "metric": "position_held_hours_max",
                 "penalize_if": "greater_than",
-                "value": 840
+                "value": 840,
+                "enabled": false
             }
         ],
         "mutation_eta": 20,

@@ -24,6 +24,13 @@ import passivbot_rust as pbr
 import logging
 import math
 from pathlib import Path
+from cli_utils import (
+    add_help_all_argument,
+    build_command_parser,
+    expand_help_all_argv,
+    get_cli_prog,
+    help_all_requested,
+)
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
 from fill_events_manager import (
     FillEventsManager,
@@ -730,6 +737,14 @@ class Passivbot:
     def bot_value(self, pside: str, key: str):
         return require_config_value(self.config, f"bot.{pside}.{key}")
 
+    def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
+        """Hook: exchange-specific filtering for approved symbols used for new entries."""
+        return symbols
+
+    def _assert_supported_live_state(self) -> None:
+        """Hook: exchange-specific startup/runtime validation for unsupported live state."""
+        return None
+
     def _build_ccxt_options(self, overrides: Optional[dict] = None) -> dict:
         options = {"adjustForTimeDifference": True}
         recv_window = get_optional_live_value(self.config, "recv_window_ms", None)
@@ -1025,6 +1040,7 @@ class Passivbot:
         self.set_wallet_exposure_limits()
         await self.update_positions_and_balance()
         await self.update_open_orders()
+        self._assert_supported_live_state()
         await self.update_effective_min_cost()
         # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
         if self.is_forager_mode():
@@ -2697,6 +2713,7 @@ class Passivbot:
         await self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
         self.set_wallet_exposure_limits()
+        self._assert_supported_live_state()
         previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, "PB_modes") else None
         self.PB_modes = {"long": {}, "short": {}}
         # Compute a shared forager fetch budget once per cycle and split it fairly by side.
@@ -6334,8 +6351,8 @@ class Passivbot:
                 if self.live_value("empty_means_all_approved") and not self.approved_coins[pside]:
                     # if approved_coins is empty, all coins are approved
                     self.approved_coins[pside] = self.eligible_symbols
-                self.approved_coins_minus_ignored_coins[pside] = (
-                    self.approved_coins[pside] - self.ignored_coins[pside]
+                self.approved_coins_minus_ignored_coins[pside] = self._filter_approved_symbols(
+                    pside, self.approved_coins[pside] - self.ignored_coins[pside]
                 )
             # aggregate add/remove logs for readability
             for k, summary in (("added", added_summary.get("approved_coins", {})),):
@@ -6396,7 +6413,7 @@ class Passivbot:
                             }
                         )
                         logging.warning(
-                            "Stock perps detected in approved_coins (%s). HIP-3 stock perps support is experimental/WIP.",
+                            "Stock perps detected in approved_coins (%s). HIP-3 isolated margin is currently unsupported; isolated-only symbols will be skipped and existing isolated live state will fail loudly.",
                             ",".join(coins),
                         )
                         self._stock_perps_warning_logged = True
@@ -6544,15 +6561,50 @@ async def shutdown_bot(bot):
 
 async def main():
     """Entry point: parse CLI args, load config, and launch the bot lifecycle."""
-    parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
+    raw_argv = sys.argv[1:]
+    help_all = help_all_requested(raw_argv)
+    parser = build_command_parser(
+        prog=get_cli_prog("passivbot"),
+        description="run passivbot",
+        usage="%(prog)s [config_path] [options]",
+        epilog=(
+            "Examples:\n"
+            "  passivbot live configs/live/my_account.json\n"
+            "  passivbot live configs/live/my_account.json -s BTC,ETH --log-level info\n"
+            "\n"
+            "Use --help-all to show every config override flag."
+        ),
+    )
     parser.add_argument(
         "config_path",
         type=str,
         nargs="?",
         default="configs/template.json",
-        help="path to hjson passivbot config",
+        help="path to json/hjson passivbot config (defaults to configs/template.json if omitted)",
     )
-    parser.add_argument(
+    add_help_all_argument(
+        parser,
+        help_all=help_all,
+        help_text="Show all live-trading override flags, including advanced config overrides.",
+    )
+
+    logging_group = parser.add_argument_group("Logging")
+    logging_group.add_argument(
+        "--log-level",
+        dest="log_level",
+        default=None,
+        help="Logging verbosity (warning, info, debug, trace or 0-3).",
+    )
+    logging_group.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Enable verbose (debug) logging. Equivalent to --log-level debug.",
+    )
+
+    runtime_group = parser.add_argument_group("Runtime")
+    runtime_group.add_argument(
         "--custom-endpoints",
         dest="custom_endpoints",
         default=None,
@@ -6561,26 +6613,28 @@ async def main():
             "Use 'none' to disable overrides even if a default file exists."
         ),
     )
-    parser.add_argument(
-        "--log-level",
-        dest="log_level",
-        default=None,
-        help="Logging verbosity (warning, info, debug, trace or 0-3).",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        default=False,
-        help="Enable verbose (debug) logging. Equivalent to --log-level debug.",
-    )
+
+    group_map = {
+        "Coin Selection": parser.add_argument_group("Coin Selection"),
+        "Behavior": parser.add_argument_group("Behavior"),
+        "Runtime": runtime_group,
+        "Logging": logging_group,
+        "Advanced Overrides": parser.add_argument_group("Advanced Overrides"),
+    }
+
     template_config = get_template_config()
     del template_config["optimize"]
     del template_config["backtest"]
     if "logging" in template_config and isinstance(template_config["logging"], dict):
         template_config["logging"].pop("level", None)
-    add_config_arguments(parser, template_config)
-    raw_args = merge_negative_cli_values(sys.argv[1:])
+    add_config_arguments(
+        parser,
+        template_config,
+        command="live",
+        help_all=help_all,
+        group_map=group_map,
+    )
+    raw_args = merge_negative_cli_values(expand_help_all_argv(raw_argv))
     args = parser.parse_args(raw_args)
     # --verbose flag overrides --log-level to debug (level 2)
     cli_log_level = "debug" if args.verbose else args.log_level

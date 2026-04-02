@@ -1,3 +1,4 @@
+import argparse
 from copy import deepcopy
 from types import SimpleNamespace
 import json
@@ -15,7 +16,10 @@ from config_utils import (
     _normalize_position_counts,
     _rename_config_keys,
     _sync_with_template,
+    CLI_HELP_GROUPS,
+    add_config_arguments,
     get_template_config,
+    load_config,
     update_config_with_args,
     parse_overrides,
     format_config,
@@ -182,6 +186,66 @@ def test_normalize_limit_entries_supports_new_schema():
     assert normalized[3]["penalize_if"] == "inside_range"
 
 
+def test_normalize_limit_entries_preserves_optional_fields_on_canonical_entries():
+    raw = [
+        {
+            "metric": "drawdown_worst_btc",
+            "penalize_if": "greater_than",
+            "value": 0.85,
+            "enabled": False,
+        },
+        {
+            "metric": "adg_pnl",
+            "penalize_if": "less_than",
+            "stat": "mean",
+            "value": 0,
+            "enabled": False,
+        },
+    ]
+
+    normalized = config_utils.normalize_limit_entries(raw)
+
+    assert normalized[0]["enabled"] is False
+    assert normalized[1]["enabled"] is False
+
+
+def test_load_config_preserves_canonical_optimize_limits(tmp_path):
+    cfg = get_template_config()
+    cfg["optimize"]["limits"] = [
+        {
+            "metric": "drawdown_worst_btc",
+            "penalize_if": "greater_than",
+            "value": 0.85,
+            "enabled": False,
+        },
+        {
+            "metric": "adg_pnl",
+            "penalize_if": "less_than",
+            "stat": "mean",
+            "value": 0,
+            "enabled": False,
+        },
+    ]
+    path = tmp_path / "limits.json"
+    path.write_text(json.dumps(cfg))
+
+    loaded = load_config(str(path), verbose=False)
+
+    assert loaded["optimize"]["limits"] == cfg["optimize"]["limits"]
+
+
+def test_load_config_malformed_optimize_limits_falls_back_to_template(caplog, tmp_path):
+    cfg = get_template_config()
+    cfg["optimize"]["limits"] = [{"metric": "adg_pnl", "value": 0}]
+    path = tmp_path / "malformed_limits.json"
+    path.write_text(json.dumps(cfg))
+
+    loaded = load_config(str(path), verbose=False)
+
+    assert loaded["optimize"]["limits"] == get_template_config()["optimize"]["limits"]
+    assert any("optimize.limits malformed or unsupported" in rec.message for rec in caplog.records)
+
+
 def test_normalize_limit_entries_preserves_integers():
     raw = {"penalize_if_greater_than_position_held_hours_max": 2016}
     normalized = config_utils.normalize_limit_entries(raw)
@@ -346,3 +410,72 @@ def test_backtest_filter_min_cost_inherits_from_live():
     formatted = format_config(cfg, verbose=False)
 
     assert formatted["backtest"]["filter_by_min_effective_cost"] is True
+
+
+def _format_parser_help_with_config(command: str, config: dict, help_all: bool) -> str:
+    parser = argparse.ArgumentParser(prog=command)
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get(command, [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command=command,
+        help_all=help_all,
+        group_map=group_map,
+    )
+    return parser.format_help()
+
+
+def test_optimize_default_help_groups_common_flags_and_hides_bounds():
+    config = get_template_config()
+    help_text = _format_parser_help_with_config("optimize", config, help_all=False)
+
+    assert "Coin Selection:" in help_text
+    assert "Date Range:" in help_text
+    assert "Optimizer:" in help_text
+    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
+    assert "--population-size INT, -ps INT" in help_text
+    assert "--backend BACKEND, -ob BACKEND" in help_text
+    assert "--optimize_population_size" not in help_text
+    assert "--optimize.bounds.long_close_grid_markup_end" not in help_text
+    assert "Optimize DEAP:" not in help_text
+    assert "Optimize Pymoo:" not in help_text
+
+
+def test_optimize_help_all_shows_hidden_bounds_flags():
+    config = get_template_config()
+    help_text = _format_parser_help_with_config("optimize", config, help_all=True)
+
+    assert "Optimize Bounds:" in help_text
+    assert "--optimize.bounds.long_close_grid_markup_end MIN,MAX[,STEP]" in help_text
+
+
+def test_live_default_help_shows_curated_groups():
+    config = get_template_config()
+    del config["optimize"]
+    del config["backtest"]
+    help_text = _format_parser_help_with_config("live", config, help_all=False)
+
+    assert "Coin Selection:" in help_text
+    assert "Behavior:" in help_text
+    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
+    assert "--ignored-coins CSV_OR_PATH" in help_text
+    assert "--minimum-coin-age-days FLOAT" in help_text
+    assert "--hedge-mode Y/N" in help_text
+    assert "--live.auto_gs" not in help_text
+    assert "--optimize.iters" not in help_text
+
+
+def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
+    config = get_template_config()
+    help_text = _format_parser_help_with_config("backtest", config, help_all=False)
+
+    assert "Coin Selection:" in help_text
+    assert "Date Range:" in help_text
+    assert "Backtest Runtime:" in help_text
+    assert "Suite:" in help_text
+    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
+    assert "--ignored-coins CSV_OR_PATH" in help_text
+    assert "--aggregate-default VALUE" in help_text
+    assert "--iters INT, -i INT" not in help_text
