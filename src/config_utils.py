@@ -782,6 +782,8 @@ def _register_argument(container, visible_names, hidden_names, **kwargs):
     hidden_kwargs = dict(kwargs)
     hidden_kwargs["help"] = argparse.SUPPRESS
     for alias in hidden_names:
+        if alias in container._option_string_actions:
+            continue
         container.add_argument(alias, **hidden_kwargs)
 
 
@@ -1098,10 +1100,13 @@ def add_arguments_recursively(
                 container = (
                     group_map.get(visible_group, parser) if group_map and visible_group else parser
                 )
+                hidden_names = [f"--{full_name.replace('.', '_')}"]
+                if command is None:
+                    hidden_names.append(f"-{acronym}")
                 _register_argument(
                     container,
                     [f"--{full_name}"],
-                    [f"--{full_name.replace('.', '_')}", f"-{acronym}"],
+                    hidden_names,
                     type=comma_separated_values,
                     dest=full_name,
                     required=False,
@@ -1158,10 +1163,13 @@ def add_arguments_recursively(
                 )
             visible_group = classify_config_argument(full_name, command, help_all)
             container = group_map.get(visible_group, parser) if group_map and visible_group else parser
+            hidden_names = [f"--{full_name.replace('.', '_')}"]
+            if command is None:
+                hidden_names.append(f"-{acronym}")
             _register_argument(
                 container,
                 [f"--{full_name}"],
-                [f"--{full_name.replace('.', '_')}", f"-{acronym}"],
+                hidden_names,
                 type=type_,
                 dest=full_name,
                 required=False,

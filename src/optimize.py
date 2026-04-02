@@ -1675,6 +1675,7 @@ async def main():
     )
     optimize_common_group = group_map["Optimize Common"]
     optimize_common_group.add_argument(
+        "-l",
         "--limit",
         action="append",
         dest="limit_entries",

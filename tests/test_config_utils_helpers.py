@@ -639,6 +639,7 @@ def _format_parser_help_with_config(command: str, config: dict, help_all: bool) 
 
         add_extra_options(group_map["Advanced Overrides"], help_all=help_all)
         group_map["Optimize Common"].add_argument(
+            "-l",
             "--limit",
             action="append",
             dest="limit_entries",
@@ -664,7 +665,7 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "--population-size INT, -ps INT" in help_text
     assert "--backend BACKEND, -ob BACKEND" in help_text
     assert "--limits JSON_OR_HJSON" in help_text
-    assert "--limit SPEC" in help_text
+    assert "-l SPEC, --limit SPEC" in help_text
     assert "--clear-limits" in help_text
     assert "--minimum-coin-age-days FLOAT, -mcad FLOAT" in help_text
     assert "--hedge-mode Y/N, -hm Y/N" not in help_text
@@ -682,7 +683,7 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     assert "Optimize Bounds:" in help_text
     assert "--optimize.bounds.long_close_grid_markup_end MIN,MAX[,STEP]" in help_text
     assert "--limits JSON_OR_HJSON" in help_text
-    assert "--limit SPEC" in help_text
+    assert "-l SPEC, --limit SPEC" in help_text
     assert "--hedge-mode Y/N, -hm Y/N" in help_text
     assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
 
