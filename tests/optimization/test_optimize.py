@@ -205,6 +205,29 @@ class TestResolveCliLimitsOverride:
         args = argparse.Namespace(**{"optimize.limits": None, "limit_entries": None, "clear_limits": False})
         assert _resolve_cli_limits_override(args) is None
 
+    def test_limit_entries_append_to_existing_config_limits_by_default(self):
+        args = argparse.Namespace(
+            **{
+                "optimize.limits": None,
+                "limit_entries": ["adg > 0.0008"],
+                "clear_limits": False,
+            }
+        )
+
+        result = _resolve_cli_limits_override(
+            args,
+            existing_limits=[{"metric": "drawdown_worst", "penalize_if": ">", "value": 0.35}],
+        )
+
+        assert result == [
+            {"metric": "drawdown_worst_usd", "penalize_if": "greater_than", "value": 0.35},
+            {
+                "metric": "adg_usd",
+                "penalize_if": "less_than_or_equal",
+                "value": 0.0008,
+            },
+        ]
+
     def test_combines_limits_payload_and_repeatable_limit_entries(self):
         args = argparse.Namespace(
             **{
@@ -226,11 +249,60 @@ class TestResolveCliLimitsOverride:
             },
         ]
 
+    def test_limits_payload_replaces_existing_config_limits_before_appending(self):
+        args = argparse.Namespace(
+            **{
+                "optimize.limits": '[{"metric":"backtest_completion_ratio","penalize_if":"<","value":1.0}]',
+                "limit_entries": ["adg > 0.0008"],
+                "clear_limits": False,
+            }
+        )
+
+        result = _resolve_cli_limits_override(
+            args,
+            existing_limits=[{"metric": "drawdown_worst", "penalize_if": ">", "value": 0.35}],
+        )
+
+        assert result == [
+            {
+                "metric": "backtest_completion_ratio",
+                "penalize_if": "less_than",
+                "value": 1.0,
+            },
+            {
+                "metric": "adg_usd",
+                "penalize_if": "less_than_or_equal",
+                "value": 0.0008,
+            },
+        ]
+
     def test_clear_limits_returns_empty_list(self):
         args = argparse.Namespace(
             **{"optimize.limits": None, "limit_entries": None, "clear_limits": True}
         )
         assert _resolve_cli_limits_override(args) == []
+
+    def test_clear_limits_discards_existing_config_limits_before_appending(self):
+        args = argparse.Namespace(
+            **{
+                "optimize.limits": None,
+                "limit_entries": ["adg > 0.0008"],
+                "clear_limits": True,
+            }
+        )
+
+        result = _resolve_cli_limits_override(
+            args,
+            existing_limits=[{"metric": "drawdown_worst", "penalize_if": ">", "value": 0.35}],
+        )
+
+        assert result == [
+            {
+                "metric": "adg_usd",
+                "penalize_if": "less_than_or_equal",
+                "value": 0.0008,
+            }
+        ]
 
 
 def test_optimize_parser_accepts_short_limit_alias():

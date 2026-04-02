@@ -1384,7 +1384,7 @@ def add_extra_options(parser, *, help_all: bool):
     )
 
 
-def _resolve_cli_limits_override(args) -> list[dict] | None:
+def _resolve_cli_limits_override(args, existing_limits=None) -> list[dict] | None:
     raw_limits_payload = getattr(args, "optimize.limits", None)
     raw_limit_entries = list(getattr(args, "limit_entries", []) or [])
     clear_limits = bool(getattr(args, "clear_limits", False))
@@ -1393,6 +1393,8 @@ def _resolve_cli_limits_override(args) -> list[dict] | None:
         return None
 
     replacement: list[dict] = []
+    if not clear_limits and raw_limits_payload is None and existing_limits is not None:
+        replacement.extend(normalize_limit_entries(existing_limits))
     if raw_limits_payload is not None:
         replacement.extend(normalize_limit_entries(raw_limits_payload))
     if raw_limit_entries:
@@ -1693,8 +1695,9 @@ async def main():
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
+    existing_limits = deepcopy(source_config.get("optimize", {}).get("limits"))
     update_config_with_args(source_config, args, verbose=True)
-    cli_limits_override = _resolve_cli_limits_override(args)
+    cli_limits_override = _resolve_cli_limits_override(args, existing_limits=existing_limits)
     if cli_limits_override is not None:
         recursive_config_update(
             source_config,
