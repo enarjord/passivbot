@@ -1,6 +1,8 @@
 import argparse
+import json
 import logging
 import re
+from collections import Counter
 from copy import deepcopy
 from typing import Any, Dict, Tuple, List, Union, Optional, Iterable
 
@@ -77,6 +79,48 @@ from utils import dump_json_streamlined, normalize_coins_source, symbol_to_coin
 
 def _log_config(verbose: bool, level: int, message: str, *args) -> None:
     log_config_message(verbose, level, message, *args)
+
+
+def _canonical_log_json(value: Any) -> str:
+    return json.dumps(sort_dict_keys(deepcopy(value)), sort_keys=True, separators=(",", ":"))
+
+
+def _format_optimize_limits_change_for_log(old_value: Any, new_value: Any) -> Optional[str]:
+    if not isinstance(old_value, list) or not isinstance(new_value, list):
+        return None
+    if not all(isinstance(x, dict) for x in old_value) or not all(isinstance(x, dict) for x in new_value):
+        return None
+
+    old_counter = Counter(_canonical_log_json(entry) for entry in old_value)
+    new_counter = Counter(_canonical_log_json(entry) for entry in new_value)
+
+    added: list[Any] = []
+    removed: list[Any] = []
+
+    for payload, count in sorted((new_counter - old_counter).items()):
+        added.extend(json.loads(payload) for _ in range(count))
+    for payload, count in sorted((old_counter - new_counter).items()):
+        removed.extend(json.loads(payload) for _ in range(count))
+
+    if not added and not removed:
+        return "changed optimize.limits normalized formatting only"
+
+    parts: list[str] = ["changed optimize.limits"]
+    if added:
+        noun = "entry" if len(added) == 1 else "entries"
+        parts.append(f"added {len(added)} {noun}: {added}")
+    if removed:
+        noun = "entry" if len(removed) == 1 else "entries"
+        parts.append(f"removed {len(removed)} {noun}: {removed}")
+    return " | ".join(parts)
+
+
+def _format_config_change_message(full_path: str, old_value: Any, new_value: Any) -> tuple[str, tuple[Any, ...]]:
+    if full_path == "optimize.limits":
+        custom = _format_optimize_limits_change_for_log(old_value, new_value)
+        if custom is not None:
+            return custom, ()
+    return "changed %s %s -> %s", (full_path, old_value, new_value)
 
 
 Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
@@ -1205,9 +1249,8 @@ def recursive_config_update(config, key, value, path=None, verbose=False):
         if coerced_value != config[key]:
             full_path = ".".join(path + [key])
             old_value = deepcopy(config[key])
-            _log_config(
-                verbose, logging.INFO, "changed %s %s -> %s", full_path, config[key], coerced_value
-            )
+            message, args = _format_config_change_message(full_path, config[key], coerced_value)
+            _log_config(verbose, logging.INFO, message, *args)
             config[key] = coerced_value
             return {"path": full_path, "old": old_value, "new": deepcopy(coerced_value)}
         return None

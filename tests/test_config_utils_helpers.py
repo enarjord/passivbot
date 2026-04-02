@@ -638,6 +638,29 @@ def test_update_config_with_args_records_old_new_values():
     assert diff["new"] == "2022-01-01"
 
 
+def test_update_config_with_args_logs_optimize_limits_as_diff(caplog):
+    config = get_template_config()
+    original_limits = deepcopy(config["optimize"]["limits"])
+    args = SimpleNamespace()
+    vars(args)["optimize.limits"] = original_limits + [
+        {
+            "metric": "adg_strategy_pnl_rebased",
+            "penalize_if": "less_than_or_equal",
+            "value": 0,
+        }
+    ]
+
+    with caplog.at_level(logging.INFO):
+        update_config_with_args(config, args, verbose=True)
+
+    messages = [rec.message for rec in caplog.records]
+    target = [msg for msg in messages if msg.startswith("[config] changed optimize.limits")]
+    assert target, messages
+    assert "added 1 entry" in target[-1]
+    assert "adg_strategy_pnl_rebased" in target[-1]
+    assert " -> " not in target[-1]
+
+
 def test_backtest_filter_min_cost_inherits_from_live():
     cfg = get_template_config()
     cfg["live"]["filter_by_min_effective_cost"] = True
