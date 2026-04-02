@@ -74,6 +74,7 @@ from cli_utils import (
 from config import load_input_config, load_prepared_config, prepare_config
 from config.access import get_optional_config_value, require_config_value
 from config.bot import normalize_forager_score_weights
+from config.limits import normalize_limit_entries, parse_limit_cli_entries
 from config.scoring import (
     ObjectiveSpec,
     default_scoring_weights,
@@ -1383,6 +1384,22 @@ def add_extra_options(parser, *, help_all: bool):
     )
 
 
+def _resolve_cli_limits_override(args) -> list[dict] | None:
+    raw_limits_payload = getattr(args, "optimize.limits", None)
+    raw_limit_entries = list(getattr(args, "limit_entries", []) or [])
+    clear_limits = bool(getattr(args, "clear_limits", False))
+
+    if raw_limits_payload is None and not raw_limit_entries and not clear_limits:
+        return None
+
+    replacement: list[dict] = []
+    if raw_limits_payload is not None:
+        replacement.extend(normalize_limit_entries(raw_limits_payload))
+    if raw_limit_entries:
+        replacement.extend(parse_limit_cli_entries(raw_limit_entries))
+    return normalize_limit_entries(replacement)
+
+
 def apply_fine_tune_bounds(
     config: dict,
     fine_tune_params: list[str],
@@ -1656,6 +1673,25 @@ async def main():
         help_all=help_all,
         group_map=group_map,
     )
+    optimize_common_group = group_map["Optimize Common"]
+    optimize_common_group.add_argument(
+        "--limit",
+        action="append",
+        dest="limit_entries",
+        default=None,
+        metavar="SPEC",
+        help=(
+            "Repeatable optimize limit override. Example: "
+            "\"drawdown_worst > 0.35\" or "
+            "\"loss_profit_ratio outside_range [0.05,0.7]\""
+        ),
+    )
+    optimize_common_group.add_argument(
+        "--clear-limits",
+        action="store_true",
+        dest="clear_limits",
+        help="Replace optimize.limits with an empty list before applying any --limits/--limit entries.",
+    )
     add_extra_options(group_map["Advanced Overrides"], help_all=help_all)
     raw_args = merge_negative_cli_values(expand_help_all_argv(raw_argv))
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
@@ -1664,6 +1700,14 @@ async def main():
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
     update_config_with_args(source_config, args, verbose=True)
+    cli_limits_override = _resolve_cli_limits_override(args)
+    if cli_limits_override is not None:
+        recursive_config_update(
+            source_config,
+            "optimize.limits",
+            cli_limits_override,
+            verbose=True,
+        )
     config = prepare_config(
         source_config,
         base_config_path=base_config_path,

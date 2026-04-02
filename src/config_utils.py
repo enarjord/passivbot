@@ -36,6 +36,8 @@ from config.hydrate import (
 from config.limits import (
     _resolve_optimize_limits_for_load,
     normalize_limit_entries,
+    parse_limit_cli_entries,
+    parse_limit_cli_entry,
     parse_limits_string,
 )
 from config.log_output import log_config_message
@@ -730,6 +732,15 @@ RESERVED_CLI_ARGS = {
         "commands": {"optimize"},
         "group": {"optimize": "Optimizer"},
         "help": "Optimizer backend to use. Supported values: deap or pymoo.",
+    },
+    "optimize.limits": {
+        "visible": ["--limits"],
+        "hidden": ["--optimize.limits", "--optimize_limits"],
+        "type": str,
+        "metavar": "JSON_OR_HJSON",
+        "commands": {"optimize"},
+        "group": {"optimize": "Optimize Common"},
+        "help": "Replace optimize.limits for this run with a JSON/HJSON list of limit objects.",
     },
 }
 

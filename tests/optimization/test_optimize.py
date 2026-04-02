@@ -7,6 +7,7 @@ to enable safe refactoring. They document how the code actually works today.
 
 import math
 import os
+import argparse
 from multiprocessing.reduction import ForkingPickler
 import tempfile
 from copy import deepcopy
@@ -22,6 +23,7 @@ from optimize import (
     _clear_candidate_metrics,
     _looks_like_bool_token,
     _normalize_optional_bool_flag,
+    _resolve_cli_limits_override,
     _set_candidate_metrics,
     _format_objectives,
     individual_to_config,
@@ -196,6 +198,39 @@ class TestNormalizeOptionalBoolFlag:
         argv = ["--suite", "custom_value"]
         result = _normalize_optional_bool_flag(argv, "--suite")
         assert result == ["--suite=true", "custom_value"]
+
+
+class TestResolveCliLimitsOverride:
+    def test_returns_none_when_no_limit_flags_present(self):
+        args = argparse.Namespace(**{"optimize.limits": None, "limit_entries": None, "clear_limits": False})
+        assert _resolve_cli_limits_override(args) is None
+
+    def test_combines_limits_payload_and_repeatable_limit_entries(self):
+        args = argparse.Namespace(
+            **{
+                "optimize.limits": '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]',
+                "limit_entries": ["adg < 0.0008 stat=mean"],
+                "clear_limits": False,
+            }
+        )
+
+        result = _resolve_cli_limits_override(args)
+
+        assert result == [
+            {"metric": "drawdown_worst_usd", "penalize_if": "greater_than", "value": 0.35},
+            {
+                "metric": "adg_usd",
+                "penalize_if": "less_than",
+                "value": 0.0008,
+                "stat": "mean",
+            },
+        ]
+
+    def test_clear_limits_returns_empty_list(self):
+        args = argparse.Namespace(
+            **{"optimize.limits": None, "limit_entries": None, "clear_limits": True}
+        )
+        assert _resolve_cli_limits_override(args) == []
 
 
 class TestFormatObjectives:

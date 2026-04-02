@@ -1,7 +1,10 @@
 import json
+import shlex
 import math
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple, Union
+
+import hjson
 
 from .metrics import canonicalize_limit_name, canonicalize_metric_name
 
@@ -23,6 +26,107 @@ def parse_limits_string(limits_str: Union[str, dict]) -> dict:
         except ValueError:
             raise ValueError(f"Invalid limits format for token: {token}")
     return result
+
+
+def _parse_jsonish(raw: str) -> Any:
+    stripped = str(raw).strip()
+    if not stripped or stripped[0] not in "[{" or stripped[-1] not in "]}":
+        return None
+    try:
+        return hjson.loads(stripped)
+    except Exception:
+        try:
+            return json.loads(stripped)
+        except Exception:
+            return None
+
+
+def _parse_cli_bool(token: str) -> bool:
+    normalized = str(token).strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean token {token!r}; expected true/false.")
+
+
+def _parse_cli_range_token(token: str) -> List[Union[int, float]]:
+    parsed = _parse_jsonish(token)
+    if isinstance(parsed, (list, tuple)) and len(parsed) == 2:
+        bounds = _extract_range(parsed)
+        if bounds is None:
+            raise ValueError(f"Invalid range token {token!r}")
+        return [
+            _restore_numeric_precision(bounds[0]),
+            _restore_numeric_precision(bounds[1]),
+        ]
+    if "," in token:
+        parts = [part.strip() for part in token.split(",")]
+        if len(parts) == 2:
+            bounds = _extract_range(parts)
+            if bounds is None:
+                raise ValueError(f"Invalid range token {token!r}")
+            return [
+                _restore_numeric_precision(bounds[0]),
+                _restore_numeric_precision(bounds[1]),
+            ]
+    raise ValueError(
+        f"Invalid range token {token!r}; expected [low,high] or low,high."
+    )
+
+
+def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+    if isinstance(raw_entry, dict):
+        return _normalize_limit_entry_preserve_extras(raw_entry)
+    if not isinstance(raw_entry, str) or not raw_entry.strip():
+        raise ValueError("CLI limit entries must be non-empty strings.")
+
+    parsed = _parse_jsonish(raw_entry)
+    if isinstance(parsed, dict):
+        return _normalize_limit_entry_preserve_extras(parsed)
+    if parsed is not None:
+        raise ValueError("CLI --limit expects a single limit object, not a list.")
+
+    tokens = shlex.split(raw_entry)
+    if len(tokens) < 3:
+        raise ValueError(
+            "CLI --limit format must be 'metric <op> value' or "
+            "'metric outside_range [low,high]'."
+        )
+
+    entry: Dict[str, Any] = {"metric": tokens[0], "penalize_if": tokens[1]}
+    penalize_if = _normalize_penalize_if(tokens[1])
+
+    if penalize_if in {"greater_than", "less_than", "auto"}:
+        numeric_value = _ensure_float(tokens[2])
+        if numeric_value is None:
+            raise ValueError(f"CLI --limit requires a numeric value, got {tokens[2]!r}")
+        entry["value"] = _restore_numeric_precision(numeric_value)
+    else:
+        entry["range"] = _parse_cli_range_token(tokens[2])
+
+    for token in tokens[3:]:
+        if "=" not in token:
+            raise ValueError(
+                f"Unsupported CLI --limit token {token!r}; expected key=value."
+            )
+        key, value = token.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if key == "stat":
+            entry["stat"] = value
+        elif key == "enabled":
+            entry["enabled"] = _parse_cli_bool(value)
+        else:
+            raise ValueError(
+                f"Unsupported CLI --limit option {key!r}; supported extras are stat=... and enabled=..."
+            )
+
+    return _normalize_limit_entry_preserve_extras(entry)
+
+
+def parse_limit_cli_entries(raw_entries: List[Union[str, Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    return [parse_limit_cli_entry(entry) for entry in raw_entries]
 
 
 def _ensure_float(value: Any) -> Optional[float]:
@@ -237,9 +341,8 @@ def normalize_limit_entries(
         if not stripped:
             return []
         if stripped[0] in "[{":
-            try:
-                parsed = json.loads(stripped)
-            except json.JSONDecodeError:
+            parsed = _parse_jsonish(stripped)
+            if parsed is None:
                 parsed = parse_limits_string(stripped)
         else:
             parsed = parse_limits_string(stripped)

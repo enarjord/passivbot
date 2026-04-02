@@ -422,13 +422,36 @@ Example:
 ]
 ```
 
-CLI overrides accept the same JSON/HJSON payload:
+CLI overrides can replace the full limit set with the same JSON/HJSON payload:
 
 ```bash
 passivbot optimize --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
 
-For quick CLI tweaks, Passivbot also accepts shorthand flags such as `--penalize_if_greater_than_drawdown_worst 0.3` and converts them to the structured schema at runtime.
+For quicker one-off edits, use repeatable `--limit` entries:
+
+```bash
+passivbot optimize \
+  --clear-limits \
+  --limit 'drawdown_worst > 0.35' \
+  --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
+  --limit 'adg < 0.0008 stat=mean'
+```
+
+You can also combine both forms. `--limits` loads a whole list first, and each `--limit`
+appends one more canonical entry:
+
+```bash
+passivbot optimize \
+  --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]' \
+  --limit 'peak_recovery_hours_hsl < 500'
+```
+
+Semantics:
+
+- `--limits` replaces `config.optimize.limits` for that run.
+- `--limit` is repeatable and appends one parsed entry to that replacement set.
+- `--clear-limits` starts from an empty limit list before any `--limits` or `--limit` entries are applied.
 
 Penalties are added to every objective as a positive modifier; they do not disqualify a config but will push it far from the Pareto front when violated. Metric names may include `_usd` / `_btc` suffixes to lock a denomination; when omitted, USD is assumed.
 

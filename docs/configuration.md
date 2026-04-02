@@ -592,13 +592,27 @@ To intentionally opt out of a default limit, keep the metric name but disable it
 {"metric": "backtest_completion_ratio", "enabled": false}
 ```
 
-For quick CLI overrides you can pass the JSON/HJSON string directly:
+For CLI overrides you can replace the full list with a JSON/HJSON payload:
 
 ```
 passivbot optimize --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
 
-Passivbot also accepts the shorthand CLI syntax (`--penalize_if_greater_than_*`) and normalizes it into the list form at runtime.
+For repeatable one-off entries, use `--limit`:
+
+```bash
+passivbot optimize \
+  --clear-limits \
+  --limit 'drawdown_worst > 0.35' \
+  --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
+  --limit 'adg < 0.0008 stat=mean'
+```
+
+CLI replacement rules:
+
+- `--limits` replaces `config.optimize.limits` for that run.
+- `--limit` appends one parsed limit entry and may be repeated.
+- `--clear-limits` starts from an empty limit list before any `--limits` or `--limit` entries are applied.
 
 ## Configuration Internals
 
