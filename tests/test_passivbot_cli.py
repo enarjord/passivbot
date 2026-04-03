@@ -84,7 +84,9 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "monitor-relay" in out
     assert "monitor-web" in out
     assert "monitor-tui" in out
+    assert "pareto" in out
     assert "pareto-dash" in out
+    assert "pareto-explorer" in out
     assert "streamline-json" in out
     assert "verify-hlcvs-data" in out
     assert "requires full install" in out
@@ -208,6 +210,30 @@ def test_tool_dispatch_forwards_module_and_prog(monkeypatch):
         "optimize_results",
     ]
     assert captured["prog_env"] == "passivbot tool pareto-dash"
+
+
+def test_pareto_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "pareto", "optimize_results/example/pareto", "-m", "knee"]) == 0
+
+    assert captured["module_name"] == "tools.pareto_explorer"
+    assert captured["argv"] == [
+        "passivbot tool pareto",
+        "optimize_results/example/pareto",
+        "-m",
+        "knee",
+    ]
+    assert captured["prog_env"] == "passivbot tool pareto"
 
 
 def test_monitor_relay_tool_dispatch_forwards_module_and_prog(monkeypatch):

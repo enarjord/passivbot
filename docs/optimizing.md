@@ -365,12 +365,45 @@ diagnosed directly from the artifact.
 Full analysis is included in each member of the Pareto front. Two helper tools are available:
 
 ```bash
+# Single-candidate selector
+passivbot tool pareto optimize_results/.../pareto -m knee
+passivbot tool pareto -m knee
+
 # Interactive dashboard (recommended)
 passivbot tool pareto-dash --data-root optimize_results
 
 # Static matplotlib plotter
 python3 src/pareto_store.py optimize_results/.../pareto/
 ```
+
+`passivbot tool pareto` is the quickest way to promote one config from a large Pareto set. It
+loads the JSON artifacts, optionally filters them with `--limit` / `--limits`, then chooses one
+candidate using a named decision rule. It accepts either a `pareto/` directory, an optimize run
+directory, or no path at all, in which case it falls back to the newest local
+`optimize_results/.../pareto`. Recommended workflow:
+
+1. apply hard filters with `--limit`
+2. use `-m reference` if you already know your target ADG / drawdown / recovery regime
+3. otherwise use `-m knee` for a balanced compromise
+4. use `--show-top N` to inspect the shortlist before promoting one config
+5. use `--json` if you want to script the selection
+
+Available methods:
+
+- `knee`: approximate balanced compromise point
+- `reference`: closest to user-specified targets via `--target metric=value`
+- `ideal`: closest to the observed ideal point
+- `utility`: weighted scalarization via `--weight metric=value`
+- `lexicographic`: strict objective priority via `--priority metric_a,metric_b,...`
+- `outranking`: simplified PROMETHEE-style pairwise ranking
+
+These are practical selection heuristics for large Passivbot Pareto fronts rather than fully
+formal MCDM implementations. For most real runs, `knee`, `reference`, and `utility` are the most
+useful methods.
+
+`--objectives` can also reference stored metrics outside the original `optimize.scoring` list,
+for example `sharpe_ratio_strategy_pnl_rebased`, as long as that metric is present in the saved
+Pareto JSON and Passivbot has a known default min/max direction for it.
 
 `pareto_dash.py` scans one or more optimization runs and launches a Plotly Dash app with:
 

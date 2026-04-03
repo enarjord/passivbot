@@ -16,6 +16,48 @@ passivbot tool pareto-dash --data-root optimize_results
 
 Pass `--run optimize_results/<timestamp>/` to load a specific run or point it at the entire results directory to browse multiple runs at once.
 
+## Pareto single-candidate explorer
+
+`passivbot tool pareto` reads a Pareto directory of JSON members, optionally filters it with
+optimizer-style limit expressions, and selects one candidate using a named decision method.
+If you omit the path entirely, it defaults to the newest local `optimize_results/.../pareto`
+directory. If you point it at an optimize run directory instead of the nested `pareto/`
+directory, it resolves that automatically.
+
+```shell
+passivbot tool pareto optimize_results/.../pareto -m knee
+passivbot tool pareto -m knee
+passivbot tool pareto optimize_results/.../pareto -m reference \
+  --target adg_strategy_pnl_rebased=0.001 \
+  --target drawdown_worst_hsl=0.25
+passivbot tool pareto optimize_results/.../pareto \
+  -l 'drawdown_worst_hsl<=0.35' \
+  -l 'adg_strategy_pnl_rebased>0.0'
+passivbot tool pareto optimize_results/... -m utility \
+  --weight adg_strategy_pnl_rebased=4 \
+  --weight drawdown_worst_hsl=2 \
+  --show-top 5
+passivbot tool pareto -m knee --json
+```
+
+Available methods:
+
+- `knee` - balanced compromise point; recommended default when you do not have explicit targets
+- `reference` - closest to user-specified aspiration targets
+- `ideal` - closest to the observed ideal point on the current front
+- `utility` - highest weighted normalized utility
+- `lexicographic` - strict objective priority order
+- `outranking` - simplified PROMETHEE-style pairwise net-flow ranking
+
+The explorer applies limits first, then ranks the retained candidates. It is intended for quickly
+promoting one config out of a large Pareto front without opening the dashboard. Its selection
+methods are practical decision heuristics for high-dimensional Passivbot fronts, not full formal
+multi-criteria decision-analysis implementations.
+
+`--objectives` is not limited to the original `optimize.scoring` list. You can also name other
+stored metrics such as `sharpe_ratio_strategy_pnl_rebased` as long as the Pareto JSON members
+contain that metric and Passivbot knows whether higher or lower is better.
+
 ## Pareto transformations / static plots
 
 `src/tools/pareto_transform.py` converts `all_results.bin` or individual Pareto JSON entries into CSV/JSON summaries for external analysis. The legacy `src/pareto_store.py` still produces quick matplotlib scatter plots if you prefer static images.

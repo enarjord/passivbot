@@ -52,6 +52,7 @@ cd passivbot-rust && cargo check --tests && cd ..
 ## Useful Tools
 
 ```bash
+passivbot tool pareto optimize_results/.../pareto -m knee
 passivbot tool pareto-dash --data-root optimize_results
 passivbot tool verify-hlcvs-data
 passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos10.json

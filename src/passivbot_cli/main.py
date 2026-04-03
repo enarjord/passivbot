@@ -102,9 +102,19 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "pad missing daily historical data (requires full install)",
         requires_full=True,
     ),
+    "pareto": CommandSpec(
+        "tools.pareto_explorer",
+        "select a single candidate from a Pareto front (requires full install)",
+        requires_full=True,
+    ),
     "pareto-dash": CommandSpec(
         "tools.pareto_dash",
         "launch Pareto dashboard (requires full install)",
+        requires_full=True,
+    ),
+    "pareto-explorer": CommandSpec(
+        "tools.pareto_explorer",
+        "select a single candidate from a Pareto front (requires full install)",
         requires_full=True,
     ),
     "pareto-transform": CommandSpec(
