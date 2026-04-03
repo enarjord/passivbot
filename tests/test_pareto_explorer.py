@@ -191,6 +191,7 @@ def test_run_from_args_prints_summary(sample_pareto_dir: Path, capsys):
     assert "Active objectives:" in captured
     assert "Why this winner:" in captured
     assert "Selected normalized utilities:" in captured
+    assert "Ideal point:" in captured
     assert "Top candidates:" in captured
     assert result.candidate.path.stem == "balanced"
 
@@ -246,6 +247,7 @@ def test_run_from_args_json_output(sample_pareto_dir: Path, capsys):
     assert len(payload["top_candidates"]) == 2
     assert payload["top_candidates"][0]["file"] == "b_extreme.json"
     assert payload["selected"]["details"]["utility_contributions"]["metric_b"] > 0
+    assert payload["selected"]["details"]["ideal_point"]["metric_b"] == pytest.approx(1.0)
     assert "ranking_order" not in payload["selected"]["details"]
     assert "score_vector" not in payload["selected"]["details"]
     assert result.candidate.path.stem == "b_extreme"

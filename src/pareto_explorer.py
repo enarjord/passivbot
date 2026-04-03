@@ -486,6 +486,35 @@ def _weights_for_metrics(metrics: Sequence[str], weight_map: Optional[Dict[str, 
     return weights / weights.sum()
 
 
+def _build_ideal_point(
+    candidates: Sequence[ParetoCandidate],
+    active_specs: Sequence[ObjectiveSpec],
+) -> Dict[str, float]:
+    ideal: Dict[str, float] = {}
+    for spec in active_specs:
+        values = [float(_resolve_candidate_metric_value(candidate, spec.metric)) for candidate in candidates]
+        ideal[spec.metric] = max(values) if spec.goal == "max" else min(values)
+    return ideal
+
+
+def _attach_shared_selection_details(
+    result: SelectionResult,
+    *,
+    candidates: Sequence[ParetoCandidate],
+    active_specs: Sequence[ObjectiveSpec],
+) -> SelectionResult:
+    ideal_point = _build_ideal_point(candidates, active_specs)
+    details = dict(result.details)
+    details["ideal_point"] = ideal_point
+    return SelectionResult(
+        candidate=result.candidate,
+        method=result.method,
+        score=result.score,
+        objective_values=result.objective_values,
+        details=details,
+    )
+
+
 def _ranked_rows(
     candidates: Sequence[ParetoCandidate],
     active_metrics: Sequence[str],
@@ -833,12 +862,13 @@ def select_candidate(
     weights = _weights_for_metrics(active_metrics, weight_map)
 
     if normalized_method == "knee":
-        return _select_knee(candidates, active_metrics, utilities)
+        result = _select_knee(candidates, active_metrics, utilities)
+        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
     if normalized_method == "reference":
         if not target_map:
             raise ValueError("Method 'reference' requires at least one --target metric=value.")
         target_vector = _normalize_reference_targets(target_map, active_specs, lows, highs)
-        return _select_ideal_like(
+        result = _select_ideal_like(
             "reference",
             candidates,
             active_metrics,
@@ -847,9 +877,10 @@ def select_candidate(
             target_vector,
             details={"targets": target_map, "weights": dict(zip(active_metrics, weights))},
         )
+        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
     if normalized_method == "ideal":
         target_vector = np.ones(len(active_metrics), dtype=float)
-        return _select_ideal_like(
+        result = _select_ideal_like(
             "ideal",
             candidates,
             active_metrics,
@@ -858,12 +889,16 @@ def select_candidate(
             target_vector,
             details={"weights": dict(zip(active_metrics, weights))},
         )
+        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
     if normalized_method == "utility":
-        return _select_utility(candidates, active_metrics, utilities, weights)
+        result = _select_utility(candidates, active_metrics, utilities, weights)
+        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
     if normalized_method == "lexicographic":
-        return _select_lexicographic(candidates, active_metrics, utilities)
+        result = _select_lexicographic(candidates, active_metrics, utilities)
+        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
     if normalized_method == "outranking":
-        return _select_outranking(candidates, active_metrics, utilities, weights)
+        result = _select_outranking(candidates, active_metrics, utilities, weights)
+        return _attach_shared_selection_details(result, candidates=candidates, active_specs=active_specs)
     raise ValueError(f"Unsupported selection method {normalized_method!r}")
 
 
@@ -940,6 +975,11 @@ def format_selection_result(
         lines.append("Weighted distance components:")
         for metric, value in distance_components.items():
             lines.append(f"  {metric}={value:.6f}")
+    ideal_point = result.details.get("ideal_point")
+    if isinstance(ideal_point, Mapping) and ideal_point:
+        lines.append("Ideal point:")
+        for metric, value in ideal_point.items():
+            lines.append(f"  {metric}={float(value):.6f}")
     if "minimum_selected_utility" in result.details:
         lines.append(
             f"Minimum selected utility: {float(result.details['minimum_selected_utility']):.6f}"
