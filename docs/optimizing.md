@@ -380,7 +380,8 @@ python3 src/pareto_store.py optimize_results/.../pareto/
 loads the JSON artifacts, optionally filters them with `--limit` / `--limits`, then chooses one
 candidate using a named decision rule. It accepts either a `pareto/` directory, an optimize run
 directory, or no path at all, in which case it falls back to the newest local
-`optimize_results/.../pareto`. Recommended workflow:
+`optimize_results/.../pareto`. It also shows the retained front's ideal point for the active
+objectives. Recommended workflow:
 
 1. apply hard filters with `--limit`
 2. use `-m reference` if you already know your target ADG / drawdown / recovery regime
@@ -401,9 +402,17 @@ These are practical selection heuristics for large Passivbot Pareto fronts rathe
 formal MCDM implementations. For most real runs, `knee`, `reference`, and `utility` are the most
 useful methods.
 
-`--objectives` can also reference stored metrics outside the original `optimize.scoring` list,
-for example `sharpe_ratio_strategy_pnl_rebased`, as long as that metric is present in the saved
-Pareto JSON and Passivbot has a known default min/max direction for it.
+`-o` / `--objectives` can also reference stored metrics outside the original `optimize.scoring`
+list, for example `sharpe_ratio_strategy_pnl_rebased`, as long as that metric is present in the
+saved Pareto JSON and Passivbot has a known default min/max direction for it.
+
+Example:
+
+```bash
+passivbot tool pareto \
+  -o sharpe_ratio_strategy_pnl_rebased,adg_strategy_pnl_rebased,peak_recovery_hours_hsl \
+  -m knee
+```
 
 `pareto_dash.py` scans one or more optimization runs and launches a Plotly Dash app with:
 

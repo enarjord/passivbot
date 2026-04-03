@@ -33,6 +33,8 @@ passivbot tool pareto optimize_results/.../pareto -m reference \
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_worst_hsl<=0.35' \
   -l 'adg_strategy_pnl_rebased>0.0'
+passivbot tool pareto -o sharpe_ratio_strategy_pnl_rebased,adg_strategy_pnl_rebased,peak_recovery_hours_hsl \
+  -m knee
 passivbot tool pareto optimize_results/... -m utility \
   --weight adg_strategy_pnl_rebased=4 \
   --weight drawdown_worst_hsl=2 \
@@ -54,9 +56,12 @@ promoting one config out of a large Pareto front without opening the dashboard. 
 methods are practical decision heuristics for high-dimensional Passivbot fronts, not full formal
 multi-criteria decision-analysis implementations.
 
-`--objectives` is not limited to the original `optimize.scoring` list. You can also name other
-stored metrics such as `sharpe_ratio_strategy_pnl_rebased` as long as the Pareto JSON members
-contain that metric and Passivbot knows whether higher or lower is better.
+The output also shows the retained front's ideal point: the best observed value for each active
+objective after any `--limit` filters are applied.
+
+`-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
+other stored metrics such as `sharpe_ratio_strategy_pnl_rebased` as long as the Pareto JSON
+members contain that metric and Passivbot knows whether higher or lower is better.
 
 ## Pareto transformations / static plots
 
