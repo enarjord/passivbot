@@ -234,6 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Whole-list limit payload using canonical optimize.limits schema.",
     )
     parser.add_argument(
+        "-o",
         "--objectives",
         type=str,
         default=None,

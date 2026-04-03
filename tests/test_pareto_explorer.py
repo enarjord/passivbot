@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from pareto_explorer import (
+    build_parser,
     detect_latest_pareto_dir,
     filter_candidates,
     load_candidates,
@@ -305,3 +306,9 @@ def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Pa
     run_from_args(args)
     captured = capsys.readouterr().out
     assert "sharpe_ratio_strategy_pnl_rebased (max): 1.4" in captured
+
+
+def test_build_parser_accepts_short_objectives_alias():
+    parser = build_parser()
+    args = parser.parse_args(["-o", "metric_a,metric_b"])
+    assert args.objectives == "metric_a,metric_b"
