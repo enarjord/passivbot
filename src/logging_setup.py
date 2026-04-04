@@ -6,7 +6,7 @@ import logging
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 TRACE_LEVEL = 5
 TRACE_LEVEL_NAME = "TRACE"
@@ -207,3 +207,22 @@ def configure_logging(
         # DEBUG and below: suppress CCXT's noisy API payloads
         # Set to WARNING so only actual warnings/errors from CCXT are shown
         ccxt_logger.setLevel(logging.WARNING)
+
+
+def resolve_live_log_file_settings(config: dict[str, Any], *, user: str) -> dict[str, Any]:
+    """Return configure_logging kwargs for canonical live file logging."""
+    logging_cfg = config.get("logging", {}) if isinstance(config, dict) else {}
+    if not isinstance(logging_cfg, dict):
+        logging_cfg = {}
+    if not bool(logging_cfg.get("persist_to_file", True)):
+        return {"log_file": None, "rotation": False, "max_bytes": 10 * 1024 * 1024, "backup_count": 5}
+
+    log_dir = str(logging_cfg.get("dir", "logs")).strip() or "logs"
+    max_bytes_mb = float(logging_cfg.get("max_bytes_mb", 10.0))
+    backup_count = int(logging_cfg.get("backup_count", 5))
+    return {
+        "log_file": str(Path(log_dir).expanduser() / f"{user}.log"),
+        "rotation": bool(logging_cfg.get("rotation", False)),
+        "max_bytes": max(1, int(max_bytes_mb * 1024 * 1024)),
+        "backup_count": max(0, backup_count),
+    }

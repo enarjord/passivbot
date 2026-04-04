@@ -19,7 +19,6 @@ Optional:
 - `PB_CONFIG_INLINE`
 - `PB_APPROVED_COINS`
 - `PB_LOG_DIR`
-- `PB_LOG_FILE`
 - `PB_LOG_LEVEL`
 - `PB_MONITOR_ENABLED`
 - `PB_MONITOR_ROOT`
@@ -30,6 +29,8 @@ If you want monitor output or file logs to persist across restarts, attach a Rai
 
 - `PB_MONITOR_ROOT`
 - `PB_LOG_DIR`
+
+`PB_LOG_DIR` maps onto Passivbot's canonical `logging.dir`, so Railway uses the same file-logging path as normal live runs.
 
 into that mounted location.
 

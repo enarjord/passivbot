@@ -100,6 +100,11 @@ def main() -> int:
     if log_level:
         set_nested(config, ["logging", "level"], maybe_int(log_level))
 
+    log_dir = os.environ.get("PB_LOG_DIR", "").strip()
+    if log_dir:
+        set_nested(config, ["logging", "persist_to_file"], True)
+        set_nested(config, ["logging", "dir"], log_dir)
+
     monitor_enabled = parse_bool_env("PB_MONITOR_ENABLED")
     if monitor_enabled is not None:
         set_nested(config, ["monitor", "enabled"], monitor_enabled)

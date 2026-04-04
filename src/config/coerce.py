@@ -22,6 +22,10 @@ MONITOR_BOOL_KEYS = (
     "emit_completed_candles",
     "include_raw_fill_payloads",
 )
+LOGGING_BOOL_KEYS = (
+    "persist_to_file",
+    "rotation",
+)
 PYMOO_ALGORITHMS = ("auto", "nsga2", "nsga3")
 PYMOO_REF_DIR_METHODS = ("das_dennis",)
 
@@ -71,6 +75,30 @@ def normalize_monitor_config(config: dict) -> None:
         if not predicate(value):
             raise ValueError(f"config.monitor.{key} {message}")
         monitor_cfg[key] = value
+
+
+def normalize_logging_config(config: dict) -> None:
+    logging_cfg = require_config_dict(config, "logging")
+    log_dir = str(logging_cfg["dir"]).strip()
+    if not log_dir:
+        raise ValueError("config.logging.dir must be a non-empty string")
+    logging_cfg["dir"] = log_dir
+
+    for key in LOGGING_BOOL_KEYS:
+        logging_cfg[key] = bool(logging_cfg[key])
+
+    numeric_rules = (
+        ("max_bytes_mb", float, lambda x: x > 0.0, "must be > 0"),
+        ("backup_count", int, lambda x: x >= 0, "must be >= 0"),
+    )
+    for key, caster, predicate, message in numeric_rules:
+        try:
+            value = caster(logging_cfg[key])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"config.logging.{key} {message}") from exc
+        if not predicate(value):
+            raise ValueError(f"config.logging.{key} {message}")
+        logging_cfg[key] = value
 
 
 def normalize_pymoo_algorithm(value, path: str = "config.optimize.pymoo.algorithm") -> str:
@@ -236,5 +264,6 @@ def normalize_validation_fields(config: dict, *, raw_optimize=None) -> None:
     config["live"]["hsl_position_during_cooldown_policy"] = (
         normalize_hsl_cooldown_position_policy(config["live"]["hsl_position_during_cooldown_policy"])
     )
+    normalize_logging_config(config)
     normalize_monitor_config(config)
     normalize_pymoo_config(config, raw_optimize=raw_optimize)

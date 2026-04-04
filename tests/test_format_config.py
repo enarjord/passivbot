@@ -168,6 +168,32 @@ def test_format_config_adds_monitor_defaults():
     }
 
 
+def test_format_config_adds_logging_defaults():
+    current = copy.deepcopy(_template())
+    current.pop("logging", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["logging"] == {
+        "backup_count": 5,
+        "dir": "logs",
+        "level": 1,
+        "max_bytes_mb": 10.0,
+        "memory_snapshot_interval_minutes": 30,
+        "persist_to_file": True,
+        "rotation": False,
+        "volume_refresh_info_threshold_seconds": 30,
+    }
+
+
+def test_format_config_rejects_invalid_logging_dir():
+    current = copy.deepcopy(_template())
+    current["logging"]["dir"] = "   "
+
+    with pytest.raises(ValueError, match="config.logging.dir"):
+        format_config(current, verbose=False, live_only=True)
+
+
 def test_format_config_rejects_invalid_monitor_snapshot_interval():
     current = copy.deepcopy(_template())
     current["monitor"]["snapshot_interval_seconds"] = 0.0

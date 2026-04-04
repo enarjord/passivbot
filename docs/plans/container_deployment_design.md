@@ -115,9 +115,8 @@ If `PB_API_KEYS_PATH` is unset, allow env-based credential materialization with:
 - `PB_LOG_LEVEL`
 - `PB_MONITOR_ENABLED`
 - `PB_LOG_DIR`
-- `PB_LOG_FILE`
 
-When a mounted config path is in use, these should be translated into normal live CLI overrides where possible. Inline-config mode may render them into a temporary config file.
+When a mounted config path is in use, these should be translated into normal live CLI overrides where possible. Inline-config mode may render them into a temporary config file. File logging should stay on Passivbot's canonical `logging.*` config path rather than a container-only wrapper contract.
 
 ## Canonical Writable Paths
 

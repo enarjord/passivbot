@@ -7,7 +7,6 @@ RUNTIME_ROOT=${PB_RUNTIME_ROOT:-/run/passivbot}
 API_KEYS_TARGET="$APP_ROOT/api-keys.json"
 GENERATED_CONFIG_PATH="$RUNTIME_ROOT/config.runtime.json"
 GENERATED_API_KEYS_PATH="$RUNTIME_ROOT/api-keys.json"
-LOG_FILE=${PB_LOG_FILE:-}
 
 mkdir -p "$RUNTIME_ROOT"
 
@@ -51,16 +50,12 @@ if [ -n "${PB_CONFIG_INLINE:-}" ]; then
     CONFIG_PATH="$GENERATED_CONFIG_PATH"
 fi
 
-if [ -z "$LOG_FILE" ] && [ -n "${PB_LOG_DIR:-}" ]; then
-    LOG_FILE="${PB_LOG_DIR%/}/${PB_USER}.log"
-fi
-
-if [ -n "$LOG_FILE" ]; then
-    mkdir -p "$(dirname "$LOG_FILE")"
-fi
-
 if [ -n "${PB_LOG_LEVEL:-}" ]; then
     set -- --log-level "$PB_LOG_LEVEL" "$@"
+fi
+
+if [ -n "${PB_LOG_DIR:-}" ]; then
+    set -- --logging.persist_to_file true --logging.dir "$PB_LOG_DIR" "$@"
 fi
 
 if [ -n "${PB_APPROVED_COINS:-}" ]; then
@@ -76,14 +71,7 @@ if [ -n "${PB_MONITOR_ROOT:-}" ]; then
 fi
 
 if [ -n "$CONFIG_PATH" ]; then
-    if [ -n "$LOG_FILE" ]; then
-        exec python3 "$SCRIPT_DIR/tee_exec.py" "$LOG_FILE" -- passivbot live "$CONFIG_PATH" -u "$PB_USER" "$@"
-    fi
     exec passivbot live "$CONFIG_PATH" -u "$PB_USER" "$@"
-fi
-
-if [ -n "$LOG_FILE" ]; then
-    exec python3 "$SCRIPT_DIR/tee_exec.py" "$LOG_FILE" -- passivbot live -u "$PB_USER" "$@"
 fi
 
 exec passivbot live -u "$PB_USER" "$@"

@@ -8,7 +8,7 @@ The container startup path uses:
 - a thin entrypoint wrapper
 - optional env-generated `api-keys.json`
 - optional env-generated config overrides
-- optional file logging via `PB_LOG_DIR` / `PB_LOG_FILE`
+- Passivbot's canonical `logging.*` config for file persistence
 
 This is the intended base for Docker, Docker Compose, and hosted platforms such as Railway.
 
@@ -79,6 +79,8 @@ If neither config env is set, the container starts from the in-code schema defau
   `true` / `false`
 - `PB_MONITOR_ROOT`
   Override the monitor root directory, for example `/data/monitor`
+- `PB_LOG_DIR`
+  Override `logging.dir` for container deployments that mount a persistent logs volume
 
 When `PB_CONFIG_PATH` is set, these overrides are translated into normal `passivbot live` CLI flags so the original config path stays intact and config-relative sidecar semantics are preserved.
 
@@ -88,16 +90,15 @@ When `PB_CONFIG_INLINE` is set, the entrypoint renders a temporary config file a
 
 ## File Logging
 
-Container logs still go to stdout/stderr by default.
+Live runs use Passivbot's canonical logging config.
 
-If you also want a persisted log file inside the container contract, set either:
+- `logging.persist_to_file` defaults to `true`
+- `logging.dir` defaults to `logs`
+- log files are written as `${logging.dir}/${live.user}.log`
 
-- `PB_LOG_DIR`
-  Creates or appends to `${PB_LOG_DIR}/${PB_USER}.log`
-- `PB_LOG_FILE`
-  Explicit log file path
+Container logs still go to stdout/stderr, and file persistence uses the same live logging handler rather than a wrapper-level tee.
 
-If both are set, `PB_LOG_FILE` wins.
+For containerized deployments, set `PB_LOG_DIR` to point `logging.dir` at a mounted volume such as `/data/logs`.
 
 ## Docker Run Example
 
@@ -137,4 +138,5 @@ See `container/examples/docker-compose.live.yml`.
 
 - The entrypoint uses `passivbot live`, not `python src/main.py`.
 - The runtime contract is intentionally thin and platform-agnostic.
+- File logging stays on the normal `logging.*` config path; the container wrapper does not implement its own parallel log persistence system.
 - Hosted platforms should reuse this image and env contract instead of introducing platform-specific config snapshots.

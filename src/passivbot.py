@@ -58,6 +58,7 @@ from config.overrides import parse_overrides
 from logging_setup import (
     configure_logging,
     get_last_log_activity_monotonic,
+    resolve_live_log_file_settings,
     resolve_log_level,
 )
 from utils import (
@@ -8339,13 +8340,15 @@ async def main():
     )
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(cli_log_level, config_logging_value, fallback=1)
-    if effective_log_level != initial_log_level:
-        configure_logging(debug=effective_log_level)
     logging_section = config.get("logging")
     if not isinstance(logging_section, dict):
         logging_section = {}
     config["logging"] = logging_section
     logging_section["level"] = effective_log_level
+    live_user = require_live_value(config, "user")
+    log_file_settings = resolve_live_log_file_settings(config, user=live_user)
+    if effective_log_level != initial_log_level or log_file_settings["log_file"]:
+        configure_logging(debug=effective_log_level, **log_file_settings)
 
     custom_endpoints_cli = args.custom_endpoints
     live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
@@ -8399,10 +8402,10 @@ async def main():
         preloaded=preloaded_override,
     )
 
-    user_info = load_user_info(require_live_value(config, "user"))
+    user_info = load_user_info(live_user)
     # Reconfigure logging with exchange prefix now that we know the exchange
     exchange_prefix = user_info["exchange"]
-    configure_logging(debug=effective_log_level, prefix=exchange_prefix)
+    configure_logging(debug=effective_log_level, prefix=exchange_prefix, **log_file_settings)
     await load_markets(user_info["exchange"], verbose=True)
 
     config = parse_overrides(config, verbose=True)
