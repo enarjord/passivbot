@@ -9,6 +9,13 @@ All notable user-facing changes will be documented in this file.
 - Added `passivbot tool pareto`, a CLI Pareto front explorer that filters JSON Pareto members with optimizer-style limit expressions, defaults to the newest local `optimize_results/.../pareto` when no path is given, accepts either a run dir or `pareto/` dir, and selects a single candidate using knee, reference-point, ideal-point, weighted utility, lexicographic, or outranking methods with optional shortlist and JSON output. It now also shows the retained front's ideal point, and `-o` / `--objectives` can use stored metrics outside the original `optimize.scoring` list when their min/max direction is known.
 - Fixed first-ohlcv timestamp cache handling for newly listed coins. Cached `0.0` entries are now treated as unresolved and refreshed, so optimize/backtest candle downloads correctly clamp fetch start to the coin's actual listing history instead of wasting time paging from much earlier dates.
 
+### Upgrade Notes
+- Reinstall after pulling this release. `passivbot` now validates the active environment and the loaded Rust extension more aggressively, so stale editable installs or stale shell shims are more likely to fail loudly instead of continuing silently. Use `python3 -m pip install -e .` for live-only setups or `python3 -m pip install -e ".[full]"` for backtest/optimize setups, and rebuild with `maturin develop --release` if needed.
+- `optimize.backend` now defaults to `pymoo`, so optimization users need the full install profile with the new `pymoo` dependency.
+- `configs/template.json` is no longer the canonical starting point. Use `configs/examples/default_trailing_grid_long_npos10.json` or omit the config path to start from the in-code defaults in `src/config/schema.py`.
+- The local monitor publisher now ships enabled by default in the canonical schema. Set `monitor.enabled = false` if you do not want snapshot/event files written under `monitor/`.
+- `live.max_realized_loss_pct` now defaults to `1.0`, which effectively disables the realized-loss gate unless you set a tighter value explicitly.
+
 ### Added
 - **Pymoo optimizer backend** - Optimization can now run with `optimize.backend: pymoo` in addition to DEAP, with shared backend dispatch and dedicated backend coverage.
 - **Pymoo NSGA-III config is now live** - `optimize.pymoo.algorithm`, nested `optimize.pymoo.shared.*`, and NSGA-III reference-direction settings are now actually honored at runtime, with auto-sized NSGA-III reference directions and `"auto"` per-variable mutation probability support.
