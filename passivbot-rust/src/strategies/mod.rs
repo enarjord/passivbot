@@ -1,7 +1,7 @@
 pub mod ema_anchor;
-pub mod trailing_grid;
 pub mod registry;
 pub mod spec;
+pub mod trailing_grid;
 
 use crate::types::{
     BotParams, ExchangeParams, Order, Position, RuntimeBudgetState, StateParams,
@@ -249,9 +249,7 @@ pub fn strategy_ema_spans(params: &StrategyParams) -> (f64, f64) {
 
 pub fn strategy_entry_volatility_span_hours(params: &StrategyParams) -> Option<f64> {
     match params {
-        StrategyParams::TrailingGrid(params) => {
-            Some(params.entry_volatility_ema_span_hours)
-        }
+        StrategyParams::TrailingGrid(params) => Some(params.entry_volatility_ema_span_hours),
         StrategyParams::EmaAnchor(_) => None,
     }
 }

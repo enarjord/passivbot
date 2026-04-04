@@ -282,17 +282,13 @@ fn build_strategy_spec(
 }
 
 pub fn trailing_grid_spec() -> StrategySpec {
-    build_strategy_spec(
-        "trailing_grid",
-        TRAILING_GRID_PARAM_SEEDS,
-        |side, name| vec![format!("bot.{side}.{name}")],
-    )
+    build_strategy_spec("trailing_grid", TRAILING_GRID_PARAM_SEEDS, |side, name| {
+        vec![format!("bot.{side}.{name}")]
+    })
 }
 
 pub fn ema_anchor_spec() -> StrategySpec {
-    build_strategy_spec(
-        "ema_anchor",
-        EMA_ANCHOR_PARAM_SEEDS,
-        |_side, _name| Vec::new(),
-    )
+    build_strategy_spec("ema_anchor", EMA_ANCHOR_PARAM_SEEDS, |_side, _name| {
+        Vec::new()
+    })
 }

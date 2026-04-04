@@ -4657,12 +4657,12 @@ mod tests {
 
     fn adaptive_strategy_pair_from_bot_params(bot_params: &BotParamsPair) -> StrategyParamsPair {
         StrategyParamsPair {
-            long: StrategyParams::TrailingGrid(
-                TrailingGridParams::from_bot_params(&bot_params.long),
-            ),
-            short: StrategyParams::TrailingGrid(
-                TrailingGridParams::from_bot_params(&bot_params.short),
-            ),
+            long: StrategyParams::TrailingGrid(TrailingGridParams::from_bot_params(
+                &bot_params.long,
+            )),
+            short: StrategyParams::TrailingGrid(TrailingGridParams::from_bot_params(
+                &bot_params.short,
+            )),
         }
     }
 
