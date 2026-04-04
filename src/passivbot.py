@@ -7,7 +7,7 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 
 set_windows_event_loop_policy()
 
-from ccxt.base.errors import NetworkError, RateLimitExceeded, RequestTimeout
+from ccxt.base import errors as ccxt_errors
 import random
 import traceback
 import argparse
@@ -91,6 +91,12 @@ from procedures import (
 from utils import get_file_mod_ms
 from downloader import compute_per_coin_warmup_minutes
 import re
+
+NetworkError = ccxt_errors.NetworkError
+RateLimitExceeded = ccxt_errors.RateLimitExceeded
+# Some isolated tests stub ccxt.base.errors without RequestTimeout; treat it as a
+# NetworkError-class transient startup error when the dedicated symbol is absent.
+RequestTimeout = getattr(ccxt_errors, "RequestTimeout", NetworkError)
 
 # Orchestrator-only: ideal orders are computed via Rust orchestrator (JSON API).
 # Legacy Python order calculation paths are removed in this branch.
