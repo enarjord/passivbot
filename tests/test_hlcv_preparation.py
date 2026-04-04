@@ -104,16 +104,16 @@ def sample_config():
                 "enabled": True,
                 "ema_span_0": 1000.0,
                 "ema_span_1": 1500.0,
-                "filter_volume_ema_span": 2000.0,
-                "filter_volatility_ema_span": 100.0,
+                "forager_volume_ema_span": 2000.0,
+                "forager_volatility_ema_span": 100.0,
                 "entry_volatility_ema_span_hours": 1.0,
             },
             "short": {
                 "enabled": True,
                 "ema_span_0": 1000.0,
                 "ema_span_1": 1500.0,
-                "filter_volume_ema_span": 2000.0,
-                "filter_volatility_ema_span": 100.0,
+                "forager_volume_ema_span": 2000.0,
+                "forager_volatility_ema_span": 100.0,
                 "entry_volatility_ema_span_hours": 1.0,
             },
         },
@@ -435,6 +435,8 @@ class TestHLCVManagerGapHandling:
         )
         om.tradfi_for_stock_perps = True
         om.load_cc = lambda: None
+        om.load_markets = AsyncMock()
+        om.markets = {"XYZ-AAPL/USDC:USDC": {"symbol": "XYZ-AAPL/USDC:USDC"}}
         om.has_coin = lambda coin: True
         om.get_symbol = lambda coin: "XYZ-AAPL/USDC:USDC"
         om.cm = MagicMock()

@@ -726,7 +726,8 @@ For each test case, verify:
 
 | File | Test Focus |
 |------|------------|
-| `src/config_utils.py` | Migration, validation |
+| `src/config/normalize.py` | Canonical config normalization pipeline |
+| `src/config/migrations/` | Legacy config migration and flavor detection |
 | `src/suite_runner.py` | `build_scenarios()`, `extract_suite_config()`, data prep |
 | `src/backtest.py` | CLI routing, suite mode detection |
 | `src/optimize.py` | CLI routing, suite mode detection |
@@ -744,7 +745,8 @@ For each test case, verify:
 
 ```python
 # Quick validation script
-from config_utils import load_config, format_config, get_template_config
+from config import load_prepared_config
+from config_utils import format_config, get_template_config
 from suite_runner import build_scenarios, extract_suite_config
 
 def verify_config(config_dict, expected_scenarios, expected_exchanges_per_scenario):

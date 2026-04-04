@@ -82,6 +82,7 @@ async def test_missing_ema_raises_from_snapshot(monkeypatch):
         effective_min_cost = {}
         _config_hedge_mode = False
         hedge_mode = False
+        equity_hard_stop_loss = {"panic_close_order_type": "limit"}
 
         def config_get(self, keys):
             return None
@@ -134,6 +135,7 @@ async def test_missing_ema_raises_from_snapshot_with_return(monkeypatch):
         effective_min_cost = {}
         _config_hedge_mode = False
         hedge_mode = False
+        equity_hard_stop_loss = {"panic_close_order_type": "limit"}
 
         def config_get(self, keys):
             return None
@@ -249,6 +251,8 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
                     "min_qty": 0.0,
                     "min_cost": 0.0,
                     "c_mult": 1.0,
+                    "maker_fee": 0.0002,
+                    "taker_fee": 0.00055,
                 },
                 "tradable": True,
                 "next_candle": None,

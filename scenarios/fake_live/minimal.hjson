@@ -1,0 +1,27 @@
+{
+  name: minimal
+  exchange: fake
+  start_time: 2026-01-01T00:00:00Z
+  tick_interval_seconds: 60
+  boot_index: 2
+  account: {
+    balance: 10000.0
+  }
+  symbols: {
+    "BTC/USDT:USDT": {
+      price_step: 0.1
+      qty_step: 0.001
+      min_qty: 0.001
+      min_cost: 5.0
+      maker_fee: 0.0002
+      taker_fee: 0.00055
+    }
+  }
+  timeline: [
+    {t: 0, prices: {"BTC/USDT:USDT": 100000.0}}
+    {t: 1, prices: {"BTC/USDT:USDT": 100200.0}}
+    {t: 2, prices: {"BTC/USDT:USDT": 99950.0}}
+    {t: 3, prices: {"BTC/USDT:USDT": 100050.0}}
+    {t: 4, prices: {"BTC/USDT:USDT": 100300.0}}
+  ]
+}

@@ -13,13 +13,13 @@ def test_compute_live_warmup_windows_forager_toggle():
     values = {
         ("long", "ema_span_0", "BTC"): 1000.0,
         ("long", "ema_span_1", "BTC"): 1500.0,
-        ("long", "filter_volume_ema_span", "BTC"): 2000.0,
-        ("long", "filter_volatility_ema_span", "BTC"): 1800.0,
+        ("long", "forager_volume_ema_span", "BTC"): 2000.0,
+        ("long", "forager_volatility_ema_span", "BTC"): 1800.0,
         ("long", "entry_volatility_ema_span_hours", "BTC"): 48.0,
         ("short", "ema_span_0", "ETH"): 900.0,
         ("short", "ema_span_1", "ETH"): 800.0,
-        ("short", "filter_volume_ema_span", "ETH"): 4000.0,
-        ("short", "filter_volatility_ema_span", "ETH"): 3000.0,
+        ("short", "forager_volume_ema_span", "ETH"): 4000.0,
+        ("short", "forager_volatility_ema_span", "ETH"): 3000.0,
         ("short", "entry_volatility_ema_span_hours", "ETH"): 24.0,
     }
 

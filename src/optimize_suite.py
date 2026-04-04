@@ -12,13 +12,10 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from config_utils import (
-    load_config,
-    parse_overrides,
-    require_config_value,
-    require_live_value,
-    format_config,
-)
+from config import load_prepared_config
+from config.access import require_config_value, require_live_value
+from config.overrides import parse_overrides
+from config_utils import format_config
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from shared_arrays import attach_shared_array
 from suite_runner import (
@@ -541,21 +538,21 @@ async def prepare_suite_contexts(
 
 
 def ensure_suite_config(config_path: Path, suite_path: Optional[Path]) -> Dict[str, Any]:
-    config = load_config(str(config_path), verbose=False)
+    config = load_prepared_config(str(config_path), verbose=False)
     config = parse_overrides(config, verbose=False)
     suite_override = None
     if suite_path:
-        override_config = load_config(str(suite_path), verbose=False)
+        override_config = load_prepared_config(str(suite_path), verbose=False)
         override_backtest = override_config.get("backtest", {})
         # Support both new (scenarios at top level) and legacy (suite wrapper) formats
-        if "scenarios" in override_backtest:
+        if "suite" in override_backtest:
+            # Legacy format - prefer explicit suite wrapper over template/default scenarios.
+            suite_override = override_backtest["suite"]
+        elif "scenarios" in override_backtest:
             suite_override = {
                 "scenarios": override_backtest.get("scenarios", []),
                 "aggregate": override_backtest.get("aggregate", {"default": "mean"}),
             }
-        elif "suite" in override_backtest:
-            # Legacy format - extract from suite wrapper
-            suite_override = override_backtest["suite"]
         else:
             raise ValueError(f"Suite config {suite_path} must provide backtest.scenarios definition.")
     return extract_suite_config(config, suite_override)

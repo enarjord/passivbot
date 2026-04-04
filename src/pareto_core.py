@@ -5,6 +5,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from config.scoring import ObjectiveSpec, dominates_objectives, extract_objective_specs, from_engine_value
+
 
 @dataclass(frozen=True)
 class ParetoPoint:
@@ -17,17 +19,33 @@ def extract_objectives(
     entry: Dict[str, Any], scoring_keys: Optional[Sequence[str]] = None
 ) -> Tuple[Tuple[float, ...], List[str]]:
     """
-    Extract the objective vector from a result entry.
-    Ordered by scoring keys if provided, otherwise by sorted w_* keys.
+    Extract raw objective values from a result entry.
+    Ordered by scoring keys/specs if provided, otherwise by sorted named keys.
+    Legacy w_i engine-space payloads are converted back to raw values when scoring
+    metadata is available.
     """
     metrics_block = entry.get("metrics") or {}
     objectives_map = metrics_block.get("objectives", metrics_block) or {}
-    if scoring_keys:
-        w_keys = [f"w_{i}" for i in range(len(scoring_keys))]
-    else:
-        w_keys = sorted(k for k in objectives_map if str(k).startswith("w_"))
-    objectives = tuple(objectives_map.get(key) for key in w_keys)
-    return objectives, w_keys
+    specs = extract_objective_specs(scoring_keys or entry.get("optimize", {}).get("scoring", []))
+    if specs:
+        values: list[float] = []
+        keys: list[str] = []
+        for idx, spec in enumerate(specs):
+            if spec.metric in objectives_map:
+                value = objectives_map.get(spec.metric)
+            else:
+                value = objectives_map.get(f"w_{idx}")
+                if value is not None:
+                    value = from_engine_value(spec, float(value))
+            values.append(value)
+            keys.append(spec.metric)
+        return tuple(values), keys
+
+    keys = sorted(k for k in objectives_map if not str(k).startswith("w_"))
+    if not keys:
+        keys = sorted(k for k in objectives_map if str(k).startswith("w_"))
+    objectives = tuple(objectives_map.get(key) for key in keys)
+    return objectives, keys
 
 
 def extract_violation(entry: Dict[str, Any]) -> float:
@@ -43,12 +61,16 @@ def dominates_with_violation(
     viol_a: float,
     obj_b: Sequence[float],
     viol_b: float,
+    objective_specs: Optional[Sequence[ObjectiveSpec]] = None,
     tol: float = 1e-12,
 ) -> bool:
     """
-    Constraint-aware dominance: lower violation wins ties; otherwise standard Pareto dominance.
+    Constraint-aware dominance: lower violation wins ties; otherwise standard Pareto
+    dominance using objective directions when provided.
     """
     if np.isclose(viol_a, viol_b, atol=tol, rtol=0.0):
+        if objective_specs:
+            return dominates_objectives(obj_a, obj_b, objective_specs)
         better_in_one = False
         for a, b in zip(obj_a, obj_b):
             if a < b:
@@ -122,8 +144,70 @@ def prune_front_with_extremes(
 
 
 def compute_ideal(
-    values_matrix: np.ndarray, mode: str = "min", weights=None, eps: float = 1e-3, pct: float = 10
+    values_matrix: np.ndarray,
+    mode: str = "min",
+    weights=None,
+    eps: float = 1e-3,
+    pct: float = 10,
+    objective_specs: Optional[Sequence[ObjectiveSpec]] = None,
 ):
+    def _require_specs() -> Sequence[ObjectiveSpec]:
+        if not objective_specs:
+            raise ValueError("objective_specs required for goal-aware ideal computation")
+        if len(objective_specs) != values_matrix.shape[1]:
+            raise ValueError(
+                "objective_specs length must match objective column count "
+                f"({len(objective_specs)} != {values_matrix.shape[1]})"
+            )
+        return objective_specs
+
+    if objective_specs:
+        specs = _require_specs()
+        mins = values_matrix.min(axis=0)
+        maxs = values_matrix.max(axis=0)
+        if mode in ["m", "min"]:
+            return np.array(
+                [
+                    maxs[i] if specs[i].goal == "max" else mins[i]
+                    for i in range(values_matrix.shape[1])
+                ]
+            )
+        if mode in ["w", "weighted"]:
+            if weights is None:
+                raise ValueError("weights required")
+            ideal = np.array(
+                [
+                    maxs[i] if specs[i].goal == "max" else mins[i]
+                    for i in range(values_matrix.shape[1])
+                ]
+            )
+            anti_ideal = np.array(
+                [
+                    mins[i] if specs[i].goal == "max" else maxs[i]
+                    for i in range(values_matrix.shape[1])
+                ]
+            )
+            return ideal + weights * (anti_ideal - ideal)
+        if mode in ["u", "utopian"]:
+            ranges = maxs - mins
+            return np.array(
+                [
+                    maxs[i] + eps * ranges[i] if specs[i].goal == "max" else mins[i] - eps * ranges[i]
+                    for i in range(values_matrix.shape[1])
+                ]
+            )
+        if mode in ["p", "percentile"]:
+            return np.array(
+                [
+                    np.percentile(values_matrix[:, i], 100.0 - pct)
+                    if specs[i].goal == "max"
+                    else np.percentile(values_matrix[:, i], pct)
+                    for i in range(values_matrix.shape[1])
+                ]
+            )
+        if mode in ["mi", "midrange"]:
+            return 0.5 * (mins + maxs)
+
     # values_matrix:  shape (n_points, n_obj)
     if mode in ["m", "min"]:
         return values_matrix.min(axis=0)

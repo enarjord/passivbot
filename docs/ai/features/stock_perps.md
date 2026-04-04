@@ -30,5 +30,5 @@
 
 - `src/exchanges/hyperliquid.py`
 - `src/passivbot.py`
-- `src/config_utils.py`
+- `src/config/access.py`
 - `src/candlestick_manager.py`

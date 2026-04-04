@@ -329,23 +329,33 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
     if exchange == "binance":
         exchange = "binanceusdm"
 
-    # 1) If no exchange is specified and all coins are in ftss, just return ftss
+    def _valid_first_timestamp(value: Any) -> bool:
+        try:
+            return float(value) > 0.0
+        except Exception:
+            return False
+
+    # 1) If no exchange is specified and all coins have valid cached timestamps, just return ftss
     if exchange is None:
-        if all(coin in ftss for coin in coins):
+        if all(_valid_first_timestamp(ftss.get(coin)) for coin in coins):
             return ftss
 
     # 2) If a specific exchange is requested:
     else:
         # If all coins exist in the exchange-specific cache for that exchange, return them
-        if all(coin in ftss_exchange_specific for coin in coins):
-            if all(exchange in ftss_exchange_specific[coin] for coin in coins):
-                # Return a simplified dict coin->timestamp
-                return {c: ftss_exchange_specific[c][exchange] for c in coins}
+        if all(_valid_first_timestamp(ftss_exchange_specific.get(coin, {}).get(exchange)) for coin in coins):
+            return {c: ftss_exchange_specific[c][exchange] for c in coins}
 
-    # Figure out which coins are missing from the main dictionary
-    missing_coins = {c for c in coins if c not in ftss}
+    # Figure out which coins are missing from the relevant cache or have invalid cached timestamps
+    if exchange is None:
+        missing_coins = {c for c in coins if not _valid_first_timestamp(ftss.get(c))}
+    else:
+        missing_coins = {
+            c for c in coins if not _valid_first_timestamp(ftss_exchange_specific.get(c, {}).get(exchange))
+        }
     if not missing_coins:
-        # No missing coins => all already in ftss
+        if exchange is not None:
+            return {c: ftss_exchange_specific.get(c, {}).get(exchange, 0.0) for c in coins}
         return ftss
 
     print("Missing coins:", sorted(missing_coins))

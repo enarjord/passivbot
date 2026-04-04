@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import importlib
 import importlib.util
+import inspect
 import os
 import runpy
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from cli_utils import help_requested
 
 
 @dataclass(frozen=True)
@@ -72,14 +77,44 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "migrate historical data layout (requires full install)",
         requires_full=True,
     ),
+    "monitor-relay": CommandSpec(
+        "tools.monitor_relay",
+        "serve monitor snapshots and live streams (requires full install)",
+        requires_full=True,
+    ),
+    "monitor-dev": CommandSpec(
+        "tools.monitor_dev",
+        "launch relay if needed and attach the terminal monitor (requires full install)",
+        requires_full=True,
+    ),
+    "monitor-web": CommandSpec(
+        "tools.monitor_web",
+        "launch relay if needed and keep the web dashboard available (requires full install)",
+        requires_full=True,
+    ),
+    "monitor-tui": CommandSpec(
+        "tools.monitor_tui",
+        "launch terminal monitor reader (requires full install)",
+        requires_full=True,
+    ),
     "pad-historical-daily": CommandSpec(
         "tools.pad_historical_daily",
         "pad missing daily historical data (requires full install)",
         requires_full=True,
     ),
+    "pareto": CommandSpec(
+        "tools.pareto_explorer",
+        "select a single candidate from a Pareto front (requires full install)",
+        requires_full=True,
+    ),
     "pareto-dash": CommandSpec(
         "tools.pareto_dash",
         "launch Pareto dashboard (requires full install)",
+        requires_full=True,
+    ),
+    "pareto-explorer": CommandSpec(
+        "tools.pareto_explorer",
+        "select a single candidate from a Pareto front (requires full install)",
         requires_full=True,
     ),
     "pareto-transform": CommandSpec(
@@ -105,6 +140,7 @@ FULL_INSTALL_MODULE_HINTS = {
     "matplotlib",
     "msgpack",
     "plotly",
+    "pymoo",
     "psutil",
     "pyecharts",
     "requests",
@@ -159,12 +195,13 @@ def _active_env_prefix() -> Path | None:
     for name in ("VIRTUAL_ENV", "CONDA_PREFIX"):
         raw = os.environ.get(name)
         if raw:
-            return Path(os.path.abspath(os.path.expanduser(raw)))
+            return _resolve_path(raw)
     return None
 
 
 def _resolve_path(value: str | os.PathLike[str]) -> Path:
-    return Path(os.path.abspath(os.path.expanduser(os.fspath(value))))
+    expanded = os.path.abspath(os.path.expanduser(os.fspath(value)))
+    return Path(os.path.realpath(expanded))
 
 
 def _path_is_within(path: Path, root: Path) -> bool:
@@ -173,6 +210,15 @@ def _path_is_within(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _current_interpreter_prefixes() -> tuple[Path, ...]:
+    prefixes: list[Path] = []
+    for value in (getattr(sys, "prefix", None), getattr(sys, "exec_prefix", None)):
+        if not value:
+            continue
+        prefixes.append(_resolve_path(value))
+    return tuple(dict.fromkeys(prefixes))
 
 
 def _env_bin_dir(prefix: Path) -> Path:
@@ -234,8 +280,14 @@ def _ensure_expected_environment() -> None:
     actual_python = _resolve_path(sys.executable)
     if _path_is_within(actual_python, prefix):
         return
+    if any(current_prefix == prefix for current_prefix in _current_interpreter_prefixes()):
+        return
 
+    script = _resolve_path(sys.argv[0]) if sys.argv and sys.argv[0] else None
     expected_script = _expected_console_script(prefix)
+    if script is not None and script == expected_script:
+        return
+
     expected_python = _expected_python(prefix)
     if expected_script.exists() and expected_python.exists() and not os.environ.get(ENV_REEXEC_GUARD_ENV):
         os.environ[ENV_REEXEC_GUARD_ENV] = "1"
@@ -261,7 +313,24 @@ def _missing_full_install_markers() -> list[str]:
 
 
 def _is_help_request(argv: list[str]) -> bool:
-    return any(arg in {"-h", "--help"} for arg in argv)
+    return help_requested(argv)
+
+
+def _invoke_module_main(module_name: str) -> tuple[bool, int]:
+    module = importlib.import_module(module_name)
+    main_fn = getattr(module, "main", None)
+    if not callable(main_fn):
+        return False, 0
+
+    result = main_fn()
+    if inspect.isawaitable(result):
+        result = asyncio.run(result)
+
+    if result is None:
+        return True, 0
+    if isinstance(result, int):
+        return True, result
+    return True, 0
 
 
 def _run_module(module_name: str, prog_name: str, argv: list[str], requires_full: bool = False) -> int:
@@ -275,6 +344,9 @@ def _run_module(module_name: str, prog_name: str, argv: list[str], requires_full
     sys.argv = [prog_name, *argv]
     os.environ["PASSIVBOT_CLI_PROG"] = prog_name
     try:
+        ran_main, exit_code = _invoke_module_main(module_name)
+        if ran_main:
+            return exit_code
         runpy.run_module(module_name, run_name="__main__")
     except ModuleNotFoundError as exc:
         if requires_full and exc.name and exc.name.split(".", 1)[0] in FULL_INSTALL_MODULE_HINTS:

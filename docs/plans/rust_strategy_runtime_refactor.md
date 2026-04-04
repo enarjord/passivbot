@@ -1,872 +1,600 @@
 # Rust Strategy Runtime Refactor
 
+## Status
+
+This plan supersedes the earlier master-based draft and is aligned to
+`integration/hsl-merge_codex` as of 2026-04-01.
+
+It uses `origin/research/simple_ema_mm` only as the motivating experiment, not as the desired
+target architecture.
+
 ## Purpose
 
-Define a durable Rust-side structure that makes it cheap to add, backtest, optimize, and ship new
-strategies without repeatedly expanding shared bot structs, duplicating orchestration logic, or
-adding custom Python plumbing for every experiment.
+Refactor the config schema, Rust runtime, backtester, and live bot so Passivbot can support
+multiple strategies without repeating the same mistakes for every experiment:
 
-The immediate case study is `simple_ema_mm`, but the design target is broader:
+- growing shared `BotParams` for strategy-only ideas
+- embedding strategy math directly in `orchestrator.rs`
+- coupling backtest sizing semantics to mutable shared runtime fields
+- hardcoding optimizer/config plumbing per strategy
 
-- new strategies should be able to use existing indicators and shared risk logic with minimal code
-- strategy-specific params should not require shared `BotParams` growth
-- live and backtest should continue to use the same Rust decision path
-- adding a new indicator should be a one-time feature-provider change, not a full plumbing rewrite
+The immediate benchmark remains `simple_ema_mm`, but the design target is broader:
 
-## Current Pain Points
+- strategy order generation should be swappable
+- forager / coin selection should remain reusable across strategies
+- TWEL/WEL, realized-loss gates, unstuck, and related enforcers should remain centralized
+- live and backtest must continue to share the same Rust decision path
 
-The current Rust shape is good for one dominant strategy, but too coupled for multi-strategy work.
+## Current Branch Baseline
 
-Observed pain points:
+The refactor must start from what already exists on `integration/hsl-merge_codex`, not from the
+older master snapshot.
 
-1. Strategy logic is embedded inside shared orchestrator flow.
-   - `StrategyKind` already exists in `passivbot-rust/src/types.rs`
-   - strategy branching currently happens directly inside `passivbot-rust/src/orchestrator.rs`
+Important current realities:
 
-2. Strategy-specific param adaptation is ad hoc.
-   - `simple_ema_mm` currently needs a custom adapter in orchestrator to reinterpret existing config
+1. The config pipeline has already been split into staged modules under `src/config/`.
+   - `schema.py` is now the canonical defaults source
+   - `normalize.py`, `project.py`, and `runtime_compile.py` already exist
+   - `tests/test_config_pipeline.py` and related tests already cover that pipeline
 
-3. Shared and strategy-specific params are mixed together.
-   - every new experiment pressures `BotParams` and Python config plumbing
+2. HSL is already merged into the canonical per-side bot config.
+   - `bot.{long,short}.hsl_*`
+   - `live.hsl_signal_mode`
 
-4. Indicator derivation is hardcoded in the orchestrator.
-   - EMA bands and volatility EMA derivation are pulled inline during order generation
+3. Live and backtest already share the Rust orchestrator path, but the runtime is still
+   monolithic.
+   - `passivbot-rust/src/orchestrator.rs`
+   - `passivbot-rust/src/backtest.rs`
+   - `passivbot-rust/src/python.rs`
 
-5. Backtest/live parity is good, but extensibility is poor.
-   - the decision path is unified
-   - the seams for plugging in new strategy behavior are not
+4. The current Rust runtime still assumes one dominant strategy shape.
+   - strategy math is inline in `orchestrator.rs`
+   - `BotParams` mixes strategy fields with forager/risk/unstuck/HSL fields
+   - backtest mutates effective WEL inside runtime state
 
-6. Shared portfolio logic and strategy sizing semantics can conflict.
-   - `simple_ema_mm` exposed this with configured `total_wallet_exposure_limit / n_positions`
-     semantics versus dynamic backtest WEL behavior
+5. Optimizer/config plumbing is still keyed to `bot.*` scalar fields.
+   - see `src/optimization/config_adapter.py`
 
-## Runtime Flow
+6. Live HSL control is still an adjacent controller concern, not a solved shared-engine concern.
+   - the live loop and HSL runtime still interact in Python
+   - the strategy refactor should not block on a simultaneous HSL architecture rewrite
 
-The intended refactor should preserve the current high-level decision flow while making each stage
-cleanly separable.
+## What The `simple_ema_mm` Experiment Actually Proved
 
-1. Python assembles payload inputs for Rust.
-   - live bot gathers exchange state, candles, EMAs, balances, positions, open orders, and config
-   - backtester assembles the same logical state from historical simulation state
+The experiment showed more than "we need another strategy module."
 
-2. Rust shared engine performs selection and allocation.
-   - enabled sides
-   - effective `n_positions`
-   - forager-style active coin selection
-   - forced-active handling
-   - keeping already-open positions active
+It exposed three structural problems:
 
-3. Rust shared engine applies routing and mode constraints.
-   - hedge/non-hedge one-way blocking
-   - manual / tp-only / normal / panic mode interpretation
-   - effective-min-cost gating for initial entries
+1. Strategy math needs an isolated runtime seam.
+   - `simple_ema_mm` had to be bolted into the existing orchestrator instead of plugged in
 
-4. Rust strategy runtime generates candidate entries and closes.
-   - one symbol, one side, one strategy context at a time
-   - uses requested features only
+2. Immutable strategy config is currently mixed with mutable runtime budget state.
+   - backtest currently changes effective `wallet_exposure_limit`
+   - that leaks shared portfolio policy into strategy sizing semantics
 
-5. Rust shared protection/risk layer augments and gates orders.
-   - WEL auto-reduce
-   - TWEL enforcer
-   - unstuck
-   - equity hard stop loss tier controllers
-   - orange-tier mode overrides
-   - red-tier panic close, halt, cooldown, and restart handling
-   - panic close
-   - realized-loss gate
-   - dust/min-cost trimming
-   - entry TWEL gating
+3. Config and optimizer plumbing still assume strategy params live inside `bot`.
+   - that is manageable for one strategy
+   - it becomes a tax on every new experiment
 
-6. Rust emits final ideal orders.
-   - deterministic per-symbol ordering
-   - optional global ordering
-   - diagnostics
-
-7. Consumer-specific handling happens after Rust emits ideal orders.
-   - backtester clears and replaces its resting open-order model each step
-   - live bot reconciles ideal orders against actual exchange orders and applies configurable
-     tolerance to avoid cancel/create churn
-
-This flow is the basis for the config grouping proposed below.
+The second point is the most important architectural lesson from the experiment.
 
 ## Goals
 
-1. New strategies should be implementable mostly by adding one Rust module and one strategy spec.
-2. Shared risk, one-way blocking, fill simulation, and diagnostics must remain centralized.
-3. Strategy-specific params must stop bloating shared core structs.
-4. Python should not need custom per-strategy payload plumbing beyond:
-   - strategy kind
-   - strategy params blob
-   - features requested by the strategy
-5. Live and backtest must use the same Rust strategy runtime.
-6. New indicators should be add-on feature-provider work, not orchestrator surgery.
+1. A new strategy should be implementable mostly by:
+   - adding one Rust strategy module
+   - registering one strategy spec
+   - adding tests
+
+2. Shared orchestration should remain centralized:
+   - coin filtering / forager selection
+   - one-way blocking
+   - TWEL/WEL gates
+   - realized-loss gates
+   - unstuck and enforcers
+   - order sorting / trimming
+   - fill simulation
+
+3. Strategy params must stop expanding shared `BotParams`.
+
+4. The config system should build on the existing staged pipeline, not replace it.
+
+5. Live and backtest must continue to use the same Rust strategy runtime.
+
+6. Optimizer bounds and validation should be strategy-spec-driven rather than hardcoded around
+   `bot.*` scalar key lists.
 
 ## Non-Goals
 
-1. Runtime-loaded external plugins.
-   - keep strategy registration static and compiled in
-2. Rewriting the backtest fill simulator.
-3. Replacing existing risk/TWEL/WEL/unstuck systems in phase 1.
-4. Generalizing everything up front to support arbitrary portfolio policies.
-   - support shared policy first
-   - allow custom portfolio policy later only if needed
+1. Runtime-loaded external strategy plugins.
+   - strategies remain statically compiled in
+
+2. A full live HSL architecture rewrite in the same refactor.
+   - the strategy refactor must integrate with current HSL/live mode control first
+
+3. Rewriting the fill simulator.
+
+4. Generalizing portfolio policy beyond concrete needs discovered by real strategies.
+
+5. Replacing the current config pipeline with another config-loader redesign.
 
 ## Recommended Target Shape
 
-Split Rust into three layers:
+### 1. Keep The Existing Config Pipeline, Extend It
 
-1. Shared engine layer
-2. Strategy runtime layer
-3. Feature provider layer
+Do not re-open the config-loader redesign.
 
-### 1. Shared Engine Layer
+The current `src/config/` pipeline is already the correct place to integrate strategy support:
 
-This layer remains the Rust source of truth for behavior shared across strategies.
+- `schema.py`: canonical defaults
+- `normalize.py`: canonical normalization and migration
+- `project.py`: target projection
+- `runtime_compile.py`: runtime-only aliases / compilation
+- `validate.py`: canonical validation
 
-Responsibilities:
+The strategy refactor should add to that pipeline, not route around it.
 
-- active symbol selection / forager policy
-- one-way blocking
-- side enablement and trading-mode interpretation
-- TWEL/WEL enforcement
-- equity hard stop loss controllers
-- realized-loss gate
-- panic / auto-reduce / unstuck actions
-- min-cost / dust guards
-- order trimming, sorting, diagnostics
-- backtest fill simulation
+### 2. Split Shared Engine Config From Strategy Config
 
-This layer should not contain strategy-specific pricing or sizing formulas.
+Keep shared orchestration and risk policy in `bot`.
 
-Suggested new files:
+Move strategy-specific shape params to a new top-level `strategy` section.
+
+Recommended canonical shape:
+
+```json
+{
+  "live": {
+    "strategy_kind": "simple_ema_mm"
+  },
+  "bot": {
+    "long": {
+      "n_positions": 3,
+      "total_wallet_exposure_limit": 1.0,
+      "risk_twel_enforcer_threshold": 1.0,
+      "risk_wel_enforcer_threshold": 1.0,
+      "unstuck_close_pct": 0.05,
+      "unstuck_ema_dist": -0.2,
+      "unstuck_loss_allowance_pct": 0.01,
+      "unstuck_threshold": 0.4,
+      "forager_volume_ema_span": 360.0,
+      "forager_volatility_ema_span": 60.0,
+      "forager_score_weights": {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 1.0
+      },
+      "hsl_enabled": false
+    },
+    "short": {
+      "n_positions": 3,
+      "total_wallet_exposure_limit": 1.0,
+      "risk_twel_enforcer_threshold": 1.0,
+      "risk_wel_enforcer_threshold": 1.0,
+      "unstuck_close_pct": 0.05,
+      "unstuck_ema_dist": -0.2,
+      "unstuck_loss_allowance_pct": 0.01,
+      "unstuck_threshold": 0.4,
+      "forager_volume_ema_span": 360.0,
+      "forager_volatility_ema_span": 60.0,
+      "forager_score_weights": {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 1.0
+      },
+      "hsl_enabled": false
+    }
+  },
+  "strategy": {
+    "long": {
+      "base_qty_pct": 0.01,
+      "ema_span_0": 200.0,
+      "ema_span_1": 800.0,
+      "offset": 0.002,
+      "offset_psize_weight": 0.1
+    },
+    "short": {
+      "mirror_long": true
+    }
+  }
+}
+```
+
+Notes:
+
+- `live.strategy_kind` is the dispatch key
+- `bot.*` remains the shared engine / risk / forager / HSL section
+- `strategy.*` becomes the strategy-owned param section
+- later, `coin_overrides.<coin>.strategy` may be added if strategy-specific per-coin overrides are
+  needed
+
+### 3. Use Typed Strategy Params Internally
+
+Do not use `HashMap<String, f64>` as the main runtime representation inside Rust.
+
+That is acceptable only as a temporary boundary format.
+
+Recommended rule:
+
+1. Python may pass a generic JSON-like strategy section.
+2. Rust should parse that once into typed per-strategy structs.
+3. Strategy modules should operate on typed params only.
+
+Recommended shape:
+
+```rust
+pub enum StrategyParams {
+    AdaptiveTrailingGrid(AdaptiveTrailingGridParamsPair),
+    SimpleEmaMm(SimpleEmaMmParamsPair),
+}
+```
+
+or equivalently:
+
+```rust
+pub enum StrategyInstance {
+    AdaptiveTrailingGrid(AdaptiveTrailingGridRuntime),
+    SimpleEmaMm(SimpleEmaMmRuntime),
+}
+```
+
+Why:
+
+- strategy code stays type-safe
+- validation errors are explicit
+- per-tick lookups stay cheap
+- adding parameters does not force shared struct growth
+
+### 4. Separate Immutable Config From Runtime-Derived Budget State
+
+This is the most important correction to the earlier draft.
+
+Today, backtest effectively mutates `wallet_exposure_limit` as runtime state. That makes strategy
+logic inherit shared allocator behavior implicitly.
+
+Instead, split:
+
+1. immutable configured policy
+2. runtime-derived allocation state
+
+Recommended concept split:
+
+```rust
+pub struct SharedBotParams {
+    pub n_positions: usize,
+    pub total_wallet_exposure_limit: f64,
+    pub risk_twel_enforcer_threshold: f64,
+    pub risk_wel_enforcer_threshold: f64,
+    pub risk_we_excess_allowance_pct: f64,
+    pub forager_volume_ema_span: f64,
+    pub forager_volatility_ema_span: f64,
+    pub forager_volume_drop_pct: f64,
+    pub forager_score_weights: ForagerScoreWeights,
+    pub unstuck_close_pct: f64,
+    pub unstuck_ema_dist: f64,
+    pub unstuck_loss_allowance_pct: f64,
+    pub unstuck_threshold: f64,
+    pub hsl: SharedHslConfig,
+}
+
+pub struct RuntimeBudgetState {
+    pub configured_wallet_exposure_limit: f64,
+    pub effective_wallet_exposure_limit: f64,
+    pub effective_n_positions: usize,
+}
+```
+
+The strategy contract should receive runtime budget state explicitly rather than silently reading a
+mutated config field.
+
+This is what prevents `simple_ema_mm` from accidentally inheriting adaptive-grid sizing semantics.
+
+### 5. Make Strategy Order Generation A Separable Layer
+
+The orchestrator should become a coordinator over:
+
+1. selection / activation
+2. strategy proposal generation
+3. shared gating / enforcement
+4. post-processing / sorting
+
+Recommended Rust layout:
 
 - `passivbot-rust/src/engine/mod.rs`
 - `passivbot-rust/src/engine/selection.rs`
 - `passivbot-rust/src/engine/one_way.rs`
 - `passivbot-rust/src/engine/risk.rs`
-- `passivbot-rust/src/engine/hard_stop.rs`
-- `passivbot-rust/src/engine/order_postprocess.rs`
-
-The existing logic in `orchestrator.rs` should be gradually moved into these modules, then
-`orchestrator.rs` becomes a coordinator rather than the place where everything lives.
-
-### Shared Protection Controllers
-
-Hard stop loss should be modeled as a shared engine protection controller, not as a strategy.
-
-Why:
-
-- it supervises strategy behavior rather than defining entry/exit logic
-- it must work consistently across multiple strategies
-- it needs access to account- or side-level strategy equity, realized PnL, panic-close flow, halt
-  state, cooldown state, and restart replay
-- it can override strategy mode at ORANGE and RED without strategy-specific knowledge
-
-Recommended responsibilities of the hard-stop controller:
-
-- maintain per-side HSL state machines
-- support both `pside` and `unified` signal modes
-- compute raw and EMA-smoothed drawdown on rebased strategy equity
-- derive `green / yellow / orange / red` tiers
-- apply ORANGE mode overrides as a shared protection policy
-- trigger RED panic-close and per-side halts
-- manage cooldown and no-restart rules
-- expose backtest/live diagnostics and optimizer-facing metrics
-
-This controller should live beside TWEL/WEL/unstuck in the shared engine, not in
-`strategies/*` and not in Python.
-
-### 2. Strategy Runtime Layer
-
-Each strategy gets an isolated module implementing one shared contract.
-
-Recommended interface:
-
-```rust
-pub trait StrategyRuntime {
-    fn kind(&self) -> StrategyKind;
-    fn spec(&self) -> &'static StrategySpec;
-    fn generate_orders(&self, ctx: &StrategyContext) -> Result<StrategyProposal, StrategyError>;
-}
-```
-
-Use static dispatch through a registry/enum, not dynamic plugin loading.
-
-Recommended files:
-
+- `passivbot-rust/src/engine/postprocess.rs`
 - `passivbot-rust/src/strategies/mod.rs`
-- `passivbot-rust/src/strategies/registry.rs`
 - `passivbot-rust/src/strategies/spec.rs`
+- `passivbot-rust/src/strategies/registry.rs`
 - `passivbot-rust/src/strategies/adaptive_trailing_grid.rs`
 - `passivbot-rust/src/strategies/simple_ema_mm.rs`
 
-### 3. Feature Provider Layer
+The earlier draft's basic direction was correct here.
 
-Strategies should declare what they need; the engine should provide it.
+### 6. Keep HSL As A Neighboring Controller Concern In Phase 1
 
-Recommended files:
+The shared engine boundary on this branch is not identical to the final idealized architecture.
 
-- `passivbot-rust/src/features/mod.rs`
-- `passivbot-rust/src/features/requests.rs`
-- `passivbot-rust/src/features/provider.rs`
-- `passivbot-rust/src/features/ema.rs`
-- `passivbot-rust/src/features/volatility.rs`
-- `passivbot-rust/src/features/account.rs`
+On `integration/hsl-merge_codex`:
 
-This layer owns feature derivation from raw inputs already available to the orchestrator/backtester.
+- live HSL still influences per-side mode control from Python
+- backtest HSL is already integrated on the Rust side
 
-## Core Rust Types
+Therefore phase 1 should treat HSL like this:
 
-### StrategyKind
+1. strategy refactor preserves the existing `TradingMode` contract into Rust
+2. shared orchestrator continues to honor `Normal`, `GracefulStop`, `TpOnly`, `Panic`, `Manual`
+3. live HSL internals are not rewritten as part of the first strategy refactor
 
-Keep `StrategyKind` in `types.rs`, but make it only a dispatch key, not the thing that forces
-branching all over orchestrator internals.
+That keeps scope under control without weakening the long-term design.
 
-Recommended built-in names:
+### 7. Use A Small, Concrete Feature Layer First
 
-- `adaptive_trailing_grid` for the standard Passivbot strategy
-- `simple_ema_mm` for the EMA-band market-making experiment
+The earlier draft was right that indicator derivation should not keep growing inline in
+`orchestrator.rs`.
 
-`adaptive_trailing_grid` should describe the strategy's core order behavior, grid plus trailing.
-Features such as TWEL/WEL enforcers, unstuck, panic, hard stop loss, and realized-loss gating
-should remain shared engine capabilities rather than defining the strategy name.
+However, the first implementation should avoid an overly generic feature framework.
 
-### SharedBotParams
+Recommended first step:
 
-Split the current monolithic `BotParams` into:
+- introduce a typed `StrategyInputs` / `StrategyFeatures` layer
+- support only the currently needed derived inputs
+- add new providers only when a real strategy needs them
 
-1. shared engine params
-2. strategy params
-
-Recommended shape:
+Examples:
 
 ```rust
-pub struct SharedBotParams {
-    pub total_wallet_exposure_limit: f64,
-    pub n_positions: usize,
-    pub wallet_exposure_limit: f64,
-    pub risk_twel_enforcer_threshold: f64,
-    pub risk_wel_enforcer_threshold: f64,
-    pub risk_we_excess_allowance_pct: f64,
-    pub filter_volume_ema_span: f64,
-    pub filter_volume_drop_pct: f64,
-    pub filter_volatility_ema_span: f64,
-    pub filter_volatility_drop_pct: f64,
-    pub unstuck_close_pct: f64,
-    pub unstuck_ema_dist: f64,
-    pub unstuck_loss_allowance_pct: f64,
-    pub unstuck_threshold: f64,
-    pub close_grid_qty_pct: f64,
-    pub close_grid_markup_start: f64,
-    pub close_grid_markup_end: f64,
-    pub close_trailing_*: ...,
+pub struct StrategyFeatures {
+    pub ema_bands: Option<EMABands>,
+    pub entry_volatility_logrange_ema_1h: Option<f64>,
+    pub forager_volume_score: Option<f64>,
+    pub forager_volatility_score: Option<f64>,
 }
 ```
 
-Only keep fields here if they are truly shared engine/risk/close policy concepts.
+Then later, if more strategies justify it, this can grow into a more formal request/provider
+registry.
 
-That includes side-level protection settings such as:
+This is a better flexibility tradeoff than building a large abstraction before the second and
+third real strategies exist.
 
-- TWEL/WEL thresholds
-- unstuck settings
-- hard stop loss settings
+## Strategy Spec
 
-The HSL-specific shape should remain grouped rather than flattened into many unrelated scalar
-fields.
+Every strategy should provide a spec that is visible to Python.
 
-Recommended nested concept:
+Recommended responsibilities of the spec:
 
-```rust
-pub struct ProtectionParams {
-    pub wel_enforcer_threshold: f64,
-    pub twel_enforcer_threshold: f64,
-    pub unstuck: UnstuckParams,
-    pub hard_stop: HardStopParams,
-}
-```
+- parameter names
+- defaults
+- bounds metadata
+- side mirroring behavior
+- required features
+- legacy compatibility aliases during migration
 
-The hard-stop controller will also need a small shared runtime-global config for items that are not
-side-local strategy params, such as:
-
-- HSL signal mode (`pside` vs `unified`)
-- live-only cooldown intervention policy
-
-### StrategyParams
-
-Do not create a new typed Rust struct for every experiment at the Python boundary.
-
-Recommended phase-1 shape:
-
-```rust
-pub type StrategyParams = std::collections::HashMap<String, f64>;
-```
-
-Recommended phase-2 shape:
-
-```rust
-pub enum ParamValue {
-    F64(f64),
-    Bool(bool),
-    String(String),
-}
-
-pub type StrategyParams = HashMap<String, ParamValue>;
-```
-
-Why this is the right tradeoff:
-
-- adding a new strategy param does not require editing `BotParams`
-- Python config/optimizer plumbing stays generic
-- strategy modules can parse only what they need
-- shared risk code stays typed
-
-### StrategySpec
-
-Every strategy must provide a spec.
-
-Recommended:
+Recommended sketch:
 
 ```rust
 pub struct StrategySpec {
     pub kind: StrategyKind,
     pub params: &'static [ParamSpec],
-    pub feature_requests: &'static [FeatureRequestTemplate],
-    pub side_mode: StrategySideMode,
-    pub portfolio_policy: PortfolioPolicyKind,
-}
-
-pub struct ParamSpec {
-    pub name: &'static str,
-    pub default: f64,
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-    pub step: Option<f64>,
-    pub side_behavior: ParamSideBehavior,
+    pub required_features: &'static [FeatureRequirement],
+    pub legacy_bot_aliases: &'static [LegacyBotAlias],
 }
 ```
 
-This spec becomes the single source of truth for:
+This spec should become the source for:
 
-- config defaults
 - config validation
-- optimizer bounds generation
-- UI/help text
-- mirrored long/short behavior
+- runtime normalization
+- optimizer bounds discovery
+- help/docs generation where useful
 
-### StrategyContext
+## Compatibility And Migration Rules
 
-Strategies should not receive raw `SymbolInput` or pull from orchestrator internals directly.
+### Phase-1 Compatibility
 
-Recommended:
+1. Keep the current adaptive-grid schema working unchanged.
+2. Accept legacy adaptive-grid params from `bot.*`.
+3. Introduce `live.strategy_kind` with a default matching current behavior.
+4. Allow `simple_ema_mm` to be expressed canonically through `strategy.*`.
 
-```rust
-pub struct StrategyContext<'a> {
-    pub symbol_idx: usize,
-    pub pside: PositionSide,
-    pub shared: &'a SharedBotParams,
-    pub strategy_params: &'a StrategyParams,
-    pub exchange: &'a ExchangeParams,
-    pub order_book: &'a OrderBook,
-    pub position: &'a Position,
-    pub mode: TradingMode,
-    pub balance: f64,
-    pub balance_raw: f64,
-    pub features: StrategyFeatureView<'a>,
-    pub diagnostics: StrategyDiagInput<'a>,
-}
-```
+### Recommended Default Strategy Naming
 
-### StrategyProposal
+- canonical name: `adaptive_trailing_grid`
+- temporary legacy alias accepted: `adaptive_grid`
+- experiment strategy: `simple_ema_mm`
 
-Recommended:
+### Migration Behavior
 
-```rust
-pub struct StrategyProposal {
-    pub entries: Vec<Order>,
-    pub closes: Vec<Order>,
-    pub notes: StrategyNotes,
-}
-```
+Use the existing config normalization pipeline for migration:
 
-The shared engine consumes this and applies final gating/post-processing.
+- `normalize.py` maps legacy strategy fields into canonical `strategy.*` when needed
+- `validate.py` validates the canonical strategy section
+- `project.py` preserves only relevant sections for each target
+- `runtime_compile.py` injects runtime-only aliases if still needed
 
-## Feature System
+Do not push these concerns into ad hoc code inside `backtest.py`, `passivbot.py`, or
+`config_utils.py`.
 
-### Why It Matters
+## Python Boundary Changes
 
-This is the main mechanism that makes new strategies cheap.
+### Required
 
-Without it:
+1. Config pipeline support for:
+   - `live.strategy_kind`
+   - `strategy.long`
+   - `strategy.short`
 
-- every strategy change adds more inline derivation logic to orchestrator
-- backtest/live need manual per-strategy data plumbed in Python
+2. Optimizer plumbing that can discover strategy-owned bounds from a Rust-exposed spec.
 
-With it:
+3. Generic payload building so live and backtest pass:
+   - shared bot params
+   - strategy kind
+   - strategy params
+   - runtime mode inputs
 
-- the strategy declares the features it needs
-- the engine provides them
-- new indicators become one new provider implementation and one request enum
+### Not Required In Phase 1
 
-Important boundary:
-
-- strategy features are for strategy modules
-- hard stop loss should consume shared equity/PnL/account streams from the engine directly
-- HSL should not be represented as a strategy feature request unless a future strategy explicitly
-  needs read-only access to HSL state for diagnostics
-
-### Feature Requests
-
-Recommended request enums:
-
-```rust
-pub enum FeatureRequest {
-    EmaClose { tf: Timeframe, span: f64 },
-    EmaBand { tf: Timeframe, spans: Vec<f64> },
-    LogRangeEma { tf: Timeframe, span: f64 },
-    TrailingBundle,
-    Balance,
-    BalanceRaw,
-    EffectiveMinCost,
-    RealizedLossState,
-    WalletExposure,
-    PositionAge,
-}
-```
-
-### Feature Provider
-
-The provider should expose a typed view:
-
-```rust
-pub struct StrategyFeatureView<'a> { ... }
-
-impl StrategyFeatureView<'_> {
-    pub fn ema_close(&self, tf: Timeframe, span: f64) -> Option<f64>;
-    pub fn ema_band(&self, tf: Timeframe, spans: &[f64]) -> Option<EMABands>;
-    pub fn log_range_ema(&self, tf: Timeframe, span: f64) -> Option<f64>;
-    pub fn trailing(&self) -> Option<&TrailingPriceBundle>;
-}
-```
-
-### Python Boundary For Features
-
-Python should not hardcode strategy-specific indicator gathering.
-
-Instead:
-
-1. Python provides raw/current indicator inputs already available today
-2. Rust feature provider derives strategy views from them
-3. When a truly new indicator is required, add a new provider capability and include it in the
-   payload-builder contract
-
-For live:
-
-- Python asks Rust for required feature requests for the active strategy kind
-- Python gathers only the needed base data
-- Python builds one generic payload
-
-For backtest:
-
-- backtest already has the full stepwise state
-- the feature provider runs inside Rust per timestep
-
-## Portfolio Policy
-
-Do not over-generalize this in phase 1.
-
-Recommended:
-
-```rust
-pub enum PortfolioPolicyKind {
-    SharedPerSide,
-    Custom,
-}
-```
-
-Phase-1 support:
-
-- all strategies, including `simple_ema_mm`, use `SharedPerSide`
-
-Phase-2 support:
-
-- if a future strategy genuinely needs global long+short slot budgeting or gross-exposure caps,
-  allow a custom strategy portfolio policy
-
-This avoids blocking the refactor on speculative complexity.
-
-## Config Design
-
-### Recommended New Shape
-
-Shared bot config should be grouped by runtime role rather than by implementation order labels like
-`pre_processing` and `post_processing`.
-
-Recommended groups:
-
-- `selection`
-- `portfolio`
-- `strategy`
-- `protection`
-
-Why this is preferred:
-
-- `selection` maps to forager / slot activation
-- `portfolio` maps to exposure-budget semantics
-- `strategy` maps to the main entry/close logic for the chosen strategy
-- `protection` maps to shared add-on behaviors layered after strategy generation
-
-This matches the runtime flow without coupling the config to exact call order.
-
-Recommended:
-
-```json
-{
-  "live": {
-    "strategy_kind": "simple_ema_mm",
-    "protection": {
-      "hsl_signal_mode": "pside",
-      "hsl_position_during_cooldown_policy": "panic"
-    }
-  },
-  "bot": {
-    "long": {
-      "selection": {
-        "n_positions": 3,
-        "filter_volume_ema_span": 60.0,
-        "filter_volume_drop_pct": 0.5,
-        "filter_volatility_ema_span": 60.0,
-        "filter_volatility_drop_pct": 0.0
-      },
-      "portfolio": {
-        "total_wallet_exposure_limit": 1.0,
-        "wallet_exposure_excess_allowance_pct": 0.0
-      },
-      "strategy": {
-        "base_qty_pct": 0.01,
-        "ema_span_0": 200.0,
-        "ema_span_1": 800.0,
-        "quote_offset_pct": 0.002,
-        "position_bias_weight": 0.1
-      },
-      "protection": {
-        "wel_enforcer_threshold": 1.0,
-        "twel_enforcer_threshold": 1.0,
-        "unstuck_close_pct": 0.001,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_loss_allowance_pct": 0.03,
-        "unstuck_threshold": 0.916,
-        "hard_stop": {
-          "enabled": true,
-          "red_threshold": 0.2,
-          "ema_span_minutes": 60.0,
-          "cooldown_minutes_after_red": 0.0,
-          "no_restart_drawdown_threshold": 1.0,
-          "tier_ratios": {
-            "yellow": 0.5,
-            "orange": 0.75
-          },
-          "orange_tier_mode": "tp_only_with_active_entry_cancellation",
-          "panic_close_order_type": "market"
-        }
-      }
-    },
-    "short": {
-      "mirror_from": "long",
-      "strategy": {
-        "quote_offset_pct": 0.003
-      }
-    }
-  }
-}
-```
-
-The example above shows the preferred symmetry model:
-
-- `bot.short.mirror_from = "long"` mirrors the entire side configuration
-- local subsection overrides remain allowed
-
-### Mirroring Design
-
-Mirroring should be a generic config feature, not a strategy-only special case.
-
-Recommended rule:
-
-- allow `mirror_from: "long"` or `mirror_from: "short"` on side blocks
-- allow `mirror_from` on subsection blocks like `selection`, `portfolio`, `strategy`,
-  and `protection`
-- resolve in this order:
-  1. shared defaults
-  2. mirrored source block
-  3. local overrides
-
-Examples:
-
-Full side mirroring:
-
-```json
-"bot": {
-  "long": { ... },
-  "short": {
-    "mirror_from": "long"
-  }
-}
-```
-
-Section-only mirroring:
-
-```json
-"bot": {
-  "long": { ... },
-  "short": {
-    "selection": { "mirror_from": "long" },
-    "portfolio": { "mirror_from": "long" },
-    "strategy": { "mirror_from": "long" },
-    "protection": { "mirror_from": "long" }
-  }
-}
-```
-
-This is preferred over many booleans such as `mirror_long_strategy`, `mirror_long_portfolio`,
-etc., because it scales better and keeps the resolved config model simple.
-
-### Compatibility Rule
-
-During migration:
-
-- continue accepting current flat `bot.*` fields for the `adaptive_trailing_grid` strategy
-- allow `simple_ema_mm` to read old mapped config on the research branch
-- normalize legacy config into the new grouped structure before Rust sees it
-- resolve all `mirror_from` references during normalization
-- normalize legacy HSL keys into `protection.hard_stop.*`
-- keep live-level HSL runtime policy keys under normalized `live.protection.*`
-- Rust should receive:
-  - `selection_params`
-  - `portfolio_params`
-  - `strategy_params`
-  - `protection_params`
-  - `runtime_protection_params`
-  - `strategy_kind`
-
-## Python Changes
-
-The Python side should remain an orchestrator/data-loader, not a strategy implementation layer.
-
-### Required Python Changes
-
-1. Config normalization
-   - add `strategy` section support
-   - normalize legacy config into the new internal representation
-
-2. Strategy spec exposure
-   - Python should be able to ask Rust for supported params and defaults
-
-3. Optimizer adapter changes
-   - optimizer bounds should be generated from strategy spec, not hardcoded bot-key lists
-
-4. Payload builder changes
-   - payload should include strategy params map
-   - payload should include shared protection/runtime-protection params
-   - payload should remain generic across strategies
-
-### Not Required
-
-- Python should not contain per-strategy pricing/sizing math
-- Python should not duplicate strategy indicator semantics if Rust can derive them from raw inputs
+1. Per-strategy Python math.
+2. A new Python-side strategy execution layer.
+3. Another config subsystem rewrite.
 
 ## Backtester Changes
 
-### Keep
+The backtester should stop representing strategy semantics by mutating shared bot params.
 
-- fill simulation
-- equity tracking
-- fee handling
-- metrics
-- suite logic
+Required changes:
 
-### Change
+1. Keep immutable shared config separate from runtime budget state.
+2. Pass strategy params separately into the Rust runtime.
+3. Make dynamic tradability / effective WEL an engine allocation input, not a silent strategy
+   config rewrite.
+4. Preserve live/backtest parity by keeping strategy dispatch inside Rust.
 
-The backtester should stop assuming the strategy is represented by the current `BotParams`.
+For `simple_ema_mm`, this means:
 
-Instead:
+- fixed clip sizing based on configured strategy semantics can remain fixed
+- shared TWEL/WEL/risk gates still apply
+- no custom fill engine is needed
 
-- keep shared risk/portfolio state as typed params
-- pass strategy params separately into the orchestrator runtime
-- keep protection-controller state and config separate from strategy params
-- let the strategy runtime define sizing semantics explicitly
+## Recommended Implementation Phases
 
-This is the key fix for cases like `simple_ema_mm`, where configured sizing semantics should not
-implicitly inherit dynamic-WEL behavior unless the strategy explicitly opts into that.
+### Phase 0: Lock The Branch Baseline
 
-Hard stop loss adds two concrete backtester requirements that should stay in the shared engine:
-
-- side-level controller state, cooldown state, and replay-safe reset semantics
-- exported account-level and side-level HSL metrics for plotting and optimization
-
-## Migration Plan
-
-### Phase 1: Extract Strategy Runtime Seam
-
-Goal: isolate strategy order generation without changing external behavior for the standard
-`adaptive_trailing_grid` strategy.
+Goal: codify the current branch assumptions before refactoring.
 
 Tasks:
 
-1. Create `strategies/` module with:
-   - `adaptive_trailing_grid.rs`
-   - `simple_ema_mm.rs`
-   - `registry.rs`
-   - `spec.rs`
+1. Add a short design note documenting:
+   - current config pipeline ownership in `src/config/`
+   - current HSL/live-mode ownership split
+   - current mutable-WEL behavior in backtest
 
-2. Define:
-   - `StrategyContext`
-   - `StrategyProposal`
-   - `StrategySpec`
+2. Add regression tests that freeze current adaptive-grid behavior.
 
-3. Move adaptive-grid entry/close generation behind the strategy contract.
+### Phase 1: Extract A Strategy Seam In Rust
 
-4. Keep shared orchestrator policy intact.
-5. Keep hard stop loss and other protection systems outside strategy modules.
-
-Success criteria:
-
-- no behavior change for adaptive-grid
-- `simple_ema_mm` still runs
-- orchestrator no longer contains inline strategy math branches
-- HSL remains a shared protection controller rather than becoming a strategy-specific branch
-
-### Phase 2: Introduce Feature Provider
-
-Goal: stop hardcoding feature derivation in the orchestrator.
+Goal: isolate strategy order generation without changing adaptive-grid behavior.
 
 Tasks:
 
-1. Create `features/` module
-2. Move EMA-band derivation there
-3. Move log-range EMA derivation there
-4. Provide typed feature access from `StrategyContext`
-5. Make each strategy declare required features
+1. Add `StrategyKind`.
+2. Add `strategies/` modules.
+3. Move current adaptive-grid order generation behind that seam.
+4. Keep shared selection, one-way logic, gates, unstuck, and sorting in the engine path.
 
 Success criteria:
 
-- orchestrator builds feature views generically
-- adding a strategy using only existing features requires no orchestrator edits
+- adaptive-grid behavior is unchanged
+- `orchestrator.rs` no longer owns inline strategy math
 
-### Phase 3: Split Shared Params From Strategy Params
+### Phase 2: Separate Immutable Shared Config From Runtime Budget State
 
-Goal: stop growing `BotParams` for every new experiment.
+Goal: stop mutating strategy semantics through shared runtime fields.
 
 Tasks:
 
-1. Introduce `SharedBotParams`
-2. Introduce `StrategyParams`
-3. Add config normalization from current schema to the new internal shape
-4. Keep backwards compatibility for `adaptive_trailing_grid`
-5. Normalize HSL into shared protection/runtime-protection config rather than strategy params
+1. Introduce `SharedBotParams`.
+2. Introduce runtime budget/allocation state.
+3. Update backtest to compute effective WEL / effective slot counts as engine state.
+4. Make strategy inputs read explicit runtime budget state.
 
 Success criteria:
 
-- new strategy params do not require new fields in `BotParams`
-- Python optimizer/config validation works from strategy spec
+- backtest dynamic-WEL behavior is explicit engine state
+- strategies no longer depend on mutated config fields
+
+### Phase 3: Add Canonical `strategy` Config Support
+
+Goal: stop growing `bot.*` for strategy-only parameters.
+
+Tasks:
+
+1. Extend `src/config/schema.py` with `strategy`.
+2. Add normalization and validation for `strategy`.
+3. Add backward-compatible adaptive-grid migration rules.
+4. Add tests in the current config pipeline suite.
+
+Success criteria:
+
+- canonical strategy params live outside `bot`
+- current adaptive-grid configs still load
+- transform log reflects meaningful migration steps
 
 ### Phase 4: Rust-Driven Strategy Specs For Python
 
-Goal: eliminate repeated per-strategy Python plumbing.
+Goal: remove hardcoded optimizer/config knowledge of strategy params.
 
 Tasks:
 
-1. Expose strategy specs from Rust via PyO3
-2. Update config validation to use those specs
-3. Update optimizer bounds handling to use those specs
-4. Update docs/help generation if desired
+1. Expose strategy specs from Rust via PyO3.
+2. Use them in config validation and optimizer bounds handling.
+3. Replace hardcoded `bot.*` scalar assumptions in `src/optimization/config_adapter.py`.
 
 Success criteria:
 
-- adding a strategy requires minimal Python changes
-- optimizer can discover params generically
+- optimizer can discover strategy params generically
+- adding a strategy no longer requires hardcoded Python bound mappings
 
-### Phase 5: Optional Custom Portfolio Policies
+### Phase 5: Add `simple_ema_mm` Properly
 
-Only do this if a real strategy needs it.
+Goal: port the experiment onto the new seam cleanly.
 
-Examples:
+Tasks:
 
-- global long+short slot budget
-- gross-exposure budgeting across both sides
-- strategy-specific open-position allocator
+1. Implement typed `SimpleEmaMmParams`.
+2. Express `simple_ema_mm` through canonical `strategy.*`.
+3. Add backtest/live parity tests.
+4. Add explicit tests for fixed strategy sizing vs shared risk gating.
 
-Until there is a concrete need, keep all strategies on shared per-side policy.
+Success criteria:
 
-## `simple_ema_mm` Case Study
+- no custom orchestrator hack
+- no short-side "read long params ad hoc" shortcut
+- no dependence on mutated WEL fields for strategy semantics
 
-This strategy is the right benchmark for the refactor because it needs:
+### Phase 6: Expand Feature Provider Only As Needed
 
-- existing EMA-based features
-- existing balance/position state
-- custom pricing and sizing semantics
-- no custom fill engine
-- shared one-way/risk/backtest machinery
+Goal: keep extensibility high without speculative abstraction.
 
-If the new runtime makes `simple_ema_mm` clean, it will make many future experiments cheap.
-
-### What `simple_ema_mm` Should Look Like After Refactor
-
-Strategy module:
-
-- reads `base_qty_pct`, `ema_span_0`, `ema_span_1`, `offset`, `offset_psize_weight`
-- requests EMA-band feature
-- emits one entry clip and one close clip
-- relies on shared engine for:
-  - one-way blocking
-  - TWEL/WEL/loss gates
-  - min-cost handling
-  - fill simulation
-
-No custom orchestrator adaptation function should be needed.
+Only do this when a concrete next strategy requires more derived inputs than the initial
+`StrategyFeatures` layer handles cleanly.
 
 ## Acceptance Criteria
 
 The refactor is successful when all of the following are true:
 
-1. A new strategy using only existing indicators can be added by:
-   - adding one Rust strategy module
-   - registering one strategy spec
-   - adding tests
-   - without modifying orchestrator policy code
+1. A new strategy using existing shared engine behavior can be added without editing shared
+   selection/risk policy code.
 
-2. A new strategy param does not require expanding shared `BotParams`.
+2. Strategy params do not require expanding shared `BotParams`.
 
 3. Backtest and live still use the same Rust strategy runtime.
 
-4. Optimizer bounds can be generated from strategy metadata instead of hardcoded key lists.
+4. The config pipeline supports canonical strategy config through `src/config/`, not through
+   one-off adapters.
 
-5. Feature derivation for existing indicators is centralized and reusable.
+5. Optimizer bounds can be discovered from strategy metadata rather than hardcoded bot-key lists.
 
-6. Shared risk/portfolio behavior remains centralized.
-7. Hard stop loss remains a shared protection controller with no strategy-specific plumbing.
+6. Dynamic allocation state is explicit runtime state rather than silent mutation of strategy
+   config.
 
-## Recommended First Implementation Scope
-
-Do not try to land the whole end-state in one PR.
-
-Best first milestone:
-
-1. Extract adaptive-grid and `simple_ema_mm` into `strategies/`
-2. Define `StrategyContext`, `StrategyProposal`, `StrategySpec`
-3. Keep current shared `BotParams` for the moment
-4. Add a thin `strategy_params` blob only for non-adaptive-grid strategies
-
-That captures most of the extensibility win without forcing the full config/optimizer redesign in
-the first step.
+7. `simple_ema_mm` runs as a normal strategy implementation, not as an orchestrator hack.
 
 ## Summary Recommendation
 
-The best practical shape is:
+The core direction of the earlier draft was right:
 
-- Rust shared engine for portfolio/risk/execution
-- Rust strategy modules with a common runtime contract
-- Rust feature provider for indicators/state views
-- Python as generic payload builder and executor
-- strategy-specific params separated from shared bot/risk params
+- separate shared engine logic from strategy logic
+- keep Rust as the source of truth for live/backtest behavior
+- keep forager and risk systems reusable across strategies
 
-This keeps Passivbot’s strongest property intact, Rust as source of truth for behavior, while
-making future strategy experiments materially cheaper to implement and ship.
+But the branch-aligned version should be stricter in three places:
+
+1. Build on the existing config pipeline instead of redesigning it again.
+2. Use typed strategy params internally, not generic maps deep in Rust.
+3. Separate immutable strategy config from runtime allocation state before building a large feature
+   abstraction.
+
+That is the highest-value path for future strategy experimentation on this codebase.

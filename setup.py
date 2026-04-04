@@ -6,6 +6,8 @@ from setuptools_rust import Binding, RustExtension
 
 ROOT = Path(__file__).resolve().parent
 SRC_DIR = ROOT / "src"
+VERSION_NS = {}
+exec((SRC_DIR / "passivbot_version.py").read_text(encoding="utf-8"), VERSION_NS)
 
 
 def parse_requirements(filename, seen=None):
@@ -44,7 +46,7 @@ DEV_REQUIREMENTS = parse_requirements("requirements-dev.txt")
 
 setup(
     name="passivbot",
-    version="7.8.5",
+    version=VERSION_NS["__version__"],
     python_requires=">=3.12",
     packages=find_packages(where="src"),
     package_dir={"": "src"},

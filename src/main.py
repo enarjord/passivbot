@@ -27,7 +27,8 @@ if __name__ == "__main__":
         )
         raise SystemExit(1)
 
-    from rust_utils import check_and_maybe_compile
+    from cli_utils import help_requested
+    from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension
 
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--skip-rust-compile", action="store_true", help="Skip Rust build check.")
@@ -40,10 +41,12 @@ if __name__ == "__main__":
         help="Abort if Rust extension appears stale instead of attempting rebuild.",
     )
     known_args, remaining = parser.parse_known_args()
+    help_only = help_requested(remaining)
 
     try:
         check_and_maybe_compile(
-            skip=known_args.skip_rust_compile
+            skip=help_only
+            or known_args.skip_rust_compile
             or os.environ.get("SKIP_RUST_COMPILE", "").lower() in ("1", "true", "yes"),
             force=known_args.force_rust_compile,
             fail_on_stale=known_args.fail_on_stale_rust,
@@ -55,5 +58,6 @@ if __name__ == "__main__":
     # Recreate argv for the real app without the rust flags
     sys.argv = [sys.argv[0]] + remaining
     from passivbot import main
+    verify_loaded_runtime_extension()
 
     asyncio.run(main())

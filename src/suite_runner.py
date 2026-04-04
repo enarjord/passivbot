@@ -18,14 +18,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
-
-from config_utils import (
-    format_config,
-    load_config,
-    parse_overrides,
-    require_config_value,
-    require_live_value,
-)
+from config import load_prepared_config
+from config.access import require_config_value, require_live_value
+from config.overrides import parse_overrides
 from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
 from utils import (
@@ -92,7 +87,7 @@ def extract_suite_config(
     - backtest.aggregate (aggregation settings)
     - backtest.exchanges (default exchanges for scenarios)
     - backtest.volume_normalization (bool, default True)
-    - backtest.suite_enabled (bool, default True) - master switch for suite mode
+    - backtest.suite_enabled (bool, default False) - master switch for suite mode
 
     Args:
         base_config: Full config dict
@@ -123,9 +118,9 @@ def extract_suite_config(
             cfg["volume_normalization"] = suite_override["volume_normalization"]
 
     # Determine if suite mode is enabled:
-    # - suite_enabled config param must be true (default: true)
+    # - suite_enabled config param must be true (default: false)
     # - AND scenarios must exist
-    suite_enabled_config = backtest.get("suite_enabled", True)
+    suite_enabled_config = backtest.get("suite_enabled", False)
     has_scenarios = bool(cfg.get("scenarios"))
     cfg["enabled"] = suite_enabled_config and has_scenarios
 
@@ -1571,13 +1566,15 @@ def run_backtest_suite_sync(
     disable_plotting: bool = False,
 ) -> SuiteSummary:
     configure_logging()
-    config = load_config(str(config_path), verbose=False)
-    config = format_config(config, verbose=False)
+    config_path_str = str(config_path)
+    if config_path_str in {"", "."}:
+        config_path_str = None
+    config = load_prepared_config(config_path_str, verbose=False)
     config = parse_overrides(config, verbose=False)
 
     suite_override = None
     if suite_config_path:
-        override_config = load_config(str(suite_config_path), verbose=False)
+        override_config = load_prepared_config(str(suite_config_path), verbose=False)
         override_backtest = override_config.get("backtest", {})
         # Support both new (scenarios at top level) and legacy (suite wrapper) formats
         if "scenarios" in override_backtest:
@@ -1613,7 +1610,7 @@ def run_backtest_suite_sync(
 
 def cli_entrypoint(config_path: str, suite_config_path: Optional[str] = None) -> None:
     summary = run_backtest_suite_sync(
-        Path(config_path),
+        Path(config_path) if config_path else Path(),
         suite_config_path=Path(suite_config_path) if suite_config_path else None,
     )
     logging.info(

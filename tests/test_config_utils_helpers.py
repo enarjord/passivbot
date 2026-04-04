@@ -1,3 +1,4 @@
+import logging
 import argparse
 from copy import deepcopy
 from types import SimpleNamespace
@@ -6,6 +7,9 @@ import json
 import config_utils
 import pytest
 
+from config import load_input_config, prepare_config
+from config.project import project_config
+from config.runtime_compile import compile_runtime_config
 from config_transform import ConfigTransformTracker, record_transform
 from config_utils import (
     _apply_backward_compatibility_renames,
@@ -26,6 +30,45 @@ from config_utils import (
 )
 
 
+def test_load_input_config_without_path_uses_schema_defaults():
+    source, base_config_path, raw_snapshot = load_input_config(None, log_info=False)
+
+    assert base_config_path == ""
+    assert source == get_template_config()
+    assert raw_snapshot == get_template_config()
+
+
+def test_default_example_config_matches_schema_defaults():
+    with open("configs/examples/default_trailing_grid_long_npos10.json", encoding="utf-8") as fh:
+        example = json.load(fh)
+
+    assert example == get_template_config()
+
+
+def test_prepare_config_preserves_raw_snapshot_and_effective_input():
+    source, base_config_path, raw_snapshot = load_input_config(None, log_info=False)
+    source["live"]["user"] = "test_user"
+
+    prepared = prepare_config(
+        source,
+        base_config_path=base_config_path,
+        live_only=True,
+        verbose=False,
+        target="live",
+        runtime="live",
+        raw_snapshot=raw_snapshot,
+    )
+
+    assert "backtest" not in prepared
+    assert prepared["live"]["user"] == "test_user"
+    assert prepared["bot"]["long"]["filter_volume_ema_span"] == pytest.approx(
+        prepared["bot"]["long"]["forager_volume_ema_span"]
+    )
+    assert prepared["_raw"] == raw_snapshot
+    assert prepared["_raw_effective"]["live"]["user"] == "test_user"
+    assert prepared["_raw"]["live"]["user"] != "test_user"
+
+
 def test_ensure_bot_defaults_and_bounds_adds_missing_values():
     config = get_template_config()
     config["bot"]["long"].pop("close_trailing_qty_pct", None)
@@ -43,7 +86,7 @@ def test_rename_config_keys_moves_legacy_fields():
             "minimum_market_age_days": 12,
             "noisiness_rolling_mean_window_size": 34,
         },
-        "backtest": {"exchange": "binance"},
+        "backtest": {"exchange": "binance", "panic_market_slippage_pct": 0.0015},
     }
 
     _rename_config_keys(config, verbose=False)
@@ -52,13 +95,15 @@ def test_rename_config_keys_moves_legacy_fields():
     assert config["live"]["minimum_coin_age_days"] == 12
     assert config["live"]["ohlcv_rolling_window"] == 34
     assert config["backtest"]["exchanges"] == ["binance"]
+    assert config["backtest"]["market_order_slippage_pct"] == pytest.approx(0.0015)
     assert "exchange" not in config["backtest"]
+    assert "panic_market_slippage_pct" not in config["backtest"]
 
 
 def test_rename_config_keys_records_tracker_events():
     config = {
         "live": {"minimum_market_age_days": 5},
-        "backtest": {"exchange": "binance"},
+        "backtest": {"exchange": "binance", "panic_market_slippage_pct": 0.0015},
     }
     tracker = ConfigTransformTracker()
 
@@ -77,6 +122,29 @@ def test_rename_config_keys_records_tracker_events():
         and event["to"] == "backtest.exchanges"
         for event in summary
     )
+    assert any(
+        event["action"] == "rename"
+        and event["from"] == "backtest.panic_market_slippage_pct"
+        and event["to"] == "backtest.market_order_slippage_pct"
+        for event in summary
+    )
+
+
+def test_load_config_renames_legacy_panic_market_slippage_pct(tmp_path):
+    raw = {
+        "backtest": {"panic_market_slippage_pct": 0.0015},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+    path = tmp_path / "legacy_slippage.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    loaded = load_config(str(path), verbose=False)
+
+    assert loaded["backtest"]["market_order_slippage_pct"] == pytest.approx(0.0015)
+    assert "panic_market_slippage_pct" not in loaded["backtest"]
 
 
 def test_hydrate_then_sync_with_template_adds_missing_and_removes_extras():
@@ -127,7 +195,10 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     _apply_non_live_adjustments(config, verbose=False)
 
     assert config["live"]["approved_coins"]["long"] == ["btc"]
-    assert config["optimize"]["scoring"] == ["adg_btc", "adg_usd"]
+    assert config["optimize"]["scoring"] == [
+        {"metric": "adg_btc", "goal": "max"},
+        {"metric": "adg_usd", "goal": "max"},
+    ]
     limits = config["optimize"]["limits"]
     assert isinstance(limits, list)
     gain_limit = next((entry for entry in limits if entry["metric"] == "gain_btc"), None)
@@ -155,6 +226,24 @@ def test_apply_non_live_adjustments_supports_legacy_coins_file():
     with open("configs/approved_coins.json") as fp:
         expected = json.load(fp)
     assert config["live"]["approved_coins"]["long"] == expected
+
+
+def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatting():
+    template = get_template_config()
+    assert template["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
+
+    sparse = {
+        "live": {},
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "optimize": {"bounds": {}},
+        "coin_overrides": {},
+    }
+    formatted = format_config(sparse, verbose=False)
+    assert formatted["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
+
+    loaded = load_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    assert loaded["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
 
 
 def test_migrate_btc_collateral_settings_converts_bool():
@@ -246,6 +335,24 @@ def test_load_config_malformed_optimize_limits_falls_back_to_template(caplog, tm
     assert any("optimize.limits malformed or unsupported" in rec.message for rec in caplog.records)
 
 
+def test_load_config_disabled_sparse_optimize_limits_are_normalized(caplog, tmp_path):
+    cfg = get_template_config()
+    cfg["optimize"]["limits"] = [
+        {"metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.9},
+        {"metric": "peak_recovery_hours_hsl", "enabled": False},
+        {"metric": "position_held_hours_max", "enabled": False},
+    ]
+    path = tmp_path / "disabled_sparse_limits.json"
+    path.write_text(json.dumps(cfg))
+
+    loaded = load_config(str(path), verbose=False)
+
+    assert loaded["optimize"]["limits"][1]["metric"] == "peak_recovery_hours_hsl"
+    assert loaded["optimize"]["limits"][1]["enabled"] is False
+    assert loaded["optimize"]["limits"][2]["enabled"] is False
+    assert not any("optimize.limits malformed or unsupported" in rec.message for rec in caplog.records)
+
+
 def test_normalize_limit_entries_preserves_integers():
     raw = {"penalize_if_greater_than_position_held_hours_max": 2016}
     normalized = config_utils.normalize_limit_entries(raw)
@@ -253,6 +360,93 @@ def test_normalize_limit_entries_preserves_integers():
     assert normalized[0]["metric"] == "position_held_hours_max"
     assert isinstance(normalized[0]["value"], int)
     assert normalized[0]["value"] == 2016
+
+
+def test_parse_limit_cli_entry_supports_scalar_syntax():
+    entry = config_utils.parse_limit_cli_entry("drawdown_worst > 0.35")
+
+    assert entry == {
+        "metric": "drawdown_worst_usd",
+        "penalize_if": "less_than_or_equal",
+        "value": 0.35,
+    }
+
+
+def test_parse_limit_cli_entry_supports_scalar_syntax_without_spaces():
+    entry = config_utils.parse_limit_cli_entry("drawdown_worst<=0.35")
+
+    assert entry == {
+        "metric": "drawdown_worst_usd",
+        "penalize_if": "greater_than",
+        "value": 0.35,
+    }
+
+
+def test_parse_limit_cli_entry_supports_extended_scalar_operators():
+    greater_equal = config_utils.parse_limit_cli_entry("adg_strategy_pnl_rebased>=0.001")
+    equal_to = config_utils.parse_limit_cli_entry("adg_strategy_pnl_rebased == 0.0")
+
+    assert greater_equal == {
+        "metric": "adg_strategy_pnl_rebased",
+        "penalize_if": "less_than",
+        "value": 0.001,
+    }
+    assert equal_to == {
+        "metric": "adg_strategy_pnl_rebased",
+        "penalize_if": "not_equal",
+        "value": 0,
+    }
+
+
+def test_parse_limit_cli_entry_supports_range_and_extras():
+    entry = config_utils.parse_limit_cli_entry(
+        "loss_profit_ratio outside_range [0.05,0.7] stat=mean enabled=false"
+    )
+
+    assert entry == {
+        "metric": "loss_profit_ratio",
+        "penalize_if": "outside_range",
+        "range": [0.05, 0.7],
+        "stat": "mean",
+        "enabled": False,
+    }
+
+
+def test_parse_limit_cli_entries_supports_json_object_strings():
+    entries = config_utils.parse_limit_cli_entries(
+        ['{"metric":"adg","penalize_if":"<","value":0.001,"stat":"mean"}']
+    )
+
+    assert entries == [
+        {
+            "metric": "adg_usd",
+            "penalize_if": "less_than",
+            "value": 0.001,
+            "stat": "mean",
+        }
+    ]
+
+
+def test_normalize_limit_entries_supports_hjson_list_payload():
+    raw = """
+    [
+      {
+        metric: drawdown_worst
+        penalize_if: greater_than
+        value: 0.35
+      }
+    ]
+    """
+
+    normalized = config_utils.normalize_limit_entries(raw)
+
+    assert normalized == [
+        {
+            "metric": "drawdown_worst_usd",
+            "penalize_if": "greater_than",
+            "value": 0.35,
+        }
+    ]
 
 
 def test_limits_structural_equal_detects_canonical_entries():
@@ -289,14 +483,67 @@ def test_apply_backward_compatibility_renames_moves_filter_keys():
     _apply_backward_compatibility_renames(config, verbose=False)
 
     assert "filter_noisiness_rolling_window" not in config["bot"]["long"]
-    assert config["bot"]["long"]["filter_volatility_ema_span"] == 84
-    assert config["bot"]["long"]["filter_volume_ema_span"] == 21
-    assert config["bot"]["short"]["filter_volume_ema_span"] == 11
+    assert config["bot"]["long"]["forager_volatility_ema_span"] == 84
+    assert config["bot"]["long"]["forager_volume_ema_span"] == 21
+    assert config["bot"]["short"]["forager_volume_ema_span"] == 11
     bounds = config["optimize"]["bounds"]
     assert "long_filter_noisiness_rolling_window" not in bounds
-    assert bounds["long_filter_volatility_ema_span"] == [10, 20]
+    assert bounds["long_forager_volatility_ema_span"] == [10, 20]
     assert "short_filter_volume_rolling_window" not in bounds
-    assert bounds["short_filter_volume_ema_span"] == [30, 40]
+    assert bounds["short_forager_volume_ema_span"] == [30, 40]
+
+
+def test_compile_runtime_config_adds_internal_forager_aliases():
+    config = format_config(get_template_config(), verbose=False)
+
+    assert "filter_volume_ema_span" not in config["bot"]["long"]
+    assert "long_filter_volume_ema_span" not in config["optimize"]["bounds"]
+
+    compiled = compile_runtime_config(config, runtime="live")
+
+    assert compiled["bot"]["long"]["filter_volume_ema_span"] == config["bot"]["long"][
+        "forager_volume_ema_span"
+    ]
+    assert compiled["bot"]["long"]["filter_volatility_ema_span"] == config["bot"]["long"][
+        "forager_volatility_ema_span"
+    ]
+    assert compiled["optimize"]["bounds"]["long_filter_volume_ema_span"] == config["optimize"][
+        "bounds"
+    ]["long_forager_volume_ema_span"]
+
+
+def test_project_config_prunes_unrelated_sections():
+    config = format_config(get_template_config(), verbose=False)
+
+    projected = project_config(config, "live", record_step=False)
+
+    assert "backtest" not in projected
+    assert "optimize" not in projected
+    assert "monitor" in projected
+    assert "live" in projected
+    assert "bot" in projected
+
+
+def test_format_config_emits_coalesced_summary_without_leaf_noise(caplog):
+    tmpl = get_template_config()
+    lean_live = {"bot": deepcopy(tmpl["bot"]), "live": deepcopy(tmpl["live"])}
+
+    with caplog.at_level(logging.INFO):
+        format_config(lean_live, verbose=True, live_only=True)
+
+    messages = [rec.message for rec in caplog.records]
+    assert any("Added missing backtest section from defaults" in msg for msg in messages)
+    assert not any("Added missing backtest.aggregate" in msg for msg in messages)
+    assert not any("renaming parameter" in msg for msg in messages)
+
+
+def test_load_example_config_avoids_leaf_add_remove_log_churn(caplog):
+    with caplog.at_level(logging.INFO):
+        load_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=True)
+
+    messages = [rec.message for rec in caplog.records]
+    assert not any("Removed unused key" in msg for msg in messages)
+    assert not any("Added missing optimize.bounds.long_" in msg for msg in messages)
 
 
 def test_update_config_with_args_updates_coin_sources():
@@ -330,35 +577,24 @@ def test_update_config_with_args_replaces_path_coin_source():
     assert entry["details"]["diffs"][0]["path"] == "live.ignored_coins"
 
 
-def test_load_config_stores_raw_snapshot(monkeypatch):
-    import copy
+def test_load_config_preserves_raw_and_effective_snapshots(tmp_path):
+    raw = get_template_config()
+    raw["live"]["approved_coins"] = ["BTC"]
+    path = tmp_path / "raw_config.json"
+    path.write_text(json.dumps(raw))
 
-    raw = {"live": {"approved_coins": ["BTC"]}}
-
-    monkeypatch.setattr(
-        config_utils,
-        "load_hjson_config",
-        lambda path: copy.deepcopy(raw),
-    )
-
-    def fake_format(cfg, **kwargs):
-        # return a new dict to simulate normalization
-        result = {"live": {"approved_coins": cfg["live"]["approved_coins"][:]}}
-        result["_transform_log"] = []
-        record_transform(result, "format_config", {"mock": True})
-        return result
-
-    monkeypatch.setattr(config_utils, "format_config", fake_format)
-
-    loaded = config_utils.load_config("dummy.json", verbose=False)
+    loaded = config_utils.load_config(str(path), verbose=False)
     assert loaded["_raw"] == raw
+    assert loaded["_raw_effective"] == raw
 
-    # Mutating runtime view must not mutate the raw snapshot
-    loaded["live"]["approved_coins"].append("ETH")
+    # Mutating runtime view must not mutate the stored snapshots
+    loaded["live"]["approved_coins"]["long"].append("ETH")
+    loaded["live"]["approved_coins"]["short"].append("ETH")
     assert loaded["_raw"]["live"]["approved_coins"] == ["BTC"]
+    assert loaded["_raw_effective"]["live"]["approved_coins"] == ["BTC"]
     log_steps = [entry["step"] for entry in loaded["_transform_log"]]
     assert log_steps[0] == "load_config"
-    assert "format_config" in log_steps
+    assert "normalize_config" in log_steps
 
 
 def test_parse_overrides_records_transform_log():
@@ -398,14 +634,37 @@ def test_update_config_with_args_records_old_new_values():
     assert entry["step"] == "update_config_with_args"
     diff = entry["details"]["diffs"][0]
     assert diff["path"] == "backtest.start_date"
-    assert diff["old"] == "2021-04-01"
+    assert diff["old"] == "2021-01-01"
     assert diff["new"] == "2022-01-01"
+
+
+def test_update_config_with_args_logs_optimize_limits_as_diff(caplog):
+    config = get_template_config()
+    original_limits = deepcopy(config["optimize"]["limits"])
+    args = SimpleNamespace()
+    vars(args)["optimize.limits"] = original_limits + [
+        {
+            "metric": "adg_strategy_pnl_rebased",
+            "penalize_if": "less_than_or_equal",
+            "value": 0,
+        }
+    ]
+
+    with caplog.at_level(logging.INFO):
+        update_config_with_args(config, args, verbose=True)
+
+    messages = [rec.message for rec in caplog.records]
+    target = [msg for msg in messages if msg.startswith("[config] changed optimize.limits")]
+    assert target, messages
+    assert "added 1 entry" in target[-1]
+    assert "adg_strategy_pnl_rebased" in target[-1]
+    assert " -> " not in target[-1]
 
 
 def test_backtest_filter_min_cost_inherits_from_live():
     cfg = get_template_config()
     cfg["live"]["filter_by_min_effective_cost"] = True
-    cfg["backtest"].pop("filter_by_min_effective_cost", None)
+    cfg["backtest"]["filter_by_min_effective_cost"] = None
 
     formatted = format_config(cfg, verbose=False)
 
@@ -424,6 +683,23 @@ def _format_parser_help_with_config(command: str, config: dict, help_all: bool) 
         help_all=help_all,
         group_map=group_map,
     )
+    if command == "optimize":
+        from optimize import add_extra_options
+
+        add_extra_options(group_map["Advanced Overrides"], help_all=help_all)
+        group_map["Optimize Common"].add_argument(
+            "-l",
+            "--limit",
+            action="append",
+            dest="limit_entries",
+            default=None,
+            metavar="SPEC",
+        )
+        group_map["Optimize Common"].add_argument(
+            "--clear-limits",
+            action="store_true",
+            dest="clear_limits",
+        )
     return parser.format_help()
 
 
@@ -437,6 +713,12 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
     assert "--population-size INT, -ps INT" in help_text
     assert "--backend BACKEND, -ob BACKEND" in help_text
+    assert "--limits JSON_OR_HJSON" in help_text
+    assert "-l SPEC, --limit SPEC" in help_text
+    assert "--clear-limits" in help_text
+    assert "--minimum-coin-age-days FLOAT, -mcad FLOAT" in help_text
+    assert "--hedge-mode Y/N, -hm Y/N" not in help_text
+    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" not in help_text
     assert "--optimize_population_size" not in help_text
     assert "--optimize.bounds.long_close_grid_markup_end" not in help_text
     assert "Optimize DEAP:" not in help_text
@@ -449,6 +731,10 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
 
     assert "Optimize Bounds:" in help_text
     assert "--optimize.bounds.long_close_grid_markup_end MIN,MAX[,STEP]" in help_text
+    assert "--limits JSON_OR_HJSON" in help_text
+    assert "-l SPEC, --limit SPEC" in help_text
+    assert "--hedge-mode Y/N, -hm Y/N" in help_text
+    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
 
 
 def test_live_default_help_shows_curated_groups():
@@ -459,10 +745,13 @@ def test_live_default_help_shows_curated_groups():
 
     assert "Coin Selection:" in help_text
     assert "Behavior:" in help_text
+    assert "Runtime:" in help_text
     assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
     assert "--ignored-coins CSV_OR_PATH" in help_text
     assert "--minimum-coin-age-days FLOAT" in help_text
     assert "--hedge-mode Y/N" in help_text
+    assert "--pnls-max-lookback-days FLOAT, -pmld FLOAT" in help_text
+    assert "--user VALUE, -u VALUE" in help_text
     assert "--live.auto_gs" not in help_text
     assert "--optimize.iters" not in help_text
 
@@ -479,3 +768,49 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     assert "--ignored-coins CSV_OR_PATH" in help_text
     assert "--aggregate-default VALUE" in help_text
     assert "--iters INT, -i INT" not in help_text
+
+
+def test_live_reserved_pnls_lookback_alias_parses_short_and_long():
+    config = get_template_config()
+    del config["optimize"]
+    del config["backtest"]
+    parser = argparse.ArgumentParser(prog="live")
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get("live", [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command="live",
+        help_all=False,
+        group_map=group_map,
+    )
+
+    parsed_short = parser.parse_args(["-pmld", "14"])
+    parsed_long = parser.parse_args(["--pnls-max-lookback-days", "21"])
+
+    assert getattr(parsed_short, "live.pnls_max_lookback_days") == pytest.approx(14.0)
+    assert getattr(parsed_long, "live.pnls_max_lookback_days") == pytest.approx(21.0)
+
+
+def test_live_reserved_user_alias_parses_short_and_long():
+    config = get_template_config()
+    del config["optimize"]
+    del config["backtest"]
+    parser = argparse.ArgumentParser(prog="live")
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get("live", [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command="live",
+        help_all=False,
+        group_map=group_map,
+    )
+
+    parsed_short = parser.parse_args(["-u", "binance_01"])
+    parsed_long = parser.parse_args(["--user", "bybit_02"])
+
+    assert getattr(parsed_short, "live.user") == "binance_01"
+    assert getattr(parsed_long, "live.user") == "bybit_02"

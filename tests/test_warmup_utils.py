@@ -35,15 +35,15 @@ def base_config():
             "long": {
                 "ema_span_0": 1000.0,
                 "ema_span_1": 1500.0,
-                "filter_volume_ema_span": 2000.0,
-                "filter_volatility_ema_span": 100.0,
+                "forager_volume_ema_span": 2000.0,
+                "forager_volatility_ema_span": 100.0,
                 "entry_volatility_ema_span_hours": 1.0,  # 60 minutes
             },
             "short": {
                 "ema_span_0": 1000.0,
                 "ema_span_1": 1500.0,
-                "filter_volume_ema_span": 2000.0,
-                "filter_volatility_ema_span": 100.0,
+                "forager_volume_ema_span": 2000.0,
+                "forager_volatility_ema_span": 100.0,
                 "entry_volatility_ema_span_hours": 1.0,
             },
         },
@@ -86,7 +86,7 @@ def config_with_bounds(base_config):
     base_config["optimize"]["bounds"] = {
         "long_ema_span_0": [500, 5000],
         "long_ema_span_1": [1000, 10000],
-        "long_filter_volume_ema_span": [1000, 5000],
+        "long_forager_volume_ema_span": [1000, 5000],
         "long_entry_volatility_ema_span_hours": [0.5, 5.0],
         "short_ema_span_0": [500, 5000],
         "short_ema_span_1": [1000, 10000],
@@ -106,7 +106,7 @@ class TestWarmupCalculation:
         """Test with default config."""
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
-        # Max span is filter_volume_ema_span = 2000.0
+        # Max span is forager_volume_ema_span = 2000.0
         # Warmup = 2000.0 * 3.0 (warmup_ratio) = 6000 minutes
         expected = int(math.ceil(2000.0 * 3.0))
 
@@ -120,7 +120,7 @@ class TestWarmupCalculation:
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
-        # Max span should still be 2000.0 from filter_volume_ema_span
+        # Max span should still be 2000.0 from forager_volume_ema_span
         assert warmup_minutes == 6000
 
         # Now test with larger entry_volatility_ema_span_hours
@@ -223,7 +223,7 @@ class TestPerCoinWarmupCalculation:
         # ETH has mixed spans:
         # - ema_span_0 override: 500.0
         # - ema_span_1 from base: 1500.0
-        # - filter_volume_ema_span from base: 2000.0
+        # - forager_volume_ema_span from base: 2000.0
         # Max is 2000.0, warmup = 2000 * 3.0 = 6000
         assert per_coin_warmup["ETH"] == 6000
 
@@ -288,15 +288,15 @@ class TestEMASpanExtraction:
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000
 
-        # Reset and test filter_volume_ema_span
+        # Reset and test forager_volume_ema_span
         base_config["bot"]["long"]["ema_span_1"] = 1500.0
-        base_config["bot"]["long"]["filter_volume_ema_span"] = 10000.0
+        base_config["bot"]["long"]["forager_volume_ema_span"] = 10000.0
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000
 
-        # Reset and test filter_volatility_ema_span
-        base_config["bot"]["long"]["filter_volume_ema_span"] = 2000.0
-        base_config["bot"]["long"]["filter_volatility_ema_span"] = 10000.0
+        # Reset and test forager_volatility_ema_span
+        base_config["bot"]["long"]["forager_volume_ema_span"] = 2000.0
+        base_config["bot"]["long"]["forager_volatility_ema_span"] = 10000.0
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000
 
@@ -319,7 +319,7 @@ class TestEMASpanExtraction:
         assert warmup == 30000
 
         # Now add larger bound for short side
-        config_with_bounds["optimize"]["bounds"]["short_filter_volume_ema_span"] = [1000, 20000]
+        config_with_bounds["optimize"]["bounds"]["short_forager_volume_ema_span"] = [1000, 20000]
 
         warmup = compute_backtest_warmup_minutes(config_with_bounds)
 

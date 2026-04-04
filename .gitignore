@@ -343,6 +343,8 @@ backtests/
 !config/optimize/default.hjson
 !config/backtest/default.hjson
 config/
+!src/config/
+!src/config/**/*.py
 historical_data/
 results*
 
@@ -377,7 +379,12 @@ Cargo.lock
 /backtests
 /historical_data
 /results*
-/configs
+/configs/private/
+/configs/local/
+/configs/*.local.json
+/configs/*.local.hjson
+/configs/*.secret.json
+/configs/*.secret.hjson
 /reports
 /api-keys.json
 /caches

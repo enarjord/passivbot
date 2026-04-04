@@ -140,6 +140,26 @@ def test_save_shard_writes_index_and_shard(tmp_path):
     assert date_key in idx_1h["shards"]
 
 
+def test_persist_batch_observer_receives_saved_batch(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "OBS/USDT"
+    ts = _floor_minute(int(time.time() * 1000))
+    arr = np.array([(ts, 1.0, 2.0, 0.5, 1.5, 0.3)], dtype=CANDLE_DTYPE)
+    observed = []
+
+    def observer(observed_symbol, timeframe, batch):
+        observed.append((observed_symbol, timeframe, batch.copy()))
+
+    cm.set_persist_batch_observer(observer)
+    cm._persist_batch(symbol, arr, timeframe="1m")
+
+    assert len(observed) == 1
+    observed_symbol, timeframe, batch = observed[0]
+    assert observed_symbol == symbol
+    assert timeframe == "1m"
+    assert np.array_equal(batch, arr)
+
+
 def test_rebuild_index_for_range_updates_and_prunes(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "REBUILD/USDT"

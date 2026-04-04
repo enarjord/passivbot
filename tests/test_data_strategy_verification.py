@@ -827,17 +827,17 @@ class TestSuiteEnabledConfig:
 
         assert suite_cfg["enabled"] is False
 
-    def test_suite_enabled_default_is_true(self):
-        """suite_enabled defaults to true."""
+    def test_suite_enabled_default_is_false(self):
+        """suite_enabled defaults to false."""
         cfg = make_test_config(
             exchanges=["binance"],
             scenarios=[{"label": "test"}],
         )
-        # Don't explicitly set suite_enabled - should default to true
+        # Don't explicitly set suite_enabled - canonical defaults keep suite opt-in.
         formatted = format_config(deepcopy(cfg), verbose=False)
         suite_cfg = extract_suite_config(formatted, None)
 
-        assert suite_cfg["enabled"] is True
+        assert suite_cfg["enabled"] is False
 
 
 # =============================================================================

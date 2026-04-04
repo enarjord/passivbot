@@ -42,6 +42,13 @@ and more stable across collateral caps.
 - `drawdown_worst_mean_1pct`: Mean of the worst 1% daily drawdowns.
 - `expected_shortfall_1pct`: Average loss of the worst 1% daily min-equity returns.
 
+## HSL metrics
+- `hard_stop_triggers`: Absolute count of RED trigger events during the run.
+- `hard_stop_restarts`: Absolute count of cooldown restarts after RED halts.
+- `hard_stop_total_loss_pct`: Total panic-close loss as a fraction of starting balance.
+- `hard_stop_triggers_per_year`: `hard_stop_triggers / n_days * 365.25`.
+- `hard_stop_restarts_per_year`: `hard_stop_restarts / n_days * 365.25`.
+
 ## Exposure, volume, and timing
 - `total_wallet_exposure_max/mean/median`: Stats over recorded wallet exposure values.
 - `volume_pct_per_day_avg`: Average daily traded notional as a percentage of balance at fill time.

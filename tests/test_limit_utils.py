@@ -19,6 +19,30 @@ def test_less_than_limit_penalizes_deficit_with_custom_stat():
     assert violation == (0.001 - 0.0002) * 5
 
 
+def test_greater_than_or_equal_limit_penalizes_boundary_hit():
+    entry = {"metric": "drawdown_worst", "penalize_if": "greater_than_or_equal", "value": 0.5}
+    assert _single_violation(entry, value=0.49, penalty_weight=10) == 0.0
+    assert _single_violation(entry, value=0.5, penalty_weight=10) > 0.0
+
+
+def test_less_than_or_equal_limit_penalizes_boundary_hit():
+    entry = {"metric": "adg", "penalize_if": "less_than_or_equal", "value": 0.001, "stat": "min"}
+    assert _single_violation(entry, value=0.0011, penalty_weight=5) == 0.0
+    assert _single_violation(entry, value=0.001, penalty_weight=5) > 0.0
+
+
+def test_equal_to_limit_penalizes_exact_match_only():
+    entry = {"metric": "adg", "penalize_if": "equal_to", "value": 0.001, "stat": "mean"}
+    assert _single_violation(entry, value=0.001, penalty_weight=5) > 0.0
+    assert _single_violation(entry, value=0.0011, penalty_weight=5) == 0.0
+
+
+def test_not_equal_limit_penalizes_non_matching_values_only():
+    entry = {"metric": "adg", "penalize_if": "not_equal", "value": 0.001, "stat": "mean"}
+    assert _single_violation(entry, value=0.001, penalty_weight=5) == 0.0
+    assert _single_violation(entry, value=0.0011, penalty_weight=5) > 0.0
+
+
 def test_outside_range_penalty_hits_when_value_leaves_band():
     entry = {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.2, 0.5]}
     violation_low = _single_violation(entry, value=0.1, penalty_weight=7)
@@ -40,3 +64,14 @@ def test_auto_penalize_if_respects_scoring_weight_sign():
     weights = {"adg": -1.0}
     violation = _single_violation(entry, value=0.0001, weights=weights, penalty_weight=3)
     assert violation == (0.0005 - 0.0001) * 3
+
+
+def test_disabled_limit_entry_is_skipped():
+    entry = {
+        "metric": "drawdown_worst",
+        "penalize_if": "greater_than",
+        "value": 0.5,
+        "enabled": False,
+    }
+    checks = expand_limit_checks([entry], {}, penalty_weight=1000.0)
+    assert checks == []

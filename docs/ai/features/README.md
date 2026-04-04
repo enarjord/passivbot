@@ -8,6 +8,8 @@ Open these only when touching the relevant subsystem.
 | Candlestick manager | `candlestick_manager.md` | OHLCV fetch/cache/synthetic candle behavior |
 | Fill events manager | `fill_events_manager.md` | Fill/PnL ingestion and pagination |
 | Balance routing | `balance_routing.md` | Raw vs snapped balance semantics |
+| Monitor relay | `monitor_relay.md` | Disk-backed monitor publisher/relay/TUI/dashboard contract |
+| Trailing diagnostics | `trailing_diagnostics.md` | Standalone trailing-logic exploration tool and pure diagnostic helpers |
 
 ## Authoring Rule
 

@@ -1,6 +1,8 @@
 import numpy as np
 
+from config.scoring import ObjectiveSpec
 from pareto_core import (
+    compute_ideal,
     crowding_distances,
     dominates_with_violation,
     extract_objectives,
@@ -22,7 +24,7 @@ def test_extract_objectives_respects_scoring_order():
     entry = {"metrics": {"objectives": {"w_1": 2.0, "w_0": 1.0, "w_2": 3.0}}}
     obj, keys = extract_objectives(entry, scoring_keys=["m0", "m1", "m2"])
     assert obj == (1.0, 2.0, 3.0)
-    assert keys == ["w_0", "w_1", "w_2"]
+    assert keys == ["m0", "m1", "m2"]
 
 
 def test_prune_preserves_extremes_and_uses_crowding():
@@ -45,3 +47,21 @@ def test_prune_preserves_extremes_and_uses_crowding():
     arr = np.array([objectives[k] for k in front])
     cds = crowding_distances(arr)
     assert cds.shape[0] == len(front)
+
+
+def test_compute_ideal_weighted_respects_mixed_objective_goals():
+    values = np.array(
+        [
+            [0.001, 400.0],
+            [0.003, 800.0],
+        ]
+    )
+    specs = [
+        ObjectiveSpec(metric="adg_strategy_pnl_rebased", goal="max"),
+        ObjectiveSpec(metric="peak_recovery_hours", goal="min"),
+    ]
+
+    ideal = compute_ideal(values, mode="weighted", weights=np.array([0.25, 0.25]), objective_specs=specs)
+
+    assert ideal[0] == np.float64(0.0025)
+    assert ideal[1] == np.float64(500.0)

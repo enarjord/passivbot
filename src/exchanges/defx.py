@@ -127,18 +127,6 @@ class DefxBot(CCXTBot):
         """Defx uses one-way mode; no hedge mode configuration needed."""
         pass
 
-    async def determine_utc_offset(self, verbose=True):
-        # returns millis to add to utc to get exchange timestamp
-        # call some endpoint which includes timestamp for exchange's server
-        # if timestamp is not included in self.cca.fetch_balance(),
-        # implement method in exchange child class
-        result = await self.cca.fetch_ticker("BTC/USDC:USDC")
-        self.utc_offset = round((result["timestamp"] - utc_ms()) / (1000 * 60 * 60)) * (
-            1000 * 60 * 60
-        )
-        if verbose:
-            logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
-
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_leverage = {}
         for symbol in symbols:
