@@ -745,10 +745,13 @@ def test_live_default_help_shows_curated_groups():
 
     assert "Coin Selection:" in help_text
     assert "Behavior:" in help_text
+    assert "Runtime:" in help_text
     assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
     assert "--ignored-coins CSV_OR_PATH" in help_text
     assert "--minimum-coin-age-days FLOAT" in help_text
     assert "--hedge-mode Y/N" in help_text
+    assert "--pnls-max-lookback-days FLOAT, -pmld FLOAT" in help_text
+    assert "--user VALUE, -u VALUE" in help_text
     assert "--live.auto_gs" not in help_text
     assert "--optimize.iters" not in help_text
 
@@ -765,3 +768,49 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     assert "--ignored-coins CSV_OR_PATH" in help_text
     assert "--aggregate-default VALUE" in help_text
     assert "--iters INT, -i INT" not in help_text
+
+
+def test_live_reserved_pnls_lookback_alias_parses_short_and_long():
+    config = get_template_config()
+    del config["optimize"]
+    del config["backtest"]
+    parser = argparse.ArgumentParser(prog="live")
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get("live", [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command="live",
+        help_all=False,
+        group_map=group_map,
+    )
+
+    parsed_short = parser.parse_args(["-pmld", "14"])
+    parsed_long = parser.parse_args(["--pnls-max-lookback-days", "21"])
+
+    assert getattr(parsed_short, "live.pnls_max_lookback_days") == pytest.approx(14.0)
+    assert getattr(parsed_long, "live.pnls_max_lookback_days") == pytest.approx(21.0)
+
+
+def test_live_reserved_user_alias_parses_short_and_long():
+    config = get_template_config()
+    del config["optimize"]
+    del config["backtest"]
+    parser = argparse.ArgumentParser(prog="live")
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get("live", [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command="live",
+        help_all=False,
+        group_map=group_map,
+    )
+
+    parsed_short = parser.parse_args(["-u", "binance_01"])
+    parsed_long = parser.parse_args(["--user", "bybit_02"])
+
+    assert getattr(parsed_short, "live.user") == "binance_01"
+    assert getattr(parsed_long, "live.user") == "bybit_02"

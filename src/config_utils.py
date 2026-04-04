@@ -636,6 +636,15 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Maximum realized loss percentage allowed before trading is halted.",
     },
+    "live.pnls_max_lookback_days": {
+        "visible": ["--pnls-max-lookback-days", "-pmld"],
+        "hidden": ["--live.pnls_max_lookback_days", "--live_pnls_max_lookback_days"],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "How far into the past to fetch realized PnL history, in days.",
+    },
     "live.price_distance_threshold": {
         "visible": ["--price-distance-threshold", "-pdt"],
         "hidden": ["--live.price_distance_threshold", "--live_price_distance_threshold"],
@@ -653,6 +662,15 @@ RESERVED_CLI_ARGS = {
         "commands": {"live"},
         "group": {"live": "Behavior"},
         "help": "Time-in-force policy for live orders.",
+    },
+    "live.user": {
+        "visible": ["--user", "-u"],
+        "hidden": ["--live.user", "--live_user"],
+        "type": str,
+        "metavar": "VALUE",
+        "commands": {"live"},
+        "group": {"live": "Runtime"},
+        "help": "Account name from api-keys.json to use for this live run.",
     },
     "backtest.exchanges": {
         "visible": ["--exchanges", "-e"],
