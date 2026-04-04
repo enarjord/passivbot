@@ -19,6 +19,20 @@ sys.modules.setdefault(
 from passivbot import Passivbot
 
 
+def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
+    bot.config = {"live": {"pnls_max_lookback_days": float(lookback_days)}}
+    bot.get_exchange_time = lambda: now_ms
+
+
+def test_get_exchange_time_uses_direct_utc_ms(monkeypatch):
+    import passivbot as pb_mod
+
+    bot = Passivbot.__new__(Passivbot)
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: 123_456.0)
+
+    assert bot.get_exchange_time() == pytest.approx(123_456.0)
+
+
 @pytest.mark.asyncio
 async def test_update_positions_only_updates_positions(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
@@ -261,6 +275,30 @@ def test_effective_min_cost_filter_uses_snapped_balance():
     assert bot.effective_min_cost_is_low_enough("long", "BTC/USDT:USDT") is True
 
 
+@pytest.mark.asyncio
+async def test_update_effective_min_cost_uses_executable_min_qty():
+    symbol = "SOL/USDT:USDT"
+    bot = Passivbot.__new__(Passivbot)
+    bot.effective_min_cost = {}
+    bot.min_qtys = {symbol: 0.0}
+    bot.qty_steps = {symbol: 1.0}
+    bot.min_costs = {symbol: 0.1}
+    bot.c_mults = {symbol: 1.0}
+    bot.cm = types.SimpleNamespace(
+        get_last_prices=lambda symbols, max_age_ms=600_000: {symbol: 88.165}
+    )
+    bot.get_symbols_approved_or_has_pos = lambda: [symbol]
+
+    async def fake_get_last_prices(symbols, max_age_ms=600_000):
+        return {symbol: 88.165}
+
+    bot.cm.get_last_prices = fake_get_last_prices
+
+    await bot.update_effective_min_cost()
+
+    assert bot.effective_min_cost[symbol] == pytest.approx(88.165)
+
+
 def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     import passivbot as pb_mod
 
@@ -298,6 +336,52 @@ def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     assert calls[0][0] == pytest.approx(200.0)  # raw balance
 
 
+def test_unstuck_allowance_uses_only_configured_pnl_lookback(monkeypatch):
+    import passivbot as pb_mod
+
+    now_ms = 10 * 86_400_000
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance_raw = 1000.0
+    bot.get_raw_balance = lambda: float(bot.balance_raw)
+    _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+    bot._pnls_manager = types.SimpleNamespace(
+        get_events=lambda start_ms=None, end_ms=None, symbol=None: [
+            ev
+            for ev in [
+                types.SimpleNamespace(pnl=100.0, timestamp=now_ms - 3 * 86_400_000),
+                types.SimpleNamespace(pnl=-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
+                types.SimpleNamespace(pnl=10.0, timestamp=now_ms - 60_000),
+            ]
+            if start_ms is None or ev.timestamp >= start_ms
+        ]
+    )
+
+    def bot_value(pside, key):
+        if key == "unstuck_loss_allowance_pct":
+            return 0.01 if pside == "long" else 0.0
+        if key == "total_wallet_exposure_limit":
+            return 1.0
+        return 0.0
+
+    bot.bot_value = bot_value
+
+    calls = []
+
+    def fake_calc_auto_unstuck_allowance(
+        balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last
+    ):
+        calls.append((balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last))
+        return 10.0
+
+    monkeypatch.setattr(pb_mod.pbr, "calc_auto_unstuck_allowance", fake_calc_auto_unstuck_allowance)
+
+    out = bot._calc_unstuck_allowances(allow_new_unstuck=True)
+
+    assert out["long"] == pytest.approx(10.0)
+    assert len(calls) == 1
+    assert calls[0] == pytest.approx((1000.0, 0.01, 10.0, 10.0))
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
     import passivbot as pb_mod
@@ -310,6 +394,11 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
         effective_min_cost = {}
         _config_hedge_mode = False
         hedge_mode = False
+        equity_hard_stop_loss = {"panic_close_order_type": "limit"}
+        _monitor_record_price_ticks = pb_mod.Passivbot._monitor_record_price_ticks
+        _build_monitor_runtime_market_hints = pb_mod.Passivbot._build_monitor_runtime_market_hints
+        _build_monitor_runtime_unstuck_hints = pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        _update_monitor_runtime_hints = pb_mod.Passivbot._update_monitor_runtime_hints
 
         def config_get(self, keys):
             return None
@@ -365,6 +454,93 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
     assert captured["input"]["balance_raw"] == pytest.approx(175.0)
 
 
+@pytest.mark.asyncio
+async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch):
+    import passivbot as pb_mod
+
+    symbol = "BTC/USDT:USDT"
+
+    class FakeBot:
+        positions = {}
+        balance = 120.0
+        balance_raw = 175.0
+        PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
+        effective_min_cost = {symbol: 1.0}
+        _config_hedge_mode = False
+        hedge_mode = False
+        qty_steps = {symbol: 0.001}
+        price_steps = {symbol: 0.1}
+        min_qtys = {symbol: 0.001}
+        min_costs = {symbol: 5.0}
+        c_mults = {symbol: 1.0}
+        markets_dict = {symbol: {"maker": 0.0001, "taker": 0.0004}}
+        equity_hard_stop_loss = {"panic_close_order_type": "limit"}
+        trailing_prices = {}
+        _monitor_record_price_ticks = pb_mod.Passivbot._monitor_record_price_ticks
+        _build_monitor_runtime_market_hints = pb_mod.Passivbot._build_monitor_runtime_market_hints
+        _build_monitor_runtime_unstuck_hints = pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        _update_monitor_runtime_hints = pb_mod.Passivbot._update_monitor_runtime_hints
+
+        def config_get(self, keys):
+            return None
+
+        def _bot_params_to_rust_dict(self, pside, symbol):
+            return {}
+
+        def live_value(self, key):
+            return False
+
+        def _log_realized_loss_gate_blocks(self, out, idx_to_symbol):
+            return None
+
+        def _log_ema_gating(self, ideal_orders, m1_close_emas, last_prices, symbols):
+            return None
+
+        def _to_executable_orders(self, ideal_orders, last_prices):
+            return ideal_orders, []
+
+        def _finalize_reduce_only_orders(self, ideal_orders_f, last_prices):
+            return ideal_orders_f
+
+        def get_raw_balance(self):
+            return float(self.balance_raw)
+
+        def get_hysteresis_snapped_balance(self):
+            return float(self.balance)
+
+        _orchestrator_exchange_params = pb_mod.Passivbot._orchestrator_exchange_params
+        _get_exchange_fee_rates = pb_mod.Passivbot._get_exchange_fee_rates
+
+        def _pb_mode_to_orchestrator_mode(self, mode):
+            return pb_mod.Passivbot._pb_mode_to_orchestrator_mode(self, mode)
+
+    snapshot = {
+        "symbols": [symbol],
+        "last_prices": {symbol: 100.0},
+        "m1_close_emas": {symbol: {10.0: 100.0}},
+        "m1_volume_emas": {symbol: {10.0: 1000.0}},
+        "m1_log_range_emas": {symbol: {10.0: 0.01}},
+        "h1_log_range_emas": {symbol: {10.0: 0.01}},
+        "unstuck_allowances": {"long": 0.0, "short": 0.0},
+        "realized_pnl_cumsum": {"max": 0.0, "last": 0.0},
+    }
+
+    captured = {}
+
+    def fake_compute(json_str):
+        captured["input"] = json.loads(json_str)
+        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+
+    monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
+
+    method = pb_mod.Passivbot.calc_ideal_orders_orchestrator_from_snapshot
+    await method(FakeBot(), snapshot, return_snapshot=False)
+
+    exchange = captured["input"]["symbols"][0]["exchange"]
+    assert exchange["maker_fee"] == pytest.approx(0.0001)
+    assert exchange["taker_fee"] == pytest.approx(0.0004)
+
+
 def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_pnl():
     """Regression for peak drift: peak must not decay when profits increase pnl_last and balance_raw."""
     bot = Passivbot.__new__(Passivbot)
@@ -398,6 +574,41 @@ def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_
     assert info_b["status"] == "ok"
     assert info_a["peak"] == pytest.approx(200.0)
     assert info_b["peak"] == pytest.approx(200.0)
+
+
+def test_unstuck_logging_uses_only_configured_pnl_lookback():
+    now_ms = 10 * 86_400_000
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = 1000.0
+    bot.balance_raw = 1000.0
+    _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+    def bot_value(pside, key):
+        if key == "total_wallet_exposure_limit":
+            return 1.0
+        if key == "unstuck_loss_allowance_pct":
+            return 0.01
+        return 0.0
+
+    bot.bot_value = bot_value
+    bot._pnls_manager = types.SimpleNamespace(
+        get_events=lambda start_ms=None, end_ms=None, symbol=None: [
+            ev
+            for ev in [
+                types.SimpleNamespace(pnl=100.0, timestamp=now_ms - 3 * 86_400_000),
+                types.SimpleNamespace(pnl=-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
+                types.SimpleNamespace(pnl=10.0, timestamp=now_ms - 60_000),
+            ]
+            if start_ms is None or ev.timestamp >= start_ms
+        ]
+    )
+
+    info = bot._calc_unstuck_allowance_for_logging("long")
+
+    assert info["status"] == "ok"
+    assert info["peak"] == pytest.approx(1000.0)
+    assert info["pct_from_peak"] == pytest.approx(0.0)
+    assert info["allowance"] == pytest.approx(10.0)
 
 
 @pytest.mark.asyncio

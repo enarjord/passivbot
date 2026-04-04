@@ -11,7 +11,7 @@ from ccxt.base.errors import RateLimitExceeded
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
 from utils import ts_to_date, utc_ms
-from config_utils import require_live_value
+from config.access import require_live_value
 from pure_funcs import calc_hash
 from procedures import print_async_exception, assert_correct_ccxt_version
 

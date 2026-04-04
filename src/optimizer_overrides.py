@@ -1,4 +1,4 @@
-from config_utils import require_config_value
+from config.access import require_config_value
 
 
 def optimizer_overrides(overrides_list, config, pside):

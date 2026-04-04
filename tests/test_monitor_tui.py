@@ -1,0 +1,780 @@
+from pathlib import Path
+
+from monitor_tui import (
+    MonitorTuiState,
+    _fmt_ts_ms,
+    _render_screen_diff,
+    execute_tui_command,
+    render_screen,
+    resolve_focus_symbol_alias,
+)
+
+
+def test_monitor_tui_state_tracks_snapshot_events_and_history():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765")
+
+    state.apply_message(
+        {
+            "type": "snapshot",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "seq": 42,
+            "ts": 1774057000000,
+            "payload": {
+                "meta": {
+                    "exchange": "bitget",
+                    "user": "bitget_01",
+                    "seq": 42,
+                    "snapshot_ts_ms": 1774057000000,
+                },
+                "account": {"balance_raw": 1000.0, "equity": 995.0},
+                "health": {"uptime_ms": 90000, "fills": 3},
+                "positions": {},
+                "open_orders": {},
+                "hsl": {},
+                "forager": {},
+                "unstuck": {},
+            },
+        }
+    )
+    state.apply_message(
+        {
+            "type": "event",
+            "ts": 1774057000100,
+            "kind": "bot.ready",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "payload": {"status": "ready"},
+        }
+    )
+    state.apply_message(
+        {
+            "type": "history",
+            "ts": 1774057000200,
+            "stream": "price_ticks",
+            "kind": "price_tick",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "symbol": "BTC/USDT:USDT",
+            "payload": {"last": 70000.0},
+        }
+    )
+    state.apply_message(
+        {
+            "type": "history",
+            "ts": 1774057000300,
+            "stream": "candles_1m",
+            "kind": "candle.completed",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "symbol": "BTC/USDT:USDT",
+            "timeframe": "1m",
+            "payload": {"c": 70100.0},
+        }
+    )
+
+    assert state.exchange == "bitget"
+    assert state.user == "bitget_01"
+    assert state.snapshot_seq == 42
+    assert state.recent_events[0]["kind"] == "bot.ready"
+    assert state.recent_price_ticks["BTC/USDT:USDT"]["payload"]["last"] == 70000.0
+    assert state.recent_candles["BTC/USDT:USDT|1m"]["payload"]["c"] == 70100.0
+
+
+def test_monitor_tui_state_accepts_snapshot_bundle_and_ignores_other_bots():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765")
+
+    state.apply_message(
+        {
+            "type": "snapshot_bundle",
+            "bots": [
+                {
+                    "type": "snapshot",
+                    "exchange": "bitget",
+                    "user": "bitget_01",
+                    "seq": 7,
+                    "ts": 1774057000000,
+                    "payload": {
+                        "meta": {
+                            "exchange": "bitget",
+                            "user": "bitget_01",
+                            "snapshot_ts_ms": 1774057000000,
+                        },
+                        "account": {"equity": 1000.0},
+                    },
+                },
+                {
+                    "type": "snapshot",
+                    "exchange": "bybit",
+                    "user": "bybit_01",
+                    "seq": 8,
+                    "ts": 1774057001000,
+                    "payload": {
+                        "meta": {
+                            "exchange": "bybit",
+                            "user": "bybit_01",
+                            "snapshot_ts_ms": 1774057001000,
+                        },
+                        "account": {"equity": 2000.0},
+                    },
+                },
+            ],
+        }
+    )
+
+    assert state.exchange == "bitget"
+    assert state.user == "bitget_01"
+    assert state.snapshot_seq == 7
+
+    state.apply_message(
+        {
+            "type": "event",
+            "exchange": "bybit",
+            "user": "bybit_01",
+            "ts": 1774057002000,
+            "kind": "bot.ready",
+            "payload": {},
+        }
+    )
+
+    assert len(state.recent_events) == 0
+
+
+def test_monitor_tui_prefers_focus_symbol_in_rendering():
+    state = MonitorTuiState(
+        relay_url="http://127.0.0.1:8765",
+        exchange="bitget",
+        user="bitget_01",
+        focus_symbol="ETH/USDT:USDT",
+    )
+    state.apply_message(
+        {
+            "type": "snapshot",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "seq": 50,
+            "ts": 1774057000000,
+            "payload": {
+                "meta": {"exchange": "bitget", "user": "bitget_01", "seq": 50, "snapshot_ts_ms": 1774057000000},
+                "account": {},
+                "health": {},
+                "positions": {
+                    "BTC/USDT:USDT": {
+                        "long": {
+                            "size": 0.01,
+                            "price": 70000.0,
+                            "wallet_exposure": 0.7,
+                            "total_wallet_exposure": 0.7,
+                            "total_wallet_exposure_limit": 1.7,
+                            "wel_ratio": 3.5,
+                            "wele_ratio": 2.8,
+                            "twel_ratio": 0.41,
+                            "price_action_distance": 0.0071,
+                            "upnl": 5.0,
+                        },
+                        "short": {"size": 0.0, "price": 0.0},
+                    },
+                    "ETH/USDT:USDT": {
+                        "long": {
+                            "size": 0.5,
+                            "price": 3500.0,
+                            "wallet_exposure": 1.75,
+                            "total_wallet_exposure": 1.75,
+                            "total_wallet_exposure_limit": 1.7,
+                            "wel_ratio": 8.75,
+                            "wele_ratio": 7.0,
+                            "twel_ratio": 1.03,
+                            "price_action_distance": 0.0143,
+                            "upnl": 25.0,
+                        },
+                        "short": {"size": 0.0, "price": 0.0},
+                    },
+                },
+                "open_orders": {"ETH/USDT:USDT": [{"side": "sell", "price": 3600.0, "qty": 0.5}]},
+                "hsl": {},
+                "forager": {"long": {"selected_symbols": ["ETH/USDT:USDT"]}, "short": {"selected_symbols": []}},
+                "unstuck": {},
+                "market": {
+                    "BTC/USDT:USDT": {
+                        "last_price": 70500.0,
+                        "tradable": True,
+                        "ema_bands": {
+                            "long": {"lower": 70000.0, "upper": 70600.0},
+                            "short": {"lower": 69900.0, "upper": 70500.0},
+                        },
+                    },
+                    "ETH/USDT:USDT": {
+                        "last_price": 3550.0,
+                        "tradable": True,
+                        "active_symbol": True,
+                        "approved": {"long": True, "short": False},
+                        "ignored": {"long": False, "short": False},
+                        "min_qty": 0.001,
+                        "min_cost": 5.0,
+                        "effective_min_cost": 5.1,
+                        "ema_bands": {
+                            "long": {"lower": 3490.0, "upper": 3560.0},
+                            "short": {"lower": 3480.0, "upper": 3550.0},
+                        },
+                    },
+                },
+                "recent": {
+                    "order_executions": [
+                        {
+                            "execution_timestamp": 1774057000200,
+                            "symbol": "ETH/USDT:USDT",
+                            "position_side": "long",
+                            "side": "buy",
+                            "qty": 0.5,
+                            "price": 3500.0,
+                            "pb_order_type": "entry_grid_normal_long",
+                        }
+                    ],
+                    "order_cancellations": [],
+                },
+            },
+        }
+    )
+    state.apply_message(
+        {
+            "type": "event",
+            "ts": 1774057000100,
+            "kind": "order.opened",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "symbol": "ETH/USDT:USDT",
+            "pside": "long",
+            "payload": {"price": 3600.0, "qty": 0.5},
+        }
+    )
+    state.apply_message(
+        {
+            "type": "history",
+            "ts": 1774057000150,
+            "stream": "price_ticks",
+            "kind": "price_tick",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "symbol": "ETH/USDT:USDT",
+            "payload": {"last": 3550.0},
+        }
+    )
+
+    rendered = render_screen(state, width=160)
+
+    assert "focus=ETH/USDT:USDT" in rendered
+    assert "| Focus" in rendered
+    assert "symbol=ETH/USDT:USDT" in rendered
+    assert "long WE=1.7500" not in rendered
+    assert "| Forager" in rendered
+    assert "| Unstuck" in rendered
+    assert "Recent Orders" in rendered
+    assert "executed | ETH/USDT:USDT" in rendered
+
+
+def test_resolve_focus_symbol_alias_accepts_coin_aliases_and_detects_ambiguity():
+    snapshot = {
+        "market": {
+            "BTC/USDT:USDT": {},
+            "ETH/USDT:USDT": {},
+        }
+    }
+    resolved, error = resolve_focus_symbol_alias("BTC", snapshot)
+    assert resolved == "BTC/USDT:USDT"
+    assert error is None
+
+    snapshot_multi = {
+        "market": {
+            "BTC/USDT:USDT": {},
+            "BTC/USDC:USDC": {},
+        }
+    }
+    resolved, error = resolve_focus_symbol_alias("BTC", snapshot_multi)
+    assert resolved is None
+    assert "ambiguous symbol" in error
+
+    resolved, error = resolve_focus_symbol_alias("BTCUSDT", snapshot_multi)
+    assert resolved == "BTC/USDT:USDT"
+    assert error is None
+
+
+def test_execute_tui_command_supports_focus_aliases_and_exit():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765")
+    state.snapshot = {
+        "market": {
+            "BTC/USDT:USDT": {},
+            "ETH/USDT:USDT": {},
+            "SOL/USDT:USDT": {},
+        }
+    }
+
+    should_stop = execute_tui_command(state, "focus BTC")
+    assert not should_stop
+    assert state.focus_symbol == "BTC/USDT:USDT"
+
+    should_stop = execute_tui_command(state, "focus next")
+    assert not should_stop
+    assert state.focus_symbol == "ETH/USDT:USDT"
+
+    should_stop = execute_tui_command(state, "focus auto")
+    assert not should_stop
+    assert state.focus_symbol is None
+
+    should_stop = execute_tui_command(state, "exit")
+    assert should_stop
+
+
+def test_execute_tui_command_supports_pause_resume_and_dump(tmp_path: Path):
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765")
+    state.last_rendered_screen = "screen line one\nscreen line two"
+
+    should_stop = execute_tui_command(state, "pause")
+    assert not should_stop
+    assert state.paused is True
+    assert "Paused." in state.command_status
+
+    should_stop = execute_tui_command(state, "dump", dump_dir=tmp_path)
+    assert not should_stop
+    assert "Dumped screen to" in state.command_status
+    dumped = sorted(tmp_path.glob("monitor_tui_dump_*.txt"))
+    assert len(dumped) == 1
+    assert dumped[0].name.startswith("monitor_tui_dump_")
+    assert dumped[0].stem.endswith("Z")
+    assert dumped[0].read_text(encoding="utf-8") == "screen line one\nscreen line two\n"
+
+    should_stop = execute_tui_command(state, "resume")
+    assert not should_stop
+    assert state.paused is False
+    assert state.paused_render_data is None
+    assert state.command_status == "Resumed monitor TUI."
+
+
+def test_monitor_tui_formats_timestamps_in_utc():
+    assert _fmt_ts_ms(0) == "1970-01-01 00:00:00Z"
+
+
+def test_monitor_tui_state_tracks_recent_log_lines():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765")
+    state.set_log_file("logs/example.log")
+    state.push_log_lines(["line one", "", "line two"])
+
+    assert state.followed_log_file == "logs/example.log"
+    assert list(state.recent_log_lines) == ["line one", "line two"]
+
+
+def test_monitor_tui_render_screen_includes_core_panels():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765", exchange="bitget", user="bitget_01")
+    state.ws_connected = True
+    state.apply_message(
+        {
+            "type": "snapshot",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "seq": 43,
+            "ts": 1774057000000,
+            "payload": {
+                "meta": {
+                    "exchange": "bitget",
+                    "user": "bitget_01",
+                    "seq": 43,
+                    "snapshot_ts_ms": 1774057000000,
+                },
+                "account": {
+                    "balance_raw": 1000.0,
+                    "balance_snapped": 999.5,
+                    "equity": 1001.25,
+                    "realized_pnl_cumsum": {"current": 12.0},
+                },
+                "health": {
+                    "uptime_ms": 65000,
+                    "last_loop_duration_ms": 1234.0,
+                    "fills": 5,
+                    "orders_placed": 2,
+                    "orders_cancelled": 1,
+                    "errors_last_hour": 0,
+                    "rate_limits": 0,
+                },
+                "positions": {
+                    "BTC/USDT:USDT": {
+                        "long": {
+                            "size": 0.01,
+                            "price": 70000.0,
+                            "wallet_exposure": 0.7,
+                            "total_wallet_exposure": 0.7,
+                            "total_wallet_exposure_limit": 1.7,
+                            "wel_ratio": 3.5,
+                            "wele_ratio": 2.8,
+                            "twel_ratio": 0.41,
+                            "price_action_distance": 0.0071,
+                            "upnl": 5.0,
+                        },
+                        "short": {"size": 0.0, "price": 0.0},
+                    }
+                },
+                "open_orders": {
+                    "BTC/USDT:USDT": [{"side": "sell", "price": 71000.0, "qty": 0.01}]
+                },
+                "hsl": {
+                    "long": {"tier": "green", "halted": False, "last_metrics": {"drawdown_score": 0.01}},
+                    "short": {"tier": "green", "halted": False, "last_metrics": {"drawdown_score": 0.0}},
+                },
+                "forager": {
+                    "long": {
+                        "enabled": True,
+                        "forager_mode": True,
+                        "slots": {"current": 4, "max": 10, "open": 6},
+                        "selected_symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+                        "pending_symbols": ["ETH/USDT:USDT"],
+                        "next_symbol": "ETH/USDT:USDT",
+                        "next_entry_trigger_price": 3500.0,
+                        "next_entry_distance_ratio": -0.0125,
+                        "candidate_universe": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+                        "ranking": {
+                            "top_total": {"symbol": "ETH/USDT:USDT", "total_score": 1.25},
+                            "top_volume": {"symbol": "SOL/USDT:USDT", "raw_score": 120.0},
+                            "top_volatility": {"symbol": "BTC/USDT:USDT", "raw_score": 0.08},
+                            "top_ema_readiness": {"symbol": "ETH/USDT:USDT", "raw_score": -0.0125},
+                        },
+                    },
+                    "short": {
+                        "enabled": False,
+                        "forager_mode": False,
+                        "slots": {"current": 0, "max": 0, "open": 0},
+                        "selected_symbols": [],
+                        "pending_symbols": [],
+                        "candidate_universe": [],
+                    },
+                },
+                "unstuck": {
+                    "has_open_order": False,
+                    "sides": {
+                        "long": {
+                            "status": "ok",
+                            "allowance": -20.0,
+                            "allowance_live": 0.0,
+                            "next_symbol": "BTC/USDT:USDT",
+                            "next_target_price": 71000.0,
+                            "next_target_distance_ratio": 0.007,
+                            "next_unstuck_trigger_distance_ratio": 0.003,
+                            "ema_bands": {
+                                "lower": 70000.0,
+                                "upper": 70600.0,
+                                "unstuck_trigger_price": 70712.0,
+                            },
+                        },
+                        "short": {"status": "disabled", "allowance_live": 0.0},
+                    },
+                },
+                "market": {
+                    "BTC/USDT:USDT": {
+                        "last_price": 70500.0,
+                        "ema_bands": {
+                            "long": {"lower": 70000.0, "upper": 70600.0},
+                            "short": {"lower": 69900.0, "upper": 70500.0},
+                        },
+                        "trailing": {
+                            "long": {
+                                "min_since_open": 69000.0,
+                                "max_since_min": 70200.0,
+                                "max_since_open": 70800.0,
+                                "min_since_max": 70100.0,
+                            }
+                        },
+                    }
+                },
+                "trailing": {
+                    "BTC/USDT:USDT": {
+                        "long": {
+                            "extrema": {
+                                "min_since_open": 69000.0,
+                                "max_since_min": 70200.0,
+                                "max_since_open": 70800.0,
+                                "min_since_max": 70100.0,
+                            },
+                            "entry": {
+                                "status": "waiting_retracement",
+                                "price": 0.0,
+                                "qty": 0.0,
+                                "current_price": 70501.0,
+                                "threshold_price": 69300.0,
+                                "threshold_met": True,
+                                "retracement_price": 70380.0,
+                                "retracement_met": False,
+                            },
+                            "close": {
+                                "status": "waiting_threshold",
+                                "price": 0.0,
+                                "qty": 0.0,
+                                "current_price": 70501.0,
+                                "threshold_price": 70700.0,
+                                "threshold_met": False,
+                                "retracement_price": 70092.0,
+                                "retracement_met": False,
+                            },
+                        }
+                    }
+                },
+            },
+        }
+    )
+    state.apply_message(
+        {
+            "type": "event",
+            "ts": 1774057000500,
+            "kind": "order.opened",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "symbol": "BTC/USDT:USDT",
+            "pside": "long",
+            "payload": {"price": 71000.0, "qty": 0.01},
+        }
+    )
+    state.apply_message(
+        {
+            "type": "history",
+            "ts": 1774057000600,
+            "stream": "price_ticks",
+            "kind": "price_tick",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "symbol": "BTC/USDT:USDT",
+            "payload": {"last": 70501.0},
+        }
+    )
+    state.set_log_file("logs/example.log")
+    state.push_log_lines(["2026-03-21T12:00:00 INFO [bitget] READY"])
+
+    rendered = render_screen(state, width=118)
+
+    assert "Passivbot Monitor TUI | LIVE | connected | bitget / bitget_01" in rendered
+    assert "| Summary" in rendered
+    assert "Account raw=1000.00 snapped=999.50 equity=1001.25 realized=12.00" in rendered
+    assert "| Positions" in rendered
+    assert "TWE total | long=0.7000/1.7000 ( 41%) | short=0.0000/- (-)" in rendered
+    assert "BTC/USDT" in rendered
+    assert "WE=   0.7" in rendered
+    assert "PA= 0.0071" in rendered
+    assert "TWEL" not in rendered
+    assert "| Forager" in rendered
+    assert "pend=1" in rendered
+    assert "next=ETH/USDT | dist=-1.25% | trg=3500 | uni=3" in rendered
+    assert "ranking:" in rendered
+    assert "vol=SOL/USDT(120)" in rendered
+    assert "| Unstuck" in rendered
+    assert "next=BTC/USDT" in rendered
+    assert "| Trailing" in rendered
+    assert "BTC/USDT   long  entry waiting_retracement" in rendered
+    assert "thr=69300" in rendered
+    assert "min_open=69000" in rendered
+    assert "| Recent Events" in rendered
+    assert "order.opened" in rendered
+    assert "| Price Ticks" in rendered
+    assert "last= 70501.0000" in rendered
+    assert "lo=69900" in rendered
+    assert "hi=70600" in rendered
+    assert "Bot Log | logs/example.log" in rendered
+    assert "READY" in rendered
+
+
+def test_monitor_tui_recent_events_collapses_balance_spam():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765", exchange="bitget", user="bitget_01")
+    state.apply_message(
+        {
+            "type": "snapshot",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "seq": 1,
+            "ts": 1774057000000,
+            "payload": {
+                "meta": {"exchange": "bitget", "user": "bitget_01", "seq": 1},
+                "account": {},
+                "health": {},
+                "positions": {},
+                "open_orders": {},
+                "hsl": {},
+                "forager": {},
+                "unstuck": {},
+            },
+        }
+    )
+    for ts in (1774057000100, 1774057000200, 1774057000300):
+        state.apply_message(
+            {
+                "type": "event",
+                "ts": ts,
+                "kind": "account.balance",
+                "exchange": "bitget",
+                "user": "bitget_01",
+                "payload": {"equity": 1000.0 + ts / 1000.0},
+            }
+        )
+    state.apply_message(
+        {
+            "type": "event",
+            "ts": 1774057000400,
+            "kind": "order.opened",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "symbol": "BTC/USDT:USDT",
+            "payload": {"price": 70000.0, "qty": 0.01},
+        }
+    )
+
+    rendered = render_screen(state, width=140)
+
+    assert rendered.count("account.balance") == 1
+    assert "order.opened" in rendered
+
+
+def test_monitor_tui_render_screen_shows_help_status():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765")
+
+    should_stop = execute_tui_command(state, "help")
+
+    assert not should_stop
+    rendered = render_screen(state, width=120)
+    assert "Status: Help:" in rendered
+    assert "focus <coin|symbol> | focus auto|next|prev" in rendered
+    assert "pause | resume | dump | clear | help | quit" in rendered
+    assert "> help" in rendered
+
+
+def test_monitor_tui_skips_disabled_short_forager_and_unstuck_rows():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765")
+    state.apply_message(
+        {
+            "type": "snapshot",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "seq": 1,
+            "ts": 1774057000000,
+            "payload": {
+                "meta": {"exchange": "bitget", "user": "bitget_01", "seq": 1},
+                "account": {},
+                "health": {},
+                "positions": {},
+                "open_orders": {},
+                "hsl": {},
+                "market": {},
+                "recent": {},
+                "forager": {
+                    "long": {
+                        "enabled": True,
+                        "slots": {"current": 1, "max": 2, "open": 1},
+                        "selected_symbols": [],
+                        "pending_symbols": [],
+                        "candidate_universe": ["BTC/USDT:USDT"],
+                    },
+                    "short": {
+                        "enabled": False,
+                        "slots": {"current": 0, "max": 0, "open": 0},
+                        "selected_symbols": ["BTC/USDT:USDT"],
+                        "pending_symbols": ["BTC/USDT:USDT"],
+                        "candidate_universe": [],
+                    },
+                },
+                "unstuck": {
+                    "has_open_order": False,
+                    "open_orders": [],
+                    "sides": {
+                        "long": {"status": "ok", "allowance_live": 0.0},
+                        "short": {"status": "disabled"},
+                    },
+                },
+            },
+        }
+    )
+
+    rendered = render_screen(state, width=120)
+
+    assert "short off slots=0/0" not in rendered
+    assert "short status=disabled" not in rendered
+
+
+def test_monitor_tui_renders_account_realized_from_nested_payload():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765", exchange="bitget", user="bitget_01")
+    state.apply_message(
+        {
+            "type": "snapshot",
+            "exchange": "bitget",
+            "user": "bitget_01",
+            "seq": 44,
+            "ts": 1774057000000,
+            "payload": {
+                "meta": {"exchange": "bitget", "user": "bitget_01", "pid": 123},
+                "account": {
+                    "balance_raw": 1000.0,
+                    "balance_snapped": 999.5,
+                    "equity": 1001.25,
+                    "realized_pnl_cumsum": {"current": -46.62},
+                },
+                "health": {},
+                "positions": {},
+                "open_orders": {},
+                "hsl": {},
+                "forager": {},
+                "unstuck": {},
+            },
+        }
+    )
+
+    rendered = render_screen(state, width=140)
+
+    assert "realized=-46.62" in rendered
+
+
+def test_monitor_tui_render_screen_shows_pause_state():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765", exchange="bitget", user="bitget_01")
+    state.paused = True
+    state.command_status = "Paused. Type 'resume' to refresh or 'dump' to save the current screen."
+
+    rendered = render_screen(state, width=120)
+
+    assert "Passivbot Monitor TUI | PAUSED | disconnected | bitget / bitget_01" in rendered
+    assert "Status: Paused. Type 'resume' to refresh or 'dump' to save the current screen." in rendered
+    assert "Mode: paused (panels frozen)" in rendered
+
+
+def test_monitor_tui_pause_can_freeze_panels_but_keep_command_line_live():
+    state = MonitorTuiState(relay_url="http://127.0.0.1:8765", exchange="bitget", user="bitget_01")
+    state.snapshot = {"meta": {"exchange": "bitget", "user": "bitget_01"}, "account": {"equity": 1000.0}}
+    frozen = {
+        "snapshot": {"meta": {"exchange": "bitget", "user": "bitget_01"}, "account": {"equity": 900.0}},
+        "snapshot_seq": 1,
+        "snapshot_ts_ms": 1774057000000,
+        "ws_connected": True,
+        "status_text": "snapshot refreshed",
+        "last_error": None,
+        "last_ws_message_ts_ms": 1774057000000,
+        "recent_events": [],
+        "recent_price_ticks": {},
+        "recent_candles": {},
+        "recent_log_lines": [],
+        "exchange": "bitget",
+        "user": "bitget_01",
+        "focus_symbol": None,
+        "followed_log_file": None,
+    }
+    state.paused = True
+    state.command_buffer = "resume"
+    state.command_status = "Paused. Type 'resume' to refresh or 'dump' to save the current screen."
+
+    rendered = render_screen(state, width=120, display_data=frozen)
+
+    assert "equity=900.00" in rendered
+    assert "> resume" in rendered
+
+
+def test_render_screen_diff_uses_full_clear_only_for_first_frame():
+    patch = _render_screen_diff(None, "line one\nline two")
+
+    assert patch.startswith("\x1b[2J\x1b[Hline one\nline two")
+    assert patch.endswith("\x1b[3;1H")
+
+
+def test_render_screen_diff_updates_only_changed_lines():
+    patch = _render_screen_diff("line one\nline two", "line one\nline three")
+
+    assert "\x1b[2J" not in patch
+    assert "\x1b[2;1Hline three\x1b[K" in patch
+    assert "\x1b[3;1H" in patch

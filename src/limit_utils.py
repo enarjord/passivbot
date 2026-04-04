@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 ALLOWED_STATS = {"min", "max", "mean", "std"}
+_BOUNDARY_VIOLATION_EPSILON = 1e-12
 
 
 def expand_limit_checks(
@@ -22,6 +23,8 @@ def expand_limit_checks(
     checks: List[Dict[str, Any]] = []
     for raw_entry in limits:
         entry = deepcopy(raw_entry)
+        if isinstance(entry, dict) and not bool(entry.get("enabled", True)):
+            continue
         metric = entry.get("metric")
         if not metric:
             continue
@@ -31,7 +34,14 @@ def expand_limit_checks(
             if weight is None:
                 continue
             mode = "less_than" if weight < 0 else "greater_than"
-        if mode in {"greater_than", "less_than"}:
+        if mode in {
+            "greater_than",
+            "greater_than_or_equal",
+            "less_than",
+            "less_than_or_equal",
+            "equal_to",
+            "not_equal",
+        }:
             check = _build_single_bound_check(
                 entry,
                 metric,
@@ -75,10 +85,26 @@ def compute_limit_violation(check: Dict[str, Any], value: Optional[float]) -> fl
         bound = check["bound"]
         if value > bound:
             return (value - bound) * weight
+    elif mode == "greater_than_or_equal":
+        bound = check["bound"]
+        if value >= bound:
+            return max(value - bound, _BOUNDARY_VIOLATION_EPSILON) * weight
     elif mode == "less_than":
         bound = check["bound"]
         if value < bound:
             return (bound - value) * weight
+    elif mode == "less_than_or_equal":
+        bound = check["bound"]
+        if value <= bound:
+            return max(bound - value, _BOUNDARY_VIOLATION_EPSILON) * weight
+    elif mode == "equal_to":
+        bound = check["bound"]
+        if value == bound:
+            return _BOUNDARY_VIOLATION_EPSILON * weight
+    elif mode == "not_equal":
+        bound = check["bound"]
+        if value != bound:
+            return max(abs(value - bound), _BOUNDARY_VIOLATION_EPSILON) * weight
     elif mode == "outside_range":
         low, high = check["range"]
         if value < low:
@@ -124,7 +150,14 @@ def _build_single_bound_check(
     numeric_bound = _ensure_float(bound)
     if numeric_bound is None:
         return None
-    fallback_stat = "min" if mode == "less_than" else "max"
+    if mode in {"less_than", "less_than_or_equal"}:
+        fallback_stat = "min"
+    elif mode in {"greater_than", "greater_than_or_equal"}:
+        fallback_stat = "max"
+    elif mode in {"equal_to", "not_equal"}:
+        fallback_stat = "mean"
+    else:
+        fallback_stat = "mean"
     stat = _normalize_stat(entry.get("stat"), fallback_stat)
     metric_key = f"{metric}_{stat}"
     return {

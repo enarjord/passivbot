@@ -4,8 +4,6 @@
 
 :warning: **Used at one's own risk** :warning:
 
-v7.8.5
-
 
 ## Overview
 
@@ -136,7 +134,7 @@ To start the bot with the default settings, run:
 passivbot live -u {account_name_from_api-keys.json}
 ```
 
-or make a new configuration file, using `configs/template.json` as a template, and start the bot with:
+or make a new configuration file, using `configs/examples/default_trailing_grid_long_npos10.json` as a starting point, and start the bot with:
 
 
 ```sh
@@ -145,6 +143,10 @@ passivbot live path/to/config.json
 
 Legacy direct-script entrypoints such as `python3 src/main.py ...`, `python3 src/backtest.py ...`,
 and `python3 src/optimize.py ...` still work unchanged for backwards compatibility.
+
+The canonical hardcoded defaults live in `src/config/schema.py`. The example config
+`configs/examples/default_trailing_grid_long_npos10.json` mirrors that default profile exactly, so
+copying it is the recommended starting point for new configs.
 
 ### Logging
 
@@ -178,12 +180,19 @@ Coming soon...
 
 See also https://pbconfigdb.scud.dedyn.io/
 
-## Documentation:
+## Documentation
 
 For more detailed information about Passivbot, see documentation files here: [docs/](docs/)
 
-- Installation details: [docs/installation.md](docs/installation.md)
-- Common setup and CLI issues: [docs/troubleshooting.md](docs/troubleshooting.md)
+Useful entry points:
+
+- [Installation](docs/installation.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Backtesting](docs/backtesting.md)
+- [Optimizing](docs/optimizing.md)
+- [Metrics reference](docs/metrics.md)
+- [Equity Hard Stop Loss](docs/equity_hard_stop_loss.md)
+- [Monitor output](docs/monitor.md)
 
 ## Support
 
@@ -194,7 +203,7 @@ For more detailed information about Passivbot, see documentation files here: [do
 ## Third Party Links, Referrals and Tip Jar
 
 **Hyperliquid Reference Vault**
-Passivbot's default template config running on a Hyperliquid Vault:  
+Passivbot's reference long-only config profile running on a Hyperliquid Vault:
 https://app.hyperliquid.xyz/vaults/0x490af7d4a048a81db0f677517ed6373565b42349
 
 **Passivbot GUI**

@@ -1,7 +1,7 @@
 import math
 from typing import Iterator, Tuple
 
-from config_utils import require_config_value, require_live_value
+from config.access import require_config_value, require_live_value
 
 
 def _to_float(value) -> float:
@@ -49,8 +49,8 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
-        "filter_volume_ema_span",
-        "filter_volatility_ema_span",
+        "forager_volume_ema_span",
+        "forager_volatility_ema_span",
     ]
 
     for _, long_params, short_params in _iter_param_sets(config):
@@ -64,12 +64,12 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     bound_keys_minutes = [
         "long_ema_span_0",
         "long_ema_span_1",
-        "long_filter_volume_ema_span",
-        "long_filter_volatility_ema_span",
+        "long_forager_volume_ema_span",
+        "long_forager_volatility_ema_span",
         "short_ema_span_0",
         "short_ema_span_1",
-        "short_filter_volume_ema_span",
-        "short_filter_volatility_ema_span",
+        "short_forager_volume_ema_span",
+        "short_forager_volatility_ema_span",
     ]
     bound_keys_hours = [
         "long_entry_volatility_ema_span_hours",
@@ -99,8 +99,8 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
-        "filter_volume_ema_span",
-        "filter_volatility_ema_span",
+        "forager_volume_ema_span",
+        "forager_volatility_ema_span",
     ]
     for coin, long_params, short_params in _iter_param_sets(config):
         max_minutes = 0.0

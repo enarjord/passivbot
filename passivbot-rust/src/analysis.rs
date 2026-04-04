@@ -9,6 +9,117 @@ fn fallback_timestamp_ms(index: usize) -> u64 {
     (index as u64) * 60_000
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct EquitySeriesMetrics {
+    pub gain: f64,
+    pub adg: f64,
+    pub mdg: f64,
+    pub sharpe_ratio: f64,
+    pub sortino_ratio: f64,
+    pub omega_ratio: f64,
+    pub expected_shortfall_1pct: f64,
+}
+
+pub fn analyze_equity_series(equities: &[f64], timestamps_ms: &[u64]) -> EquitySeriesMetrics {
+    if equities.len() < 2 {
+        return EquitySeriesMetrics::default();
+    }
+    let mut daily_eqs = Vec::new();
+    let mut daily_eqs_mins = Vec::new();
+
+    let use_timestamps = !timestamps_ms.is_empty() && timestamps_ms.len() == equities.len();
+    let mut current_day = if use_timestamps {
+        (timestamps_ms[0] / MS_PER_DAY) as usize
+    } else {
+        0
+    };
+    let mut current_min = equities[0];
+    let mut last_equity = equities[0];
+    for (i, &equity) in equities.iter().enumerate() {
+        let day = if use_timestamps {
+            (timestamps_ms[i] / MS_PER_DAY) as usize
+        } else {
+            i / 1440
+        };
+        if day > current_day {
+            daily_eqs.push(last_equity);
+            daily_eqs_mins.push(current_min);
+            current_day = day;
+            current_min = equity;
+        } else {
+            current_min = current_min.min(equity);
+        }
+        last_equity = equity;
+    }
+    daily_eqs.push(last_equity);
+    daily_eqs_mins.push(current_min);
+
+    let daily_eqs_pct_change: Vec<f64> = daily_eqs
+        .windows(2)
+        .map(|w| {
+            let denom = w[0].abs().max(1e-12);
+            (w[1] - w[0]) / denom
+        })
+        .collect();
+    let daily_eqs_mins_pct_change: Vec<f64> = daily_eqs_mins
+        .windows(2)
+        .map(|w| {
+            let denom = w[0].abs().max(1e-12);
+            (w[1] - w[0]) / denom
+        })
+        .collect();
+
+    let (gain, adg) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
+    let mdg = median(&daily_eqs_pct_change);
+    let (sharpe_ratio, sortino_ratio) = calc_sharpe_and_sortino(&daily_eqs_mins_pct_change, adg);
+    let (gains_sum, losses_sum) =
+        daily_eqs_pct_change
+            .iter()
+            .fold((0.0, 0.0), |(gains, losses), &ret| {
+                if ret >= 0.0 {
+                    (gains + ret, losses)
+                } else {
+                    (gains, losses + ret.abs())
+                }
+            });
+    let omega_ratio = if losses_sum != 0.0 {
+        gains_sum / losses_sum
+    } else {
+        f64::INFINITY
+    };
+    let expected_shortfall_1pct = mean_worst_1pct_abs(&daily_eqs_mins_pct_change);
+    EquitySeriesMetrics {
+        gain,
+        adg,
+        mdg,
+        sharpe_ratio,
+        sortino_ratio,
+        omega_ratio,
+        expected_shortfall_1pct,
+    }
+}
+
+fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| {
+        a.partial_cmp(b).unwrap_or_else(|| {
+            if a.is_nan() && b.is_nan() {
+                Ordering::Equal
+            } else if a.is_nan() {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            }
+        })
+    });
+    let cutoff_index = (sorted.len() as f64 * 0.01).max(1.0) as usize;
+    let worst_n = cutoff_index.min(sorted.len());
+    sorted[..worst_n].iter().map(|x| x.abs()).sum::<f64>() / worst_n as f64
+}
+
 fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[u64]) -> Analysis {
     if fills.len() <= 1 {
         return Analysis::default();
@@ -283,6 +394,33 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
         total_loss / total_profit
     };
 
+    let (long_profit, long_loss, short_profit, short_loss) =
+        fills
+            .iter()
+            .fold((0.0, 0.0, 0.0, 0.0), |(lp, ll, sp, sl), fill| {
+                if fill.order_type.is_long() {
+                    if fill.pnl > 0.0 {
+                        (lp + fill.pnl, ll, sp, sl)
+                    } else {
+                        (lp, ll + fill.pnl.abs(), sp, sl)
+                    }
+                } else if fill.pnl > 0.0 {
+                    (lp, ll, sp + fill.pnl, sl)
+                } else {
+                    (lp, ll, sp, sl + fill.pnl.abs())
+                }
+            });
+    let loss_profit_ratio_long = if long_profit == 0.0 {
+        1.0
+    } else {
+        long_loss / long_profit
+    };
+    let loss_profit_ratio_short = if short_profit == 0.0 {
+        1.0
+    } else {
+        short_loss / short_profit
+    };
+
     // Calculate position durations and position_unchanged_hours_max
     let mut positions_opened: HashMap<String, u64> = HashMap::new(); // Tracks position open time
     let mut durations_ms: Vec<u64> = Vec::new(); // Total position durations (ms)
@@ -425,6 +563,8 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
     analysis.equity_balance_diff_pos_max = equity_balance_diff_pos_max;
     analysis.equity_balance_diff_pos_mean = equity_balance_diff_pos_mean;
     analysis.loss_profit_ratio = loss_profit_ratio;
+    analysis.loss_profit_ratio_long = loss_profit_ratio_long;
+    analysis.loss_profit_ratio_short = loss_profit_ratio_short;
     analysis.positions_held_per_day = positions_held_per_day;
     analysis.position_held_hours_mean = position_held_hours_mean;
     analysis.position_held_hours_max = position_held_hours_max;
@@ -696,6 +836,23 @@ pub fn analyze_backtest_pair(
     _use_btc_collateral: bool,
     total_wallet_exposures: &[f64],
 ) -> (Analysis, Analysis) {
+    let (long_pnl_sum, short_pnl_sum) =
+        fills
+            .iter()
+            .fold((0.0, 0.0), |(long_sum, short_sum), fill| {
+                if fill.order_type.is_long() {
+                    (long_sum + fill.pnl, short_sum)
+                } else {
+                    (long_sum, short_sum + fill.pnl)
+                }
+            });
+    let pnl_sum = long_pnl_sum + short_pnl_sum;
+    let long_short_profit_ratio = if pnl_sum != 0.0 {
+        long_pnl_sum / pnl_sum
+    } else {
+        0.5
+    };
+
     let analysis_usd = analyze_backtest(
         fills,
         &equities.usd_total_equity,
@@ -721,6 +878,14 @@ pub fn analyze_backtest_pair(
         &equities.timestamps_ms,
         total_wallet_exposures,
     );
+    let mut analysis_usd = analysis_usd;
+    analysis_usd.pnl_ratio_long_short = long_short_profit_ratio;
+    analysis_usd.long_short_profit_ratio = long_short_profit_ratio;
+
+    let mut analysis_btc = analysis_btc;
+    analysis_btc.pnl_ratio_long_short = long_short_profit_ratio;
+    analysis_btc.long_short_profit_ratio = long_short_profit_ratio;
+
     (analysis_usd, analysis_btc)
 }
 
@@ -1046,6 +1211,7 @@ mod tests {
             position_size: -0.1,
             position_price: 50000.0,
             order_type: OrderType::EntryInitialNormalShort,
+            liquidity: "maker".to_string(),
             wallet_exposure: twe_net.abs(),
             twe_long: 0.0,
             twe_short: twe_net,

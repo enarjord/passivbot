@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Passivbot Monitor Dashboard</title>
+  <link rel="stylesheet" href="/dashboard/assets/dashboard.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Passivbot Monitor Dashboard</p>
+        <h1 id="hero-title">Connecting...</h1>
+        <p id="hero-subtitle" class="hero-subtitle">Waiting for relay snapshot.</p>
+      </div>
+      <div class="hero-actions">
+        <label class="control">
+          <span>Focus Symbol</span>
+          <select id="focus-symbol">
+            <option value="">Auto</option>
+          </select>
+        </label>
+        <button id="refresh-button" type="button">Refresh Snapshot</button>
+      </div>
+    </header>
+
+    <section class="status-strip">
+      <div class="status-chip" id="ws-status">WS: connecting</div>
+      <div class="status-chip" id="snapshot-status">Snapshot: waiting</div>
+      <div class="status-chip" id="focus-status">Focus: auto</div>
+      <div class="status-chip" id="relay-status">Relay: -</div>
+    </section>
+
+    <main class="dashboard-grid">
+      <section class="panel panel-bots">
+        <div class="panel-head">
+          <h2>Bot Overview</h2>
+          <span id="bots-meta" class="panel-tag">0 bots</span>
+        </div>
+        <div id="bot-overview" class="overview-grid"></div>
+      </section>
+
+      <section class="panel panel-summary">
+        <div class="panel-head">
+          <h2>Focused Bot</h2>
+          <span id="summary-meta" class="panel-tag">-</span>
+        </div>
+        <div class="stats-grid" id="summary-cards"></div>
+      </section>
+
+      <section class="panel panel-focus">
+        <div class="panel-head">
+          <h2>Focus</h2>
+          <span id="focus-label" class="panel-tag">auto</span>
+        </div>
+        <div id="focus-details" class="detail-list"></div>
+      </section>
+
+      <section class="panel panel-positions">
+        <div class="panel-head">
+          <h2>Positions</h2>
+          <span id="positions-meta" class="panel-tag">-</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Size @ Price</th>
+                <th>WE</th>
+                <th>WEL / WELe</th>
+                <th>PA Dist</th>
+                <th>uPnL</th>
+                <th>Orders</th>
+              </tr>
+            </thead>
+            <tbody id="positions-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel panel-trailing">
+        <div class="panel-head">
+          <h2>Trailing</h2>
+          <span class="panel-tag">next entry / close</span>
+        </div>
+        <div id="trailing-list" class="stack-list"></div>
+      </section>
+
+      <section class="panel panel-forager">
+        <div class="panel-head">
+          <h2>Forager</h2>
+        </div>
+        <div id="forager-details" class="detail-list"></div>
+      </section>
+
+      <section class="panel panel-unstuck">
+        <div class="panel-head">
+          <h2>Unstuck</h2>
+        </div>
+        <div id="unstuck-details" class="detail-list"></div>
+      </section>
+
+      <section class="panel panel-events">
+        <div class="panel-head">
+          <h2>Recent Events</h2>
+        </div>
+        <div id="events-list" class="stack-list"></div>
+      </section>
+
+      <section class="panel panel-ticks">
+        <div class="panel-head">
+          <h2>Price Ticks</h2>
+        </div>
+        <div id="ticks-list" class="stack-list"></div>
+      </section>
+
+      <section class="panel panel-orders">
+        <div class="panel-head">
+          <h2>Recent Orders</h2>
+        </div>
+        <div id="orders-list" class="stack-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <template id="empty-state-template">
+    <div class="empty-state">No data yet.</div>
+  </template>
+
+  <script src="/dashboard/assets/dashboard.js" defer></script>
+</body>
+</html>

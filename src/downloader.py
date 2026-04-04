@@ -29,13 +29,12 @@ import pandas as pd
 from dateutil import parser
 from tqdm import tqdm
 from cli_utils import get_cli_prog
+from config import load_input_config, prepare_config
+from config.access import require_config_value, require_live_value
+from config.schema import get_template_config
 from config_utils import (
     add_config_arguments,
-    load_config,
-    get_template_config,
     update_config_with_args,
-    require_config_value,
-    require_live_value,
 )
 from pure_funcs import (
     safe_filename,
@@ -135,8 +134,8 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
-        "filter_volume_ema_span",
-        "filter_volatility_ema_span",
+        "forager_volume_ema_span",
+        "forager_volatility_ema_span",
     ]
 
     for _, long_params, short_params in _iter_param_sets(config):
@@ -150,12 +149,12 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     bound_keys_minutes = [
         "long_ema_span_0",
         "long_ema_span_1",
-        "long_filter_volume_ema_span",
-        "long_filter_volatility_ema_span",
+        "long_forager_volume_ema_span",
+        "long_forager_volatility_ema_span",
         "short_ema_span_0",
         "short_ema_span_1",
-        "short_filter_volume_ema_span",
-        "short_filter_volatility_ema_span",
+        "short_forager_volume_ema_span",
+        "short_forager_volatility_ema_span",
     ]
     bound_keys_hours = [
         "long_entry_volatility_ema_span_hours",
@@ -185,8 +184,8 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
-        "filter_volume_ema_span",
-        "filter_volatility_ema_span",
+        "forager_volume_ema_span",
+        "forager_volatility_ema_span",
     ]
     for coin, long_params, short_params in _iter_param_sets(config):
         max_minutes = 0.0
@@ -2141,13 +2140,14 @@ async def main():
     }
     add_config_arguments(parser, template_config)
     args = parser.parse_args()
-    if args.config_path is None:
-        logging.info(f"loading default template config configs/template.json")
-        config = load_config("configs/template.json", verbose=False)
-    else:
-        logging.info(f"loading config {args.config_path}")
-        config = load_config(args.config_path)
-    update_config_with_args(config, args)
+    source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
+    update_config_with_args(source_config, args)
+    config = prepare_config(
+        source_config,
+        base_config_path=base_config_path,
+        verbose=False,
+        raw_snapshot=raw_snapshot,
+    )
     await format_approved_ignored_coins(config, require_config_value(config, "backtest.exchanges"))
     oms = {}
     try:

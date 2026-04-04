@@ -808,6 +808,7 @@ mod tests {
             min_qty: 0.0,
             min_cost: 0.0,
             c_mult: 1.0,
+            ..Default::default()
         }
     }
 
@@ -852,6 +853,7 @@ mod tests {
             min_qty: 0.0,
             min_cost: 0.0,
             c_mult: 1.0,
+            ..Default::default()
         };
         let state = StateParams {
             balance: 500.0,

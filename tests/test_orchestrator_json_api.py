@@ -91,6 +91,8 @@ def exchange_params(**overrides):
         "min_qty": 0.0,
         "min_cost": 0.0,
         "c_mult": 1.0,
+        "maker_fee": 0.0002,
+        "taker_fee": 0.00055,
     }
     base.update(overrides)
     return base
@@ -107,9 +109,11 @@ def ema_bundle(
 ):
     return {
         "m1": {
-            "close": m1_close or [],
-            "volume": m1_volume or [],
-            "log_range": m1_log_range or [],
+            "close": m1_close
+            if m1_close is not None
+            else [[10.0, 100.0], [20.0, 100.0], [math.sqrt(10.0 * 20.0), 100.0]],
+            "volume": m1_volume if m1_volume is not None else [[10.0, 1_000.0]],
+            "log_range": m1_log_range if m1_log_range is not None else [[10.0, 0.01]],
         },
         "h1": {
             "close": h1_close or [],
@@ -149,7 +153,9 @@ def make_symbol(
                 [10.0, bid],
                 [20.0, bid],
                 [math.sqrt(10.0 * 20.0), bid],
-            ]
+            ],
+            m1_volume=[[10.0, 1_000.0]],
+            m1_log_range=[[10.0, 0.01]],
         ),
         "long": {
             "mode": long_mode,
@@ -278,7 +284,11 @@ def test_graceful_stop_blocks_initial_entries_only():
     )
     out_normal = compute(pbr, inp_normal)
     out_gs = compute(pbr, inp_gs)
-    assert out_normal == out_gs
+    assert out_normal["orders"] == out_gs["orders"]
+    assert out_normal["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] == "normal"
+    assert out_gs["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] == "normal"
+    assert out_normal["diagnostics"]["symbol_states"][0]["long"]["input_mode"] is None
+    assert out_gs["diagnostics"]["symbol_states"][0]["long"]["input_mode"] == "graceful_stop"
     assert any(o["order_type"].startswith("close_") for o in out_gs["orders"])
 
 

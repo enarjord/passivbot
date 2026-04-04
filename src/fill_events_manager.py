@@ -27,13 +27,13 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypedDict
 
 from ccxt.base.errors import RateLimitExceeded
+from config import load_input_config, prepare_config
 
 try:
     from utils import ts_to_date  # type: ignore
 except ImportError:  # pragma: no cover - fallback for package-relative execution
     from .utils import ts_to_date
 
-from config_utils import format_config, load_config
 from logging_setup import configure_logging
 from procedures import load_user_info
 from pure_funcs import ensure_millis
@@ -1061,6 +1061,33 @@ class BaseFetcher:
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
         raise NotImplementedError
+
+
+class FakeFetcher(BaseFetcher):
+    """Fetch canonical fill events from the fake exchange ledger."""
+
+    def __init__(self, api) -> None:
+        self.api = api
+
+    async def fetch(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        events = list(self.api.get_fill_events(since_ms, until_ms))
+        for event in events:
+            cache_entry = detail_cache.get(event["id"])
+            if cache_entry:
+                event["client_order_id"], event["pb_order_type"] = cache_entry
+            elif event["client_order_id"]:
+                event["pb_order_type"] = custom_id_to_snake(event["client_order_id"])
+            if not event["pb_order_type"]:
+                event["pb_order_type"] = "unknown"
+        if on_batch and events:
+            on_batch(events)
+        return events
 
 
 class BitgetFetcher(BaseFetcher):
@@ -4405,6 +4432,7 @@ EXCHANGE_BOT_CLASSES: Dict[str, Tuple[str, str]] = {
     "binance": ("exchanges.binance", "BinanceBot"),
     "bitget": ("exchanges.bitget", "BitgetBot"),
     "bybit": ("exchanges.bybit", "BybitBot"),
+    "fake": ("exchanges.fake", "FakeBot"),
     "hyperliquid": ("exchanges.hyperliquid", "HyperliquidBot"),
     "gateio": ("exchanges.gateio", "GateIOBot"),
     "kucoin": ("exchanges.kucoin", "KucoinBot"),
@@ -4517,6 +4545,8 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         )
     if exchange == "bybit":
         return BybitFetcher(api=bot.cca)
+    if exchange == "fake":
+        return FakeFetcher(api=bot.cca)
     if exchange == "hyperliquid":
         return HyperliquidFetcher(
             api=bot.cca,
@@ -4551,8 +4581,15 @@ def _instantiate_bot(config: dict):
 
 
 async def _run_cli(args: argparse.Namespace) -> None:
-    config = load_config(args.config, verbose=False)
-    config = format_config(config, verbose=False)
+    source_config, base_config_path, raw_snapshot = load_input_config(args.config)
+    config = prepare_config(
+        source_config,
+        base_config_path=base_config_path,
+        verbose=False,
+        target="live",
+        runtime="live",
+        raw_snapshot=raw_snapshot,
+    )
     live = config.setdefault("live", {})
     if args.user:
         live["user"] = args.user
@@ -4596,7 +4633,11 @@ async def _run_cli(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fill events cache refresher")
     parser.add_argument(
-        "--config", "-c", type=str, default="configs/template.json", help="Config path"
+        "--config",
+        "-c",
+        type=str,
+        default=None,
+        help="Config path (defaults to in-code schema defaults)",
     )
     parser.add_argument("--user", "-u", type=str, required=True, help="Live user identifier")
     parser.add_argument("--start", "-s", type=str, help="Start datetime (ms or ISO)")

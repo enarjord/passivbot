@@ -2,7 +2,7 @@ from exchanges.ccxt_bot import CCXTBot
 from passivbot import logging
 
 from utils import ts_to_date, utc_ms
-from config_utils import require_live_value
+from config.access import require_live_value
 
 
 class GateIOBot(CCXTBot):
@@ -42,15 +42,6 @@ class GateIOBot(CCXTBot):
         raise Exception(f"unsupported order side {order['side']}")
 
     # ═══════════════════ GATEIO-SPECIFIC METHODS ═══════════════════
-
-    async def determine_utc_offset(self, verbose=True):
-        # returns millis to add to utc to get exchange timestamp
-        # call some endpoint which includes timestamp for exchange's server
-        # GateIO uses fetch_ohlcv for this
-        result = await self.cca.fetch_ohlcv("BTC/USDT:USDT", timeframe="1m")
-        self.utc_offset = round((result[-1][0] - utc_ms()) / (1000 * 60 * 60)) * (1000 * 60 * 60)
-        if verbose:
-            logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
 
     async def fetch_balance(self) -> float:
         """GateIO: Fetch balance with special UID logic for websockets.

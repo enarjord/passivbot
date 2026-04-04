@@ -23,6 +23,11 @@ def _is_step_aligned(value: float, step: float, tol: float = 1e-12) -> bool:
 
 
 @requires_extension
+def test_select_forager_candidates_py_is_exported():
+    assert hasattr(pbr, "select_forager_candidates_py")
+
+
+@requires_extension
 def test_calc_entries_long_py_quantizes_results():
     step_qty = 0.001
     step_price = 0.0001

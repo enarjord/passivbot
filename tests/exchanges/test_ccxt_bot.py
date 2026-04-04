@@ -398,6 +398,74 @@ class TestCCXTBotUpdateExchangeConfigBySymbols:
         with pytest.raises(Exception, match="Margin API error"):
             await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
 
+    def test_cross_only_blocks_isolated_only_symbol_for_entries(self, caplog):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot.markets_dict = {
+            "ISO/USDT:USDT": {
+                "info": {"onlyIsolated": True},
+                "marginModes": {"cross": False, "isolated": True},
+            }
+        }
+
+        with caplog.at_level("WARNING"):
+            filtered = bot._filter_approved_symbols("long", {"ISO/USDT:USDT"})
+
+        assert filtered == set()
+        assert bot._get_margin_mode_for_symbol("ISO/USDT:USDT") == "isolated"
+        assert "isolated margin support is currently disabled" in caplog.text
+
+    def test_live_margin_mode_is_preserved_when_symbol_has_existing_state(self):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot.markets_dict = {
+            "ISO/USDT:USDT": {
+                "marginModes": {"cross": True, "isolated": True},
+                "info": {},
+            }
+        }
+        bot.positions = {
+            "ISO/USDT:USDT": {
+                "long": {"size": 1.0, "price": 100.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+        }
+        bot.open_orders = {}
+        bot._live_margin_modes = {"ISO/USDT:USDT": "isolated"}
+
+        policy = bot._resolve_margin_policy_for_symbol("ISO/USDT:USDT")
+
+        assert policy["mode"] == "isolated"
+        assert policy["blocked"] is False
+        assert policy["live_margin_mode"] == "isolated"
+
+    def test_normalize_positions_records_live_margin_mode(self):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot._live_margin_modes = {}
+        positions = bot._normalize_positions(
+            [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "long",
+                    "contracts": 1.0,
+                    "entryPrice": 100.0,
+                    "marginMode": "isolated",
+                }
+            ]
+        )
+
+        assert positions[0]["margin_mode"] == "isolated"
+        assert bot._live_margin_modes["BTC/USDT:USDT"] == "isolated"
+
 
 class TestCCXTBotSetMarketSpecificSettings:
     """Tests for set_market_specific_settings."""
@@ -474,6 +542,40 @@ class TestCCXTBotSetMarketSpecificSettings:
 
         assert bot.min_costs["ETH/USDT:USDT"] == 0.1  # Default fallback
         assert bot.c_mults["ETH/USDT:USDT"] == 1  # Default when missing
+
+    def test_clamps_nonpositive_min_qty_to_qty_step(self):
+        """Test that zero min_qty is normalized to qty_step for executable sizing."""
+        from exchanges.ccxt_bot import CCXTBot
+        from passivbot import Passivbot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.symbol_ids = {}
+        bot.min_costs = {}
+        bot.min_qtys = {}
+        bot.qty_steps = {}
+        bot.price_steps = {}
+        bot.c_mults = {}
+
+        bot.markets_dict = {
+            "SOL/USDT:USDT": {
+                "id": "SOLUSDT",
+                "limits": {
+                    "cost": {"min": 0.1},
+                    "amount": {"min": 0.0},
+                },
+                "precision": {
+                    "amount": 1.0,
+                    "price": 0.01,
+                },
+                "contractSize": 1.0,
+            }
+        }
+
+        with patch.object(Passivbot, "set_market_specific_settings", lambda self: None):
+            bot.set_market_specific_settings()
+
+        assert bot.min_qtys["SOL/USDT:USDT"] == 1.0
+        assert bot.qty_steps["SOL/USDT:USDT"] == 1.0
 
 
 class TestCCXTBotFetchTickers:

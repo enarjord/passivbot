@@ -31,18 +31,6 @@ def test_detect_flavor_variants():
     }
     assert detect_flavor(pb_multi, tmpl) == "pb_multi"
 
-    v7_legacy = {
-        "common": {
-            "approved_symbols": ["BTC"],
-            "symbol_flags": {"BTC": "--long_mode n"},
-        },
-        "bot": tmpl["bot"],
-        "live": tmpl["live"],
-        "optimize": tmpl["optimize"],
-        "backtest": tmpl["backtest"],
-    }
-    assert detect_flavor(v7_legacy, tmpl) == "v7_legacy"
-
     current = copy.deepcopy(tmpl)
     assert detect_flavor(current, tmpl) == "current"
 
@@ -79,23 +67,6 @@ def test_build_base_config_pb_multi():
     # total_wallet_exposure_limit derived from TWE_x when enabled by default
     assert base["bot"]["long"]["total_wallet_exposure_limit"] == 1.2
     assert base["bot"]["short"]["total_wallet_exposure_limit"] == 1.5
-
-
-def test_build_base_config_v7_legacy():
-    tmpl = _template()
-    cfg = {
-        "common": {
-            "approved_symbols": ["BTC"],
-            "symbol_flags": {"BTC": "--long_mode n"},
-        },
-        "bot": tmpl["bot"],
-        "live": tmpl["live"],
-        "optimize": tmpl["optimize"],
-        "backtest": tmpl["backtest"],
-    }
-    base = build_base_config_from_flavor(cfg, tmpl, "v7_legacy", verbose=True)
-    assert base["live"]["approved_coins"] == ["BTC"]
-    assert base["live"]["coin_flags"] == {"BTC": "--long_mode n"}
 
 
 def test_format_config_live_only_adds_sections():
@@ -153,6 +124,57 @@ def test_format_config_prunes_unknown_keys_recursively():
     assert "extra_section" not in out
 
 
+def test_format_config_normalizes_hsl_position_during_cooldown_policy():
+    tmpl = _template()
+    current = copy.deepcopy(tmpl)
+    current["live"]["hsl_position_during_cooldown_policy"] = "manual"
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["live"]["hsl_position_during_cooldown_policy"] == "manual"
+
+
+def test_format_config_rejects_invalid_hsl_position_during_cooldown_policy():
+    tmpl = _template()
+    current = copy.deepcopy(tmpl)
+    current["live"]["hsl_position_during_cooldown_policy"] = "bad_policy"
+
+    with pytest.raises(ValueError, match="live.hsl_position_during_cooldown_policy"):
+        format_config(current, verbose=False, live_only=True)
+
+
+def test_format_config_adds_monitor_defaults():
+    current = copy.deepcopy(_template())
+    current.pop("monitor", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["monitor"] == {
+        "enabled": True,
+        "root_dir": "monitor",
+        "snapshot_interval_seconds": 1.0,
+        "checkpoint_interval_minutes": 10.0,
+        "event_rotation_mb": 128.0,
+        "event_rotation_minutes": 60.0,
+        "retain_days": 7.0,
+        "max_total_bytes": 1073741824,
+        "retain_price_ticks": True,
+        "retain_candles": True,
+        "retain_fills": True,
+        "compress_rotated_segments": True,
+        "price_tick_min_interval_ms": 500,
+        "emit_completed_candles": True,
+        "include_raw_fill_payloads": False,
+    }
+
+
+def test_format_config_rejects_invalid_monitor_snapshot_interval():
+    current = copy.deepcopy(_template())
+    current["monitor"]["snapshot_interval_seconds"] = 0.0
+
+    with pytest.raises(ValueError, match="config.monitor.snapshot_interval_seconds"):
+        format_config(current, verbose=False, live_only=True)
+
 def test_format_config_current_with_empty_optimize_adds_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
@@ -176,7 +198,7 @@ def test_format_config_current_with_optimize_missing_bounds_adds_defaults():
 
     out = format_config(current, verbose=False, live_only=True)
 
-    assert out["optimize"]["scoring"] == ["adg"]
+    assert out["optimize"]["scoring"] == [{"metric": "adg_usd", "goal": "max"}]
     assert "long_close_grid_qty_pct" in out["optimize"]["bounds"]
     assert "short_close_grid_qty_pct" in out["optimize"]["bounds"]
 
@@ -264,3 +286,23 @@ def test_format_config_is_idempotent_for_lean_live_config():
 
     for key in ("backtest", "bot", "coin_overrides", "live", "logging", "optimize"):
         assert first[key] == second[key]
+
+
+def test_format_config_preserves_live_optimize_bounds():
+    tmpl = _template()
+    current = copy.deepcopy(tmpl)
+    current["optimize"]["bounds"]["long_hsl_red_threshold"] = [0.1, 0.3, 0.01]
+    current["optimize"]["bounds"]["long_hsl_ema_span_minutes"] = [10.0, 120.0, 5.0]
+
+    out = format_config(current, verbose=False)
+
+    assert out["optimize"]["bounds"]["long_hsl_red_threshold"] == [
+        0.1,
+        0.3,
+        0.01,
+    ]
+    assert out["optimize"]["bounds"]["long_hsl_ema_span_minutes"] == [
+        10.0,
+        120.0,
+        5.0,
+    ]

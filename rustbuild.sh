@@ -34,3 +34,9 @@ cd "$script_dir/passivbot-rust"
 cargo fmt
 maturin develop --release
 cd "$script_dir"
+PYTHONPATH="$script_dir/src${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
+from rust_utils import source_fingerprint, stamp_compiled_extensions, sync_installed_extension_into_src
+
+sync_installed_extension_into_src()
+stamp_compiled_extensions(source_fingerprint())
+PY
