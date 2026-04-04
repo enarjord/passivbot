@@ -49,7 +49,7 @@ Suite configuration uses a flattened structure directly under `backtest`:
   - `coins`, `ignored_coins`: Restrict or skip symbols.
   - `exchanges`: Limit which exchanges can contribute data to this scenario.
   - `coin_sources`: Scenario-specific overrides for `coin_sources`.
-  - `overrides`: Arbitrary config path overrides (e.g., `{"bot.long.total_wallet_exposure_limit": 2}`).
+  - `overrides`: Arbitrary config path overrides (e.g., `{"bot.long.risk.total_wallet_exposure_limit": 2}`).
 - **backtest.aggregate**: Dict of metric-specific aggregation modes (default `mean`). Keys fall back to the `default` entry if unspecified.
 
 See [Suite Examples](suite_examples.md) for practical examples and suggested usage.

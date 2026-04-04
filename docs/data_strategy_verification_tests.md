@@ -345,15 +345,15 @@ config = {
             {
                 "label": "conservative",
                 "overrides": {
-                    "bot.long.total_wallet_exposure_limit": 0.5,
-                    "bot.short.total_wallet_exposure_limit": 0.5
+                    "bot.long.risk.total_wallet_exposure_limit": 0.5,
+                    "bot.short.risk.total_wallet_exposure_limit": 0.5
                 }
             }
         ]
     },
     "bot": {
-        "long": {"total_wallet_exposure_limit": 1.0},
-        "short": {"total_wallet_exposure_limit": 1.0}
+        "long": {"risk": {"total_wallet_exposure_limit": 1.0}},
+        "short": {"risk": {"total_wallet_exposure_limit": 1.0}}
     }
 }
 ```
@@ -367,11 +367,11 @@ config = {
         "scenarios": [
             {
                 "label": "long_only",
-                "overrides": {"bot.short.total_wallet_exposure_limit": 0}
+                "overrides": {"bot.short.risk.total_wallet_exposure_limit": 0}
             },
             {
                 "label": "short_only",
-                "overrides": {"bot.long.total_wallet_exposure_limit": 0}
+                "overrides": {"bot.long.risk.total_wallet_exposure_limit": 0}
             }
         ]
     }
@@ -388,15 +388,15 @@ config = {
             {
                 "label": "pure_grid",
                 "overrides": {
-                    "bot.long.entry_trailing_grid_ratio": 0,
-                    "bot.long.close_trailing_grid_ratio": 0
+                    "bot.long.strategy.trailing_grid.entry_trailing_grid_ratio": 0,
+                    "bot.long.strategy.trailing_grid.close_trailing_grid_ratio": 0
                 }
             },
             {
                 "label": "pure_trailing",
                 "overrides": {
-                    "bot.long.entry_trailing_grid_ratio": 1,
-                    "bot.long.close_trailing_grid_ratio": 1
+                    "bot.long.strategy.trailing_grid.entry_trailing_grid_ratio": 1,
+                    "bot.long.strategy.trailing_grid.close_trailing_grid_ratio": 1
                 }
             }
         ]
@@ -411,9 +411,9 @@ config = {
     "backtest": {
         "exchanges": ["binance"],
         "scenarios": [
-            {"label": "n3", "overrides": {"bot.long.n_positions": 3}},
-            {"label": "n5", "overrides": {"bot.long.n_positions": 5}},
-            {"label": "n10", "overrides": {"bot.long.n_positions": 10}}
+            {"label": "n3", "overrides": {"bot.long.risk.n_positions": 3}},
+            {"label": "n5", "overrides": {"bot.long.risk.n_positions": 5}},
+            {"label": "n10", "overrides": {"bot.long.risk.n_positions": 10}}
         ]
     }
 }

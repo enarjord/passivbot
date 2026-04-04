@@ -1,6 +1,7 @@
 import logging
 import argparse
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 import json
 
@@ -56,6 +57,31 @@ def test_default_example_config_matches_schema_defaults():
         example = json.load(fh)
 
     assert example == get_template_config()
+
+
+def test_shipped_example_configs_load_with_grouped_canonical_shape():
+    example_paths = sorted(Path("configs/examples").glob("*.json"))
+
+    assert example_paths
+
+    for path in example_paths:
+        loaded = load_config(str(path), verbose=False)
+        assert set(loaded["bot"]["long"]) == {"forager", "hsl", "risk", "strategy", "unstuck"}
+        assert set(loaded["bot"]["short"]) == {"forager", "hsl", "risk", "strategy", "unstuck"}
+        assert set(loaded["optimize"]["bounds"]["long"]) == {
+            "forager",
+            "hsl",
+            "risk",
+            "strategy",
+            "unstuck",
+        }
+        assert set(loaded["optimize"]["bounds"]["short"]) == {
+            "forager",
+            "hsl",
+            "risk",
+            "strategy",
+            "unstuck",
+        }
 
 
 def test_prepare_config_preserves_raw_snapshot_and_effective_input():
