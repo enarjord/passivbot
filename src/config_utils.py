@@ -45,6 +45,7 @@ from config.limits import (
 from config.log_output import log_config_message
 from config.metrics import CURRENCY_METRICS, SHARED_METRICS
 from config.normalize import normalize_config
+from config.optimize_bounds import prune_inactive_optimize_strategy_bounds
 from config.overrides import (
     apply_allowed_modifications as staged_apply_allowed_modifications,
     get_allowed_modifications as staged_get_allowed_modifications,
@@ -59,6 +60,7 @@ from config.parse import load_raw_config
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
 from config.schema import get_template_config as get_schema_template_config
+from config.strategy import prune_inactive_strategy_subtrees
 from config.tree_ops import (
     add_missing_keys_recursively,
     remove_unused_keys_recursively,
@@ -417,6 +419,8 @@ def clean_config(config: dict) -> dict:
     """
     template = get_template_config()
     cleaned = _clean_with_template(template, config or {})
+    prune_inactive_strategy_subtrees(cleaned)
+    prune_inactive_optimize_strategy_bounds(cleaned)
     return sort_dict_keys(cleaned)
 
 

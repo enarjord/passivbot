@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any, Mapping, Optional
 
 import passivbot_rust as pbr
+from config.shared_bot import flatten_shared_bot_side
 
 
 ENTRY_CONFIG_KEYS = [
@@ -81,7 +82,7 @@ def _effective_wallet_exposure_limit(
     bot_cfg = config.get("bot", {})
     if not isinstance(bot_cfg, Mapping):
         return 0.0
-    side_cfg = bot_cfg.get(pside, {})
+    side_cfg = flatten_shared_bot_side(bot_cfg.get(pside, {}))
     if not isinstance(side_cfg, Mapping):
         return 0.0
     direct = side_cfg.get("wallet_exposure_limit")

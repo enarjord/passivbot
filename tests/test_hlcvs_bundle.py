@@ -92,6 +92,7 @@ def _payload_two_coins():
     return BacktestPayload(
         bundle=bundle,
         bot_params_list=["bp0", "bp1"],
+        strategy_params_list=["sp0", "sp1"],
         exchange_params=["ex0", "ex1"],
         backtest_params=backtest_params,
     )
@@ -103,6 +104,7 @@ def test_subset_backtest_payload_by_index():
     assert subset.bundle.meta["coins"][0]["symbol"] == "ETH/USDT:USDT"
     assert subset.bundle.hlcvs.shape[1] == 1
     assert subset.bot_params_list == ["bp1"]
+    assert subset.strategy_params_list == ["sp1"]
     assert subset.exchange_params == ["ex1"]
     assert subset.backtest_params["coins"] == ["ETH/USDT:USDT"]
 

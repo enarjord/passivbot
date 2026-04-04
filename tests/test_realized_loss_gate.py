@@ -318,20 +318,20 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
 
     def test_default_value_is_1(self):
         config = self._make_config()
-        _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
+        _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["max_realized_loss_pct"] == pytest.approx(1.0)
         assert bp["pnls_max_lookback_days"] == pytest.approx(30.0)
 
     def test_explicit_value_passthrough(self):
         config = self._make_config(max_realized_loss_pct=0.05)
         config["live"]["pnls_max_lookback_days"] = 14
-        _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
+        _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["max_realized_loss_pct"] == pytest.approx(0.05)
         assert bp["pnls_max_lookback_days"] == pytest.approx(14.0)
 
     def test_zero_disables_lossy_closes(self):
         config = self._make_config(max_realized_loss_pct=0.0)
-        _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
+        _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["max_realized_loss_pct"] == pytest.approx(0.0)
 
 
@@ -426,7 +426,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
 
     def test_defaults_passthrough(self):
         config = self._make_config()
-        _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
+        _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         hs = bp["equity_hard_stop_loss"]
         assert hs["enabled"] is False
         assert hs["red_threshold"] == pytest.approx(0.25)
@@ -451,7 +451,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
                 "panic_close_order_type": "limit",
             }
         )
-        _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
+        _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         hs = bp["equity_hard_stop_loss"]
         assert hs["enabled"] is True
         assert hs["red_threshold"] == pytest.approx(0.3)
@@ -496,7 +496,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
                 "no_restart_drawdown_threshold": 0.2,
             }
         )
-        _, _, backtest_params = prep_backtest_args(config, self._make_mss(), "binance")
+        _, _, _, backtest_params = prep_backtest_args(config, self._make_mss(), "binance")
         assert backtest_params["equity_hard_stop_loss"]["no_restart_drawdown_threshold"] == pytest.approx(
             0.3
         )

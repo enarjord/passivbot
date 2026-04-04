@@ -7,12 +7,18 @@ from pure_funcs import sort_dict_keys
 
 from .log_output import log_config_message
 from .migrations import apply_backward_compatibility_renames
+from .optimize_bounds import get_optimize_bounds_defaults
+from .shared_bot import (
+    BOT_POSITION_SIDES,
+    canonicalize_shared_bot_side,
+    flatten_shared_bot_side,
+    get_bot_group,
+    get_grouped_bot_value,
+    inject_flattened_shared_bot_side,
+)
 from .schema import get_template_config
 from .access import require_config_dict
 from .tree_ops import add_missing_keys_recursively
-
-
-BOT_POSITION_SIDES = ("long", "short")
 
 FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
     "forager_volatility_ema_span": "filter_volatility_ema_span",
@@ -32,125 +38,43 @@ FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
 def ensure_bot_defaults(
     result: dict, *, verbose: bool = True, tracker: Optional[object] = None
 ) -> None:
+    template_bot = get_template_config()["bot"]
     for pside in BOT_POSITION_SIDES:
-        for key, default_value in [
-            ("close_trailing_qty_pct", 1.0),
-            (
-                "entry_trailing_double_down_factor",
-                result["bot"][pside].get("entry_grid_double_down_factor", 1.0),
-            ),
-            (
-                "forager_volatility_ema_span",
-                result["bot"][pside].get(
-                    "forager_volatility_ema_span",
-                    result["bot"][pside].get(
-                        "filter_volatility_ema_span",
-                        result["bot"][pside].get(
-                            "filter_rolling_window",
-                            result["live"].get("ohlcv_rolling_window", 60.0),
-                        ),
-                    ),
-                ),
-            ),
-            (
-                "forager_volume_ema_span",
-                result["bot"][pside].get(
-                    "forager_volume_ema_span",
-                    result["bot"][pside].get(
-                        "filter_volume_ema_span",
-                        result["bot"][pside].get(
-                            "filter_rolling_window",
-                            result["live"].get("ohlcv_rolling_window", 60.0),
-                        ),
-                    ),
-                ),
-            ),
-            (
-                "close_grid_markup_start",
-                result["bot"][pside].get("close_grid_min_markup", 0.001)
-                + result["bot"][pside].get("close_grid_markup_range", 0.001),
-            ),
-            (
-                "close_grid_markup_end",
-                result["bot"][pside].get("close_grid_min_markup", 0.001),
-            ),
-            (
-                "forager_volume_drop_pct",
-                result["live"].get("filter_relative_volume_clip_pct", 0.5),
-            ),
-        ]:
-            if key not in result["bot"][pside]:
-                result["bot"][pside][key] = default_value
-                log_config_message(
-                    verbose,
-                    logging.INFO,
-                    "adding missing backtest parameter %s %s: %s",
-                    pside,
-                    key,
-                    default_value,
-                )
-                if tracker is not None:
-                    tracker.add(["bot", pside, key], default_value)
-        if "forager_score_weights" not in result["bot"][pside]:
-            weights = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
-            result["bot"][pside]["forager_score_weights"] = weights
-            log_config_message(
-                verbose,
-                logging.INFO,
-                "adding missing backtest parameter %s forager_score_weights: %s",
-                pside,
-                weights,
-            )
-            if tracker is not None:
-                tracker.add(["bot", pside, "forager_score_weights"], weights)
+        canonicalize_shared_bot_side(
+            result["bot"][pside],
+            path_prefix=("bot", pside),
+            tracker=tracker,
+            seed_missing_groups=True,
+        )
+    add_missing_keys_recursively(
+        template_bot,
+        result["bot"],
+        parent=["bot"],
+        verbose=verbose,
+        tracker=tracker,
+    )
 
 
 def ensure_optimize_bounds_for_bot(
     result: dict, *, verbose: bool = True, tracker: Optional[object] = None
 ) -> None:
+    del verbose
     bounds = result["optimize"]["bounds"]
+    defaults = get_optimize_bounds_defaults()
+    add_missing_keys_recursively(
+        defaults,
+        bounds,
+        parent=["optimize", "bounds"],
+        verbose=False,
+        tracker=tracker,
+    )
     for pside in BOT_POSITION_SIDES:
-        for key, default_value in [
-            ("close_trailing_qty_pct", [0.05, 1.0]),
-            ("entry_trailing_double_down_factor", [0.01, 3.0]),
-            ("forager_volatility_ema_span", [10.0, 1440.0]),
-            ("forager_volume_ema_span", [10.0, 1440.0]),
-            ("close_grid_markup_start", bounds.get(f"{pside}_min_markup", [0.001, 0.03])),
-            ("close_grid_markup_end", bounds.get(f"{pside}_close_grid_min_markup", [0.001, 0.03])),
-            ("forager_volume_drop_pct", [0.0, 1.0]),
-        ]:
-            opt_key = f"{pside}_{key}"
-            if opt_key not in bounds:
-                bounds[opt_key] = default_value
-                log_config_message(
-                    verbose,
-                    logging.INFO,
-                    "adding missing optimize parameter %s %s: %s",
-                    pside,
-                    opt_key,
-                    default_value,
-                )
-                if tracker is not None:
-                    tracker.add(["optimize", "bounds", opt_key], default_value)
-        if "forager_score_weights" not in result["bot"][pside]:
+        forager_cfg = get_bot_group(result["bot"][pside], "forager")
+        if "score_weights" not in forager_cfg:
             weights = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
-            result["bot"][pside]["forager_score_weights"] = weights
+            forager_cfg["score_weights"] = weights
             if tracker is not None:
-                tracker.add(["bot", pside, "forager_score_weights"], weights)
-        for weight_key in ("volume", "ema_readiness", "volatility"):
-            opt_key = f"{pside}_forager_score_weights_{weight_key}"
-            if opt_key not in bounds:
-                bounds[opt_key] = [0.0, 1.0]
-                log_config_message(
-                    verbose,
-                    logging.INFO,
-                    "adding missing optimize parameter %s %s: %s",
-                    pside,
-                    opt_key,
-                    bounds[opt_key],
-                )
-                if tracker is not None:
-                    tracker.add(["optimize", "bounds", opt_key], bounds[opt_key])
+                tracker.add(["bot", pside, "forager", "score_weights"], weights)
 
 
 def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
@@ -190,21 +114,21 @@ def normalize_bot_forager_config(
 ) -> None:
     required_weight_keys = {"volume", "ema_readiness", "volatility"}
     for pside in BOT_POSITION_SIDES:
-        bot_cfg = result["bot"][pside]
-        raw_drop_pct = bot_cfg["forager_volume_drop_pct"]
+        forager_cfg = get_bot_group(result["bot"][pside], "forager")
+        raw_drop_pct = forager_cfg["volume_drop_pct"]
         try:
             drop_pct = float(raw_drop_pct)
         except (TypeError, ValueError) as exc:
-            raise TypeError(f"bot.{pside}.forager_volume_drop_pct must be numeric") from exc
+            raise TypeError(f"bot.{pside}.forager.volume_drop_pct must be numeric") from exc
         if not math.isfinite(drop_pct) or not (0.0 <= drop_pct <= 1.0):
-            raise ValueError(f"bot.{pside}.forager_volume_drop_pct must be within [0.0, 1.0]")
+            raise ValueError(f"bot.{pside}.forager.volume_drop_pct must be within [0.0, 1.0]")
         if raw_drop_pct != drop_pct and tracker is not None:
-            tracker.update(["bot", pside, "forager_volume_drop_pct"], raw_drop_pct, drop_pct)
-        bot_cfg["forager_volume_drop_pct"] = drop_pct
+            tracker.update(["bot", pside, "forager", "volume_drop_pct"], raw_drop_pct, drop_pct)
+        forager_cfg["volume_drop_pct"] = drop_pct
 
-        weights = bot_cfg["forager_score_weights"]
+        weights = forager_cfg["score_weights"]
         normalized = normalize_forager_score_weights(
-            weights, path=f"bot.{pside}.forager_score_weights"
+            weights, path=f"bot.{pside}.forager.score_weights"
         )
         if normalized != weights:
             raw_total = 0.0
@@ -219,29 +143,38 @@ def normalize_bot_forager_config(
                 log_config_message(
                     verbose,
                     logging.INFO,
-                    "normalizing bot.%s.forager_score_weights all-zero vector to volume-only",
+                    "normalizing bot.%s.forager.score_weights all-zero vector to volume-only",
                     pside,
                 )
             else:
                 log_config_message(
                     verbose,
                     logging.INFO,
-                    "normalizing bot.%s.forager_score_weights to relative unit-sum weights: %s",
+                    "normalizing bot.%s.forager.score_weights to relative unit-sum weights: %s",
                     pside,
                     normalized,
                 )
             if tracker is not None:
-                tracker.update(["bot", pside, "forager_score_weights"], weights, normalized)
-        bot_cfg["forager_score_weights"] = normalized
+                tracker.update(["bot", pside, "forager", "score_weights"], weights, normalized)
+        forager_cfg["score_weights"] = normalized
 
 
 def normalize_position_counts(result: dict, *, tracker: Optional[object] = None) -> None:
     for pside in BOT_POSITION_SIDES:
-        current = result["bot"][pside].get("n_positions")
+        canonicalize_shared_bot_side(
+            result["bot"][pside],
+            path_prefix=("bot", pside),
+            tracker=tracker,
+            seed_missing_groups=False,
+        )
+        risk_cfg = get_bot_group(result["bot"][pside], "risk")
+        current = risk_cfg.get("n_positions")
+        if current is None:
+            continue
         rounded = int(round(current))
         if tracker is not None and current != rounded:
-            tracker.update(["bot", pside, "n_positions"], current, rounded)
-        result["bot"][pside]["n_positions"] = rounded
+            tracker.update(["bot", pside, "risk", "n_positions"], current, rounded)
+        risk_cfg["n_positions"] = rounded
 
 
 def validate_forager_config(
@@ -253,40 +186,42 @@ def validate_forager_config(
     del verbose, tracker
     for pside in BOT_POSITION_SIDES:
         bot_cfg = result["bot"][pside]
-        drop_pct = bot_cfg["forager_volume_drop_pct"]
+        forager_cfg = get_bot_group(bot_cfg, "forager")
+        risk_cfg = get_bot_group(bot_cfg, "risk")
+        drop_pct = forager_cfg["volume_drop_pct"]
         try:
             drop_pct = float(drop_pct)
         except (TypeError, ValueError) as exc:
-            raise TypeError(f"bot.{pside}.forager_volume_drop_pct must be numeric") from exc
+            raise TypeError(f"bot.{pside}.forager.volume_drop_pct must be numeric") from exc
         if not math.isfinite(drop_pct) or not (0.0 <= drop_pct <= 1.0):
-            raise ValueError(f"bot.{pside}.forager_volume_drop_pct must be within [0.0, 1.0]")
+            raise ValueError(f"bot.{pside}.forager.volume_drop_pct must be within [0.0, 1.0]")
         pside_enabled = (
-            float(bot_cfg["total_wallet_exposure_limit"]) > 0.0
-            and int(round(float(bot_cfg["n_positions"]))) > 0
+            float(risk_cfg["total_wallet_exposure_limit"]) > 0.0
+            and int(round(float(risk_cfg["n_positions"]))) > 0
         )
 
         normalized = normalize_forager_score_weights(
-            bot_cfg["forager_score_weights"],
-            path=f"bot.{pside}.forager_score_weights",
+            forager_cfg["score_weights"],
+            path=f"bot.{pside}.forager.score_weights",
         )
-        if normalized != bot_cfg["forager_score_weights"]:
+        if normalized != forager_cfg["score_weights"]:
             raise ValueError(
-                f"bot.{pside}.forager_score_weights must be normalized before validation"
+                f"bot.{pside}.forager.score_weights must be normalized before validation"
             )
 
         if pside_enabled and (normalized["volume"] > 0.0 or drop_pct > 0.0):
-            volume_span = float(bot_cfg["forager_volume_ema_span"])
+            volume_span = float(forager_cfg["volume_ema_span"])
             if not math.isfinite(volume_span) or volume_span <= 0.0:
                 raise ValueError(
-                    f"bot.{pside}.forager_volume_ema_span must be > 0 when "
+                    f"bot.{pside}.forager.volume_ema_span must be > 0 when "
                     "forager volume ranking or volume pruning is enabled"
                 )
 
         if pside_enabled and normalized["volatility"] > 0.0:
-            volatility_span = float(bot_cfg["forager_volatility_ema_span"])
+            volatility_span = float(forager_cfg["volatility_ema_span"])
             if not math.isfinite(volatility_span) or volatility_span <= 0.0:
                 raise ValueError(
-                    f"bot.{pside}.forager_volatility_ema_span must be > 0 when "
+                    f"bot.{pside}.forager.volatility_ema_span must be > 0 when "
                     "forager volatility ranking is enabled"
                 )
 
@@ -330,6 +265,7 @@ def format_bot_config(
 
 def apply_forager_internal_aliases(result: dict) -> None:
     def _alias_bot_cfg(bot_cfg: dict) -> None:
+        inject_flattened_shared_bot_side(bot_cfg)
         for canonical_key, internal_key in FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS.items():
             if canonical_key in bot_cfg and internal_key not in bot_cfg:
                 bot_cfg[internal_key] = deepcopy(bot_cfg[canonical_key])

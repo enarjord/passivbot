@@ -27,7 +27,7 @@ def _base_mss():
 def test_prep_backtest_args_uses_exchange_maker_fee_when_no_override():
     config = _base_config()
     mss = _base_mss()
-    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["maker_fee"] == 0.0001
     assert backtest_params["taker_fee"] == 0.0005
 
@@ -36,14 +36,15 @@ def test_prep_backtest_args_uses_maker_fee_override_when_set():
     config = _base_config()
     config["backtest"]["maker_fee_override"] = 0.0002
     mss = _base_mss()
-    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["maker_fee"] == 0.0002
+
 
 def test_prep_backtest_args_uses_taker_fee_override_when_set():
     config = _base_config()
     config["backtest"]["taker_fee_override"] = 0.0008
     mss = _base_mss()
-    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["taker_fee"] == 0.0008
 
 
@@ -51,7 +52,7 @@ def test_prep_backtest_args_passes_market_order_slippage_pct():
     config = _base_config()
     config["backtest"]["market_order_slippage_pct"] = 0.0015
     mss = _base_mss()
-    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["market_order_slippage_pct"] == 0.0015
 
 
@@ -59,7 +60,7 @@ def test_prep_backtest_args_passes_market_order_near_touch_threshold_from_live()
     config = _base_config()
     config["live"]["market_order_near_touch_threshold"] = 0.0017
     mss = _base_mss()
-    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["market_order_near_touch_threshold"] == 0.0017
 
 
@@ -67,7 +68,7 @@ def test_prep_backtest_args_passes_liquidation_threshold():
     config = _base_config()
     config["backtest"]["liquidation_threshold"] = 0.07
     mss = _base_mss()
-    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["liquidation_threshold"] == 0.07
 
 
@@ -75,9 +76,87 @@ def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():
     config = _base_config()
     mss = _base_mss()
 
-    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["dynamic_wel_by_tradability"] is True
 
     config["backtest"]["dynamic_wel_by_tradability"] = False
-    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["dynamic_wel_by_tradability"] is False
+
+
+def test_prep_backtest_args_injects_dynamic_wallet_exposure_sentinel_without_coin_override():
+    config = _base_config()
+    mss = _base_mss()
+
+    bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
+
+    assert len(bot_params_list) == 1
+    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == -1.0
+    assert bot_params_list[0]["short"]["wallet_exposure_limit"] == -1.0
+
+
+def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
+    config = _base_config()
+    config["coin_overrides"] = {
+        "BTC/USDT:USDT": {
+            "bot": {
+                "long": {"wallet_exposure_limit": 0.25},
+                "short": {"wallet_exposure_limit": 0.5},
+            }
+        }
+    }
+    mss = _base_mss()
+
+    bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
+
+    assert len(bot_params_list) == 1
+    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.25
+    assert bot_params_list[0]["short"]["wallet_exposure_limit"] == 0.5
+
+
+def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload():
+    config = _base_config()
+    config["bot"]["long"]["ema_span_0"] = -1.0
+    config["bot"]["short"]["entry_grid_spacing_pct"] = -1.0
+    config["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"] = 321.0
+    config["bot"]["short"]["strategy"]["trailing_grid"]["entry_grid_spacing_pct"] = 0.0123
+    mss = _base_mss()
+
+    bot_params_list, strategy_params_list, _, _ = prep_backtest_args(config, mss, "binance")
+
+    assert len(bot_params_list) == 1
+    assert "ema_span_0" not in bot_params_list[0]["long"]
+    assert "entry_grid_spacing_pct" not in bot_params_list[0]["short"]
+    assert strategy_params_list[0]["long"]["ema_span_0"] == 321.0
+    assert strategy_params_list[0]["short"]["entry_grid_spacing_pct"] == 0.0123
+
+
+def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
+    config = _base_config()
+    config["live"]["strategy_kind"] = "ema_anchor"
+    config["bot"]["long"]["strategy"]["ema_anchor"] = {
+            "base_qty_pct": 0.02,
+            "ema_span_0": 55.0,
+            "ema_span_1": 144.0,
+            "offset": 0.003,
+            "offset_psize_weight": 0.2,
+    }
+    config["bot"]["short"]["strategy"]["ema_anchor"] = {
+            "base_qty_pct": 0.03,
+            "ema_span_0": 34.0,
+            "ema_span_1": 89.0,
+            "offset": 0.004,
+            "offset_psize_weight": 0.1,
+    }
+    mss = _base_mss()
+
+    bot_params_list, strategy_params_list, _, backtest_params = prep_backtest_args(
+        config, mss, "binance"
+    )
+
+    assert backtest_params["strategy_kind"] == "ema_anchor"
+    assert len(bot_params_list) == 1
+    assert len(strategy_params_list) == 1
+    assert "base_qty_pct" not in bot_params_list[0]["long"]
+    assert strategy_params_list[0]["long"]["base_qty_pct"] == 0.02
+    assert strategy_params_list[0]["short"]["offset"] == 0.004

@@ -56,6 +56,13 @@ from config import (
 from config.access import get_optional_config_value, require_config_value, require_live_value
 from config.coerce import normalize_hsl_signal_mode
 from config.overrides import parse_overrides
+from config.shared_bot import flatten_shared_bot_side
+from config.strategy import (
+    build_runtime_strategy_side,
+    get_active_strategy_config,
+    merge_runtime_bot_side,
+    normalize_strategy_kind,
+)
 from config_utils import (
     dump_config,
     add_config_arguments,
@@ -243,8 +250,8 @@ def _looks_like_bool_token(value: str) -> bool:
 
 
 def _resolve_backtest_hsl_configs(config: dict) -> tuple[dict, dict]:
-    long_cfg = config.get("bot", {}).get("long", {})
-    short_cfg = config.get("bot", {}).get("short", {})
+    long_cfg = flatten_shared_bot_side(config.get("bot", {}).get("long", {}))
+    short_cfg = flatten_shared_bot_side(config.get("bot", {}).get("short", {}))
     if not (
         all(key in long_cfg for key in HSL_PSIDE_KEYS)
         and all(key in short_cfg for key in HSL_PSIDE_KEYS)
@@ -487,6 +494,7 @@ class BacktestPayload:
 
     bundle: Any
     bot_params_list: list
+    strategy_params_list: list
     exchange_params: list
     backtest_params: dict
     hard_stop_plot_data: dict | None = None
@@ -506,7 +514,12 @@ def build_backtest_payload(
     Assemble the bundle, bot params, and metadata needed to execute a backtest.
     """
 
-    bot_params_list, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
+    (
+        bot_params_list,
+        strategy_params_list,
+        exchange_params,
+        backtest_params,
+    ) = prep_backtest_args(config, mss, exchange)
     backtest_params = dict(backtest_params)
     coins_order = backtest_params.get("coins", [])
 
@@ -663,6 +676,7 @@ def build_backtest_payload(
     return BacktestPayload(
         bundle=bundle,
         bot_params_list=bot_params_list,
+        strategy_params_list=strategy_params_list,
         exchange_params=exchange_params,
         backtest_params=backtest_params,
     )
@@ -676,6 +690,7 @@ def execute_backtest(payload: BacktestPayload, config: dict):
     backtest_result = pbr.run_backtest_bundle(
         payload.bundle,
         payload.bot_params_list,
+        payload.strategy_params_list,
         payload.exchange_params,
         payload.backtest_params,
     )
@@ -766,6 +781,7 @@ def subset_backtest_payload(
         return [seq[pos] for pos in selected_positions]
 
     new_bot = _select(payload.bot_params_list)
+    new_strategy = _select(payload.strategy_params_list)
     new_exchange_params = _select(payload.exchange_params)
     new_backtest_params = deepcopy(payload.backtest_params)
     for key in [
@@ -781,6 +797,7 @@ def subset_backtest_payload(
     return BacktestPayload(
         bundle=new_bundle,
         bot_params_list=new_bot,
+        strategy_params_list=new_strategy,
         exchange_params=new_exchange_params,
         backtest_params=new_backtest_params,
     )
@@ -1246,21 +1263,48 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
 
 def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
     config = compile_runtime_config(config, runtime="backtest", record_step=False)
+    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
     coins = sorted(set(require_config_value(config, f"backtest.coins.{exchange}")))
     candle_interval = int(config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
     bot_params_list = []
+    strategy_params_list = []
     bot_params_template = deepcopy(require_config_value(config, "bot"))
+    strategy_template = get_active_strategy_config(config, strategy_kind=strategy_kind)
     for coin in coins:
-        coin_specific_bot_params = deepcopy(bot_params_template)
+        coin_specific_bot_params = {}
+        coin_specific_strategy_params = {}
         if coin in config.get("coin_overrides", {}):
+            coin_override_bot = config["coin_overrides"][coin].get("bot", {})
             for pside in ["long", "short"]:
-                for key in config["coin_overrides"][coin].get("bot", {}).get(pside, {}):
-                    coin_specific_bot_params[pside][key] = config["coin_overrides"][coin]["bot"][
-                        pside
-                    ][key]
+                coin_specific_bot_params[pside] = merge_runtime_bot_side(
+                    bot_params_template[pside],
+                    strategy_template.get(pside, {}),
+                    pside=pside,
+                    override_side=coin_override_bot.get(pside, {}),
+                    strategy_kind=strategy_kind,
+                )
+                coin_specific_strategy_params[pside] = build_runtime_strategy_side(
+                    strategy_template.get(pside, {}),
+                    strategy_kind=strategy_kind,
+                    pside=pside,
+                    override_side=coin_override_bot.get(pside, {}),
+                )
                 coin_specific_bot_params[pside]["is_forced_active"] = (
                     config["coin_overrides"].get("live", {}).get(f"forced_mode_{pside}", "")
                     == "normal"
+                )
+        else:
+            for pside in ["long", "short"]:
+                coin_specific_bot_params[pside] = merge_runtime_bot_side(
+                    bot_params_template[pside],
+                    strategy_template.get(pside, {}),
+                    pside=pside,
+                    strategy_kind=strategy_kind,
+                )
+                coin_specific_strategy_params[pside] = build_runtime_strategy_side(
+                    strategy_template.get(pside, {}),
+                    strategy_kind=strategy_kind,
+                    pside=pside,
                 )
         for pside in ["long", "short"]:
             if "wallet_exposure_limit" not in config["coin_overrides"].get(coin, {}).get(
@@ -1268,6 +1312,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             ).get(pside, {}):
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
         bot_params_list.append(coin_specific_bot_params)
+        strategy_params_list.append(coin_specific_strategy_params)
     if exchange_params is None:
         exchange_params = [
             {
@@ -1380,6 +1425,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             taker_fee = float(taker_fee_override)
         backtest_params = {
             "starting_balance": require_config_value(config, "backtest.starting_balance"),
+            "strategy_kind": strategy_kind,
             "maker_fee": maker_fee,
             "taker_fee": taker_fee,
             "coins": coins,
@@ -1407,7 +1453,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "market_order_near_touch_threshold": market_order_near_touch_threshold,
             "liquidation_threshold": liquidation_threshold,
         }
-    return bot_params_list, exchange_params, backtest_params
+    return bot_params_list, strategy_params_list, exchange_params, backtest_params
 
 
 def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
@@ -1415,7 +1461,12 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     analysis_btc = dict(analysis_btc)
     keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
     for pside in ["long", "short"]:
-        twel = float(require_config_value(config, f"bot.{pside}.total_wallet_exposure_limit"))
+        twel = float(
+            flatten_shared_bot_side(config.get("bot", {}).get(pside, {})).get(
+                "total_wallet_exposure_limit", 0.0
+            )
+            or 0.0
+        )
         for key in keys:
             analysis_usd[f"{key}_per_exposure_{pside}"] = (
                 (analysis_usd[key] / twel if twel > 0.0 else 0.0)

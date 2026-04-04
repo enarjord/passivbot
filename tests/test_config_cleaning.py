@@ -8,8 +8,8 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
     template = get_template_config()
     config = {
         "bot": {
-            "long": {"n_positions": 5, "_note": "keep me?"},
-            "short": {"n_positions": 3},
+            "long": {"risk": {"n_positions": 5}, "_note": "keep me?"},
+            "short": {"risk": {"n_positions": 3}},
         },
         "coin_overrides": {
             "BTC": {
@@ -27,9 +27,15 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
     assert "_transform_log" not in cleaned
     assert "_raw" not in cleaned
     assert "_raw_effective" not in cleaned
-    assert cleaned["bot"]["long"]["n_positions"] == 5
-    assert cleaned["bot"]["short"]["n_positions"] == 3
-    assert cleaned["bot"]["long"]["ema_span_0"] == template["bot"]["long"]["ema_span_0"]
+    assert cleaned["bot"]["long"]["risk"]["n_positions"] == 5
+    assert cleaned["bot"]["short"]["risk"]["n_positions"] == 3
+    assert cleaned["bot"]["long"]["forager"]["volume_ema_span"] == template["bot"]["long"]["forager"][
+        "volume_ema_span"
+    ]
+    assert (
+        cleaned["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"]
+        == template["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"]
+    )
     assert "BTC" in cleaned["coin_overrides"]
     assert "_meta" not in cleaned["coin_overrides"]["BTC"]
     assert (
@@ -42,7 +48,36 @@ def test_clean_config_fills_missing_values_from_template():
     config = {}
     cleaned = clean_config(config)
     template = get_template_config()
-    assert cleaned == template
+    assert cleaned["live"]["strategy_kind"] == template["live"]["strategy_kind"]
+    assert cleaned["bot"]["long"]["strategy"] == {"trailing_grid": template["bot"]["long"]["strategy"]["trailing_grid"]}
+    assert cleaned["bot"]["short"]["strategy"] == {
+        "trailing_grid": template["bot"]["short"]["strategy"]["trailing_grid"]
+    }
+    assert cleaned["optimize"]["bounds"]["long"]["strategy"] == {
+        "trailing_grid": template["optimize"]["bounds"]["long"]["strategy"]["trailing_grid"]
+    }
+    assert cleaned["optimize"]["bounds"]["short"]["strategy"] == {
+        "trailing_grid": template["optimize"]["bounds"]["short"]["strategy"]["trailing_grid"]
+    }
+
+
+def test_clean_config_prunes_inactive_strategy_subtrees_for_selected_kind():
+    template = get_template_config()
+    config = deepcopy(template)
+    config["live"]["strategy_kind"] = "ema_anchor"
+
+    cleaned = clean_config(config)
+
+    assert cleaned["bot"]["long"]["strategy"] == {"ema_anchor": template["bot"]["long"]["strategy"]["ema_anchor"]}
+    assert cleaned["bot"]["short"]["strategy"] == {
+        "ema_anchor": template["bot"]["short"]["strategy"]["ema_anchor"]
+    }
+    assert cleaned["optimize"]["bounds"]["long"]["strategy"] == {
+        "ema_anchor": template["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"]
+    }
+    assert cleaned["optimize"]["bounds"]["short"]["strategy"] == {
+        "ema_anchor": template["optimize"]["bounds"]["short"]["strategy"]["ema_anchor"]
+    }
 
 
 def test_strip_config_metadata_removes_known_keys_recursively():

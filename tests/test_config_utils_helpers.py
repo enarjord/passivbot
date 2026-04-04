@@ -30,6 +30,19 @@ from config_utils import (
 )
 
 
+def _strategy_side(config, pside, kind=None):
+    if kind is None:
+        kind = config["live"]["strategy_kind"]
+    return config["bot"][pside]["strategy"][kind]
+
+
+def _bound(config, pside, *path):
+    cur = config["optimize"]["bounds"][pside]
+    for part in path:
+        cur = cur[part]
+    return cur
+
+
 def test_load_input_config_without_path_uses_schema_defaults():
     source, base_config_path, raw_snapshot = load_input_config(None, log_info=False)
 
@@ -62,7 +75,7 @@ def test_prepare_config_preserves_raw_snapshot_and_effective_input():
     assert "backtest" not in prepared
     assert prepared["live"]["user"] == "test_user"
     assert prepared["bot"]["long"]["filter_volume_ema_span"] == pytest.approx(
-        prepared["bot"]["long"]["forager_volume_ema_span"]
+        prepared["bot"]["long"]["forager"]["volume_ema_span"]
     )
     assert prepared["_raw"] == raw_snapshot
     assert prepared["_raw_effective"]["live"]["user"] == "test_user"
@@ -71,13 +84,15 @@ def test_prepare_config_preserves_raw_snapshot_and_effective_input():
 
 def test_ensure_bot_defaults_and_bounds_adds_missing_values():
     config = get_template_config()
-    config["bot"]["long"].pop("close_trailing_qty_pct", None)
-    config["optimize"]["bounds"].pop("long_close_trailing_qty_pct", None)
+    config["bot"]["long"]["forager"].pop("volume_ema_span", None)
+    config["optimize"]["bounds"]["long"]["forager"].pop("volume_ema_span", None)
 
     _ensure_bot_defaults_and_bounds(config, verbose=False)
 
-    assert config["bot"]["long"]["close_trailing_qty_pct"] == pytest.approx(1.0)
-    assert config["optimize"]["bounds"]["long_close_trailing_qty_pct"] == [0.05, 1.0]
+    assert config["bot"]["long"]["forager"]["volume_ema_span"] == pytest.approx(
+        get_template_config()["bot"]["long"]["forager"]["volume_ema_span"]
+    )
+    assert config["optimize"]["bounds"]["long"]["forager"]["volume_ema_span"] == [360, 2880, 10]
 
 
 def test_rename_config_keys_moves_legacy_fields():
@@ -163,7 +178,8 @@ def test_hydrate_then_sync_with_template_adds_missing_and_removes_extras():
     assert "extra_side" not in result["bot"]
     assert result["live"]["base_config_path"] == "/tmp/base_config.json"
     # ensure key from template was added
-    assert "close_grid_markup_end" in result["bot"]["long"]
+    assert "strategy" in result["bot"]["long"]
+    assert "trailing_grid" in result["bot"]["long"]["strategy"]
 
 
 def test_normalize_position_counts_rounds_values():
@@ -176,8 +192,8 @@ def test_normalize_position_counts_rounds_values():
 
     _normalize_position_counts(config)
 
-    assert config["bot"]["long"]["n_positions"] == 4
-    assert config["bot"]["short"]["n_positions"] == 1
+    assert config["bot"]["long"]["risk"]["n_positions"] == 4
+    assert config["bot"]["short"]["risk"]["n_positions"] == 1
 
 
 def test_apply_non_live_adjustments_sorts_and_filters():
@@ -190,7 +206,7 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     config["optimize"][
         "limits"
     ] = "--lower_bound_drawdown_worst 0.3 --penalize_if_lower_than_gain_btc 0.1"
-    config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] = [0.1, 0.05]
+    config["optimize"]["bounds"]["long"]["strategy"]["trailing_grid"]["entry_grid_spacing_pct"] = [0.1, 0.05]
 
     _apply_non_live_adjustments(config, verbose=False)
 
@@ -211,7 +227,7 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     assert gain_limit is not None
     assert gain_limit["penalize_if"] == "less_than"
     assert gain_limit["value"] == pytest.approx(0.1)
-    assert config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] == [0.05, 0.1]
+    assert _bound(config, "long", "strategy", "trailing_grid", "entry_grid_spacing_pct") == [0.05, 0.1]
     assert config["live"]["approved_coins"]["short"] == ["btc", "eth"]
 
 
@@ -220,7 +236,7 @@ def test_apply_non_live_adjustments_supports_legacy_coins_file():
     config["live"]["approved_coins"] = "configs/approved_coins_topmcap.json"
     config["live"]["ignored_coins"] = {"long": [], "short": []}
     config["live"]["empty_means_all_approved"] = False
-    config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] = [0.1, 0.2]
+    config["optimize"]["bounds"]["long"]["strategy"]["trailing_grid"]["entry_grid_spacing_pct"] = [0.1, 0.2]
     config["backtest"]["end_date"] = "2023-01-01"
     _apply_non_live_adjustments(config, verbose=False)
     with open("configs/approved_coins.json") as fp:
@@ -502,14 +518,15 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     compiled = compile_runtime_config(config, runtime="live")
 
     assert compiled["bot"]["long"]["filter_volume_ema_span"] == config["bot"]["long"][
-        "forager_volume_ema_span"
+        "forager"
+    ]["volume_ema_span"]
+    assert compiled["bot"]["long"]["forager_volume_ema_span"] == config["bot"]["long"]["forager"][
+        "volume_ema_span"
     ]
     assert compiled["bot"]["long"]["filter_volatility_ema_span"] == config["bot"]["long"][
-        "forager_volatility_ema_span"
-    ]
-    assert compiled["optimize"]["bounds"]["long_filter_volume_ema_span"] == config["optimize"][
-        "bounds"
-    ]["long_forager_volume_ema_span"]
+        "forager"
+    ]["volatility_ema_span"]
+    assert _strategy_side(compiled, "long")["ema_span_0"] == _strategy_side(config, "long")["ema_span_0"]
 
 
 def test_project_config_prunes_unrelated_sections():
@@ -522,6 +539,7 @@ def test_project_config_prunes_unrelated_sections():
     assert "monitor" in projected
     assert "live" in projected
     assert "bot" in projected
+    assert "strategy" in projected["bot"]["long"]
 
 
 def test_format_config_emits_coalesced_summary_without_leaf_noise(caplog):
@@ -543,7 +561,7 @@ def test_load_example_config_avoids_leaf_add_remove_log_churn(caplog):
 
     messages = [rec.message for rec in caplog.records]
     assert not any("Removed unused key" in msg for msg in messages)
-    assert not any("Added missing optimize.bounds.long_" in msg for msg in messages)
+    assert not any("Added missing optimize.bounds.long." in msg for msg in messages)
 
 
 def test_update_config_with_args_updates_coin_sources():
@@ -720,7 +738,7 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "--hedge-mode Y/N, -hm Y/N" not in help_text
     assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" not in help_text
     assert "--optimize_population_size" not in help_text
-    assert "--optimize.bounds.long_close_grid_markup_end" not in help_text
+    assert "--optimize.bounds.long.strategy.trailing_grid.close_grid_markup_end" not in help_text
     assert "Optimize DEAP:" not in help_text
     assert "Optimize Pymoo:" not in help_text
 
@@ -730,7 +748,7 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     help_text = _format_parser_help_with_config("optimize", config, help_all=True)
 
     assert "Optimize Bounds:" in help_text
-    assert "--optimize.bounds.long_close_grid_markup_end MIN,MAX[,STEP]" in help_text
+    assert "--optimize.bounds.long.strategy.trailing_grid.close_grid_markup_end MIN,MAX[,STEP]" in help_text
     assert "--limits JSON_OR_HJSON" in help_text
     assert "-l SPEC, --limit SPEC" in help_text
     assert "--hedge-mode Y/N, -hm Y/N" in help_text

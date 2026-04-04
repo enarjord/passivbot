@@ -19,31 +19,31 @@ pub struct EntryPeekHints {
 }
 
 mod core {
-    use crate::closes::{
-        calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
-    };
     use crate::coin_selection::{
         select_forager_candidates, ForagerCandidate, ForagerPositionSide, ForagerSelectionConfig,
         ForagerSelectionError,
     };
     use crate::constants::{LONG, SHORT};
-    use crate::entries::{
-        calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
-        calc_next_entry_short,
-    };
+    use crate::entries::calc_min_entry_qty;
     use crate::risk::{
         calc_twel_enforcer_actions, calc_unstucking_action, GateEntriesPosition,
         TwelEnforcerInputPosition, UnstuckPositionInput,
     };
+    use crate::strategies::{
+        generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
+        strategy_entry_volatility_span_hours, strategy_initial_entry_offset, NextStepHint,
+        PeekBehavior, StrategyKind, StrategyRequest, StrategySide,
+    };
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
-        StateParams, TrailingPriceBundle,
+        RuntimeBudgetState, StateParams, TrailingPriceBundle,
     };
     use crate::utils::{
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
         calc_pnl_short, calc_pside_price_diff_int, calc_wallet_exposure, round_, round_dn,
     };
     use serde::{Deserialize, Serialize};
+    use serde_json::Value;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
@@ -235,6 +235,8 @@ mod core {
         /// When no position exists on either side, the side closer to its EMA entry band wins.
         #[serde(default = "default_hedge_mode")]
         pub hedge_mode: bool,
+        #[serde(default)]
+        pub strategy_kind: StrategyKind,
     }
 
     fn default_hedge_mode() -> bool {
@@ -259,6 +261,10 @@ mod core {
         pub trailing: TrailingPriceBundle,
         /// Per-symbol/per-pside params after applying coin_overrides.
         pub bot_params: BotParams,
+        #[serde(default)]
+        pub strategy_params: Option<Value>,
+        #[serde(default)]
+        pub runtime_budget: Option<RuntimeBudgetState>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,12 +327,14 @@ mod core {
                 | CloseAutoReduceTwelLong
                 | ClosePanicLong
                 | CloseAutoReduceWelLong
+                | CloseEmaAnchorLong
                 | CloseGridShort
                 | CloseTrailingShort
                 | CloseUnstuckShort
                 | CloseAutoReduceTwelShort
                 | ClosePanicShort
                 | CloseAutoReduceWelShort
+                | CloseEmaAnchorShort
         )
     }
 
@@ -433,13 +441,14 @@ mod core {
     fn derive_ema_bands(
         symbol_idx: usize,
         emas: &EmaBundle,
-        bot: &BotParams,
+        strategy_params: &crate::strategies::StrategyParams,
     ) -> Result<EMABands, OrchestratorError> {
-        let ema0 = ema_lookup(&emas.m1.close, bot.ema_span_0)
+        let (ema_span_0, ema_span_1) = strategy_ema_spans(strategy_params);
+        let ema0 = ema_lookup(&emas.m1.close, ema_span_0)
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
-        let ema1 = ema_lookup(&emas.m1.close, bot.ema_span_1)
+        let ema1 = ema_lookup(&emas.m1.close, ema_span_1)
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
-        let ema2_span = (bot.ema_span_0 * bot.ema_span_1).sqrt();
+        let ema2_span = (ema_span_0 * ema_span_1).sqrt();
         let ema2 = ema_lookup(&emas.m1.close, ema2_span)
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
         let lower = ema0.min(ema1).min(ema2);
@@ -456,9 +465,11 @@ mod core {
     fn derive_entry_volatility_logrange_ema_1h(
         symbol_idx: usize,
         emas: &EmaBundle,
-        bot: &BotParams,
+        strategy_params: &crate::strategies::StrategyParams,
     ) -> Result<f64, OrchestratorError> {
-        let span = bot.entry_volatility_ema_span_hours;
+        let Some(span) = strategy_entry_volatility_span_hours(strategy_params) else {
+            return Ok(0.0);
+        };
         if span <= 0.0 {
             return Ok(0.0);
         }
@@ -502,11 +513,39 @@ mod core {
         Ok(value)
     }
 
+    fn fallback_configured_wallet_exposure_limit(bot: &BotParams) -> f64 {
+        if bot.wallet_exposure_limit > 0.0 {
+            bot.wallet_exposure_limit
+        } else if bot.n_positions > 0 {
+            bot.total_wallet_exposure_limit / bot.n_positions as f64
+        } else {
+            0.0
+        }
+    }
+
+    fn resolve_runtime_budget(
+        side: &SymbolSideInput,
+        effective_n_positions: usize,
+    ) -> RuntimeBudgetState {
+        if let Some(runtime_budget) = side.runtime_budget.clone() {
+            return runtime_budget;
+        }
+        let configured_wallet_exposure_limit =
+            fallback_configured_wallet_exposure_limit(&side.bot_params);
+        RuntimeBudgetState {
+            configured_wallet_exposure_limit,
+            effective_wallet_exposure_limit: configured_wallet_exposure_limit,
+            configured_n_positions: side.bot_params.n_positions,
+            effective_n_positions,
+        }
+    }
+
     fn effective_min_cost_is_low_enough(
         balance: f64,
         filter_enabled: bool,
         effective_min_cost: f64,
         bot: &BotParams,
+        runtime_budget: &RuntimeBudgetState,
     ) -> bool {
         if !filter_enabled {
             return true;
@@ -518,7 +557,7 @@ mod core {
         {
             return false;
         }
-        let base_limit = bot.wallet_exposure_limit;
+        let base_limit = runtime_budget.effective_wallet_exposure_limit;
         let allowance_pct = bot.risk_we_excess_allowance_pct;
         let allowance_multiplier = 1.0 + allowance_pct.max(0.0);
         let effective_limit = base_limit * allowance_multiplier;
@@ -543,17 +582,6 @@ mod core {
             calc_order_price_diff_bid(order.price, market_price)
         } else {
             calc_order_price_diff_ask(order.price, market_price)
-        }
-    }
-
-    #[inline]
-    fn would_fill_next_candle(next_low: f64, next_high: f64, qty: f64, price: f64) -> bool {
-        if qty > 0.0 {
-            next_low < price
-        } else if qty < 0.0 {
-            next_high > price
-        } else {
-            false
         }
     }
 
@@ -1001,9 +1029,11 @@ mod core {
     fn build_forager_candidates_into(
         symbols: &[SymbolInput],
         pside: PositionSide,
+        strategy_kind: StrategyKind,
         hedge_mode: bool,
         filter_enabled: bool,
         balance: f64,
+        effective_n_positions: usize,
         active_flags: Option<&[bool]>,
         cfg: &ForagerSelectionConfig,
         out: &mut Vec<ForagerCandidate>,
@@ -1018,6 +1048,15 @@ mod core {
                 PositionSide::Long => &s.long,
                 PositionSide::Short => &s.short,
             };
+            let strategy_params = parse_strategy_params(
+                strategy_kind,
+                side.strategy_params.as_ref(),
+                &side.bot_params,
+            )
+            .map_err(|_| OrchestratorError::NonFiniteInput {
+                field: "strategy_params",
+                symbol_idx: Some(s.symbol_idx),
+            })?;
             // For selection of coins to occupy available slots for initial entries:
             // - We rank across all coins (including those with positions), matching legacy.
             // - We exclude modes which categorically block initial entries when `psize == 0.0`.
@@ -1036,6 +1075,7 @@ mod core {
                     filter_enabled,
                     s.effective_min_cost,
                     &side.bot_params,
+                    &resolve_runtime_budget(side, effective_n_positions),
                 );
             if !enabled {
                 out.push(ForagerCandidate {
@@ -1081,7 +1121,7 @@ mod core {
             };
             let (bid, ask, ema_lower, ema_upper, entry_initial_ema_dist) = if ema_readiness_required
             {
-                let ema_bands = match derive_ema_bands(s.symbol_idx, &s.emas, &side.bot_params) {
+                let ema_bands = match derive_ema_bands(s.symbol_idx, &s.emas, &strategy_params) {
                     Ok(v) => v,
                     Err(OrchestratorError::MissingEma { .. })
                     | Err(OrchestratorError::NonFiniteInput {
@@ -1102,10 +1142,11 @@ mod core {
                     }
                     Err(err) => return Err(err),
                 };
+                let entry_initial_ema_dist = strategy_initial_entry_offset(&strategy_params);
                 let entry_initial_ema_dist = match require_forager_input(
                     s.symbol_idx,
                     "entry_initial_ema_dist",
-                    side.bot_params.entry_initial_ema_dist,
+                    entry_initial_ema_dist,
                 ) {
                     Ok(v) => v,
                     Err(_) => {
@@ -1206,6 +1247,42 @@ mod core {
             Some(TradingMode::GracefulStop) if has_pos => TradingMode::Normal,
             Some(m) => m,
             None => TradingMode::Normal,
+        }
+    }
+
+    fn strategy_kind_for_symbol_side(global: &OrchestratorGlobal) -> StrategyKind {
+        global.strategy_kind
+    }
+
+    fn strategy_params_for_symbol_side(
+        global: &OrchestratorGlobal,
+        side: &SymbolSideInput,
+    ) -> Result<crate::strategies::StrategyParams, OrchestratorError> {
+        parse_strategy_params(
+            strategy_kind_for_symbol_side(global),
+            side.strategy_params.as_ref(),
+            &side.bot_params,
+        )
+        .map_err(|_| OrchestratorError::NonFiniteInput {
+            field: "strategy_params",
+            symbol_idx: None,
+        })
+    }
+
+    fn append_strategy_orders_as_ideal(
+        target: &mut Vec<IdealOrder>,
+        orders: Vec<crate::types::Order>,
+        symbol_idx: usize,
+        pside: PositionSide,
+    ) {
+        for order in orders {
+            target.push(IdealOrder {
+                symbol_idx,
+                pside,
+                qty: order.qty,
+                price: order.price,
+                order_type: order.order_type,
+            });
         }
     }
 
@@ -1650,9 +1727,11 @@ mod core {
                 build_forager_candidates_into(
                     &input.symbols,
                     PositionSide::Long,
+                    input.global.strategy_kind,
                     input.global.hedge_mode,
                     input.global.filter_by_min_effective_cost,
                     input.balance,
+                    enp_long,
                     Some(actives_long),
                     &cfg,
                     &mut workspace.features,
@@ -1716,9 +1795,11 @@ mod core {
                 build_forager_candidates_into(
                     &input.symbols,
                     PositionSide::Short,
+                    input.global.strategy_kind,
                     input.global.hedge_mode,
                     input.global.filter_by_min_effective_cost,
                     input.balance,
+                    enp_short,
                     Some(actives_short),
                     &cfg,
                     &mut workspace.features,
@@ -1792,14 +1873,34 @@ mod core {
                     }
 
                     // Both sides are eligible - choose based on EMA band distance.
-                    let ema_bands_long = derive_ema_bands(idx, &s.emas, &s.long.bot_params);
-                    let ema_bands_short = derive_ema_bands(idx, &s.emas, &s.short.bot_params);
+                    let strategy_params_long =
+                        strategy_params_for_symbol_side(&input.global, &s.long);
+                    let strategy_params_short =
+                        strategy_params_for_symbol_side(&input.global, &s.short);
+                    let ema_bands_long = strategy_params_long
+                        .as_ref()
+                        .ok()
+                        .and_then(|params| derive_ema_bands(idx, &s.emas, params).ok());
+                    let ema_bands_short = strategy_params_short
+                        .as_ref()
+                        .ok()
+                        .and_then(|params| derive_ema_bands(idx, &s.emas, params).ok());
 
-                    if let (Ok(bands_long), Ok(bands_short)) = (ema_bands_long, ema_bands_short) {
+                    if let (
+                        Some(bands_long),
+                        Some(bands_short),
+                        Ok(params_long),
+                        Ok(params_short),
+                    ) = (
+                        ema_bands_long,
+                        ema_bands_short,
+                        strategy_params_long,
+                        strategy_params_short,
+                    ) {
                         let entry_threshold_long =
-                            bands_long.lower * (1.0 - s.long.bot_params.entry_initial_ema_dist);
-                        let entry_threshold_short =
-                            bands_short.upper * (1.0 + s.short.bot_params.entry_initial_ema_dist);
+                            bands_long.lower * (1.0 - strategy_initial_entry_offset(&params_long));
+                        let entry_threshold_short = bands_short.upper
+                            * (1.0 + strategy_initial_entry_offset(&params_short));
 
                         let dist_long = entry_threshold_long / s.order_book.bid - 1.0;
                         let dist_short = 1.0 - entry_threshold_short / s.order_book.ask;
@@ -1863,6 +1964,7 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.long.bot_params,
+                        &resolve_runtime_budget(&s.long, enp_long),
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -1882,13 +1984,14 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let ema_bands =
-                            derive_ema_bands(s.symbol_idx, &s.emas, &s.long.bot_params)?;
+                        let strategy_params =
+                            strategy_params_for_symbol_side(&input.global, &s.long)?;
+                        let ema_bands = derive_ema_bands(s.symbol_idx, &s.emas, &strategy_params)?;
                         let entry_volatility_logrange_ema_1h =
                             derive_entry_volatility_logrange_ema_1h(
                                 s.symbol_idx,
                                 &s.emas,
-                                &s.long.bot_params,
+                                &strategy_params,
                             )?;
                         let state = StateParams {
                             balance: input.balance,
@@ -1896,200 +1999,43 @@ mod core {
                             ema_bands,
                             entry_volatility_logrange_ema_1h,
                         };
-
-                        if wants_entries {
-                            if let Some(hints) = input.peek_hints.as_ref() {
-                                let expand_entries = hints.expand_grid_long.contains(&s.symbol_idx);
-                                if expand_entries {
-                                    for e in calc_entries_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    ) {
-                                        if e.qty != 0.0 {
-                                            entries.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Long,
-                                                qty: e.qty,
-                                                price: e.price,
-                                                order_type: e.order_type,
-                                            });
-                                        }
-                                    }
-                                } else {
-                                    let e = calc_next_entry_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    );
-                                    if e.qty != 0.0 {
-                                        entries.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Long,
-                                            qty: e.qty,
-                                            price: e.price,
-                                            order_type: e.order_type,
-                                        });
-                                    }
-                                }
-                            } else if let Some(nc) = s.next_candle.as_ref() {
-                                let e = calc_next_entry_long(
-                                    &s.exchange,
-                                    &state,
-                                    &s.long.bot_params,
-                                    &s.long.position,
-                                    &s.long.trailing,
-                                );
-                                let expand_entries = nc.tradable
-                                    && would_fill_next_candle(nc.low, nc.high, e.qty, e.price);
-                                if expand_entries {
-                                    for e in calc_entries_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    ) {
-                                        if e.qty != 0.0 {
-                                            entries.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Long,
-                                                qty: e.qty,
-                                                price: e.price,
-                                                order_type: e.order_type,
-                                            });
-                                        }
-                                    }
-                                } else if e.qty != 0.0 {
-                                    entries.push(IdealOrder {
-                                        symbol_idx: s.symbol_idx,
-                                        pside: PositionSide::Long,
-                                        qty: e.qty,
-                                        price: e.price,
-                                        order_type: e.order_type,
-                                    });
-                                }
-                            } else {
-                                for e in calc_entries_long(
-                                    &s.exchange,
-                                    &state,
-                                    &s.long.bot_params,
-                                    &s.long.position,
-                                    &s.long.trailing,
-                                ) {
-                                    if e.qty != 0.0 {
-                                        entries.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Long,
-                                            qty: e.qty,
-                                            price: e.price,
-                                            order_type: e.order_type,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-
-                        if wants_closes {
-                            if let Some(hints) = input.peek_hints.as_ref() {
-                                let expand_closes = hints.expand_close_long.contains(&s.symbol_idx);
-                                if expand_closes {
-                                    for c in calc_closes_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    ) {
-                                        if c.qty != 0.0 {
-                                            closes.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Long,
-                                                qty: c.qty,
-                                                price: c.price,
-                                                order_type: c.order_type,
-                                            });
-                                        }
-                                    }
-                                } else {
-                                    let c = calc_next_close_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    );
-                                    if c.qty != 0.0 {
-                                        closes.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Long,
-                                            qty: c.qty,
-                                            price: c.price,
-                                            order_type: c.order_type,
-                                        });
-                                    }
-                                }
-                            } else if let Some(nc) = s.next_candle.as_ref() {
-                                let c = calc_next_close_long(
-                                    &s.exchange,
-                                    &state,
-                                    &s.long.bot_params,
-                                    &s.long.position,
-                                    &s.long.trailing,
-                                );
-                                let expand_closes = nc.tradable
-                                    && would_fill_next_candle(nc.low, nc.high, c.qty, c.price);
-                                if expand_closes {
-                                    for c in calc_closes_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    ) {
-                                        if c.qty != 0.0 {
-                                            closes.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Long,
-                                                qty: c.qty,
-                                                price: c.price,
-                                                order_type: c.order_type,
-                                            });
-                                        }
-                                    }
-                                } else if c.qty != 0.0 {
-                                    closes.push(IdealOrder {
-                                        symbol_idx: s.symbol_idx,
-                                        pside: PositionSide::Long,
-                                        qty: c.qty,
-                                        price: c.price,
-                                        order_type: c.order_type,
-                                    });
-                                }
-                            } else {
-                                for c in calc_closes_long(
-                                    &s.exchange,
-                                    &state,
-                                    &s.long.bot_params,
-                                    &s.long.position,
-                                    &s.long.trailing,
-                                ) {
-                                    if c.qty != 0.0 {
-                                        closes.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Long,
-                                            qty: c.qty,
-                                            price: c.price,
-                                            order_type: c.order_type,
-                                        });
-                                    }
-                                }
-                            }
-                        }
+                        let runtime_budget = resolve_runtime_budget(&s.long, enp_long);
+                        let generated = generate_strategy_orders(
+                            strategy_kind_for_symbol_side(&input.global),
+                            StrategySide::Long,
+                            StrategyRequest {
+                                wants_entries,
+                                wants_closes,
+                                exchange: &s.exchange,
+                                state: &state,
+                                bot_params: &s.long.bot_params,
+                                strategy_params: &strategy_params,
+                                runtime_budget,
+                                position: &s.long.position,
+                                trailing: &s.long.trailing,
+                                next_candle: s.next_candle.as_ref().map(|nc| NextStepHint {
+                                    low: nc.low,
+                                    high: nc.high,
+                                    tradable: nc.tradable,
+                                }),
+                                peek: input.peek_hints.as_ref().map(|hints| PeekBehavior {
+                                    expand_entries: hints.expand_grid_long.contains(&s.symbol_idx),
+                                    expand_closes: hints.expand_close_long.contains(&s.symbol_idx),
+                                }),
+                            },
+                        );
+                        append_strategy_orders_as_ideal(
+                            &mut entries,
+                            generated.entries,
+                            s.symbol_idx,
+                            PositionSide::Long,
+                        );
+                        append_strategy_orders_as_ideal(
+                            &mut closes,
+                            generated.closes,
+                            s.symbol_idx,
+                            PositionSide::Long,
+                        );
                     }
                 }
 
@@ -2135,6 +2081,7 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.short.bot_params,
+                        &resolve_runtime_budget(&s.short, enp_short),
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -2154,13 +2101,14 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let ema_bands =
-                            derive_ema_bands(s.symbol_idx, &s.emas, &s.short.bot_params)?;
+                        let strategy_params =
+                            strategy_params_for_symbol_side(&input.global, &s.short)?;
+                        let ema_bands = derive_ema_bands(s.symbol_idx, &s.emas, &strategy_params)?;
                         let entry_volatility_logrange_ema_1h =
                             derive_entry_volatility_logrange_ema_1h(
                                 s.symbol_idx,
                                 &s.emas,
-                                &s.short.bot_params,
+                                &strategy_params,
                             )?;
                         let state = StateParams {
                             balance: input.balance,
@@ -2168,202 +2116,43 @@ mod core {
                             ema_bands,
                             entry_volatility_logrange_ema_1h,
                         };
-
-                        if wants_entries {
-                            if let Some(hints) = input.peek_hints.as_ref() {
-                                let expand_entries =
-                                    hints.expand_grid_short.contains(&s.symbol_idx);
-                                if expand_entries {
-                                    for e in calc_entries_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    ) {
-                                        if e.qty != 0.0 {
-                                            entries.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Short,
-                                                qty: e.qty,
-                                                price: e.price,
-                                                order_type: e.order_type,
-                                            });
-                                        }
-                                    }
-                                } else {
-                                    let e = calc_next_entry_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    );
-                                    if e.qty != 0.0 {
-                                        entries.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Short,
-                                            qty: e.qty,
-                                            price: e.price,
-                                            order_type: e.order_type,
-                                        });
-                                    }
-                                }
-                            } else if let Some(nc) = s.next_candle.as_ref() {
-                                let e = calc_next_entry_short(
-                                    &s.exchange,
-                                    &state,
-                                    &s.short.bot_params,
-                                    &s.short.position,
-                                    &s.short.trailing,
-                                );
-                                let expand_entries = nc.tradable
-                                    && would_fill_next_candle(nc.low, nc.high, e.qty, e.price);
-                                if expand_entries {
-                                    for e in calc_entries_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    ) {
-                                        if e.qty != 0.0 {
-                                            entries.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Short,
-                                                qty: e.qty,
-                                                price: e.price,
-                                                order_type: e.order_type,
-                                            });
-                                        }
-                                    }
-                                } else if e.qty != 0.0 {
-                                    entries.push(IdealOrder {
-                                        symbol_idx: s.symbol_idx,
-                                        pside: PositionSide::Short,
-                                        qty: e.qty,
-                                        price: e.price,
-                                        order_type: e.order_type,
-                                    });
-                                }
-                            } else {
-                                for e in calc_entries_short(
-                                    &s.exchange,
-                                    &state,
-                                    &s.short.bot_params,
-                                    &s.short.position,
-                                    &s.short.trailing,
-                                ) {
-                                    if e.qty != 0.0 {
-                                        entries.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Short,
-                                            qty: e.qty,
-                                            price: e.price,
-                                            order_type: e.order_type,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-
-                        if wants_closes {
-                            if let Some(hints) = input.peek_hints.as_ref() {
-                                let expand_closes =
-                                    hints.expand_close_short.contains(&s.symbol_idx);
-                                if expand_closes {
-                                    for c in calc_closes_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    ) {
-                                        if c.qty != 0.0 {
-                                            closes.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Short,
-                                                qty: c.qty,
-                                                price: c.price,
-                                                order_type: c.order_type,
-                                            });
-                                        }
-                                    }
-                                } else {
-                                    let c = calc_next_close_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    );
-                                    if c.qty != 0.0 {
-                                        closes.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Short,
-                                            qty: c.qty,
-                                            price: c.price,
-                                            order_type: c.order_type,
-                                        });
-                                    }
-                                }
-                            } else if let Some(nc) = s.next_candle.as_ref() {
-                                let c = calc_next_close_short(
-                                    &s.exchange,
-                                    &state,
-                                    &s.short.bot_params,
-                                    &s.short.position,
-                                    &s.short.trailing,
-                                );
-                                let expand_closes = nc.tradable
-                                    && would_fill_next_candle(nc.low, nc.high, c.qty, c.price);
-                                if expand_closes {
-                                    for c in calc_closes_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    ) {
-                                        if c.qty != 0.0 {
-                                            closes.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Short,
-                                                qty: c.qty,
-                                                price: c.price,
-                                                order_type: c.order_type,
-                                            });
-                                        }
-                                    }
-                                } else if c.qty != 0.0 {
-                                    closes.push(IdealOrder {
-                                        symbol_idx: s.symbol_idx,
-                                        pside: PositionSide::Short,
-                                        qty: c.qty,
-                                        price: c.price,
-                                        order_type: c.order_type,
-                                    });
-                                }
-                            } else {
-                                for c in calc_closes_short(
-                                    &s.exchange,
-                                    &state,
-                                    &s.short.bot_params,
-                                    &s.short.position,
-                                    &s.short.trailing,
-                                ) {
-                                    if c.qty != 0.0 {
-                                        closes.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Short,
-                                            qty: c.qty,
-                                            price: c.price,
-                                            order_type: c.order_type,
-                                        });
-                                    }
-                                }
-                            }
-                        }
+                        let runtime_budget = resolve_runtime_budget(&s.short, enp_short);
+                        let generated = generate_strategy_orders(
+                            strategy_kind_for_symbol_side(&input.global),
+                            StrategySide::Short,
+                            StrategyRequest {
+                                wants_entries,
+                                wants_closes,
+                                exchange: &s.exchange,
+                                state: &state,
+                                bot_params: &s.short.bot_params,
+                                strategy_params: &strategy_params,
+                                runtime_budget,
+                                position: &s.short.position,
+                                trailing: &s.short.trailing,
+                                next_candle: s.next_candle.as_ref().map(|nc| NextStepHint {
+                                    low: nc.low,
+                                    high: nc.high,
+                                    tradable: nc.tradable,
+                                }),
+                                peek: input.peek_hints.as_ref().map(|hints| PeekBehavior {
+                                    expand_entries: hints.expand_grid_short.contains(&s.symbol_idx),
+                                    expand_closes: hints.expand_close_short.contains(&s.symbol_idx),
+                                }),
+                            },
+                        );
+                        append_strategy_orders_as_ideal(
+                            &mut entries,
+                            generated.entries,
+                            s.symbol_idx,
+                            PositionSide::Short,
+                        );
+                        append_strategy_orders_as_ideal(
+                            &mut closes,
+                            generated.closes,
+                            s.symbol_idx,
+                            PositionSide::Short,
+                        );
                     }
                 }
 
@@ -2385,19 +2174,21 @@ mod core {
             }
             let sym = &input.symbols[s.symbol_idx];
             let bot = &sym.long.bot_params;
+            let runtime_budget = resolve_runtime_budget(&sym.long, enp_long);
             let enabled = bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
                 && bot.unstuck_threshold > 0.0;
             if !enabled {
                 continue;
             }
-            let ema_bands = derive_ema_bands(s.symbol_idx, &sym.emas, bot)?;
+            let strategy_params = strategy_params_for_symbol_side(&input.global, &sym.long)?;
+            let ema_bands = derive_ema_bands(s.symbol_idx, &sym.emas, &strategy_params)?;
             workspace.unstuck_inputs.push(UnstuckPositionInput {
                 idx: s.symbol_idx,
                 side: LONG,
                 position_size: s.pos.size,
                 position_price: s.pos.price,
-                wallet_exposure_limit: bot.wallet_exposure_limit,
+                wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
                 risk_we_excess_allowance_pct: bot.risk_we_excess_allowance_pct,
                 unstuck_threshold: bot.unstuck_threshold,
                 unstuck_close_pct: bot.unstuck_close_pct,
@@ -2418,19 +2209,21 @@ mod core {
             }
             let sym = &input.symbols[s.symbol_idx];
             let bot = &sym.short.bot_params;
+            let runtime_budget = resolve_runtime_budget(&sym.short, enp_short);
             let enabled = bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
                 && bot.unstuck_threshold > 0.0;
             if !enabled {
                 continue;
             }
-            let ema_bands = derive_ema_bands(s.symbol_idx, &sym.emas, bot)?;
+            let strategy_params = strategy_params_for_symbol_side(&input.global, &sym.short)?;
+            let ema_bands = derive_ema_bands(s.symbol_idx, &sym.emas, &strategy_params)?;
             workspace.unstuck_inputs.push(UnstuckPositionInput {
                 idx: s.symbol_idx,
                 side: SHORT,
                 position_size: s.pos.size,
                 position_price: s.pos.price,
-                wallet_exposure_limit: bot.wallet_exposure_limit,
+                wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
                 risk_we_excess_allowance_pct: bot.risk_we_excess_allowance_pct,
                 unstuck_threshold: bot.unstuck_threshold,
                 unstuck_close_pct: bot.unstuck_close_pct,
@@ -2491,13 +2284,13 @@ mod core {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
-                let bot = &sym.long.bot_params;
+                let runtime_budget = resolve_runtime_budget(&sym.long, enp_long);
                 workspace.twel_positions.push(TwelEnforcerInputPosition {
                     idx: s.symbol_idx,
                     position_size: s.pos.size,
                     position_price: s.pos.price,
                     market_price: sym.order_book.bid,
-                    base_wallet_exposure_limit: bot.wallet_exposure_limit,
+                    base_wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
                     c_mult: sym.exchange.c_mult,
                     qty_step: sym.exchange.qty_step,
                     price_step: sym.exchange.price_step,
@@ -2547,13 +2340,13 @@ mod core {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
-                let bot = &sym.short.bot_params;
+                let runtime_budget = resolve_runtime_budget(&sym.short, enp_short);
                 workspace.twel_positions.push(TwelEnforcerInputPosition {
                     idx: s.symbol_idx,
                     position_size: s.pos.size,
                     position_price: s.pos.price,
                     market_price: sym.order_book.ask,
-                    base_wallet_exposure_limit: bot.wallet_exposure_limit,
+                    base_wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
                     c_mult: sym.exchange.c_mult,
                     qty_step: sym.exchange.qty_step,
                     price_step: sym.exchange.price_step,
@@ -2815,6 +2608,7 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.long.bot_params,
+                        &resolve_runtime_budget(&s.long, enp_long),
                     );
                 let short_allow_initial = workspace.actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
@@ -2823,6 +2617,7 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.short.bot_params,
+                        &resolve_runtime_budget(&s.short, enp_short),
                     );
                 SymbolStateDiagnostic {
                     symbol_idx: s.symbol_idx,
@@ -2898,12 +2693,16 @@ mod core {
                     position: Position::default(),
                     trailing: TrailingPriceBundle::default(),
                     bot_params: bp.clone(),
+                    strategy_params: None,
+                    runtime_budget: None,
                 },
                 short: SymbolSideInput {
                     mode: None,
                     position: Position::default(),
                     trailing: TrailingPriceBundle::default(),
                     bot_params: bp,
+                    strategy_params: None,
+                    runtime_budget: None,
                 },
             }
         }
@@ -2922,6 +2721,7 @@ mod core {
                 sort_global: true,
                 global_bot_params: BotParamsPair::default(),
                 hedge_mode: true,
+                strategy_kind: StrategyKind::TrailingGrid,
             }
         }
 
@@ -3065,6 +2865,7 @@ mod core {
                         pair
                     },
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
@@ -3095,6 +2896,154 @@ mod core {
                 .filter(|o| o.pside == PositionSide::Long && !is_close_order_type(o.order_type))
                 .count();
             assert!(n_entries_fill > 1);
+        }
+
+        #[test]
+        fn adaptive_grid_long_entry_output_regression() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.bot_params.entry_initial_ema_dist = -0.01;
+            sym.short.bot_params.total_wallet_exposure_limit = 0.0;
+            sym.short.bot_params.n_positions = 0;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 1.0;
+            global_bp.long.n_positions = 1;
+            global_bp.short.total_wallet_exposure_limit = 0.0;
+            global_bp.short.n_positions = 0;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            let actual: Vec<(PositionSide, f64, f64, OrderType)> = out
+                .orders
+                .iter()
+                .map(|o| (o.pside, o.qty, o.price, o.order_type))
+                .collect();
+            let expected = vec![
+                (
+                    PositionSide::Long,
+                    1.0,
+                    100.0,
+                    OrderType::EntryInitialNormalLong,
+                ),
+                (
+                    PositionSide::Long,
+                    1.02,
+                    98.0,
+                    OrderType::EntryGridNormalLong,
+                ),
+                (
+                    PositionSide::Long,
+                    2.02,
+                    97.01,
+                    OrderType::EntryGridNormalLong,
+                ),
+                (
+                    PositionSide::Long,
+                    4.04,
+                    96.04,
+                    OrderType::EntryGridNormalLong,
+                ),
+                (
+                    PositionSide::Long,
+                    2.27,
+                    95.07,
+                    OrderType::EntryGridCroppedLong,
+                ),
+            ];
+            assert_eq!(actual, expected);
+        }
+
+        #[test]
+        fn adaptive_grid_short_entry_output_regression() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.bot_params.total_wallet_exposure_limit = 0.0;
+            sym.long.bot_params.n_positions = 0;
+            sym.short.bot_params.total_wallet_exposure_limit = 1.0;
+            sym.short.bot_params.n_positions = 1;
+            sym.short.bot_params.entry_initial_ema_dist = 0.01;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.0;
+            global_bp.long.n_positions = 0;
+            global_bp.short.total_wallet_exposure_limit = 1.0;
+            global_bp.short.n_positions = 1;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            let actual: Vec<(PositionSide, f64, f64, OrderType)> = out
+                .orders
+                .iter()
+                .map(|o| (o.pside, o.qty, o.price, o.order_type))
+                .collect();
+            let expected = vec![
+                (
+                    PositionSide::Short,
+                    -0.99,
+                    101.0,
+                    OrderType::EntryInitialNormalShort,
+                ),
+                (
+                    PositionSide::Short,
+                    -0.99,
+                    103.02,
+                    OrderType::EntryGridNormalShort,
+                ),
+                (
+                    PositionSide::Short,
+                    -1.98,
+                    104.06,
+                    OrderType::EntryGridNormalShort,
+                ),
+                (
+                    PositionSide::Short,
+                    -5.63,
+                    105.1,
+                    OrderType::EntryGridInflatedShort,
+                ),
+            ];
+            assert_eq!(actual, expected);
         }
 
         #[test]
@@ -3152,6 +3101,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3187,6 +3137,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3231,6 +3182,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3287,6 +3239,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -3340,6 +3293,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -3392,6 +3346,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -3438,6 +3393,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -3549,6 +3505,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: syms,
                 peek_hints: None,
@@ -3765,6 +3722,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp.clone(),
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
@@ -3835,6 +3793,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3893,6 +3852,7 @@ mod core {
                         sort_global: true,
                         global_bot_params: global_bp,
                         hedge_mode: true,
+                        strategy_kind: StrategyKind::TrailingGrid,
                     },
                     symbols: vec![sym],
                     peek_hints: None,
@@ -3955,6 +3915,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -4010,6 +3971,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -4071,6 +4033,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -4117,6 +4080,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym],
                 peek_hints: None,

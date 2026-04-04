@@ -4,6 +4,7 @@ use numpy::{PyArray1, PyArray3, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::{Py, PyResult, Python};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use strum_macros::{Display, EnumIter, EnumString};
 
@@ -294,6 +295,29 @@ pub struct BotParamsPair {
     pub short: BotParams,
 }
 
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeBudgetState {
+    pub configured_wallet_exposure_limit: f64,
+    pub effective_wallet_exposure_limit: f64,
+    pub configured_n_positions: usize,
+    pub effective_n_positions: usize,
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeBudgetStatePair {
+    pub long: RuntimeBudgetState,
+    pub short: RuntimeBudgetState,
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StrategyParamsPairValue {
+    pub long: Value,
+    pub short: Value,
+}
+
 fn default_hsl_enabled() -> bool {
     false
 }
@@ -376,27 +400,49 @@ impl ForagerScoreWeights {
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BotParams {
+    #[serde(default)]
     pub close_grid_markup_end: f64,
+    #[serde(default)]
     pub close_grid_markup_start: f64,
+    #[serde(default)]
     pub close_grid_qty_pct: f64,
+    #[serde(default)]
     pub close_trailing_retracement_pct: f64,
+    #[serde(default)]
     pub close_trailing_grid_ratio: f64,
+    #[serde(default)]
     pub close_trailing_qty_pct: f64,
+    #[serde(default)]
     pub close_trailing_threshold_pct: f64,
+    #[serde(default)]
     pub entry_grid_double_down_factor: f64,
+    #[serde(default)]
     pub entry_grid_spacing_volatility_weight: f64,
+    #[serde(default)]
     pub entry_grid_spacing_we_weight: f64,
+    #[serde(default)]
     pub entry_grid_spacing_pct: f64,
+    #[serde(default)]
     pub entry_volatility_ema_span_hours: f64,
+    #[serde(default)]
     pub entry_initial_ema_dist: f64,
+    #[serde(default)]
     pub entry_initial_qty_pct: f64,
+    #[serde(default)]
     pub entry_trailing_double_down_factor: f64,
+    #[serde(default)]
     pub entry_trailing_retracement_pct: f64,
+    #[serde(default)]
     pub entry_trailing_retracement_we_weight: f64,
+    #[serde(default)]
     pub entry_trailing_retracement_volatility_weight: f64,
+    #[serde(default)]
     pub entry_trailing_grid_ratio: f64,
+    #[serde(default)]
     pub entry_trailing_threshold_pct: f64,
+    #[serde(default)]
     pub entry_trailing_threshold_we_weight: f64,
+    #[serde(default)]
     pub entry_trailing_threshold_volatility_weight: f64,
     pub filter_volatility_ema_span: f64,
     pub filter_volume_ema_span: f64,
@@ -406,7 +452,9 @@ pub struct BotParams {
     pub forager_volume_drop_pct: f64,
     #[serde(default)]
     pub forager_score_weights: ForagerScoreWeights,
+    #[serde(default)]
     pub ema_span_0: f64,
+    #[serde(default)]
     pub ema_span_1: f64,
     #[serde(default = "default_hsl_enabled")]
     pub hsl_enabled: bool,
@@ -505,6 +553,10 @@ pub enum OrderType {
     ClosePanicShort = 23,
     CloseAutoReduceWelLong = 24,
     CloseAutoReduceWelShort = 25,
+    EntryEmaAnchorLong = 26,
+    CloseEmaAnchorLong = 27,
+    EntryEmaAnchorShort = 28,
+    CloseEmaAnchorShort = 29,
 
     Empty = 65535,
 }
@@ -539,6 +591,8 @@ impl OrderType {
                 | CloseAutoReduceTwelLong
                 | CloseAutoReduceWelLong
                 | ClosePanicLong
+                | EntryEmaAnchorLong
+                | CloseEmaAnchorLong
         )
     }
 }

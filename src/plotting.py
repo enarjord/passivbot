@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover
 
     Fore = _Dummy()
 from prettytable import PrettyTable
+from config.shared_bot import flatten_shared_bot_side
 from config_utils import dump_config
 from utils import make_get_filepath
 from pure_funcs import denumpyize, ts_to_date
@@ -945,7 +946,7 @@ def create_forager_hard_stop_drawdown_figure(
 
     def _resolve_pside_cfg(pside: str) -> dict:
         bot = ((config or {}).get("bot") or {})
-        pside_cfg = bot.get(pside) or {}
+        pside_cfg = flatten_shared_bot_side(bot.get(pside) or {})
         if not isinstance(pside_cfg, dict):
             return {}
         twel = float(pside_cfg.get("total_wallet_exposure_limit", 0.0) or 0.0)

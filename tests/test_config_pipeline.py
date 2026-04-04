@@ -11,6 +11,12 @@ from config import (
 )
 
 
+def _strategy_side(config, pside, kind=None):
+    if kind is None:
+        kind = config["live"]["strategy_kind"]
+    return config["bot"][pside]["strategy"][kind]
+
+
 @pytest.mark.parametrize(
     ("target", "expected_sections"),
     [
@@ -51,6 +57,12 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert "filter_volatility_ema_span" not in prepared["bot"]["long"]
     assert "long_filter_volume_ema_span" not in prepared["optimize"]["bounds"]
     assert "long_filter_volatility_ema_span" not in prepared["optimize"]["bounds"]
+    assert prepared["live"]["strategy_kind"] == "trailing_grid"
+    assert "ema_span_0" not in get_template_config()["bot"]["long"]
+    assert "entry_grid_spacing_pct" not in get_template_config()["bot"]["short"]
+    assert _strategy_side(prepared, "long")["ema_span_0"] == _strategy_side(
+        get_template_config(), "long", "trailing_grid"
+    )["ema_span_0"]
 
 
 def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_keys():
@@ -63,18 +75,76 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
 
     compiled = compile_runtime_config(canonical, runtime="optimize")
 
-    assert compiled["bot"]["long"]["forager_volume_ema_span"] == canonical["bot"]["long"]["forager_volume_ema_span"]
-    assert compiled["bot"]["long"]["filter_volume_ema_span"] == canonical["bot"]["long"]["forager_volume_ema_span"]
-    assert compiled["bot"]["long"]["filter_volatility_ema_span"] == canonical["bot"]["long"]["forager_volatility_ema_span"]
+    assert compiled["bot"]["long"]["forager_volume_ema_span"] == canonical["bot"]["long"]["forager"][
+        "volume_ema_span"
+    ]
+    assert compiled["bot"]["long"]["filter_volume_ema_span"] == canonical["bot"]["long"]["forager"][
+        "volume_ema_span"
+    ]
+    assert compiled["bot"]["long"]["filter_volatility_ema_span"] == canonical["bot"]["long"][
+        "forager"
+    ]["volatility_ema_span"]
     assert compiled["bot"]["long"]["filter_volatility_drop_pct"] == pytest.approx(0.0)
-    assert (
-        compiled["optimize"]["bounds"]["long_filter_volume_ema_span"]
-        == canonical["optimize"]["bounds"]["long_forager_volume_ema_span"]
-    )
-    assert (
-        compiled["optimize"]["bounds"]["long_filter_volatility_ema_span"]
-        == canonical["optimize"]["bounds"]["long_forager_volatility_ema_span"]
-    )
+    assert compiled["optimize"]["bounds"] == canonical["optimize"]["bounds"]
+    assert _strategy_side(compiled, "long")["ema_span_0"] == _strategy_side(canonical, "long")[
+        "ema_span_0"
+    ]
+
+
+def test_prepare_config_preserves_nested_strategy_namespace():
+    source = get_template_config()
+    source["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"] = 321.0
+    source["bot"]["short"]["strategy"]["trailing_grid"]["entry_grid_spacing_pct"] = 0.0123
+    source["live"].pop("strategy_kind", None)
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["live"]["strategy_kind"] == "trailing_grid"
+    assert _strategy_side(prepared, "long")["ema_span_0"] == pytest.approx(321.0)
+    assert _strategy_side(prepared, "short")["entry_grid_spacing_pct"] == pytest.approx(0.0123)
+
+
+def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
+    source = get_template_config()
+    source["live"]["strategy_kind"] = "ema_anchor"
+    source["bot"]["long"]["strategy"]["ema_anchor"] = {
+            "base_qty_pct": 0.02,
+            "ema_span_0": 55.0,
+            "ema_span_1": 144.0,
+            "offset": 0.003,
+            "offset_psize_weight": 0.2,
+    }
+    source["bot"]["short"]["strategy"]["ema_anchor"] = {
+            "base_qty_pct": 0.03,
+            "ema_span_0": 34.0,
+            "ema_span_1": 89.0,
+            "offset": 0.004,
+            "offset_psize_weight": 0.1,
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    compiled = compile_runtime_config(prepared, runtime="backtest")
+
+    assert prepared["live"]["strategy_kind"] == "ema_anchor"
+    assert _strategy_side(prepared, "long")["base_qty_pct"] == pytest.approx(0.02)
+    assert _strategy_side(prepared, "short")["offset"] == pytest.approx(0.004)
+    assert "base_qty_pct" not in compiled["bot"]["long"]
+    assert "offset" not in compiled["bot"]["short"]
+
+
+def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missing():
+    source = get_template_config()
+    source["live"]["strategy_kind"] = "ema_anchor"
+    source["bot"]["long"]["strategy"] = {}
+    source["bot"]["short"]["strategy"] = {}
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["live"]["strategy_kind"] == "ema_anchor"
+    assert _strategy_side(prepared, "long")["base_qty_pct"] == pytest.approx(0.01)
+    assert _strategy_side(prepared, "long")["ema_span_0"] == pytest.approx(200.0)
+    assert _strategy_side(prepared, "short")["offset"] == pytest.approx(0.002)
+    assert "base_qty_pct" not in prepared["bot"]["long"]
 
 
 def test_prepare_config_target_and_runtime_preserve_raw_metadata_and_record_steps():
@@ -100,6 +170,7 @@ def test_prepare_config_target_and_runtime_preserve_raw_metadata_and_record_step
     assert "backtest" not in prepared
     assert "optimize" not in prepared
     assert "monitor" in prepared
+    assert "strategy" in prepared["bot"]["long"]
 
 
 def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
@@ -113,7 +184,12 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
 
     template = get_template_config()
     assert prepared["backtest"]["market_order_slippage_pct"] == template["backtest"]["market_order_slippage_pct"]
-    assert prepared["bot"]["long"]["filter_volume_ema_span"] == template["bot"]["long"]["forager_volume_ema_span"]
+    assert prepared["bot"]["long"]["filter_volume_ema_span"] == template["bot"]["long"]["forager"][
+        "volume_ema_span"
+    ]
+    assert _strategy_side(prepared, "long")["ema_span_0"] == _strategy_side(
+        template, "long", "trailing_grid"
+    )["ema_span_0"]
     assert prepared["_raw"] == template
     assert prepared["_raw_effective"] == template
 

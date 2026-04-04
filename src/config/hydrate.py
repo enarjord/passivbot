@@ -6,6 +6,7 @@ from utils import format_end_date, normalize_coins_source, symbol_to_coin
 
 from .limits import _resolve_optimize_limits_for_load
 from .log_output import log_config_message
+from .optimize_bounds import sort_optimize_bounds_in_place
 from .scoring import extract_objective_specs
 from .schema import get_template_config
 from .tree_ops import add_missing_keys_recursively, remove_unused_keys_recursively
@@ -85,11 +86,6 @@ def sync_with_template(
         template["optimize"]["bounds"],
         result["optimize"]["bounds"],
         verbose=verbose,
-        preserve=[
-            (key,)
-            for key in result["optimize"]["bounds"]
-            if isinstance(key, str) and key.startswith("live_")
-        ],
         tracker=tracker,
     )
     remove_unused_keys_recursively(
@@ -207,9 +203,7 @@ def apply_non_live_adjustments(
         )
         if tracker is not None:
             tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
-    for key, value in sorted(result["optimize"]["bounds"].items()):
-        if isinstance(value, list):
-            if len(value) == 1:
-                result["optimize"]["bounds"][key] = [value[0], value[0]]
-            elif len(value) == 2:
-                result["optimize"]["bounds"][key] = sorted(value)
+    sort_optimize_bounds_in_place(
+        result["optimize"]["bounds"],
+        strategy_kind=result.get("live", {}).get("strategy_kind"),
+    )

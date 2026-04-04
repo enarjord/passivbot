@@ -357,7 +357,7 @@ def test_optimize_parser_accepts_short_limit_alias():
     assert args.limit_entries == ["adg_strategy_pnl_rebased > 0.0"]
 
 
-def test_optimize_parser_preserves_legacy_multi_char_short_flags_alongside_limit_alias():
+def test_optimize_parser_accepts_nested_bound_flags_alongside_limit_alias():
     parser = optimize.build_command_parser(
         prog="passivbot optimize",
         description="run optimizer",
@@ -404,10 +404,17 @@ def test_optimize_parser_preserves_legacy_multi_char_short_flags_alongside_limit
         dest="clear_limits",
     )
 
-    args = parser.parse_args(["-ltwel", "0", "-l", "adg_strategy_pnl_rebased>0.0"])
+    args = parser.parse_args(
+        [
+            "--optimize.bounds.long.risk.total_wallet_exposure_limit",
+            "0",
+            "-l",
+            "adg_strategy_pnl_rebased>0.0",
+        ]
+    )
 
     assert args.limit_entries == ["adg_strategy_pnl_rebased>0.0"]
-    assert getattr(args, "optimize.bounds.long_total_wallet_exposure_limit") == [0.0]
+    assert getattr(args, "optimize.bounds.long.risk.total_wallet_exposure_limit") == [0.0]
 
 
 class TestFormatObjectives:
@@ -926,7 +933,7 @@ class TestExtractConfigs:
             result = extract_configs(path)
             assert len(result) == 1
             assert "bot" in result[0]
-            assert result[0]["bot"]["long"]["forager_score_weights"]["volatility"] == 1.0
+            assert result[0]["bot"]["long"]["forager"]["score_weights"]["volatility"] == 1.0
         finally:
             os.unlink(path)
 

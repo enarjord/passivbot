@@ -7,11 +7,16 @@ use crate::orchestrator::{
     EmaBundle as OrchestratorEmaBundle, EmaTimeframeBundle as OrchestratorEmaTimeframeBundle,
     EntryPeekHints,
 };
+use crate::strategies::{
+    parse_strategy_params, strategy_ema_spans, strategy_entry_volatility_span_hours,
+    strategy_has_trailing, strategy_needs_log_range_1m, StrategyParams, TrailingGridParams,
+};
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
     BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities,
     EquityHardStopLossConfig, ExchangeParams, Fill, Order, OrderBook, OrderType, Position,
-    Positions, TrailingPriceBundle,
+    Positions, RuntimeBudgetState, RuntimeBudgetStatePair, StrategyParamsPairValue,
+    TrailingPriceBundle,
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
@@ -170,6 +175,12 @@ impl Default for HourBucket {
 pub struct EffectiveNPositions {
     pub long: usize,
     pub short: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct StrategyParamsPair {
+    long: StrategyParams,
+    short: StrategyParams,
 }
 
 impl EMAs {
@@ -417,6 +428,10 @@ pub struct Backtest<'a> {
     bot_params_master: BotParamsPair,
     bot_params: Vec<BotParamsPair>,
     bot_params_original: Vec<BotParamsPair>,
+    strategy_params_raw: Vec<StrategyParamsPairValue>,
+    strategy_params: Vec<StrategyParamsPair>,
+    strategy_kind: crate::strategies::StrategyKind,
+    runtime_budget: Vec<RuntimeBudgetStatePair>,
     configured_n_positions: EffectiveNPositions,
     effective_n_positions: EffectiveNPositions,
     exchange_params_list: Vec<ExchangeParams>,
@@ -698,6 +713,48 @@ fn calc_entry_balance_pct(params: &BotParams, effective_n_positions: usize) -> f
         / effective_n_positions as f64
 }
 
+fn configured_wallet_exposure_limit(params: &BotParams) -> f64 {
+    if params.wallet_exposure_limit > 0.0 {
+        params.wallet_exposure_limit
+    } else if params.n_positions > 0 {
+        params.total_wallet_exposure_limit / params.n_positions as f64
+    } else {
+        0.0
+    }
+}
+
+fn make_runtime_budget_state(
+    params: &BotParams,
+    effective_n_positions: usize,
+) -> RuntimeBudgetState {
+    let configured_wallet_exposure_limit = configured_wallet_exposure_limit(params);
+    RuntimeBudgetState {
+        configured_wallet_exposure_limit,
+        effective_wallet_exposure_limit: configured_wallet_exposure_limit,
+        configured_n_positions: params.n_positions,
+        effective_n_positions,
+    }
+}
+
+fn default_strategy_params_pair_from_bot_params(
+    bot_params: &BotParamsPair,
+) -> StrategyParamsPairValue {
+    let long = TrailingGridParams::from_bot_params(&bot_params.long).to_value();
+    let short = TrailingGridParams::from_bot_params(&bot_params.short).to_value();
+    StrategyParamsPairValue { long, short }
+}
+
+fn parse_strategy_params_pair(
+    strategy_kind: crate::strategies::StrategyKind,
+    raw: &StrategyParamsPairValue,
+    bot_params: &BotParamsPair,
+) -> Result<StrategyParamsPair, String> {
+    Ok(StrategyParamsPair {
+        long: parse_strategy_params(strategy_kind, Some(&raw.long), &bot_params.long)?,
+        short: parse_strategy_params(strategy_kind, Some(&raw.short), &bot_params.short)?,
+    })
+}
+
 impl<'a> Backtest<'a> {
     #[inline]
     fn snapshot_balance(&self) -> BalanceSnapshot {
@@ -803,13 +860,14 @@ impl<'a> Backtest<'a> {
         };
 
         let bp = self.bp(idx, side);
+        let runtime_budget = self.runtime_budget(idx, side);
         let ema_bands = self.emas[idx].compute_bands(side);
         let current_price = self.hlcvs_value(k, idx, CLOSE);
         let ex = &self.exchange_params_list[idx];
 
         let size_abs = position.size.abs();
         let allowance_multiplier = 1.0 + bp.risk_we_excess_allowance_pct.max(0.0);
-        let effective_wel = bp.wallet_exposure_limit * allowance_multiplier;
+        let effective_wel = runtime_budget.effective_wallet_exposure_limit * allowance_multiplier;
         let wallet_exposure = calc_wallet_exposure(ex.c_mult, balance, size_abs, position.price);
         let ema_price_target = match side {
             LONG => ema_bands.upper * (1.0 + bp.unstuck_ema_dist),
@@ -890,8 +948,8 @@ impl<'a> Backtest<'a> {
             ema_band_upper_bits: ema_bands.upper.to_bits(),
             ema_band_lower: ema_bands.lower,
             ema_band_lower_bits: ema_bands.lower.to_bits(),
-            wallet_exposure_limit: bp.wallet_exposure_limit,
-            wallet_exposure_limit_bits: bp.wallet_exposure_limit.to_bits(),
+            wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
+            wallet_exposure_limit_bits: runtime_budget.effective_wallet_exposure_limit.to_bits(),
             risk_we_excess_allowance_pct: bp.risk_we_excess_allowance_pct,
             unstuck_threshold: bp.unstuck_threshold,
             unstuck_close_pct: bp.unstuck_close_pct,
@@ -1081,8 +1139,6 @@ impl<'a> Backtest<'a> {
                 let mut mode_long: Option<orchestrator::TradingMode> = None;
                 let mut mode_short: Option<orchestrator::TradingMode> = None;
 
-                // Backtest delist behaviour: if a coin is delisted (ends early), switch to panic at the
-                // last valid candle so we force a close while the market is still "tradeable".
                 if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
                     if k >= delist_timestamp {
                         if pos_long.size != 0.0 {
@@ -1093,7 +1149,6 @@ impl<'a> Backtest<'a> {
                         }
                     }
                 } else {
-                    // Fallback: if data is already invalid and we still have a position, panic as well.
                     if !valid_now && pos_long.size != 0.0 {
                         mode_long = Some(orchestrator::TradingMode::Panic);
                     }
@@ -1102,7 +1157,6 @@ impl<'a> Backtest<'a> {
                     }
                 }
 
-                // filter_by_min_effective_cost => GracefulStop (blocks only initial entries).
                 if self.backtest_params.filter_by_min_effective_cost {
                     if !self.coin_passes_min_effective_cost(idx, LONG) && pos_long.size == 0.0 {
                         mode_long = Some(orchestrator::TradingMode::GracefulStop);
@@ -1118,38 +1172,28 @@ impl<'a> Backtest<'a> {
                     pos_short,
                 );
 
-                // Build EMA bundle (per-coin spans; must match how EMAs were computed).
                 let mut m1 = OrchestratorEmaTimeframeBundle::default();
                 let mut h1 = OrchestratorEmaTimeframeBundle::default();
 
-                // 1m close EMAs (3 spans) per pside
                 {
-                    let bp = &self.bot_params[idx].long;
-                    let mut spans = [
-                        bp.ema_span_0,
-                        bp.ema_span_1,
-                        (bp.ema_span_0 * bp.ema_span_1).sqrt(),
-                    ];
+                    let strategy = &self.strategy_params[idx].long;
+                    let (span0, span1) = strategy_ema_spans(strategy);
+                    let mut spans = [span0, span1, (span0 * span1).sqrt()];
                     spans.sort_by(|a, b| a.partial_cmp(b).unwrap());
                     for (span, value) in spans.into_iter().zip(self.emas[idx].long.into_iter()) {
                         m1.close.push((span, value));
                     }
                 }
                 {
-                    let bp = &self.bot_params[idx].short;
-                    let mut spans = [
-                        bp.ema_span_0,
-                        bp.ema_span_1,
-                        (bp.ema_span_0 * bp.ema_span_1).sqrt(),
-                    ];
+                    let strategy = &self.strategy_params[idx].short;
+                    let (span0, span1) = strategy_ema_spans(strategy);
+                    let mut spans = [span0, span1, (span0 * span1).sqrt()];
                     spans.sort_by(|a, b| a.partial_cmp(b).unwrap());
                     for (span, value) in spans.into_iter().zip(self.emas[idx].short.into_iter()) {
                         m1.close.push((span, value));
                     }
                 }
 
-                // 1m volume/log-range EMAs (used by forager); these are global by spec.
-                // We assume the spans match across coins (as the backtest EMA alphas were built per-coin).
                 let vol_span_long = self.bot_params_master.long.filter_volume_ema_span as f64;
                 let vol_span_short = self.bot_params_master.short.filter_volume_ema_span as f64;
                 let lr_span_long = self.bot_params_master.long.filter_volatility_ema_span as f64;
@@ -1183,16 +1227,17 @@ impl<'a> Backtest<'a> {
                 m1.log_range
                     .push((lr_span_short, self.emas[idx].log_range_short));
 
-                // 1h log-range EMA for grid spacing/trailing volatility weight (per-coin span).
+                if let Some(span) =
+                    strategy_entry_volatility_span_hours(&self.strategy_params[idx].long)
                 {
-                    let span = self.bot_params[idx].long.entry_volatility_ema_span_hours;
                     if span > 0.0 {
                         h1.log_range
                             .push((span, self.emas[idx].entry_volatility_logrange_ema_1h_long));
                     }
                 }
+                if let Some(span) =
+                    strategy_entry_volatility_span_hours(&self.strategy_params[idx].short)
                 {
-                    let span = self.bot_params[idx].short.entry_volatility_ema_span_hours;
                     if span > 0.0 {
                         h1.log_range
                             .push((span, self.emas[idx].entry_volatility_logrange_ema_1h_short));
@@ -1227,12 +1272,16 @@ impl<'a> Backtest<'a> {
                         position: pos_long,
                         trailing: trailing_long,
                         bot_params: self.bot_params[idx].long.clone(),
+                        strategy_params: Some(self.strategy_params_raw[idx].long.clone()),
+                        runtime_budget: Some(self.runtime_budget[idx].long.clone()),
                     },
                     short: orchestrator::SymbolSideInput {
                         mode: mode_short,
                         position: pos_short,
                         trailing: trailing_short,
                         bot_params: self.bot_params[idx].short.clone(),
+                        strategy_params: Some(self.strategy_params_raw[idx].short.clone()),
+                        runtime_budget: Some(self.runtime_budget[idx].short.clone()),
                     },
                 }
             })
@@ -1260,6 +1309,7 @@ impl<'a> Backtest<'a> {
                 sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
                 hedge_mode: self.backtest_params.hedge_mode,
+                strategy_kind: self.strategy_kind,
             },
             symbols,
             peek_hints,
@@ -1369,13 +1419,8 @@ impl<'a> Backtest<'a> {
                 .cloned()
                 .unwrap_or_default();
 
-            // Bot params are mostly static, but `wallet_exposure_limit` may be updated per
-            // timestep from the active denominator mode (fixed configured n_positions, or
-            // backtest tradability-driven denominator).
-            sym.long.bot_params.wallet_exposure_limit =
-                self.bot_params[idx].long.wallet_exposure_limit;
-            sym.short.bot_params.wallet_exposure_limit =
-                self.bot_params[idx].short.wallet_exposure_limit;
+            sym.long.runtime_budget = Some(self.runtime_budget[idx].long.clone());
+            sym.short.runtime_budget = Some(self.runtime_budget[idx].short.clone());
 
             let valid_now = self.coin_is_valid_at(idx, k);
             let mut mode_long: Option<orchestrator::TradingMode> = None;
@@ -1444,9 +1489,10 @@ impl<'a> Backtest<'a> {
                 }
                 1 => {
                     let span0 = sym.emas.h1.log_range[0].0;
-                    if (span0 - self.bot_params[idx].long.entry_volatility_ema_span_hours).abs()
-                        < 1e-12
-                    {
+                    let long_span =
+                        strategy_entry_volatility_span_hours(&self.strategy_params[idx].long)
+                            .unwrap_or(0.0);
+                    if (span0 - long_span).abs() < 1e-12 {
                         sym.emas.h1.log_range[0].1 =
                             self.emas[idx].entry_volatility_logrange_ema_1h_long;
                     } else {
@@ -1471,10 +1517,35 @@ impl<'a> Backtest<'a> {
         self.hlcvs[[row, col, feature]]
     }
 
+    #[allow(dead_code)]
     pub fn new(
         hlcvs: ArrayView3<'a, f64>,
         btc_usd_prices: ArrayView1<'a, f64>,
         bot_params: Vec<BotParamsPair>,
+        exchange_params_list: Vec<ExchangeParams>,
+        backtest_params: &BacktestParams,
+    ) -> Self {
+        let strategy_params = bot_params
+            .iter()
+            .map(default_strategy_params_pair_from_bot_params)
+            .collect();
+        Self::new_with_strategy_params(
+            hlcvs,
+            btc_usd_prices,
+            crate::strategies::StrategyKind::TrailingGrid,
+            bot_params,
+            strategy_params,
+            exchange_params_list,
+            backtest_params,
+        )
+    }
+
+    pub fn new_with_strategy_params(
+        hlcvs: ArrayView3<'a, f64>,
+        btc_usd_prices: ArrayView1<'a, f64>,
+        strategy_kind: crate::strategies::StrategyKind,
+        bot_params: Vec<BotParamsPair>,
+        strategy_params: Vec<StrategyParamsPairValue>,
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,
     ) -> Self {
@@ -1526,6 +1597,13 @@ impl<'a> Backtest<'a> {
             n_coins,
             "bot params length ({}) does not match active coin indices ({})",
             bot_params.len(),
+            n_coins
+        );
+        assert_eq!(
+            strategy_params.len(),
+            n_coins,
+            "strategy params length ({}) does not match active coin indices ({})",
+            strategy_params.len(),
             n_coins
         );
         let mut first_valid_idx = backtest_params.first_valid_indices.clone();
@@ -1661,6 +1739,12 @@ impl<'a> Backtest<'a> {
                 &backtest_params.equity_hard_stop_loss,
             );
         }
+        let strategy_params_parsed: Vec<StrategyParamsPair> = strategy_params
+            .iter()
+            .zip(bot_params.iter())
+            .map(|(raw, bp)| parse_strategy_params_pair(strategy_kind, raw, bp))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap_or_else(|err| panic!("failed to parse strategy params for backtest: {err}"));
 
         // init bot params
         let configured_n_positions = EffectiveNPositions {
@@ -1675,29 +1759,58 @@ impl<'a> Backtest<'a> {
         let bot_params_original = bot_params.clone();
 
         let effective_n_positions = configured_n_positions.clone();
+        let runtime_budget = bot_params
+            .iter()
+            .map(|bp| RuntimeBudgetStatePair {
+                long: make_runtime_budget_state(&bp.long, configured_n_positions.long),
+                short: make_runtime_budget_state(&bp.short, configured_n_positions.short),
+            })
+            .collect();
 
         // Calculate EMA alphas for each coin, adjusted for candle interval
         let interval = backtest_params.candle_interval_minutes;
         let ema_alphas: Vec<EmaAlphas> = bot_params
             .iter()
-            .map(|bp| calc_ema_alphas(bp, interval))
+            .zip(strategy_params_parsed.iter())
+            .map(|(bp, sp)| calc_ema_alphas(bp, sp, interval))
             .collect();
         let mut warmup_bars = backtest_params.global_warmup_bars;
         if warmup_bars == 0 {
-            warmup_bars = calc_warmup_bars(&bot_params);
+            warmup_bars = calc_warmup_bars(&bot_params, &strategy_params_parsed);
         }
 
-        let trailing_enabled: Vec<TrailingEnabled> = bot_params
+        let trailing_enabled: Vec<TrailingEnabled> = strategy_params_parsed
             .iter()
-            .map(|bp| TrailingEnabled {
-                long: bp.long.close_trailing_grid_ratio != 0.0
-                    || bp.long.entry_trailing_grid_ratio != 0.0,
-                short: bp.short.close_trailing_grid_ratio != 0.0
-                    || bp.short.entry_trailing_grid_ratio != 0.0,
+            .map(|sp| TrailingEnabled {
+                long: strategy_has_trailing(&sp.long),
+                short: strategy_has_trailing(&sp.short),
             })
             .collect();
         let any_trailing_long = trailing_enabled.iter().any(|te| te.long);
         let any_trailing_short = trailing_enabled.iter().any(|te| te.short);
+        let needs_log_range_long = bot_params
+            .iter()
+            .any(|bp| bp.long.forager_score_weights.volatility != 0.0)
+            || strategy_params_parsed
+                .iter()
+                .any(|sp| strategy_needs_log_range_1m(&sp.long));
+        let needs_log_range_short = bot_params
+            .iter()
+            .any(|bp| bp.short.forager_score_weights.volatility != 0.0)
+            || strategy_params_parsed
+                .iter()
+                .any(|sp| strategy_needs_log_range_1m(&sp.short));
+        let needs_entry_volatility_logrange_ema_1h_long = strategy_params_parsed.iter().any(|sp| {
+            strategy_entry_volatility_span_hours(&sp.long)
+                .map(|span| span > 0.0)
+                .unwrap_or(false)
+        });
+        let needs_entry_volatility_logrange_ema_1h_short =
+            strategy_params_parsed.iter().any(|sp| {
+                strategy_entry_volatility_span_hours(&sp.short)
+                    .map(|span| span > 0.0)
+                    .unwrap_or(false)
+            });
 
         Backtest {
             hlcvs,
@@ -1707,6 +1820,10 @@ impl<'a> Backtest<'a> {
             bot_params_master: bot_params_master.clone(),
             bot_params: bot_params.clone(),
             bot_params_original,
+            strategy_params_raw: strategy_params,
+            strategy_params: strategy_params_parsed,
+            strategy_kind,
+            runtime_budget,
             configured_n_positions,
             effective_n_positions,
             exchange_params_list,
@@ -1723,26 +1840,10 @@ impl<'a> Backtest<'a> {
                 bp.short.forager_volume_drop_pct != 0.0
                     || bp.short.forager_score_weights.volume != 0.0
             }),
-            needs_log_range_long: bot_params.iter().any(|bp| {
-                bp.long.forager_score_weights.volatility != 0.0
-                    || bp.long.entry_grid_spacing_volatility_weight != 0.0
-                    || bp.long.entry_trailing_threshold_volatility_weight != 0.0
-                    || bp.long.entry_trailing_retracement_volatility_weight != 0.0
-                    || bp.long.entry_trailing_grid_ratio != 0.0
-            }),
-            needs_log_range_short: bot_params.iter().any(|bp| {
-                bp.short.forager_score_weights.volatility != 0.0
-                    || bp.short.entry_grid_spacing_volatility_weight != 0.0
-                    || bp.short.entry_trailing_threshold_volatility_weight != 0.0
-                    || bp.short.entry_trailing_retracement_volatility_weight != 0.0
-                    || bp.short.entry_trailing_grid_ratio != 0.0
-            }),
-            needs_entry_volatility_logrange_ema_1h_long: bot_params
-                .iter()
-                .any(|bp| bp.long.entry_volatility_ema_span_hours > 0.0),
-            needs_entry_volatility_logrange_ema_1h_short: bot_params
-                .iter()
-                .any(|bp| bp.short.entry_volatility_ema_span_hours > 0.0),
+            needs_log_range_long,
+            needs_log_range_short,
+            needs_entry_volatility_logrange_ema_1h_long,
+            needs_entry_volatility_logrange_ema_1h_short,
             coin_first_valid_idx: first_valid_idx,
             coin_last_valid_idx: last_valid_idx,
             coin_trade_start_idx: trade_start_idx,
@@ -2038,15 +2139,21 @@ impl<'a> Backtest<'a> {
             0.0
         };
 
-        // ---------- 4. apply to every eligible coin ----------
+        // ---------- 4. apply runtime budgets without mutating config ----------
+        for runtime_budget in self.runtime_budget.iter_mut() {
+            runtime_budget.long.effective_n_positions = self.effective_n_positions.long;
+            runtime_budget.short.effective_n_positions = self.effective_n_positions.short;
+        }
         for &idx in &eligible {
-            // long side
             if self.bot_params_original[idx].long.wallet_exposure_limit < 0.0 {
-                self.bot_params[idx].long.wallet_exposure_limit = dyn_wel_long_base;
+                self.runtime_budget[idx]
+                    .long
+                    .effective_wallet_exposure_limit = dyn_wel_long_base;
             }
-            // short side
             if self.bot_params_original[idx].short.wallet_exposure_limit < 0.0 {
-                self.bot_params[idx].short.wallet_exposure_limit = dyn_wel_short_base;
+                self.runtime_budget[idx]
+                    .short
+                    .effective_wallet_exposure_limit = dyn_wel_short_base;
             }
         }
         true
@@ -2076,6 +2183,15 @@ impl<'a> Backtest<'a> {
         match pside {
             0 => &self.bot_params[coin_idx].long,
             1 => &self.bot_params[coin_idx].short,
+            _ => unreachable!("invalid pside"),
+        }
+    }
+
+    #[inline(always)]
+    fn runtime_budget(&self, coin_idx: usize, pside: usize) -> &RuntimeBudgetState {
+        match pside {
+            0 => &self.runtime_budget[coin_idx].long,
+            1 => &self.runtime_budget[coin_idx].short,
             _ => unreachable!("invalid pside"),
         }
     }
@@ -2130,7 +2246,9 @@ impl<'a> Backtest<'a> {
         if bot.entry_initial_qty_pct <= 0.0 {
             return false;
         }
-        let base_limit = bot.wallet_exposure_limit;
+        let base_limit = self
+            .runtime_budget(idx, pside)
+            .effective_wallet_exposure_limit;
         if base_limit <= 0.0 {
             return false;
         }
@@ -4453,7 +4571,11 @@ fn cumulative_max(values: &[f64]) -> Vec<f64> {
     out
 }
 
-fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas {
+fn calc_ema_alphas(
+    bot_params_pair: &BotParamsPair,
+    strategy_params_pair: &StrategyParamsPair,
+    interval: u64,
+) -> EmaAlphas {
     let interval_f = interval as f64;
     let clamp_alpha = |alpha: f64| {
         if !alpha.is_finite() {
@@ -4468,17 +4590,15 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas 
     };
 
     // EMA spans are in minutes. Divide by interval to get number of candle periods.
-    let mut ema_spans_long = [
-        bot_params_pair.long.ema_span_0,
-        bot_params_pair.long.ema_span_1,
-        (bot_params_pair.long.ema_span_0 * bot_params_pair.long.ema_span_1).sqrt(),
-    ];
+    let (long_span_0, long_span_1) = strategy_ema_spans(&strategy_params_pair.long);
+    let mut ema_spans_long = [long_span_0, long_span_1, (long_span_0 * long_span_1).sqrt()];
     ema_spans_long.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
+    let (short_span_0, short_span_1) = strategy_ema_spans(&strategy_params_pair.short);
     let mut ema_spans_short = [
-        bot_params_pair.short.ema_span_0,
-        bot_params_pair.short.ema_span_1,
-        (bot_params_pair.short.ema_span_0 * bot_params_pair.short.ema_span_1).sqrt(),
+        short_span_0,
+        short_span_1,
+        (short_span_0 * short_span_1).sqrt(),
     ];
     ema_spans_short.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
@@ -4509,7 +4629,8 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas 
         // Note: entry_volatility spans are in HOURS and computed from hourly buckets,
         // so they do NOT need interval adjustment (hourly buckets are calendar-based)
         entry_volatility_logrange_ema_1h_alpha_long: {
-            let span = bot_params_pair.long.entry_volatility_ema_span_hours;
+            let span =
+                strategy_entry_volatility_span_hours(&strategy_params_pair.long).unwrap_or(0.0);
             if span > 0.0 {
                 2.0 / (span + 1.0)
             } else {
@@ -4517,7 +4638,8 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas 
             }
         },
         entry_volatility_logrange_ema_1h_alpha_short: {
-            let span = bot_params_pair.short.entry_volatility_ema_span_hours;
+            let span =
+                strategy_entry_volatility_span_hours(&strategy_params_pair.short).unwrap_or(0.0);
             if span > 0.0 {
                 2.0 / (span + 1.0)
             } else {
@@ -4532,6 +4654,17 @@ mod tests {
     use super::*;
     use crate::types::EquityHardStopLossConfig;
     use ndarray::{Array1, Array3};
+
+    fn adaptive_strategy_pair_from_bot_params(bot_params: &BotParamsPair) -> StrategyParamsPair {
+        StrategyParamsPair {
+            long: StrategyParams::TrailingGrid(
+                TrailingGridParams::from_bot_params(&bot_params.long),
+            ),
+            short: StrategyParams::TrailingGrid(
+                TrailingGridParams::from_bot_params(&bot_params.short),
+            ),
+        }
+    }
 
     #[test]
     fn effective_min_cost_uses_executable_min_qty() {
@@ -6323,18 +6456,28 @@ mod tests {
         );
 
         let input = bt.get_orchestrator_input_cached(1, None);
+        let runtime_budget = input.symbols[0]
+            .long
+            .runtime_budget
+            .as_ref()
+            .expect("expected long runtime budget");
         assert!(
-            (input.symbols[0].long.bot_params.wallet_exposure_limit - 0.1).abs() < 1e-12,
-            "expected cached input WEL to match initial bot_params"
+            (runtime_budget.effective_wallet_exposure_limit - 0.1).abs() < 1e-12,
+            "expected cached input WEL to match initial runtime budget"
         );
         bt.orchestrator_input_cache = Some(input);
 
-        bt.bot_params[0].long.wallet_exposure_limit = 0.2;
+        bt.runtime_budget[0].long.effective_wallet_exposure_limit = 0.2;
 
         let input = bt.get_orchestrator_input_cached(1, None);
+        let runtime_budget = input.symbols[0]
+            .long
+            .runtime_budget
+            .as_ref()
+            .expect("expected refreshed long runtime budget");
         assert!(
-            (input.symbols[0].long.bot_params.wallet_exposure_limit - 0.2).abs() < 1e-12,
-            "expected cached input WEL to update after bot_params change"
+            (runtime_budget.effective_wallet_exposure_limit - 0.2).abs() < 1e-12,
+            "expected cached input WEL to update after runtime budget change"
         );
         bt.orchestrator_input_cache = Some(input);
     }
@@ -6576,21 +6719,25 @@ mod tests {
 
         assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
         assert!(
-            (bt.bot_params[0].long.wallet_exposure_limit - 0.75).abs() < 1e-12,
+            (bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.75).abs() < 1e-12,
             "k=0 expected wel 1.5/2"
+        );
+        assert!(
+            (bt.bot_params[0].long.wallet_exposure_limit + 1.0).abs() < 1e-12,
+            "configured bot params must remain unchanged"
         );
         assert_eq!(bt.effective_n_positions.long, 2);
 
         assert!(bt.update_n_positions_and_wallet_exposure_limits(1));
         assert!(
-            (bt.bot_params[0].long.wallet_exposure_limit - 0.5).abs() < 1e-12,
+            (bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.5).abs() < 1e-12,
             "k=1 expected wel 1.5/3 after third coin becomes tradable"
         );
         assert_eq!(bt.effective_n_positions.long, 3);
 
         assert!(bt.update_n_positions_and_wallet_exposure_limits(4));
         assert!(
-            (bt.bot_params[0].long.wallet_exposure_limit - 0.5).abs() < 1e-12,
+            (bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.5).abs() < 1e-12,
             "k=4 expected wel to remain 1.5/3 after B delists"
         );
         assert_eq!(bt.effective_n_positions.long, 3);
@@ -6647,14 +6794,18 @@ mod tests {
 
         assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
         assert!(
-            (bt.bot_params[0].long.wallet_exposure_limit - 0.5).abs() < 1e-12,
+            (bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.5).abs() < 1e-12,
             "k=0 expected fixed wel 2.0/4"
+        );
+        assert!(
+            (bt.bot_params[0].long.wallet_exposure_limit + 1.0).abs() < 1e-12,
+            "configured bot params must remain unchanged"
         );
         assert_eq!(bt.effective_n_positions.long, 4);
 
         assert!(bt.update_n_positions_and_wallet_exposure_limits(4));
         assert!(
-            (bt.bot_params[0].long.wallet_exposure_limit - 0.5).abs() < 1e-12,
+            (bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.5).abs() < 1e-12,
             "k=4 expected fixed wel to stay 2.0/4 despite fewer tradable coins"
         );
         assert_eq!(bt.effective_n_positions.long, 4);
@@ -6672,8 +6823,9 @@ mod tests {
         bp.short.filter_volume_ema_span = 400.0;
         bp.long.filter_volatility_ema_span = 500.0;
         bp.short.filter_volatility_ema_span = 600.0;
+        let strategy_pair = adaptive_strategy_pair_from_bot_params(&bp);
 
-        let alphas = calc_ema_alphas(&bp, 1);
+        let alphas = calc_ema_alphas(&bp, &strategy_pair, 1);
 
         // span2 = sqrt(100*200) = 141.42..., sorted: [100, 141.42, 200]
         let span2_long = (100.0f64 * 200.0).sqrt();
@@ -6707,8 +6859,9 @@ mod tests {
         bp.long.ema_span_1 = 60.0; // same so span2=60 too
         bp.short.ema_span_0 = 60.0;
         bp.short.ema_span_1 = 60.0;
+        let strategy_pair = adaptive_strategy_pair_from_bot_params(&bp);
 
-        let alphas = calc_ema_alphas(&bp, 5);
+        let alphas = calc_ema_alphas(&bp, &strategy_pair, 5);
 
         let expected = 2.0 / (60.0 / 5.0 + 1.0); // 2/13
         for i in 0..3 {
@@ -6728,9 +6881,10 @@ mod tests {
         let mut bp = BotParamsPair::default();
         bp.long.entry_volatility_ema_span_hours = 24.0;
         bp.short.entry_volatility_ema_span_hours = 48.0;
+        let strategy_pair = adaptive_strategy_pair_from_bot_params(&bp);
 
-        let alphas_1 = calc_ema_alphas(&bp, 1);
-        let alphas_5 = calc_ema_alphas(&bp, 5);
+        let alphas_1 = calc_ema_alphas(&bp, &strategy_pair, 1);
+        let alphas_5 = calc_ema_alphas(&bp, &strategy_pair, 5);
 
         assert!(
             (alphas_1.entry_volatility_logrange_ema_1h_alpha_long
@@ -6749,23 +6903,25 @@ mod tests {
     }
 }
 
-fn calc_warmup_bars(bot_params: &[BotParamsPair]) -> usize {
+fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyParamsPair]) -> usize {
     let mut max_span_minutes = 0.0f64;
 
-    for pair in bot_params {
+    for (pair, strategy_pair) in bot_params.iter().zip(strategy_params.iter()) {
+        let (long_span_0, long_span_1) = strategy_ema_spans(&strategy_pair.long);
+        let (short_span_0, short_span_1) = strategy_ema_spans(&strategy_pair.short);
         let spans_long = [
-            pair.long.ema_span_0,
-            pair.long.ema_span_1,
+            long_span_0,
+            long_span_1,
             pair.long.filter_volume_ema_span as f64,
             pair.long.filter_volatility_ema_span as f64,
-            pair.long.entry_volatility_ema_span_hours * 60.0,
+            strategy_entry_volatility_span_hours(&strategy_pair.long).unwrap_or(0.0) * 60.0,
         ];
         let spans_short = [
-            pair.short.ema_span_0,
-            pair.short.ema_span_1,
+            short_span_0,
+            short_span_1,
             pair.short.filter_volume_ema_span as f64,
             pair.short.filter_volatility_ema_span as f64,
-            pair.short.entry_volatility_ema_span_hours * 60.0,
+            strategy_entry_volatility_span_hours(&strategy_pair.short).unwrap_or(0.0) * 60.0,
         ];
         for span in spans_long.iter().chain(spans_short.iter()) {
             if span.is_finite() {

@@ -12,6 +12,7 @@ use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
 };
+use crate::strategies::registry::{strategy_kind_from_name, strategy_spec};
 use crate::trailing::{
     trailing_bundle_to_tuple, tuple_to_trailing_bundle, update_trailing_bundle_sequence,
 };
@@ -19,7 +20,7 @@ use crate::types::OrderType;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, EquityHardStopLossConfig,
     EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights, HlcvsBundle, HlcvsMeta,
-    OrderBook, Position, StateParams, TrailingPriceBundle,
+    OrderBook, Position, StateParams, StrategyParamsPairValue, TrailingPriceBundle,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -28,7 +29,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
 use pyo3::PyObject;
 use serde::Serialize;
-use serde_json;
+use serde_json::{self, Value};
 use std::str::FromStr;
 
 type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, Py<PyDict>, PyObject);
@@ -838,6 +839,7 @@ pub fn run_backtest(
     hlcvs: PyReadonlyArray3<f64>,
     btc_usd: PyReadonlyArray1<f64>,
     bot_params: &Bound<'_, PyAny>,
+    strategy_params: &Bound<'_, PyAny>,
     exchange_params_list: &Bound<'_, PyAny>,
     backtest_params_dict: &Bound<'_, PyDict>,
 ) -> PyResult<BacktestPyResult> {
@@ -845,6 +847,7 @@ pub fn run_backtest(
         hlcvs,
         btc_usd,
         bot_params,
+        strategy_params,
         exchange_params_list,
         backtest_params_dict,
     )
@@ -854,6 +857,7 @@ pub fn run_backtest(
 pub fn run_backtest_bundle(
     bundle: &HlcvsBundlePy,
     bot_params: &Bound<'_, PyAny>,
+    strategy_params: &Bound<'_, PyAny>,
     exchange_params_list: &Bound<'_, PyAny>,
     backtest_params_dict: &Bound<'_, PyDict>,
 ) -> PyResult<BacktestPyResult> {
@@ -864,6 +868,7 @@ pub fn run_backtest_bundle(
         hlcvs,
         btc,
         bot_params,
+        strategy_params,
         exchange_params_list,
         backtest_params_dict,
     )
@@ -873,6 +878,7 @@ fn run_backtest_core<'py>(
     hlcvs: PyReadonlyArray3<'py, f64>,
     btc_usd: PyReadonlyArray1<'py, f64>,
     bot_params: &Bound<'py, PyAny>,
+    strategy_params: &Bound<'py, PyAny>,
     exchange_params_list: &Bound<'py, PyAny>,
     backtest_params_dict: &Bound<'py, PyDict>,
 ) -> PyResult<BacktestPyResult> {
@@ -895,6 +901,19 @@ fn run_backtest_core<'py>(
         )));
     }
 
+    let strategy_kind_name = backtest_params_dict
+        .get_item("strategy_kind")?
+        .map(|item| item.extract::<String>())
+        .transpose()?
+        .unwrap_or_else(|| "trailing_grid".to_string());
+    let strategy_kind = strategy_kind_from_name(&strategy_kind_name).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "unknown strategy_kind for backtest params: {}",
+            strategy_kind_name
+        ))
+    })?;
+    let backtest_params = backtest_params_from_dict(backtest_params_dict.as_gil_ref())?;
+
     let bot_params_py_list_bound = bot_params
         .downcast::<PyList>()
         .map_err(|_| PyValueError::new_err("bot_params must be a list[dict] (one per coin)"))?;
@@ -907,6 +926,25 @@ fn run_backtest_core<'py>(
             .downcast::<PyDict>()
             .map_err(|_| PyValueError::new_err("each bot_params element must be a dict"))?;
         bot_params_vec.push(bot_params_pair_from_dict(dict)?);
+    }
+
+    let strategy_params_py_list_bound = strategy_params.downcast::<PyList>().map_err(|_| {
+        PyValueError::new_err("strategy_params must be a list[dict] (one per coin)")
+    })?;
+    let strategy_params_py_list = strategy_params_py_list_bound.as_gil_ref();
+    if strategy_params_py_list.len() != bot_params_len {
+        return Err(PyValueError::new_err(format!(
+            "strategy_params length ({}) does not match bot_params length ({})",
+            strategy_params_py_list.len(),
+            bot_params_len
+        )));
+    }
+    let mut strategy_params_vec = Vec::with_capacity(bot_params_len);
+    for item in strategy_params_py_list.iter() {
+        let dict = item
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("each strategy_params element must be a dict"))?;
+        strategy_params_vec.push(strategy_params_pair_from_dict(dict, &strategy_kind_name)?);
     }
 
     let exchange_params_list_bound = exchange_params_list
@@ -922,12 +960,13 @@ fn run_backtest_core<'py>(
         exchange_params.push(exchange_params_from_dict(dict)?);
     }
 
-    let backtest_params = backtest_params_from_dict(backtest_params_dict.as_gil_ref())?;
     let metrics_only = backtest_params.metrics_only;
-    let mut backtest = Backtest::new(
+    let mut backtest = Backtest::new_with_strategy_params(
         hlcvs_rust,
         btc_usd_rust,
+        strategy_kind,
         bot_params_vec,
+        strategy_params_vec,
         exchange_params,
         &backtest_params,
     );
@@ -1312,12 +1351,95 @@ fn bot_params_pair_from_dict(dict: &PyDict) -> PyResult<BotParamsPair> {
     })
 }
 
+fn trailing_grid_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
+    Ok(serde_json::json!({
+        "close_grid_markup_end": extract_value::<f64>(dict, "close_grid_markup_end")?,
+        "close_grid_markup_start": extract_value::<f64>(dict, "close_grid_markup_start")?,
+        "close_grid_qty_pct": extract_value::<f64>(dict, "close_grid_qty_pct")?,
+        "close_trailing_grid_ratio": extract_value::<f64>(dict, "close_trailing_grid_ratio")?,
+        "close_trailing_qty_pct": extract_value::<f64>(dict, "close_trailing_qty_pct")?,
+        "close_trailing_retracement_pct": extract_value::<f64>(dict, "close_trailing_retracement_pct")?,
+        "close_trailing_threshold_pct": extract_value::<f64>(dict, "close_trailing_threshold_pct")?,
+        "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
+        "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
+        "entry_grid_double_down_factor": extract_value::<f64>(dict, "entry_grid_double_down_factor")?,
+        "entry_grid_spacing_pct": extract_value::<f64>(dict, "entry_grid_spacing_pct")?,
+        "entry_grid_spacing_volatility_weight": extract_value::<f64>(dict, "entry_grid_spacing_volatility_weight")?,
+        "entry_grid_spacing_we_weight": extract_grid_spacing_we_weight(dict)?,
+        "entry_initial_ema_dist": extract_value::<f64>(dict, "entry_initial_ema_dist")?,
+        "entry_initial_qty_pct": extract_value::<f64>(dict, "entry_initial_qty_pct")?,
+        "entry_trailing_double_down_factor": extract_value::<f64>(dict, "entry_trailing_double_down_factor")?,
+        "entry_trailing_grid_ratio": extract_value::<f64>(dict, "entry_trailing_grid_ratio")?,
+        "entry_trailing_retracement_pct": extract_value::<f64>(dict, "entry_trailing_retracement_pct")?,
+        "entry_trailing_retracement_volatility_weight": extract_value::<f64>(dict, "entry_trailing_retracement_volatility_weight")?,
+        "entry_trailing_retracement_we_weight": extract_value::<f64>(dict, "entry_trailing_retracement_we_weight")?,
+        "entry_trailing_threshold_pct": extract_value::<f64>(dict, "entry_trailing_threshold_pct")?,
+        "entry_trailing_threshold_volatility_weight": extract_value::<f64>(dict, "entry_trailing_threshold_volatility_weight")?,
+        "entry_trailing_threshold_we_weight": extract_value::<f64>(dict, "entry_trailing_threshold_we_weight")?,
+        "entry_volatility_ema_span_hours": extract_value_with_fallback::<f64>(
+            dict,
+            "entry_volatility_ema_span_hours",
+            "entry_log_range_ema_span_hours",
+        )?,
+    }))
+}
+
+fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
+    Ok(serde_json::json!({
+        "base_qty_pct": extract_value::<f64>(dict, "base_qty_pct")?,
+        "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
+        "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
+        "offset": extract_value::<f64>(dict, "offset")?,
+        "offset_psize_weight": extract_value::<f64>(dict, "offset_psize_weight")?,
+    }))
+}
+
+fn strategy_params_pair_from_dict(
+    dict: &PyDict,
+    strategy_kind: &str,
+) -> PyResult<StrategyParamsPairValue> {
+    let long_dict = dict
+        .get_item("long")?
+        .ok_or_else(|| PyValueError::new_err("missing required key: long"))?
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("strategy_params.long must be a dict"))?;
+    let short_dict = dict
+        .get_item("short")?
+        .ok_or_else(|| PyValueError::new_err("missing required key: short"))?
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("strategy_params.short must be a dict"))?;
+    let (long, short) = match strategy_kind {
+        "trailing_grid" => (
+            trailing_grid_strategy_params_from_dict(long_dict)?,
+            trailing_grid_strategy_params_from_dict(short_dict)?,
+        ),
+        "ema_anchor" => (
+            ema_anchor_strategy_params_from_dict(long_dict)?,
+            ema_anchor_strategy_params_from_dict(short_dict)?,
+        ),
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "unknown strategy kind for strategy params: {}",
+                strategy_kind
+            )))
+        }
+    };
+    Ok(StrategyParamsPairValue { long, short })
+}
+
 fn extract_grid_spacing_we_weight(dict: &PyDict) -> PyResult<f64> {
     if let Some(obj) = dict.get_item("entry_grid_spacing_we_weight")? {
         obj.extract::<f64>()
     } else {
         extract_value(dict, "entry_grid_spacing_we_weight")
     }
+}
+
+fn extract_optional_f64(dict: &PyDict, key: &str) -> PyResult<f64> {
+    Ok(match dict.get_item(key)? {
+        Some(item) => item.extract::<f64>()?,
+        None => 0.0,
+    })
 }
 
 fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
@@ -1389,47 +1511,55 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     };
 
     Ok(BotParams {
-        close_grid_markup_end: extract_value(dict, "close_grid_markup_end")?,
-        close_grid_markup_start: extract_value(dict, "close_grid_markup_start")?,
-        close_grid_qty_pct: extract_value(dict, "close_grid_qty_pct")?,
-        close_trailing_retracement_pct: extract_value(dict, "close_trailing_retracement_pct")?,
-        close_trailing_grid_ratio: extract_value(dict, "close_trailing_grid_ratio")?,
-        close_trailing_qty_pct: extract_value(dict, "close_trailing_qty_pct")?,
-        close_trailing_threshold_pct: extract_value(dict, "close_trailing_threshold_pct")?,
-        entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
-        entry_grid_spacing_volatility_weight: extract_value(
+        close_grid_markup_end: extract_optional_f64(dict, "close_grid_markup_end")?,
+        close_grid_markup_start: extract_optional_f64(dict, "close_grid_markup_start")?,
+        close_grid_qty_pct: extract_optional_f64(dict, "close_grid_qty_pct")?,
+        close_trailing_retracement_pct: extract_optional_f64(
+            dict,
+            "close_trailing_retracement_pct",
+        )?,
+        close_trailing_grid_ratio: extract_optional_f64(dict, "close_trailing_grid_ratio")?,
+        close_trailing_qty_pct: extract_optional_f64(dict, "close_trailing_qty_pct")?,
+        close_trailing_threshold_pct: extract_optional_f64(dict, "close_trailing_threshold_pct")?,
+        entry_grid_double_down_factor: extract_optional_f64(dict, "entry_grid_double_down_factor")?,
+        entry_grid_spacing_volatility_weight: extract_optional_f64(
             dict,
             "entry_grid_spacing_volatility_weight",
         )?,
-        entry_grid_spacing_we_weight: extract_grid_spacing_we_weight(dict)?,
-        entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
-        entry_volatility_ema_span_hours: extract_value_with_fallback(
-            dict,
-            "entry_volatility_ema_span_hours",
-            "entry_log_range_ema_span_hours",
-        )?,
-        entry_initial_ema_dist: extract_value(dict, "entry_initial_ema_dist")?,
-        entry_initial_qty_pct: extract_value(dict, "entry_initial_qty_pct")?,
-        entry_trailing_double_down_factor: extract_value(
+        entry_grid_spacing_we_weight: extract_optional_f64(dict, "entry_grid_spacing_we_weight")?,
+        entry_grid_spacing_pct: extract_optional_f64(dict, "entry_grid_spacing_pct")?,
+        entry_volatility_ema_span_hours: match dict.get_item("entry_volatility_ema_span_hours")? {
+            Some(item) => item.extract::<f64>()?,
+            None => match dict.get_item("entry_log_range_ema_span_hours")? {
+                Some(item) => item.extract::<f64>()?,
+                None => 0.0,
+            },
+        },
+        entry_initial_ema_dist: extract_optional_f64(dict, "entry_initial_ema_dist")?,
+        entry_initial_qty_pct: extract_optional_f64(dict, "entry_initial_qty_pct")?,
+        entry_trailing_double_down_factor: extract_optional_f64(
             dict,
             "entry_trailing_double_down_factor",
         )?,
-        entry_trailing_retracement_pct: extract_value(dict, "entry_trailing_retracement_pct")?,
-        entry_trailing_retracement_we_weight: extract_value(
+        entry_trailing_retracement_pct: extract_optional_f64(
+            dict,
+            "entry_trailing_retracement_pct",
+        )?,
+        entry_trailing_retracement_we_weight: extract_optional_f64(
             dict,
             "entry_trailing_retracement_we_weight",
         )?,
-        entry_trailing_retracement_volatility_weight: extract_value(
+        entry_trailing_retracement_volatility_weight: extract_optional_f64(
             dict,
             "entry_trailing_retracement_volatility_weight",
         )?,
-        entry_trailing_grid_ratio: extract_value(dict, "entry_trailing_grid_ratio")?,
-        entry_trailing_threshold_pct: extract_value(dict, "entry_trailing_threshold_pct")?,
-        entry_trailing_threshold_we_weight: extract_value(
+        entry_trailing_grid_ratio: extract_optional_f64(dict, "entry_trailing_grid_ratio")?,
+        entry_trailing_threshold_pct: extract_optional_f64(dict, "entry_trailing_threshold_pct")?,
+        entry_trailing_threshold_we_weight: extract_optional_f64(
             dict,
             "entry_trailing_threshold_we_weight",
         )?,
-        entry_trailing_threshold_volatility_weight: extract_value(
+        entry_trailing_threshold_volatility_weight: extract_optional_f64(
             dict,
             "entry_trailing_threshold_volatility_weight",
         )?,
@@ -1463,8 +1593,8 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
             .map(|_| extract_forager_score_weights(dict))
             .transpose()?
             .unwrap_or_default(),
-        ema_span_0: extract_value(dict, "ema_span_0")?,
-        ema_span_1: extract_value(dict, "ema_span_1")?,
+        ema_span_0: extract_optional_f64(dict, "ema_span_0")?,
+        ema_span_1: extract_optional_f64(dict, "ema_span_1")?,
         hsl_enabled,
         hsl_red_threshold,
         hsl_ema_span_minutes,
@@ -2443,4 +2573,12 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
             e
         ))
     })
+}
+
+#[pyfunction]
+pub fn get_strategy_spec(py: Python<'_>, strategy_kind: &str) -> PyResult<Py<PyDict>> {
+    let kind = strategy_kind_from_name(strategy_kind).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!("unknown strategy kind: {}", strategy_kind))
+    })?;
+    struct_to_py_dict(py, &strategy_spec(kind))
 }

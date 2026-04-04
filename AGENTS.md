@@ -87,3 +87,8 @@ Use `docs/ai/commands.md` for setup, test, backtest, optimizer, and Rust build c
 3. Put deep investigations in case-study docs, not core instruction docs.
 4. User-facing docs and `CHANGELOG.md` should describe the diff from `master`, not intermediate changes made within the current dev branch.
 5. Update `CHANGELOG.md` for user-facing behavior changes.
+
+## Compatibility Policy
+
+1. Only add backward compatibility across official released versions on `master`.
+2. Do not add compatibility aliases, migrations, duplicate schema support, or shims between iterations within the same dev branch or between dev branches unless explicitly requested.

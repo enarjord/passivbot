@@ -54,6 +54,11 @@ from config.coerce import (
     normalize_hsl_cooldown_position_policy,
     normalize_hsl_signal_mode,
 )
+from config.strategy import (
+    build_runtime_strategy_side,
+    get_active_strategy_side,
+    normalize_strategy_kind,
+)
 from config.overrides import parse_overrides
 from logging_setup import (
     configure_logging,
@@ -5726,6 +5731,31 @@ class Passivbot:
         """Compute desired entry and exit orders for every active symbol."""
         return await self.calc_ideal_orders_orchestrator()
 
+    def _strategy_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
+        strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
+        strategy_cfg = get_active_strategy_side(
+            self.config.get("bot", {}).get(pside, {}),
+            strategy_kind=strategy_kind,
+            pside=pside,
+        )
+        symbol_override = (
+            getattr(self, "coin_overrides", {}).get(symbol, {}).get("bot", {}).get(pside, {})
+            if symbol is not None
+            else {}
+        )
+        return build_runtime_strategy_side(
+            strategy_cfg,
+            strategy_kind=strategy_kind,
+            pside=pside,
+            override_side=symbol_override,
+        )
+
+    def _strategy_value(self, pside: str, key: str, symbol: str | None = None) -> Any:
+        strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
+        if key not in strategy_cfg:
+            raise KeyError(f"missing required strategy key {pside}.{key}")
+        return strategy_cfg[key]
+
     def _bot_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
         """Build a dict matching Rust `BotParams` for JSON orchestrator input."""
         # Values which are configured globally (not per symbol) live under bot_value.
@@ -5737,34 +5767,10 @@ class Passivbot:
         }
         # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
         fields = [
-            "close_grid_markup_end",
-            "close_grid_markup_start",
-            "close_grid_qty_pct",
-            "close_trailing_retracement_pct",
-            "close_trailing_grid_ratio",
-            "close_trailing_qty_pct",
-            "close_trailing_threshold_pct",
-            "entry_grid_double_down_factor",
-            "entry_grid_spacing_volatility_weight",
-            "entry_grid_spacing_we_weight",
-            "entry_grid_spacing_pct",
-            "entry_volatility_ema_span_hours",
-            "entry_initial_ema_dist",
-            "entry_initial_qty_pct",
-            "entry_trailing_double_down_factor",
-            "entry_trailing_retracement_pct",
-            "entry_trailing_retracement_we_weight",
-            "entry_trailing_retracement_volatility_weight",
-            "entry_trailing_grid_ratio",
-            "entry_trailing_threshold_pct",
-            "entry_trailing_threshold_we_weight",
-            "entry_trailing_threshold_volatility_weight",
             "forager_volatility_ema_span",
             "forager_volume_ema_span",
             "forager_volume_drop_pct",
             "forager_score_weights",
-            "ema_span_0",
-            "ema_span_1",
             "n_positions",
             "total_wallet_exposure_limit",
             "wallet_exposure_limit",
@@ -5776,6 +5782,11 @@ class Passivbot:
             "unstuck_loss_allowance_pct",
             "unstuck_threshold",
         ]
+        symbol_override = (
+            getattr(self, "coin_overrides", {}).get(symbol, {}).get("bot", {}).get(pside, {})
+            if symbol is not None
+            else {}
+        )
         out: dict[str, float | int] = {}
         for key in fields:
             if key in global_keys:
@@ -6001,6 +6012,7 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
+        strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
         input_dict = {
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
@@ -6025,6 +6037,7 @@ class Passivbot:
                 "sort_global": True,
                 "global_bot_params": global_bp,
                 "hedge_mode": effective_hedge_mode,
+                "strategy_kind": strategy_kind,
             },
             "symbols": [],
             "peek_hints": None,
@@ -6066,6 +6079,7 @@ class Passivbot:
                         "min_since_max": float(trailing.get("min_since_max", 0.0)),
                     },
                     "bot_params": self._bot_params_to_rust_dict(pside, symbol),
+                    "strategy_params": self._strategy_params_to_rust_dict(pside, symbol),
                 }
 
             m1_close_pairs = [[float(k), float(v)] for k, v in sorted(m1_close_emas[symbol].items())]
@@ -6215,13 +6229,18 @@ class Passivbot:
 
         for pside in ["long", "short"]:
             for symbol in symbols:
-                span0 = float(self.bp(pside, "ema_span_0", symbol))
-                span1 = float(self.bp(pside, "ema_span_1", symbol))
+                span0 = float(self._strategy_value(pside, "ema_span_0", symbol))
+                span1 = float(self._strategy_value(pside, "ema_span_1", symbol))
                 span2 = float((span0 * span1) ** 0.5) if span0 > 0.0 and span1 > 0.0 else 0.0
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
-                h1_span = float(self.bp(pside, "entry_volatility_ema_span_hours", symbol) or 0.0)
+                h1_span = float(
+                    self._strategy_params_to_rust_dict(pside, symbol).get(
+                        "entry_volatility_ema_span_hours", 0.0
+                    )
+                    or 0.0
+                )
                 if h1_span > 0.0 and math.isfinite(h1_span):
                     need_h1_lr_spans[symbol].add(h1_span)
 
@@ -6519,6 +6538,7 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
+        strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
         input_dict = {
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
@@ -6543,6 +6563,7 @@ class Passivbot:
                 "sort_global": True,
                 "global_bot_params": global_bp,
                 "hedge_mode": effective_hedge_mode,
+                "strategy_kind": strategy_kind,
             },
             "symbols": [],
             "peek_hints": None,
@@ -6580,6 +6601,7 @@ class Passivbot:
                         "min_since_max": float(trailing.get("min_since_max", 0.0)),
                     },
                     "bot_params": self._bot_params_to_rust_dict(pside, symbol),
+                    "strategy_params": self._strategy_params_to_rust_dict(pside, symbol),
                 }
 
             # Build EMA bundle for this symbol.

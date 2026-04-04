@@ -14,6 +14,13 @@ def _template():
     return get_template_config()
 
 
+def _bound(config, pside, *path):
+    cur = config["optimize"]["bounds"][pside]
+    for part in path:
+        cur = cur[part]
+    return cur
+
+
 def test_detect_flavor_variants():
     tmpl = _template()
 
@@ -92,12 +99,12 @@ def test_format_config_current_roundtrip_basic():
     out = format_config(current, verbose=False)
     for k in ["bot", "live", "optimize", "backtest"]:
         assert k in out
-    assert isinstance(out["bot"]["long"]["risk_wel_enforcer_threshold"], (int, float))
-    assert isinstance(out["bot"]["long"]["risk_we_excess_allowance_pct"], float)
-    assert isinstance(out["bot"]["long"]["risk_twel_enforcer_threshold"], (int, float))
-    assert isinstance(out["bot"]["short"]["risk_wel_enforcer_threshold"], (int, float))
-    assert isinstance(out["bot"]["short"]["risk_twel_enforcer_threshold"], (int, float))
-    assert "risk_twel_enforcer_threshold" not in out
+    assert isinstance(out["bot"]["long"]["risk"]["wel_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["long"]["risk"]["we_excess_allowance_pct"], float)
+    assert isinstance(out["bot"]["long"]["risk"]["twel_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["short"]["risk"]["wel_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["short"]["risk"]["twel_enforcer_threshold"], (int, float))
+    assert "risk_twel_enforcer_threshold" not in out["bot"]["long"]
 
 
 def test_format_config_preserves_approved_coins_dict():
@@ -183,12 +190,12 @@ def test_format_config_current_with_empty_optimize_adds_bounds():
     out = format_config(current, verbose=False, live_only=True)
 
     assert "bounds" in out["optimize"]
-    assert out["optimize"]["bounds"]["long_close_grid_markup_start"] == tmpl["optimize"]["bounds"][
-        "long_close_grid_markup_start"
-    ]
-    assert out["optimize"]["bounds"]["short_close_grid_markup_end"] == tmpl["optimize"]["bounds"][
-        "short_close_grid_markup_end"
-    ]
+    assert _bound(out, "long", "strategy", "trailing_grid", "close_grid_markup_start") == _bound(
+        tmpl, "long", "strategy", "trailing_grid", "close_grid_markup_start"
+    )
+    assert _bound(out, "short", "strategy", "trailing_grid", "close_grid_markup_end") == _bound(
+        tmpl, "short", "strategy", "trailing_grid", "close_grid_markup_end"
+    )
 
 
 def test_format_config_current_with_optimize_missing_bounds_adds_defaults():
@@ -199,8 +206,8 @@ def test_format_config_current_with_optimize_missing_bounds_adds_defaults():
     out = format_config(current, verbose=False, live_only=True)
 
     assert out["optimize"]["scoring"] == [{"metric": "adg_usd", "goal": "max"}]
-    assert "long_close_grid_qty_pct" in out["optimize"]["bounds"]
-    assert "short_close_grid_qty_pct" in out["optimize"]["bounds"]
+    assert "close_grid_qty_pct" in out["optimize"]["bounds"]["long"]["strategy"]["trailing_grid"]
+    assert "close_grid_qty_pct" in out["optimize"]["bounds"]["short"]["strategy"]["trailing_grid"]
 
 
 def test_format_config_current_with_missing_bot_side_adds_defaults():
@@ -210,8 +217,8 @@ def test_format_config_current_with_missing_bot_side_adds_defaults():
 
     out = format_config(current, verbose=False, live_only=True)
 
-    assert out["bot"]["short"]["close_grid_markup_end"] == tmpl["bot"]["short"]["close_grid_markup_end"]
-    assert out["bot"]["short"]["n_positions"] == tmpl["bot"]["short"]["n_positions"]
+    assert out["bot"]["short"]["strategy"]["trailing_grid"]["close_grid_markup_end"] == tmpl["bot"]["short"]["strategy"]["trailing_grid"]["close_grid_markup_end"]
+    assert out["bot"]["short"]["risk"]["n_positions"] == tmpl["bot"]["short"]["risk"]["n_positions"]
 
 
 def test_format_config_raises_on_non_dict_optimize_bounds():
@@ -223,58 +230,27 @@ def test_format_config_raises_on_non_dict_optimize_bounds():
         format_config(current, verbose=False, live_only=True)
 
 
-def test_format_config_preserves_legacy_derivations_before_hydration():
+def test_format_config_preserves_nested_strategy_bounds_before_hydration():
     current = copy.deepcopy(_template())
-    legacy_per_side = {
-        "long": {
-            "min_markup": 0.006,
-            "markup_range": 0.018,
-            "ddown_factor": 1.23,
-            "bounds_min_markup": [0.005, 0.02],
-            "bounds_close_grid_min_markup": [0.003, 0.015],
-        },
-        "short": {
-            "min_markup": 0.007,
-            "markup_range": 0.02,
-            "ddown_factor": 1.11,
-            "bounds_min_markup": [0.006, 0.021],
-            "bounds_close_grid_min_markup": [0.004, 0.016],
-        },
-    }
-
-    for pside, values in legacy_per_side.items():
-        current["bot"][pside]["close_grid_min_markup"] = values["min_markup"]
-        current["bot"][pside]["close_grid_markup_range"] = values["markup_range"]
-        current["bot"][pside]["entry_grid_double_down_factor"] = values["ddown_factor"]
-        current["bot"][pside].pop("close_grid_markup_start", None)
-        current["bot"][pside].pop("close_grid_markup_end", None)
-        current["bot"][pside].pop("entry_trailing_double_down_factor", None)
-
-        current["optimize"]["bounds"][f"{pside}_min_markup"] = values["bounds_min_markup"]
-        current["optimize"]["bounds"][f"{pside}_close_grid_min_markup"] = values[
-            "bounds_close_grid_min_markup"
-        ]
-        current["optimize"]["bounds"].pop(f"{pside}_close_grid_markup_start", None)
-        current["optimize"]["bounds"].pop(f"{pside}_close_grid_markup_end", None)
+    current["optimize"]["bounds"]["long"]["strategy"]["trailing_grid"]["close_grid_markup_start"] = [
+        0.005,
+        0.02,
+    ]
+    current["optimize"]["bounds"]["short"]["strategy"]["trailing_grid"]["close_grid_markup_end"] = [
+        0.004,
+        0.016,
+    ]
 
     out = format_config(current, verbose=False, live_only=True)
 
-    for pside, values in legacy_per_side.items():
-        assert out["bot"][pside]["close_grid_markup_start"] == pytest.approx(
-            values["min_markup"] + values["markup_range"]
-        )
-        assert out["bot"][pside]["close_grid_markup_end"] == pytest.approx(values["min_markup"])
-        assert out["bot"][pside]["entry_trailing_double_down_factor"] == pytest.approx(
-            values["ddown_factor"]
-        )
-        assert out["optimize"]["bounds"][f"{pside}_close_grid_markup_start"] == values[
-            "bounds_min_markup"
-        ]
-        assert out["optimize"]["bounds"][f"{pside}_close_grid_markup_end"] == values[
-            "bounds_close_grid_min_markup"
-        ]
-        assert f"{pside}_min_markup" not in out["optimize"]["bounds"]
-        assert f"{pside}_close_grid_min_markup" not in out["optimize"]["bounds"]
+    assert _bound(out, "long", "strategy", "trailing_grid", "close_grid_markup_start") == [
+        0.005,
+        0.02,
+    ]
+    assert _bound(out, "short", "strategy", "trailing_grid", "close_grid_markup_end") == [
+        0.004,
+        0.016,
+    ]
 
 
 def test_format_config_is_idempotent_for_lean_live_config():
@@ -291,17 +267,17 @@ def test_format_config_is_idempotent_for_lean_live_config():
 def test_format_config_preserves_live_optimize_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["optimize"]["bounds"]["long_hsl_red_threshold"] = [0.1, 0.3, 0.01]
-    current["optimize"]["bounds"]["long_hsl_ema_span_minutes"] = [10.0, 120.0, 5.0]
+    current["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] = [0.1, 0.3, 0.01]
+    current["optimize"]["bounds"]["long"]["hsl"]["ema_span_minutes"] = [10.0, 120.0, 5.0]
 
     out = format_config(current, verbose=False)
 
-    assert out["optimize"]["bounds"]["long_hsl_red_threshold"] == [
+    assert out["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] == [
         0.1,
         0.3,
         0.01,
     ]
-    assert out["optimize"]["bounds"]["long_hsl_ema_span_minutes"] == [
+    assert out["optimize"]["bounds"]["long"]["hsl"]["ema_span_minutes"] == [
         10.0,
         120.0,
         5.0,

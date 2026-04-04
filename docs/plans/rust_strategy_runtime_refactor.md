@@ -2,11 +2,11 @@
 
 ## Status
 
-This plan supersedes the earlier master-based draft and is aligned to
-`integration/hsl-merge_codex` as of 2026-04-01.
+This plan supersedes the earlier master-based draft and tracks the current
+`refactor/rust-strategy-runtime-plan` branch state.
 
-It uses `origin/research/simple_ema_mm` only as the motivating experiment, not as the desired
-target architecture.
+It uses the early EMA-anchor experiment only as the motivating example, not as the desired target
+architecture.
 
 ## Purpose
 
@@ -18,7 +18,7 @@ multiple strategies without repeating the same mistakes for every experiment:
 - coupling backtest sizing semantics to mutable shared runtime fields
 - hardcoding optimizer/config plumbing per strategy
 
-The immediate benchmark remains `simple_ema_mm`, but the design target is broader:
+The immediate benchmark remains `ema_anchor`, but the design target is broader:
 
 - strategy order generation should be swappable
 - forager / coin selection should remain reusable across strategies
@@ -27,8 +27,8 @@ The immediate benchmark remains `simple_ema_mm`, but the design target is broade
 
 ## Current Branch Baseline
 
-The refactor must start from what already exists on `integration/hsl-merge_codex`, not from the
-older master snapshot.
+The refactor must start from what already exists on this branch, not from the older master
+snapshot that predated the HSL/config pipeline work.
 
 Important current realities:
 
@@ -38,7 +38,7 @@ Important current realities:
    - `tests/test_config_pipeline.py` and related tests already cover that pipeline
 
 2. HSL is already merged into the canonical per-side bot config.
-   - `bot.{long,short}.hsl_*`
+   - `bot.{long,short}.hsl`
    - `live.hsl_signal_mode`
 
 3. Live and backtest already share the Rust orchestrator path, but the runtime is still
@@ -52,21 +52,48 @@ Important current realities:
    - `BotParams` mixes strategy fields with forager/risk/unstuck/HSL fields
    - backtest mutates effective WEL inside runtime state
 
-5. Optimizer/config plumbing is still keyed to `bot.*` scalar fields.
+5. Optimizer/config plumbing still carries legacy flat-key assumptions at the adapter boundary.
    - see `src/optimization/config_adapter.py`
 
 6. Live HSL control is still an adjacent controller concern, not a solved shared-engine concern.
    - the live loop and HSL runtime still interact in Python
    - the strategy refactor should not block on a simultaneous HSL architecture rewrite
 
-## What The `simple_ema_mm` Experiment Actually Proved
+## Phase-0 Branch Notes
+
+These branch notes are the implementation baseline to preserve while extracting the strategy seam.
+
+1. Config ownership already lives in the staged `src/config/` pipeline.
+   - `schema.py` owns defaults
+   - `normalize.py` owns migration into canonical shape
+   - `project.py` owns target projection
+   - `runtime_compile.py` owns runtime-only aliases
+   - `validate.py` owns canonical validation
+
+2. Live HSL ownership is still partially Python-side on this branch.
+   - backtest HSL is already expressed through Rust runtime inputs
+   - live still has Python-side mode control and adjacent controller behavior
+   - phase 1 of the strategy refactor must preserve the current `TradingMode` contract rather than
+     rewrite live HSL architecture
+
+3. Backtest dynamic WEL currently works by mutating runtime bot params.
+   - `src/backtest.py` injects `wallet_exposure_limit = -1.0` as the dynamic-WEL sentinel when no
+     coin override is set
+   - `passivbot-rust/src/backtest.rs` derives effective WEL from tradability and writes it back
+     into per-coin `bot_params`
+   - cached orchestrator input then copies that mutable WEL into symbol bot params before order
+     generation
+   - this behavior must be frozen first, then replaced with explicit runtime budget state in phase 2
+
+## What The `ema_anchor` Experiment Actually Proved
 
 The experiment showed more than "we need another strategy module."
 
 It exposed three structural problems:
 
 1. Strategy math needs an isolated runtime seam.
-   - `simple_ema_mm` had to be bolted into the existing orchestrator instead of plugged in
+   - the EMA-anchor prototype had to be bolted into the existing orchestrator instead of plugged
+     in
 
 2. Immutable strategy config is currently mixed with mutable runtime budget state.
    - backtest currently changes effective `wallet_exposure_limit`
@@ -119,6 +146,12 @@ The second point is the most important architectural lesson from the experiment.
 
 ## Recommended Target Shape
 
+The detailed branch checklist lives in
+[`docs/plans/rust_strategy_runtime_refactor_execution_plan.md`](./rust_strategy_runtime_refactor_execution_plan.md).
+
+The schema guidance below reflects the final agreed direction for this branch and supersedes the
+older top-level `strategy.long` / `strategy.short` draft.
+
 ### 1. Keep The Existing Config Pipeline, Extend It
 
 Do not re-open the config-loader redesign.
@@ -133,67 +166,103 @@ The current `src/config/` pipeline is already the correct place to integrate str
 
 The strategy refactor should add to that pipeline, not route around it.
 
-### 2. Split Shared Engine Config From Strategy Config
+### 2. Keep A Fixed Per-Side Schema Under `bot`
 
-Keep shared orchestration and risk policy in `bot`.
+Keep shared orchestration and risk policy in `bot`, but group it by subsystem rather than as one
+flat side config.
 
-Move strategy-specific shape params to a new top-level `strategy` section.
+Keep strategy params in fixed namespaces under `bot.<side>.strategy.<strategy_kind>`.
+
+The full reference schema may contain all supported strategy subtrees, but user-facing configs may
+omit inactive strategy subtrees.
 
 Recommended canonical shape:
 
 ```json
 {
   "live": {
-    "strategy_kind": "simple_ema_mm"
+    "strategy_kind": "ema_anchor"
   },
   "bot": {
     "long": {
-      "n_positions": 3,
-      "total_wallet_exposure_limit": 1.0,
-      "risk_twel_enforcer_threshold": 1.0,
-      "risk_wel_enforcer_threshold": 1.0,
-      "unstuck_close_pct": 0.05,
-      "unstuck_ema_dist": -0.2,
-      "unstuck_loss_allowance_pct": 0.01,
-      "unstuck_threshold": 0.4,
-      "forager_volume_ema_span": 360.0,
-      "forager_volatility_ema_span": 60.0,
-      "forager_score_weights": {
-        "volume": 0.0,
-        "ema_readiness": 0.0,
-        "volatility": 1.0
+      "risk": {
+        "n_positions": 3,
+        "total_wallet_exposure_limit": 1.0,
+        "twel_enforcer_threshold": 1.0,
+        "wel_enforcer_threshold": 1.0,
+        "we_excess_allowance_pct": 0.0
       },
-      "hsl_enabled": false
+      "forager": {
+        "volume_ema_span": 360.0,
+        "volatility_ema_span": 60.0,
+        "volume_drop_pct": 0.5,
+        "score_weights": {
+          "volume": 0.0,
+          "ema_readiness": 0.0,
+          "volatility": 1.0
+        }
+      },
+      "hsl": {
+        "enabled": false,
+        "red_threshold": 0.2,
+        "ema_span_minutes": 60
+      },
+      "unstuck": {
+        "close_pct": 0.05,
+        "ema_dist": -0.2,
+        "loss_allowance_pct": 0.01,
+        "threshold": 0.4
+      },
+      "strategy": {
+        "ema_anchor": {
+          "base_qty_pct": 0.01,
+          "ema_span_0": 200.0,
+          "ema_span_1": 800.0,
+          "offset": 0.002,
+          "offset_psize_weight": 0.1
+        },
+        "trailing_grid": {}
+      },
     },
     "short": {
-      "n_positions": 3,
-      "total_wallet_exposure_limit": 1.0,
-      "risk_twel_enforcer_threshold": 1.0,
-      "risk_wel_enforcer_threshold": 1.0,
-      "unstuck_close_pct": 0.05,
-      "unstuck_ema_dist": -0.2,
-      "unstuck_loss_allowance_pct": 0.01,
-      "unstuck_threshold": 0.4,
-      "forager_volume_ema_span": 360.0,
-      "forager_volatility_ema_span": 60.0,
-      "forager_score_weights": {
-        "volume": 0.0,
-        "ema_readiness": 0.0,
-        "volatility": 1.0
+      "risk": {
+        "n_positions": 3,
+        "total_wallet_exposure_limit": 1.0,
+        "twel_enforcer_threshold": 1.0,
+        "wel_enforcer_threshold": 1.0,
+        "we_excess_allowance_pct": 0.0
       },
-      "hsl_enabled": false
-    }
-  },
-  "strategy": {
-    "long": {
-      "base_qty_pct": 0.01,
-      "ema_span_0": 200.0,
-      "ema_span_1": 800.0,
-      "offset": 0.002,
-      "offset_psize_weight": 0.1
-    },
-    "short": {
-      "mirror_long": true
+      "forager": {
+        "volume_ema_span": 360.0,
+        "volatility_ema_span": 60.0,
+        "volume_drop_pct": 0.5,
+        "score_weights": {
+          "volume": 0.0,
+          "ema_readiness": 0.0,
+          "volatility": 1.0
+        }
+      },
+      "hsl": {
+        "enabled": false,
+        "red_threshold": 0.2,
+        "ema_span_minutes": 60
+      },
+      "unstuck": {
+        "close_pct": 0.05,
+        "ema_dist": -0.2,
+        "loss_allowance_pct": 0.01,
+        "threshold": 0.4
+      },
+      "strategy": {
+        "ema_anchor": {
+          "base_qty_pct": 0.01,
+          "ema_span_0": 200.0,
+          "ema_span_1": 800.0,
+          "offset": 0.002,
+          "offset_psize_weight": 0.1
+        },
+        "trailing_grid": {}
+      },
     }
   }
 }
@@ -202,10 +271,10 @@ Recommended canonical shape:
 Notes:
 
 - `live.strategy_kind` is the dispatch key
-- `bot.*` remains the shared engine / risk / forager / HSL section
-- `strategy.*` becomes the strategy-owned param section
-- later, `coin_overrides.<coin>.strategy` may be added if strategy-specific per-coin overrides are
-  needed
+- `bot.<side>` is grouped by subsystem for human readability
+- `bot.<side>.strategy` has fixed strategy namespaces
+- runtime uses only the subtree selected by `live.strategy_kind`
+- user-facing configs and artifact configs should normally show only the active strategy subtree
 
 ### 3. Use Typed Strategy Params Internally
 
@@ -223,8 +292,8 @@ Recommended shape:
 
 ```rust
 pub enum StrategyParams {
-    AdaptiveTrailingGrid(AdaptiveTrailingGridParamsPair),
-    SimpleEmaMm(SimpleEmaMmParamsPair),
+    TrailingGrid(TrailingGridParamsPair),
+    EmaAnchor(EmaAnchorParamsPair),
 }
 ```
 
@@ -232,8 +301,8 @@ or equivalently:
 
 ```rust
 pub enum StrategyInstance {
-    AdaptiveTrailingGrid(AdaptiveTrailingGridRuntime),
-    SimpleEmaMm(SimpleEmaMmRuntime),
+    TrailingGrid(TrailingGridRuntime),
+    EmaAnchor(EmaAnchorRuntime),
 }
 ```
 
@@ -286,7 +355,7 @@ pub struct RuntimeBudgetState {
 The strategy contract should receive runtime budget state explicitly rather than silently reading a
 mutated config field.
 
-This is what prevents `simple_ema_mm` from accidentally inheriting adaptive-grid sizing semantics.
+This is what prevents `ema_anchor` from accidentally inheriting trailing-grid sizing semantics.
 
 ### 5. Make Strategy Order Generation A Separable Layer
 
@@ -307,8 +376,8 @@ Recommended Rust layout:
 - `passivbot-rust/src/strategies/mod.rs`
 - `passivbot-rust/src/strategies/spec.rs`
 - `passivbot-rust/src/strategies/registry.rs`
-- `passivbot-rust/src/strategies/adaptive_trailing_grid.rs`
-- `passivbot-rust/src/strategies/simple_ema_mm.rs`
+- `passivbot-rust/src/strategies/trailing_grid.rs`
+- `passivbot-rust/src/strategies/ema_anchor.rs`
 
 The earlier draft's basic direction was correct here.
 
@@ -316,7 +385,7 @@ The earlier draft's basic direction was correct here.
 
 The shared engine boundary on this branch is not identical to the final idealized architecture.
 
-On `integration/hsl-merge_codex`:
+On the current branch:
 
 - live HSL still influences per-side mode control from Python
 - backtest HSL is already integrated on the Rust side
@@ -370,7 +439,6 @@ Recommended responsibilities of the spec:
 - bounds metadata
 - side mirroring behavior
 - required features
-- legacy compatibility aliases during migration
 
 Recommended sketch:
 
@@ -392,25 +460,24 @@ This spec should become the source for:
 
 ## Compatibility And Migration Rules
 
-### Phase-1 Compatibility
+### Branch Compatibility Policy
 
-1. Keep the current adaptive-grid schema working unchanged.
-2. Accept legacy adaptive-grid params from `bot.*`.
-3. Introduce `live.strategy_kind` with a default matching current behavior.
-4. Allow `simple_ema_mm` to be expressed canonically through `strategy.*`.
+1. Backward compatibility is only for official `master` release transitions.
+2. Do not add compatibility aliases, duplicate schema support, or branch-local shims between
+   iterations of this dev branch unless explicitly requested.
 
 ### Recommended Default Strategy Naming
 
-- canonical name: `adaptive_trailing_grid`
-- temporary legacy alias accepted: `adaptive_grid`
-- experiment strategy: `simple_ema_mm`
+- canonical strategy name: `trailing_grid`
+- canonical experiment strategy name: `ema_anchor`
+- old branch-local names should be removed, not aliased
 
 ### Migration Behavior
 
 Use the existing config normalization pipeline for migration:
 
-- `normalize.py` maps legacy strategy fields into canonical `strategy.*` when needed
-- `validate.py` validates the canonical strategy section
+- `normalize.py` maps canonical config into the grouped bot-side schema
+- `validate.py` validates the canonical active strategy subtree
 - `project.py` preserves only relevant sections for each target
 - `runtime_compile.py` injects runtime-only aliases if still needed
 
@@ -423,8 +490,8 @@ Do not push these concerns into ad hoc code inside `backtest.py`, `passivbot.py`
 
 1. Config pipeline support for:
    - `live.strategy_kind`
-   - `strategy.long`
-   - `strategy.short`
+   - `bot.long.strategy.<kind>`
+   - `bot.short.strategy.<kind>`
 
 2. Optimizer plumbing that can discover strategy-owned bounds from a Rust-exposed spec.
 
@@ -452,7 +519,7 @@ Required changes:
    config rewrite.
 4. Preserve live/backtest parity by keeping strategy dispatch inside Rust.
 
-For `simple_ema_mm`, this means:
+For `ema_anchor`, this means:
 
 - fixed clip sizing based on configured strategy semantics can remain fixed
 - shared TWEL/WEL/risk gates still apply
@@ -505,22 +572,22 @@ Success criteria:
 - backtest dynamic-WEL behavior is explicit engine state
 - strategies no longer depend on mutated config fields
 
-### Phase 3: Add Canonical `strategy` Config Support
+### Phase 3: Add Canonical Grouped Strategy Config Support
 
 Goal: stop growing `bot.*` for strategy-only parameters.
 
 Tasks:
 
-1. Extend `src/config/schema.py` with `strategy`.
-2. Add normalization and validation for `strategy`.
-3. Add backward-compatible adaptive-grid migration rules.
+1. Extend `src/config/schema.py` with grouped per-side strategy namespaces.
+2. Add normalization and validation for `bot.<side>.strategy.<kind>`.
+3. Keep saved configs and artifacts active-only by default.
 4. Add tests in the current config pipeline suite.
 
 Success criteria:
 
-- canonical strategy params live outside `bot`
-- current adaptive-grid configs still load
-- transform log reflects meaningful migration steps
+- canonical strategy params live under `bot.<side>.strategy.<kind>`
+- user-facing configs do not regrow inactive strategy trees
+- transform log reflects meaningful canonicalization steps
 
 ### Phase 4: Rust-Driven Strategy Specs For Python
 
@@ -537,14 +604,14 @@ Success criteria:
 - optimizer can discover strategy params generically
 - adding a strategy no longer requires hardcoded Python bound mappings
 
-### Phase 5: Add `simple_ema_mm` Properly
+### Phase 5: Add `ema_anchor` Properly
 
 Goal: port the experiment onto the new seam cleanly.
 
 Tasks:
 
-1. Implement typed `SimpleEmaMmParams`.
-2. Express `simple_ema_mm` through canonical `strategy.*`.
+1. Implement typed `EmaAnchorParams`.
+2. Express `ema_anchor` through canonical bot-side strategy config.
 3. Add backtest/live parity tests.
 4. Add explicit tests for fixed strategy sizing vs shared risk gating.
 
@@ -580,7 +647,7 @@ The refactor is successful when all of the following are true:
 6. Dynamic allocation state is explicit runtime state rather than silent mutation of strategy
    config.
 
-7. `simple_ema_mm` runs as a normal strategy implementation, not as an orchestrator hack.
+7. `ema_anchor` runs as a normal strategy implementation, not as an orchestrator hack.
 
 ## Summary Recommendation
 

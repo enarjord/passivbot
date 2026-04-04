@@ -11,8 +11,10 @@ from .hydrate import (
 )
 from .coerce import normalize_validation_fields
 from .migrations import apply_migrations, build_base_config_from_flavor, detect_flavor
+from .optimize_bounds import prune_inactive_optimize_strategy_bounds
 from .scoring import normalize_scoring_config
 from .schema import get_template_config
+from .strategy import prune_inactive_strategy_subtrees, sync_canonical_strategy_config
 from .transform_log import ConfigTransformTracker, record_transform
 from .access import require_config_dict
 from .validate import validate_config
@@ -68,6 +70,7 @@ def normalize_config(
         verbose=verbose,
         tracker=tracker,
     )
+    sync_canonical_strategy_config(result, tracker=tracker)
     ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
     hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
     sync_with_template(
@@ -77,6 +80,9 @@ def normalize_config(
         verbose=verbose,
         tracker=tracker,
     )
+    sync_canonical_strategy_config(result, tracker=tracker)
+    prune_inactive_strategy_subtrees(result, tracker=tracker)
+    prune_inactive_optimize_strategy_bounds(result, tracker=tracker)
     normalize_validation_fields(result, raw_optimize=raw_optimize_snapshot)
     normalize_scoring_config(result, verbose=verbose, tracker=tracker)
     validate_config(

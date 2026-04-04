@@ -75,6 +75,7 @@ from config import load_input_config, load_prepared_config, prepare_config
 from config.access import get_optional_config_value, require_config_value
 from config.bot import normalize_forager_score_weights
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
+from config.shared_bot import get_bot_group, get_grouped_bot_value
 from config.scoring import (
     ObjectiveSpec,
     default_scoring_weights,
@@ -169,7 +170,8 @@ from optimization.bounds import (
 from optimization.backend_shared import cancel_pending_async_results, drain_async_results
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.backends import get_backend_runner
-from optimization.config_adapter import get_optimization_key_paths, OPTIMIZABLE_BOT_KEY_PATHS
+from optimization.config_adapter import get_optimization_key_paths, resolve_optimization_bound_path
+from config.strategy import sync_canonical_strategy_config
 from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
@@ -666,23 +668,40 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
         pside_cfg = config.get("bot", {}).get(pside, {})
         if not isinstance(pside_cfg, dict):
             continue
-        red_threshold = pside_cfg.get("hsl_red_threshold")
-        no_restart = pside_cfg.get("hsl_no_restart_drawdown_threshold")
+        hsl_cfg = get_bot_group(pside_cfg, "hsl")
+        red_threshold = get_grouped_bot_value(pside_cfg, "hsl_red_threshold")
+        no_restart = get_grouped_bot_value(pside_cfg, "hsl_no_restart_drawdown_threshold")
         if red_threshold is not None and no_restart is not None:
             if float(no_restart) < float(red_threshold):
-                pside_cfg["hsl_no_restart_drawdown_threshold"] = float(red_threshold)
+                if hsl_cfg:
+                    hsl_cfg["no_restart_drawdown_threshold"] = float(red_threshold)
+                else:
+                    pside_cfg["hsl_no_restart_drawdown_threshold"] = float(red_threshold)
     for pside in sorted(config["bot"]):
         config = optimizer_overrides(overrides_list, config, pside)
 
     for pside in ("long", "short"):
         pside_cfg = config.get("bot", {}).get(pside, {})
-        if not isinstance(pside_cfg, dict) or "forager_score_weights" not in pside_cfg:
+        if not isinstance(pside_cfg, dict):
             continue
-        pside_cfg["forager_score_weights"] = normalize_forager_score_weights(
-            pside_cfg["forager_score_weights"],
-            path=f"bot.{pside}.forager_score_weights",
+        forager_cfg = get_bot_group(pside_cfg, "forager")
+        weights = (
+            forager_cfg.get("score_weights")
+            if "score_weights" in forager_cfg
+            else get_grouped_bot_value(pside_cfg, "forager_score_weights")
         )
+        if weights is None:
+            continue
+        normalized = normalize_forager_score_weights(
+            weights,
+            path=f"bot.{pside}.forager.score_weights",
+        )
+        if forager_cfg:
+            forager_cfg["score_weights"] = normalized
+        else:
+            pside_cfg["forager_score_weights"] = normalized
 
+    sync_canonical_strategy_config(config)
     return config
 
 
@@ -1410,15 +1429,7 @@ def apply_fine_tune_bounds(
     bounds = config.get("optimize", {}).get("bounds", {})
 
     def _resolve_bound_key_path(bound_key: str):
-        if bound_key in OPTIMIZABLE_BOT_KEY_PATHS:
-            return OPTIMIZABLE_BOT_KEY_PATHS[bound_key]
-        try:
-            pside, param = bound_key.split("_", 1)
-        except ValueError:
-            return None
-        if pside not in ("long", "short"):
-            return None
-        return ("bot", pside, param)
+        return resolve_optimization_bound_path(config, bound_key)
 
     def _fix_bound_to_current_value(bound_key: str) -> bool:
         path = _resolve_bound_key_path(bound_key)

@@ -15,7 +15,35 @@ def require_real_passivbot_rust_module():
         )
 
 
-def bot_params(**overrides):
+ADAPTIVE_STRATEGY_KEYS = {
+    "close_grid_markup_end",
+    "close_grid_markup_start",
+    "close_grid_qty_pct",
+    "close_trailing_retracement_pct",
+    "close_trailing_grid_ratio",
+    "close_trailing_qty_pct",
+    "close_trailing_threshold_pct",
+    "entry_grid_double_down_factor",
+    "entry_grid_spacing_volatility_weight",
+    "entry_grid_spacing_we_weight",
+    "entry_grid_spacing_pct",
+    "entry_volatility_ema_span_hours",
+    "entry_initial_ema_dist",
+    "entry_initial_qty_pct",
+    "entry_trailing_double_down_factor",
+    "entry_trailing_retracement_pct",
+    "entry_trailing_retracement_we_weight",
+    "entry_trailing_retracement_volatility_weight",
+    "entry_trailing_grid_ratio",
+    "entry_trailing_threshold_pct",
+    "entry_trailing_threshold_we_weight",
+    "entry_trailing_threshold_volatility_weight",
+    "ema_span_0",
+    "ema_span_1",
+}
+
+
+def adaptive_strategy_params(**overrides):
     base = {
         "close_grid_markup_end": 0.01,
         "close_grid_markup_start": 0.01,
@@ -39,12 +67,26 @@ def bot_params(**overrides):
         "entry_trailing_threshold_pct": 0.0,
         "entry_trailing_threshold_we_weight": 0.0,
         "entry_trailing_threshold_volatility_weight": 0.0,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+    }
+    base.update(overrides)
+    return base
+
+
+def _split_bot_and_adaptive_strategy_overrides(overrides):
+    raw = dict(overrides or {})
+    bot_overrides = {k: v for k, v in raw.items() if k not in ADAPTIVE_STRATEGY_KEYS}
+    strategy_overrides = {k: v for k, v in raw.items() if k in ADAPTIVE_STRATEGY_KEYS}
+    return bot_overrides, strategy_overrides
+
+
+def bot_params(**overrides):
+    base = {
         "filter_volatility_ema_span": 10.0,
         "filter_volatility_drop_pct": 0.0,
         "filter_volume_ema_span": 10.0,
         "filter_volume_drop_pct": 0.0,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
         "n_positions": 1,
         "total_wallet_exposure_limit": 1.0,
         "wallet_exposure_limit": 1.0,
@@ -138,8 +180,16 @@ def make_symbol(
     short_pos_price=0.0,
     long_bp=None,
     short_bp=None,
+    long_strategy=None,
+    short_strategy=None,
     emas=None,
 ):
+    long_bot_overrides, long_strategy_overrides = _split_bot_and_adaptive_strategy_overrides(long_bp)
+    short_bot_overrides, short_strategy_overrides = _split_bot_and_adaptive_strategy_overrides(short_bp)
+    if long_strategy is None and long_strategy_overrides:
+        long_strategy = adaptive_strategy_params(**long_strategy_overrides)
+    if short_strategy is None and short_strategy_overrides:
+        short_strategy = adaptive_strategy_params(**short_strategy_overrides)
     return {
         "symbol_idx": symbol_idx,
         "order_book": {"bid": bid, "ask": ask},
@@ -161,7 +211,8 @@ def make_symbol(
             "mode": long_mode,
             "position": {"size": long_pos_size, "price": long_pos_price},
             "trailing": trailing_bundle(),
-            "bot_params": bot_params(**(long_bp or {})),
+            "bot_params": bot_params(**long_bot_overrides),
+            "strategy_params": long_strategy,
         },
         "short": {
             "mode": short_mode,
@@ -173,14 +224,23 @@ def make_symbol(
                         "n_positions": 0,
                         "total_wallet_exposure_limit": 0.0,
                     }
-                    | (short_bp or {})
+                    | short_bot_overrides
                 )
             ),
+            "strategy_params": short_strategy,
         },
     }
 
 
-def make_input(*, balance: float, global_bp=None, symbols):
+def make_input(*, balance: float, global_bp=None, strategy_kind="trailing_grid", symbols):
+    if strategy_kind == "trailing_grid":
+        for symbol in symbols:
+            for pside in ("long", "short"):
+                current = symbol[pside].get("strategy_params")
+                if current is None:
+                    symbol[pside]["strategy_params"] = adaptive_strategy_params()
+                else:
+                    symbol[pside]["strategy_params"] = adaptive_strategy_params(**current)
     return {
         "balance": balance,
         "balance_raw": balance,
@@ -190,6 +250,7 @@ def make_input(*, balance: float, global_bp=None, symbols):
             "unstuck_allowance_short": 0.0,
             "sort_global": True,
             "global_bot_params": global_bp or bot_params_pair(),
+            "strategy_kind": strategy_kind,
         },
         "symbols": symbols,
         "peek_hints": None,
@@ -232,6 +293,351 @@ def test_json_rejects_missing_ema():
     )
     with pytest.raises(ValueError, match="MissingEma"):
         compute(pbr, inp)
+
+
+def test_adaptive_grid_long_entry_output_regression():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            short_overrides={
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0,
+            }
+        ),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={"entry_initial_ema_dist": -0.01},
+                short_bp={
+                    "n_positions": 0,
+                    "total_wallet_exposure_limit": 0.0,
+                },
+            )
+        ],
+    )
+
+    out = compute(pbr, inp)
+
+    assert out["orders"] == [
+        {
+            "symbol_idx": 0,
+            "pside": "long",
+            "qty": 1.0,
+            "price": 100.0,
+            "order_type": "entry_initial_normal_long",
+            "execution_type": "limit",
+        },
+        {
+            "symbol_idx": 0,
+            "pside": "long",
+            "qty": 1.02,
+            "price": 98.0,
+            "order_type": "entry_grid_normal_long",
+            "execution_type": "limit",
+        },
+        {
+            "symbol_idx": 0,
+            "pside": "long",
+            "qty": 2.02,
+            "price": 97.01,
+            "order_type": "entry_grid_normal_long",
+            "execution_type": "limit",
+        },
+        {
+            "symbol_idx": 0,
+            "pside": "long",
+            "qty": 4.04,
+            "price": 96.04,
+            "order_type": "entry_grid_normal_long",
+            "execution_type": "limit",
+        },
+        {
+            "symbol_idx": 0,
+            "pside": "long",
+            "qty": 2.27,
+            "price": 95.07,
+            "order_type": "entry_grid_cropped_long",
+            "execution_type": "limit",
+        },
+    ]
+
+
+def test_adaptive_grid_short_entry_output_regression():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            long_overrides={
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0,
+            },
+            short_overrides={
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+            },
+        ),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={
+                    "n_positions": 0,
+                    "total_wallet_exposure_limit": 0.0,
+                },
+                short_bp={
+                    "n_positions": 1,
+                    "total_wallet_exposure_limit": 1.0,
+                    "entry_initial_ema_dist": 0.01,
+                },
+            )
+        ],
+    )
+
+    out = compute(pbr, inp)
+
+    assert out["orders"] == [
+        {
+            "symbol_idx": 0,
+            "pside": "short",
+            "qty": -0.99,
+            "price": 101.0,
+            "order_type": "entry_initial_normal_short",
+            "execution_type": "limit",
+        },
+        {
+            "symbol_idx": 0,
+            "pside": "short",
+            "qty": -0.99,
+            "price": 103.02,
+            "order_type": "entry_grid_normal_short",
+            "execution_type": "limit",
+        },
+        {
+            "symbol_idx": 0,
+            "pside": "short",
+            "qty": -1.98,
+            "price": 104.06,
+            "order_type": "entry_grid_normal_short",
+            "execution_type": "limit",
+        },
+        {
+            "symbol_idx": 0,
+            "pside": "short",
+            "qty": -5.63,
+            "price": 105.1,
+            "order_type": "entry_grid_inflated_short",
+            "execution_type": "limit",
+        },
+    ]
+
+
+def test_ema_anchor_long_position_emits_single_entry_and_close():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind="ema_anchor",
+        global_bp=bot_params_pair(
+            short_overrides={
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0,
+            }
+        ),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_pos_size=1.0,
+                long_pos_price=100.0,
+                long_strategy={
+                    "base_qty_pct": 0.1,
+                    "ema_span_0": 10.0,
+                    "ema_span_1": 20.0,
+                    "offset": 0.01,
+                    "offset_psize_weight": 0.0,
+                },
+                short_strategy={
+                    "base_qty_pct": 0.1,
+                    "ema_span_0": 10.0,
+                    "ema_span_1": 20.0,
+                    "offset": 0.01,
+                    "offset_psize_weight": 0.0,
+                },
+            )
+        ],
+    )
+
+    out = compute(pbr, inp)
+
+    assert out["orders"] == [
+        {
+            "symbol_idx": 0,
+            "pside": "long",
+            "qty": -0.99,
+            "price": 101.0,
+            "order_type": "close_ema_anchor_long",
+            "execution_type": "limit",
+        },
+        {
+            "symbol_idx": 0,
+            "pside": "long",
+            "qty": 1.01,
+            "price": 99.0,
+            "order_type": "entry_ema_anchor_long",
+            "execution_type": "limit",
+        },
+    ]
+
+
+def test_ema_anchor_respects_runtime_budget_for_base_clip_size():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind="ema_anchor",
+        global_bp=bot_params_pair(),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={
+                    "wallet_exposure_limit": 1.0,
+                    "risk_we_excess_allowance_pct": 0.0,
+                },
+                long_strategy={
+                    "base_qty_pct": 0.1,
+                    "ema_span_0": 10.0,
+                    "ema_span_1": 20.0,
+                    "offset": 0.0,
+                    "offset_psize_weight": 0.0,
+                },
+                short_strategy={
+                    "base_qty_pct": 0.1,
+                    "ema_span_0": 10.0,
+                    "ema_span_1": 20.0,
+                    "offset": 0.0,
+                    "offset_psize_weight": 0.0,
+                },
+            )
+        ],
+    )
+    inp["symbols"][0]["long"]["runtime_budget"] = {
+        "configured_wallet_exposure_limit": 1.0,
+        "effective_wallet_exposure_limit": 0.3,
+        "configured_n_positions": 1,
+        "effective_n_positions": 1,
+    }
+
+    out = compute(pbr, inp)
+    assert out["orders"][0]["qty"] == pytest.approx(0.3)
+
+
+def test_ema_anchor_one_way_mode_blocks_short_entries_while_long_position_exists():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind="ema_anchor",
+        global_bp=bot_params_pair(
+            short_overrides={
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+            }
+        ),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_pos_size=1.0,
+                long_pos_price=100.0,
+                long_strategy={
+                    "base_qty_pct": 0.1,
+                    "ema_span_0": 10.0,
+                    "ema_span_1": 20.0,
+                    "offset": 0.01,
+                    "offset_psize_weight": 0.0,
+                },
+                short_strategy={
+                    "base_qty_pct": 0.1,
+                    "ema_span_0": 10.0,
+                    "ema_span_1": 20.0,
+                    "offset": 0.01,
+                    "offset_psize_weight": 0.0,
+                },
+            )
+        ],
+    )
+    inp["global"]["hedge_mode"] = False
+
+    out = compute(pbr, inp)
+
+    assert any(o["pside"] == "long" and o["order_type"] == "entry_ema_anchor_long" for o in out["orders"])
+    assert any(o["pside"] == "long" and o["order_type"] == "close_ema_anchor_long" for o in out["orders"])
+    assert not any(
+        o["pside"] == "short" and o["order_type"].startswith("entry_") for o in out["orders"]
+    )
+    assert out["diagnostics"]["symbol_states"][0]["short"]["active"] is False
+
+
+def test_ema_anchor_one_way_mode_blocks_long_entries_while_short_position_exists():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind="ema_anchor",
+        global_bp=bot_params_pair(
+            short_overrides={
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+            }
+        ),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                short_pos_size=-1.0,
+                short_pos_price=100.0,
+                long_strategy={
+                    "base_qty_pct": 0.1,
+                    "ema_span_0": 10.0,
+                    "ema_span_1": 20.0,
+                    "offset": 0.01,
+                    "offset_psize_weight": 0.0,
+                },
+                short_strategy={
+                    "base_qty_pct": 0.1,
+                    "ema_span_0": 10.0,
+                    "ema_span_1": 20.0,
+                    "offset": 0.01,
+                    "offset_psize_weight": 0.0,
+                },
+            )
+        ],
+    )
+    inp["global"]["hedge_mode"] = False
+
+    out = compute(pbr, inp)
+
+    assert any(
+        o["pside"] == "short" and o["order_type"] == "entry_ema_anchor_short" for o in out["orders"]
+    )
+    assert any(
+        o["pside"] == "short" and o["order_type"] == "close_ema_anchor_short" for o in out["orders"]
+    )
+    assert not any(
+        o["pside"] == "long" and o["order_type"].startswith("entry_") for o in out["orders"]
+    )
+    assert out["diagnostics"]["symbol_states"][0]["long"]["active"] is False
 
 
 def test_panic_mode_emits_close_panic_long():
