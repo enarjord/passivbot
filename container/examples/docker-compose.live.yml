@@ -9,6 +9,7 @@ services:
       PB_USER: ${PB_USER:?set PB_USER}
       PB_CONFIG_PATH: /data/configs/live.json
       PB_API_KEYS_PATH: /data/api-keys.json
+      PB_LOG_DIR: /data/logs
       PB_MONITOR_ROOT: /data/monitor
     volumes:
       - ../../configs:/data/configs:ro

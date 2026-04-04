@@ -114,11 +114,71 @@ def test_entrypoint_generates_runtime_files_and_invokes_cli(tmp_path):
 
     invocation = json.loads(record_path.read_text())
     assert Path(invocation["argv"][0]).name == "passivbot"
-    assert invocation["argv"][1:4] == ["live", str(runtime_root / "config.runtime.json"), "-u"]
-    assert invocation["argv"][4:] == ["bitget_01", "--log-level", "info"]
+    assert invocation["argv"][1:4] == ["live", "-u", "bitget_01"]
+    assert invocation["argv"][4:] == [
+        "--monitor.enabled",
+        "false",
+        "--symbols",
+        "BTC,ETH",
+        "--log-level",
+        "info",
+    ]
 
     api_keys = json.loads((runtime_root / "api-keys.json").read_text())
     assert api_keys["bitget_01"]["exchange"] == "bitget"
-    rendered_config = json.loads((runtime_root / "config.runtime.json").read_text())
-    assert rendered_config["live"]["approved_coins"] == ["BTC", "ETH"]
-    assert rendered_config["monitor"]["enabled"] is False
+    assert not (runtime_root / "config.runtime.json").exists()
+
+
+def test_entrypoint_preserves_mounted_config_path_and_writes_log_file(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_passivbot = fake_bin / "passivbot"
+    record_path = tmp_path / "invocation.json"
+    fake_passivbot.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "print('hello from fake passivbot')\n"
+        "with open(os.environ['FAKE_PASSIVBOT_RECORD'], 'w', encoding='utf-8') as f:\n"
+        "    json.dump({'argv': sys.argv}, f)\n",
+        encoding="utf-8",
+    )
+    fake_passivbot.chmod(fake_passivbot.stat().st_mode | stat.S_IEXEC)
+
+    app_root = tmp_path / "app"
+    runtime_root = tmp_path / "runtime"
+    logs_root = tmp_path / "logs"
+    app_root.mkdir()
+    runtime_root.mkdir()
+    logs_root.mkdir()
+    config_path = tmp_path / "configs" / "live.json"
+    config_path.parent.mkdir()
+    config_path.write_text('{"live": {"approved_coins": "approved.json"}}\n', encoding="utf-8")
+
+    env = os.environ | {
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "PB_APP_ROOT": str(app_root),
+        "PB_RUNTIME_ROOT": str(runtime_root),
+        "PB_USER": "bitget_01",
+        "PB_EXCHANGE": "bitget",
+        "PB_API_KEY": "key123",
+        "PB_API_SECRET": "secret123",
+        "PB_CONFIG_PATH": str(config_path),
+        "PB_MONITOR_ENABLED": "false",
+        "PB_LOG_DIR": str(logs_root),
+        "FAKE_PASSIVBOT_RECORD": str(record_path),
+    }
+
+    subprocess.run(
+        [str(ENTRYPOINT)],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+    invocation = json.loads(record_path.read_text())
+    assert invocation["argv"][1:5] == ["live", str(config_path), "-u", "bitget_01"]
+    assert invocation["argv"][5:] == ["--monitor.enabled", "false"]
+    assert not (runtime_root / "config.runtime.json").exists()
+    log_file = logs_root / "bitget_01.log"
+    assert log_file.exists()
+    assert "hello from fake passivbot" in log_file.read_text(encoding="utf-8")

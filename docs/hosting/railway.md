@@ -18,13 +18,20 @@ Optional:
 - `PB_API_PASSPHRASE`
 - `PB_CONFIG_INLINE`
 - `PB_APPROVED_COINS`
+- `PB_LOG_DIR`
+- `PB_LOG_FILE`
 - `PB_LOG_LEVEL`
 - `PB_MONITOR_ENABLED`
 - `PB_MONITOR_ROOT`
 
 ## Persistent Storage
 
-If you want monitor output, logs, or cache-like writable data to persist across restarts, attach a Railway volume and point writable paths such as `PB_MONITOR_ROOT` into that mounted location.
+If you want monitor output or file logs to persist across restarts, attach a Railway volume and point writable paths such as:
+
+- `PB_MONITOR_ROOT`
+- `PB_LOG_DIR`
+
+into that mounted location.
 
 ## What Not To Do
 

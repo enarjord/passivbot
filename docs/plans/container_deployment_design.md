@@ -111,11 +111,13 @@ If `PB_API_KEYS_PATH` is unset, allow env-based credential materialization with:
 ### Optional Convenience Inputs
 
 - `PB_APPROVED_COINS`
-  Optional comma-separated list for simple hosted deployments.
+  Optional comma-separated list or `--symbols`-style path for simple hosted deployments.
 - `PB_LOG_LEVEL`
 - `PB_MONITOR_ENABLED`
+- `PB_LOG_DIR`
+- `PB_LOG_FILE`
 
-These should be rendered into a tiny config override only if provided.
+When a mounted config path is in use, these should be translated into normal live CLI overrides where possible. Inline-config mode may render them into a temporary config file.
 
 ## Canonical Writable Paths
 
@@ -143,9 +145,10 @@ Recommended operator mounts:
 2. Determine credentials source.
 3. If needed, render `/run/passivbot/api-keys.json`.
 4. Determine config source.
-5. If needed, render `/run/passivbot/config.override.json`.
-6. Choose the final config path.
-7. Exec the canonical CLI:
+5. If `PB_CONFIG_INLINE` is used, render `/run/passivbot/config.override.json`.
+6. If a mounted config path is used, translate deployment overrides into normal live CLI flags so the original config path stays intact.
+7. Choose the final config path.
+8. Exec the canonical CLI:
 
 ```bash
 passivbot live [config_path] -u "$PB_USER" ...
@@ -357,9 +360,25 @@ if [ -z "$API_KEYS_PATH" ]; then
   API_KEYS_PATH="/run/passivbot/api-keys.json"
 fi
 
-if [ -n "${PB_CONFIG_INLINE:-}" ] || [ -n "${PB_APPROVED_COINS:-}" ] || [ -n "${PB_MONITOR_ENABLED:-}" ] || [ -n "${PB_LOG_LEVEL:-}" ]; then
+if [ -n "${PB_CONFIG_INLINE:-}" ]; then
   python /app/container/render_config.py
   CONFIG_PATH="/run/passivbot/config.override.json"
+fi
+
+if [ -n "${PB_LOG_LEVEL:-}" ]; then
+  set -- --log-level "$PB_LOG_LEVEL" "$@"
+fi
+
+if [ -n "${PB_APPROVED_COINS:-}" ]; then
+  set -- --symbols "$PB_APPROVED_COINS" "$@"
+fi
+
+if [ -n "${PB_MONITOR_ENABLED:-}" ]; then
+  set -- --monitor.enabled "$PB_MONITOR_ENABLED" "$@"
+fi
+
+if [ -n "${PB_MONITOR_ROOT:-}" ]; then
+  set -- --monitor.root_dir "$PB_MONITOR_ROOT" "$@"
 fi
 
 export PB_API_KEYS_PATH_EFFECTIVE="$API_KEYS_PATH"
@@ -376,6 +395,8 @@ The final implementation may merge mounted config with generated overrides rathe
 - base config path
 - override patch values
 - deterministic output path
+
+In practice, mounted config paths should prefer CLI overrides so relative sidecar resolution keeps using the original config path semantics.
 
 ## Suggested `render_api_keys.py`
 

@@ -8,6 +8,7 @@ The container startup path uses:
 - a thin entrypoint wrapper
 - optional env-generated `api-keys.json`
 - optional env-generated config overrides
+- optional file logging via `PB_LOG_DIR` / `PB_LOG_FILE`
 
 This is the intended base for Docker, Docker Compose, and hosted platforms such as Railway.
 
@@ -71,7 +72,7 @@ If neither config env is set, the container starts from the in-code schema defau
 ## Optional Deployment Overrides
 
 - `PB_APPROVED_COINS`
-  Comma-separated list such as `BTC,ETH,SOL`, or a JSON/HJSON list/dict payload.
+  Comma-separated list such as `BTC,ETH,SOL`, or a path accepted by the normal `--symbols` live CLI flag.
 - `PB_LOG_LEVEL`
   For example `1`, `2`, `debug`, or `trace`.
 - `PB_MONITOR_ENABLED`
@@ -79,7 +80,24 @@ If neither config env is set, the container starts from the in-code schema defau
 - `PB_MONITOR_ROOT`
   Override the monitor root directory, for example `/data/monitor`
 
-If any of these are set, the entrypoint renders a temporary config file and starts `passivbot live` with that rendered config.
+When `PB_CONFIG_PATH` is set, these overrides are translated into normal `passivbot live` CLI flags so the original config path stays intact and config-relative sidecar semantics are preserved.
+
+When `PB_CONFIG_INLINE` is set, the entrypoint renders a temporary config file and starts `passivbot live` with that rendered config.
+
+`PB_CONFIG_INLINE` and `PB_CONFIG_PATH` are mutually exclusive.
+
+## File Logging
+
+Container logs still go to stdout/stderr by default.
+
+If you also want a persisted log file inside the container contract, set either:
+
+- `PB_LOG_DIR`
+  Creates or appends to `${PB_LOG_DIR}/${PB_USER}.log`
+- `PB_LOG_FILE`
+  Explicit log file path
+
+If both are set, `PB_LOG_FILE` wins.
 
 ## Docker Run Example
 
@@ -90,9 +108,11 @@ docker run --rm \
   -e PB_USER=bitget_01 \
   -e PB_CONFIG_PATH=/data/configs/live.json \
   -e PB_API_KEYS_PATH=/data/api-keys.json \
+  -e PB_LOG_DIR=/data/logs \
   -e PB_MONITOR_ROOT=/data/monitor \
   -v "$(pwd)/configs:/data/configs:ro" \
   -v "$(pwd)/api-keys.json:/data/api-keys.json:ro" \
+  -v "$(pwd)/logs:/data/logs" \
   -v "$(pwd)/monitor:/data/monitor" \
   passivbot-live:latest
 ```
