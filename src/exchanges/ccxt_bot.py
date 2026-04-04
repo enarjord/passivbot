@@ -198,6 +198,7 @@ class CCXTBot(Passivbot):
 
         config = {k: v for k, v in self.user_info.items() if k not in passivbot_fields}
         config["enableRateLimit"] = True
+        config.setdefault("timeout", 30000)  # 30 s — CCXT default ~10 s is too tight on cold boot
 
         # Remap legacy credential field names to CCXT-native names for backwards compatibility
         legacy_mappings = {

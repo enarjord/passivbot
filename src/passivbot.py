@@ -7,7 +7,7 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 
 set_windows_event_loop_policy()
 
-from ccxt.base.errors import NetworkError, RateLimitExceeded
+from ccxt.base import errors as ccxt_errors
 import random
 import traceback
 import argparse
@@ -105,6 +105,12 @@ from procedures import (
 from utils import get_file_mod_ms
 from downloader import compute_per_coin_warmup_minutes
 import re
+
+NetworkError = ccxt_errors.NetworkError
+RateLimitExceeded = ccxt_errors.RateLimitExceeded
+# Some isolated tests stub ccxt.base.errors without RequestTimeout; treat it as a
+# NetworkError-class transient startup error when the dedicated symbol is absent.
+RequestTimeout = getattr(ccxt_errors, "RequestTimeout", NetworkError)
 
 # Orchestrator-only: ideal orders are computed via Rust orchestrator (JSON API).
 # Legacy Python order calculation paths are removed in this branch.
@@ -2179,7 +2185,23 @@ class Passivbot:
         """Load exchange market metadata and refresh approval lists."""
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
-        await self.update_exchange_config()  # set hedge mode
+        # Retry on transient network errors (TCP + TLS handshake on a fresh
+        # aiohttp session can time out; also called hourly so transient errors
+        # should not abort the refresh cycle).
+        for _attempt in range(1, 4):
+            try:
+                await self.update_exchange_config()  # set hedge mode
+                break
+            except (RequestTimeout, NetworkError) as e:
+                if _attempt == 3:
+                    raise
+                logging.warning(
+                    "[init_markets] update_exchange_config error (attempt %d/3): %s – retrying in %ds",
+                    _attempt,
+                    e,
+                    5 * _attempt,
+                )
+                await asyncio.sleep(5 * _attempt)
         # Reuse existing ccxt session when available (ensures shared options such as fetchMarkets types).
         cc_instance = getattr(self, "cca", None)
         self.markets_dict = await load_markets(
