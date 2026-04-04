@@ -25,14 +25,7 @@ Optional:
 
 ## Persistent Storage
 
-If you want monitor output or file logs to persist across restarts, attach a Railway volume and point writable paths such as:
-
-- `PB_MONITOR_ROOT`
-- `PB_LOG_DIR`
-
-`PB_LOG_DIR` maps onto Passivbot's canonical `logging.dir`, so Railway uses the same file-logging path as normal live runs.
-
-into that mounted location.
+If you want monitor output or file logs to persist across restarts, attach a Railway volume and point writable paths such as `PB_MONITOR_ROOT` and `PB_LOG_DIR` into that mounted location. `PB_LOG_DIR` maps onto Passivbot's canonical `logging.dir`, so Railway uses the same file-logging path as normal live runs.
 
 ## What Not To Do
 
