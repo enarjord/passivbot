@@ -1,0 +1,17 @@
+services:
+  passivbot-live:
+    build:
+      context: ../..
+      dockerfile: Dockerfile_live
+    image: passivbot-live:latest
+    restart: unless-stopped
+    environment:
+      PB_USER: ${PB_USER:?set PB_USER}
+      PB_CONFIG_PATH: /data/configs/live.json
+      PB_API_KEYS_PATH: /data/api-keys.json
+      PB_MONITOR_ROOT: /data/monitor
+    volumes:
+      - ../../configs:/data/configs:ro
+      - ../../api-keys.json:/data/api-keys.json:ro
+      - ../../logs:/data/logs
+      - ../../monitor:/data/monitor

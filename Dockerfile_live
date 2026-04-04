@@ -1,4 +1,4 @@
-# Stage 1: Build Rust extensions
+# Stage 1: Build the Passivbot live wheel
 FROM python:3.12-slim-bookworm AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -19,15 +19,20 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 
 WORKDIR /app
 
-# Copy only files needed for building the Rust extension
+# Copy only files needed to build the live package wheel
+COPY pyproject.toml pyproject.toml
+COPY setup.py setup.py
+COPY requirements-dev.txt requirements-dev.txt
+COPY requirements-full.txt requirements-full.txt
+COPY requirements-live.txt requirements-live.txt
 COPY requirements-rust.txt requirements-rust.txt
+COPY src src
 COPY passivbot-rust/Cargo.toml passivbot-rust/Cargo.toml
 COPY passivbot-rust/src passivbot-rust/src
 
-# Install maturin and build the extension
-RUN pip install --no-cache-dir -r requirements-rust.txt \
-    && cd passivbot-rust \
-    && maturin build --release
+# Install build requirements and build the wheel without dependency resolution
+RUN pip install --no-cache-dir -r requirements-rust.txt setuptools-rust wheel \
+    && python -m pip wheel . --no-deps --no-build-isolation -w /tmp/wheels
 
 # Stage 2: Final minimal image
 FROM python:3.12-slim-bookworm
@@ -37,19 +42,17 @@ ENV SKIP_RUST_COMPILE=true
 
 WORKDIR /app
 
-# Copy runtime source files
-COPY requirements-rust.txt requirements-rust.txt
-COPY requirements-live.txt requirements-live.txt
+# Copy runtime support files
 COPY broker_codes.hjson broker_codes.hjson
-COPY src src
+COPY container container
 
-# Copy prebuilt wheel from the builder stage
-COPY --from=builder /app/passivbot-rust/target/wheels/*.whl /tmp/
+# Copy the built Passivbot wheel from the builder stage
+COPY --from=builder /tmp/wheels/*.whl /tmp/wheels/
 
-# Install Python packages (including Rust extension wheel)
-RUN pip install --no-cache-dir /tmp/*.whl \
-    && pip install --no-cache-dir -r requirements-live.txt \
+# Install the live package and make the entrypoint executable
+RUN pip install --no-cache-dir /tmp/wheels/passivbot-*.whl \
+    && chmod +x /app/container/entrypoint.sh \
     && rm -rf /tmp/* ~/.cache/pip
 
-# Default command
-CMD ["python", "src/main.py"]
+# Keep the wrapper on the command path and pass runtime args through it
+ENTRYPOINT ["/app/container/entrypoint.sh"]

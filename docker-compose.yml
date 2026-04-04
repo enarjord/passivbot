@@ -25,9 +25,18 @@ services:
     image: passivbot-live:latest
     container_name: passivbot-live
     restart: unless-stopped
+    environment:
+      PB_USER: ${PB_USER:-}
+      PB_CONFIG_PATH: ${PB_CONFIG_PATH:-/data/configs/live.json}
+      PB_API_KEYS_PATH: ${PB_API_KEYS_PATH:-/data/api-keys.json}
+      PB_MONITOR_ROOT: ${PB_MONITOR_ROOT:-/data/monitor}
     volumes:
-      - ./configs/:/app/configs/
-      - ./api-keys.json:/app/api-keys.json
+      - ./configs/:/data/configs/:ro
+      - ./api-keys.json:/data/api-keys.json:ro
+      - ./logs/:/data/logs/
+      - ./monitor/:/data/monitor/
     working_dir: /app
-    # command: python src/main.py configs/examples/forager_long_only.json
+    # Example:
+    # PB_USER=bitget_01 docker compose --profile live up passivbot-live
+    # command: ["--log-level", "info"]
     
