@@ -140,6 +140,7 @@ FULL_INSTALL_MODULE_HINTS = {
     "matplotlib",
     "msgpack",
     "plotly",
+    "pymoo",
     "psutil",
     "pyecharts",
     "requests",
