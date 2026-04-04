@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 TRACE_LEVEL = 5
 TRACE_LEVEL_NAME = "TRACE"
@@ -15,6 +17,7 @@ DEFAULT_FORMAT = "%(asctime)s %(levelname)-8s %(message)s"
 DEFAULT_FORMAT_WITH_PREFIX = "%(asctime)s %(levelname)-8s [%(log_prefix)s] %(message)s"
 DEFAULT_DATEFMT = "%Y-%m-%dT%H:%M:%SZ"
 _LAST_LOG_ACTIVITY_MONOTONIC = time.monotonic()
+DEFAULT_LOG_FILENAME_MAX_LEN = 100
 
 
 class PrefixFilter(logging.Filter):
@@ -120,6 +123,71 @@ def _debug_to_level(debug: int) -> int:
     if debug == 2:
         return logging.DEBUG
     return TRACE_LEVEL
+
+
+def sanitize_log_filename(text: str, *, max_len: int = DEFAULT_LOG_FILENAME_MAX_LEN) -> str:
+    """Return a filesystem-safe filename fragment."""
+    sanitized = re.sub(r"[\s/\\]", "_", text)
+    sanitized = re.sub(r'[<>:"|?*]', "", sanitized)
+    sanitized = sanitized.strip(". ")
+    if len(sanitized) > max_len:
+        sanitized = sanitized[:max_len]
+    return sanitized or "log"
+
+
+def create_command_log_filename(
+    command_args: Sequence[object], *, timestamp: Optional[datetime] = None
+) -> str:
+    """Return a timestamped log filename for a command invocation."""
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc)
+    elif timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    command_str = " ".join(str(part) for part in command_args)
+    sanitized_command = sanitize_log_filename(command_str)
+    prefix = timestamp.astimezone(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return f"{prefix}_{sanitized_command}.log"
+
+
+def build_command_log_path(
+    command_args: Sequence[object], log_dir: str | Path, *, timestamp: Optional[datetime] = None
+) -> Path:
+    """Return the log file path for a command invocation under the given directory."""
+    return Path(log_dir).expanduser() / create_command_log_filename(command_args, timestamp=timestamp)
+
+
+def resolve_command_logging_options(
+    logging_config: dict,
+    command_args: Sequence[object],
+    *,
+    default_persist: bool = False,
+) -> tuple[Optional[str], bool, int, int]:
+    """Resolve file-logging options from config for a command invocation."""
+    persist_to_file = bool(logging_config.get("persist_to_file", default_persist))
+    rotation_enabled = bool(logging_config.get("rotation_enabled", False))
+
+    try:
+        rotation_max_mb = float(logging_config.get("rotation_max_mb", 10))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("logging.rotation_max_mb must be a positive number") from exc
+    if rotation_max_mb <= 0:
+        raise ValueError("logging.rotation_max_mb must be greater than 0")
+
+    try:
+        rotation_backups = int(logging_config.get("rotation_backups", 5))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("logging.rotation_backups must be a non-negative integer") from exc
+    if rotation_backups < 0:
+        raise ValueError("logging.rotation_backups must be a non-negative integer")
+
+    log_file = None
+    if persist_to_file:
+        log_dir = logging_config.get("dir", "logs")
+        if not isinstance(log_dir, str) or not log_dir.strip():
+            raise ValueError("logging.dir must be a non-empty string when file logging is enabled")
+        log_file = str(build_command_log_path(command_args, log_dir.strip()))
+
+    return log_file, rotation_enabled, int(rotation_max_mb * 1024 * 1024), rotation_backups
 
 
 def configure_logging(

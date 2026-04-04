@@ -4,6 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot live` now persists logs to a timestamped file under `logs/` by default, using `config.logging` for the on/off switch and file-rotation settings. This makes the built-in live workflow self-logging without needing `run_with_logging.py`.
 - Restored `passivbot live --user` / `-u` as the curated shorthand for `live.user`, so existing live-run workflows using `-u account_name` work again and the alias is visible in the default live help output.
 - `passivbot live -h` now shows a curated shorthand for `live.pnls_max_lookback_days` as `--pnls-max-lookback-days` / `-pmld` in the default help output instead of exposing it only via `--help-all` and the raw dotted config flag.
 - Added `passivbot tool pareto`, a CLI Pareto front explorer that filters JSON Pareto members with optimizer-style limit expressions, defaults to the newest local `optimize_results/.../pareto` when no path is given, accepts either a run dir or `pareto/` dir, and selects a single candidate using knee, reference-point, ideal-point, weighted utility, lexicographic, or outranking methods with optional shortlist and JSON output. It now also shows the retained front's ideal point, and `-o` / `--objectives` can use stored metrics outside the original `optimize.scoring` list when their min/max direction is known.

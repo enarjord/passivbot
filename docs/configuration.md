@@ -73,6 +73,11 @@ Example per-metric aggregation:
   - Accepted values: `0` (warnings), `1` (info), `2` (debug), `3` (trace).
   - The CLI flag `--debug-level`/`--log-level` on `passivbot live` and `passivbot backtest` overrides the configured value for a single run.
   - Components such as the CandlestickManager inherit this level, so EMA warm-up and candle maintenance logs follow the same verbosity.
+- **persist_to_file**: When `true`, `passivbot live` also writes the console log stream to a timestamped file on disk. The canonical default is `true`, so live runs write to `logs/` unless you disable it explicitly. In this first integrated version, backtest/optimize still use console logging unless you wrap them externally.
+- **dir**: Directory used for persisted live log files when `persist_to_file` is enabled. Default `logs`.
+- **rotation_enabled**: Enables rotating live log files instead of appending to one file per process. Default `false`.
+- **rotation_max_mb**: Maximum size in megabytes for each live log file before rotation. Used only when `rotation_enabled = true`. Default `10`.
+- **rotation_backups**: Number of rotated backup files to keep when rotation is enabled. Default `5`.
 - **memory_snapshot_interval_minutes**: Interval between `_log_memory_snapshot` telemetry entries (RSS, cache footprint, asyncio task counts). Default `30`; lower values surface leaks sooner, higher values reduce noise.
 - **volume_refresh_info_threshold_seconds**: Minimum duration a bulk volume-EMA refresh must take before it is promoted to an INFO log. Runs that finish faster emit only DEBUG output (when debug logging is enabled). Set `0` to log every refresh at INFO.
 

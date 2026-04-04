@@ -58,6 +58,7 @@ from config.overrides import parse_overrides
 from logging_setup import (
     configure_logging,
     get_last_log_activity_monotonic,
+    resolve_command_logging_options,
     resolve_log_level,
 )
 from utils import (
@@ -8346,6 +8347,27 @@ async def main():
         logging_section = {}
     config["logging"] = logging_section
     logging_section["level"] = effective_log_level
+    live_log_file, live_log_rotation, live_log_max_bytes, live_log_backup_count = resolve_command_logging_options(
+        logging_section,
+        sys.argv,
+        default_persist=True,
+    )
+
+    if effective_log_level != initial_log_level or live_log_file is not None:
+        try:
+            configure_logging(
+                debug=effective_log_level,
+                log_file=live_log_file,
+                rotation=live_log_rotation,
+                max_bytes=live_log_max_bytes,
+                backup_count=live_log_backup_count,
+            )
+        except Exception as exc:
+            if live_log_file is not None:
+                raise RuntimeError(
+                    f"failed to initialize live log file '{live_log_file}': {exc}"
+                ) from exc
+            raise
 
     custom_endpoints_cli = args.custom_endpoints
     live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
@@ -8402,7 +8424,23 @@ async def main():
     user_info = load_user_info(require_live_value(config, "user"))
     # Reconfigure logging with exchange prefix now that we know the exchange
     exchange_prefix = user_info["exchange"]
-    configure_logging(debug=effective_log_level, prefix=exchange_prefix)
+    try:
+        configure_logging(
+            debug=effective_log_level,
+            log_file=live_log_file,
+            rotation=live_log_rotation,
+            max_bytes=live_log_max_bytes,
+            backup_count=live_log_backup_count,
+            prefix=exchange_prefix,
+        )
+    except Exception as exc:
+        if live_log_file is not None:
+            raise RuntimeError(
+                f"failed to initialize live log file '{live_log_file}': {exc}"
+            ) from exc
+        raise
+    if live_log_file is not None:
+        logging.info("[logging] writing live logs to %s", live_log_file)
     await load_markets(user_info["exchange"], verbose=True)
 
     config = parse_overrides(config, verbose=True)

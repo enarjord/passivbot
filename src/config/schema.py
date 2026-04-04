@@ -348,8 +348,13 @@ def get_template_config():
                 "warmup_ratio": 0.3,
             },
             "logging": {
+                "dir": "logs",
                 "level": 1,
                 "memory_snapshot_interval_minutes": 30,
+                "persist_to_file": True,
+                "rotation_backups": 5,
+                "rotation_enabled": False,
+                "rotation_max_mb": 10,
                 "volume_refresh_info_threshold_seconds": 30,
             },
             "monitor": {
