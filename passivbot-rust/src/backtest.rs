@@ -520,6 +520,7 @@ pub struct Backtest<'a> {
     peak_strategy_equity_series: Vec<f64>,
     peak_strategy_equity_series_pside: [Vec<f64>; 2],
     hard_stop_no_restart_peak_strategy_equity: f64,
+    liquidated: bool,
     final_hard_stop_metrics: Option<HardStopMetrics>,
 }
 
@@ -1860,9 +1861,14 @@ impl<'a> Backtest<'a> {
             peak_strategy_equity_series: Vec::new(),
             peak_strategy_equity_series_pside: [Vec::new(), Vec::new()],
             hard_stop_no_restart_peak_strategy_equity: 0.0,
+            liquidated: false,
             final_hard_stop_metrics: None,
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
+    }
+
+    pub fn liquidated(&self) -> bool {
+        self.liquidated
     }
 
     pub fn run(&mut self) -> Result<(Vec<Fill>, Equities), String> {
@@ -1977,6 +1983,7 @@ impl<'a> Backtest<'a> {
         if !liquidated {
             return false;
         }
+        self.liquidated = true;
 
         if let Some(last_usd_equity) = self.equities.usd_total_equity.last_mut() {
             *last_usd_equity = floor_usd.max(0.0);

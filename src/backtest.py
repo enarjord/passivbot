@@ -229,12 +229,6 @@ def aggregate_candles(candles_1m: np.ndarray, interval: int) -> np.ndarray:
     return aggregate_hlcvs(candles_1m, interval)
 
 
-def _liquidation_drawdown_threshold(config: dict) -> float:
-    threshold = float(get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0)
-    threshold = min(max(threshold, 0.0), 1.0 - 1e-12)
-    return 1.0 - threshold
-
-
 def _looks_like_bool_token(value: str) -> bool:
     if value is None:
         return False
@@ -698,12 +692,11 @@ def execute_backtest(payload: BacktestPayload, config: dict):
     equities_array = np.asarray(equities_array)
     payload.hard_stop_plot_data = dict(hard_stop_plot_data or {})
     analysis = expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config)
-    if float(analysis.get("drawdown_worst", 0.0) or 0.0) >= _liquidation_drawdown_threshold(
-        config
-    ) - 1e-12:
+    if bool(analysis.get("liquidated", False)):
+        final_equity_usd = float(equities_array[-1, 1]) if equities_array.size else float("nan")
         logging.debug(
-            "Backtest liquidated early | drawdown_worst=%.6f | liquidation_threshold=%.6f",
-            float(analysis.get("drawdown_worst", 0.0) or 0.0),
+            "Backtest liquidated early | final_equity_usd=%.6f | liquidation_threshold=%.6f",
+            final_equity_usd,
             float(get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0),
         )
     return fills, equities_array, analysis

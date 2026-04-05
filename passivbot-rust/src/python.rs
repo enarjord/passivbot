@@ -941,6 +941,7 @@ fn run_backtest_core<'py>(
             &equities,
             backtest.balance.use_btc_collateral,
             &backtest.total_wallet_exposures,
+            backtest.liquidated(),
         );
         analysis_usd.entry_initial_balance_pct_long = entry_pct_long;
         analysis_usd.entry_initial_balance_pct_short = entry_pct_short;

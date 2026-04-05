@@ -405,27 +405,14 @@ def _build_invalid_candidate_metrics(
     return objectives, INVALID_BACKTEST_CANDIDATE_PENALTY, metrics_payload
 
 
-def _liquidation_drawdown_threshold(config: dict) -> float:
-    raw = (
-        get_optional_config_value(config, "backtest.liquidation_threshold", 0.05)
-        if isinstance(config, dict)
-        else 0.05
-    )
-    try:
-        threshold = float(raw if raw is not None else 0.05)
-    except (TypeError, ValueError):
-        threshold = 0.05
-    threshold = min(max(threshold, 0.0), 1.0 - 1e-12)
-    return 1.0 - threshold
-
-
 def _analysis_indicates_liquidation(analysis: dict | None, config: dict) -> bool:
+    del config
     if not isinstance(analysis, dict):
         return False
-    drawdown = analysis.get("drawdown_worst")
-    if not isinstance(drawdown, (int, float)):
+    liquidated = analysis.get("liquidated")
+    if not isinstance(liquidated, (bool, int)):
         return False
-    return float(drawdown) >= _liquidation_drawdown_threshold(config) - 1e-12
+    return bool(liquidated)
 
 
 def _set_candidate_metrics(individual, metrics_payload) -> None:

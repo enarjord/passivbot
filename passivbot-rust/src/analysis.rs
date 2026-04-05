@@ -835,6 +835,7 @@ pub fn analyze_backtest_pair(
     equities: &Equities,
     _use_btc_collateral: bool,
     total_wallet_exposures: &[f64],
+    liquidated: bool,
 ) -> (Analysis, Analysis) {
     let (long_pnl_sum, short_pnl_sum) =
         fills
@@ -881,10 +882,12 @@ pub fn analyze_backtest_pair(
     let mut analysis_usd = analysis_usd;
     analysis_usd.pnl_ratio_long_short = long_short_profit_ratio;
     analysis_usd.long_short_profit_ratio = long_short_profit_ratio;
+    analysis_usd.liquidated = liquidated;
 
     let mut analysis_btc = analysis_btc;
     analysis_btc.pnl_ratio_long_short = long_short_profit_ratio;
     analysis_btc.long_short_profit_ratio = long_short_profit_ratio;
+    analysis_btc.liquidated = liquidated;
 
     (analysis_usd, analysis_btc)
 }
@@ -1358,7 +1361,7 @@ mod tests {
         let exposures_series: Vec<f64> = vec![];
 
         let (analysis_usd, analysis_btc) =
-            analyze_backtest_pair(&fills, &equities, false, &exposures_series);
+            analyze_backtest_pair(&fills, &equities, false, &exposures_series, false);
 
         assert!(analysis_usd.adg > 0.0, "expected positive usd adg");
         assert!(analysis_btc.adg < 0.0, "expected negative btc adg");
@@ -1366,5 +1369,24 @@ mod tests {
             (analysis_usd.adg - analysis_btc.adg).abs() > 1e-12,
             "expected btc metrics to differ from usd metrics without btc collateral"
         );
+        assert!(!analysis_usd.liquidated);
+        assert!(!analysis_btc.liquidated);
+    }
+
+    #[test]
+    fn test_analyze_backtest_pair_propagates_liquidated_flag() {
+        let fills = vec![make_fill(0, -0.1), make_fill(1, -0.1)];
+        let equities = Equities {
+            timestamps_ms: vec![0, MS_PER_DAY],
+            usd_total_equity: vec![1000.0, 50.0],
+            btc_total_equity: vec![0.1, 0.005],
+        };
+        let exposures_series: Vec<f64> = vec![];
+
+        let (analysis_usd, analysis_btc) =
+            analyze_backtest_pair(&fills, &equities, false, &exposures_series, true);
+
+        assert!(analysis_usd.liquidated);
+        assert!(analysis_btc.liquidated);
     }
 }

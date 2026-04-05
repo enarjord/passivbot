@@ -111,13 +111,17 @@ class TestApplyConfigOverrides:
 
 
 class TestLiquidationHelpers:
-    def test_analysis_indicates_liquidation_at_threshold(self):
+    def test_analysis_indicates_liquidation_uses_explicit_flag(self):
         from config_utils import get_template_config
 
         config = get_template_config()
         config["backtest"]["liquidation_threshold"] = 0.05
-        assert _analysis_indicates_liquidation({"drawdown_worst": 0.95}, config) is True
-        assert _analysis_indicates_liquidation({"drawdown_worst": 0.949}, config) is False
+        assert _analysis_indicates_liquidation({"liquidated": True}, config) is True
+        assert _analysis_indicates_liquidation({"liquidated": False}, config) is False
+        assert (
+            _analysis_indicates_liquidation({"drawdown_worst": 0.999, "liquidated": False}, config)
+            is False
+        )
 
 
 class TestLooksLikeBoolToken:
