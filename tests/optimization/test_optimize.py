@@ -39,6 +39,7 @@ from optimize import (
 from multiprocessing_utils import ignore_sigint_in_worker
 from optimization.bounds import Bound
 from optimize_suite import ScenarioEvalContext
+from config import load_prepared_config
 
 
 def test_worker_initializer_is_pickleable_for_spawn():
@@ -609,6 +610,183 @@ class TestIndividualToConfig:
         assert result["bot"]["long"]["hsl_red_threshold"] == pytest.approx(0.25)
         assert result["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
         assert template == original_template
+
+    def test_mirror_short_from_long_override(self):
+        individual = [
+            0.018,
+            100.0,
+            570.0,
+            0.015,
+            0.7,
+            0.47,
+            0.011,
+            63.0,
+            636.0,
+            0.0095,
+            0.33,
+            0.19,
+        ]
+        template = {
+            "live": {"strategy_kind": "ema_anchor"},
+            "bot": {
+                "long": {
+                    "risk": {
+                        "n_positions": 1,
+                        "total_wallet_exposure_limit": 0.55,
+                    },
+                    "forager": {
+                        "volume_ema_span": 520,
+                        "volatility_ema_span": 225,
+                        "volume_drop_pct": 0.57,
+                        "score_weights": {
+                            "volume": 0.0,
+                            "ema_readiness": 0.0,
+                            "volatility": 1.0,
+                        },
+                    },
+                    "hsl": {
+                        "enabled": False,
+                        "red_threshold": 0.2,
+                    },
+                    "unstuck": {
+                        "close_pct": 0.05,
+                        "ema_dist": -0.05,
+                    },
+                    "strategy": {
+                        "ema_anchor": {
+                            "base_qty_pct": 0.012,
+                            "ema_span_0": 72.0,
+                            "ema_span_1": 432.0,
+                            "offset": 0.009,
+                            "offset_psize_weight": 0.4,
+                        }
+                    },
+                },
+                "short": {
+                    "risk": {
+                        "n_positions": 3,
+                        "total_wallet_exposure_limit": 0.25,
+                    },
+                    "forager": {
+                        "volume_ema_span": 360,
+                        "volatility_ema_span": 10,
+                        "volume_drop_pct": 0.5,
+                        "score_weights": {
+                            "volume": 0.2,
+                            "ema_readiness": 0.3,
+                            "volatility": 0.5,
+                        },
+                    },
+                    "hsl": {
+                        "enabled": True,
+                        "red_threshold": 0.1,
+                    },
+                    "unstuck": {
+                        "close_pct": 0.11,
+                        "ema_dist": -0.11,
+                    },
+                    "strategy": {
+                        "ema_anchor": {
+                            "base_qty_pct": 0.004,
+                            "ema_span_0": 48.0,
+                            "ema_span_1": 288.0,
+                            "offset": 0.02,
+                            "offset_psize_weight": 0.2,
+                        }
+                    },
+                },
+            },
+            "optimize": {
+                "enable_overrides": ["mirror_short_from_long"],
+                "bounds": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": [0.35, 0.8, 0.01],
+                        },
+                        "strategy": {
+                            "ema_anchor": {
+                                "base_qty_pct": [0.006, 0.03, 0.0005],
+                                "ema_span_0": [48, 120, 1],
+                                "ema_span_1": [288, 720, 1],
+                                "offset": [0.006, 0.02, 0.0005],
+                                "offset_psize_weight": [0.2, 0.8, 0.01],
+                            }
+                        },
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": [0.15, 0.5, 0.01],
+                        },
+                        "strategy": {
+                            "ema_anchor": {
+                                "base_qty_pct": [0.004, 0.02, 0.0005],
+                                "ema_span_0": [48, 120, 1],
+                                "ema_span_1": [288, 720, 1],
+                                "offset": [0.007, 0.02, 0.0005],
+                                "offset_psize_weight": [0.2, 0.8, 0.01],
+                            }
+                        },
+                    },
+                },
+            },
+        }
+
+        result = individual_to_config(
+            individual,
+            optimize.optimizer_overrides,
+            ["mirror_short_from_long"],
+            template,
+        )
+
+        assert result["bot"]["short"]["risk"] == result["bot"]["long"]["risk"]
+        assert result["bot"]["short"]["forager"] == result["bot"]["long"]["forager"]
+        assert result["bot"]["short"]["hsl"] == result["bot"]["long"]["hsl"]
+        assert result["bot"]["short"]["unstuck"] == result["bot"]["long"]["unstuck"]
+        assert (
+            result["bot"]["short"]["strategy"]["ema_anchor"]
+            == result["bot"]["long"]["strategy"]["ema_anchor"]
+        )
+
+    def test_mirror_short_from_long_override_supports_trailing_grid(self):
+        config = {
+            "live": {"strategy_kind": "trailing_grid"},
+            "bot": {
+                "long": {
+                    "risk": {"n_positions": 1, "total_wallet_exposure_limit": 0.9},
+                    "forager": {
+                        "volume_ema_span": 520,
+                        "volatility_ema_span": 225,
+                        "score_weights": {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0},
+                    },
+                    "strategy": {
+                        "trailing_grid": {"ema_span_0": 100.0},
+                        "ema_anchor": {"ema_span_0": 999.0},
+                    },
+                },
+                "short": {
+                    "risk": {"n_positions": 2, "total_wallet_exposure_limit": 0.1},
+                    "forager": {
+                        "volume_ema_span": 10,
+                        "volatility_ema_span": 20,
+                        "score_weights": {"volume": 0.1, "ema_readiness": 0.2, "volatility": 0.7},
+                    },
+                    "strategy": {
+                        "trailing_grid": {"ema_span_0": 200.0},
+                        "ema_anchor": {"ema_span_0": 123.0},
+                    },
+                },
+            },
+        }
+
+        result = optimize.optimizer_overrides(["mirror_short_from_long"], deepcopy(config), None)
+
+        assert result["bot"]["short"]["risk"] == result["bot"]["long"]["risk"]
+        assert result["bot"]["short"]["forager"] == result["bot"]["long"]["forager"]
+        assert (
+            result["bot"]["short"]["strategy"]["trailing_grid"]
+            == result["bot"]["long"]["strategy"]["trailing_grid"]
+        )
+        assert result["bot"]["short"]["strategy"]["ema_anchor"] == {"ema_span_0": 123.0}
 class TestConfigToIndividual:
     """Test config_to_individual function."""
 
@@ -787,6 +965,48 @@ class TestApplyFineTuneBounds:
         apply_fine_tune_bounds(config, [], {"long_param1"})
 
         assert config["optimize"]["bounds"]["long_param1"] == [5.0, 5.0]
+
+    def test_nested_bounds_fix_non_tuned_params(self):
+        config = {
+            "live": {"strategy_kind": "ema_anchor"},
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": [0.35, 0.8, 0.01],
+                        },
+                        "strategy": {
+                            "ema_anchor": {
+                                "base_qty_pct": [0.006, 0.03, 0.0005],
+                                "offset": [0.006, 0.02, 0.0005],
+                            }
+                        },
+                    }
+                }
+            },
+            "bot": {
+                "long": {
+                    "risk": {"total_wallet_exposure_limit": 0.55},
+                    "strategy": {"ema_anchor": {"base_qty_pct": 0.012, "offset": 0.009}},
+                }
+            },
+        }
+
+        apply_fine_tune_bounds(config, ["long_offset"], set())
+
+        assert config["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"]["offset"] == [
+            0.006,
+            0.02,
+            0.0005,
+        ]
+        assert config["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"]["base_qty_pct"] == [
+            0.012,
+            0.012,
+        ]
+        assert config["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit"] == [
+            0.55,
+            0.55,
+        ]
 
     def test_missing_bot_value_logs_warning(self):
         # When bot value is missing for a non-tuned param, it should log warning
@@ -1057,6 +1277,17 @@ class TestConfigsToIndividuals:
         result = configs_to_individuals([invalid_config], bounds, 6)
 
         assert len(result) == 0
+
+    def test_full_config_seed_preserves_strategy_kind(self):
+        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        from optimization.config_adapter import extract_bounds_tuple_list_from_config
+
+        bounds = extract_bounds_tuple_list_from_config(config)
+
+        result = configs_to_individuals([config], bounds, 6)
+
+        assert len(result) >= 1
+        assert len(result[0]) == len(bounds)
 
 
 class TestConstraintAwareFitness:

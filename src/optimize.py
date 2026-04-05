@@ -76,6 +76,7 @@ from config.access import get_optional_config_value, require_config_value
 from config.bot import normalize_forager_score_weights
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
 from config.shared_bot import get_bot_group, get_grouped_bot_value
+from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 from config.scoring import (
     ObjectiveSpec,
     default_scoring_weights,
@@ -171,7 +172,7 @@ from optimization.backend_shared import cancel_pending_async_results, drain_asyn
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.backends import get_backend_runner
 from optimization.config_adapter import get_optimization_key_paths, resolve_optimization_bound_path
-from config.strategy import sync_canonical_strategy_config
+from config.strategy import normalize_strategy_kind, sync_canonical_strategy_config
 from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
@@ -666,6 +667,7 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
                     pside_cfg["hsl_no_restart_drawdown_threshold"] = float(red_threshold)
     for pside in sorted(config["bot"]):
         config = optimizer_overrides(overrides_list, config, pside)
+    config = optimizer_overrides(overrides_list, config, None)
 
     for pside in ("long", "short"):
         pside_cfg = config.get("bot", {}).get(pside, {})
@@ -1414,6 +1416,17 @@ def apply_fine_tune_bounds(
     cli_overridden_bounds: set[str],
 ) -> None:
     bounds = config.get("optimize", {}).get("bounds", {})
+    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    flat_bounds = flatten_optimize_bounds(bounds, strategy_kind=strategy_kind)
+    use_flat_bounds = isinstance(bounds, dict) and any(
+        isinstance(key, str) and (key.startswith("long_") or key.startswith("short_")) for key in bounds
+    )
+
+    def _set_bound(bound_key: str, value) -> None:
+        if use_flat_bounds:
+            bounds[bound_key] = value
+        else:
+            set_flat_optimize_bound(bounds, strategy_kind, bound_key, value)
 
     def _resolve_bound_key_path(bound_key: str):
         return resolve_optimization_bound_path(config, bound_key)
@@ -1435,48 +1448,48 @@ def apply_fine_tune_bounds(
             return False
         try:
             value_float = float(target)
-            bounds[bound_key] = [value_float, value_float]
+            _set_bound(bound_key, [value_float, value_float])
         except (TypeError, ValueError):
-            bounds[bound_key] = [target, target]
+            _set_bound(bound_key, [target, target])
         return True
 
     # First, normalize any CLI overrides such that single values mean fixed bounds
     for key in cli_overridden_bounds:
-        if key not in bounds:
+        if key not in flat_bounds:
             continue
-        raw_val = bounds[key]
+        raw_val = flat_bounds[key]
         if isinstance(raw_val, (list, tuple)):
             if len(raw_val) == 1:
-                bounds[key] = [float(raw_val[0]), float(raw_val[0])]
+                _set_bound(key, [float(raw_val[0]), float(raw_val[0])])
         else:
             try:
                 val = float(raw_val)
             except (TypeError, ValueError):
                 continue
-            bounds[key] = [val, val]
+            _set_bound(key, [val, val])
 
     fine_tune_set = set(fine_tune_params)
     config_fixed_params = set(config.get("optimize", {}).get("fixed_params", []) or [])
 
     effective_fixed_params = set(config_fixed_params)
     if fine_tune_set:
-        effective_fixed_params.update(key for key in bounds if key not in fine_tune_set)
+        effective_fixed_params.update(key for key in flat_bounds if key not in fine_tune_set)
 
     if not effective_fixed_params:
         return
 
     for key in sorted(effective_fixed_params):
-        if key not in bounds:
+        if key not in flat_bounds:
             continue
         _fix_bound_to_current_value(key)
 
-    missing = [key for key in fine_tune_set if key not in bounds]
+    missing = [key for key in fine_tune_set if key not in flat_bounds]
     if missing:
         logging.warning(
             "fine-tune bounds: requested keys not found in optimize bounds: %s",
             ",".join(sorted(missing)),
         )
-    fixed_missing = [key for key in config_fixed_params if key not in bounds]
+    fixed_missing = [key for key in config_fixed_params if key not in flat_bounds]
     if fixed_missing:
         logging.warning(
             "optimize.fixed_params keys not found in optimize bounds: %s",
@@ -1525,6 +1538,11 @@ def _extract_starting_config(raw_config, *, source: str = "<memory>"):
             verbose=False,
         )
     }
+    live_cfg = current.get("live")
+    if isinstance(live_cfg, dict):
+        strategy_kind = live_cfg.get("strategy_kind")
+        if strategy_kind and normalize_strategy_kind(strategy_kind) != normalize_strategy_kind(None):
+            extracted["live"] = {"strategy_kind": strategy_kind}
     optimize_cfg = current.get("optimize")
     if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
         extracted["optimize"] = {"bounds": deepcopy(optimize_cfg["bounds"])}
@@ -1544,6 +1562,8 @@ def _build_starting_seed_config(cfg):
         extracted = _extract_starting_config(cfg)
     seed = get_template_config()
     seed["bot"] = deepcopy(extracted["bot"])
+    if isinstance(extracted.get("live"), dict):
+        seed["live"] = deepcopy(extracted["live"])
     optimize_cfg = extracted.get("optimize")
     if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
         seed["optimize"]["bounds"] = deepcopy(optimize_cfg["bounds"])

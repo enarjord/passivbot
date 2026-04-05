@@ -1,12 +1,45 @@
+from copy import deepcopy
+
 from config.access import require_config_value
+from config.shared_bot import BOT_SHARED_GROUPS
+from config.strategy import normalize_strategy_kind
 
 
-def optimizer_overrides(overrides_list, config, pside):
+def _mirror_short_from_long(config):
+    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+
+    bot_cfg = config.get("bot", {})
+    long_side = bot_cfg.get("long")
+    short_side = bot_cfg.get("short")
+    if not isinstance(long_side, dict) or not isinstance(short_side, dict):
+        return config
+
+    for group_name in BOT_SHARED_GROUPS:
+        if group_name in long_side:
+            short_side[group_name] = deepcopy(long_side[group_name])
+
+    long_strategy = long_side.get("strategy")
+    if isinstance(long_strategy, dict) and strategy_kind in long_strategy:
+        short_strategy = short_side.setdefault("strategy", {})
+        short_strategy[strategy_kind] = deepcopy(long_strategy[strategy_kind])
+
+    return config
+
+
+def optimizer_overrides(overrides_list, config, pside=None):
     if not overrides_list:
         # No overrides to apply
         return config
 
     for override in overrides_list:
+        if override == "mirror_short_from_long":
+            if pside is None:
+                config = _mirror_short_from_long(config)
+            continue
+
+        if pside is None:
+            continue
+
         if override == "lossless_close_trailing":
 
             # Logic for lossless close

@@ -77,7 +77,11 @@ python3 src/pareto_store.py optimize_results/.../pareto/
 `src/tools/iterative_backtester.py` and `iterative_history_plot.py` help replay slices of the backtester (or real fills) interactively so you can inspect order-by-order behaviour. Useful when tuning configs by hand.
 
 ```shell
-passivbot tool iterative-backtester --config configs/your_config.json --symbol BTC/USDT:USDT
+passivbot tool iterative-backtester configs/your_config.json --auto-run
+passivbot tool iterative-backtester configs/examples/ema_anchor.json --auto-run \
+  --override backtest.start_date=2022-01-01 \
+  --override backtest.end_date=now \
+  --quit-after-run
 passivbot tool iterative-history-plot backtests/.../fills.csv
 ```
 

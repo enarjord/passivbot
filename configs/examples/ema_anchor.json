@@ -15,7 +15,7 @@
         "coin_sources": {},
         "compress_cache": true,
         "dynamic_wel_by_tradability": true,
-        "end_date": "2026-04-02",
+        "end_date": "now",
         "exchanges": ["binance","bybit"],
         "filter_by_min_effective_cost": false,
         "gap_tolerance_ohlcvs_minutes": 120,
@@ -26,7 +26,7 @@
         "max_warmup_minutes": 0,
         "ohlcv_source_dir": null,
         "scenarios": [],
-        "start_date": "2023-01-01",
+        "start_date": "2022-01-01",
         "starting_balance": 100000,
         "suite_enabled": false,
         "taker_fee_override": null,
@@ -51,19 +51,19 @@
                 "tier_ratios": {"orange":0.75,"yellow":0.5}
             },
             "risk": {
-                "n_positions": 2,
-                "total_wallet_exposure_limit": 1,
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 0.47,
                 "twel_enforcer_threshold": 1,
                 "we_excess_allowance_pct": 0,
                 "wel_enforcer_threshold": 0.98
             },
             "strategy": {
                 "ema_anchor": {
-                    "base_qty_pct": 0.03,
-                    "ema_span_0": 48,
-                    "ema_span_1": 288,
-                    "offset": 0.003,
-                    "offset_psize_weight": 0.2
+                    "base_qty_pct": 0.018,
+                    "ema_span_0": 100,
+                    "ema_span_1": 570,
+                    "offset": 0.015,
+                    "offset_psize_weight": 0.7
                 }
             },
             "unstuck": {
@@ -91,19 +91,19 @@
                 "tier_ratios": {"orange":0.75,"yellow":0.5}
             },
             "risk": {
-                "n_positions": 2,
-                "total_wallet_exposure_limit": 1,
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 0.19,
                 "twel_enforcer_threshold": 1,
                 "we_excess_allowance_pct": 0,
                 "wel_enforcer_threshold": 0.98
             },
             "strategy": {
                 "ema_anchor": {
-                    "base_qty_pct": 0.03,
-                    "ema_span_0": 48,
-                    "ema_span_1": 288,
-                    "offset": 0.003,
-                    "offset_psize_weight": 0.2
+                    "base_qty_pct": 0.0185,
+                    "ema_span_0": 63,
+                    "ema_span_1": 636,
+                    "offset": 0.0115,
+                    "offset_psize_weight": 0.74
                 }
             },
             "unstuck": {
@@ -197,25 +197,25 @@
                     "red_threshold": [0.01,0.12,0.001]
                 },
                 "risk": {
-                    "n_positions": [10,10,1],
-                    "total_wallet_exposure_limit": [1.25,1.25],
-                    "twel_enforcer_threshold": [0.95,1.01,0.001],
-                    "we_excess_allowance_pct": [0,0.3,0.01],
-                    "wel_enforcer_threshold": [0.95,1.01,0.001]
+                    "n_positions": [1,1,1],
+                    "total_wallet_exposure_limit": [1.0,3.0,0.01],
+                    "twel_enforcer_threshold": [10,10],
+                    "we_excess_allowance_pct": [0,0],
+                    "wel_enforcer_threshold": [10,10]
                 },
                 "strategy": {
                     "ema_anchor": {
-                        "base_qty_pct": [0.001,0.05,0.0001],
-                        "ema_span_0": [20,1440,1],
-                        "ema_span_1": [20,1440,1],
-                        "offset": [0,0.05,0.0001],
-                        "offset_psize_weight": [0,2,0.001]
+                        "base_qty_pct": [0.001,0.1,0.0001],
+                        "ema_span_0": [48,1440,1],
+                        "ema_span_1": [48,1440,1],
+                        "offset": [0.0001,0.02,0.0001],
+                        "offset_psize_weight": [0.1,10.0,0.001]
                     }
                 },
                 "unstuck": {
                     "close_pct": [0.05,0.12,0.001],
                     "ema_dist": [-0.2,-0.07,0.0001],
-                    "loss_allowance_pct": [0.005,0.025,0.0001],
+                    "loss_allowance_pct": [0.0,0.0,0.0001],
                     "threshold": [0.4,0.9,0.001]
                 }
             },
@@ -234,19 +234,19 @@
                     "red_threshold": [0.01,0.12,0.001]
                 },
                 "risk": {
-                    "n_positions": [10,10,1],
-                    "total_wallet_exposure_limit": [0,0],
-                    "twel_enforcer_threshold": [0.95,1.01,0.001],
-                    "we_excess_allowance_pct": [0,0.3,0.01],
-                    "wel_enforcer_threshold": [0.95,1.01,0.001]
+                    "n_positions": [1,1,1],
+                    "total_wallet_exposure_limit": [0.15,0.5,0.01],
+                    "twel_enforcer_threshold": [1,1],
+                    "we_excess_allowance_pct": [0,0],
+                    "wel_enforcer_threshold": [0.98,0.98]
                 },
                 "strategy": {
                     "ema_anchor": {
-                        "base_qty_pct": [0.001,0.05,0.0001],
-                        "ema_span_0": [20,1440,1],
-                        "ema_span_1": [20,1440,1],
-                        "offset": [0,0.05,0.0001],
-                        "offset_psize_weight": [0,2,0.001]
+                        "base_qty_pct": [0.004,0.02,0.0005],
+                        "ema_span_0": [48,120,1],
+                        "ema_span_1": [288,720,1],
+                        "offset": [0.007,0.02,0.0005],
+                        "offset_psize_weight": [0.2,0.8,0.01]
                     }
                 },
                 "unstuck": {
@@ -260,7 +260,7 @@
         "compress_results_file": true,
         "crossover_eta": 20,
         "crossover_probability": 0.64,
-        "enable_overrides": [],
+        "enable_overrides": ["mirror_short_from_long"],
         "fixed_params": [],
         "fixed_runtime_overrides": {
             "bot.long.hsl_no_restart_drawdown_threshold": 1,
@@ -269,22 +269,22 @@
         "iters": 500000,
         "limits": [
             {
-                "enabled": false,
+                "enabled": true,
                 "metric": "drawdown_worst_hsl",
                 "penalize_if": "greater_than",
-                "value": 0.8
+                "value": 0.5
             },
             {
                 "enabled": false,
                 "metric": "drawdown_worst_mean_1pct_hsl",
                 "penalize_if": "greater_than",
-                "value": 0.6
+                "value": 0.2
             },
             {
                 "enabled": false,
                 "metric": "loss_profit_ratio",
                 "penalize_if": "greater_than",
-                "value": 0.85
+                "value": 0.9
             },
             {
                 "enabled": true,
@@ -340,14 +340,10 @@
         },
         "round_to_n_significant_digits": 3,
         "scoring": [
-            {"goal":"max","metric":"adg_strategy_pnl_rebased"},
-            {"goal":"max","metric":"adg_strategy_pnl_rebased_w"},
-            {"goal":"max","metric":"mdg_strategy_pnl_rebased"},
-            {"goal":"max","metric":"mdg_strategy_pnl_rebased_w"},
-            {"goal":"min","metric":"peak_recovery_hours_hsl"},
-            {"goal":"min","metric":"position_held_hours_max"},
-            {"goal":"min","metric":"drawdown_worst_hsl"},
-            {"goal":"min","metric":"drawdown_worst_mean_1pct_hsl"}
+            {"metric": "adg_strategy_pnl_rebased_w", "goal": "max"},
+            {"metric": "mdg_strategy_pnl_rebased_w", "goal": "max"},
+            {"metric": "drawdown_worst_hsl", "goal": "min"},
+            {"metric": "peak_recovery_hours_hsl", "goal": "min"}
         ],
         "write_all_results": true
     }
