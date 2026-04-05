@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed `CCXTBot.create_ccxt_sessions()` using the generic exchange name (e.g. `binance`) instead of the futures-specific CCXT id (`binanceusdm`). This caused `load_markets()` to unnecessarily fetch COIN-margined markets from `dapi.binance.com`, and a timeout on that endpoint would cascade-fail all symbol trade fetches and open order updates.
+- Fixed `BinanceFetcher._fetch_symbol_trades` sending future `endTime` (now+1h) and using a tight 7-day safety margin (0.1%), causing Binance `-4181 "Invalid start time"` errors for symbols with sparse trades. Removed the +1h extension and widened the margin to 1%.
 - `passivbot live` now persists logs to a timestamped file under `logs/` by default, using `config.logging` for the on/off switch and file-rotation settings, and also refreshes `logs/{user}.log` as a stable alias to the current run for monitor tooling. This makes the built-in live workflow self-logging without needing `run_with_logging.py`.
 - Added a canonical live-container runtime contract around `Dockerfile_live`, a thin `container/entrypoint.sh` wrapper, env-generated `api-keys.json` support, env-driven config overrides, and a documented Compose/Railway deployment path that reuses the normal `passivbot live` CLI instead of maintaining platform-specific baked configs.
 - Restored `passivbot live --user` / `-u` as the curated shorthand for `live.user`, so existing live-run workflows using `-u account_name` work again and the alias is visible in the default live help output.
