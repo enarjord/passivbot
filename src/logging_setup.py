@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 TRACE_LEVEL = 5
 TRACE_LEVEL_NAME = "TRACE"
@@ -156,40 +156,6 @@ def build_command_log_path(
     return Path(log_dir).expanduser() / create_command_log_filename(command_args, timestamp=timestamp)
 
 
-def resolve_command_logging_options(
-    logging_config: dict,
-    command_args: Sequence[object],
-    *,
-    default_persist: bool = False,
-) -> tuple[Optional[str], bool, int, int]:
-    """Resolve file-logging options from config for a command invocation."""
-    persist_to_file = bool(logging_config.get("persist_to_file", default_persist))
-    rotation_enabled = bool(logging_config.get("rotation_enabled", False))
-
-    try:
-        rotation_max_mb = float(logging_config.get("rotation_max_mb", 10))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("logging.rotation_max_mb must be a positive number") from exc
-    if rotation_max_mb <= 0:
-        raise ValueError("logging.rotation_max_mb must be greater than 0")
-
-    try:
-        rotation_backups = int(logging_config.get("rotation_backups", 5))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("logging.rotation_backups must be a non-negative integer") from exc
-    if rotation_backups < 0:
-        raise ValueError("logging.rotation_backups must be a non-negative integer")
-
-    log_file = None
-    if persist_to_file:
-        log_dir = logging_config.get("dir", "logs")
-        if not isinstance(log_dir, str) or not log_dir.strip():
-            raise ValueError("logging.dir must be a non-empty string when file logging is enabled")
-        log_file = str(build_command_log_path(command_args, log_dir.strip()))
-
-    return log_file, rotation_enabled, int(rotation_max_mb * 1024 * 1024), rotation_backups
-
-
 def configure_logging(
     debug: Optional[int | str] = 1,
     *,
@@ -275,3 +241,22 @@ def configure_logging(
         # DEBUG and below: suppress CCXT's noisy API payloads
         # Set to WARNING so only actual warnings/errors from CCXT are shown
         ccxt_logger.setLevel(logging.WARNING)
+
+
+def resolve_live_log_file_settings(config: dict[str, Any], *, user: str) -> dict[str, Any]:
+    """Return configure_logging kwargs for canonical live file logging."""
+    logging_cfg = config.get("logging", {}) if isinstance(config, dict) else {}
+    if not isinstance(logging_cfg, dict):
+        logging_cfg = {}
+    if not bool(logging_cfg.get("persist_to_file", True)):
+        return {"log_file": None, "rotation": False, "max_bytes": 10 * 1024 * 1024, "backup_count": 5}
+
+    log_dir = str(logging_cfg.get("dir", "logs")).strip() or "logs"
+    max_bytes_mb = float(logging_cfg.get("max_bytes_mb", 10.0))
+    backup_count = int(logging_cfg.get("backup_count", 5))
+    return {
+        "log_file": str(Path(log_dir).expanduser() / f"{user}.log"),
+        "rotation": bool(logging_cfg.get("rotation", False)),
+        "max_bytes": max(1, int(max_bytes_mb * 1024 * 1024)),
+        "backup_count": max(0, backup_count),
+    }
