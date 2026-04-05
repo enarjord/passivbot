@@ -73,6 +73,7 @@ All notable user-facing changes will be documented in this file.
 - **Backtest HSL EMA span fallback** - Backtests no longer fail when `bot.common.equity_hard_stop_loss.ema_span_minutes` is smaller than `backtest.candle_interval_minutes`. Sub-interval spans now fall back to a one-sample EMA, which disables smoothing and makes the HSL score follow raw drawdown.
 - **HSL no-restart threshold semantics** - Values of `bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold` below `red_threshold` are now clamped up to `red_threshold` in live, backtest, and optimizer flows. Stop events now treat `drawdown_raw >= no_restart_drawdown_threshold` as terminal, so setting both thresholds equal makes the first RED halt non-restarting.
 - **Backtest HSL analysis metrics expanded and clarified** - Added account-level HSL metrics for yellow/orange/red time share, RED halt duration, trigger drawdown, panic-close realized loss, flatten time, and restart-to-retrigger rate. Also renamed the old ambiguous halt-loss metric to `hard_stop_halt_to_restart_equity_loss_pct`.
+- **HLCV fetch logging and cache-root hygiene** - CCXT candle fetch progress logs now include the actual returned candle range (`first`/`last`) instead of only the requested `since`, and CandlestickManager now quarantines invalid root-level daily shard files or `index.json` debris found directly under `caches/ohlcv/{exchange}/{timeframe}` so mixed/corrupt cache roots stop masquerading as symbol data.
 
 ## v7.8.4 - 2026-03-06
 

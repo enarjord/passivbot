@@ -203,3 +203,30 @@ def test_global_legacy_migration_covers_all_exchanges(tmp_path, monkeypatch):
 
     assert binance_target.exists()
     assert bybit_target.exists()
+
+
+def test_quarantines_invalid_root_level_timeframe_cache_artifacts(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    tf_root = tmp_path / "caches" / "ohlcv" / "bybit" / "1m"
+    tf_root.mkdir(parents=True, exist_ok=True)
+    root_day = tf_root / "2021-02-04.npy"
+    np.save(root_day, np.array([[1612396800000, 1, 1, 1, 1, 1]], dtype=np.float64))
+    root_index = tf_root / "index.json"
+    root_index.write_text('{"shards": {}}', encoding="utf-8")
+
+    symbol_dir = tf_root / _sanitize_symbol("XMR/USDT:USDT")
+    symbol_dir.mkdir(parents=True, exist_ok=True)
+    symbol_day = symbol_dir / "2022-01-14.npy"
+    np.save(symbol_day, np.array([[1642118400000, 1, 1, 1, 1, 1]], dtype=np.float64))
+
+    CandlestickManager(exchange=None, exchange_name="bybit", cache_dir=str(tmp_path / "caches"))
+
+    quarantine_root = tmp_path / "caches" / "ohlcv" / "_quarantine_root_level"
+    quarantined = list(quarantine_root.rglob("*"))
+
+    assert not root_day.exists()
+    assert not root_index.exists()
+    assert symbol_day.exists()
+    assert any(p.name == "2021-02-04.npy" for p in quarantined)
+    assert any(p.name == "index.json" for p in quarantined)

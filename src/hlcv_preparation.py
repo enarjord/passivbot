@@ -250,12 +250,32 @@ class HLCVManager:
                 if (now - float(self._download_log_last.get(key, 0.0))) < 10.0:
                     return
                 self._download_log_last[key] = now
+                first_ts = payload.get("first_ts")
+                last_ts = payload.get("last_ts")
+                first_iso = None
+                last_iso = None
+                try:
+                    if first_ts is not None:
+                        first_iso = datetime.fromtimestamp(
+                            int(first_ts) / 1000, tz=timezone.utc
+                        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                except Exception:
+                    first_iso = None
+                try:
+                    if last_ts is not None:
+                        last_iso = datetime.fromtimestamp(
+                            int(last_ts) / 1000, tz=timezone.utc
+                        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                except Exception:
+                    last_iso = None
                 logging.info(
-                    "[%s] download ccxt ok symbol=%s tf=%s rows=%s elapsed_ms=%s",
+                    "[%s] download ccxt ok symbol=%s tf=%s rows=%s first=%s last=%s elapsed_ms=%s",
                     self.exchange,
                     symbol,
                     payload.get("tf"),
                     payload.get("rows"),
+                    first_iso if first_iso is not None else first_ts,
+                    last_iso if last_iso is not None else last_ts,
                     payload.get("elapsed_ms"),
                 )
                 return
