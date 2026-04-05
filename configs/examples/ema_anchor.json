@@ -26,7 +26,7 @@
         "max_warmup_minutes": 0,
         "ohlcv_source_dir": null,
         "scenarios": [],
-        "start_date": "2022-01-01",
+        "start_date": "2021-01-01",
         "starting_balance": 100000,
         "suite_enabled": false,
         "taker_fee_override": null,
@@ -198,7 +198,7 @@
                 },
                 "risk": {
                     "n_positions": [1,1,1],
-                    "total_wallet_exposure_limit": [1.0,3.0,0.01],
+                    "total_wallet_exposure_limit": [1.0,10.0,0.01],
                     "twel_enforcer_threshold": [10,10],
                     "we_excess_allowance_pct": [0,0],
                     "wel_enforcer_threshold": [10,10]
@@ -206,10 +206,10 @@
                 "strategy": {
                     "ema_anchor": {
                         "base_qty_pct": [0.001,0.1,0.0001],
-                        "ema_span_0": [48,1440,1],
-                        "ema_span_1": [48,1440,1],
-                        "offset": [0.0001,0.02,0.0001],
-                        "offset_psize_weight": [0.1,10.0,0.001]
+                        "ema_span_0": [10,2880,1],
+                        "ema_span_1": [10,2880,1],
+                        "offset": [0.0001,0.2,0.0001],
+                        "offset_psize_weight": [0.0001,100.0,0.0001]
                     }
                 },
                 "unstuck": {

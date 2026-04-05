@@ -215,8 +215,6 @@ class ParetoStore:
             self.scoring_specs = extract_objective_specs(entry)
             self.scoring_keys = [spec.metric for spec in self.scoring_specs]
         rounded = round_floats(entry, self.sig_digits)
-        if self.bounds is not None:
-            rounded = _quantize_entry_params_with_bounds(rounded, self.bounds, self._log)
         h = calc_hash(rounded)
         with self._lock:
             if h in self._entries:  # fast‑dedupe

@@ -94,6 +94,7 @@ from config_utils import (
     update_config_with_args,
     recursive_config_update,
     merge_negative_cli_values,
+    clean_config,
     strip_config_metadata,
 )
 from pure_funcs import (
@@ -432,7 +433,8 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
     metrics = getattr(individual, "evaluation_metrics", {}) or {}
     suite_metrics = metrics.pop("suite_metrics", None)
     config = individual_to_config(individual, optimizer_overrides, overrides_list, evaluator_config)
-    entry = dict(config)
+    entry = clean_config(strip_config_metadata(config))
+    entry = optimizer_overrides(overrides_list, entry, None)
     if suite_metrics is not None:
         entry["suite_metrics"] = suite_metrics
         bt = entry.get("backtest")
@@ -444,7 +446,6 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
             if violation is not None:
                 metrics["constraint_violation"] = violation
         entry["metrics"] = metrics
-    entry = strip_config_metadata(entry)
     recorder.record(entry)
     _clear_candidate_metrics(individual)
 

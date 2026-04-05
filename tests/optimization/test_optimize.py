@@ -8,9 +8,11 @@ to enable safe refactoring. They document how the code actually works today.
 import math
 import os
 import argparse
+import json
 from multiprocessing.reduction import ForkingPickler
 import tempfile
 from copy import deepcopy
+from pathlib import Path
 from unittest.mock import Mock, MagicMock, patch
 
 import numpy as np
@@ -23,6 +25,7 @@ from optimize import (
     _clear_candidate_metrics,
     _looks_like_bool_token,
     _normalize_optional_bool_flag,
+    _record_individual_result,
     _resolve_cli_limits_override,
     _set_candidate_metrics,
     _format_objectives,
@@ -38,6 +41,8 @@ from optimize import (
 )
 from multiprocessing_utils import ignore_sigint_in_worker
 from optimization.bounds import Bound
+from optimization.callback import build_pymoo_record_entry
+from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimize_suite import ScenarioEvalContext
 from config import load_prepared_config
 
@@ -1345,6 +1350,118 @@ class TestConstraintAwareFitness:
 
 class TestResultRecorder:
     """Test ResultRecorder class."""
+
+    def test_pymoo_record_entry_is_canonical_and_mirrored(self):
+        template = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        bounds = extract_bounds_tuple_list_from_config(template)
+        vector = config_to_individual(template, bounds, sig_digits=6)
+
+        entry = build_pymoo_record_entry(
+            vector=vector,
+            metrics={"objectives": {"metric1": 0.5}, "constraint_violation": 0.0},
+            template=template,
+            build_config_fn=individual_to_config,
+            overrides_fn=optimize.optimizer_overrides,
+            overrides_list=["mirror_short_from_long"],
+        )
+        strategy_kind = entry["live"]["strategy_kind"]
+
+        assert entry["bot"]["long"]["risk"] == entry["bot"]["short"]["risk"]
+        assert entry["bot"]["long"]["forager"] == entry["bot"]["short"]["forager"]
+        assert entry["bot"]["long"]["hsl"] == entry["bot"]["short"]["hsl"]
+        assert entry["bot"]["long"]["unstuck"] == entry["bot"]["short"]["unstuck"]
+        assert entry["bot"]["long"]["strategy"][strategy_kind] == entry["bot"]["short"]["strategy"][
+            strategy_kind
+        ]
+        assert sorted(entry["bot"]["long"]["strategy"]) == [strategy_kind]
+        assert sorted(entry["bot"]["short"]["strategy"]) == [strategy_kind]
+
+    def test_recorded_pareto_entry_is_canonical_and_mirrored(self):
+        class Candidate(list):
+            pass
+
+        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        bounds = extract_bounds_tuple_list_from_config(config)
+        individual = Candidate(config_to_individual(config, bounds, sig_digits=6))
+
+        individual.evaluation_metrics = {
+            "objectives": {"metric1": 0.5},
+            "constraint_violation": 0.0,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recorder = ResultRecorder(
+                results_dir=tmpdir,
+                sig_digits=6,
+                flush_interval=60,
+                scoring_keys=["metric1"],
+                compress=False,
+                write_all_results=False,
+                bounds=None,
+            )
+
+            _record_individual_result(
+                individual,
+                config,
+                config["optimize"]["enable_overrides"],
+                recorder,
+            )
+
+            pareto_files = list((Path(tmpdir) / "pareto").glob("*.json"))
+            assert len(pareto_files) == 1
+            saved = json.loads(pareto_files[0].read_text())
+            strategy_kind = saved["live"]["strategy_kind"]
+
+            assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
+            assert saved["bot"]["long"]["forager"] == saved["bot"]["short"]["forager"]
+            assert saved["bot"]["long"]["hsl"] == saved["bot"]["short"]["hsl"]
+            assert saved["bot"]["long"]["unstuck"] == saved["bot"]["short"]["unstuck"]
+            assert (
+                saved["bot"]["long"]["strategy"][strategy_kind]
+                == saved["bot"]["short"]["strategy"][strategy_kind]
+            )
+            assert sorted(saved["bot"]["long"]["strategy"]) == [strategy_kind]
+            assert sorted(saved["bot"]["short"]["strategy"]) == [strategy_kind]
+
+    def test_recorded_pareto_entry_with_bounds_preserves_mirror_override(self):
+        template = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        bounds = extract_bounds_tuple_list_from_config(template)
+        vector = config_to_individual(template, bounds, sig_digits=6)
+
+        entry = build_pymoo_record_entry(
+            vector=vector,
+            metrics={"objectives": {"metric1": 0.5}, "constraint_violation": 0.0},
+            template=template,
+            build_config_fn=individual_to_config,
+            overrides_fn=optimize.optimizer_overrides,
+            overrides_list=["mirror_short_from_long"],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recorder = ResultRecorder(
+                results_dir=tmpdir,
+                sig_digits=6,
+                flush_interval=60,
+                scoring_keys=["metric1"],
+                compress=False,
+                write_all_results=False,
+                bounds=bounds,
+            )
+            recorder.record(entry)
+
+            pareto_files = list((Path(tmpdir) / "pareto").glob("*.json"))
+            assert len(pareto_files) == 1
+            saved = json.loads(pareto_files[0].read_text())
+            strategy_kind = saved["live"]["strategy_kind"]
+
+            assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
+            assert saved["bot"]["long"]["forager"] == saved["bot"]["short"]["forager"]
+            assert saved["bot"]["long"]["hsl"] == saved["bot"]["short"]["hsl"]
+            assert saved["bot"]["long"]["unstuck"] == saved["bot"]["short"]["unstuck"]
+            assert (
+                saved["bot"]["long"]["strategy"][strategy_kind]
+                == saved["bot"]["short"]["strategy"][strategy_kind]
+            )
 
     def test_initialization(self):
         with tempfile.TemporaryDirectory() as tmpdir:
