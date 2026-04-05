@@ -7,7 +7,7 @@ This behavior is controlled from `config.logging`:
 
 - `logging.persist_to_file = true` keeps on-disk live logs enabled
 - `logging.dir` chooses the target directory
-- `logging.rotation_enabled`, `logging.rotation_max_mb`, and `logging.rotation_backups`
+- `logging.rotation`, `logging.max_bytes_mb`, and `logging.backup_count`
   control optional file rotation
 
 Disable file persistence only if you explicitly want console-only live logging:
