@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import os
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
@@ -120,6 +121,132 @@ def _summarize_anchor_files(anchor_files: Sequence[str], *, preview: int = 4) ->
     shown = ", ".join(str(item) for item in list(anchor_files)[:preview])
     hidden = len(anchor_files) - preview
     return f"{shown} ... (+{hidden} more)"
+
+
+def _abbreviate_path(path: Path | str, *, max_len: int = 100) -> str:
+    value = str(path)
+    home = str(Path.home())
+    if value.startswith(home):
+        value = "~" + value[len(home) :]
+    if len(value) <= max_len:
+        return value
+    parts = value.split(os.sep)
+    if len(parts) <= 3:
+        keep = max(0, max_len - 3)
+        return f"...{value[-keep:]}"
+    prefix = parts[0]
+    suffix = parts[-2:]
+    middle = parts[1:-2]
+    candidate = os.sep.join([prefix, "...", *suffix])
+    while len(candidate) > max_len and suffix:
+        suffix = suffix[1:]
+        candidate = os.sep.join([prefix, "...", *suffix]) if suffix else f"{prefix}{os.sep}..."
+    if len(candidate) <= max_len:
+        return candidate
+    if middle:
+        tail = os.sep.join(parts[-1:])
+        keep = max(0, max_len - len(prefix) - len(tail) - 6)
+        mid_joined = os.sep.join(middle)
+        return f"{prefix}{os.sep}...{mid_joined[-keep:]}{os.sep}{tail}"
+    keep = max(0, max_len - 3)
+    return f"...{value[-keep:]}"
+
+
+def _display_path(path: Path | str, *, base_dir: Path | None = None) -> str:
+    resolved = Path(path).resolve()
+    search_bases: List[Path] = []
+    if base_dir is not None:
+        search_bases.append(Path(base_dir).resolve())
+    search_bases.append(Path.cwd().resolve())
+    for base in search_bases:
+        try:
+            return str(resolved.relative_to(base))
+        except ValueError:
+            continue
+    return str(resolved)
+
+
+def _render_key_value_box(rows: Sequence[tuple[str, str]]) -> List[str]:
+    if not rows:
+        return []
+    key_width = max(len(key) for key, _ in rows)
+    value_width = max(len(value) for _, value in rows)
+    border = f"+-{'-' * key_width}-+-{'-' * value_width}-+"
+    lines = [border]
+    for key, value in rows:
+        lines.append(f"| {key.ljust(key_width)} | {value.ljust(value_width)} |")
+    lines.append(border)
+    return lines
+
+
+def _render_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> List[str]:
+    if not rows:
+        return []
+    widths = [len(str(header)) for header in headers]
+    for row in rows:
+        for idx, cell in enumerate(row):
+            widths[idx] = max(widths[idx], len(str(cell)))
+    border = "+-" + "-+-".join("-" * width for width in widths) + "-+"
+    header_line = "| " + " | ".join(str(header).ljust(widths[idx]) for idx, header in enumerate(headers)) + " |"
+    lines = [border, header_line, border]
+    for row in rows:
+        lines.append("| " + " | ".join(str(cell).ljust(widths[idx]) for idx, cell in enumerate(row)) + " |")
+    lines.append(border)
+    return lines
+
+
+def _format_limit_entry(entry: Mapping[str, Any]) -> str:
+    metric = str(entry.get("metric", "")).strip()
+    mode = str(entry.get("penalize_if", "")).strip().lower()
+    value = entry.get("value")
+    range_value = entry.get("range")
+    op_map = {
+        "greater_than": ">",
+        "greater_than_or_equal": ">=",
+        "less_than": "<",
+        "less_than_or_equal": "<=",
+        "equal_to": "==",
+        "not_equal": "!=",
+    }
+    if mode in op_map and value is not None:
+        return f"{metric} {op_map[mode]} {value}"
+    if mode == "outside_range" and isinstance(range_value, Sequence) and len(range_value) == 2:
+        return f"{metric} outside [{range_value[0]}, {range_value[1]}]"
+    if mode == "inside_range" and isinstance(range_value, Sequence) and len(range_value) == 2:
+        return f"{metric} inside [{range_value[0]}, {range_value[1]}]"
+    return str(dict(entry))
+
+
+def _wrap_csv(values: Sequence[str], *, width: int = 104, indent: str = "") -> List[str]:
+    text = ", ".join(str(value) for value in values)
+    return textwrap.wrap(text, width=width, subsequent_indent=indent) or [""]
+
+
+def _format_metric_value(value: Any) -> str:
+    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        magnitude = abs(float(value))
+        if magnitude >= 1000:
+            return f"{float(value):.1f}"
+        if magnitude >= 100:
+            return f"{float(value):.2f}"
+        if magnitude >= 1:
+            return f"{float(value):.3f}"
+        return f"{float(value):.6f}"
+    return str(value)
+
+
+def _score_label_and_value(result: SelectionResult) -> tuple[str, str]:
+    if result.method in {"ideal", "reference"}:
+        return "Distance", f"{abs(float(result.score)):.6f}"
+    if result.method == "utility":
+        return "Utility score", f"{float(result.score):.6f}"
+    if result.method == "outranking":
+        return "Net flow", f"{float(result.score):.6f}"
+    if result.method == "lexicographic":
+        return "Lexicographic score", f"{float(result.score):.6f}"
+    if result.method == "knee":
+        return "Knee score", f"{float(result.score):.6f}"
+    return "Score", f"{float(result.score):.6f}"
 
 
 def detect_latest_pareto_dir(root: str | os.PathLike[str] = "optimize_results") -> Optional[Path]:
@@ -914,36 +1041,45 @@ def format_selection_result(
     show_top: int = 1,
 ) -> str:
     selected_filename = result.candidate.path.name
-    selected_hash = result.candidate.path.stem
-    lines = [
-        f"Pareto directory: {pareto_dir}",
-        f"Loaded candidates: {loaded_count}",
-        f"Retained after limits: {retained_count}",
-        f"Applied limits: {len(active_limits)}",
-        f"Method: {result.method}",
-        f"Method summary: {_method_explanation(result.method)}",
-        f"Selected file: {selected_filename}",
-        f"Selected hash: {selected_hash}",
-        f"Selected path: {result.candidate.path}",
-        f"Score: {result.score:.6f}",
-    ]
+    score_label, score_value = _score_label_and_value(result)
+    selected_display_path = _display_path(result.candidate.path)
+    backtest_command = f"passivbot backtest {selected_display_path}"
+    lines: List[str] = []
+    lines.extend(
+        _render_key_value_box(
+            [
+                ("Pareto directory", _display_path(pareto_dir)),
+                ("Loaded candidates", str(loaded_count)),
+                ("Retained after limits", str(retained_count)),
+                ("Applied limits", str(len(active_limits))),
+                ("Method", result.method),
+                (score_label, score_value),
+                ("Selected file", selected_filename),
+                ("Selected path", selected_display_path),
+            ]
+        )
+    )
+    lines.append(f"Backtest command: {backtest_command}")
+    lines.append(f"Method summary: {_method_explanation(result.method)}")
     active_metrics = result.details.get("active_metrics")
+    spec_map = objective_spec_by_metric(result.candidate.entry)
     if isinstance(active_metrics, list) and active_metrics:
-        lines.append(f"Active objectives: {', '.join(str(metric) for metric in active_metrics)}")
+        lines.append("Active objectives:")
+        objective_rows = []
+        for metric in active_metrics:
+            goal = spec_map.get(metric).goal if metric in spec_map else (default_objective_goal(metric) or "?")
+            objective_rows.append([str(metric), str(goal)])
+        lines.extend(_render_table(["metric", "goal"], objective_rows))
     if active_limits:
         lines.append("Limit filters:")
         for entry in active_limits:
-            lines.append(f"  {entry}")
+            lines.append(f"  - {_format_limit_entry(entry)}")
     weights = result.details.get("weights")
-    if isinstance(weights, Mapping) and weights:
-        lines.append("Method weights:")
-        for metric, value in weights.items():
-            lines.append(f"  {metric}={value}")
     targets = result.details.get("targets")
     if isinstance(targets, Mapping) and targets:
         lines.append("Reference targets:")
         for metric, value in targets.items():
-            lines.append(f"  {metric}={value}")
+            lines.append(f"  - {metric} = {_format_metric_value(value)}")
     priority = result.details.get("priority")
     if isinstance(priority, list) and priority:
         lines.append(f"Priority order: {', '.join(str(metric) for metric in priority)}")
@@ -957,39 +1093,55 @@ def format_selection_result(
         )
     lines.extend(_selection_rationale_lines(result))
     selected_utilities = result.details.get("selected_utilities")
-    if isinstance(selected_utilities, Mapping) and selected_utilities:
-        lines.append("Selected normalized utilities:")
-        for metric, value in selected_utilities.items():
-            lines.append(f"  {metric}={value:.6f}")
     utility_contributions = result.details.get("utility_contributions")
-    if isinstance(utility_contributions, Mapping) and utility_contributions:
-        lines.append("Utility contributions:")
-        for metric, value in utility_contributions.items():
-            lines.append(f"  {metric}={value:.6f}")
     target_utilities = result.details.get("target_utilities")
-    if isinstance(target_utilities, Mapping) and target_utilities:
-        lines.append("Target utilities:")
-        for metric, value in target_utilities.items():
-            lines.append(f"  {metric}={value:.6f}")
     distance_components = result.details.get("distance_components")
-    if isinstance(distance_components, Mapping) and distance_components:
-        lines.append("Weighted distance components:")
-        for metric, value in distance_components.items():
-            lines.append(f"  {metric}={value:.6f}")
     ideal_point = result.details.get("ideal_point")
-    if isinstance(ideal_point, Mapping) and ideal_point:
-        lines.append("Ideal point:")
-        for metric, value in ideal_point.items():
-            lines.append(f"  {metric}={float(value):.6f}")
     if "minimum_selected_utility" in result.details:
         lines.append(
             f"Minimum selected utility: {float(result.details['minimum_selected_utility']):.6f}"
         )
-    lines.extend(["", "Objectives:"])
-    spec_map = objective_spec_by_metric(result.candidate.entry)
-    for metric, value in result.objective_values.items():
-        goal = spec_map.get(metric).goal if metric in spec_map else (default_objective_goal(metric) or "?")
-        lines.append(f"  {metric} ({goal}): {value}")
+    if isinstance(selected_utilities, Mapping) and selected_utilities:
+        metric_rows: List[List[str]] = []
+        for metric, value in result.objective_values.items():
+            goal = spec_map.get(metric).goal if metric in spec_map else (default_objective_goal(metric) or "?")
+            row = [
+                metric,
+                str(goal),
+                _format_metric_value(value),
+                _format_metric_value(selected_utilities.get(metric, "")),
+                _format_metric_value(ideal_point.get(metric, "")) if isinstance(ideal_point, Mapping) else "",
+            ]
+            if isinstance(weights, Mapping) and weights:
+                row.append(_format_metric_value(weights.get(metric, "")))
+            if isinstance(distance_components, Mapping) and distance_components:
+                row.append(_format_metric_value(distance_components.get(metric, "")))
+            if isinstance(utility_contributions, Mapping) and utility_contributions:
+                row.append(_format_metric_value(utility_contributions.get(metric, "")))
+            if isinstance(targets, Mapping) and targets:
+                row.append(_format_metric_value(targets.get(metric, "")))
+            elif isinstance(target_utilities, Mapping) and target_utilities and result.method != "ideal":
+                row.append(_format_metric_value(target_utilities.get(metric, "")))
+            metric_rows.append(row)
+
+        headers = ["metric", "goal", "value", "utility", "ideal"]
+        if isinstance(weights, Mapping) and weights:
+            headers.append("weight")
+        if isinstance(distance_components, Mapping) and distance_components:
+            headers.append("distance")
+        if isinstance(utility_contributions, Mapping) and utility_contributions:
+            headers.append("contrib")
+        if isinstance(targets, Mapping) and targets:
+            headers.append("target")
+        elif isinstance(target_utilities, Mapping) and target_utilities and result.method != "ideal":
+            headers.append("target_u")
+        lines.extend(["", "Objective table:"])
+        lines.extend(_render_table(headers, metric_rows))
+    else:
+        lines.extend(["", "Objectives:"])
+        for metric, value in result.objective_values.items():
+            goal = spec_map.get(metric).goal if metric in spec_map else (default_objective_goal(metric) or "?")
+            lines.append(f"  {metric} ({goal}): {value}")
     ranking_order = result.details.get("ranking_order")
     score_vector = result.details.get("score_vector")
     if (
@@ -1006,10 +1158,16 @@ def format_selection_result(
             score_vector,
             limit=show_top,
         )
-        for row in shortlist:
-            lines.append(
-                f"  #{row['rank']} score={row['score']:.6f} file={row['file']} hash={row['hash']}"
-            )
+        top_rows = [
+            [
+                f"#{row['rank']}",
+                f"{row['score']:.6f}",
+                str(row["file"]),
+                str(row["hash"]),
+            ]
+            for row in shortlist
+        ]
+        lines.extend(_render_table(["rank", "score", "file", "hash"], top_rows))
     return "\n".join(lines)
 
 
