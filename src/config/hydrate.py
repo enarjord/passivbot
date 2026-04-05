@@ -40,6 +40,9 @@ def seed_missing_compatibility_sections(template: dict, result: dict, *, tracker
     for pside in ("long", "short"):
         if pside not in result["bot"]:
             seeded = deepcopy(template["bot"][pside])
+            # A fully omitted side should stay disabled after hydration instead of inheriting
+            # whichever exposure default happens to be in the schema.
+            seeded["total_wallet_exposure_limit"] = 0.0
             result["bot"][pside] = seeded
             if tracker is not None:
                 tracker.add(["bot", pside], seeded)

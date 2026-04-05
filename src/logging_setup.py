@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, Sequence
 
 TRACE_LEVEL = 5
 TRACE_LEVEL_NAME = "TRACE"
@@ -15,6 +17,7 @@ DEFAULT_FORMAT = "%(asctime)s %(levelname)-8s %(message)s"
 DEFAULT_FORMAT_WITH_PREFIX = "%(asctime)s %(levelname)-8s [%(log_prefix)s] %(message)s"
 DEFAULT_DATEFMT = "%Y-%m-%dT%H:%M:%SZ"
 _LAST_LOG_ACTIVITY_MONOTONIC = time.monotonic()
+DEFAULT_LOG_FILENAME_MAX_LEN = 100
 
 
 class PrefixFilter(logging.Filter):
@@ -122,6 +125,37 @@ def _debug_to_level(debug: int) -> int:
     return TRACE_LEVEL
 
 
+def sanitize_log_filename(text: str, *, max_len: int = DEFAULT_LOG_FILENAME_MAX_LEN) -> str:
+    """Return a filesystem-safe filename fragment."""
+    sanitized = re.sub(r"[\s/\\]", "_", text)
+    sanitized = re.sub(r'[<>:"|?*]', "", sanitized)
+    sanitized = sanitized.strip(". ")
+    if len(sanitized) > max_len:
+        sanitized = sanitized[:max_len]
+    return sanitized or "log"
+
+
+def create_command_log_filename(
+    command_args: Sequence[object], *, timestamp: Optional[datetime] = None
+) -> str:
+    """Return a timestamped log filename for a command invocation."""
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc)
+    elif timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    command_str = " ".join(str(part) for part in command_args)
+    sanitized_command = sanitize_log_filename(command_str)
+    prefix = timestamp.astimezone(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return f"{prefix}_{sanitized_command}.log"
+
+
+def build_command_log_path(
+    command_args: Sequence[object], log_dir: str | Path, *, timestamp: Optional[datetime] = None
+) -> Path:
+    """Return the log file path for a command invocation under the given directory."""
+    return Path(log_dir).expanduser() / create_command_log_filename(command_args, timestamp=timestamp)
+
+
 def configure_logging(
     debug: Optional[int | str] = 1,
     *,
@@ -207,3 +241,22 @@ def configure_logging(
         # DEBUG and below: suppress CCXT's noisy API payloads
         # Set to WARNING so only actual warnings/errors from CCXT are shown
         ccxt_logger.setLevel(logging.WARNING)
+
+
+def resolve_live_log_file_settings(config: dict[str, Any], *, user: str) -> dict[str, Any]:
+    """Return configure_logging kwargs for canonical live file logging."""
+    logging_cfg = config.get("logging", {}) if isinstance(config, dict) else {}
+    if not isinstance(logging_cfg, dict):
+        logging_cfg = {}
+    if not bool(logging_cfg.get("persist_to_file", True)):
+        return {"log_file": None, "rotation": False, "max_bytes": 10 * 1024 * 1024, "backup_count": 5}
+
+    log_dir = str(logging_cfg.get("dir", "logs")).strip() or "logs"
+    max_bytes_mb = float(logging_cfg.get("max_bytes_mb", 10.0))
+    backup_count = int(logging_cfg.get("backup_count", 5))
+    return {
+        "log_file": str(Path(log_dir).expanduser() / f"{user}.log"),
+        "rotation": bool(logging_cfg.get("rotation", False)),
+        "max_bytes": max(1, int(max_bytes_mb * 1024 * 1024)),
+        "backup_count": max(0, backup_count),
+    }

@@ -91,6 +91,14 @@ def make_table(result_):
     )
     table.add_row(["No. days", pbr.round_dynamic(result["result"]["n_days"], 2)])
     table.add_row(["Starting balance", pbr.round_dynamic(result["result"]["starting_balance"], 6)])
+    for title, key, precision, mul, suffix in [
+        ("Win rate", "win_rate", 4, 100, "%"),
+        ("Worst trade loss", "trade_loss_max", 4, 100, "%"),
+    ]:
+        if key in result["result"]:
+            table.add_row(
+                [title, f"{pbr.round_dynamic(result['result'][key] * mul, precision)}{suffix}"]
+            )
     for side in ["long", "short"]:
         if side not in result:
             result[side] = {"enabled": result[f"do_{side}"]}

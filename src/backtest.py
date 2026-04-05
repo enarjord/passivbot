@@ -119,6 +119,11 @@ ANALYSIS_SHARED_KEYS = {
     "position_held_hours_max",
     "position_held_hours_median",
     "position_unchanged_hours_max",
+    "win_rate",
+    "win_rate_w",
+    "trade_loss_max",
+    "trade_loss_mean",
+    "trade_loss_median",
     "loss_profit_ratio",
     "loss_profit_ratio_long",
     "loss_profit_ratio_short",
@@ -234,12 +239,6 @@ set_windows_event_loop_policy()
 
 def aggregate_candles(candles_1m: np.ndarray, interval: int) -> np.ndarray:
     return aggregate_hlcvs(candles_1m, interval)
-
-
-def _liquidation_drawdown_threshold(config: dict) -> float:
-    threshold = float(get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0)
-    threshold = min(max(threshold, 0.0), 1.0 - 1e-12)
-    return 1.0 - threshold
 
 
 def _looks_like_bool_token(value: str) -> bool:
@@ -713,12 +712,11 @@ def execute_backtest(payload: BacktestPayload, config: dict):
     equities_array = np.asarray(equities_array)
     payload.hard_stop_plot_data = dict(hard_stop_plot_data or {})
     analysis = expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config)
-    if float(analysis.get("drawdown_worst", 0.0) or 0.0) >= _liquidation_drawdown_threshold(
-        config
-    ) - 1e-12:
+    if bool(analysis.get("liquidated", False)):
+        final_equity_usd = float(equities_array[-1, 1]) if equities_array.size else float("nan")
         logging.debug(
-            "Backtest liquidated early | drawdown_worst=%.6f | liquidation_threshold=%.6f",
-            float(analysis.get("drawdown_worst", 0.0) or 0.0),
+            "Backtest liquidated early | final_equity_usd=%.6f | liquidation_threshold=%.6f",
+            final_equity_usd,
             float(get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0),
         )
     return fills, equities_array, analysis
@@ -898,10 +896,11 @@ def process_forager_fills(
         btc_cash_series.index = pd.to_datetime(btc_cash_series.index, unit="ns")
         btc_total_balance_series.index = pd.to_datetime(btc_total_balance_series.index, unit="ns")
     else:
-        usd_cash_series = pd.Series(dtype=float, name="usd_cash_wallet")
-        usd_total_balance_series = pd.Series(dtype=float, name="usd_total_balance")
-        btc_cash_series = pd.Series(dtype=float, name="btc_cash_wallet")
-        btc_total_balance_series = pd.Series(dtype=float, name="btc_total_balance")
+        empty_dtidx = pd.DatetimeIndex([])
+        usd_cash_series = pd.Series(dtype=float, name="usd_cash_wallet", index=empty_dtidx)
+        usd_total_balance_series = pd.Series(dtype=float, name="usd_total_balance", index=empty_dtidx)
+        btc_cash_series = pd.Series(dtype=float, name="btc_cash_wallet", index=empty_dtidx)
+        btc_total_balance_series = pd.Series(dtype=float, name="btc_total_balance", index=empty_dtidx)
     equities_array = np.asarray(equities_array)
     equities_index = pd.to_datetime(equities_array[:, 0].astype(np.int64), unit="ms")
     edf = pd.Series(
@@ -955,9 +954,12 @@ def process_forager_fills(
             .bfill()
         )
         if sample_divider > 1 and not bal_eq.empty:
-            try:
-                bal_eq = bal_eq.resample(f"{sample_divider}min").last()
-            except ValueError:
+            if isinstance(bal_eq.index, pd.DatetimeIndex):
+                try:
+                    bal_eq = bal_eq.resample(f"{sample_divider}min").last()
+                except ValueError:
+                    bal_eq = bal_eq.iloc[::sample_divider]
+            else:
                 bal_eq = bal_eq.iloc[::sample_divider]
             bal_eq = bal_eq.dropna(how="all").ffill().bfill()
     bal_eq = bal_eq.round(4).astype(np.float32)

@@ -86,6 +86,46 @@ def test_format_config_live_only_adds_sections():
     assert "optimize" in out_live_only and "backtest" in out_live_only
 
 
+def test_format_config_missing_short_side_stays_disabled():
+    current = {
+        "bot": {
+            "long": {
+                "total_wallet_exposure_limit": 0.7,
+            }
+        },
+        "live": {},
+        "backtest": {},
+        "optimize": {},
+        "logging": {},
+        "monitor": {},
+    }
+
+    out = format_config(current, verbose=False)
+
+    assert out["bot"]["long"]["total_wallet_exposure_limit"] == 0.7
+    assert out["bot"]["short"]["total_wallet_exposure_limit"] == 0.0
+
+
+def test_format_config_missing_long_side_stays_disabled():
+    current = {
+        "bot": {
+            "short": {
+                "total_wallet_exposure_limit": 0.7,
+            }
+        },
+        "live": {},
+        "backtest": {},
+        "optimize": {},
+        "logging": {},
+        "monitor": {},
+    }
+
+    out = format_config(current, verbose=False)
+
+    assert out["bot"]["short"]["total_wallet_exposure_limit"] == 0.7
+    assert out["bot"]["long"]["total_wallet_exposure_limit"] == 0.0
+
+
 def test_format_config_current_roundtrip_basic():
     # Provide a minimally valid current config and ensure format_config returns a dict with
     # expected top-level sections while normalising new exposure controls
@@ -173,6 +213,32 @@ def test_format_config_adds_monitor_defaults():
         "emit_completed_candles": True,
         "include_raw_fill_payloads": False,
     }
+
+
+def test_format_config_adds_logging_defaults():
+    current = copy.deepcopy(_template())
+    current.pop("logging", None)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["logging"] == {
+        "backup_count": 5,
+        "dir": "logs",
+        "level": 1,
+        "max_bytes_mb": 10.0,
+        "memory_snapshot_interval_minutes": 30,
+        "persist_to_file": True,
+        "rotation": False,
+        "volume_refresh_info_threshold_seconds": 30,
+    }
+
+
+def test_format_config_rejects_invalid_logging_dir():
+    current = copy.deepcopy(_template())
+    current["logging"]["dir"] = "   "
+
+    with pytest.raises(ValueError, match="config.logging.dir"):
+        format_config(current, verbose=False, live_only=True)
 
 
 def test_format_config_rejects_invalid_monitor_snapshot_interval():

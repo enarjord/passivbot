@@ -7,7 +7,7 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 
 set_windows_event_loop_policy()
 
-from ccxt.base.errors import NetworkError, RateLimitExceeded
+from ccxt.base import errors as ccxt_errors
 import random
 import traceback
 import argparse
@@ -63,6 +63,7 @@ from config.overrides import parse_overrides
 from logging_setup import (
     configure_logging,
     get_last_log_activity_monotonic,
+    resolve_live_log_file_settings,
     resolve_log_level,
 )
 from utils import (
@@ -109,6 +110,12 @@ from procedures import (
 from utils import get_file_mod_ms
 from downloader import compute_per_coin_warmup_minutes
 import re
+
+NetworkError = ccxt_errors.NetworkError
+RateLimitExceeded = ccxt_errors.RateLimitExceeded
+# Some isolated tests stub ccxt.base.errors without RequestTimeout; treat it as a
+# NetworkError-class transient startup error when the dedicated symbol is absent.
+RequestTimeout = getattr(ccxt_errors, "RequestTimeout", NetworkError)
 
 # Orchestrator-only: ideal orders are computed via Rust orchestrator (JSON API).
 # Legacy Python order calculation paths are removed in this branch.
@@ -2183,7 +2190,23 @@ class Passivbot:
         """Load exchange market metadata and refresh approval lists."""
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
-        await self.update_exchange_config()  # set hedge mode
+        # Retry on transient network errors (TCP + TLS handshake on a fresh
+        # aiohttp session can time out; also called hourly so transient errors
+        # should not abort the refresh cycle).
+        for _attempt in range(1, 4):
+            try:
+                await self.update_exchange_config()  # set hedge mode
+                break
+            except (RequestTimeout, NetworkError) as e:
+                if _attempt == 3:
+                    raise
+                logging.warning(
+                    "[init_markets] update_exchange_config error (attempt %d/3): %s – retrying in %ds",
+                    _attempt,
+                    e,
+                    5 * _attempt,
+                )
+                await asyncio.sleep(5 * _attempt)
         # Reuse existing ccxt session when available (ensures shared options such as fetchMarkets types).
         cc_instance = getattr(self, "cca", None)
         self.markets_dict = await load_markets(
@@ -8361,13 +8384,15 @@ async def main():
     )
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(cli_log_level, config_logging_value, fallback=1)
-    if effective_log_level != initial_log_level:
-        configure_logging(debug=effective_log_level)
     logging_section = config.get("logging")
     if not isinstance(logging_section, dict):
         logging_section = {}
     config["logging"] = logging_section
     logging_section["level"] = effective_log_level
+    live_user = require_live_value(config, "user")
+    log_file_settings = resolve_live_log_file_settings(config, user=live_user)
+    if effective_log_level != initial_log_level or log_file_settings["log_file"]:
+        configure_logging(debug=effective_log_level, **log_file_settings)
 
     custom_endpoints_cli = args.custom_endpoints
     live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
@@ -8421,10 +8446,10 @@ async def main():
         preloaded=preloaded_override,
     )
 
-    user_info = load_user_info(require_live_value(config, "user"))
+    user_info = load_user_info(live_user)
     # Reconfigure logging with exchange prefix now that we know the exchange
     exchange_prefix = user_info["exchange"]
-    configure_logging(debug=effective_log_level, prefix=exchange_prefix)
+    configure_logging(debug=effective_log_level, prefix=exchange_prefix, **log_file_settings)
     await load_markets(user_info["exchange"], verbose=True)
 
     config = parse_overrides(config, verbose=True)

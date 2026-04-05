@@ -50,6 +50,39 @@ class TestCCXTBotSessionCreation:
         assert config["privateKey"] == "0xDEF456"
         assert "apiKey" not in config  # Not provided
 
+    def test_build_ccxt_config_default_timeout(self):
+        """Should set a default timeout of 30 000 ms when user_info has no timeout."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.user_info = {
+            "exchange": "bybit",
+            "apiKey": "k",
+            "secret": "s",
+            "quote": "USDT",
+        }
+
+        config = bot._build_ccxt_config()
+
+        assert config["timeout"] == 30000
+
+    def test_build_ccxt_config_user_timeout_not_overridden(self):
+        """User-supplied timeout in user_info must take precedence over the default."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.user_info = {
+            "exchange": "bybit",
+            "apiKey": "k",
+            "secret": "s",
+            "quote": "USDT",
+            "timeout": 60000,
+        }
+
+        config = bot._build_ccxt_config()
+
+        assert config["timeout"] == 60000
+
 
 class TestCCXTBotFetchBalance:
     """Test CCXTBot balance fetching."""

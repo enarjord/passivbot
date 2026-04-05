@@ -167,10 +167,16 @@ def test_select_candidate_outranking_prefers_balanced_candidate(sample_pareto_di
     assert result.candidate.path.stem == "balanced"
 
 
+def test_build_parser_defaults_to_ideal_method():
+    parser = build_parser()
+    args = parser.parse_args([])
+    assert args.method == "ideal"
+
+
 def test_run_from_args_prints_summary(sample_pareto_dir: Path, capsys):
     args = argparse.Namespace(
         path=str(sample_pareto_dir),
-        method="knee",
+        method="ideal",
         limit_entries=[],
         limits_payload=None,
         objectives=None,
@@ -182,17 +188,25 @@ def test_run_from_args_prints_summary(sample_pareto_dir: Path, capsys):
     )
     result = run_from_args(args)
     captured = capsys.readouterr().out
-    assert "Loaded candidates: 4" in captured
-    assert "Retained after limits: 4" in captured
-    assert "Applied limits: 0" in captured
-    assert "Method: knee" in captured
+    assert "| Loaded candidates" in captured
+    assert "| Retained after limits" in captured
+    assert "| Applied limits" in captured
+    assert "| Method                | ideal" in captured
+    assert "| Distance              |" in captured
     assert "Method summary:" in captured
-    assert "Selected file:" in captured
-    assert "Selected hash:" in captured
+    assert "| Selected file" in captured
+    assert "| Selected path" in captured
+    assert "| Selected hash" not in captured
+    assert "Backtest command: passivbot backtest" in captured
     assert "Active objectives:" in captured
+    assert "| metric" in captured
+    assert "| goal" in captured
     assert "Why this winner:" in captured
-    assert "Selected normalized utilities:" in captured
-    assert "Ideal point:" in captured
+    assert "Objective table:" in captured
+    assert "metric" in captured
+    assert "utility" in captured
+    assert "ideal" in captured
+    assert "Target utilities:" not in captured
     assert "Top candidates:" in captured
     assert result.candidate.path.stem == "balanced"
 
@@ -211,7 +225,7 @@ def test_run_from_args_uses_latest_pareto_dir_when_path_omitted(tmp_path: Path, 
 
     args = argparse.Namespace(
         path=None,
-        method="knee",
+        method="ideal",
         limit_entries=[],
         limits_payload=None,
         objectives=None,
@@ -223,7 +237,9 @@ def test_run_from_args_uses_latest_pareto_dir_when_path_omitted(tmp_path: Path, 
     )
     result = run_from_args(args)
     captured = capsys.readouterr().out
-    assert str(newer.resolve()) in captured
+    assert str(newer.resolve()) not in captured
+    assert "optimize_results/newer/pareto" in captured
+    assert "Backtest command: passivbot backtest optimize_results/newer/pareto/newer_balanced.json" in captured
     assert result.candidate.path.stem == "newer_balanced"
 
 
@@ -305,7 +321,29 @@ def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Pa
     )
     run_from_args(args)
     captured = capsys.readouterr().out
-    assert "sharpe_ratio_strategy_pnl_rebased (max): 1.4" in captured
+    assert "sharpe_ratio_strategy_pnl_rebased" in captured
+    assert "| max  | 1.400" in captured
+
+
+def test_run_from_args_ideal_uses_distance_label_and_omits_hash(sample_pareto_dir: Path, capsys):
+    args = argparse.Namespace(
+        path=str(sample_pareto_dir),
+        method="ideal",
+        limit_entries=[],
+        limits_payload=None,
+        objectives=None,
+        weight=None,
+        target=None,
+        priority=None,
+        show_top=1,
+        json_output=False,
+    )
+    run_from_args(args)
+    captured = capsys.readouterr().out
+    assert "| Distance" in captured
+    assert "| Score" not in captured
+    assert "| Selected hash" not in captured
+    assert "Backtest command: passivbot backtest" in captured
 
 
 def test_build_parser_accepts_short_objectives_alias():

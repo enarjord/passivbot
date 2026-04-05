@@ -85,7 +85,7 @@ If you see linker errors after an OS update (e.g. new glibc), rebuild the extens
 
 ## 7. Special environments
 
-- **Docker** – Use `Dockerfile`/`Dockerfile_live` in the repo root. The Docker images already include the compiled extension.
+- **Docker / hosted containers** – Use `Dockerfile_live` for the canonical live image. It installs the compiled extension and starts through the `passivbot live` wrapper contract documented in [container_deployment.md](container_deployment.md). Railway and similar hosts should reuse that same image/env contract instead of maintaining platform-specific configs.
 - **Windows** – WSL2 (Ubuntu) is the recommended route; native Windows lacks some dependency support.
 - **ARM (Raspberry Pi / AWS Graviton)** – Works, but builds are slower; make sure your Rust toolchain targets the correct architecture.
 

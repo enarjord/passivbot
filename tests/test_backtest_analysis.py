@@ -19,6 +19,11 @@ def _make_analysis_entry(value):
         "position_held_hours_max",
         "position_held_hours_median",
         "position_unchanged_hours_max",
+        "win_rate",
+        "win_rate_w",
+        "trade_loss_max",
+        "trade_loss_mean",
+        "trade_loss_median",
         "loss_profit_ratio",
         "loss_profit_ratio_w",
         "volume_pct_per_day_avg",
@@ -108,6 +113,58 @@ def test_expand_analysis_includes_high_exposure_hours():
         assert result[f"high_exposure_hours_max_{side}"] == 0.5
 
 
+def test_expand_analysis_includes_trade_level_metrics():
+    analysis_usd = _make_analysis_entry(0.25)
+    analysis_btc = _make_analysis_entry(0.75)
+    config = {
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 1.0},
+        }
+    }
+
+    result = expand_analysis(
+        analysis_usd,
+        analysis_btc,
+        fills=np.empty((0, 0)),
+        equities_array=np.empty((0, 3)),
+        config=config,
+    )
+
+    assert result["win_rate"] == 0.25
+    assert result["win_rate_w"] == 0.25
+    assert result["trade_loss_max"] == 0.25
+    assert result["trade_loss_mean"] == 0.25
+    assert result["trade_loss_median"] == 0.25
+    assert "win_rate_usd" not in result
+    assert "trade_loss_max_btc" not in result
+
+
+def test_make_table_includes_trade_metrics():
+    table = plotting.make_table(
+        {
+            "exchange": "binance",
+            "market_type": "futures",
+            "symbol": "BTC/USDT:USDT",
+            "passivbot_mode": "recursive_grid",
+            "adg_n_subdivisions": 10,
+            "long": {"enabled": False},
+            "short": {"enabled": False},
+            "result": {
+                "n_days": 7.0,
+                "starting_balance": 1000.0,
+                "win_rate": 0.625,
+                "trade_loss_max": 0.015,
+            },
+        }
+    ).get_string()
+
+    assert "Win rate" in table
+    assert "62.5%" in table
+    assert "Worst trade loss" in table
+    assert "1.5%" in table
+
+
 def test_expand_analysis_deduplicates_hard_stop_metrics():
     analysis_usd = _make_analysis_entry(0.5)
     analysis_btc = _make_analysis_entry(0.5)
@@ -176,6 +233,30 @@ def test_process_forager_fills_handles_zero_pnl_division():
     assert analysis_appendix["loss_profit_ratio_long"] == 1.0
     assert analysis_appendix["loss_profit_ratio_short"] == 1.0
     assert analysis_appendix["pnl_ratio_long_short"] == 0.5
+
+
+def test_process_forager_fills_no_fills_keeps_datetime_index_for_resample():
+    """No-fill balance/equity joins should stay resample-safe on a DatetimeIndex."""
+    t0 = 1_740_000_000_000
+    equities_array = np.array(
+        [
+            [t0, 1000.0, 0.02],
+            [t0 + 3_600_000, 1000.5, 0.02],
+        ],
+        dtype=np.float64,
+    )
+
+    fdf, _analysis_appendix, bal_eq = process_forager_fills(
+        fills=[],
+        coins=[],
+        hlcvs=np.empty((0, 0), dtype=np.float64),
+        equities_array=equities_array,
+        balance_sample_divider=60,
+    )
+
+    assert fdf.empty
+    assert isinstance(bal_eq.index, pd.DatetimeIndex)
+    assert not bal_eq.empty
 
 
 def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, monkeypatch):

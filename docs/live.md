@@ -1,5 +1,23 @@
 # Running the bot live
 
+## Logging
+
+`passivbot live` now writes its console log stream to a timestamped file under `logs/` by default.
+This behavior is controlled from `config.logging`:
+
+- `logging.persist_to_file = true` keeps on-disk live logs enabled
+- `logging.dir` chooses the target directory
+- `logging.rotation`, `logging.max_bytes_mb`, and `logging.backup_count`
+  control optional file rotation
+
+Disable file persistence only if you explicitly want console-only live logging:
+
+```json
+"logging": {
+  "persist_to_file": false
+}
+```
+
 ## Custom Exchange Endpoints
 
 Some integrations require routing REST traffic through an intermediate service

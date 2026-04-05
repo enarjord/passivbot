@@ -366,8 +366,8 @@ Full analysis is included in each member of the Pareto front. Two helper tools a
 
 ```bash
 # Single-candidate selector
-passivbot tool pareto optimize_results/.../pareto -m knee
-passivbot tool pareto -m knee
+passivbot tool pareto optimize_results/.../pareto
+passivbot tool pareto
 
 # Interactive dashboard (recommended)
 passivbot tool pareto-dash --data-root optimize_results
@@ -385,15 +385,16 @@ objectives. Recommended workflow:
 
 1. apply hard filters with `--limit`
 2. use `-m reference` if you already know your target ADG / drawdown / recovery regime
-3. otherwise use `-m knee` for a balanced compromise
-4. use `--show-top N` to inspect the shortlist before promoting one config
-5. use `--json` if you want to script the selection
+3. otherwise start with the default `ideal` selector
+4. switch to `-m knee` if you specifically want a balanced-compromise heuristic
+5. use `--show-top N` to inspect the shortlist before promoting one config
+6. use `--json` if you want to script the selection
 
 Available methods:
 
 - `knee`: approximate balanced compromise point
 - `reference`: closest to user-specified targets via `--target metric=value`
-- `ideal`: closest to the observed ideal point
+- `ideal`: closest to the observed ideal point; default
 - `utility`: weighted scalarization via `--weight metric=value`
 - `lexicographic`: strict objective priority via `--priority metric_a,metric_b,...`
 - `outranking`: simplified PROMETHEE-style pairwise ranking
@@ -411,7 +412,7 @@ Example:
 ```bash
 passivbot tool pareto \
   -o sharpe_ratio_strategy_pnl_rebased,adg_strategy_pnl_rebased,peak_recovery_hours_hsl \
-  -m knee
+  -m ideal
 ```
 
 `pareto_dash.py` scans one or more optimization runs and launches a Plotly Dash app with:

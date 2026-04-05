@@ -9,38 +9,10 @@ import sys
 import os
 import subprocess
 import signal
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-
-def sanitize_filename(text):
-    """Sanitize a string to be safe for use as a filename."""
-    # Replace spaces and path separators with underscores
-    text = re.sub(r"[\s/\\]", "_", text)
-    # Remove or replace other problematic characters
-    text = re.sub(r'[<>:"|?*]', "", text)
-    # Remove leading/trailing dots and spaces
-    text = text.strip(". ")
-    # Limit length
-    if len(text) > 100:
-        text = text[:100]
-    return text
-
-
-def create_log_filename(command_args):
-    """Create a log filename based on the command and timestamp."""
-    # Join command arguments and sanitize
-    command_str = " ".join(command_args)
-    sanitized_command = sanitize_filename(command_str)
-
-    # Add UTC timestamp
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-
-    # Create filename with timestamp first
-    log_filename = f"{timestamp}_{sanitized_command}.log"
-
-    return log_filename
+from logging_setup import build_command_log_path
 
 
 class LoggingWrapper:
@@ -156,8 +128,7 @@ def main():
     command_args = sys.argv[1:]
 
     # Create log filename
-    log_filename = create_log_filename(command_args)
-    log_file_path = Path("logs") / log_filename
+    log_file_path = build_command_log_path(command_args, "logs")
 
     print(f"Logging output to: {log_file_path}")
 
