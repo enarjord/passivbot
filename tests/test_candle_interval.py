@@ -146,6 +146,10 @@ def test_backtest_with_candle_interval():
         "trade_loss_max",
         "trade_loss_mean",
         "trade_loss_median",
+        "paper_loss_ratio_usd",
+        "paper_loss_mean_ratio_usd",
+        "exposure_ratio_usd",
+        "exposure_mean_ratio_usd",
     ]:
         assert key in analysis
         assert np.isfinite(analysis[key])

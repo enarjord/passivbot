@@ -37,6 +37,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import sys
 
 import time
@@ -54,7 +55,7 @@ if TYPE_CHECKING:
 
 import warnings
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import portalocker  # type: ignore
@@ -416,6 +417,76 @@ def _quarantine_gateio_cache_if_stale(cache_base: str, cutoff_date: str) -> None
                 return
 
 
+def _looks_like_daily_shard_filename(name: str) -> bool:
+    if not isinstance(name, str) or not name.endswith(".npy"):
+        return False
+    stem = name[:-4]
+    if len(stem) != 10 or stem[4] != "-" or stem[7] != "-":
+        return False
+    try:
+        datetime.strptime(stem, "%Y-%m-%d")
+    except Exception:
+        return False
+    return True
+
+
+def _quarantine_root_level_timeframe_debris(cache_base: str) -> int:
+    """
+    Quarantine invalid files found directly under exchange/timeframe roots.
+
+    Valid OHLCV layout is:
+    `{cache_base}/{exchange}/{timeframe}/{symbol}/YYYY-MM-DD.npy`
+
+    Any daily shard files or index.json files found directly under
+    `{cache_base}/{exchange}/{timeframe}` are debris from older/corrupt layouts and
+    should not remain in place.
+    """
+    root = Path(cache_base)
+    if not root.is_dir():
+        return 0
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    moved = 0
+
+    for exchange_dir in root.iterdir():
+        if not exchange_dir.is_dir() or exchange_dir.name.startswith("."):
+            continue
+        if exchange_dir.name.startswith("_"):
+            continue
+
+        for tf_dir in exchange_dir.iterdir():
+            if not tf_dir.is_dir():
+                continue
+
+            debris: List[Path] = []
+            for child in tf_dir.iterdir():
+                if not child.is_file():
+                    continue
+                if child.name == "index.json" or _looks_like_daily_shard_filename(child.name):
+                    debris.append(child)
+
+            if not debris:
+                continue
+
+            quarantine_dir = (
+                root / "_quarantine_root_level" / stamp / exchange_dir.name / tf_dir.name
+            )
+            quarantine_dir.mkdir(parents=True, exist_ok=True)
+
+            for child in debris:
+                shutil.move(str(child), str(quarantine_dir / child.name))
+                moved += 1
+
+            logging.warning(
+                "Quarantined %d invalid root-level OHLCV cache artifact(s) from %s -> %s",
+                len(debris),
+                tf_dir,
+                quarantine_dir,
+            )
+
+    return moved
+
+
 # Parse timeframe string like '1m','5m','1h','1d' to milliseconds.
 # Falls back to ONE_MIN_MS on invalid input. Seconds are rounded down to minutes.
 def _tf_to_ms(s: Optional[str]) -> int:
@@ -608,6 +679,13 @@ class CandlestickManager:
         migration_done = os.path.join(ohlcv_cache_base, ".migration_done")
         try:
             with portalocker.Lock(migration_lock, timeout=0.1, fail_when_locked=True):
+                try:
+                    _quarantine_root_level_timeframe_debris(ohlcv_cache_base)
+                except Exception as exc:
+                    logging.exception(
+                        "Root-level OHLCV cache cleanup failed (non-fatal). Continuing: %s",
+                        exc,
+                    )
                 if not os.path.exists(migration_done):
                     try:
                         standardize_cache_directories(ohlcv_cache_base)
@@ -3052,6 +3130,17 @@ class CandlestickManager:
                         limit=limit,
                         params=params,
                     )
+                first_ts = None
+                last_ts = None
+                if res:
+                    try:
+                        first_ts = int(res[0][0])
+                    except Exception:
+                        first_ts = None
+                    try:
+                        last_ts = int(res[-1][0])
+                    except Exception:
+                        last_ts = None
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
                 self._emit_remote_fetch(
                     {
@@ -3062,6 +3151,8 @@ class CandlestickManager:
                         "tf": tf_norm,
                         "since_ts": int(since_ms),
                         "rows": int(len(res) if res else 0),
+                        "first_ts": first_ts,
+                        "last_ts": last_ts,
                         "elapsed_ms": elapsed_ms,
                     }
                 )
@@ -3072,6 +3163,8 @@ class CandlestickManager:
                     tf=tf_norm,
                     since_ts=int(since_ms),
                     rows=(len(res) if res else 0),
+                    first_ts=first_ts,
+                    last_ts=last_ts,
                 )
                 return res or []
             except Exception as e:  # pragma: no cover - network not used in tests

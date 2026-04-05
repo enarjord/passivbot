@@ -170,6 +170,32 @@ def create_numpy_candles(start_ts: int, num_candles: int, base_price: float = 10
     return np.array(candles, dtype=CANDLE_DTYPE)
 
 
+def test_remote_fetch_log_ccxt_ok_includes_returned_range(caplog):
+    om = HLCVManager(
+        exchange="bybit",
+        start_date="2024-01-01",
+        end_date="2024-01-02",
+    )
+
+    payload = {
+        "kind": "ccxt_fetch_ohlcv",
+        "stage": "ok",
+        "symbol": "XMR/USDT:USDT",
+        "tf": "1m",
+        "rows": 1000,
+        "first_ts": 1642118400000,
+        "last_ts": 1642204740000,
+        "elapsed_ms": 612,
+    }
+
+    with caplog.at_level("INFO"):
+        om._remote_fetch_log(payload)
+
+    assert "download ccxt ok" in caplog.text
+    assert "first=2022-01-14T00:00:00Z" in caplog.text
+    assert "last=2022-01-14T23:59:00Z" in caplog.text
+
+
 # ============================================================================
 # Test Class: HLCVManager Basics
 # ============================================================================

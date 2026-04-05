@@ -24,6 +24,14 @@ def _make_analysis_entry(value):
         "trade_loss_max",
         "trade_loss_mean",
         "trade_loss_median",
+        "paper_loss_ratio",
+        "paper_loss_mean_ratio",
+        "exposure_ratio",
+        "exposure_mean_ratio",
+        "paper_loss_ratio_w",
+        "paper_loss_mean_ratio_w",
+        "exposure_ratio_w",
+        "exposure_mean_ratio_w",
         "loss_profit_ratio",
         "loss_profit_ratio_w",
         "volume_pct_per_day_avg",
@@ -138,6 +146,39 @@ def test_expand_analysis_includes_trade_level_metrics():
     assert result["trade_loss_median"] == 0.25
     assert "win_rate_usd" not in result
     assert "trade_loss_max_btc" not in result
+
+
+def test_expand_analysis_currency_suffixes_new_ratio_metrics():
+    analysis_usd = _make_analysis_entry(0.25)
+    analysis_btc = _make_analysis_entry(0.75)
+    config = {
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 1.0},
+        }
+    }
+
+    result = expand_analysis(
+        analysis_usd,
+        analysis_btc,
+        fills=np.empty((0, 0)),
+        equities_array=np.empty((0, 3)),
+        config=config,
+    )
+
+    for metric in (
+        "paper_loss_ratio",
+        "paper_loss_mean_ratio",
+        "exposure_ratio",
+        "exposure_mean_ratio",
+        "paper_loss_ratio_w",
+        "paper_loss_mean_ratio_w",
+        "exposure_ratio_w",
+        "exposure_mean_ratio_w",
+    ):
+        assert result[f"{metric}_usd"] == 0.25
+        assert result[f"{metric}_btc"] == 0.75
+        assert metric not in result
 
 
 def test_make_table_includes_trade_metrics():

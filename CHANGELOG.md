@@ -15,6 +15,7 @@ All notable user-facing changes will be documented in this file.
 - Fixed first-ohlcv timestamp cache handling for newly listed coins. Cached `0.0` entries are now treated as unresolved and refreshed, so optimize/backtest candle downloads correctly clamp fetch start to the coin's actual listing history instead of wasting time paging from much earlier dates.
 - Fixed optimizer/backtest liquidation reporting to use an explicit Rust-provided `analysis.liquidated` flag instead of inferring liquidation from `drawdown_worst`, avoiding false positives after runs that made a new equity peak before hitting the liquidation floor.
 - Added trade-level backtest metrics for completed positions: `win_rate`, `win_rate_w`, and `trade_loss_{max,mean,median}`. These measure completed-trade outcomes from open-to-flat realized PnL and normalize loss metrics by balance at trade open.
+- Added optimizer-facing backtest ratio metrics `paper_loss_ratio`, `paper_loss_mean_ratio`, `exposure_ratio`, and `exposure_mean_ratio`, plus weighted `_w` variants. These measure growth relative to unrealized equity-vs-balance drawdown and actual wallet exposure.
 
 ### Upgrade Notes
 - Reinstall after pulling this release. `passivbot` now validates the active environment and the loaded Rust extension more aggressively, so stale editable installs or stale shell shims are more likely to fail loudly instead of continuing silently. Use `python3 -m pip install -e .` for live-only setups or `python3 -m pip install -e ".[full]"` for backtest/optimize setups, and rebuild with `maturin develop --release` if needed.
@@ -73,6 +74,7 @@ All notable user-facing changes will be documented in this file.
 - **Backtest HSL EMA span fallback** - Backtests no longer fail when `bot.common.equity_hard_stop_loss.ema_span_minutes` is smaller than `backtest.candle_interval_minutes`. Sub-interval spans now fall back to a one-sample EMA, which disables smoothing and makes the HSL score follow raw drawdown.
 - **HSL no-restart threshold semantics** - Values of `bot.common.equity_hard_stop_loss.no_restart_drawdown_threshold` below `red_threshold` are now clamped up to `red_threshold` in live, backtest, and optimizer flows. Stop events now treat `drawdown_raw >= no_restart_drawdown_threshold` as terminal, so setting both thresholds equal makes the first RED halt non-restarting.
 - **Backtest HSL analysis metrics expanded and clarified** - Added account-level HSL metrics for yellow/orange/red time share, RED halt duration, trigger drawdown, panic-close realized loss, flatten time, and restart-to-retrigger rate. Also renamed the old ambiguous halt-loss metric to `hard_stop_halt_to_restart_equity_loss_pct`.
+- **HLCV fetch logging and cache-root hygiene** - CCXT candle fetch progress logs now include the actual returned candle range (`first`/`last`) instead of only the requested `since`, and CandlestickManager now quarantines invalid root-level daily shard files or `index.json` debris found directly under `caches/ohlcv/{exchange}/{timeframe}` so mixed/corrupt cache roots stop masquerading as symbol data.
 
 ## v7.8.4 - 2026-03-06
 
