@@ -79,6 +79,46 @@ def test_format_config_live_only_adds_sections():
     assert "optimize" in out_live_only and "backtest" in out_live_only
 
 
+def test_format_config_missing_short_side_stays_disabled():
+    current = {
+        "bot": {
+            "long": {
+                "total_wallet_exposure_limit": 0.7,
+            }
+        },
+        "live": {},
+        "backtest": {},
+        "optimize": {},
+        "logging": {},
+        "monitor": {},
+    }
+
+    out = format_config(current, verbose=False)
+
+    assert out["bot"]["long"]["total_wallet_exposure_limit"] == 0.7
+    assert out["bot"]["short"]["total_wallet_exposure_limit"] == 0.0
+
+
+def test_format_config_missing_long_side_stays_disabled():
+    current = {
+        "bot": {
+            "short": {
+                "total_wallet_exposure_limit": 0.7,
+            }
+        },
+        "live": {},
+        "backtest": {},
+        "optimize": {},
+        "logging": {},
+        "monitor": {},
+    }
+
+    out = format_config(current, verbose=False)
+
+    assert out["bot"]["short"]["total_wallet_exposure_limit"] == 0.7
+    assert out["bot"]["long"]["total_wallet_exposure_limit"] == 0.0
+
+
 def test_format_config_current_roundtrip_basic():
     # Provide a minimally valid current config and ensure format_config returns a dict with
     # expected top-level sections while normalising new exposure controls
