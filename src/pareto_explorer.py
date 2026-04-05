@@ -214,8 +214,8 @@ def build_parser() -> argparse.ArgumentParser:
         "-m",
         "--method",
         type=str,
-        default="knee",
-        help="Selection method. Default: knee.",
+        default="ideal",
+        help="Selection method. Default: ideal.",
     )
     parser.add_argument(
         "-l",

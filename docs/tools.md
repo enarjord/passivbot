@@ -25,8 +25,8 @@ directory. If you point it at an optimize run directory instead of the nested `p
 directory, it resolves that automatically.
 
 ```shell
-passivbot tool pareto optimize_results/.../pareto -m knee
-passivbot tool pareto -m knee
+passivbot tool pareto optimize_results/.../pareto
+passivbot tool pareto
 passivbot tool pareto optimize_results/.../pareto -m reference \
   --target adg_strategy_pnl_rebased=0.001 \
   --target drawdown_worst_hsl=0.25
@@ -34,19 +34,19 @@ passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_worst_hsl<=0.35' \
   -l 'adg_strategy_pnl_rebased>0.0'
 passivbot tool pareto -o sharpe_ratio_strategy_pnl_rebased,adg_strategy_pnl_rebased,peak_recovery_hours_hsl \
-  -m knee
+  -m ideal
 passivbot tool pareto optimize_results/... -m utility \
   --weight adg_strategy_pnl_rebased=4 \
   --weight drawdown_worst_hsl=2 \
   --show-top 5
-passivbot tool pareto -m knee --json
+passivbot tool pareto --json
 ```
 
 Available methods:
 
-- `knee` - balanced compromise point; recommended default when you do not have explicit targets
+- `knee` - balanced compromise point when you want a compromise selector instead of ideal-point distance
 - `reference` - closest to user-specified aspiration targets
-- `ideal` - closest to the observed ideal point on the current front
+- `ideal` - closest to the observed ideal point on the current front; default method
 - `utility` - highest weighted normalized utility
 - `lexicographic` - strict objective priority order
 - `outranking` - simplified PROMETHEE-style pairwise net-flow ranking

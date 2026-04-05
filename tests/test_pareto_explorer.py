@@ -167,10 +167,16 @@ def test_select_candidate_outranking_prefers_balanced_candidate(sample_pareto_di
     assert result.candidate.path.stem == "balanced"
 
 
+def test_build_parser_defaults_to_ideal_method():
+    parser = build_parser()
+    args = parser.parse_args([])
+    assert args.method == "ideal"
+
+
 def test_run_from_args_prints_summary(sample_pareto_dir: Path, capsys):
     args = argparse.Namespace(
         path=str(sample_pareto_dir),
-        method="knee",
+        method="ideal",
         limit_entries=[],
         limits_payload=None,
         objectives=None,
@@ -185,7 +191,7 @@ def test_run_from_args_prints_summary(sample_pareto_dir: Path, capsys):
     assert "Loaded candidates: 4" in captured
     assert "Retained after limits: 4" in captured
     assert "Applied limits: 0" in captured
-    assert "Method: knee" in captured
+    assert "Method: ideal" in captured
     assert "Method summary:" in captured
     assert "Selected file:" in captured
     assert "Selected hash:" in captured
@@ -211,7 +217,7 @@ def test_run_from_args_uses_latest_pareto_dir_when_path_omitted(tmp_path: Path, 
 
     args = argparse.Namespace(
         path=None,
-        method="knee",
+        method="ideal",
         limit_entries=[],
         limits_payload=None,
         objectives=None,
