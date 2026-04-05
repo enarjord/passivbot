@@ -120,7 +120,12 @@ fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
     sorted[..worst_n].iter().map(|x| x.abs()).sum::<f64>() / worst_n as f64
 }
 
-fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[u64]) -> Analysis {
+fn analyze_backtest_basic(
+    fills: &[Fill],
+    equities: &Vec<f64>,
+    timestamps_ms: &[u64],
+    exposures_series: &[f64],
+) -> Analysis {
     if fills.len() <= 1 {
         return Analysis::default();
     }
@@ -380,6 +385,50 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
         0.0
     };
 
+    let exposures: Vec<f64> = if !exposures_series.is_empty() {
+        exposures_series
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite())
+            .map(f64::abs)
+            .collect()
+    } else {
+        fills
+            .iter()
+            .map(|fill| fill.twe_net.abs())
+            .filter(|value| value.is_finite())
+            .collect()
+    };
+    let (twe_max, twe_mean, twe_median) = if !exposures.is_empty() {
+        let max_val = exposures
+            .iter()
+            .copied()
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap_or(0.0);
+        let mean_val = exposures.iter().sum::<f64>() / exposures.len() as f64;
+        let median_val = median(&exposures);
+        (max_val, mean_val, median_val)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
+    let paper_loss_ratio = {
+        let denom = equity_balance_diff_neg_max.abs().max(1e-12);
+        adg / denom
+    };
+    let paper_loss_mean_ratio = {
+        let denom = equity_balance_diff_neg_mean.abs().max(1e-12);
+        adg / denom
+    };
+    let exposure_ratio = {
+        let denom = twe_max.abs().max(1e-12);
+        adg / denom
+    };
+    let exposure_mean_ratio = {
+        let denom = twe_mean.abs().max(1e-12);
+        adg / denom
+    };
+
     // Calculate profit factor
     let (total_profit, total_loss) = fills.iter().fold((0.0, 0.0), |(profit, loss), fill| {
         if fill.pnl > 0.0 {
@@ -606,6 +655,10 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
     analysis.equity_balance_diff_neg_mean = equity_balance_diff_neg_mean;
     analysis.equity_balance_diff_pos_max = equity_balance_diff_pos_max;
     analysis.equity_balance_diff_pos_mean = equity_balance_diff_pos_mean;
+    analysis.paper_loss_ratio = paper_loss_ratio;
+    analysis.paper_loss_mean_ratio = paper_loss_mean_ratio;
+    analysis.exposure_ratio = exposure_ratio;
+    analysis.exposure_mean_ratio = exposure_mean_ratio;
     analysis.loss_profit_ratio = loss_profit_ratio;
     analysis.loss_profit_ratio_long = loss_profit_ratio_long;
     analysis.loss_profit_ratio_short = loss_profit_ratio_short;
@@ -624,6 +677,9 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>, timestamps_ms: &[
     analysis.volume_pct_per_day_avg = volume_pct_per_day_avg;
     analysis.peak_recovery_hours_equity = peak_recovery_hours_equity;
     analysis.peak_recovery_hours_pnl = peak_recovery_hours_pnl;
+    analysis.total_wallet_exposure_max = twe_max;
+    analysis.total_wallet_exposure_mean = twe_mean;
+    analysis.total_wallet_exposure_median = twe_median;
 
     analysis
 }
@@ -634,7 +690,7 @@ pub fn analyze_backtest(
     timestamps_ms: &[u64],
     exposures_series: &[f64],
 ) -> Analysis {
-    let mut analysis = analyze_backtest_basic(fills, equities, timestamps_ms);
+    let mut analysis = analyze_backtest_basic(fills, equities, timestamps_ms, exposures_series);
 
     if fills.len() <= 1 {
         return analysis;
@@ -688,8 +744,17 @@ pub fn analyze_backtest(
         } else {
             &[]
         };
-        let subset_analysis =
-            analyze_backtest_basic(&subset_fills, &subset_equities.to_vec(), subset_timestamps);
+        let subset_exposures = if exposures_series.len() == equities.len() {
+            &exposures_series[start_idx..]
+        } else {
+            &[]
+        };
+        let subset_analysis = analyze_backtest_basic(
+            &subset_fills,
+            &subset_equities.to_vec(),
+            subset_timestamps,
+            subset_exposures,
+        );
         subset_analyses.push(subset_analysis);
     }
 
@@ -722,6 +787,26 @@ pub fn analyze_backtest(
         .map(|a| a.loss_profit_ratio)
         .sum::<f64>()
         / 10.0;
+    analysis.paper_loss_ratio_w = subset_analyses
+        .iter()
+        .map(|a| a.paper_loss_ratio)
+        .sum::<f64>()
+        / 10.0;
+    analysis.paper_loss_mean_ratio_w = subset_analyses
+        .iter()
+        .map(|a| a.paper_loss_mean_ratio)
+        .sum::<f64>()
+        / 10.0;
+    analysis.exposure_ratio_w = subset_analyses
+        .iter()
+        .map(|a| a.exposure_ratio)
+        .sum::<f64>()
+        / 10.0;
+    analysis.exposure_mean_ratio_w = subset_analyses
+        .iter()
+        .map(|a| a.exposure_mean_ratio)
+        .sum::<f64>()
+        / 10.0;
     analysis.equity_choppiness_w = subset_analyses
         .iter()
         .map(|a| a.equity_choppiness)
@@ -749,42 +834,6 @@ pub fn analyze_backtest(
         .sum::<f64>()
         / 10.0;
     analysis.win_rate_w = subset_analyses.iter().map(|a| a.win_rate).sum::<f64>() / 10.0;
-
-    // Use absolute values for exposure metrics since short positions have negative twe_net.
-    // The metric represents "how much exposure" regardless of direction.
-    let exposures: Vec<f64> = if !exposures_series.is_empty() {
-        exposures_series
-            .iter()
-            .cloned()
-            .filter(|value| value.is_finite())
-            .map(|v| v.abs())
-            .collect()
-    } else {
-        fills
-            .iter()
-            .map(|fill| fill.twe_net.abs())
-            .filter(|value| value.is_finite())
-            .collect()
-    };
-    if !exposures.is_empty() {
-        if let Some(max_val) = exposures
-            .iter()
-            .copied()
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
-        {
-            analysis.total_wallet_exposure_max = max_val;
-        }
-        analysis.total_wallet_exposure_mean =
-            exposures.iter().sum::<f64>() / exposures.len() as f64;
-        let mut sorted = exposures.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let mid = sorted.len() / 2;
-        analysis.total_wallet_exposure_median = if sorted.len() % 2 == 0 {
-            (sorted[mid - 1] + sorted[mid]) / 2.0
-        } else {
-            sorted[mid]
-        };
-    }
 
     // Compute high-exposure duration metrics per side:
     // Mean and max continuous duration (hours) where twe exceeded the
@@ -1358,6 +1407,25 @@ mod tests {
             "Expected total_wallet_exposure_max=0.8, got {}",
             analysis.total_wallet_exposure_max
         );
+    }
+
+    #[test]
+    fn test_paper_loss_and_exposure_ratios_from_equity_and_exposure_series() {
+        let fills = vec![make_fill(0, -0.2), make_fill(1, -0.5)];
+        let equities = vec![10000.0, 9500.0, 11000.0, 12000.0];
+        let timestamps = vec![0, MS_PER_DAY, 2 * MS_PER_DAY, 3 * MS_PER_DAY];
+        let exposures_series = vec![-0.2, -0.5, -0.8, -0.3];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures_series);
+        let expected_gain: f64 = ((9500.0 + 11000.0 + 12000.0) / 3.0) / 10000.0;
+        let expected_adg = expected_gain.powf(1.0 / 4.0) - 1.0;
+
+        assert!((analysis.paper_loss_ratio - expected_adg / 0.05).abs() < 1e-12);
+        assert!((analysis.paper_loss_mean_ratio - expected_adg / 0.05).abs() < 1e-12);
+        assert!((analysis.exposure_ratio - expected_adg / 0.8).abs() < 1e-12);
+        assert!((analysis.exposure_mean_ratio - expected_adg / 0.45).abs() < 1e-12);
+        assert!((analysis.total_wallet_exposure_mean - 0.45).abs() < 1e-12);
+        assert!((analysis.total_wallet_exposure_median - 0.4).abs() < 1e-12);
     }
 
     #[test]

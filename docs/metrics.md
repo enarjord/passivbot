@@ -36,6 +36,12 @@ and more stable across collateral caps.
 - `omega_ratio`: Sum of positive daily returns divided by the absolute sum of negative daily returns.
 - `sterling_ratio`: `adg` divided by the average of the worst 1% drawdowns.
 - `calmar_ratio`: `adg` divided by the worst drawdown observed over the full equity curve.
+- `paper_loss_ratio`: `adg` divided by the worst absolute negative equity-vs-balance gap.
+- `paper_loss_mean_ratio`: `adg` divided by the mean absolute negative equity-vs-balance gap.
+- `exposure_ratio`: `adg` divided by the maximum absolute recorded wallet exposure.
+- `exposure_mean_ratio`: `adg` divided by the mean absolute recorded wallet exposure.
+
+Weighted `_w` variants use the same trailing-slice averaging as the rest of the `_w` metrics.
 
 ## Drawdown and tail metrics
 - `drawdown_worst`: Maximum absolute drawdown over the equity curve.
