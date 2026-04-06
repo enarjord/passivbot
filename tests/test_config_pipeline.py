@@ -131,3 +131,25 @@ def test_prepare_config_migrates_legacy_backtest_market_slippage_key():
 
     assert prepared["backtest"]["market_order_slippage_pct"] == pytest.approx(0.0015)
     assert "panic_market_slippage_pct" not in prepared["backtest"]
+
+
+def test_prepare_config_removes_empty_means_all_approved_from_canonical_shape():
+    source = {
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {
+            "approved_coins": [],
+            "ignored_coins": {"long": [], "short": []},
+            "empty_means_all_approved": True,
+        },
+        "optimize": {"bounds": {}},
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert "empty_means_all_approved" not in prepared["live"]
+    assert prepared["live"]["approved_coins"] == {"long": ["all"], "short": ["all"]}
+    assert prepared["_coins_sources"]["approved_coins"] == "all"
+    assert prepared["_raw"]["live"]["empty_means_all_approved"] is True
+    assert prepared["_raw_effective"]["live"]["empty_means_all_approved"] is True

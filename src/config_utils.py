@@ -70,6 +70,7 @@ from config.migrations import (
     build_base_config_from_flavor as build_migration_base_config_from_flavor,
     detect_flavor as detect_migration_flavor,
     migrate_btc_collateral_settings as migrate_btc_collateral_settings_v7,
+    migrate_empty_means_all_approved as migrate_empty_means_all_approved_v7,
     migrate_suite_to_scenarios as migrate_suite_to_scenarios_v7,
     rename_config_keys as rename_migration_config_keys,
 )
@@ -245,6 +246,12 @@ def _migrate_btc_collateral_settings(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
     migrate_btc_collateral_settings_v7(result, verbose=verbose, tracker=tracker)
+
+
+def _migrate_empty_means_all_approved(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    migrate_empty_means_all_approved_v7(result, verbose=verbose, tracker=tracker)
 
 
 def detect_flavor(config: dict, template: dict) -> str:
@@ -557,8 +564,9 @@ RESERVED_CLI_ARGS = {
             "optimize": "Coin Selection",
         },
         "help": (
-            "Approved coins. Comma-separated coins like BTC,ETH,XRP, or path to a JSON "
-            "coin list file. Use coin tickers, not exchange symbols."
+            "Approved coins. Use CSV like BTC,ETH,XRP, the literal 'all', a path to a JSON "
+            "coin list file, or a JSON/HJSON per-side object like "
+            "{\"long\":[\"BTC\"],\"short\":\"all\"}. Use coin tickers, not exchange symbols."
         ),
     },
     "live.ignored_coins": {
@@ -1290,7 +1298,10 @@ def update_config_with_args(config, args, verbose=False):
         if value is None:
             continue
         if key in {"live.approved_coins", "live.ignored_coins"}:
-            normalized = normalize_coins_source(value)
+            normalized = normalize_coins_source(
+                value,
+                allow_all=(key == "live.approved_coins"),
+            )
             change = recursive_config_update(config, key, normalized, verbose=verbose)
             source_key = key.split(".")[-1]
             config.setdefault("_coins_sources", {})[source_key] = deepcopy(normalized)

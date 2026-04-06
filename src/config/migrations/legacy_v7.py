@@ -1,7 +1,9 @@
 import logging
+from copy import deepcopy
 from typing import Optional
 
 from config.transform_log import ConfigTransformTracker
+from utils import normalize_coins_source
 
 
 def _log_config(verbose: bool, level: int, message: str, *args) -> None:
@@ -99,3 +101,53 @@ def migrate_btc_collateral_settings(
         backtest["btc_collateral_ltv_cap"] = None
         if tracker is not None:
             tracker.add(["backtest", "btc_collateral_ltv_cap"], None)
+
+
+def _coerce_legacy_bool(value) -> bool:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", ""}:
+            return False
+    return bool(value)
+
+
+def migrate_empty_means_all_approved(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    live = result.setdefault("live", {})
+    if "empty_means_all_approved" not in live:
+        return
+
+    legacy_value = live.pop("empty_means_all_approved")
+    _log_config(
+        verbose,
+        logging.WARNING,
+        "live.empty_means_all_approved is deprecated and will be removed in a future release; "
+        "legacy configs still work for now. Prefer explicit live.approved_coins='all' or per-side "
+        "'all' entries in new configs.",
+    )
+    if tracker is not None:
+        tracker.remove(["live", "empty_means_all_approved"], legacy_value)
+
+    if not _coerce_legacy_bool(legacy_value):
+        return
+
+    approved_source = deepcopy(live.get("approved_coins"))
+    explicit_side_source = isinstance(approved_source, dict) and any(
+        key in approved_source for key in ("long", "short")
+    )
+    normalized = normalize_coins_source(approved_source, allow_all=True)
+    if explicit_side_source or any(normalized[pside] for pside in ("long", "short")):
+        return
+
+    live["approved_coins"] = "all"
+    _log_config(
+        verbose,
+        logging.WARNING,
+        "migrated legacy live.empty_means_all_approved=true with empty live.approved_coins "
+        "to live.approved_coins='all'",
+    )
+    if tracker is not None:
+        tracker.update(["live", "approved_coins"], approved_source, "all")

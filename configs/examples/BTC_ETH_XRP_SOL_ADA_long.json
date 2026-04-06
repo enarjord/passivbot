@@ -133,7 +133,6 @@
         "pnls_manager_shadow_mode": true,
         "balance_hysteresis_snap_pct": 0.02,
         "balance_override": null,
-        "empty_means_all_approved": true,
         "execution_delay_seconds": 2,
         "filter_by_min_effective_cost": true,
         "forced_mode_long": "",

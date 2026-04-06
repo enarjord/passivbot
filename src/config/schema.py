@@ -312,7 +312,6 @@ def get_template_config():
                 "balance_hysteresis_snap_pct": 0.01,
                 "balance_override": None,
                 "candle_lock_timeout_seconds": 10,
-                "empty_means_all_approved": False,
                 "enable_archive_candle_fetch": False,
                 "execution_delay_seconds": 2,
                 "filter_by_min_effective_cost": True,

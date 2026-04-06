@@ -11,12 +11,14 @@ from config import load_input_config, prepare_config
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
 from config_transform import ConfigTransformTracker, record_transform
+from utils import normalize_coins_source
 from config_utils import (
     _apply_backward_compatibility_renames,
     _apply_non_live_adjustments,
     _ensure_bot_defaults_and_bounds,
     _hydrate_missing_template_fields,
     _migrate_btc_collateral_settings,
+    _migrate_empty_means_all_approved,
     _normalize_position_counts,
     _rename_config_keys,
     _sync_with_template,
@@ -219,13 +221,71 @@ def test_apply_non_live_adjustments_supports_legacy_coins_file():
     config = get_template_config()
     config["live"]["approved_coins"] = "configs/approved_coins_topmcap.json"
     config["live"]["ignored_coins"] = {"long": [], "short": []}
-    config["live"]["empty_means_all_approved"] = False
     config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] = [0.1, 0.2]
     config["backtest"]["end_date"] = "2023-01-01"
     _apply_non_live_adjustments(config, verbose=False)
     with open("configs/approved_coins.json") as fp:
         expected = json.load(fp)
     assert config["live"]["approved_coins"]["long"] == expected
+
+
+def test_normalize_coins_source_supports_partial_per_side_dicts():
+    normalized = normalize_coins_source({"long": ["BTC", "ETH"]})
+
+    assert normalized["long"] == ["BTC", "ETH"]
+    assert normalized["short"] == []
+
+
+def test_normalize_coins_source_supports_explicit_all():
+    normalized_global = normalize_coins_source("all")
+    normalized_partial = normalize_coins_source({"long": ["BTC"], "short": "all"})
+
+    assert normalized_global == {"long": ["all"], "short": ["all"]}
+    assert normalized_partial == {"long": ["BTC"], "short": ["all"]}
+
+
+def test_migrate_empty_means_all_approved_converts_global_empty_to_all(caplog):
+    config = {
+        "live": {
+            "approved_coins": [],
+            "ignored_coins": {"long": [], "short": []},
+            "empty_means_all_approved": True,
+        }
+    }
+    tracker = ConfigTransformTracker()
+
+    with caplog.at_level(logging.WARNING):
+        _migrate_empty_means_all_approved(config, verbose=False, tracker=tracker)
+
+    assert config["live"]["approved_coins"] == "all"
+    assert "empty_means_all_approved" not in config["live"]
+    summary = tracker.summary()
+    assert any(
+        event["action"] == "remove" and event["path"] == "live.empty_means_all_approved"
+        for event in summary
+    )
+    assert any(
+        event["action"] == "update"
+        and event["path"] == "live.approved_coins"
+        and event["new"] == "all"
+        for event in summary
+    )
+    assert any("deprecated" in rec.message for rec in caplog.records)
+
+
+def test_migrate_empty_means_all_approved_keeps_explicit_per_side_values():
+    config = {
+        "live": {
+            "approved_coins": {"long": ["BTC"], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+            "empty_means_all_approved": True,
+        }
+    }
+
+    _migrate_empty_means_all_approved(config, verbose=False)
+
+    assert config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
+    assert "empty_means_all_approved" not in config["live"]
 
 
 def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatting():

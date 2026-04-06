@@ -72,6 +72,7 @@ from utils import (
     filter_markets,
     to_ccxt_exchange_id,
     coin_symbol_warning_counts,
+    _coins_source_side_is_all,
     normalize_coins_source,
 )
 from prettytable import PrettyTable
@@ -7965,44 +7966,47 @@ class Passivbot:
         for pside in content:
             if not psides_equal or symbols is None:
                 coins = content[pside]
-                # Check if coins is a single string that needs to be split
-                if isinstance(coins, str):
-                    coins = coins.split(",")
-                # Handle case where list contains comma-separated values in its elements
-                elif isinstance(coins, (list, tuple)):
-                    expanded_coins = []
-                    for item in coins:
-                        if isinstance(item, str) and "," in item:
-                            expanded_coins.extend(item.split(","))
-                        else:
-                            expanded_coins.append(item)
-                    coins = expanded_coins
+                if k_coins == "approved_coins" and _coins_source_side_is_all(coins):
+                    symbols = set(getattr(self, "eligible_symbols", set()))
+                else:
+                    # Check if coins is a single string that needs to be split
+                    if isinstance(coins, str):
+                        coins = coins.split(",")
+                    # Handle case where list contains comma-separated values in its elements
+                    elif isinstance(coins, (list, tuple)):
+                        expanded_coins = []
+                        for item in coins:
+                            if isinstance(item, str) and "," in item:
+                                expanded_coins.extend(item.split(","))
+                            else:
+                                expanded_coins.append(item)
+                        coins = expanded_coins
 
-                symbols = [self.coin_to_symbol(coin, verbose=False) for coin in coins if coin]
-                symbols = {s for s in symbols if s}
-                eligible = getattr(self, "eligible_symbols", None)
-                if eligible:
-                    skipped = [sym for sym in symbols if sym not in eligible]
-                    if skipped:
-                        coin_list = ", ".join(
-                            sorted(symbol_to_coin(sym, verbose=False) or sym for sym in skipped)
-                        )
-                        symbol_list = ", ".join(sorted(skipped))
-                        warned = getattr(self, "_unsupported_coin_warnings", None)
-                        if warned is None:
-                            warned = set()
-                            setattr(self, "_unsupported_coin_warnings", warned)
-                        warn_key = (self.exchange, coin_list, symbol_list, k_coins)
-                        if warn_key not in warned:
-                            logging.info(
-                                "[config] skipping unsupported markets for %s: coins=%s symbols=%s exchange=%s",
-                                k_coins,
-                                coin_list,
-                                symbol_list,
-                                getattr(self, "exchange", "?"),
+                    symbols = [self.coin_to_symbol(coin, verbose=False) for coin in coins if coin]
+                    symbols = {s for s in symbols if s}
+                    eligible = getattr(self, "eligible_symbols", None)
+                    if eligible:
+                        skipped = [sym for sym in symbols if sym not in eligible]
+                        if skipped:
+                            coin_list = ", ".join(
+                                sorted(symbol_to_coin(sym, verbose=False) or sym for sym in skipped)
                             )
-                            warned.add(warn_key)
-                        symbols = symbols - set(skipped)
+                            symbol_list = ", ".join(sorted(skipped))
+                            warned = getattr(self, "_unsupported_coin_warnings", None)
+                            if warned is None:
+                                warned = set()
+                                setattr(self, "_unsupported_coin_warnings", warned)
+                            warn_key = (self.exchange, coin_list, symbol_list, k_coins)
+                            if warn_key not in warned:
+                                logging.info(
+                                    "[config] skipping unsupported markets for %s: coins=%s symbols=%s exchange=%s",
+                                    k_coins,
+                                    coin_list,
+                                    symbol_list,
+                                    getattr(self, "exchange", "?"),
+                                )
+                                warned.add(warn_key)
+                            symbols = symbols - set(skipped)
             symbols_already = getattr(self, k_coins)[pside]
             if symbols_already != symbols:
                 added = symbols - symbols_already
@@ -8023,8 +8027,11 @@ class Passivbot:
                 if not hasattr(self, k):
                     setattr(self, k, {"long": set(), "short": set()})
                 config_sources = self.config.get("_coins_sources", {})
-                raw_source = config_sources.get(k, self.live_value(k))
-                parsed = normalize_coins_source(raw_source)
+                if k in config_sources:
+                    raw_source = config_sources[k]
+                else:
+                    raw_source = self.live_value(k)
+                parsed = normalize_coins_source(raw_source, allow_all=(k == "approved_coins"))
                 if k == "approved_coins":
                     log_psides = {ps for ps in parsed if self.is_pside_enabled(ps)}
                 else:
@@ -8053,9 +8060,6 @@ class Passivbot:
                     if pside in self._disabled_psides_logged:
                         logging.info(f"{pside} side re-enabled; restoring approved coin handling.")
                         self._disabled_psides_logged.discard(pside)
-                if self.live_value("empty_means_all_approved") and not self.approved_coins[pside]:
-                    # if approved_coins is empty, all coins are approved
-                    self.approved_coins[pside] = self.eligible_symbols
                 self.approved_coins_minus_ignored_coins[pside] = self._filter_approved_symbols(
                     pside, self.approved_coins[pside] - self.ignored_coins[pside]
                 )

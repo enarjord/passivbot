@@ -368,17 +368,24 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 ## Live Trading Settings
 
 - **approved_coins**:
-  - List of coins approved for trading. If empty, see `live.empty_means_all_approved`.
+  - List of coins approved for trading.
     - Backtester and optimizer use `live.approved_coins` minus `live.ignored_coins`.
   - May be given as a path to an external file, read continuously by Passivbot.
   - May be split into long and short:
     - Example: `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
+    - Example: `{"long": ["COIN1", "COIN2"], "short": "all"}`
+  - Explicit empty values disable trading for the affected side:
+    - `approved_coins = []`, `{}`, `""`, or `null` disables both sides
+    - `approved_coins = {"long": ["BTC"], "short": []}` keeps long curated and disables short
+  - The explicit value `"all"` means all eligible coins for the affected side:
+    - `approved_coins = "all"` enables all eligible coins for both sides
+    - `approved_coins = {"long": "all", "short": ["BTC", "ETH"]}` enables all eligible longs and curated shorts
+  - Older configs using `live.empty_means_all_approved=true` still migrate for now:
+    - A globally empty `approved_coins` input is converted to `approved_coins = "all"`
+    - The parser logs that `live.empty_means_all_approved` is deprecated
 - **auto_gs**: Automatically enable graceful stop for positions on disapproved coins.
   - Graceful stop: The bot continues trading as normal but does not open a new position after the current position is fully closed.
   - If `auto_gs=false`, positions on disapproved coins are put on manual mode.
-- **empty_means_all_approved**:
-  - If `true`, `approved_coins=[]` means all coins are approved.
-  - If `false`, `approved_coins=[]` means no coins are approved.
 - **enable_archive_candle_fetch**: Enables the archive-candle fallback path in live mode. Keep `false` unless you specifically want the live bot to supplement its local candle state from exchange archive endpoints.
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
 - **hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
