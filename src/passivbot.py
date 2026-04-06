@@ -3676,7 +3676,12 @@ class Passivbot:
         return per_sym_ttl, cache_only_never_fetched
 
     def _get_fetch_delay_seconds(self) -> float:
-        """Return configured per-fetch delay in seconds (default 0.2s for Hyperliquid)."""
+        """Return configured per-fetch delay in seconds.
+
+        Default 200ms for Bybit and Hyperliquid (strict IP-based rate limits),
+        0ms for all others.
+        Override via live.warmup_fetch_delay_ms in config.
+        """
         fetch_delay_ms = get_optional_live_value(self.config, "warmup_fetch_delay_ms", None)
         try:
             fetch_delay_ms = float(fetch_delay_ms) if fetch_delay_ms is not None else None
@@ -3684,7 +3689,7 @@ class Passivbot:
             fetch_delay_ms = None
         if fetch_delay_ms is None:
             exchange_lower = self.exchange.lower() if self.exchange else ""
-            fetch_delay_ms = 200.0 if exchange_lower == "hyperliquid" else 0.0
+            fetch_delay_ms = 200.0 if exchange_lower in ("bybit", "hyperliquid") else 0.0
         return max(0.0, float(fetch_delay_ms) / 1000.0)
 
     def stop_data_maintainers(self, verbose=True):
@@ -4626,6 +4631,7 @@ class Passivbot:
             logging.info("[fills] initialized: %d cached events loaded", cached_count)
 
             self._pnls_initialized = True
+            self._fills_initial_full_refresh_done = False
 
         except Exception as e:
             logging.error("Failed to initialize FillEventsManager: %s", e)
@@ -4660,33 +4666,25 @@ class Passivbot:
                 elif getattr(ev, "id", None):
                     existing_source_ids.add(ev.id)
 
-            # Check if we need a full refresh (cache empty or too old)
+            # Check if we need a full refresh (cache empty or first run)
             events = self._pnls_manager.get_events()
-            needs_full_refresh = not events
-            if events:
+            needs_full_refresh = not events and not getattr(
+                self, "_fills_initial_full_refresh_done", False
+            )
+            if events and not getattr(self, "_fills_initial_full_refresh_done", False):
                 oldest_event_ts = events[0].timestamp
                 if oldest_event_ts > age_limit + 1000 * 60 * 60 * 24:  # > 1 day newer than limit
                     needs_full_refresh = True
-                    # Log once per session to avoid spam
-                    cache_key = "_fills_full_refresh_logged"
-                    if not getattr(self, cache_key, False):
-                        setattr(self, cache_key, True)
-                        logging.debug(
-                            "[fills] Cache oldest event (%s) is newer than lookback (%s), doing full refresh",
-                            ts_to_date(oldest_event_ts)[:19],
-                            ts_to_date(age_limit)[:19],
-                        )
 
             if needs_full_refresh:
-                # Full refresh with proper lookback window
-                if not getattr(self, "_fills_full_refresh_logged", False):
-                    logging.debug(
-                        "[fills] Performing full refresh from %s", ts_to_date(age_limit)[:19]
-                    )
+                logging.info(
+                    "[fills] Performing full refresh from %s", ts_to_date(age_limit)[:19]
+                )
                 await self._pnls_manager.refresh(start_ms=int(age_limit), end_ms=None)
             else:
-                # Incremental refresh
+                # Incremental refresh (after first full refresh succeeded)
                 await self._pnls_manager.refresh_latest(overlap=20)
+            self._fills_initial_full_refresh_done = True
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
@@ -6421,8 +6419,20 @@ class Passivbot:
         random.shuffle(symbols_without_pos)
         ordered_symbols = symbols_with_pos + symbols_without_pos
 
-        symbol_tasks = [asyncio.create_task(load_symbol_bundle(sym)) for sym in ordered_symbols]
-        symbol_results = await asyncio.gather(*symbol_tasks, return_exceptions=True)
+        # Process symbol bundles sequentially with an inter-symbol delay to
+        # avoid firing all 1h candle fetches concurrently at hour boundaries.
+        # At each hour, the 1h EMA cache expires for every symbol simultaneously,
+        # and parallel gather would burst N×fetch_ohlcv in one shot → 10006.
+        fetch_delay_s = self._get_fetch_delay_seconds()
+        symbol_results = []
+        for sym in ordered_symbols:
+            try:
+                res = await load_symbol_bundle(sym)
+            except Exception as e:
+                res = e
+            symbol_results.append(res)
+            if fetch_delay_s > 0:
+                await asyncio.sleep(fetch_delay_s)
 
         m1_close_emas: dict[str, dict[float, float]] = {}
         m1_volume_emas: dict[str, dict[float, float]] = {}
@@ -7646,7 +7656,10 @@ class Passivbot:
 
     async def maintain_hourly_cycle(self):
         """Periodically refresh market metadata while the bot is running."""
-        logging.info("[hourly] starting maintenance cycle")
+        # Random jitter (0–120s) so multiple bots on the same VPS don't fire
+        # init_markets simultaneously and blow through IP-based rate limits.
+        jitter_s = random.uniform(0, 120)
+        logging.info("[hourly] starting maintenance cycle (jitter=%.1fs)", jitter_s)
         while not self.stop_signal_received:
             try:
                 now = utc_ms()
@@ -7673,8 +7686,9 @@ class Passivbot:
                         logging.error(
                             "error running candle disk coverage audit: %s", exc, exc_info=True
                         )
-                # update markets dict once every hour
-                if now - self.init_markets_last_update_ms > 1000 * 60 * 60:
+                # update markets dict once every hour, with per-instance jitter
+                hourly_interval_ms = 1000 * 60 * 60 + int(jitter_s * 1000)
+                if now - self.init_markets_last_update_ms > hourly_interval_ms:
                     try:
                         await self.init_markets(verbose=False)
                     except RateLimitExceeded:

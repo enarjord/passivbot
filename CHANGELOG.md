@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed Bybit `closed-pnl` pagination storm that caused retCode:10006 rate-limit errors every ~15 minutes. `update_pnls()` re-triggered a full history refresh (20–50+ API requests over 42 days) on every main loop iteration because the `needs_full_refresh` condition was perpetually true when no trades existed in the first day of the lookback window. Now performs one full refresh on startup and uses incremental `refresh_latest` thereafter.
+- Serialized per-symbol EMA bundle fetches in `_load_orchestrator_ema_bundle` to prevent rate-limit bursts at hour boundaries. Previously all symbols fired 1h candle fetches concurrently via `asyncio.gather`; now they run sequentially with the configured inter-symbol delay.
+- Added random jitter (0–120s) to the hourly `init_markets` cycle so multiple bots on the same VPS don't fire heavy API bursts simultaneously.
 - `passivbot live` now persists logs to a timestamped file under `logs/` by default, using `config.logging` for the on/off switch and file-rotation settings, and also refreshes `logs/{user}.log` as a stable alias to the current run for monitor tooling. This makes the built-in live workflow self-logging without needing `run_with_logging.py`.
 - Added a canonical live-container runtime contract around `Dockerfile_live`, a thin `container/entrypoint.sh` wrapper, env-generated `api-keys.json` support, env-driven config overrides, and a documented Compose/Railway deployment path that reuses the normal `passivbot live` CLI instead of maintaining platform-specific baked configs.
 - Restored `passivbot live --user` / `-u` as the curated shorthand for `live.user`, so existing live-run workflows using `-u account_name` work again and the alias is visible in the default live help output.
