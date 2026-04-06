@@ -3,10 +3,12 @@
 ## Logging
 
 `passivbot live` now writes its console log stream to a timestamped file under `logs/` by default.
-This behavior is controlled from `config.logging`:
+It also refreshes `logs/{user}.log` as a stable alias to the current run's logfile, which is useful
+for monitor tooling that wants a fixed path per bot. This behavior is controlled from
+`config.logging`:
 
 - `logging.persist_to_file = true` keeps on-disk live logs enabled
-- `logging.dir` chooses the target directory
+- `logging.dir` chooses the target directory for both the timestamped archive and the stable alias
 - `logging.rotation`, `logging.max_bytes_mb`, and `logging.backup_count`
   control optional file rotation
 

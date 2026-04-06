@@ -73,8 +73,8 @@ Example per-metric aggregation:
   - Accepted values: `0` (warnings), `1` (info), `2` (debug), `3` (trace).
   - The CLI flag `--debug-level`/`--log-level` on `passivbot live` and `passivbot backtest` overrides the configured value for a single run.
   - Components such as the CandlestickManager inherit this level, so EMA warm-up and candle maintenance logs follow the same verbosity.
-- **persist_to_file**: When `true`, `passivbot live` also writes the console log stream to a timestamped file on disk. The canonical default is `true`, so live runs write to `logs/` unless you disable it explicitly. In this first integrated version, backtest/optimize still use console logging unless you wrap them externally.
-- **dir**: Directory used for persisted live log files when `persist_to_file` is enabled. Default `logs`.
+- **persist_to_file**: When `true`, `passivbot live` also writes the console log stream to a timestamped file on disk and refreshes `logs/{user}.log` as a stable alias to the current run. The canonical default is `true`, so live runs write to `logs/` unless you disable it explicitly. In this first integrated version, backtest/optimize still use console logging unless you wrap them externally.
+- **dir**: Directory used for persisted live log files and the stable current-run alias when `persist_to_file` is enabled. Default `logs`.
 - **rotation**: Enables rotating live log files instead of appending to one file per process. Default `false`.
 - **max_bytes_mb**: Maximum size in megabytes for each live log file before rotation. Used only when `rotation = true`. Default `10`.
 - **backup_count**: Number of rotated backup files to keep when rotation is enabled. Default `5`.

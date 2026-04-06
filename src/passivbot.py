@@ -8368,7 +8368,11 @@ async def main():
     config["logging"] = logging_section
     logging_section["level"] = effective_log_level
     live_user = require_live_value(config, "user")
-    log_file_settings = resolve_live_log_file_settings(config, user=live_user)
+    log_file_settings = resolve_live_log_file_settings(
+        config,
+        user=live_user,
+        command_args=[sys.argv[0], *raw_argv],
+    )
     if effective_log_level != initial_log_level or log_file_settings["log_file"]:
         configure_logging(debug=effective_log_level, **log_file_settings)
 

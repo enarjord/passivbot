@@ -15,7 +15,7 @@ This is the recommended way to work with Passivbot configs on the current config
 3. Use `passivbot backtest` first.
 4. Use `passivbot optimize` if you want to tune parameters or compare alternatives.
 5. Use `passivbot live` only after the config has been tested.
-6. Expect live runs to write a timestamped log file under `logs/` by default unless you set `logging.persist_to_file = false`.
+6. Expect live runs to write a timestamped log file under `logs/` by default unless you set `logging.persist_to_file = false`, and to refresh `logs/{user}.log` as a stable alias to the current run.
 
 Example:
 
@@ -33,7 +33,7 @@ passivbot live configs/live/my_config.json
 - Treat `bot`, `live`, `backtest`, and `optimize` as one config file with command-specific sections.
 - Keep new configs on the canonical schema. Do not author new configs using deprecated field names.
 - Use `coin_overrides` for per-coin exceptions instead of cloning whole configs for minor differences.
-- Leave `logging.persist_to_file = true` for normal live operations so each bot run has a durable logfile under `logs/`.
+- Leave `logging.persist_to_file = true` for normal live operations so each bot run has a durable logfile under `logs/` and monitor tooling can follow the stable `logs/{user}.log` alias.
 
 ## What The Default Profile Is
 
