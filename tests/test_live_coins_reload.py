@@ -6,6 +6,7 @@ import hjson
 
 import pytest
 
+import procedures
 from config_utils import load_config
 import utils
 from utils import format_approved_ignored_coins, normalize_coins_source
@@ -297,3 +298,78 @@ async def test_format_approved_ignored_coins_supports_fake_exchange_all(tmp_path
         "short": ["BTC", "ETH", "SOL"],
     }
     assert config["live"]["ignored_coins"] == {"long": [], "short": ["SOL"]}
+
+
+@pytest.mark.asyncio
+async def test_format_approved_ignored_coins_supports_fake_exchange_all_via_api_keys(
+    tmp_path: Path, monkeypatch
+):
+    scenario_path = tmp_path / "fake_scenario_via_api_keys.hjson"
+    scenario_path.write_text(
+        hjson.dumps(
+            {
+                "name": "approved_coins_fake_all_api_keys",
+                "exchange": "fake",
+                "start_time": "2026-01-01T00:00:00Z",
+                "tick_interval_seconds": 60,
+                "boot_index": 1,
+                "account": {"balance": 1000.0},
+                "symbols": {
+                    "BTC/USDT:USDT": {
+                        "price_step": 0.1,
+                        "qty_step": 0.001,
+                        "min_qty": 0.001,
+                        "min_cost": 5.0,
+                    },
+                    "ETH/USDT:USDT": {
+                        "price_step": 0.01,
+                        "qty_step": 0.001,
+                        "min_qty": 0.001,
+                        "min_cost": 5.0,
+                    },
+                },
+                "timeline": [
+                    {
+                        "t": 0,
+                        "prices": {
+                            "BTC/USDT:USDT": 100000.0,
+                            "ETH/USDT:USDT": 2500.0,
+                        },
+                    },
+                    {
+                        "t": 1,
+                        "prices": {
+                            "BTC/USDT:USDT": 100100.0,
+                            "ETH/USDT:USDT": 2510.0,
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        procedures,
+        "load_user_info",
+        lambda user: {
+            "exchange": "fake",
+            "quote": "USDT",
+            "fake_scenario_path": str(scenario_path),
+        },
+    )
+
+    config = {
+        "live": {
+            "user": "fake_api_keys_user",
+            "approved_coins": "all",
+            "ignored_coins": {"long": [], "short": []},
+        }
+    }
+
+    await format_approved_ignored_coins(config, ["fake"], quote="USDT")
+
+    assert config["live"]["approved_coins"] == {
+        "long": ["BTC", "ETH"],
+        "short": ["BTC", "ETH"],
+    }

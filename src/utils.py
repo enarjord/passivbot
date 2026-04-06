@@ -1074,12 +1074,27 @@ def _diff_snapshot(before, after):
     return {"old": _snapshot(before), "new": _snapshot(after)}
 
 
-def _load_fake_approved_coins(config, *, quote=None):
+def _resolve_fake_scenario_path(config) -> Optional[str]:
     live = config.get("live", {}) if isinstance(config, dict) else {}
     scenario_path = live.get("fake_scenario_path")
+    if scenario_path:
+        return scenario_path
+    user = live.get("user")
+    if not user:
+        return None
+    from procedures import load_user_info
+
+    user_info = load_user_info(user)
+    return user_info.get("fake_scenario_path")
+
+
+def _load_fake_approved_coins(config, *, quote=None):
+    live = config.get("live", {}) if isinstance(config, dict) else {}
+    scenario_path = _resolve_fake_scenario_path(config)
     if not scenario_path:
         raise ValueError(
-            "fake exchange approved_coins='all' requires live.fake_scenario_path during startup"
+            "fake exchange approved_coins='all' requires live.fake_scenario_path "
+            "or api-keys fake_scenario_path during startup"
         )
     from exchanges.fake import load_fake_scenario
 
