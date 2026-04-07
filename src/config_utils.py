@@ -137,6 +137,100 @@ HSL_PSIDE_KEYS = (
     "hsl_panic_close_order_type",
     "hsl_tier_ratios",
 )
+FIELD_RUNTIME_RULES = {
+    "live.approved_coins": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Coin Selection",
+            "optimize": "Coin Selection",
+        },
+    },
+    "live.ignored_coins": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest"},
+        "cli_exposed_on": {"live", "backtest"},
+        "help_group": {
+            "backtest": "Coin Selection",
+        },
+    },
+    "live.minimum_coin_age_days": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Coin Selection",
+            "optimize": "Coin Selection",
+        },
+    },
+    "live.hedge_mode": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+    },
+    "live.market_orders_allowed": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+    },
+    "live.market_order_near_touch_threshold": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+    },
+    "live.max_realized_loss_pct": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+    },
+    "live.pnls_max_lookback_days": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+    },
+}
+
+
+def get_field_runtime_rule(full_name: str) -> dict:
+    return FIELD_RUNTIME_RULES.get(full_name, {})
+
+
+def field_cli_exposed_on(full_name: str, command: Optional[str]) -> bool:
+    if command is None:
+        return True
+    rule = get_field_runtime_rule(full_name)
+    return command in rule.get("cli_exposed_on", set())
+
+
+def field_cli_help_group(full_name: str, command: Optional[str]) -> Optional[str]:
+    if command is None:
+        return None
+    rule = get_field_runtime_rule(full_name)
+    help_group = rule.get("help_group", {})
+    if not isinstance(help_group, dict):
+        return None
+    return help_group.get(command)
 
 
 def load_hjson_config(config_path: str, *, log_errors: bool = True) -> dict:
@@ -638,8 +732,12 @@ RESERVED_CLI_ARGS = {
         "hidden": ["--live.market_orders_allowed", "--live_market_orders_allowed"],
         "type": str2bool,
         "metavar": "Y/N",
-        "commands": {"live"},
-        "group": {"live": "Behavior"},
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
         "help": "Allow or disallow market orders.",
     },
     "live.max_realized_loss_pct": {
@@ -656,8 +754,12 @@ RESERVED_CLI_ARGS = {
         "hidden": ["--live.pnls_max_lookback_days", "--live_pnls_max_lookback_days"],
         "type": float,
         "metavar": "FLOAT",
-        "commands": {"live"},
-        "group": {"live": "Behavior"},
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
         "help": "How far into the past to fetch realized PnL history, in days.",
     },
     "live.price_distance_threshold": {
@@ -929,11 +1031,11 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
 
 
 def _classify_backtest_argument(full_name: str, help_all: bool) -> Optional[str]:
+    shared_group = field_cli_help_group(full_name, "backtest")
+    if shared_group is not None:
+        return shared_group
     coin_selection = {
         "backtest.exchanges",
-        "live.approved_coins",
-        "live.ignored_coins",
-        "live.minimum_coin_age_days",
     }
     date_range = {
         "backtest.end_date",
@@ -972,9 +1074,11 @@ def _classify_backtest_argument(full_name: str, help_all: bool) -> Optional[str]
 
 
 def _classify_optimize_argument(full_name: str, help_all: bool) -> Optional[str]:
+    shared_group = field_cli_help_group(full_name, "optimize")
+    if shared_group is not None:
+        return shared_group
     coin_selection = {
         "backtest.exchanges",
-        "live.approved_coins",
     }
     date_range = {
         "backtest.end_date",
@@ -1053,6 +1157,31 @@ def classify_config_argument(
     if command == "optimize":
         return _classify_optimize_argument(full_name, help_all)
     return None
+
+
+def project_template_config_for_cli(config: dict, command: Optional[str]) -> dict:
+    result = deepcopy(config)
+    if command == "backtest":
+        result.pop("optimize", None)
+        live_cfg = result.get("live")
+        if isinstance(live_cfg, dict):
+            result["live"] = {
+                key: live_cfg[key]
+                for key in sorted(live_cfg)
+                if field_cli_exposed_on(f"live.{key}", "backtest")
+            }
+        return result
+    if command == "optimize":
+        result.pop("bot", None)
+        live_cfg = result.get("live")
+        if isinstance(live_cfg, dict):
+            result["live"] = {
+                key: live_cfg[key]
+                for key in sorted(live_cfg)
+                if field_cli_exposed_on(f"live.{key}", "optimize")
+            }
+        return result
+    return result
 
 
 def add_reserved_arguments(

@@ -29,6 +29,7 @@ from config_utils import (
     add_config_arguments,
     get_template_config,
     load_config,
+    project_template_config_for_cli,
     update_config_with_args,
     parse_overrides,
     format_config,
@@ -808,6 +809,7 @@ def test_backtest_filter_min_cost_inherits_from_live():
 
 
 def _format_parser_help_with_config(command: str, config: dict, help_all: bool) -> str:
+    config = project_template_config_for_cli(config, command)
     parser = argparse.ArgumentParser(prog=command)
     group_map = {
         title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get(command, [])
@@ -902,6 +904,8 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     assert "Suite:" in help_text
     assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
     assert "--ignored-coins CSV_OR_PATH" in help_text
+    assert "--market-orders-allowed Y/N, -moa Y/N" in help_text
+    assert "--pnls-max-lookback-days FLOAT, -pmld FLOAT" in help_text
     assert "--aggregate-default VALUE" in help_text
     assert "--iters INT, -i INT" not in help_text
 
@@ -927,6 +931,52 @@ def test_live_reserved_pnls_lookback_alias_parses_short_and_long():
 
     assert getattr(parsed_short, "live.pnls_max_lookback_days") == pytest.approx(14.0)
     assert getattr(parsed_long, "live.pnls_max_lookback_days") == pytest.approx(21.0)
+
+
+def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
+    config = project_template_config_for_cli(get_template_config(), "backtest")
+    parser = argparse.ArgumentParser(prog="backtest")
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get("backtest", [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command="backtest",
+        help_all=False,
+        group_map=group_map,
+    )
+
+    parsed_market = parser.parse_args(["-moa", "y"])
+    parsed_lookback = parser.parse_args(["-pmld", "14"])
+
+    assert getattr(parsed_market, "live.market_orders_allowed") is True
+    assert getattr(parsed_lookback, "live.pnls_max_lookback_days") == pytest.approx(14.0)
+
+
+def test_backtest_help_all_shows_live_near_touch_threshold_override():
+    config = get_template_config()
+    help_text = _format_parser_help_with_config("backtest", config, help_all=True)
+
+    assert "--live.market_order_near_touch_threshold FLOAT" in help_text
+
+
+def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_fields():
+    config = project_template_config_for_cli(get_template_config(), "backtest")
+
+    assert "market_orders_allowed" in config["live"]
+    assert "market_order_near_touch_threshold" in config["live"]
+    assert "pnls_max_lookback_days" in config["live"]
+    assert "user" not in config["live"]
+
+
+def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_fields():
+    config = project_template_config_for_cli(get_template_config(), "optimize")
+
+    assert "market_orders_allowed" in config["live"]
+    assert "market_order_near_touch_threshold" in config["live"]
+    assert "pnls_max_lookback_days" in config["live"]
+    assert "user" not in config["live"]
 
 
 def test_live_reserved_user_alias_parses_short_and_long():

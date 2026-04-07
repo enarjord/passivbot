@@ -65,6 +65,7 @@ from config.overrides import parse_overrides
 from config_utils import (
     dump_config,
     add_config_arguments,
+    project_template_config_for_cli,
     update_config_with_args,
     recursive_config_update,
     format_config,
@@ -1773,18 +1774,7 @@ async def main():
         "Advanced Overrides": parser.add_argument_group("Advanced Overrides"),
     }
 
-    template_config = get_template_config()
-    del template_config["optimize"]
-    keep_live_keys = {
-        "approved_coins",
-        "hedge_mode",
-        "ignored_coins",
-        "max_realized_loss_pct",
-        "minimum_coin_age_days",
-    }
-    for key in sorted(template_config["live"]):
-        if key not in keep_live_keys:
-            del template_config["live"][key]
+    template_config = project_template_config_for_cli(get_template_config(), "backtest")
     if "logging" in template_config and isinstance(template_config["logging"], dict):
         template_config["logging"].pop("level", None)
     allowed_config_keys = add_config_arguments(
