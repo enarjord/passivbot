@@ -740,6 +740,18 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Allow or disallow market orders.",
     },
+    "live.market_order_near_touch_threshold": {
+        "visible": ["--market-order-near-touch-threshold", "-montt"],
+        "hidden": [
+            "--live.market_order_near_touch_threshold",
+            "--live_market_order_near_touch_threshold",
+        ],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Distance threshold for allowing market orders near touch.",
+    },
     "live.max_realized_loss_pct": {
         "visible": ["--max-realized-loss-pct", "-mrlp"],
         "hidden": ["--live.max_realized_loss_pct", "--live_max_realized_loss_pct"],
@@ -922,6 +934,26 @@ RESERVED_CLI_ARGS = {
         "help": "Replace optimize.limits for this run with a JSON/HJSON list of limit objects.",
     },
 }
+
+
+def _merge_runtime_rules_into_reserved_cli_args():
+    for full_name, rule in FIELD_RUNTIME_RULES.items():
+        spec = RESERVED_CLI_ARGS.get(full_name)
+        if spec is None:
+            continue
+
+        cli_exposed_on = rule.get("cli_exposed_on", set())
+        if cli_exposed_on:
+            spec["commands"] = set(spec.get("commands", set())) | set(cli_exposed_on)
+
+        help_group = rule.get("help_group", {})
+        if isinstance(help_group, dict) and help_group:
+            merged_group = dict(spec.get("group", {}))
+            merged_group.update(help_group)
+            spec["group"] = merged_group
+
+
+_merge_runtime_rules_into_reserved_cli_args()
 
 CLI_HELP_GROUPS = {
     "live": [
