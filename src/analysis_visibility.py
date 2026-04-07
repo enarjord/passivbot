@@ -7,6 +7,18 @@ from config.metrics import CURRENCY_METRICS, SHARED_METRICS
 from config.scoring import extract_objective_specs
 from utils import trim_analysis_aliases
 
+VISIBLE_ONLY_SHARED_METRICS = {
+    "loss_profit_ratio_long",
+    "loss_profit_ratio_short",
+    "pnl_ratio_long_short",
+    "long_short_profit_ratio",
+    "total_wallet_exposure_max",
+    "total_wallet_exposure_mean",
+    "total_wallet_exposure_median",
+    "entry_initial_balance_pct_long",
+    "entry_initial_balance_pct_short",
+}
+
 
 @dataclass(frozen=True)
 class VisibleAnalysis:
@@ -78,6 +90,23 @@ def filter_analysis_for_visibility(analysis: dict, config: dict) -> VisibleAnaly
     )
 
 
+def validate_visible_metrics_config(config: dict) -> None:
+    _derived, explicit, visible_cfg = collect_visible_metric_requests(config)
+    if visible_cfg in (None, []):
+        return
+    known_metrics = _known_visible_metric_names()
+    unresolved_explicit = [
+        metric for metric in explicit if not _metric_name_is_known(metric, known_metrics)
+    ]
+    if unresolved_explicit:
+        available = ", ".join(sorted(known_metrics))
+        raise ValueError(
+            "unknown backtest.visible_metrics entries: "
+            + ", ".join(unresolved_explicit)
+            + f" | available metrics: {available}"
+        )
+
+
 def _normalize_visible_metrics_config(value) -> list[str]:
     if value == []:
         return []
@@ -106,3 +135,21 @@ def _expand_metric_name(metric: str, ordered_keys: Sequence[str], key_set: set[s
     if prefixed:
         return prefixed
     return []
+
+
+def _known_visible_metric_names() -> set[str]:
+    known = set(CURRENCY_METRICS) | set(SHARED_METRICS) | set(VISIBLE_ONLY_SHARED_METRICS)
+    known |= {
+        f"{metric}_{suffix}"
+        for metric in CURRENCY_METRICS
+        for suffix in ("usd", "btc")
+    }
+    return known
+
+
+def _metric_name_is_known(metric: str, known_metrics: set[str]) -> bool:
+    if metric in known_metrics:
+        return True
+    if metric.endswith(("_usd", "_btc")) and metric.rsplit("_", 1)[0] in CURRENCY_METRICS:
+        return True
+    return any(known_metric.startswith(f"{metric}_") for known_metric in known_metrics)

@@ -1,6 +1,10 @@
 import pytest
 
-from analysis_visibility import filter_analysis_for_visibility, resolve_visible_metric_names
+from analysis_visibility import (
+    filter_analysis_for_visibility,
+    resolve_visible_metric_names,
+    validate_visible_metrics_config,
+)
 from config_utils import get_template_config
 
 
@@ -80,6 +84,14 @@ def test_visible_metrics_rejects_invalid_config_type():
 
     with pytest.raises(ValueError, match="backtest.visible_metrics must be null, \\[\\], or"):
         filter_analysis_for_visibility(_make_analysis(), cfg)
+
+
+def test_validate_visible_metrics_config_rejects_unknown_metric_early():
+    cfg = get_template_config()
+    cfg["backtest"]["visible_metrics"] = ["not_a_metric"]
+
+    with pytest.raises(ValueError, match="unknown backtest.visible_metrics entries"):
+        validate_visible_metrics_config(cfg)
 
 
 def test_visible_metrics_prefix_match_supports_metric_families():

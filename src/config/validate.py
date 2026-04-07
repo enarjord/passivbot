@@ -4,6 +4,8 @@ from .coerce import normalize_hsl_cooldown_position_policy, normalize_hsl_signal
 
 
 def validate_config(config: dict, *, raw_optimize=None, verbose: bool = True, tracker=None) -> None:
+    from analysis_visibility import validate_visible_metrics_config
+
     del raw_optimize
     require_config_dict(config, "monitor")
     normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
@@ -11,4 +13,5 @@ def validate_config(config: dict, *, raw_optimize=None, verbose: bool = True, tr
     monitor_cfg = require_config_dict(config, "monitor")
     if not str(monitor_cfg["root_dir"]).strip():
         raise ValueError("config.monitor.root_dir must be a non-empty string")
+    validate_visible_metrics_config(config)
     validate_forager_config(config, verbose=verbose, tracker=tracker)

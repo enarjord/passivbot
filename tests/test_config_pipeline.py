@@ -134,6 +134,32 @@ def test_prepare_config_preserves_backtest_visible_metrics():
     assert prepared["backtest"]["visible_metrics"] == ["gain", "drawdown_worst_hsl"]
 
 
+def test_prepare_config_rejects_unknown_backtest_visible_metrics():
+    source = {
+        "backtest": {"visible_metrics": ["not_a_metric"]},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    with pytest.raises(ValueError, match="unknown backtest.visible_metrics entries"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_prepare_config_rejects_invalid_backtest_visible_metrics_type():
+    source = {
+        "backtest": {"visible_metrics": "adg"},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    with pytest.raises(ValueError, match="backtest.visible_metrics must be null, \\[\\], or"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_assigns_current_schema_version_to_legacy_configs():
     source = {
         "backtest": {},
@@ -146,6 +172,34 @@ def test_prepare_config_assigns_current_schema_version_to_legacy_configs():
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
     assert prepared["config_version"] == CONFIG_SCHEMA_VERSION
+
+
+def test_prepare_config_rejects_future_config_version():
+    source = {
+        "config_version": "v8.0.0",
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    with pytest.raises(ValueError, match="newer than supported schema"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_prepare_config_rejects_malformed_config_version():
+    source = {
+        "config_version": "banana",
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    with pytest.raises(ValueError, match="must be a semantic version"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 def test_prepare_config_migrates_pre_v79_backtest_pnls_lookback_override():

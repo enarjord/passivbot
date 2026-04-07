@@ -38,6 +38,10 @@ def migrate_config_version(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
     current_version = result.get("config_version")
+    current_parsed = _parse_version_tuple(current_version)
+    target_parsed = _parse_version_tuple(CONFIG_SCHEMA_VERSION)
+    if target_parsed is None:
+        raise ValueError(f"internal error: invalid CONFIG_SCHEMA_VERSION {CONFIG_SCHEMA_VERSION!r}")
     if current_version == CONFIG_SCHEMA_VERSION:
         return
     if current_version in (None, ""):
@@ -46,6 +50,16 @@ def migrate_config_version(
             logging.INFO,
             "pre-versioned config detected. attempting migration to schema %s",
             CONFIG_SCHEMA_VERSION,
+        )
+    elif current_parsed is None:
+        raise ValueError(
+            f"config.config_version must be a semantic version like {CONFIG_SCHEMA_VERSION}; "
+            f"got {current_version!r}"
+        )
+    elif current_parsed > target_parsed:
+        raise ValueError(
+            f"config.config_version {current_version!r} is newer than supported schema "
+            f"{CONFIG_SCHEMA_VERSION}; upgrade Passivbot"
         )
     else:
         _log_config(
