@@ -480,6 +480,15 @@ pub struct BotParams {
     pub unstuck_threshold: f64,
 }
 
+impl BotParams {
+    pub fn with_runtime_budget(&self, runtime_budget: RuntimeBudgetState) -> Self {
+        let mut runtime_params = self.clone();
+        runtime_params.wallet_exposure_limit = runtime_budget.effective_wallet_exposure_limit;
+        runtime_params.n_positions = runtime_budget.effective_n_positions;
+        runtime_params
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrailingPriceBundle {

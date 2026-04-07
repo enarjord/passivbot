@@ -1,4 +1,5 @@
 use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance};
+use crate::strategies::{GridClosePriceAnchor, TrailingGridCloseParams};
 use crate::types::{
     BotParams, ExchangeParams, Order, OrderType, Position, StateParams, TrailingPriceBundle,
 };
@@ -207,22 +208,52 @@ fn calc_wel_auto_reduce_short(
     })
 }
 
+fn grid_close_anchor_price_long(
+    state_params: &StateParams,
+    close_params: &TrailingGridCloseParams,
+    position: &Position,
+) -> f64 {
+    match close_params.grid_close_price_anchor {
+        GridClosePriceAnchor::PositionPrice => position.price,
+        GridClosePriceAnchor::EmaBandUpper => state_params.ema_bands.upper,
+        GridClosePriceAnchor::EmaBandLower => {
+            panic!("long grid close does not support ema_band_lower")
+        }
+    }
+}
+
+fn grid_close_anchor_price_short(
+    state_params: &StateParams,
+    close_params: &TrailingGridCloseParams,
+    position: &Position,
+) -> f64 {
+    match close_params.grid_close_price_anchor {
+        GridClosePriceAnchor::PositionPrice => position.price,
+        GridClosePriceAnchor::EmaBandLower => state_params.ema_bands.lower,
+        GridClosePriceAnchor::EmaBandUpper => {
+            panic!("short grid close does not support ema_band_upper")
+        }
+    }
+}
+
 pub fn calc_grid_close_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    close_params: &TrailingGridCloseParams,
     position: &Position,
 ) -> Order {
     if position.size <= 0.0 {
         return Order::default();
     }
-    if bot_params.close_grid_qty_pct < 0.0 || bot_params.close_grid_qty_pct >= 1.0 {
+    let anchor_price = grid_close_anchor_price_long(state_params, close_params, position);
+    if close_params.close_grid_qty_pct < 0.0 || close_params.close_grid_qty_pct >= 1.0 {
         return Order {
             qty: -round_(position.size, exchange_params.qty_step),
             price: f64::max(
                 state_params.order_book.ask,
                 round_up(
-                    position.price * (1.0 + bot_params.close_grid_markup_start),
+                    anchor_price * (1.0 + close_params.close_grid_markup_start),
                     exchange_params.price_step,
                 ),
             ),
@@ -230,11 +261,11 @@ pub fn calc_grid_close_long(
         };
     }
     let close_prices_start = round_up(
-        position.price * (1.0 + bot_params.close_grid_markup_start),
+        anchor_price * (1.0 + close_params.close_grid_markup_start),
         exchange_params.price_step,
     );
     let close_prices_end = round_up(
-        position.price * (1.0 + bot_params.close_grid_markup_end),
+        anchor_price * (1.0 + close_params.close_grid_markup_end),
         exchange_params.price_step,
     );
     if close_prices_start == close_prices_end {
@@ -246,7 +277,7 @@ pub fn calc_grid_close_long(
     }
     let n_steps =
         ((close_prices_end - close_prices_start).abs() / exchange_params.price_step).ceil();
-    let close_grid_qty_pct_modified = f64::max(bot_params.close_grid_qty_pct, 1.0 / n_steps);
+    let close_grid_qty_pct_modified = f64::max(close_params.close_grid_qty_pct, 1.0 / n_steps);
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
         state_params.balance,
@@ -289,25 +320,26 @@ pub fn calc_trailing_close_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    close_params: &TrailingGridCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     if position.size == 0.0 {
         return Order::default();
     }
-    if bot_params.close_trailing_threshold_pct <= 0.0 {
+    if close_params.close_trailing_threshold_pct <= 0.0 {
         // means trailing close immediately from pos open
-        if bot_params.close_trailing_retracement_pct > 0.0
+        if close_params.close_trailing_retracement_pct > 0.0
             && trailing_price_bundle.min_since_max
                 < trailing_price_bundle.max_since_open
-                    * (1.0 - bot_params.close_trailing_retracement_pct)
+                    * (1.0 - close_params.close_trailing_retracement_pct)
         {
             Order {
                 qty: -calc_close_qty(
                     &exchange_params,
                     &bot_params,
                     &position,
-                    bot_params.close_trailing_qty_pct,
+                    close_params.close_trailing_qty_pct,
                     state_params.balance,
                     state_params.order_book.ask,
                 ),
@@ -323,12 +355,12 @@ pub fn calc_trailing_close_long(
         }
     } else {
         // means trailing close will activate only after a threshold
-        if bot_params.close_trailing_retracement_pct <= 0.0 {
+        if close_params.close_trailing_retracement_pct <= 0.0 {
             // close at threshold
             let close_price = f64::max(
                 state_params.order_book.ask,
                 round_up(
-                    position.price * (1.0 + bot_params.close_trailing_threshold_pct),
+                    position.price * (1.0 + close_params.close_trailing_threshold_pct),
                     exchange_params.price_step,
                 ),
             );
@@ -337,7 +369,7 @@ pub fn calc_trailing_close_long(
                     &exchange_params,
                     &bot_params,
                     &position,
-                    bot_params.close_trailing_qty_pct,
+                    close_params.close_trailing_qty_pct,
                     state_params.balance,
                     close_price,
                 ),
@@ -347,17 +379,17 @@ pub fn calc_trailing_close_long(
         } else {
             // close if both conditions are met
             if trailing_price_bundle.max_since_open
-                > position.price * (1.0 + bot_params.close_trailing_threshold_pct)
+                > position.price * (1.0 + close_params.close_trailing_threshold_pct)
                 && trailing_price_bundle.min_since_max
                     < trailing_price_bundle.max_since_open
-                        * (1.0 - bot_params.close_trailing_retracement_pct)
+                        * (1.0 - close_params.close_trailing_retracement_pct)
             {
                 let close_price = f64::max(
                     state_params.order_book.ask,
                     round_up(
                         position.price
-                            * (1.0 + bot_params.close_trailing_threshold_pct
-                                - bot_params.close_trailing_retracement_pct),
+                            * (1.0 + close_params.close_trailing_threshold_pct
+                                - close_params.close_trailing_retracement_pct),
                         exchange_params.price_step,
                     ),
                 );
@@ -366,7 +398,7 @@ pub fn calc_trailing_close_long(
                         &exchange_params,
                         &bot_params,
                         &position,
-                        bot_params.close_trailing_qty_pct,
+                        close_params.close_trailing_qty_pct,
                         state_params.balance,
                         close_price,
                     ),
@@ -388,6 +420,7 @@ pub fn calc_next_close_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    close_params: &TrailingGridCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
@@ -415,28 +448,38 @@ pub fn calc_next_close_long(
     } else {
         wallet_exposure / wallet_exposure_limit_with_allowance(bot_params)
     };
-    if bot_params.close_trailing_grid_ratio >= 1.0 || bot_params.close_trailing_grid_ratio <= -1.0 {
+    if close_params.close_trailing_grid_ratio >= 1.0
+        || close_params.close_trailing_grid_ratio <= -1.0
+    {
         // return trailing only
         return calc_trailing_close_long(
             &exchange_params,
             &state_params,
             &bot_params,
+            close_params,
             &position,
             &trailing_price_bundle,
         );
     }
-    if bot_params.close_trailing_grid_ratio == 0.0 {
+    if close_params.close_trailing_grid_ratio == 0.0 {
         // return grid only
-        return calc_grid_close_long(&exchange_params, &state_params, &bot_params, &position);
+        return calc_grid_close_long(
+            &exchange_params,
+            &state_params,
+            &bot_params,
+            close_params,
+            &position,
+        );
     }
-    if bot_params.close_trailing_grid_ratio > 0.0 {
+    if close_params.close_trailing_grid_ratio > 0.0 {
         // trailing first
-        if wallet_exposure_ratio < bot_params.close_trailing_grid_ratio {
+        if wallet_exposure_ratio < close_params.close_trailing_grid_ratio {
             // return trailing order
             calc_trailing_close_long(
                 &exchange_params,
                 &state_params,
                 &bot_params,
+                close_params,
                 &position,
                 &trailing_price_bundle,
             )
@@ -445,7 +488,7 @@ pub fn calc_next_close_long(
             let mut trailing_allocation = cost_to_qty(
                 state_params.balance
                     * wallet_exposure_limit_with_allowance(bot_params)
-                    * bot_params.close_trailing_grid_ratio,
+                    * close_params.close_trailing_grid_ratio,
                 position.price,
                 exchange_params.c_mult,
             );
@@ -461,19 +504,31 @@ pub fn calc_next_close_long(
                 size: f64::min(position.size, f64::max(grid_allocation, min_entry_qty)),
                 price: position.price,
             };
-            calc_grid_close_long(&exchange_params, &state_params, &bot_params, &position_mod)
+            calc_grid_close_long(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                close_params,
+                &position_mod,
+            )
         }
     } else {
         // grid first
-        if wallet_exposure_ratio < 1.0 + bot_params.close_trailing_grid_ratio {
+        if wallet_exposure_ratio < 1.0 + close_params.close_trailing_grid_ratio {
             // return grid order, closing whole position
-            calc_grid_close_long(&exchange_params, &state_params, &bot_params, &position)
+            calc_grid_close_long(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                close_params,
+                &position,
+            )
         } else {
             // return trailing order, but leave full_psize * (1.0 + close_trailing_grid_ratio) for grid close
             let mut grid_allocation = cost_to_qty(
                 state_params.balance
                     * wallet_exposure_limit_with_allowance(bot_params)
-                    * (1.0 + bot_params.close_trailing_grid_ratio),
+                    * (1.0 + close_params.close_trailing_grid_ratio),
                 position.price,
                 exchange_params.c_mult,
             );
@@ -493,6 +548,7 @@ pub fn calc_next_close_long(
                 &exchange_params,
                 &state_params,
                 &bot_params,
+                close_params,
                 &position_mod,
                 &trailing_price_bundle,
             )
@@ -504,19 +560,21 @@ pub fn calc_grid_close_short(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    close_params: &TrailingGridCloseParams,
     position: &Position,
 ) -> Order {
     let position_size_abs = position.size.abs();
     if position_size_abs == 0.0 {
         return Order::default();
     }
-    if bot_params.close_grid_qty_pct < 0.0 || bot_params.close_grid_qty_pct >= 1.0 {
+    let anchor_price = grid_close_anchor_price_short(state_params, close_params, position);
+    if close_params.close_grid_qty_pct < 0.0 || close_params.close_grid_qty_pct >= 1.0 {
         return Order {
             qty: round_(position_size_abs, exchange_params.qty_step),
             price: f64::min(
                 state_params.order_book.bid,
                 round_dn(
-                    position.price * (1.0 - bot_params.close_grid_markup_start),
+                    anchor_price * (1.0 - close_params.close_grid_markup_start),
                     exchange_params.price_step,
                 ),
             ),
@@ -524,11 +582,11 @@ pub fn calc_grid_close_short(
         };
     }
     let close_prices_start = round_dn(
-        position.price * (1.0 - bot_params.close_grid_markup_start),
+        anchor_price * (1.0 - close_params.close_grid_markup_start),
         exchange_params.price_step,
     );
     let close_prices_end = round_dn(
-        position.price * (1.0 - bot_params.close_grid_markup_end),
+        anchor_price * (1.0 - close_params.close_grid_markup_end),
         exchange_params.price_step,
     );
     if close_prices_start == close_prices_end {
@@ -540,7 +598,7 @@ pub fn calc_grid_close_short(
     }
     let n_steps =
         ((close_prices_start - close_prices_end).abs() / exchange_params.price_step).ceil();
-    let close_grid_qty_pct_modified = f64::max(bot_params.close_grid_qty_pct, 1.0 / n_steps);
+    let close_grid_qty_pct_modified = f64::max(close_params.close_grid_qty_pct, 1.0 / n_steps);
     let wallet_exposure_ratio = calc_wallet_exposure(
         exchange_params.c_mult,
         state_params.balance,
@@ -582,6 +640,7 @@ pub fn calc_trailing_close_short(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    close_params: &TrailingGridCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
@@ -589,19 +648,19 @@ pub fn calc_trailing_close_short(
     if position_size_abs == 0.0 {
         return Order::default();
     }
-    if bot_params.close_trailing_threshold_pct <= 0.0 {
+    if close_params.close_trailing_threshold_pct <= 0.0 {
         // means trailing stop immediately from pos open
-        if bot_params.close_trailing_retracement_pct > 0.0
+        if close_params.close_trailing_retracement_pct > 0.0
             && trailing_price_bundle.max_since_min
                 > trailing_price_bundle.min_since_open
-                    * (1.0 + bot_params.close_trailing_retracement_pct)
+                    * (1.0 + close_params.close_trailing_retracement_pct)
         {
             Order {
                 qty: calc_close_qty(
                     &exchange_params,
                     &bot_params,
                     &position,
-                    bot_params.close_trailing_qty_pct,
+                    close_params.close_trailing_qty_pct,
                     state_params.balance,
                     state_params.order_book.bid,
                 ),
@@ -617,12 +676,12 @@ pub fn calc_trailing_close_short(
         }
     } else {
         // means trailing stop will activate only after a threshold
-        if bot_params.close_trailing_retracement_pct <= 0.0 {
+        if close_params.close_trailing_retracement_pct <= 0.0 {
             // close at threshold
             let close_price = f64::min(
                 state_params.order_book.bid,
                 round_dn(
-                    position.price * (1.0 - bot_params.close_trailing_threshold_pct),
+                    position.price * (1.0 - close_params.close_trailing_threshold_pct),
                     exchange_params.price_step,
                 ),
             );
@@ -631,7 +690,7 @@ pub fn calc_trailing_close_short(
                     &exchange_params,
                     &bot_params,
                     &position,
-                    bot_params.close_trailing_qty_pct,
+                    close_params.close_trailing_qty_pct,
                     state_params.balance,
                     close_price,
                 ),
@@ -640,17 +699,17 @@ pub fn calc_trailing_close_short(
             }
         } else {
             if trailing_price_bundle.min_since_open
-                < position.price * (1.0 - bot_params.close_trailing_threshold_pct)
+                < position.price * (1.0 - close_params.close_trailing_threshold_pct)
                 && trailing_price_bundle.max_since_min
                     > trailing_price_bundle.min_since_open
-                        * (1.0 + bot_params.close_trailing_retracement_pct)
+                        * (1.0 + close_params.close_trailing_retracement_pct)
             {
                 let close_price = f64::min(
                     state_params.order_book.bid,
                     round_dn(
                         position.price
-                            * (1.0 - bot_params.close_trailing_threshold_pct
-                                + bot_params.close_trailing_retracement_pct),
+                            * (1.0 - close_params.close_trailing_threshold_pct
+                                + close_params.close_trailing_retracement_pct),
                         exchange_params.price_step,
                     ),
                 );
@@ -659,7 +718,7 @@ pub fn calc_trailing_close_short(
                         &exchange_params,
                         &bot_params,
                         &position,
-                        bot_params.close_trailing_qty_pct,
+                        close_params.close_trailing_qty_pct,
                         state_params.balance,
                         close_price,
                     ),
@@ -681,6 +740,7 @@ pub fn calc_next_close_short(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    close_params: &TrailingGridCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
@@ -704,19 +764,28 @@ pub fn calc_next_close_short(
     ) {
         return order;
     }
-    if bot_params.close_trailing_grid_ratio >= 1.0 || bot_params.close_trailing_grid_ratio <= -1.0 {
+    if close_params.close_trailing_grid_ratio >= 1.0
+        || close_params.close_trailing_grid_ratio <= -1.0
+    {
         // return trailing only
         return calc_trailing_close_short(
             &exchange_params,
             &state_params,
             &bot_params,
+            close_params,
             &position,
             &trailing_price_bundle,
         );
     }
-    if bot_params.close_trailing_grid_ratio == 0.0 {
+    if close_params.close_trailing_grid_ratio == 0.0 {
         // return grid only
-        return calc_grid_close_short(&exchange_params, &state_params, &bot_params, &position);
+        return calc_grid_close_short(
+            &exchange_params,
+            &state_params,
+            &bot_params,
+            close_params,
+            &position,
+        );
     }
     let wallet_exposure_ratio = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -724,14 +793,15 @@ pub fn calc_next_close_short(
         position_size_abs,
         position.price,
     ) / wallet_exposure_limit_with_allowance(bot_params);
-    if bot_params.close_trailing_grid_ratio > 0.0 {
+    if close_params.close_trailing_grid_ratio > 0.0 {
         // trailing first
-        if wallet_exposure_ratio < bot_params.close_trailing_grid_ratio {
+        if wallet_exposure_ratio < close_params.close_trailing_grid_ratio {
             // return trailing order, closing whole pos
             calc_trailing_close_short(
                 &exchange_params,
                 &state_params,
                 &bot_params,
+                close_params,
                 &position,
                 &trailing_price_bundle,
             )
@@ -740,7 +810,7 @@ pub fn calc_next_close_short(
             let mut trailing_allocation = cost_to_qty(
                 state_params.balance
                     * wallet_exposure_limit_with_allowance(bot_params)
-                    * bot_params.close_trailing_grid_ratio,
+                    * close_params.close_trailing_grid_ratio,
                 position.price,
                 exchange_params.c_mult,
             );
@@ -756,18 +826,30 @@ pub fn calc_next_close_short(
                 size: -f64::min(position_size_abs, f64::max(grid_allocation, min_entry_qty)),
                 price: position.price,
             };
-            calc_grid_close_short(&exchange_params, &state_params, &bot_params, &position_mod)
+            calc_grid_close_short(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                close_params,
+                &position_mod,
+            )
         }
     } else {
-        if wallet_exposure_ratio < 1.0 + bot_params.close_trailing_grid_ratio {
+        if wallet_exposure_ratio < 1.0 + close_params.close_trailing_grid_ratio {
             // return grid order, closing whole position
-            return calc_grid_close_short(&exchange_params, &state_params, &bot_params, &position);
+            return calc_grid_close_short(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                close_params,
+                &position,
+            );
         } else {
             // return trailing order, but leave full_psize * (1.0 + close_trailing_grid_ratio) for grid close
             let mut grid_allocation = cost_to_qty(
                 state_params.balance
                     * wallet_exposure_limit_with_allowance(bot_params)
-                    * (1.0 + bot_params.close_trailing_grid_ratio),
+                    * (1.0 + close_params.close_trailing_grid_ratio),
                 position.price,
                 exchange_params.c_mult,
             );
@@ -790,6 +872,7 @@ pub fn calc_next_close_short(
                 &exchange_params,
                 &state_params,
                 &bot_params,
+                close_params,
                 &position_mod,
                 &trailing_price_bundle,
             )
@@ -809,6 +892,19 @@ mod tests {
             min_cost: 0.0,
             c_mult: 1.0,
             ..Default::default()
+        }
+    }
+
+    fn make_close_params() -> TrailingGridCloseParams {
+        TrailingGridCloseParams {
+            close_grid_markup_end: 0.01,
+            close_grid_markup_start: 0.01,
+            close_grid_qty_pct: 1.0,
+            grid_close_price_anchor: GridClosePriceAnchor::PositionPrice,
+            close_trailing_grid_ratio: 0.0,
+            close_trailing_qty_pct: 0.0,
+            close_trailing_retracement_pct: 0.0,
+            close_trailing_threshold_pct: 0.0,
         }
     }
 
@@ -884,12 +980,83 @@ mod tests {
         let new_we = calc_wallet_exposure(exchange.c_mult, state.balance, new_psize, pos.price);
         assert!(new_we < 1.0, "new_we={} not strictly below target", new_we);
     }
+
+    #[test]
+    fn test_grid_close_long_anchors_to_ema_upper_when_requested() {
+        let exchange = make_exchange_params();
+        let state = StateParams {
+            balance: 1_000.0,
+            order_book: crate::types::OrderBook {
+                ask: 100.0,
+                bid: 100.0,
+                ..Default::default()
+            },
+            ema_bands: crate::types::EMABands {
+                upper: 110.0,
+                lower: 90.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let close = TrailingGridCloseParams {
+            grid_close_price_anchor: GridClosePriceAnchor::EmaBandUpper,
+            ..make_close_params()
+        };
+        let pos = Position {
+            size: 1.0,
+            price: 100.0,
+        };
+
+        let order = calc_grid_close_long(&exchange, &state, &bot, &close, &pos);
+
+        assert_eq!(order.order_type, OrderType::CloseGridLong);
+        assert_eq!(order.price, 111.1);
+    }
+
+    #[test]
+    fn test_grid_close_short_anchors_to_ema_lower_when_requested() {
+        let exchange = make_exchange_params();
+        let state = StateParams {
+            balance: 1_000.0,
+            order_book: crate::types::OrderBook {
+                ask: 100.0,
+                bid: 100.0,
+                ..Default::default()
+            },
+            ema_bands: crate::types::EMABands {
+                upper: 110.0,
+                lower: 90.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let close = TrailingGridCloseParams {
+            grid_close_price_anchor: GridClosePriceAnchor::EmaBandLower,
+            ..make_close_params()
+        };
+        let pos = Position {
+            size: -1.0,
+            price: 100.0,
+        };
+
+        let order = calc_grid_close_short(&exchange, &state, &bot, &close, &pos);
+
+        assert_eq!(order.order_type, OrderType::CloseGridShort);
+        assert_eq!(order.price, 89.1);
+    }
 }
 
 pub fn calc_closes_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    close_params: &TrailingGridCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Vec<Order> {
@@ -904,6 +1071,7 @@ pub fn calc_closes_long(
             exchange_params,
             &state_params,
             bot_params,
+            close_params,
             &position_mod,
             &trailing_price_bundle,
         );
@@ -964,6 +1132,7 @@ pub fn calc_closes_short(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    close_params: &TrailingGridCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Vec<Order> {
@@ -978,6 +1147,7 @@ pub fn calc_closes_short(
             exchange_params,
             &state_params,
             bot_params,
+            close_params,
             &position_mod,
             &trailing_price_bundle,
         );

@@ -13,6 +13,7 @@ use crate::risk::{
     GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
 };
 use crate::strategies::registry::{strategy_kind_from_name, strategy_spec};
+use crate::strategies::{GridClosePriceAnchor, TrailingGridCloseParams, TrailingGridEntryParams};
 use crate::trailing::{
     trailing_bundle_to_tuple, tuple_to_trailing_bundle, update_trailing_bundle_sequence,
 };
@@ -1352,11 +1353,12 @@ fn bot_params_pair_from_dict(dict: &PyDict) -> PyResult<BotParamsPair> {
     })
 }
 
-fn trailing_grid_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
+fn trailing_grid_strategy_params_from_dict(dict: &PyDict, side: &str) -> PyResult<Value> {
     Ok(serde_json::json!({
         "close_grid_markup_end": extract_value::<f64>(dict, "close_grid_markup_end")?,
         "close_grid_markup_start": extract_value::<f64>(dict, "close_grid_markup_start")?,
         "close_grid_qty_pct": extract_value::<f64>(dict, "close_grid_qty_pct")?,
+        "grid_close_price_anchor": extract_grid_close_price_anchor(dict, side)?,
         "close_trailing_grid_ratio": extract_value::<f64>(dict, "close_trailing_grid_ratio")?,
         "close_trailing_qty_pct": extract_value::<f64>(dict, "close_trailing_qty_pct")?,
         "close_trailing_retracement_pct": extract_value::<f64>(dict, "close_trailing_retracement_pct")?,
@@ -1415,8 +1417,8 @@ fn strategy_params_pair_from_dict(
         .map_err(|_| PyValueError::new_err("strategy_params.short must be a dict"))?;
     let (long, short) = match strategy_kind {
         "trailing_grid" => (
-            trailing_grid_strategy_params_from_dict(long_dict)?,
-            trailing_grid_strategy_params_from_dict(short_dict)?,
+            trailing_grid_strategy_params_from_dict(long_dict, "long")?,
+            trailing_grid_strategy_params_from_dict(short_dict, "short")?,
         ),
         "ema_anchor" => (
             ema_anchor_strategy_params_from_dict(long_dict)?,
@@ -1437,6 +1439,33 @@ fn extract_grid_spacing_we_weight(dict: &PyDict) -> PyResult<f64> {
         obj.extract::<f64>()
     } else {
         extract_value(dict, "entry_grid_spacing_we_weight")
+    }
+}
+
+fn extract_grid_close_price_anchor(dict: &PyDict, side: &str) -> PyResult<&'static str> {
+    let raw = match dict.get_item("grid_close_price_anchor")? {
+        Some(item) => item.extract::<String>()?,
+        None => "position_price".to_string(),
+    };
+    let normalized = raw.trim().to_lowercase();
+    match side {
+        "long" => match normalized.as_str() {
+            "" | "position_price" | "pprice" => Ok("position_price"),
+            "ema_band" | "ema_band_upper" => Ok("ema_band_upper"),
+            _ => Err(PyValueError::new_err(
+                "long grid_close_price_anchor must be one of {'position_price', 'pprice', 'ema_band', 'ema_band_upper'}",
+            )),
+        },
+        "short" => match normalized.as_str() {
+            "" | "position_price" | "pprice" => Ok("position_price"),
+            "ema_band" | "ema_band_lower" => Ok("ema_band_lower"),
+            _ => Err(PyValueError::new_err(
+                "short grid_close_price_anchor must be one of {'position_price', 'pprice', 'ema_band', 'ema_band_lower'}",
+            )),
+        },
+        _ => Err(PyValueError::new_err(format!(
+            "unsupported side for grid_close_price_anchor extraction: {side}"
+        ))),
     }
 }
 
@@ -1682,6 +1711,61 @@ fn extract_value_with_fallback<'a, T: pyo3::FromPyObject<'a>>(
     )))
 }
 
+fn make_trailing_grid_entry_params(
+    entry_grid_double_down_factor: f64,
+    entry_grid_spacing_volatility_weight: f64,
+    entry_grid_spacing_we_weight: f64,
+    entry_grid_spacing_pct: f64,
+    entry_initial_ema_dist: f64,
+    entry_initial_qty_pct: f64,
+    entry_trailing_double_down_factor: f64,
+    entry_trailing_grid_ratio: f64,
+    entry_trailing_retracement_pct: f64,
+    entry_trailing_retracement_we_weight: f64,
+    entry_trailing_retracement_volatility_weight: f64,
+    entry_trailing_threshold_pct: f64,
+    entry_trailing_threshold_we_weight: f64,
+    entry_trailing_threshold_volatility_weight: f64,
+) -> TrailingGridEntryParams {
+    TrailingGridEntryParams {
+        entry_grid_double_down_factor,
+        entry_grid_spacing_pct,
+        entry_grid_spacing_volatility_weight,
+        entry_grid_spacing_we_weight,
+        entry_initial_ema_dist,
+        entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
+        entry_trailing_grid_ratio,
+        entry_trailing_retracement_pct,
+        entry_trailing_retracement_volatility_weight,
+        entry_trailing_retracement_we_weight,
+        entry_trailing_threshold_pct,
+        entry_trailing_threshold_volatility_weight,
+        entry_trailing_threshold_we_weight,
+    }
+}
+
+fn make_trailing_grid_close_params(
+    close_grid_markup_end: f64,
+    close_grid_markup_start: f64,
+    close_grid_qty_pct: f64,
+    close_trailing_grid_ratio: f64,
+    close_trailing_qty_pct: f64,
+    close_trailing_retracement_pct: f64,
+    close_trailing_threshold_pct: f64,
+) -> TrailingGridCloseParams {
+    TrailingGridCloseParams {
+        close_grid_markup_end,
+        close_grid_markup_start,
+        close_grid_qty_pct,
+        grid_close_price_anchor: GridClosePriceAnchor::PositionPrice,
+        close_trailing_grid_ratio,
+        close_trailing_qty_pct,
+        close_trailing_retracement_pct,
+        close_trailing_threshold_pct,
+    }
+}
+
 #[pyfunction]
 pub fn calc_next_entry_long_py(
     qty_step: f64,
@@ -1756,6 +1840,22 @@ pub fn calc_next_entry_long_py(
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
+    let entry_params = make_trailing_grid_entry_params(
+        entry_grid_double_down_factor,
+        entry_grid_spacing_volatility_weight,
+        entry_grid_spacing_we_weight,
+        entry_grid_spacing_pct,
+        entry_initial_ema_dist,
+        entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
+        entry_trailing_grid_ratio,
+        entry_trailing_retracement_pct,
+        entry_trailing_retracement_we_weight,
+        entry_trailing_retracement_volatility_weight,
+        entry_trailing_threshold_pct,
+        entry_trailing_threshold_we_weight,
+        entry_trailing_threshold_volatility_weight,
+    );
     let position = Position {
         size: position_size,
         price: position_price,
@@ -1770,6 +1870,7 @@ pub fn calc_next_entry_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &entry_params,
         &position,
         &trailing_price_bundle,
     );
@@ -1836,6 +1937,15 @@ pub fn calc_next_close_long_py(
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
+    let close_params = make_trailing_grid_close_params(
+        close_grid_markup_end,
+        close_grid_markup_start,
+        close_grid_qty_pct,
+        close_trailing_grid_ratio,
+        close_trailing_qty_pct,
+        close_trailing_retracement_pct,
+        close_trailing_threshold_pct,
+    );
     let position = Position {
         size: position_size,
         price: position_price,
@@ -1850,6 +1960,7 @@ pub fn calc_next_close_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &close_params,
         &position,
         &trailing_price_bundle,
     );
@@ -1934,6 +2045,22 @@ pub fn calc_next_entry_short_py(
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
+    let entry_params = make_trailing_grid_entry_params(
+        entry_grid_double_down_factor,
+        entry_grid_spacing_volatility_weight,
+        entry_grid_spacing_we_weight,
+        entry_grid_spacing_pct,
+        entry_initial_ema_dist,
+        entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
+        entry_trailing_grid_ratio,
+        entry_trailing_retracement_pct,
+        entry_trailing_retracement_we_weight,
+        entry_trailing_retracement_volatility_weight,
+        entry_trailing_threshold_pct,
+        entry_trailing_threshold_we_weight,
+        entry_trailing_threshold_volatility_weight,
+    );
     let position = Position {
         size: position_size,
         price: position_price,
@@ -1948,6 +2075,7 @@ pub fn calc_next_entry_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &entry_params,
         &position,
         &trailing_price_bundle,
     );
@@ -2014,6 +2142,15 @@ pub fn calc_next_close_short_py(
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
+    let close_params = make_trailing_grid_close_params(
+        close_grid_markup_end,
+        close_grid_markup_start,
+        close_grid_qty_pct,
+        close_trailing_grid_ratio,
+        close_trailing_qty_pct,
+        close_trailing_retracement_pct,
+        close_trailing_threshold_pct,
+    );
     let position = Position {
         size: position_size,
         price: position_price,
@@ -2028,6 +2165,7 @@ pub fn calc_next_close_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &close_params,
         &position,
         &trailing_price_bundle,
     );
@@ -2114,6 +2252,22 @@ pub fn calc_entries_long_py(
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
+    let entry_params = make_trailing_grid_entry_params(
+        entry_grid_double_down_factor,
+        entry_grid_spacing_volatility_weight,
+        entry_grid_spacing_we_weight,
+        entry_grid_spacing_pct,
+        entry_initial_ema_dist,
+        entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
+        entry_trailing_grid_ratio,
+        entry_trailing_retracement_pct,
+        entry_trailing_retracement_we_weight,
+        entry_trailing_retracement_volatility_weight,
+        entry_trailing_threshold_pct,
+        entry_trailing_threshold_we_weight,
+        entry_trailing_threshold_volatility_weight,
+    );
 
     let position = Position {
         size: position_size,
@@ -2129,6 +2283,7 @@ pub fn calc_entries_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &entry_params,
         &position,
         &trailing_price_bundle,
     );
@@ -2216,6 +2371,22 @@ pub fn calc_entries_short_py(
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
+    let entry_params = make_trailing_grid_entry_params(
+        entry_grid_double_down_factor,
+        entry_grid_spacing_volatility_weight,
+        entry_grid_spacing_we_weight,
+        entry_grid_spacing_pct,
+        entry_initial_ema_dist,
+        entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
+        entry_trailing_grid_ratio,
+        entry_trailing_retracement_pct,
+        entry_trailing_retracement_we_weight,
+        entry_trailing_retracement_volatility_weight,
+        entry_trailing_threshold_pct,
+        entry_trailing_threshold_we_weight,
+        entry_trailing_threshold_volatility_weight,
+    );
 
     let position = Position {
         size: position_size,
@@ -2231,6 +2402,7 @@ pub fn calc_entries_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &entry_params,
         &position,
         &trailing_price_bundle,
     );
@@ -2318,6 +2490,15 @@ pub fn calc_closes_long_py(
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
+    let close_params = make_trailing_grid_close_params(
+        close_grid_markup_end,
+        close_grid_markup_start,
+        close_grid_qty_pct,
+        close_trailing_grid_ratio,
+        close_trailing_qty_pct,
+        close_trailing_retracement_pct,
+        close_trailing_threshold_pct,
+    );
 
     let position = Position {
         size: position_size,
@@ -2333,6 +2514,7 @@ pub fn calc_closes_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &close_params,
         &position,
         &trailing_price_bundle,
     );
@@ -2401,6 +2583,15 @@ pub fn calc_closes_short_py(
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
+    let close_params = make_trailing_grid_close_params(
+        close_grid_markup_end,
+        close_grid_markup_start,
+        close_grid_qty_pct,
+        close_trailing_grid_ratio,
+        close_trailing_qty_pct,
+        close_trailing_retracement_pct,
+        close_trailing_threshold_pct,
+    );
     let position = Position {
         size: position_size,
         price: position_price,
@@ -2415,6 +2606,7 @@ pub fn calc_closes_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &close_params,
         &position,
         &trailing_price_bundle,
     );

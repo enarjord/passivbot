@@ -120,6 +120,8 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
     config["bot"]["short"]["entry_grid_spacing_pct"] = -1.0
     config["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"] = 321.0
     config["bot"]["short"]["strategy"]["trailing_grid"]["entry_grid_spacing_pct"] = 0.0123
+    config["bot"]["long"]["strategy"]["trailing_grid"]["grid_close_price_anchor"] = "ema_band"
+    config["bot"]["short"]["strategy"]["trailing_grid"]["grid_close_price_anchor"] = "pprice"
     mss = _base_mss()
 
     bot_params_list, strategy_params_list, _, _ = prep_backtest_args(config, mss, "binance")
@@ -129,6 +131,8 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
     assert "entry_grid_spacing_pct" not in bot_params_list[0]["short"]
     assert strategy_params_list[0]["long"]["ema_span_0"] == 321.0
     assert strategy_params_list[0]["short"]["entry_grid_spacing_pct"] == 0.0123
+    assert strategy_params_list[0]["long"]["grid_close_price_anchor"] == "ema_band_upper"
+    assert strategy_params_list[0]["short"]["grid_close_price_anchor"] == "position_price"
 
 
 def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():

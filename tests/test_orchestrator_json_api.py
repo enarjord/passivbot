@@ -19,6 +19,7 @@ ADAPTIVE_STRATEGY_KEYS = {
     "close_grid_markup_end",
     "close_grid_markup_start",
     "close_grid_qty_pct",
+    "grid_close_price_anchor",
     "close_trailing_retracement_pct",
     "close_trailing_grid_ratio",
     "close_trailing_qty_pct",
@@ -48,6 +49,7 @@ def adaptive_strategy_params(**overrides):
         "close_grid_markup_end": 0.01,
         "close_grid_markup_start": 0.01,
         "close_grid_qty_pct": 1.0,
+        "grid_close_price_anchor": "position_price",
         "close_trailing_retracement_pct": 0.0,
         "close_trailing_grid_ratio": 0.0,
         "close_trailing_qty_pct": 0.0,
@@ -898,6 +900,85 @@ def test_orders_include_entries_and_closes():
     order_types = {o["order_type"] for o in out["orders"]}
     assert any(t.startswith("entry_") for t in order_types)
     assert any(t.startswith("close_") for t in order_types)
+
+
+def test_long_grid_close_can_anchor_to_ema_band_upper():
+    import passivbot_rust as pbr
+
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        long_strategy=adaptive_strategy_params(
+            close_grid_markup_start=0.01,
+            close_grid_markup_end=0.01,
+            grid_close_price_anchor="ema_band_upper",
+        ),
+        emas=ema_bundle(
+            m1_close=[
+                [10.0, 110.0],
+                [20.0, 110.0],
+                [math.sqrt(10.0 * 20.0), 110.0],
+            ]
+        ),
+    )
+
+    out = compute(pbr, make_input(balance=1_000.0, symbols=[sym]))
+    close = next(o for o in out["orders"] if o["order_type"] == "close_grid_long")
+    assert close["price"] == pytest.approx(111.1)
+
+
+def test_short_grid_close_can_anchor_to_ema_band_lower():
+    import passivbot_rust as pbr
+
+    short_bp = {"n_positions": 1, "total_wallet_exposure_limit": 1.0, "wallet_exposure_limit": 1.0}
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_mode="manual",
+        short_pos_size=-1.0,
+        short_pos_price=100.0,
+        short_mode="normal",
+        short_bp=short_bp,
+        short_strategy=adaptive_strategy_params(
+            close_grid_markup_start=0.01,
+            close_grid_markup_end=0.01,
+            grid_close_price_anchor="ema_band_lower",
+        ),
+        emas=ema_bundle(
+            m1_close=[
+                [10.0, 90.0],
+                [20.0, 90.0],
+                [math.sqrt(10.0 * 20.0), 90.0],
+            ]
+        ),
+    )
+
+    out = compute(
+        pbr,
+        make_input(balance=1_000.0, global_bp=bot_params_pair(short_overrides=short_bp), symbols=[sym]),
+    )
+    close = next(o for o in out["orders"] if o["order_type"] == "close_grid_short")
+    assert close["price"] == pytest.approx(89.1)
+
+
+def test_json_rejects_wrong_side_grid_close_anchor():
+    import passivbot_rust as pbr
+
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        long_strategy=adaptive_strategy_params(grid_close_price_anchor="ema_band_lower"),
+    )
+
+    with pytest.raises(ValueError, match="strategy_params"):
+        compute(pbr, make_input(balance=1_000.0, symbols=[sym]))
 
 
 def test_twel_entry_gating_blocks_new_entries():

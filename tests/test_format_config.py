@@ -348,3 +348,25 @@ def test_format_config_preserves_live_optimize_bounds():
         120.0,
         5.0,
     ]
+
+
+def test_format_config_normalizes_grid_close_price_anchor_aliases():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["strategy"]["trailing_grid"]["grid_close_price_anchor"] = "ema_band"
+    current["bot"]["short"]["strategy"]["trailing_grid"]["grid_close_price_anchor"] = "pprice"
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["strategy"]["trailing_grid"]["grid_close_price_anchor"] == "ema_band_upper"
+    assert out["bot"]["short"]["strategy"]["trailing_grid"]["grid_close_price_anchor"] == "position_price"
+
+
+def test_format_config_rejects_wrong_side_grid_close_price_anchor():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["strategy"]["trailing_grid"]["grid_close_price_anchor"] = "ema_band_lower"
+
+    with pytest.raises(
+        ValueError,
+        match="bot\\.long\\.strategy\\.trailing_grid\\.grid_close_price_anchor",
+    ):
+        format_config(current, verbose=False, live_only=True)

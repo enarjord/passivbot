@@ -95,6 +95,16 @@ tp_qty(pside, i) = full_pos_size * close_grid_qty_pct
 `n ≈ 1 / close_grid_qty_pct`.  Quantities are trimmed so the sum equals the current position
 size, and any leftover exposure is assigned to the TP closest to `markup_start`.
 
+For `trailing_grid`, the grid-close anchor can now be selected with
+`bot.<side>.strategy.trailing_grid.grid_close_price_anchor`:
+
+* `position_price` / `pprice`: anchor the close grid to `pos.price` (existing behavior).
+* `ema_band` / `ema_band_upper` for longs: anchor the close grid to `EMA_high`.
+* `ema_band` / `ema_band_lower` for shorts: anchor the close grid to `EMA_low`.
+
+Only grid closes use this anchor. Trailing closes still use `pos.price` so the trailing bundle
+remains restart-safe and side effects stay local to the grid-close ladder.
+
 ## Trailing Closes
 
 Trailing closes mirror the trailing-entry logic with the parameters

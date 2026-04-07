@@ -16,8 +16,7 @@ use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle}
 use crate::types::{
     BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities,
     EquityHardStopLossConfig, ExchangeParams, Fill, Order, OrderBook, OrderType, Position,
-    RuntimeBudgetState, RuntimeBudgetStatePair, StrategyParamsPairValue,
-    TrailingPriceBundle,
+    RuntimeBudgetState, RuntimeBudgetStatePair, StrategyParamsPairValue, TrailingPriceBundle,
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
@@ -225,35 +224,31 @@ fn make_orchestrator_ema_slots(
     next_m1_log_range += 1;
     let forager_short = next_m1_log_range;
     next_m1_log_range += 1;
-    let offset_long = if strategy_offset_volatility_span_minutes(&strategy_params.long)
-        .unwrap_or(0.0)
-        > 0.0
-    {
-        let idx = next_m1_log_range;
-        next_m1_log_range += 1;
-        Some(idx)
-    } else {
-        None
-    };
-    let offset_short = if strategy_offset_volatility_span_minutes(&strategy_params.short)
-        .unwrap_or(0.0)
-        > 0.0
-    {
-        let idx = next_m1_log_range;
-        Some(idx)
-    } else {
-        None
-    };
+    let offset_long =
+        if strategy_offset_volatility_span_minutes(&strategy_params.long).unwrap_or(0.0) > 0.0 {
+            let idx = next_m1_log_range;
+            next_m1_log_range += 1;
+            Some(idx)
+        } else {
+            None
+        };
+    let offset_short =
+        if strategy_offset_volatility_span_minutes(&strategy_params.short).unwrap_or(0.0) > 0.0 {
+            let idx = next_m1_log_range;
+            Some(idx)
+        } else {
+            None
+        };
 
     let mut next_h1_log_range = 0usize;
-    let h1_long = if strategy_entry_volatility_span_hours(&strategy_params.long).unwrap_or(0.0) > 0.0
-    {
-        let idx = next_h1_log_range;
-        next_h1_log_range += 1;
-        Some(idx)
-    } else {
-        None
-    };
+    let h1_long =
+        if strategy_entry_volatility_span_hours(&strategy_params.long).unwrap_or(0.0) > 0.0 {
+            let idx = next_h1_log_range;
+            next_h1_log_range += 1;
+            Some(idx)
+        } else {
+            None
+        };
     let h1_short =
         if strategy_entry_volatility_span_hours(&strategy_params.short).unwrap_or(0.0) > 0.0 {
             let idx = next_h1_log_range;
@@ -901,8 +896,18 @@ fn parse_strategy_params_pair(
     bot_params: &BotParamsPair,
 ) -> Result<StrategyParamsPair, String> {
     Ok(StrategyParamsPair {
-        long: parse_strategy_params(strategy_kind, Some(&raw.long), &bot_params.long)?,
-        short: parse_strategy_params(strategy_kind, Some(&raw.short), &bot_params.short)?,
+        long: parse_strategy_params(
+            strategy_kind,
+            crate::strategies::StrategySide::Long,
+            Some(&raw.long),
+            &bot_params.long,
+        )?,
+        short: parse_strategy_params(
+            strategy_kind,
+            crate::strategies::StrategySide::Short,
+            Some(&raw.short),
+            &bot_params.short,
+        )?,
     })
 }
 
@@ -1373,20 +1378,16 @@ impl<'a> Backtest<'a> {
                     strategy_offset_volatility_span_minutes(&self.strategy_params[idx].long)
                 {
                     if span > 0.0 {
-                        m1.log_range.push((
-                            span,
-                            self.emas[idx].offset_volatility_logrange_ema_1m_long,
-                        ));
+                        m1.log_range
+                            .push((span, self.emas[idx].offset_volatility_logrange_ema_1m_long));
                     }
                 }
                 if let Some(span) =
                     strategy_offset_volatility_span_minutes(&self.strategy_params[idx].short)
                 {
                     if span > 0.0 {
-                        m1.log_range.push((
-                            span,
-                            self.emas[idx].offset_volatility_logrange_ema_1m_short,
-                        ));
+                        m1.log_range
+                            .push((span, self.emas[idx].offset_volatility_logrange_ema_1m_short));
                     }
                 }
 
@@ -1615,7 +1616,8 @@ impl<'a> Backtest<'a> {
                 sym.emas.m1.volume[slots.m1_volume_short].1 = self.emas[idx].vol_short;
             }
             if sym.emas.m1.log_range.len() > slots.m1_log_range.forager_short {
-                sym.emas.m1.log_range[slots.m1_log_range.forager_long].1 = self.emas[idx].log_range_long;
+                sym.emas.m1.log_range[slots.m1_log_range.forager_long].1 =
+                    self.emas[idx].log_range_long;
                 sym.emas.m1.log_range[slots.m1_log_range.forager_short].1 =
                     self.emas[idx].log_range_short;
             }
@@ -1957,13 +1959,12 @@ impl<'a> Backtest<'a> {
         let needs_offset_volatility_logrange_ema_1m_short = strategy_params_parsed
             .iter()
             .any(|sp| strategy_needs_log_range_1m(&sp.short));
-        let needs_entry_volatility_logrange_ema_1h_long = strategy_params_parsed.iter().any(|sp| {
-            strategy_needs_log_range_1h(&sp.long)
-        });
-        let needs_entry_volatility_logrange_ema_1h_short =
-            strategy_params_parsed.iter().any(|sp| {
-                strategy_needs_log_range_1h(&sp.short)
-            });
+        let needs_entry_volatility_logrange_ema_1h_long = strategy_params_parsed
+            .iter()
+            .any(|sp| strategy_needs_log_range_1h(&sp.long));
+        let needs_entry_volatility_logrange_ema_1h_short = strategy_params_parsed
+            .iter()
+            .any(|sp| strategy_needs_log_range_1h(&sp.short));
 
         Backtest {
             hlcvs,
@@ -2424,8 +2425,16 @@ impl<'a> Backtest<'a> {
     #[inline(always)]
     fn has_blocking_open_orders_pside(&self, pside: usize) -> bool {
         match pside {
-            LONG => self.open_orders.long.iter().any(Self::bundle_has_blocking_open_orders),
-            SHORT => self.open_orders.short.iter().any(Self::bundle_has_blocking_open_orders),
+            LONG => self
+                .open_orders
+                .long
+                .iter()
+                .any(Self::bundle_has_blocking_open_orders),
+            SHORT => self
+                .open_orders
+                .short
+                .iter()
+                .any(Self::bundle_has_blocking_open_orders),
             _ => unreachable!("invalid pside"),
         }
     }
@@ -5182,13 +5191,13 @@ mod tests {
             price: 100.0,
         };
         bt.open_orders.long[0].closes.push(BacktestOrder {
-                order: Order {
-                    qty: -1.0,
-                    price: 200.0,
-                    order_type: OrderType::ClosePanicLong,
-                },
-                execution_type: orchestrator::ExecutionType::Market,
-            });
+            order: Order {
+                qty: -1.0,
+                price: 200.0,
+                order_type: OrderType::ClosePanicLong,
+            },
+            execution_type: orchestrator::ExecutionType::Market,
+        });
 
         bt.check_for_fills(1);
 
@@ -5262,13 +5271,13 @@ mod tests {
             price: 100.0,
         };
         bt.open_orders.long[0].closes.push(BacktestOrder {
-                order: Order {
-                    qty: -1.0,
-                    price: 200.0,
-                    order_type: OrderType::ClosePanicLong,
-                },
-                execution_type: orchestrator::ExecutionType::Limit,
-            });
+            order: Order {
+                qty: -1.0,
+                price: 200.0,
+                order_type: OrderType::ClosePanicLong,
+            },
+            execution_type: orchestrator::ExecutionType::Limit,
+        });
 
         bt.check_for_fills(1);
 
@@ -5331,13 +5340,13 @@ mod tests {
             &backtest_params,
         );
         bt.open_orders.long[0].entries.push(BacktestOrder {
-                order: Order {
-                    qty: 1.0,
-                    price: 100.0,
-                    order_type: OrderType::EntryGridNormalLong,
-                },
-                execution_type: orchestrator::ExecutionType::Market,
-            });
+            order: Order {
+                qty: 1.0,
+                price: 100.0,
+                order_type: OrderType::EntryGridNormalLong,
+            },
+            execution_type: orchestrator::ExecutionType::Market,
+        });
 
         bt.check_for_fills(1);
 
@@ -7060,7 +7069,9 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let out_path = base.join("measurements").join("orch_profile_orchestrator.json");
+        let out_path = base
+            .join("measurements")
+            .join("orch_profile_orchestrator.json");
         let profile = OrchProfile {
             mode: "test",
             steps: 1,

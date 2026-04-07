@@ -593,6 +593,7 @@ mod core {
         cache: &mut [CachedSideDerived],
         symbol_idx: usize,
         strategy_kind: StrategyKind,
+        strategy_side: StrategySide,
         side: &SymbolSideInput,
     ) -> Result<crate::strategies::StrategyParams, OrchestratorError> {
         if let Some(params) = cache[symbol_idx].strategy_params {
@@ -602,11 +603,16 @@ mod core {
             cache[symbol_idx].strategy_params = Some(params);
             return Ok(params);
         }
-        let params = parse_strategy_params(strategy_kind, side.strategy_params.as_ref(), &side.bot_params)
-            .map_err(|_| OrchestratorError::NonFiniteInput {
-                field: "strategy_params",
-                symbol_idx: Some(symbol_idx),
-            })?;
+        let params = parse_strategy_params(
+            strategy_kind,
+            strategy_side,
+            side.strategy_params.as_ref(),
+            &side.bot_params,
+        )
+        .map_err(|_| OrchestratorError::NonFiniteInput {
+            field: "strategy_params",
+            symbol_idx: Some(symbol_idx),
+        })?;
         cache[symbol_idx].strategy_params = Some(params);
         Ok(params)
     }
@@ -1166,6 +1172,10 @@ mod core {
                 derived_cache,
                 s.symbol_idx,
                 strategy_kind,
+                match pside {
+                    PositionSide::Long => StrategySide::Long,
+                    PositionSide::Short => StrategySide::Short,
+                },
                 side,
             )?;
             // For selection of coins to occupy available slots for initial entries:
@@ -1232,9 +1242,12 @@ mod core {
             };
             let (bid, ask, ema_lower, ema_upper, entry_initial_ema_dist) = if ema_readiness_required
             {
-                let ema_bands =
-                    match cached_ema_bands(derived_cache, s.symbol_idx, &s.emas, &strategy_params)
-                    {
+                let ema_bands = match cached_ema_bands(
+                    derived_cache,
+                    s.symbol_idx,
+                    &s.emas,
+                    &strategy_params,
+                ) {
                     Ok(v) => v,
                     Err(OrchestratorError::MissingEma { .. })
                     | Err(OrchestratorError::NonFiniteInput {
@@ -1254,7 +1267,7 @@ mod core {
                         continue;
                     }
                     Err(err) => return Err(err),
-                    };
+                };
                 let entry_initial_ema_dist = strategy_initial_entry_offset(&strategy_params);
                 let entry_initial_ema_dist = match require_forager_input(
                     s.symbol_idx,
@@ -2014,27 +2027,22 @@ mod core {
                         &mut workspace.derived_long,
                         idx,
                         input.global.strategy_kind,
+                        StrategySide::Long,
                         &s.long,
                     );
                     let strategy_params_short = cached_strategy_params_for_symbol_side(
                         &mut workspace.derived_short,
                         idx,
                         input.global.strategy_kind,
+                        StrategySide::Short,
                         &s.short,
                     );
-                    let ema_bands_long = strategy_params_long
-                        .as_ref()
-                        .ok()
-                        .and_then(|params| {
-                            cached_ema_bands(&mut workspace.derived_long, idx, &s.emas, params).ok()
-                        });
-                    let ema_bands_short = strategy_params_short
-                        .as_ref()
-                        .ok()
-                        .and_then(|params| {
-                            cached_ema_bands(&mut workspace.derived_short, idx, &s.emas, params)
-                                .ok()
-                        });
+                    let ema_bands_long = strategy_params_long.as_ref().ok().and_then(|params| {
+                        cached_ema_bands(&mut workspace.derived_long, idx, &s.emas, params).ok()
+                    });
+                    let ema_bands_short = strategy_params_short.as_ref().ok().and_then(|params| {
+                        cached_ema_bands(&mut workspace.derived_short, idx, &s.emas, params).ok()
+                    });
 
                     if let (
                         Some(bands_long),
@@ -2138,6 +2146,7 @@ mod core {
                             &mut workspace.derived_long,
                             s.symbol_idx,
                             input.global.strategy_kind,
+                            StrategySide::Long,
                             &s.long,
                         )?;
                         let ema_bands = cached_ema_bands(
@@ -2273,6 +2282,7 @@ mod core {
                             &mut workspace.derived_short,
                             s.symbol_idx,
                             input.global.strategy_kind,
+                            StrategySide::Short,
                             &s.short,
                         )?;
                         let ema_bands = cached_ema_bands(
@@ -2371,6 +2381,7 @@ mod core {
                 &mut workspace.derived_long,
                 s.symbol_idx,
                 input.global.strategy_kind,
+                StrategySide::Long,
                 &sym.long,
             )?;
             let ema_bands = cached_ema_bands(
@@ -2416,6 +2427,7 @@ mod core {
                 &mut workspace.derived_short,
                 s.symbol_idx,
                 input.global.strategy_kind,
+                StrategySide::Short,
                 &sym.short,
             )?;
             let ema_bands = cached_ema_bands(

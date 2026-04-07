@@ -8,11 +8,13 @@ BOT_POSITION_SIDES = ("long", "short")
 DEFAULT_STRATEGY_KIND = "trailing_grid"
 EMA_ANCHOR_STRATEGY_KIND = "ema_anchor"
 SUPPORTED_STRATEGY_KINDS = (DEFAULT_STRATEGY_KIND, EMA_ANCHOR_STRATEGY_KIND)
+GRID_CLOSE_PRICE_ANCHOR_DEFAULT = "position_price"
 
 TRAILING_GRID_PARAM_KEYS = (
     "close_grid_markup_end",
     "close_grid_markup_start",
     "close_grid_qty_pct",
+    "grid_close_price_anchor",
     "close_trailing_grid_ratio",
     "close_trailing_qty_pct",
     "close_trailing_retracement_pct",
@@ -59,6 +61,7 @@ STRATEGY_DEFAULTS_BY_KIND = {
             "close_grid_markup_end": 0.0094,
             "close_grid_markup_start": 0.00634,
             "close_grid_qty_pct": 0.51,
+            "grid_close_price_anchor": GRID_CLOSE_PRICE_ANCHOR_DEFAULT,
             "close_trailing_grid_ratio": -0.76,
             "close_trailing_qty_pct": 0.05,
             "close_trailing_retracement_pct": 0.00279,
@@ -85,6 +88,7 @@ STRATEGY_DEFAULTS_BY_KIND = {
             "close_grid_markup_end": 0.0015,
             "close_grid_markup_start": 0.0015,
             "close_grid_qty_pct": 0.05,
+            "grid_close_price_anchor": GRID_CLOSE_PRICE_ANCHOR_DEFAULT,
             "close_trailing_grid_ratio": -1,
             "close_trailing_qty_pct": 0.05,
             "close_trailing_retracement_pct": 0.001,
@@ -133,6 +137,33 @@ STRATEGY_DEFAULTS_BY_KIND = {
         },
     },
 }
+
+
+def normalize_grid_close_price_anchor(value, *, pside: str) -> str:
+    normalized = str(value or GRID_CLOSE_PRICE_ANCHOR_DEFAULT).strip().lower()
+    if normalized in {"", "position_price", "pprice"}:
+        return GRID_CLOSE_PRICE_ANCHOR_DEFAULT
+    if pside == "long":
+        if normalized in {"ema_band", "ema_band_upper"}:
+            return "ema_band_upper"
+        raise ValueError(
+            "bot.long.strategy.trailing_grid.grid_close_price_anchor must be one of "
+            "{'position_price', 'pprice', 'ema_band', 'ema_band_upper'}"
+        )
+    if pside == "short":
+        if normalized in {"ema_band", "ema_band_lower"}:
+            return "ema_band_lower"
+        raise ValueError(
+            "bot.short.strategy.trailing_grid.grid_close_price_anchor must be one of "
+            "{'position_price', 'pprice', 'ema_band', 'ema_band_lower'}"
+        )
+    raise ValueError(f"unsupported pside {pside!r} for grid_close_price_anchor normalization")
+
+
+def _normalize_strategy_side_value(key: str, value, *, strategy_kind: str, pside: str):
+    if strategy_kind == DEFAULT_STRATEGY_KIND and key == "grid_close_price_anchor":
+        return normalize_grid_close_price_anchor(value, pside=pside)
+    return value
 
 
 def get_all_strategy_defaults() -> dict:
@@ -233,13 +264,34 @@ def build_runtime_strategy_side(
     result = {}
     for key in strategy_keys:
         if isinstance(override_side, dict) and key in override_side:
-            result[key] = deepcopy(override_side[key])
+            result[key] = deepcopy(
+                _normalize_strategy_side_value(
+                    key,
+                    override_side[key],
+                    strategy_kind=normalized_kind,
+                    pside=pside or "",
+                )
+            )
             continue
         if isinstance(strategy_side, dict) and key in strategy_side:
-            result[key] = deepcopy(strategy_side[key])
+            result[key] = deepcopy(
+                _normalize_strategy_side_value(
+                    key,
+                    strategy_side[key],
+                    strategy_kind=normalized_kind,
+                    pside=pside or "",
+                )
+            )
             continue
         if key in side_defaults:
-            result[key] = deepcopy(side_defaults[key])
+            result[key] = deepcopy(
+                _normalize_strategy_side_value(
+                    key,
+                    side_defaults[key],
+                    strategy_kind=normalized_kind,
+                    pside=pside or "",
+                )
+            )
     return result
 
 
@@ -285,16 +337,27 @@ def sync_canonical_strategy_config(config: dict, *, tracker: Optional[object] = 
                 )
 
             for key in get_strategy_param_keys(kind):
-                if key in current_strategy_side:
-                    continue
-                if kind == normalized_kind and key in defaults_by_side:
-                    current_strategy_side[key] = deepcopy(defaults_by_side[key])
+                if key not in current_strategy_side:
+                    if key in defaults_by_side:
+                        current_strategy_side[key] = deepcopy(defaults_by_side[key])
+                        if tracker is not None:
+                            tracker.add(
+                                ["bot", pside, "strategy", kind, key], current_strategy_side[key]
+                            )
+                normalized_value = _normalize_strategy_side_value(
+                    key,
+                    current_strategy_side[key],
+                    strategy_kind=kind,
+                    pside=pside,
+                )
+                if current_strategy_side[key] != normalized_value:
                     if tracker is not None:
-                        tracker.add(["bot", pside, "strategy", kind, key], current_strategy_side[key])
-                elif kind != normalized_kind and key in defaults_by_side:
-                    current_strategy_side[key] = deepcopy(defaults_by_side[key])
-                    if tracker is not None:
-                        tracker.add(["bot", pside, "strategy", kind, key], current_strategy_side[key])
+                        tracker.update(
+                            ["bot", pside, "strategy", kind, key],
+                            current_strategy_side[key],
+                            normalized_value,
+                        )
+                    current_strategy_side[key] = normalized_value
 
 
 def prune_inactive_strategy_subtrees(config: dict, *, tracker: Optional[object] = None) -> None:
