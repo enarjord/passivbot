@@ -5,7 +5,7 @@ use crate::closes::{
 use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
-use crate::types::Order;
+use crate::types::{Order, RuntimeOrderContext};
 
 fn push_if_nonzero(out: &mut Vec<Order>, order: Order) {
     if order.qty != 0.0 {
@@ -36,9 +36,9 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
         StrategyParams::TrailingGrid(params) => params,
         _ => panic!("trailing_grid strategy received non-trailing_grid params"),
     };
-    let runtime_bot_params = request
-        .bot_params
-        .with_runtime_budget(request.runtime_budget);
+    let runtime_context = RuntimeOrderContext {
+        effective_wallet_exposure_limit: request.runtime_budget.effective_wallet_exposure_limit,
+    };
     let entry_params = params.entry_params();
     let close_params = params.close_params();
 
@@ -52,7 +52,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_entries_long(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &entry_params,
                                 request.position,
                                 request.trailing,
@@ -64,7 +65,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_next_entry_long(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &entry_params,
                                 request.position,
                                 request.trailing,
@@ -75,7 +77,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     let next_entry = calc_next_entry_long(
                         request.exchange,
                         request.state,
-                        &runtime_bot_params,
+                        request.bot_params,
+                        &runtime_context,
                         &entry_params,
                         request.position,
                         request.trailing,
@@ -93,7 +96,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_entries_long(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &entry_params,
                                 request.position,
                                 request.trailing,
@@ -108,7 +112,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                         calc_entries_long(
                             request.exchange,
                             request.state,
-                            &runtime_bot_params,
+                            request.bot_params,
+                            &runtime_context,
                             &entry_params,
                             request.position,
                             request.trailing,
@@ -125,7 +130,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_closes_long(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &close_params,
                                 request.position,
                                 request.trailing,
@@ -137,7 +143,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_next_close_long(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &close_params,
                                 request.position,
                                 request.trailing,
@@ -148,7 +155,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     let next_close = calc_next_close_long(
                         request.exchange,
                         request.state,
-                        &runtime_bot_params,
+                        request.bot_params,
+                        &runtime_context,
                         &close_params,
                         request.position,
                         request.trailing,
@@ -166,7 +174,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_closes_long(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &close_params,
                                 request.position,
                                 request.trailing,
@@ -181,7 +190,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                         calc_closes_long(
                             request.exchange,
                             request.state,
-                            &runtime_bot_params,
+                            request.bot_params,
+                            &runtime_context,
                             &close_params,
                             request.position,
                             request.trailing,
@@ -199,7 +209,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_entries_short(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &entry_params,
                                 request.position,
                                 request.trailing,
@@ -211,7 +222,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_next_entry_short(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &entry_params,
                                 request.position,
                                 request.trailing,
@@ -222,7 +234,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     let next_entry = calc_next_entry_short(
                         request.exchange,
                         request.state,
-                        &runtime_bot_params,
+                        request.bot_params,
+                        &runtime_context,
                         &entry_params,
                         request.position,
                         request.trailing,
@@ -240,7 +253,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_entries_short(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &entry_params,
                                 request.position,
                                 request.trailing,
@@ -255,7 +269,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                         calc_entries_short(
                             request.exchange,
                             request.state,
-                            &runtime_bot_params,
+                            request.bot_params,
+                            &runtime_context,
                             &entry_params,
                             request.position,
                             request.trailing,
@@ -272,7 +287,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_closes_short(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &close_params,
                                 request.position,
                                 request.trailing,
@@ -284,7 +300,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_next_close_short(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &close_params,
                                 request.position,
                                 request.trailing,
@@ -295,7 +312,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     let next_close = calc_next_close_short(
                         request.exchange,
                         request.state,
-                        &runtime_bot_params,
+                        request.bot_params,
+                        &runtime_context,
                         &close_params,
                         request.position,
                         request.trailing,
@@ -313,7 +331,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             calc_closes_short(
                                 request.exchange,
                                 request.state,
-                                &runtime_bot_params,
+                                request.bot_params,
+                                &runtime_context,
                                 &close_params,
                                 request.position,
                                 request.trailing,
@@ -328,7 +347,8 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                         calc_closes_short(
                             request.exchange,
                             request.state,
-                            &runtime_bot_params,
+                            request.bot_params,
+                            &runtime_context,
                             &close_params,
                             request.position,
                             request.trailing,

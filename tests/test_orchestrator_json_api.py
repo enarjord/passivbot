@@ -977,7 +977,7 @@ def test_json_rejects_wrong_side_grid_close_anchor():
         long_strategy=adaptive_strategy_params(grid_close_price_anchor="ema_band_lower"),
     )
 
-    with pytest.raises(ValueError, match="strategy_params"):
+    with pytest.raises(ValueError, match="grid_close_price_anchor"):
         compute(pbr, make_input(balance=1_000.0, symbols=[sym]))
 
 

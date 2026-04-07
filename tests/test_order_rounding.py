@@ -109,6 +109,71 @@ def test_calc_closes_long_py_quantizes_results():
 
 
 @requires_extension
+def test_calc_closes_long_py_supports_ema_anchor():
+    result = pbr.calc_closes_long_py(
+        qty_step=0.01,
+        price_step=0.01,
+        min_qty=0.0,
+        min_cost=0.0,
+        c_mult=1.0,
+        close_grid_markup_end=0.01,
+        close_grid_markup_start=0.01,
+        close_grid_qty_pct=1.0,
+        close_trailing_grid_ratio=0.0,
+        close_trailing_qty_pct=0.0,
+        close_trailing_retracement_pct=0.0,
+        close_trailing_threshold_pct=0.0,
+        wallet_exposure_limit=1.0,
+        risk_we_excess_allowance_pct=0.0,
+        risk_wel_enforcer_threshold=1.0,
+        balance=1000.0,
+        position_size=1.0,
+        position_price=100.0,
+        min_since_open=0.0,
+        max_since_min=0.0,
+        max_since_open=0.0,
+        min_since_max=0.0,
+        order_book_ask=100.0,
+        ema_bands_upper=110.0,
+        grid_close_price_anchor="ema_band",
+    )
+    assert result
+    _, price, _ = result[0]
+    assert price == pytest.approx(111.1)
+
+
+@requires_extension
+def test_calc_closes_short_py_rejects_missing_ema_band_for_ema_anchor():
+    with pytest.raises(ValueError, match="ema_bands_lower must be > 0"):
+        pbr.calc_closes_short_py(
+            qty_step=0.01,
+            price_step=0.01,
+            min_qty=0.0,
+            min_cost=0.0,
+            c_mult=1.0,
+            close_grid_markup_end=0.01,
+            close_grid_markup_start=0.01,
+            close_grid_qty_pct=1.0,
+            close_trailing_grid_ratio=0.0,
+            close_trailing_qty_pct=0.0,
+            close_trailing_retracement_pct=0.0,
+            close_trailing_threshold_pct=0.0,
+            wallet_exposure_limit=1.0,
+            risk_we_excess_allowance_pct=0.0,
+            risk_wel_enforcer_threshold=1.0,
+            balance=1000.0,
+            position_size=-1.0,
+            position_price=100.0,
+            min_since_open=0.0,
+            max_since_min=0.0,
+            max_since_open=0.0,
+            min_since_max=0.0,
+            order_book_bid=100.0,
+            grid_close_price_anchor="ema_band",
+        )
+
+
+@requires_extension
 def test_calc_twel_enforcer_orders_quantizes_results():
     order_type = pbr.order_type_snake_to_id("close_auto_reduce_twel_long")
     positions = [

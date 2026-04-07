@@ -13,7 +13,10 @@ use crate::risk::{
     GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
 };
 use crate::strategies::registry::{strategy_kind_from_name, strategy_spec};
-use crate::strategies::{GridClosePriceAnchor, TrailingGridCloseParams, TrailingGridEntryParams};
+use crate::strategies::{
+    parse_grid_close_price_anchor_value, GridClosePriceAnchor, StrategySide,
+    TrailingGridCloseParams, TrailingGridEntryParams,
+};
 use crate::trailing::{
     trailing_bundle_to_tuple, tuple_to_trailing_bundle, update_trailing_bundle_sequence,
 };
@@ -21,7 +24,8 @@ use crate::types::OrderType;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, EquityHardStopLossConfig,
     EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights, HlcvsBundle, HlcvsMeta,
-    OrderBook, Position, StateParams, StrategyParamsPairValue, TrailingPriceBundle,
+    OrderBook, Position, RuntimeOrderContext, StateParams, StrategyParamsPairValue,
+    TrailingPriceBundle,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -1746,6 +1750,7 @@ fn make_trailing_grid_entry_params(
 }
 
 fn make_trailing_grid_close_params(
+    side: StrategySide,
     close_grid_markup_end: f64,
     close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
@@ -1753,16 +1758,51 @@ fn make_trailing_grid_close_params(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
-) -> TrailingGridCloseParams {
-    TrailingGridCloseParams {
+    grid_close_price_anchor: &str,
+) -> PyResult<TrailingGridCloseParams> {
+    let grid_close_price_anchor = parse_helper_close_anchor(side, grid_close_price_anchor)?;
+    Ok(TrailingGridCloseParams {
         close_grid_markup_end,
         close_grid_markup_start,
         close_grid_qty_pct,
-        grid_close_price_anchor: GridClosePriceAnchor::PositionPrice,
+        grid_close_price_anchor,
         close_trailing_grid_ratio,
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+    })
+}
+
+fn make_runtime_order_context(wallet_exposure_limit: f64) -> RuntimeOrderContext {
+    RuntimeOrderContext {
+        effective_wallet_exposure_limit: wallet_exposure_limit,
+    }
+}
+
+fn parse_helper_close_anchor(
+    side: StrategySide,
+    grid_close_price_anchor: &str,
+) -> PyResult<GridClosePriceAnchor> {
+    parse_grid_close_price_anchor_value(side, grid_close_price_anchor).map_err(PyValueError::new_err)
+}
+
+fn validate_helper_close_anchor_inputs(
+    side: StrategySide,
+    anchor: GridClosePriceAnchor,
+    ema_band: f64,
+) -> PyResult<()> {
+    match (side, anchor) {
+        (StrategySide::Long, GridClosePriceAnchor::EmaBandUpper) if ema_band <= 0.0 => Err(
+            PyValueError::new_err(
+                "ema_bands_upper must be > 0 when grid_close_price_anchor is ema_band_upper",
+            ),
+        ),
+        (StrategySide::Short, GridClosePriceAnchor::EmaBandLower) if ema_band <= 0.0 => Err(
+            PyValueError::new_err(
+                "ema_bands_lower must be > 0 when grid_close_price_anchor is ema_band_lower",
+            ),
+        ),
+        _ => Ok(()),
     }
 }
 
@@ -1860,6 +1900,7 @@ pub fn calc_next_entry_long_py(
         size: position_size,
         price: position_price,
     };
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -1870,6 +1911,7 @@ pub fn calc_next_entry_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
         &entry_params,
         &position,
         &trailing_price_bundle,
@@ -1882,7 +1924,33 @@ pub fn calc_next_entry_long_py(
     )
 }
 
-#[pyfunction]
+#[pyfunction(signature = (
+    qty_step,
+    price_step,
+    min_qty,
+    min_cost,
+    c_mult,
+    close_grid_markup_end,
+    close_grid_markup_start,
+    close_grid_qty_pct,
+    close_trailing_grid_ratio,
+    close_trailing_qty_pct,
+    close_trailing_retracement_pct,
+    close_trailing_threshold_pct,
+    wallet_exposure_limit,
+    risk_we_excess_allowance_pct,
+    risk_wel_enforcer_threshold,
+    balance,
+    position_size,
+    position_price,
+    min_since_open,
+    max_since_min,
+    max_since_open,
+    min_since_max,
+    order_book_ask,
+    ema_bands_upper = 0.0,
+    grid_close_price_anchor = "position_price".to_string()
+))]
 pub fn calc_next_close_long_py(
     qty_step: f64,
     price_step: f64,
@@ -1907,7 +1975,9 @@ pub fn calc_next_close_long_py(
     max_since_open: f64,
     min_since_max: f64,
     order_book_ask: f64,
-) -> (f64, f64, String) {
+    ema_bands_upper: f64,
+    grid_close_price_anchor: String,
+) -> PyResult<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -1920,6 +1990,10 @@ pub fn calc_next_close_long_py(
         balance,
         order_book: OrderBook {
             ask: order_book_ask,
+            ..Default::default()
+        },
+        ema_bands: EMABands {
+            upper: ema_bands_upper,
             ..Default::default()
         },
         ..Default::default()
@@ -1938,6 +2012,7 @@ pub fn calc_next_close_long_py(
         ..Default::default()
     };
     let close_params = make_trailing_grid_close_params(
+        StrategySide::Long,
         close_grid_markup_end,
         close_grid_markup_start,
         close_grid_qty_pct,
@@ -1945,7 +2020,14 @@ pub fn calc_next_close_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
-    );
+        &grid_close_price_anchor,
+    )?;
+    validate_helper_close_anchor_inputs(
+        StrategySide::Long,
+        close_params.grid_close_price_anchor,
+        ema_bands_upper,
+    )?;
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let position = Position {
         size: position_size,
         price: position_price,
@@ -1960,15 +2042,16 @@ pub fn calc_next_close_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
         &close_params,
         &position,
         &trailing_price_bundle,
     );
-    (
+    Ok((
         next_entry.qty,
         next_entry.price,
         next_entry.order_type.to_string(),
-    )
+    ))
 }
 
 #[pyfunction]
@@ -2065,6 +2148,7 @@ pub fn calc_next_entry_short_py(
         size: position_size,
         price: position_price,
     };
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -2075,6 +2159,7 @@ pub fn calc_next_entry_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
         &entry_params,
         &position,
         &trailing_price_bundle,
@@ -2087,7 +2172,33 @@ pub fn calc_next_entry_short_py(
     )
 }
 
-#[pyfunction]
+#[pyfunction(signature = (
+    qty_step,
+    price_step,
+    min_qty,
+    min_cost,
+    c_mult,
+    close_grid_markup_end,
+    close_grid_markup_start,
+    close_grid_qty_pct,
+    close_trailing_grid_ratio,
+    close_trailing_qty_pct,
+    close_trailing_retracement_pct,
+    close_trailing_threshold_pct,
+    wallet_exposure_limit,
+    risk_we_excess_allowance_pct,
+    risk_wel_enforcer_threshold,
+    balance,
+    position_size,
+    position_price,
+    min_since_open,
+    max_since_min,
+    max_since_open,
+    min_since_max,
+    order_book_bid,
+    ema_bands_lower = 0.0,
+    grid_close_price_anchor = "position_price".to_string()
+))]
 pub fn calc_next_close_short_py(
     qty_step: f64,
     price_step: f64,
@@ -2112,7 +2223,9 @@ pub fn calc_next_close_short_py(
     max_since_open: f64,
     min_since_max: f64,
     order_book_bid: f64,
-) -> (f64, f64, String) {
+    ema_bands_lower: f64,
+    grid_close_price_anchor: String,
+) -> PyResult<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -2125,6 +2238,10 @@ pub fn calc_next_close_short_py(
         balance,
         order_book: OrderBook {
             bid: order_book_bid,
+            ..Default::default()
+        },
+        ema_bands: EMABands {
+            lower: ema_bands_lower,
             ..Default::default()
         },
         ..Default::default()
@@ -2143,6 +2260,7 @@ pub fn calc_next_close_short_py(
         ..Default::default()
     };
     let close_params = make_trailing_grid_close_params(
+        StrategySide::Short,
         close_grid_markup_end,
         close_grid_markup_start,
         close_grid_qty_pct,
@@ -2150,11 +2268,18 @@ pub fn calc_next_close_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
-    );
+        &grid_close_price_anchor,
+    )?;
+    validate_helper_close_anchor_inputs(
+        StrategySide::Short,
+        close_params.grid_close_price_anchor,
+        ema_bands_lower,
+    )?;
     let position = Position {
         size: position_size,
         price: position_price,
     };
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -2165,15 +2290,16 @@ pub fn calc_next_close_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
         &close_params,
         &position,
         &trailing_price_bundle,
     );
-    (
+    Ok((
         next_entry.qty,
         next_entry.price,
         next_entry.order_type.to_string(),
-    )
+    ))
 }
 
 #[pyfunction]
@@ -2273,6 +2399,7 @@ pub fn calc_entries_long_py(
         size: position_size,
         price: position_price,
     };
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -2283,6 +2410,7 @@ pub fn calc_entries_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
         &entry_params,
         &position,
         &trailing_price_bundle,
@@ -2392,6 +2520,7 @@ pub fn calc_entries_short_py(
         size: position_size,
         price: position_price,
     };
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -2402,6 +2531,7 @@ pub fn calc_entries_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
         &entry_params,
         &position,
         &trailing_price_bundle,
@@ -2433,7 +2563,33 @@ pub fn calc_min_entry_qty_py(
     crate::entries::calc_min_entry_qty(price, &exchange_params)
 }
 
-#[pyfunction]
+#[pyfunction(signature = (
+    qty_step,
+    price_step,
+    min_qty,
+    min_cost,
+    c_mult,
+    close_grid_markup_end,
+    close_grid_markup_start,
+    close_grid_qty_pct,
+    close_trailing_grid_ratio,
+    close_trailing_qty_pct,
+    close_trailing_retracement_pct,
+    close_trailing_threshold_pct,
+    wallet_exposure_limit,
+    risk_we_excess_allowance_pct,
+    risk_wel_enforcer_threshold,
+    balance,
+    position_size,
+    position_price,
+    min_since_open,
+    max_since_min,
+    max_since_open,
+    min_since_max,
+    order_book_ask,
+    ema_bands_upper = 0.0,
+    grid_close_price_anchor = "position_price".to_string()
+))]
 pub fn calc_closes_long_py(
     qty_step: f64,
     price_step: f64,
@@ -2458,7 +2614,9 @@ pub fn calc_closes_long_py(
     max_since_open: f64,
     min_since_max: f64,
     order_book_ask: f64,
-) -> Vec<(f64, f64, u16)> {
+    ema_bands_upper: f64,
+    grid_close_price_anchor: String,
+) -> PyResult<Vec<(f64, f64, u16)>> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -2472,6 +2630,10 @@ pub fn calc_closes_long_py(
         balance,
         order_book: OrderBook {
             ask: order_book_ask,
+            ..Default::default()
+        },
+        ema_bands: EMABands {
+            upper: ema_bands_upper,
             ..Default::default()
         },
         ..Default::default()
@@ -2491,6 +2653,7 @@ pub fn calc_closes_long_py(
         ..Default::default()
     };
     let close_params = make_trailing_grid_close_params(
+        StrategySide::Long,
         close_grid_markup_end,
         close_grid_markup_start,
         close_grid_qty_pct,
@@ -2498,7 +2661,14 @@ pub fn calc_closes_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
-    );
+        &grid_close_price_anchor,
+    )?;
+    validate_helper_close_anchor_inputs(
+        StrategySide::Long,
+        close_params.grid_close_price_anchor,
+        ema_bands_upper,
+    )?;
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
 
     let position = Position {
         size: position_size,
@@ -2514,19 +2684,46 @@ pub fn calc_closes_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
         &close_params,
         &position,
         &trailing_price_bundle,
     );
 
     // Convert closes to Python-compatible format
-    closes
+    Ok(closes
         .into_iter()
         .map(|order| (order.qty, order.price, order.order_type.id()))
-        .collect()
+        .collect())
 }
 
-#[pyfunction]
+#[pyfunction(signature = (
+    qty_step,
+    price_step,
+    min_qty,
+    min_cost,
+    c_mult,
+    close_grid_markup_end,
+    close_grid_markup_start,
+    close_grid_qty_pct,
+    close_trailing_grid_ratio,
+    close_trailing_qty_pct,
+    close_trailing_retracement_pct,
+    close_trailing_threshold_pct,
+    wallet_exposure_limit,
+    risk_we_excess_allowance_pct,
+    risk_wel_enforcer_threshold,
+    balance,
+    position_size,
+    position_price,
+    min_since_open,
+    max_since_min,
+    max_since_open,
+    min_since_max,
+    order_book_bid,
+    ema_bands_lower = 0.0,
+    grid_close_price_anchor = "position_price".to_string()
+))]
 pub fn calc_closes_short_py(
     qty_step: f64,
     price_step: f64,
@@ -2551,7 +2748,9 @@ pub fn calc_closes_short_py(
     max_since_open: f64,
     min_since_max: f64,
     order_book_bid: f64,
-) -> Vec<(f64, f64, u16)> {
+    ema_bands_lower: f64,
+    grid_close_price_anchor: String,
+) -> PyResult<Vec<(f64, f64, u16)>> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -2565,6 +2764,10 @@ pub fn calc_closes_short_py(
         balance,
         order_book: OrderBook {
             bid: order_book_bid,
+            ..Default::default()
+        },
+        ema_bands: EMABands {
+            lower: ema_bands_lower,
             ..Default::default()
         },
         ..Default::default()
@@ -2584,6 +2787,7 @@ pub fn calc_closes_short_py(
         ..Default::default()
     };
     let close_params = make_trailing_grid_close_params(
+        StrategySide::Short,
         close_grid_markup_end,
         close_grid_markup_start,
         close_grid_qty_pct,
@@ -2591,7 +2795,14 @@ pub fn calc_closes_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
-    );
+        &grid_close_price_anchor,
+    )?;
+    validate_helper_close_anchor_inputs(
+        StrategySide::Short,
+        close_params.grid_close_price_anchor,
+        ema_bands_lower,
+    )?;
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let position = Position {
         size: position_size,
         price: position_price,
@@ -2606,16 +2817,17 @@ pub fn calc_closes_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
         &close_params,
         &position,
         &trailing_price_bundle,
     );
 
     // Convert closes to Python-compatible format
-    closes
+    Ok(closes
         .into_iter()
         .map(|order| (order.qty, order.price, order.order_type.id()))
-        .collect()
+        .collect())
 }
 
 #[pyfunction]

@@ -481,12 +481,11 @@ pub struct BotParams {
 }
 
 impl BotParams {
-    pub fn with_runtime_budget(&self, runtime_budget: RuntimeBudgetState) -> Self {
-        let mut runtime_params = self.clone();
-        runtime_params.wallet_exposure_limit = runtime_budget.effective_wallet_exposure_limit;
-        runtime_params.n_positions = runtime_budget.effective_n_positions;
-        runtime_params
-    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RuntimeOrderContext {
+    pub effective_wallet_exposure_limit: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

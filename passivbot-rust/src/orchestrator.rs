@@ -147,6 +147,10 @@ mod core {
             field: &'static str,
             symbol_idx: Option<usize>,
         },
+        InvalidStrategyParams {
+            symbol_idx: usize,
+            details: String,
+        },
         MissingEma {
             symbol_idx: usize,
         },
@@ -609,9 +613,9 @@ mod core {
             side.strategy_params.as_ref(),
             &side.bot_params,
         )
-        .map_err(|_| OrchestratorError::NonFiniteInput {
-            field: "strategy_params",
-            symbol_idx: Some(symbol_idx),
+        .map_err(|details| OrchestratorError::InvalidStrategyParams {
+            symbol_idx,
+            details,
         })?;
         cache[symbol_idx].strategy_params = Some(params);
         Ok(params)

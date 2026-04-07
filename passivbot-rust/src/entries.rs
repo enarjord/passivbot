@@ -1,6 +1,7 @@
 use crate::strategies::TrailingGridEntryParams;
 use crate::types::{
-    BotParams, ExchangeParams, Order, OrderType, Position, StateParams, TrailingPriceBundle,
+    BotParams, ExchangeParams, Order, OrderType, Position, RuntimeOrderContext, StateParams,
+    TrailingPriceBundle,
 };
 use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
@@ -8,8 +9,11 @@ use crate::utils::{
     round_dn, round_up, RoundingMode,
 };
 
-pub fn wallet_exposure_limit_with_allowance(bot_params: &BotParams) -> f64 {
-    let base = bot_params.wallet_exposure_limit;
+pub fn wallet_exposure_limit_with_allowance(
+    bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
+) -> f64 {
+    let base = runtime_context.effective_wallet_exposure_limit;
     if base <= 0.0 {
         base
     } else {
@@ -20,6 +24,7 @@ pub fn wallet_exposure_limit_with_allowance(bot_params: &BotParams) -> f64 {
 pub fn calc_initial_entry_qty(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     balance: f64,
     entry_price: f64,
@@ -29,7 +34,7 @@ pub fn calc_initial_entry_qty(
         round_(
             cost_to_qty(
                 balance
-                    * wallet_exposure_limit_with_allowance(bot_params)
+                    * wallet_exposure_limit_with_allowance(bot_params, runtime_context)
                     * entry_params.entry_initial_qty_pct,
                 entry_price,
                 exchange_params.c_mult,
@@ -56,6 +61,7 @@ pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) ->
 pub fn calc_cropped_reentry_qty(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     position: &Position,
     wallet_exposure: f64,
     balance: f64,
@@ -65,7 +71,7 @@ pub fn calc_cropped_reentry_qty(
 ) -> (f64, f64) {
     let effective_wallet_exposure_limit = f64::min(
         wallet_exposure_limit_cap,
-        wallet_exposure_limit_with_allowance(bot_params),
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context),
     );
     let position_size_abs = position.size.abs();
     let entry_qty_abs = entry_qty.abs();
@@ -107,12 +113,13 @@ pub fn calc_reentry_qty(
     double_down_factor: f64,
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     wallet_exposure_limit_cap: f64,
 ) -> f64 {
     let effective_wallet_exposure_limit = f64::min(
         wallet_exposure_limit_cap,
-        wallet_exposure_limit_with_allowance(bot_params),
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context),
     );
     f64::max(
         calc_min_entry_qty(entry_price, &exchange_params),
@@ -134,13 +141,14 @@ fn calc_reentry_price_bid(
     order_book_bid: f64,
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     entry_volatility_logrange_ema_1h: f64,
     wallet_exposure_limit_cap: f64,
 ) -> f64 {
     let effective_wallet_exposure_limit = f64::min(
         wallet_exposure_limit_cap,
-        wallet_exposure_limit_with_allowance(bot_params),
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context),
     );
     let we_multiplier = if effective_wallet_exposure_limit > 0.0 {
         (wallet_exposure / effective_wallet_exposure_limit)
@@ -172,13 +180,14 @@ fn calc_reentry_price_ask(
     order_book_ask: f64,
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     entry_volatility_logrange_ema_1h: f64,
     wallet_exposure_limit_cap: f64,
 ) -> f64 {
     let effective_wallet_exposure_limit = f64::min(
         wallet_exposure_limit_cap,
-        wallet_exposure_limit_with_allowance(bot_params),
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context),
     );
     let we_multiplier = if effective_wallet_exposure_limit > 0.0 {
         (wallet_exposure / effective_wallet_exposure_limit)
@@ -208,11 +217,14 @@ pub fn calc_grid_entry_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     position: &Position,
     wallet_exposure_limit_cap: f64,
 ) -> Order {
-    if wallet_exposure_limit_with_allowance(bot_params) == 0.0 || state_params.balance <= 0.0 {
+    if wallet_exposure_limit_with_allowance(bot_params, runtime_context) == 0.0
+        || state_params.balance <= 0.0
+    {
         return Order::default();
     }
     let initial_entry_price = calc_ema_price_bid(
@@ -227,6 +239,7 @@ pub fn calc_grid_entry_long(
     let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
+        runtime_context,
         entry_params,
         state_params.balance,
         initial_entry_price,
@@ -258,7 +271,7 @@ pub fn calc_grid_entry_long(
     );
     let effective_wallet_exposure_limit = f64::min(
         wallet_exposure_limit_cap,
-        wallet_exposure_limit_with_allowance(bot_params),
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context),
     );
     if wallet_exposure >= effective_wallet_exposure_limit * 0.999 {
         return Order::default();
@@ -271,6 +284,7 @@ pub fn calc_grid_entry_long(
         state_params.order_book.bid,
         exchange_params,
         bot_params,
+        runtime_context,
         entry_params,
         state_params.entry_volatility_logrange_ema_1h,
         effective_wallet_exposure_limit,
@@ -286,6 +300,7 @@ pub fn calc_grid_entry_long(
             entry_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
+            runtime_context,
             entry_params,
             effective_wallet_exposure_limit,
         ),
@@ -294,6 +309,7 @@ pub fn calc_grid_entry_long(
     let (wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
+        runtime_context,
         position,
         wallet_exposure,
         state_params.balance,
@@ -322,6 +338,7 @@ pub fn calc_grid_entry_long(
         state_params.order_book.bid,
         exchange_params,
         bot_params,
+        runtime_context,
         entry_params,
         state_params.entry_volatility_logrange_ema_1h,
         effective_wallet_exposure_limit,
@@ -334,6 +351,7 @@ pub fn calc_grid_entry_long(
             entry_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
+            runtime_context,
             entry_params,
             effective_wallet_exposure_limit,
         ),
@@ -342,6 +360,7 @@ pub fn calc_grid_entry_long(
     let (_next_wallet_exposure_if_filled, next_reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
+        runtime_context,
         &Position {
             size: psize_if_filled,
             price: pprice_if_filled,
@@ -378,17 +397,20 @@ pub fn calc_next_entry_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     // determines whether trailing or grid order, returns Order
-    let base_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
+    let base_wallet_exposure_limit =
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context);
     if base_wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
         // no orders
         return Order::default();
     }
-    let allowed_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
+    let allowed_wallet_exposure_limit =
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context);
     if entry_params.entry_trailing_grid_ratio >= 1.0
         || entry_params.entry_trailing_grid_ratio <= -1.0
     {
@@ -397,6 +419,7 @@ pub fn calc_next_entry_long(
             &exchange_params,
             &state_params,
             &bot_params,
+            runtime_context,
             entry_params,
             &position,
             &trailing_price_bundle,
@@ -408,6 +431,7 @@ pub fn calc_next_entry_long(
             &exchange_params,
             &state_params,
             &bot_params,
+            runtime_context,
             entry_params,
             &position,
             allowed_wallet_exposure_limit,
@@ -437,6 +461,7 @@ pub fn calc_next_entry_long(
                 &exchange_params,
                 &state_params,
                 &bot_params,
+                runtime_context,
                 entry_params,
                 &position,
                 &trailing_price_bundle,
@@ -448,6 +473,7 @@ pub fn calc_next_entry_long(
                 &exchange_params,
                 &state_params,
                 &bot_params,
+                runtime_context,
                 entry_params,
                 &position,
                 allowed_wallet_exposure_limit,
@@ -466,6 +492,7 @@ pub fn calc_next_entry_long(
                 &exchange_params,
                 &state_params,
                 &bot_params,
+                runtime_context,
                 entry_params,
                 &position,
                 wallet_exposure_limit_cap,
@@ -475,6 +502,7 @@ pub fn calc_next_entry_long(
                 &exchange_params,
                 &state_params,
                 &bot_params,
+                runtime_context,
                 entry_params,
                 &position,
                 &trailing_price_bundle,
@@ -488,6 +516,7 @@ pub fn calc_trailing_entry_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
@@ -505,6 +534,7 @@ pub fn calc_trailing_entry_long(
     let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
+        runtime_context,
         entry_params,
         state_params.balance,
         initial_entry_price,
@@ -537,7 +567,7 @@ pub fn calc_trailing_entry_long(
     );
     let effective_wallet_exposure_limit = f64::min(
         wallet_exposure_limit_cap,
-        wallet_exposure_limit_with_allowance(bot_params),
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context),
     );
     if wallet_exposure > effective_wallet_exposure_limit * 0.999 {
         return Order::default();
@@ -618,6 +648,7 @@ pub fn calc_trailing_entry_long(
             entry_params.entry_trailing_double_down_factor,
             &exchange_params,
             &bot_params,
+            runtime_context,
             entry_params,
             effective_wallet_exposure_limit,
         ),
@@ -626,6 +657,7 @@ pub fn calc_trailing_entry_long(
     let (_wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
+        runtime_context,
         position,
         wallet_exposure,
         state_params.balance,
@@ -652,11 +684,14 @@ pub fn calc_grid_entry_short(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     position: &Position,
     wallet_exposure_limit_cap: f64,
 ) -> Order {
-    if wallet_exposure_limit_with_allowance(bot_params) == 0.0 || state_params.balance <= 0.0 {
+    if wallet_exposure_limit_with_allowance(bot_params, runtime_context) == 0.0
+        || state_params.balance <= 0.0
+    {
         return Order::default();
     }
     let initial_entry_price = calc_ema_price_ask(
@@ -671,6 +706,7 @@ pub fn calc_grid_entry_short(
     let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
+        runtime_context,
         entry_params,
         state_params.balance,
         initial_entry_price,
@@ -706,7 +742,7 @@ pub fn calc_grid_entry_short(
     );
     let effective_wallet_exposure_limit = f64::min(
         wallet_exposure_limit_cap,
-        wallet_exposure_limit_with_allowance(bot_params),
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context),
     );
     if wallet_exposure >= effective_wallet_exposure_limit * 0.999 {
         return Order::default();
@@ -719,6 +755,7 @@ pub fn calc_grid_entry_short(
         state_params.order_book.ask,
         exchange_params,
         bot_params,
+        runtime_context,
         entry_params,
         state_params.entry_volatility_logrange_ema_1h,
         effective_wallet_exposure_limit,
@@ -734,6 +771,7 @@ pub fn calc_grid_entry_short(
             entry_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
+            runtime_context,
             entry_params,
             effective_wallet_exposure_limit,
         ),
@@ -742,6 +780,7 @@ pub fn calc_grid_entry_short(
     let (wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
+        runtime_context,
         position,
         wallet_exposure,
         state_params.balance,
@@ -770,6 +809,7 @@ pub fn calc_grid_entry_short(
         state_params.order_book.ask,
         exchange_params,
         bot_params,
+        runtime_context,
         entry_params,
         state_params.entry_volatility_logrange_ema_1h,
         effective_wallet_exposure_limit,
@@ -782,6 +822,7 @@ pub fn calc_grid_entry_short(
             entry_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
+            runtime_context,
             entry_params,
             effective_wallet_exposure_limit,
         ),
@@ -790,6 +831,7 @@ pub fn calc_grid_entry_short(
     let (_next_wallet_exposure_if_filled, next_reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
+        runtime_context,
         &Position {
             size: psize_if_filled,
             price: pprice_if_filled,
@@ -826,6 +868,7 @@ pub fn calc_trailing_entry_short(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
@@ -843,6 +886,7 @@ pub fn calc_trailing_entry_short(
     let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
+        runtime_context,
         entry_params,
         state_params.balance,
         initial_entry_price,
@@ -879,7 +923,7 @@ pub fn calc_trailing_entry_short(
     );
     let effective_wallet_exposure_limit = f64::min(
         wallet_exposure_limit_cap,
-        wallet_exposure_limit_with_allowance(bot_params),
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context),
     );
     if wallet_exposure > effective_wallet_exposure_limit * 0.999 {
         return Order::default();
@@ -960,6 +1004,7 @@ pub fn calc_trailing_entry_short(
             entry_params.entry_trailing_double_down_factor,
             &exchange_params,
             &bot_params,
+            runtime_context,
             entry_params,
             effective_wallet_exposure_limit,
         ),
@@ -968,6 +1013,7 @@ pub fn calc_trailing_entry_short(
     let (_wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
+        runtime_context,
         position,
         wallet_exposure,
         state_params.balance,
@@ -994,17 +1040,20 @@ pub fn calc_next_entry_short(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     // determines whether trailing or grid order, returns Order
-    let base_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
+    let base_wallet_exposure_limit =
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context);
     if base_wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
         // no orders
         return Order::default();
     }
-    let allowed_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
+    let allowed_wallet_exposure_limit =
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context);
     if entry_params.entry_trailing_grid_ratio >= 1.0
         || entry_params.entry_trailing_grid_ratio <= -1.0
     {
@@ -1013,6 +1062,7 @@ pub fn calc_next_entry_short(
             &exchange_params,
             &state_params,
             &bot_params,
+            runtime_context,
             entry_params,
             &position,
             &trailing_price_bundle,
@@ -1024,6 +1074,7 @@ pub fn calc_next_entry_short(
             &exchange_params,
             &state_params,
             &bot_params,
+            runtime_context,
             entry_params,
             &position,
             allowed_wallet_exposure_limit,
@@ -1048,6 +1099,7 @@ pub fn calc_next_entry_short(
                     &exchange_params,
                     &state_params,
                     &bot_params,
+                    runtime_context,
                     entry_params,
                     &position,
                     &trailing_price_bundle,
@@ -1061,6 +1113,7 @@ pub fn calc_next_entry_short(
                     &exchange_params,
                     &state_params,
                     &bot_params,
+                    runtime_context,
                     entry_params,
                     &position,
                     &trailing_price_bundle,
@@ -1073,6 +1126,7 @@ pub fn calc_next_entry_short(
                 &exchange_params,
                 &state_params,
                 &bot_params,
+                runtime_context,
                 entry_params,
                 &position,
                 allowed_wallet_exposure_limit,
@@ -1086,6 +1140,7 @@ pub fn calc_next_entry_short(
                     &exchange_params,
                     &state_params,
                     &bot_params,
+                    runtime_context,
                     entry_params,
                     &position,
                     allowed_wallet_exposure_limit,
@@ -1099,6 +1154,7 @@ pub fn calc_next_entry_short(
                     &exchange_params,
                     &state_params,
                     &bot_params,
+                    runtime_context,
                     entry_params,
                     &position,
                     wallet_exposure_limit_cap,
@@ -1109,6 +1165,7 @@ pub fn calc_next_entry_short(
                 &exchange_params,
                 &state_params,
                 &bot_params,
+                runtime_context,
                 entry_params,
                 &position,
                 &trailing_price_bundle,
@@ -1122,6 +1179,7 @@ pub fn calc_entries_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
@@ -1141,6 +1199,7 @@ pub fn calc_entries_long(
             exchange_params,
             &state_params_mod,
             bot_params,
+            runtime_context,
             entry_params,
             &position_mod,
             &trailing_price_bundle,
@@ -1187,6 +1246,7 @@ pub fn calc_entries_short(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
     entry_params: &TrailingGridEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
@@ -1206,6 +1266,7 @@ pub fn calc_entries_short(
             exchange_params,
             &state_params_mod,
             bot_params,
+            runtime_context,
             entry_params,
             &position_mod,
             &trailing_price_bundle,
