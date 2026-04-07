@@ -292,25 +292,25 @@ pub fn parse_grid_close_price_anchor_value(
     raw: &str,
 ) -> Result<GridClosePriceAnchor, String> {
     let normalized = raw.trim().to_lowercase();
-    let anchor = match (side, normalized.as_str()) {
-        (_, "" | "position_price" | "pprice") => GridClosePriceAnchor::PositionPrice,
-        (StrategySide::Long, "ema_band" | "ema_band_upper") => GridClosePriceAnchor::EmaBandUpper,
+    match (side, normalized.as_str()) {
+        (_, "" | "position_price" | "pprice") => Ok(GridClosePriceAnchor::PositionPrice),
+        (StrategySide::Long, "ema_band" | "ema_band_upper") => {
+            Ok(GridClosePriceAnchor::EmaBandUpper)
+        }
         (StrategySide::Short, "ema_band" | "ema_band_lower") => {
-            GridClosePriceAnchor::EmaBandLower
+            Ok(GridClosePriceAnchor::EmaBandLower)
         }
         (StrategySide::Long, _) => {
-            return Err(
+            Err(
                 "long trailing_grid grid_close_price_anchor must be one of {'position_price', 'pprice', 'ema_band', 'ema_band_upper'}".to_string()
             )
         }
         (StrategySide::Short, _) => {
-            return Err(
+            Err(
                 "short trailing_grid grid_close_price_anchor must be one of {'position_price', 'pprice', 'ema_band', 'ema_band_lower'}".to_string()
             )
         }
-    };
-    validate_grid_close_price_anchor(side, anchor)?;
-    Ok(anchor)
+    }
 }
 
 pub fn validate_grid_close_price_anchor(

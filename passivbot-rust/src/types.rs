@@ -480,9 +480,6 @@ pub struct BotParams {
     pub unstuck_threshold: f64,
 }
 
-impl BotParams {
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RuntimeOrderContext {
     pub effective_wallet_exposure_limit: f64,
