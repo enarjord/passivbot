@@ -3,16 +3,12 @@ from .legacy_v7 import (
     migrate_config_version,
     migrate_btc_collateral_settings,
     migrate_empty_means_all_approved,
-    migrate_pre_v79_backtest_market_orders_allowed,
-    migrate_pre_v79_backtest_pnls_lookback,
     migrate_suite_to_scenarios,
 )
 from .renames import apply_backward_compatibility_renames, rename_config_keys
 
 
 def apply_migrations(result: dict, *, verbose: bool = True, tracker=None) -> None:
-    migrate_pre_v79_backtest_market_orders_allowed(result, verbose=verbose, tracker=tracker)
-    migrate_pre_v79_backtest_pnls_lookback(result, verbose=verbose, tracker=tracker)
     migrate_config_version(result, verbose=verbose, tracker=tracker)
     apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
     migrate_btc_collateral_settings(result, verbose=verbose, tracker=tracker)
@@ -29,8 +25,6 @@ __all__ = [
     "migrate_config_version",
     "migrate_btc_collateral_settings",
     "migrate_empty_means_all_approved",
-    "migrate_pre_v79_backtest_market_orders_allowed",
-    "migrate_pre_v79_backtest_pnls_lookback",
     "migrate_suite_to_scenarios",
     "rename_config_keys",
 ]

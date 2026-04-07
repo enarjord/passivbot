@@ -22,8 +22,6 @@ from config_utils import (
     _migrate_btc_collateral_settings,
     _migrate_config_version,
     _migrate_empty_means_all_approved,
-    _migrate_pre_v79_backtest_market_orders_allowed,
-    _migrate_pre_v79_backtest_pnls_lookback,
     _normalize_position_counts,
     _rename_config_keys,
     _sync_with_template,
@@ -234,33 +232,6 @@ def test_apply_non_live_adjustments_supports_legacy_coins_file():
     assert config["live"]["approved_coins"]["long"] == expected
 
 
-def test_apply_non_live_adjustments_preserves_backtest_live_override_keys():
-    config = get_template_config()
-    config["backtest"]["market_orders_allowed"] = True
-    config["backtest"]["market_order_near_touch_threshold"] = 0.0
-    config["backtest"]["pnls_max_lookback_days"] = 0.0
-
-    _apply_non_live_adjustments(config, verbose=False)
-
-    assert config["backtest"]["market_orders_allowed"] is True
-    assert config["backtest"]["market_order_near_touch_threshold"] == pytest.approx(0.0)
-    assert config["backtest"]["pnls_max_lookback_days"] == pytest.approx(0.0)
-
-
-def test_apply_non_live_adjustments_warns_when_backtest_override_differs_from_live(caplog):
-    config = get_template_config()
-    config["live"]["pnls_max_lookback_days"] = 30.0
-    config["backtest"]["pnls_max_lookback_days"] = 0.0
-
-    with caplog.at_level(logging.WARNING):
-        _apply_non_live_adjustments(config, verbose=False)
-
-    assert any(
-        "backtest.pnls_max_lookback_days overrides live.pnls_max_lookback_days" in rec.message
-        for rec in caplog.records
-    )
-
-
 def test_normalize_coins_source_supports_partial_per_side_dicts():
     normalized = normalize_coins_source({"long": ["BTC", "ETH"]})
 
@@ -318,32 +289,6 @@ def test_migrate_empty_means_all_approved_keeps_explicit_per_side_values():
 
     assert config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
     assert "empty_means_all_approved" not in config["live"]
-
-
-def test_migrate_pre_v79_backtest_pnls_lookback_inserts_compat_override():
-    config = {"backtest": {}, "live": {"pnls_max_lookback_days": 30.0}}
-
-    _migrate_pre_v79_backtest_pnls_lookback(config, verbose=False)
-
-    assert config["backtest"]["pnls_max_lookback_days"] == pytest.approx(0.0)
-    assert config["live"]["pnls_max_lookback_days"] == pytest.approx(30.0)
-
-
-def test_migrate_pre_v79_backtest_market_orders_allowed_inserts_compat_override():
-    config = {"backtest": {}, "live": {"market_orders_allowed": True}}
-
-    _migrate_pre_v79_backtest_market_orders_allowed(config, verbose=False)
-
-    assert config["backtest"]["market_orders_allowed"] is False
-    assert config["live"]["market_orders_allowed"] is True
-
-
-def test_migrate_pre_v79_backtest_market_orders_allowed_keeps_false_live_value():
-    config = {"backtest": {}, "live": {"market_orders_allowed": False}}
-
-    _migrate_pre_v79_backtest_market_orders_allowed(config, verbose=False)
-
-    assert "market_orders_allowed" not in config["backtest"]
 
 
 def test_migrate_config_version_sets_current_schema_version():

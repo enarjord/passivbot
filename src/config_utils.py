@@ -30,7 +30,6 @@ from config.coerce import (
     normalize_hsl_signal_mode,
 )
 from config.hydrate import (
-    BACKTEST_LIVE_OVERRIDE_PATHS,
     PARTIALLY_OPEN_CONFIG_PATHS,
     apply_non_live_adjustments as staged_apply_non_live_adjustments,
     hydrate_missing_template_fields as staged_hydrate_missing_template_fields,
@@ -73,8 +72,6 @@ from config.migrations import (
     migrate_btc_collateral_settings as migrate_btc_collateral_settings_v7,
     migrate_config_version as migrate_config_version_v7,
     migrate_empty_means_all_approved as migrate_empty_means_all_approved_v7,
-    migrate_pre_v79_backtest_market_orders_allowed as migrate_pre_v79_backtest_market_orders_allowed_v7,
-    migrate_pre_v79_backtest_pnls_lookback as migrate_pre_v79_backtest_pnls_lookback_v7,
     migrate_suite_to_scenarios as migrate_suite_to_scenarios_v7,
     rename_config_keys as rename_migration_config_keys,
 )
@@ -264,18 +261,6 @@ def _migrate_empty_means_all_approved(
     migrate_empty_means_all_approved_v7(result, verbose=verbose, tracker=tracker)
 
 
-def _migrate_pre_v79_backtest_pnls_lookback(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    migrate_pre_v79_backtest_pnls_lookback_v7(result, verbose=verbose, tracker=tracker)
-
-
-def _migrate_pre_v79_backtest_market_orders_allowed(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    migrate_pre_v79_backtest_market_orders_allowed_v7(result, verbose=verbose, tracker=tracker)
-
-
 def detect_flavor(config: dict, template: dict) -> str:
     return detect_migration_flavor(config, template)
 
@@ -429,11 +414,6 @@ def _clean_with_template(template_node, source_node, path: Path = ()):
         result = {}
         for key, tmpl_value in template_node.items():
             result[key] = _clean_with_template(tmpl_value, source_dict.get(key), path + (key,))
-        for extra_path in BACKTEST_LIVE_OVERRIDE_PATHS:
-            if len(extra_path) == len(path) + 1 and extra_path[:-1] == path:
-                extra_key = extra_path[-1]
-                if extra_key in source_dict:
-                    result[extra_key] = _clean_dynamic_node(source_dict[extra_key])
         return result
     if isinstance(template_node, list):
         if isinstance(source_node, list):
