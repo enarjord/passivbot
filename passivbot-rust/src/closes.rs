@@ -458,10 +458,10 @@ pub fn calc_next_close_long(
     }
     let wallet_exposure_ratio =
         if wallet_exposure_limit_with_allowance(bot_params, runtime_context) <= 0.0 {
-        10.0
-    } else {
-        wallet_exposure / wallet_exposure_limit_with_allowance(bot_params, runtime_context)
-    };
+            10.0
+        } else {
+            wallet_exposure / wallet_exposure_limit_with_allowance(bot_params, runtime_context)
+        };
     if close_params.close_trailing_grid_ratio >= 1.0
         || close_params.close_trailing_grid_ratio <= -1.0
     {
@@ -620,12 +620,13 @@ pub fn calc_grid_close_short(
     let n_steps =
         ((close_prices_start - close_prices_end).abs() / exchange_params.price_step).ceil();
     let close_grid_qty_pct_modified = f64::max(close_params.close_grid_qty_pct, 1.0 / n_steps);
-    let wallet_exposure_ratio = calc_wallet_exposure(
-        exchange_params.c_mult,
-        state_params.balance,
-        position_size_abs,
-        position.price,
-    ) / wallet_exposure_limit_with_allowance(bot_params, runtime_context);
+    let wallet_exposure_ratio =
+        calc_wallet_exposure(
+            exchange_params.c_mult,
+            state_params.balance,
+            position_size_abs,
+            position.price,
+        ) / wallet_exposure_limit_with_allowance(bot_params, runtime_context);
     let close_price = if wallet_exposure_ratio > 1.0 {
         f64::min(
             state_params.order_book.bid,
@@ -817,12 +818,13 @@ pub fn calc_next_close_short(
             &position,
         );
     }
-    let wallet_exposure_ratio = calc_wallet_exposure(
-        exchange_params.c_mult,
-        state_params.balance,
-        position_size_abs,
-        position.price,
-    ) / wallet_exposure_limit_with_allowance(bot_params, runtime_context);
+    let wallet_exposure_ratio =
+        calc_wallet_exposure(
+            exchange_params.c_mult,
+            state_params.balance,
+            position_size_abs,
+            position.price,
+        ) / wallet_exposure_limit_with_allowance(bot_params, runtime_context);
     if close_params.close_trailing_grid_ratio > 0.0 {
         // trailing first
         if wallet_exposure_ratio < close_params.close_trailing_grid_ratio {
@@ -981,7 +983,7 @@ mod tests {
             &pos,
             we,
         )
-            .expect("should emit strict reduce order");
+        .expect("should emit strict reduce order");
         assert!(order.qty < 0.0 && order.price > 0.0);
         let new_psize = (pos.size - order.qty.abs()).max(0.0);
         let new_we = calc_wallet_exposure(exchange.c_mult, state.balance, new_psize, pos.price);
@@ -1028,7 +1030,7 @@ mod tests {
             &pos,
             we,
         )
-            .expect("should emit strict reduce order");
+        .expect("should emit strict reduce order");
         assert!(order.qty > 0.0 && order.price > 0.0);
         let new_psize = (pos.size.abs() - order.qty.abs()).max(0.0);
         let new_we = calc_wallet_exposure(exchange.c_mult, state.balance, new_psize, pos.price);

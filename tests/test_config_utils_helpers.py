@@ -777,14 +777,22 @@ def _parse_backtest_args(raw_argv):
 
 
 @pytest.mark.parametrize("start_flag", ["-sd", "--start-date"])
-def test_backtest_cli_start_date_override_creates_missing_backtest_section(start_flag):
-    source_config, _, _ = load_input_config(str(Path("configs/hype.json")))
+def test_backtest_cli_start_date_override_creates_missing_backtest_section(start_flag, tmp_path):
+    raw = {
+        "live": {"approved_coins": ["BTC"]},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "optimize": {"bounds": {}},
+    }
+    path = tmp_path / "no_backtest.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    source_config, _, _ = load_input_config(str(path))
     assert "backtest" not in source_config
 
     args, allowed_config_keys = _parse_backtest_args(
         [
-            "configs/hype.json",
-            "--bot.long.hsl_ema_span_minutes",
+            str(path),
+            "--bot.long.hsl.ema_span_minutes",
             "1440",
             start_flag,
             "2025-10-11",
@@ -794,7 +802,7 @@ def test_backtest_cli_start_date_override_creates_missing_backtest_section(start
     update_config_with_args(source_config, args, verbose=False, allowed_keys=allowed_config_keys)
 
     assert source_config["backtest"]["start_date"] == "2025-10-11"
-    assert source_config["bot"]["long"]["hsl_ema_span_minutes"] == pytest.approx(1440.0)
+    assert source_config["bot"]["long"]["hsl"]["ema_span_minutes"] == pytest.approx(1440.0)
     assert "backtest.start_date" in source_config["_transform_log"][-1]["details"]["keys"]
 
 
@@ -806,6 +814,61 @@ def test_update_config_with_args_ignores_non_config_parser_args():
 
     assert "_transform_log" not in config
     assert config == {}
+
+
+def test_update_config_with_args_adds_missing_sparse_leaf_override():
+    source_config, base_config_path, raw_snapshot = load_input_config(
+        "configs/examples/default_trailing_grid_long_npos10.json", log_info=False
+    )
+    assert "grid_close_price_anchor" not in source_config["bot"]["long"]["strategy"]["trailing_grid"]
+
+    args = SimpleNamespace()
+    vars(args)["bot.long.strategy.trailing_grid.grid_close_price_anchor"] = "ema_band"
+
+    update_config_with_args(source_config, args, verbose=False)
+
+    assert (
+        source_config["bot"]["long"]["strategy"]["trailing_grid"]["grid_close_price_anchor"]
+        == "ema_band"
+    )
+    entry = source_config["_transform_log"][-1]
+    assert entry["step"] == "update_config_with_args"
+    diff = entry["details"]["diffs"][0]
+    assert diff["path"] == "bot.long.strategy.trailing_grid.grid_close_price_anchor"
+    assert diff["old"] is None
+    assert diff["new"] == "ema_band"
+
+    prepared = prepare_config(
+        source_config,
+        base_config_path=base_config_path,
+        verbose=False,
+        raw_snapshot=raw_snapshot,
+    )
+    assert (
+        prepared["bot"]["long"]["strategy"]["trailing_grid"]["grid_close_price_anchor"]
+        == "ema_band_upper"
+    )
+
+
+def test_prepare_config_rejects_invalid_sparse_leaf_cli_override():
+    source_config, base_config_path, raw_snapshot = load_input_config(
+        "configs/examples/default_trailing_grid_long_npos10.json", log_info=False
+    )
+    args = SimpleNamespace()
+    vars(args)["bot.long.strategy.trailing_grid.grid_close_price_anchor"] = "ema"
+
+    update_config_with_args(source_config, args, verbose=False)
+
+    with pytest.raises(
+        ValueError,
+        match="bot\\.long\\.strategy\\.trailing_grid\\.grid_close_price_anchor",
+    ):
+        prepare_config(
+            source_config,
+            base_config_path=base_config_path,
+            verbose=False,
+            raw_snapshot=raw_snapshot,
+        )
 
 
 def test_update_config_with_args_logs_optimize_limits_as_diff(caplog):

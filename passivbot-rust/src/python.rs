@@ -1783,7 +1783,8 @@ fn parse_helper_close_anchor(
     side: StrategySide,
     grid_close_price_anchor: &str,
 ) -> PyResult<GridClosePriceAnchor> {
-    parse_grid_close_price_anchor_value(side, grid_close_price_anchor).map_err(PyValueError::new_err)
+    parse_grid_close_price_anchor_value(side, grid_close_price_anchor)
+        .map_err(PyValueError::new_err)
 }
 
 fn validate_helper_close_anchor_inputs(
@@ -1792,16 +1793,16 @@ fn validate_helper_close_anchor_inputs(
     ema_band: f64,
 ) -> PyResult<()> {
     match (side, anchor) {
-        (StrategySide::Long, GridClosePriceAnchor::EmaBandUpper) if ema_band <= 0.0 => Err(
-            PyValueError::new_err(
+        (StrategySide::Long, GridClosePriceAnchor::EmaBandUpper) if ema_band <= 0.0 => {
+            Err(PyValueError::new_err(
                 "ema_bands_upper must be > 0 when grid_close_price_anchor is ema_band_upper",
-            ),
-        ),
-        (StrategySide::Short, GridClosePriceAnchor::EmaBandLower) if ema_band <= 0.0 => Err(
-            PyValueError::new_err(
+            ))
+        }
+        (StrategySide::Short, GridClosePriceAnchor::EmaBandLower) if ema_band <= 0.0 => {
+            Err(PyValueError::new_err(
                 "ema_bands_lower must be > 0 when grid_close_price_anchor is ema_band_lower",
-            ),
-        ),
+            ))
+        }
         _ => Ok(()),
     }
 }
