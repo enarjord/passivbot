@@ -4631,7 +4631,6 @@ class Passivbot:
             logging.info("[fills] initialized: %d cached events loaded", cached_count)
 
             self._pnls_initialized = True
-            self._fills_initial_full_refresh_done = False
 
         except Exception as e:
             logging.error("Failed to initialize FillEventsManager: %s", e)
@@ -4666,25 +4665,7 @@ class Passivbot:
                 elif getattr(ev, "id", None):
                     existing_source_ids.add(ev.id)
 
-            # Check if we need a full refresh (cache empty or first run)
-            events = self._pnls_manager.get_events()
-            needs_full_refresh = not events and not getattr(
-                self, "_fills_initial_full_refresh_done", False
-            )
-            if events and not getattr(self, "_fills_initial_full_refresh_done", False):
-                oldest_event_ts = events[0].timestamp
-                if oldest_event_ts > age_limit + 1000 * 60 * 60 * 24:  # > 1 day newer than limit
-                    needs_full_refresh = True
-
-            if needs_full_refresh:
-                logging.info(
-                    "[fills] Performing full refresh from %s", ts_to_date(age_limit)[:19]
-                )
-                await self._pnls_manager.refresh(start_ms=int(age_limit), end_ms=None)
-            else:
-                # Incremental refresh (after first full refresh succeeded)
-                await self._pnls_manager.refresh_latest(overlap=20)
-            self._fills_initial_full_refresh_done = True
+            await self._pnls_manager.refresh_for_lookback(start_ms=int(age_limit), end_ms=None, overlap=20)
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
@@ -6419,20 +6400,21 @@ class Passivbot:
         random.shuffle(symbols_without_pos)
         ordered_symbols = symbols_with_pos + symbols_without_pos
 
-        # Process symbol bundles sequentially with an inter-symbol delay to
-        # avoid firing all 1h candle fetches concurrently at hour boundaries.
-        # At each hour, the 1h EMA cache expires for every symbol simultaneously,
-        # and parallel gather would burst N×fetch_ohlcv in one shot → 10006.
         fetch_delay_s = self._get_fetch_delay_seconds()
-        symbol_results = []
-        for sym in ordered_symbols:
-            try:
-                res = await load_symbol_bundle(sym)
-            except Exception as e:
-                res = e
-            symbol_results.append(res)
-            if fetch_delay_s > 0:
+        if fetch_delay_s > 0:
+            # Strict exchanges benefit from pacing expensive 1h refreshes when
+            # all symbol TTLs expire at the same hour boundary.
+            symbol_results = []
+            for sym in ordered_symbols:
+                try:
+                    res = await load_symbol_bundle(sym)
+                except Exception as e:
+                    res = e
+                symbol_results.append(res)
                 await asyncio.sleep(fetch_delay_s)
+        else:
+            symbol_tasks = [asyncio.create_task(load_symbol_bundle(sym)) for sym in ordered_symbols]
+            symbol_results = await asyncio.gather(*symbol_tasks, return_exceptions=True)
 
         m1_close_emas: dict[str, dict[float, float]] = {}
         m1_volume_emas: dict[str, dict[float, float]] = {}
