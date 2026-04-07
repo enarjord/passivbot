@@ -213,14 +213,14 @@
                 },
                 "strategy": {
                     "ema_anchor": {
-                        "base_qty_pct": [0.001,0.1,0.0001],
-                        "ema_span_0": [10,2880,1],
-                        "ema_span_1": [10,2880,1],
+                        "base_qty_pct": [0.001,0.5,0.0001],
+                        "ema_span_0": [30,2880,1],
+                        "ema_span_1": [30,2880,1],
                         "offset": [0.0001,0.02,0.0001],
                         "offset_volatility_ema_span_minutes": [5,720,1],
-                        "offset_volatility_1m_weight": [1,40,0.1],
+                        "offset_volatility_1m_weight": [0.1,40,0.1],
                         "entry_volatility_ema_span_hours": [1,672,1],
-                        "offset_volatility_1h_weight": [1,40,0.1],
+                        "offset_volatility_1h_weight": [0.1,40,0.1],
                         "offset_psize_weight": [0.0001,100.0,0.0001]
                     }
                 },
