@@ -1,4 +1,5 @@
 {
+    "config_version": "v7.9.0",
     "backtest": {
         "aggregate": {
             "default": "mean",
@@ -28,6 +29,7 @@
         "max_warmup_minutes": 0,
         "ohlcv_source_dir": null,
         "market_order_slippage_pct": 0.0005,
+        "visible_metrics": null,
         "scenarios": [
             {
                 "label": "base"

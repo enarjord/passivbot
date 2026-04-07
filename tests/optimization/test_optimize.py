@@ -43,6 +43,7 @@ from multiprocessing_utils import ignore_sigint_in_worker
 from optimization.bounds import Bound
 from optimization.callback import build_pymoo_record_entry
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
+from optimization.config_adapter import get_optimization_key_paths
 from optimize_suite import ScenarioEvalContext
 from config import load_prepared_config
 
@@ -792,6 +793,29 @@ class TestIndividualToConfig:
             == result["bot"]["long"]["strategy"]["trailing_grid"]
         )
         assert result["bot"]["short"]["strategy"]["ema_anchor"] == {"ema_span_0": 123.0}
+
+    def test_accepts_precomputed_key_paths(self):
+        individual = [10.0, 20.0, 30.0, 40.0]
+        template = {
+            "bot": {
+                "long": {"z_param": 0.0, "a_param": 0.0},
+                "short": {"z_param": 0.0, "a_param": 0.0},
+            }
+        }
+        key_paths = get_optimization_key_paths(template)
+
+        result = individual_to_config(
+            individual,
+            lambda x, y, z: y,
+            [],
+            template,
+            key_paths=key_paths,
+        )
+
+        assert result["bot"]["long"]["a_param"] == 10.0
+        assert result["bot"]["long"]["z_param"] == 20.0
+        assert result["bot"]["short"]["a_param"] == 30.0
+        assert result["bot"]["short"]["z_param"] == 40.0
 class TestConfigToIndividual:
     """Test config_to_individual function."""
 

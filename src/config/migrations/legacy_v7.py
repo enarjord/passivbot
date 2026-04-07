@@ -2,6 +2,7 @@ import logging
 from copy import deepcopy
 from typing import Optional
 
+from config.schema import CONFIG_SCHEMA_VERSION
 from config.transform_log import ConfigTransformTracker
 from utils import normalize_coins_source
 
@@ -12,6 +13,68 @@ def _log_config(verbose: bool, level: int, message: str, *args) -> None:
         logging.log(level, prefixed_message, *args)
     else:
         logging.debug(prefixed_message, *args)
+
+
+def _parse_version_tuple(value: object) -> Optional[tuple[int, ...]]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized.startswith("v"):
+        normalized = normalized[1:]
+    parts = normalized.split(".")
+    if not parts or any(not part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def _is_pre_v79_config(version: object) -> bool:
+    parsed = _parse_version_tuple(version)
+    if parsed is None:
+        return version in (None, "")
+    return parsed < (7, 9, 0)
+
+
+def migrate_config_version(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    current_version = result.get("config_version")
+    current_parsed = _parse_version_tuple(current_version)
+    target_parsed = _parse_version_tuple(CONFIG_SCHEMA_VERSION)
+    if target_parsed is None:
+        raise ValueError(f"internal error: invalid CONFIG_SCHEMA_VERSION {CONFIG_SCHEMA_VERSION!r}")
+    if current_version == CONFIG_SCHEMA_VERSION:
+        return
+    if current_version in (None, ""):
+        _log_config(
+            verbose,
+            logging.INFO,
+            "pre-versioned config detected. attempting migration to schema %s",
+            CONFIG_SCHEMA_VERSION,
+        )
+    elif current_parsed is None:
+        raise ValueError(
+            f"config.config_version must be a semantic version like {CONFIG_SCHEMA_VERSION}; "
+            f"got {current_version!r}"
+        )
+    elif current_parsed > target_parsed:
+        raise ValueError(
+            f"config.config_version {current_version!r} is newer than supported schema "
+            f"{CONFIG_SCHEMA_VERSION}; upgrade Passivbot"
+        )
+    else:
+        _log_config(
+            verbose,
+            logging.INFO,
+            "%s config detected. attempting migration to schema %s",
+            current_version,
+            CONFIG_SCHEMA_VERSION,
+        )
+    result["config_version"] = CONFIG_SCHEMA_VERSION
+    if tracker is not None:
+        if current_version in (None, ""):
+            tracker.add(["config_version"], CONFIG_SCHEMA_VERSION)
+        else:
+            tracker.update(["config_version"], current_version, CONFIG_SCHEMA_VERSION)
 
 
 def migrate_suite_to_scenarios(
@@ -151,3 +214,53 @@ def migrate_empty_means_all_approved(
     )
     if tracker is not None:
         tracker.update(["live", "approved_coins"], approved_source, "all")
+
+
+def migrate_pre_v79_backtest_pnls_lookback(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    original_version = result.get("config_version")
+    if not _is_pre_v79_config(original_version):
+        return
+
+    backtest = result.setdefault("backtest", {})
+    if "pnls_max_lookback_days" in backtest:
+        return
+
+    backtest["pnls_max_lookback_days"] = 0.0
+    _log_config(
+        verbose,
+        logging.INFO,
+        "added backtest.pnls_max_lookback_days=0.0 for pre-v7.9 backtest compatibility; "
+        "live.pnls_max_lookback_days remains unchanged",
+    )
+    if tracker is not None:
+        tracker.add(["backtest", "pnls_max_lookback_days"], 0.0)
+
+
+def migrate_pre_v79_backtest_market_orders_allowed(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    original_version = result.get("config_version")
+    if not _is_pre_v79_config(original_version):
+        return
+
+    backtest = result.setdefault("backtest", {})
+    if "market_orders_allowed" in backtest:
+        return
+
+    live_market_orders_allowed = _coerce_legacy_bool(
+        result.setdefault("live", {}).get("market_orders_allowed", False)
+    )
+    if not live_market_orders_allowed:
+        return
+
+    backtest["market_orders_allowed"] = False
+    _log_config(
+        verbose,
+        logging.INFO,
+        "added backtest.market_orders_allowed=false for pre-v7.9 backtest compatibility; "
+        "live.market_orders_allowed remains unchanged",
+    )
+    if tracker is not None:
+        tracker.add(["backtest", "market_orders_allowed"], False)

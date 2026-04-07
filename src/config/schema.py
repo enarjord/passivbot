@@ -4,6 +4,7 @@ from .optimize_bounds import get_optimize_bounds_defaults
 from .strategy import DEFAULT_STRATEGY_KIND, get_all_strategy_defaults
 
 
+CONFIG_SCHEMA_VERSION = "v7.9.0"
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_grid_long_npos10.json"
 
 
@@ -85,6 +86,7 @@ def _get_shared_bot_defaults():
 def get_template_config():
     return deepcopy(
         {
+            "config_version": CONFIG_SCHEMA_VERSION,
             "backtest": {
                 "aggregate": {
                     "default": "mean",
@@ -111,6 +113,7 @@ def get_template_config():
                 "max_warmup_minutes": 0,
                 "ohlcv_source_dir": None,
                 "market_order_slippage_pct": 0.0005,
+                "visible_metrics": None,
                 "scenarios": [
                     {"label": "base"},
                     {

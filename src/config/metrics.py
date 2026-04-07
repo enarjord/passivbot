@@ -116,6 +116,33 @@ SHARED_METRICS = {
 }
 
 
+ANALYSIS_SHARED_KEYS = SHARED_METRICS | {
+    "loss_profit_ratio_long",
+    "loss_profit_ratio_short",
+    "pnl_ratio_long_short",
+    "long_short_profit_ratio",
+    "total_wallet_exposure_max",
+    "total_wallet_exposure_mean",
+    "total_wallet_exposure_median",
+    "entry_initial_balance_pct_long",
+    "entry_initial_balance_pct_short",
+    "drawdown_worst_hsl_long",
+    "drawdown_worst_hsl_short",
+    "drawdown_worst_ema_hsl_long",
+    "drawdown_worst_ema_hsl_short",
+    "drawdown_worst_mean_1pct_hsl_long",
+    "drawdown_worst_mean_1pct_hsl_short",
+    "drawdown_worst_mean_1pct_ema_hsl_long",
+    "drawdown_worst_mean_1pct_ema_hsl_short",
+    "peak_recovery_hours_hsl_long",
+    "peak_recovery_hours_hsl_short",
+    "hard_stop_triggers_long",
+    "hard_stop_triggers_short",
+    "hard_stop_restarts_long",
+    "hard_stop_restarts_short",
+}
+
+
 def canonicalize_metric_name(metric: str) -> str:
     if metric.endswith("_usd") or metric.endswith("_btc"):
         return metric

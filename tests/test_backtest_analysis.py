@@ -424,6 +424,68 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     assert calls == {"balance": 1, "twe": 1, "pnl": 1, "save": 3, "coin": 0}
 
 
+def test_post_process_visible_metrics_filters_terminal_output_only(tmp_path, monkeypatch, capsys):
+    def _fake_process_forager_fills(*args, **kwargs):
+        fdf = pd.DataFrame(columns=["coin", "pnl"])
+        bal_eq = pd.DataFrame({"balance": [1000.0], "equity": [1000.0]})
+        return fdf, {}, bal_eq
+
+    monkeypatch.setattr(bt, "process_forager_fills", _fake_process_forager_fills)
+    monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
+    monkeypatch.setattr(bt, "strip_config_metadata", lambda config: config)
+    monkeypatch.setattr(
+        bt, "dump_config", lambda config, path: open(path, "w", encoding="utf-8").write("{}")
+    )
+    monkeypatch.setattr(bt, "create_forager_balance_figures", lambda *args, **kwargs: {})
+    monkeypatch.setattr(bt, "create_forager_twe_figure", lambda *args, **kwargs: {})
+    monkeypatch.setattr(bt, "create_forager_pnl_figure", lambda *args, **kwargs: {})
+    monkeypatch.setattr(bt, "save_figures", lambda *args, **kwargs: {})
+    monkeypatch.setattr(bt, "create_forager_coin_figures", lambda *args, **kwargs: {})
+
+    config = {
+        "disable_plotting": True,
+        "backtest": {
+            "balance_sample_divider": 60,
+            "coins": {"binance": ["BTC"]},
+            "visible_metrics": None,
+        },
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 0.0},
+        },
+        "live": {},
+        "optimize": {
+            "scoring": ["adg"],
+            "limits": [{"metric": "loss_profit_ratio"}],
+        },
+    }
+
+    bt.post_process(
+        config=config,
+        hlcvs=np.zeros((1, 1, 3), dtype=np.float64),
+        fills=[],
+        equities_array=np.array([[1704067200000, 1000.0, 1000.0]], dtype=np.float64),
+        btc_usd_prices=np.array([]),
+        analysis={
+            "adg_usd": 0.01,
+            "adg_btc": 0.02,
+            "loss_profit_ratio": 0.5,
+            "peak_recovery_hours_hsl": 12.0,
+        },
+        results_path=str(tmp_path),
+        exchange="binance",
+    )
+
+    captured = capsys.readouterr().out
+    assert "Showing 3 of 4 metrics" in captured
+    assert "adg_usd" in captured
+    assert "adg_btc" in captured
+    assert "loss_profit_ratio" in captured
+    assert "peak_recovery_hours_hsl" not in captured
+    analysis_path = next(tmp_path.glob("*/analysis.json"))
+    assert "peak_recovery_hours_hsl" in analysis_path.read_text(encoding="utf-8")
+
+
 def test_parse_disabled_plot_groups_accepts_summary_alias_and_commas():
     assert parse_disabled_plot_groups("summary,coin_fills") == {
         "balance",

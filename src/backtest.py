@@ -53,7 +53,13 @@ from config import (
     load_prepared_config,
     prepare_config,
 )
-from config.access import get_optional_config_value, require_config_value, require_live_value
+from config.access import (
+    get_backtest_override_or_live_value_with_source,
+    get_optional_config_value,
+    require_config_value,
+    require_live_value,
+)
+from config.metrics import ANALYSIS_SHARED_KEYS
 from config.coerce import normalize_hsl_signal_mode
 from config.overrides import parse_overrides
 from config.shared_bot import flatten_shared_bot_side
@@ -73,6 +79,7 @@ from config_utils import (
     HSL_PSIDE_KEYS,
 )
 from backtest_dataset import dump_backtest_dataset_metadata
+from analysis_visibility import filter_analysis_for_visibility
 from utils import (
     utc_ms,
     make_get_filepath,
@@ -80,7 +87,6 @@ from utils import (
     format_end_date,
     format_approved_ignored_coins,
     date_to_ts,
-    trim_analysis_aliases,
 )
 from pure_funcs import (
     ts_to_date,
@@ -112,85 +118,6 @@ import passivbot_rust as pbr  # noqa: E402
 verify_loaded_runtime_extension()
 from tools.event_loop_policy import set_windows_event_loop_policy
 
-
-ANALYSIS_SHARED_KEYS = {
-    "positions_held_per_day",
-    "positions_held_per_day_w",
-    "position_held_hours_mean",
-    "position_held_hours_max",
-    "position_held_hours_median",
-    "position_unchanged_hours_max",
-    "win_rate",
-    "win_rate_w",
-    "trade_loss_max",
-    "trade_loss_mean",
-    "trade_loss_median",
-    "loss_profit_ratio",
-    "loss_profit_ratio_long",
-    "loss_profit_ratio_short",
-    "loss_profit_ratio_w",
-    "pnl_ratio_long_short",
-    "long_short_profit_ratio",
-    "volume_pct_per_day_avg",
-    "volume_pct_per_day_avg_w",
-    "peak_recovery_hours_pnl",
-    "total_wallet_exposure_max",
-    "total_wallet_exposure_mean",
-    "total_wallet_exposure_median",
-    "high_exposure_hours_mean_long",
-    "high_exposure_hours_max_long",
-    "high_exposure_hours_mean_short",
-    "high_exposure_hours_max_short",
-    "entry_initial_balance_pct_long",
-    "entry_initial_balance_pct_short",
-    "adg_pnl",
-    "adg_pnl_w",
-    "mdg_pnl",
-    "mdg_pnl_w",
-    "sharpe_ratio_pnl",
-    "sharpe_ratio_pnl_w",
-    "sortino_ratio_pnl",
-    "sortino_ratio_pnl_w",
-    "gain_strategy_pnl_rebased",
-    "adg_strategy_pnl_rebased",
-    "mdg_strategy_pnl_rebased",
-    "sharpe_ratio_strategy_pnl_rebased",
-    "sortino_ratio_strategy_pnl_rebased",
-    "omega_ratio_strategy_pnl_rebased",
-    "expected_shortfall_1pct_strategy_pnl_rebased",
-    "calmar_ratio_strategy_pnl_rebased",
-    "sterling_ratio_strategy_pnl_rebased",
-    "adg_strategy_pnl_rebased_w",
-    "mdg_strategy_pnl_rebased_w",
-    "sharpe_ratio_strategy_pnl_rebased_w",
-    "sortino_ratio_strategy_pnl_rebased_w",
-    "omega_ratio_strategy_pnl_rebased_w",
-    "calmar_ratio_strategy_pnl_rebased_w",
-    "sterling_ratio_strategy_pnl_rebased_w",
-    "drawdown_worst_hsl",
-    "drawdown_worst_hsl_long",
-    "drawdown_worst_hsl_short",
-    "drawdown_worst_ema_hsl",
-    "drawdown_worst_ema_hsl_long",
-    "drawdown_worst_ema_hsl_short",
-    "drawdown_worst_mean_1pct_hsl",
-    "drawdown_worst_mean_1pct_hsl_long",
-    "drawdown_worst_mean_1pct_hsl_short",
-    "drawdown_worst_mean_1pct_ema_hsl",
-    "drawdown_worst_mean_1pct_ema_hsl_long",
-    "drawdown_worst_mean_1pct_ema_hsl_short",
-    "peak_recovery_hours_hsl",
-    "peak_recovery_hours_hsl_long",
-    "peak_recovery_hours_hsl_short",
-    "hard_stop_triggers_per_year",
-    "hard_stop_restarts_per_year",
-    "hard_stop_restarts_per_year_long",
-    "hard_stop_restarts_per_year_short",
-    "hard_stop_triggers_long",
-    "hard_stop_triggers_short",
-    "hard_stop_restarts_long",
-    "hard_stop_restarts_short",
-}
 PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl", "hard_stop"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
 
@@ -489,6 +416,17 @@ def _build_hlcvs_bundle(
 
 
 @dataclass
+class BacktestExecutionSettings:
+    market_orders_allowed: bool
+    market_orders_allowed_source: str
+    market_order_near_touch_threshold: float
+    market_order_near_touch_threshold_source: str
+    market_order_slippage_pct: float
+    pnls_max_lookback_days: float
+    pnls_max_lookback_days_source: str
+
+
+@dataclass
 class BacktestPayload:
     """Container for everything needed to run a backtest via the Rust engine."""
 
@@ -497,6 +435,7 @@ class BacktestPayload:
     strategy_params_list: list
     exchange_params: list
     backtest_params: dict
+    execution_settings: BacktestExecutionSettings | None = None
     hard_stop_plot_data: dict | None = None
 
 
@@ -514,12 +453,20 @@ def build_backtest_payload(
     Assemble the bundle, bot params, and metadata needed to execute a backtest.
     """
 
+    runtime_config = compile_runtime_config(config, runtime="backtest", record_step=False)
+    execution_settings = get_backtest_execution_settings(runtime_config, is_runtime_compiled=True)
     (
         bot_params_list,
         strategy_params_list,
         exchange_params,
         backtest_params,
-    ) = prep_backtest_args(config, mss, exchange)
+    ) = prep_backtest_args(
+        runtime_config,
+        mss,
+        exchange,
+        execution_settings=execution_settings,
+        is_runtime_compiled=True,
+    )
     backtest_params = dict(backtest_params)
     coins_order = backtest_params.get("coins", [])
 
@@ -679,6 +626,7 @@ def build_backtest_payload(
         strategy_params_list=strategy_params_list,
         exchange_params=exchange_params,
         backtest_params=backtest_params,
+        execution_settings=execution_settings,
     )
 
 
@@ -799,6 +747,7 @@ def subset_backtest_payload(
         strategy_params_list=new_strategy,
         exchange_params=new_exchange_params,
         backtest_params=new_backtest_params,
+        execution_settings=payload.execution_settings,
     )
 
 
@@ -1264,8 +1213,110 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
     return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
 
 
-def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
-    config = compile_runtime_config(config, runtime="backtest", record_step=False)
+def _coerce_config_bool(value, *, field_name):
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", ""}:
+            return False
+        raise ValueError(f"{field_name} must be a boolean; got {value!r}")
+    return bool(value)
+
+
+def _field_name_for_source(key, source):
+    if source == "backtest override":
+        return f"backtest.{key}"
+    return f"live.{key}"
+
+
+def get_backtest_execution_settings(config, *, is_runtime_compiled: bool = False) -> BacktestExecutionSettings:
+    if not is_runtime_compiled:
+        config = compile_runtime_config(config, runtime="backtest", record_step=False)
+    market_order_slippage_pct = float(
+        get_optional_config_value(config, "backtest.market_order_slippage_pct", 0.0005) or 0.0
+    )
+    if market_order_slippage_pct < 0.0:
+        raise ValueError("backtest.market_order_slippage_pct must be >= 0.0")
+    market_orders_allowed_raw, market_orders_allowed_source = (
+        get_backtest_override_or_live_value_with_source(config, "market_orders_allowed", False)
+    )
+    market_orders_allowed = _coerce_config_bool(
+        market_orders_allowed_raw,
+        field_name=_field_name_for_source("market_orders_allowed", market_orders_allowed_source),
+    )
+    market_order_near_touch_threshold_raw, market_order_near_touch_threshold_source = (
+        get_backtest_override_or_live_value_with_source(
+            config, "market_order_near_touch_threshold", 0.001
+        )
+    )
+    market_order_near_touch_threshold = float(market_order_near_touch_threshold_raw or 0.0)
+    if market_order_near_touch_threshold < 0.0:
+        raise ValueError(
+            f"{_field_name_for_source('market_order_near_touch_threshold', market_order_near_touch_threshold_source)} must be >= 0.0"
+        )
+    pnls_max_lookback_days_raw, pnls_max_lookback_days_source = (
+        get_backtest_override_or_live_value_with_source(config, "pnls_max_lookback_days", 30.0)
+    )
+    pnls_max_lookback_days = float(pnls_max_lookback_days_raw or 0.0)
+    if not math.isfinite(pnls_max_lookback_days):
+        raise ValueError(
+            f"{_field_name_for_source('pnls_max_lookback_days', pnls_max_lookback_days_source)} must be finite"
+        )
+    if pnls_max_lookback_days < 0.0:
+        raise ValueError(
+            f"{_field_name_for_source('pnls_max_lookback_days', pnls_max_lookback_days_source)} must be >= 0.0"
+        )
+    return BacktestExecutionSettings(
+        market_orders_allowed=market_orders_allowed,
+        market_orders_allowed_source=market_orders_allowed_source,
+        market_order_near_touch_threshold=market_order_near_touch_threshold,
+        market_order_near_touch_threshold_source=market_order_near_touch_threshold_source,
+        market_order_slippage_pct=market_order_slippage_pct,
+        pnls_max_lookback_days=pnls_max_lookback_days,
+        pnls_max_lookback_days_source=pnls_max_lookback_days_source,
+    )
+
+
+def log_backtest_execution_settings(execution_settings: BacktestExecutionSettings | None) -> None:
+    if execution_settings is None:
+        return
+    logging.info("[backtest] effective execution settings:")
+    logging.info(
+        "[backtest]   market_orders_allowed = %s (%s)",
+        execution_settings.market_orders_allowed,
+        execution_settings.market_orders_allowed_source,
+    )
+    logging.info(
+        "[backtest]   market_order_near_touch_threshold = %s (%s)",
+        execution_settings.market_order_near_touch_threshold,
+        execution_settings.market_order_near_touch_threshold_source,
+    )
+    logging.info(
+        "[backtest]   market_order_slippage_pct = %s (backtest)",
+        execution_settings.market_order_slippage_pct,
+    )
+    logging.info(
+        "[backtest]   pnls_max_lookback_days = %s (%s)",
+        execution_settings.pnls_max_lookback_days,
+        execution_settings.pnls_max_lookback_days_source,
+    )
+
+
+def prep_backtest_args(
+    config,
+    mss,
+    exchange,
+    exchange_params=None,
+    backtest_params=None,
+    execution_settings: BacktestExecutionSettings | None = None,
+    *,
+    is_runtime_compiled: bool = False,
+):
+    if not is_runtime_compiled:
+        config = compile_runtime_config(config, runtime="backtest", record_step=False)
+    if execution_settings is None:
+        execution_settings = get_backtest_execution_settings(config, is_runtime_compiled=True)
     strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
     coins = sorted(set(require_config_value(config, f"backtest.coins.{exchange}")))
     candle_interval = int(config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
@@ -1393,20 +1444,6 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
 
         hard_stop_cfg_long = _normalize_hsl_cfg(hard_stop_cfg_long, "bot.long.hsl")
         hard_stop_cfg_short = _normalize_hsl_cfg(hard_stop_cfg_short, "bot.short.hsl")
-        market_order_slippage_pct = float(
-            get_optional_config_value(config, "backtest.market_order_slippage_pct", 0.0005) or 0.0
-        )
-        if market_order_slippage_pct < 0.0:
-            raise ValueError("backtest.market_order_slippage_pct must be >= 0.0")
-        market_orders_allowed = bool(
-            get_optional_config_value(config, "live.market_orders_allowed", False)
-        )
-        market_order_near_touch_threshold = float(
-            get_optional_config_value(config, "live.market_order_near_touch_threshold", 0.001)
-            or 0.0
-        )
-        if market_order_near_touch_threshold < 0.0:
-            raise ValueError("live.market_order_near_touch_threshold must be >= 0.0")
         liquidation_threshold = float(
             get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0
         )
@@ -1449,11 +1486,11 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             ),
             "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
             "max_realized_loss_pct": float(require_config_value(config, "live.max_realized_loss_pct")),
-            "pnls_max_lookback_days": float(require_config_value(config, "live.pnls_max_lookback_days")),
+            "pnls_max_lookback_days": execution_settings.pnls_max_lookback_days,
             "equity_hard_stop_loss": hard_stop_cfg_long,
-            "market_order_slippage_pct": market_order_slippage_pct,
-            "market_orders_allowed": market_orders_allowed,
-            "market_order_near_touch_threshold": market_order_near_touch_threshold,
+            "market_order_slippage_pct": execution_settings.market_order_slippage_pct,
+            "market_orders_allowed": execution_settings.market_orders_allowed,
+            "market_order_near_touch_threshold": execution_settings.market_order_near_touch_threshold,
             "liquidation_threshold": liquidation_threshold,
         }
     return bot_params_list, strategy_params_list, exchange_params, backtest_params
@@ -1558,7 +1595,15 @@ def run_backtest(
 
     logging.info(f"Backtesting {exchange}...")
     sts = utc_ms()
-    payload = build_backtest_payload(hlcvs, mss, config, exchange, btc_usd_prices, timestamps)
+    payload = build_backtest_payload(
+        hlcvs,
+        mss,
+        config,
+        exchange,
+        btc_usd_prices,
+        timestamps,
+    )
+    log_backtest_execution_settings(payload.execution_settings)
     fills, equities_array, analysis = execute_backtest(payload, config)
     logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
     if return_payload:
@@ -1600,7 +1645,14 @@ def post_process(
             analysis[k] = analysis_py[k]
     logging.info(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
     label_prefix = f"[{label}] " if label else ""
-    print(f"{label_prefix}{pprint.pformat(trim_analysis_aliases(analysis))}")
+    visible_analysis = filter_analysis_for_visibility(analysis, config)
+    if visible_analysis.shown_count < visible_analysis.total_count:
+        print(
+            f"{label_prefix}Showing {visible_analysis.shown_count} of "
+            f"{visible_analysis.total_count} metrics "
+            "(set backtest.visible_metrics=[] to show all)."
+        )
+    print(f"{label_prefix}{pprint.pformat(visible_analysis.analysis)}")
     results_path = make_get_filepath(
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )

@@ -10,6 +10,8 @@ from .strategy import (
 
 
 def validate_config(config: dict, *, raw_optimize=None, verbose: bool = True, tracker=None) -> None:
+    from analysis_visibility import validate_visible_metrics_config
+
     del raw_optimize
     require_config_dict(config, "monitor")
     strategy_kind = normalize_strategy_kind(config["live"].get("strategy_kind"))
@@ -29,4 +31,5 @@ def validate_config(config: dict, *, raw_optimize=None, verbose: bool = True, tr
     monitor_cfg = require_config_dict(config, "monitor")
     if not str(monitor_cfg["root_dir"]).strip():
         raise ValueError("config.monitor.root_dir must be a non-empty string")
+    validate_visible_metrics_config(config)
     validate_forager_config(config, verbose=verbose, tracker=tracker)

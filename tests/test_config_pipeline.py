@@ -3,6 +3,7 @@ from copy import deepcopy
 import pytest
 
 from config import (
+    CONFIG_SCHEMA_VERSION,
     compile_runtime_config,
     get_template_config,
     load_prepared_config,
@@ -36,7 +37,7 @@ def test_project_config_keeps_only_target_sections_and_metadata(target, expected
 
     projected = project_config(cfg, target)
 
-    metadata_keys = {"_raw", "_raw_effective", "_transform_log", "_coins_sources"}
+    metadata_keys = {"_raw", "_raw_effective", "_transform_log", "_coins_sources", "config_version"}
     assert set(projected) == expected_sections | metadata_keys
     for section in ("backtest", "bot", "coin_overrides", "live", "logging", "monitor", "optimize"):
         if section in expected_sections:
@@ -190,8 +191,125 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
     assert _strategy_side(prepared, "long")["ema_span_0"] == _strategy_side(
         template, "long", "trailing_grid"
     )["ema_span_0"]
+    assert prepared["backtest"]["visible_metrics"] is None
     assert prepared["_raw"] == template
     assert prepared["_raw_effective"] == template
+
+
+def test_prepare_config_preserves_backtest_visible_metrics():
+    source = {
+        "backtest": {"visible_metrics": ["gain", "drawdown_worst_hsl", "hard_stop_restarts_short"]},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["backtest"]["visible_metrics"] == [
+        "gain",
+        "drawdown_worst_hsl",
+        "hard_stop_restarts_short",
+    ]
+
+
+def test_prepare_config_rejects_unknown_backtest_visible_metrics():
+    source = {
+        "backtest": {"visible_metrics": ["not_a_metric"]},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    with pytest.raises(ValueError, match="unknown backtest.visible_metrics entries"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_prepare_config_rejects_invalid_backtest_visible_metrics_type():
+    source = {
+        "backtest": {"visible_metrics": "adg"},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    with pytest.raises(ValueError, match="backtest.visible_metrics must be null, \\[\\], or"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_prepare_config_assigns_current_schema_version_to_legacy_configs():
+    source = {
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["config_version"] == CONFIG_SCHEMA_VERSION
+
+
+def test_prepare_config_rejects_future_config_version():
+    source = {
+        "config_version": "v8.0.0",
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    with pytest.raises(ValueError, match="newer than supported schema"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_prepare_config_rejects_malformed_config_version():
+    source = {
+        "config_version": "banana",
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    with pytest.raises(ValueError, match="must be a semantic version"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_prepare_config_migrates_pre_v79_backtest_pnls_lookback_override():
+    source = {
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {"pnls_max_lookback_days": 30.0},
+        "optimize": {"bounds": {}},
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["backtest"]["pnls_max_lookback_days"] == pytest.approx(0.0)
+    assert prepared["live"]["pnls_max_lookback_days"] == pytest.approx(30.0)
+
+
+def test_prepare_config_migrates_pre_v79_backtest_market_orders_allowed_override():
+    source = {
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {"market_orders_allowed": True},
+        "optimize": {"bounds": {}},
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["backtest"]["market_orders_allowed"] is False
+    assert prepared["live"]["market_orders_allowed"] is True
 
 
 def test_prepare_config_migrates_legacy_backtest_market_slippage_key():
