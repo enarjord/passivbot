@@ -439,7 +439,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **recv_window_ms**: Millisecond tolerance for authenticated REST calls (default `5000`). Increase if your exchange intermittently rejects requests with `invalid request ... recv_window` errors due to clock drift.
 - Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used.
 - **pnls_max_lookback_days**: How far into the past to fetch PnL history. This also feeds the rolling realized-PnL window used by both live risk logic and backtests. Ownership is `config.live`; `config.backtest` does not accept an override.
-  - `0`: minimal lookback window (resets as often as possible).
+  - `0`: minimal lookback window at the consumer's native sampling resolution (resets as often as that path can meaningfully observe).
   - `> 0`: rolling window of that many days.
   - `"all"`: full available history.
 - **price_distance_threshold**: Minimum distance to current price action required for EMA-based limit orders.

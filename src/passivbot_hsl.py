@@ -438,7 +438,7 @@ def _equity_hard_stop_lookback_ms(self) -> int | None:
         require_live_value(self.config, "pnls_max_lookback_days"),
         field_name="live.pnls_max_lookback_days",
     )
-    return lookback.to_window_ms(minimum_ms=60_000)
+    return lookback.hsl_window_ms()
 
 
 def _equity_hard_stop_apply_sample(

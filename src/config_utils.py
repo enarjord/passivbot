@@ -1241,6 +1241,8 @@ def add_arguments_recursively(
                     type_ = str
             elif type_ == bool:
                 type_ = str2bool
+            elif full_name == "live.pnls_max_lookback_days":
+                type_ = normalize_pnls_max_lookback_days_config_value
             elif isinstance(value, (int, float)) and not isinstance(value, bool):
                 type_ = float
             if "combine_ohlcvs" in full_name:

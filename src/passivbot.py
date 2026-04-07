@@ -1024,7 +1024,7 @@ class Passivbot:
             require_live_value(config, "pnls_max_lookback_days"),
             field_name="live.pnls_max_lookback_days",
         )
-        return lookback.to_start_ms(self.get_exchange_time(), minimum_ms=1)
+        return lookback.event_history_start_ms(self.get_exchange_time())
 
     def _get_effective_pnl_events(self) -> list:
         if self._pnls_manager is None:
@@ -1039,7 +1039,7 @@ class Passivbot:
             require_live_value(self.config, "pnls_max_lookback_days"),
             field_name="live.pnls_max_lookback_days",
         )
-        return lookback.to_window_ms(minimum_ms=60_000)
+        return lookback.hsl_window_ms()
 
     def _equity_hard_stop_apply_sample(
         self,
@@ -4647,9 +4647,7 @@ class Passivbot:
                 self.live_value("pnls_max_lookback_days"),
                 field_name="live.pnls_max_lookback_days",
             )
-            age_limit = lookback.to_start_ms(self.get_exchange_time(), minimum_ms=1)
-            if age_limit is None:
-                age_limit = 0
+            age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
 
             # Get existing event IDs and source IDs before refresh
             existing_ids: set[str] = set()
@@ -4666,7 +4664,7 @@ class Passivbot:
             # Check if we need a full refresh (cache empty or too old)
             events = self._pnls_manager.get_events()
             needs_full_refresh = not events
-            if events:
+            if events and age_limit is not None:
                 oldest_event_ts = events[0].timestamp
                 if oldest_event_ts > age_limit + 1000 * 60 * 60 * 24:  # > 1 day newer than limit
                     needs_full_refresh = True
@@ -4683,10 +4681,16 @@ class Passivbot:
             if needs_full_refresh:
                 # Full refresh with proper lookback window
                 if not getattr(self, "_fills_full_refresh_logged", False):
-                    logging.debug(
-                        "[fills] Performing full refresh from %s", ts_to_date(age_limit)[:19]
-                    )
-                await self._pnls_manager.refresh(start_ms=int(age_limit), end_ms=None)
+                    if age_limit is None:
+                        logging.debug("[fills] Performing full refresh from full available history")
+                    else:
+                        logging.debug(
+                            "[fills] Performing full refresh from %s", ts_to_date(age_limit)[:19]
+                        )
+                await self._pnls_manager.refresh(
+                    start_ms=None if age_limit is None else int(age_limit),
+                    end_ms=None,
+                )
             else:
                 # Incremental refresh
                 await self._pnls_manager.refresh_latest(overlap=20)
@@ -5101,7 +5105,7 @@ class Passivbot:
             field_name="live.pnls_max_lookback_days",
         )
         ts_now = self.get_exchange_time()
-        lookback_start = lookback.to_start_ms(ts_now, minimum_ms=ONE_MIN_MS)
+        lookback_start = lookback.balance_history_start_ms(ts_now)
 
         balance_now = (
             float(current_balance) if current_balance is not None else self.get_raw_balance()

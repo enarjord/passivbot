@@ -931,6 +931,26 @@ def test_live_reserved_pnls_lookback_alias_parses_short_and_long():
     assert getattr(parsed_all, "live.pnls_max_lookback_days") == "all"
 
 
+@pytest.mark.parametrize("command", ["backtest", "optimize"])
+def test_dotted_pnls_lookback_override_accepts_all_for_non_live_commands(command):
+    config = get_template_config()
+    parser = argparse.ArgumentParser(prog=command)
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get(command, [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command=command,
+        help_all=False,
+        group_map=group_map,
+    )
+
+    parsed = parser.parse_args(["--live.pnls_max_lookback_days", "all"])
+
+    assert getattr(parsed, "live.pnls_max_lookback_days") == "all"
+
+
 def test_live_reserved_user_alias_parses_short_and_long():
     config = get_template_config()
     del config["optimize"]
