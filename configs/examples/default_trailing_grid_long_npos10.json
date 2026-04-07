@@ -1,4 +1,5 @@
 {
+    "config_version": "v7.9.0",
     "backtest": {
         "aggregate": {
             "default": "mean",

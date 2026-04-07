@@ -1,12 +1,14 @@
 from copy import deepcopy
 
 
+CONFIG_SCHEMA_VERSION = "v7.9.0"
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_grid_long_npos10.json"
 
 
 def get_template_config():
     return deepcopy(
         {
+            "config_version": CONFIG_SCHEMA_VERSION,
             "backtest": {
                 "aggregate": {
                     "default": "mean",
