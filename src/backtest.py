@@ -72,6 +72,7 @@ from config_utils import (
     strip_config_metadata,
     HSL_PSIDE_KEYS,
 )
+from backtest_dataset import dump_backtest_dataset_metadata
 from utils import (
     utc_ms,
     make_get_filepath,
@@ -1608,6 +1609,7 @@ def post_process(
     formatted_config = format_config(config, verbose=False)
     sanitized_config = strip_config_metadata(formatted_config)
     dump_config(sanitized_config, f"{results_path}config.json")
+    dump_backtest_dataset_metadata(config, exchange, results_path)
     fdf.to_csv(f"{results_path}fills.csv")
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv.gz"), compression="gzip")
     if "balance" not in disabled_plot_groups:

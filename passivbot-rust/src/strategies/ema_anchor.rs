@@ -22,7 +22,7 @@ fn effective_wallet_exposure_limit_with_allowance(bot_params: &BotParams, base_l
 }
 
 #[inline]
-fn calc_bid_price(
+pub fn calc_bid_price(
     state: &StateParams,
     exchange: &ExchangeParams,
     params: &EmaAnchorParams,
@@ -38,7 +38,7 @@ fn calc_bid_price(
 }
 
 #[inline]
-fn calc_ask_price(
+pub fn calc_ask_price(
     state: &StateParams,
     exchange: &ExchangeParams,
     params: &EmaAnchorParams,
@@ -51,6 +51,19 @@ fn calc_ask_price(
     let effective_offset = params.offset * (1.0 + vol_term).max(1.0);
     let target = state.ema_bands.upper * (1.0 + effective_offset - inventory_shift);
     f64::max(state.order_book.ask, round_up(target, exchange.price_step))
+}
+
+#[inline]
+pub fn calc_quote_prices(
+    state: &StateParams,
+    exchange: &ExchangeParams,
+    params: &EmaAnchorParams,
+    psize: f64,
+) -> (f64, f64) {
+    (
+        calc_bid_price(state, exchange, params, psize),
+        calc_ask_price(state, exchange, params, psize),
+    )
 }
 
 #[inline]

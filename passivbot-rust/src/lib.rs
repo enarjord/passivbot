@@ -69,6 +69,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(equity_hard_stop_step_py, m)?)?;
     m.add_function(wrap_pyfunction!(select_coin_indices_py, m)?)?;
     m.add_function(wrap_pyfunction!(select_forager_candidates_py, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_ema_anchor_quote_series_py, m)?)?;
 
     Ok(())
 }

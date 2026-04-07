@@ -1,5 +1,7 @@
 import math
 
+import numpy as np
+import pandas as pd
 import pytest
 
 import passivbot_rust as pbr
@@ -171,6 +173,62 @@ def test_calc_closes_short_py_rejects_missing_ema_band_for_ema_anchor():
             order_book_bid=100.0,
             grid_close_price_anchor="ema_band",
         )
+
+
+@requires_extension
+def test_calc_ema_anchor_quote_series_py_supports_inventory_and_volatility_inputs():
+    timestamps = np.array(
+        [int(ts.value // 1_000_000) for ts in pd.date_range("2026-01-01", periods=4, freq="1min")],
+        dtype=np.int64,
+    )
+    highs = np.array([101.0, 103.0, 104.0, 105.0], dtype=float)
+    lows = np.array([99.0, 100.0, 101.0, 102.0], dtype=float)
+    closes = np.array([100.0, 101.0, 102.0, 103.0], dtype=float)
+    balances = np.array([1000.0, 1000.0, 1000.0, 1000.0], dtype=float)
+    flat_psize = np.zeros(4, dtype=float)
+    long_psize = np.array([0.0, 0.0, 1.0, 1.0], dtype=float)
+
+    bid_flat, ask_flat = pbr.calc_ema_anchor_quote_series_py(
+        "long",
+        timestamps,
+        highs,
+        lows,
+        closes,
+        balances,
+        flat_psize,
+        price_step=0.1,
+        ema_span_0=2.0,
+        ema_span_1=6.0,
+        offset=0.01,
+        offset_volatility_ema_span_minutes=2.0,
+        offset_volatility_1m_weight=0.5,
+        entry_volatility_ema_span_hours=2.0,
+        offset_volatility_1h_weight=0.25,
+        offset_psize_weight=0.2,
+    )
+    bid_long, ask_long = pbr.calc_ema_anchor_quote_series_py(
+        "long",
+        timestamps,
+        highs,
+        lows,
+        closes,
+        balances,
+        long_psize,
+        price_step=0.1,
+        ema_span_0=2.0,
+        ema_span_1=6.0,
+        offset=0.01,
+        offset_volatility_ema_span_minutes=2.0,
+        offset_volatility_1m_weight=0.5,
+        entry_volatility_ema_span_hours=2.0,
+        offset_volatility_1h_weight=0.25,
+        offset_psize_weight=0.2,
+    )
+
+    assert len(bid_flat) == 4
+    assert len(ask_flat) == 4
+    assert bid_long[2] < bid_flat[2]
+    assert ask_long[2] < ask_flat[2]
 
 
 @requires_extension

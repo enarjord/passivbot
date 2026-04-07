@@ -12,9 +12,10 @@ use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
 };
+use crate::strategies::ema_anchor::calc_quote_prices as calc_ema_anchor_quote_prices;
 use crate::strategies::registry::{strategy_kind_from_name, strategy_spec};
 use crate::strategies::{
-    parse_grid_close_price_anchor_value, GridClosePriceAnchor, StrategySide,
+    parse_grid_close_price_anchor_value, EmaAnchorParams, GridClosePriceAnchor, StrategySide,
     TrailingGridCloseParams, TrailingGridEntryParams,
 };
 use crate::trailing::{
@@ -421,6 +422,312 @@ pub fn update_trailing_bundle_py(
     update_trailing_bundle_sequence(&mut bundle, highs, lows, closes);
 
     Ok(trailing_bundle_to_tuple(&bundle))
+}
+
+fn parse_strategy_side_str(side: &str) -> PyResult<StrategySide> {
+    match side {
+        "long" => Ok(StrategySide::Long),
+        "short" => Ok(StrategySide::Short),
+        _ => Err(PyValueError::new_err(
+            "side must be either 'long' or 'short'",
+        )),
+    }
+}
+
+#[inline]
+fn clamp_alpha(alpha: f64) -> f64 {
+    if !alpha.is_finite() || alpha < 0.0 {
+        0.0
+    } else if alpha > 1.0 {
+        1.0
+    } else {
+        alpha
+    }
+}
+
+#[inline(always)]
+fn update_adjusted_ema_py(
+    value: f64,
+    alpha: f64,
+    numerator: &mut f64,
+    denominator: &mut f64,
+) -> f64 {
+    if !value.is_finite() {
+        return if *denominator > 0.0 {
+            *numerator / *denominator
+        } else {
+            value
+        };
+    }
+    if alpha <= 0.0 || !alpha.is_finite() {
+        return if *denominator > 0.0 {
+            *numerator / *denominator
+        } else {
+            value
+        };
+    }
+    let one_minus_alpha = 1.0 - alpha;
+    let new_num = alpha * value + one_minus_alpha * *numerator;
+    let new_den = alpha + one_minus_alpha * *denominator;
+    if !new_den.is_finite() || new_den <= f64::MIN_POSITIVE {
+        *numerator = alpha * value;
+        *denominator = alpha;
+        return value;
+    }
+    *numerator = new_num;
+    *denominator = new_den;
+    new_num / new_den
+}
+
+fn validate_ema_anchor_series_inputs(
+    timestamps: &[i64],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    balances: &[f64],
+    position_sizes: &[f64],
+    price_step: f64,
+) -> PyResult<()> {
+    let len = timestamps.len();
+    if len == 0 {
+        return Err(PyValueError::new_err("timestamps/highs/lows/closes must not be empty"));
+    }
+    if highs.len() != len
+        || lows.len() != len
+        || closes.len() != len
+        || balances.len() != len
+        || position_sizes.len() != len
+    {
+        return Err(PyValueError::new_err(
+            "timestamps, highs, lows, closes, balances, and position_sizes must have the same length",
+        ));
+    }
+    if !price_step.is_finite() || price_step <= 0.0 {
+        return Err(PyValueError::new_err("price_step must be > 0"));
+    }
+    for i in 0..len {
+        if i > 0 && timestamps[i] <= timestamps[i - 1] {
+            return Err(PyValueError::new_err(format!(
+                "timestamps must be strictly increasing; index {i} ({}) <= previous ({})",
+                timestamps[i], timestamps[i - 1]
+            )));
+        }
+        if !highs[i].is_finite() || highs[i] <= 0.0 {
+            return Err(PyValueError::new_err(format!("highs[{i}] must be finite and > 0")));
+        }
+        if !lows[i].is_finite() || lows[i] <= 0.0 {
+            return Err(PyValueError::new_err(format!("lows[{i}] must be finite and > 0")));
+        }
+        if !closes[i].is_finite() || closes[i] <= 0.0 {
+            return Err(PyValueError::new_err(format!("closes[{i}] must be finite and > 0")));
+        }
+        if !balances[i].is_finite() || balances[i] < 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "balances[{i}] must be finite and >= 0"
+            )));
+        }
+        if !position_sizes[i].is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "position_sizes[{i}] must be finite"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn calc_ema_anchor_quote_series(
+    side: StrategySide,
+    timestamps: &[i64],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    balances: &[f64],
+    position_sizes: &[f64],
+    price_step: f64,
+    params: EmaAnchorParams,
+) -> PyResult<(Vec<f64>, Vec<f64>)> {
+    validate_ema_anchor_series_inputs(
+        timestamps,
+        highs,
+        lows,
+        closes,
+        balances,
+        position_sizes,
+        price_step,
+    )?;
+
+    let exchange = ExchangeParams {
+        price_step,
+        ..Default::default()
+    };
+
+    let ema_alpha_0 = clamp_alpha(2.0 / (params.ema_span_0 + 1.0));
+    let ema_alpha_1 = clamp_alpha(2.0 / (params.ema_span_1 + 1.0));
+    let ema_alpha_2 = clamp_alpha(2.0 / ((params.ema_span_0 * params.ema_span_1).sqrt() + 1.0));
+    let vol_1m_alpha = if params.offset_volatility_ema_span_minutes > 0.0 {
+        clamp_alpha(2.0 / (params.offset_volatility_ema_span_minutes + 1.0))
+    } else {
+        0.0
+    };
+    let vol_1h_alpha = if params.entry_volatility_ema_span_hours > 0.0 {
+        clamp_alpha(2.0 / (params.entry_volatility_ema_span_hours + 1.0))
+    } else {
+        0.0
+    };
+
+    let base_close = closes[0];
+    let mut ema_0_num = base_close;
+    let mut ema_1_num = base_close;
+    let mut ema_2_num = base_close;
+    let mut ema_0_den = 1.0;
+    let mut ema_1_den = 1.0;
+    let mut ema_2_den = 1.0;
+
+    let mut vol_1m_num = 0.0;
+    let mut vol_1m_den = 1.0;
+
+    let mut vol_1h = 0.0;
+    let mut vol_1h_num = 0.0;
+    let mut vol_1h_den = 1.0;
+
+    let first_ts_ms = timestamps[0] as u64;
+    let mut current_hour_boundary = (first_ts_ms / 3_600_000u64) * 3_600_000u64;
+    let mut bucket_high = f64::MIN;
+    let mut bucket_low = f64::MAX;
+    let mut bucket_seen = false;
+
+    let mut bids = Vec::with_capacity(timestamps.len());
+    let mut asks = Vec::with_capacity(timestamps.len());
+
+    for i in 0..timestamps.len() {
+        let current_ts = timestamps[i] as u64;
+        let high = highs[i];
+        let low = lows[i];
+        let close = closes[i];
+        let hour_boundary = (current_ts / 3_600_000u64) * 3_600_000u64;
+        if hour_boundary > current_hour_boundary {
+            if bucket_seen && bucket_high > 0.0 && bucket_low > 0.0 {
+                let hour_log_range = (bucket_high / bucket_low).ln();
+                vol_1h = update_adjusted_ema_py(
+                    hour_log_range,
+                    vol_1h_alpha,
+                    &mut vol_1h_num,
+                    &mut vol_1h_den,
+                );
+            }
+            current_hour_boundary = hour_boundary;
+            bucket_high = f64::MIN;
+            bucket_low = f64::MAX;
+        }
+
+        let ema_0 = update_adjusted_ema_py(close, ema_alpha_0, &mut ema_0_num, &mut ema_0_den);
+        let ema_1 = update_adjusted_ema_py(close, ema_alpha_1, &mut ema_1_num, &mut ema_1_den);
+        let ema_2 = update_adjusted_ema_py(close, ema_alpha_2, &mut ema_2_num, &mut ema_2_den);
+
+        let log_range = (high / low).ln();
+        let vol_1m = update_adjusted_ema_py(
+            log_range,
+            vol_1m_alpha,
+            &mut vol_1m_num,
+            &mut vol_1m_den,
+        );
+
+        let lower = ema_0.min(ema_1).min(ema_2);
+        let upper = ema_0.max(ema_1).max(ema_2);
+        let state = StateParams {
+            balance: balances[i],
+            order_book: OrderBook {
+                bid: close,
+                ask: close,
+            },
+            ema_bands: EMABands { upper, lower },
+            offset_volatility_logrange_ema_1m: vol_1m,
+            entry_volatility_logrange_ema_1h: vol_1h,
+        };
+        let (bid, ask) =
+            calc_ema_anchor_quote_prices(&state, &exchange, &params, position_sizes[i]);
+        bids.push(bid);
+        asks.push(ask);
+
+        if high > bucket_high {
+            bucket_high = high;
+        }
+        if low < bucket_low {
+            bucket_low = low;
+        }
+        bucket_seen = true;
+    }
+
+    match side {
+        StrategySide::Long | StrategySide::Short => Ok((bids, asks)),
+    }
+}
+
+#[pyfunction(signature = (
+    side,
+    timestamps,
+    highs,
+    lows,
+    closes,
+    balances,
+    position_sizes,
+    *,
+    price_step,
+    ema_span_0,
+    ema_span_1,
+    offset,
+    offset_volatility_ema_span_minutes,
+    offset_volatility_1m_weight,
+    entry_volatility_ema_span_hours,
+    offset_volatility_1h_weight,
+    offset_psize_weight
+))]
+pub fn calc_ema_anchor_quote_series_py<'py>(
+    py: Python<'py>,
+    side: &str,
+    timestamps: PyReadonlyArray1<'_, i64>,
+    highs: PyReadonlyArray1<'_, f64>,
+    lows: PyReadonlyArray1<'_, f64>,
+    closes: PyReadonlyArray1<'_, f64>,
+    balances: PyReadonlyArray1<'_, f64>,
+    position_sizes: PyReadonlyArray1<'_, f64>,
+    price_step: f64,
+    ema_span_0: f64,
+    ema_span_1: f64,
+    offset: f64,
+    offset_volatility_ema_span_minutes: f64,
+    offset_volatility_1m_weight: f64,
+    entry_volatility_ema_span_hours: f64,
+    offset_volatility_1h_weight: f64,
+    offset_psize_weight: f64,
+) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
+    let side = parse_strategy_side_str(side)?;
+    let params = EmaAnchorParams {
+        base_qty_pct: 0.0,
+        ema_span_0,
+        ema_span_1,
+        offset,
+        offset_volatility_ema_span_minutes,
+        offset_volatility_1m_weight,
+        entry_volatility_ema_span_hours,
+        offset_volatility_1h_weight,
+        offset_psize_weight,
+    };
+    let (bids, asks) = calc_ema_anchor_quote_series(
+        side,
+        timestamps.as_slice()?,
+        highs.as_slice()?,
+        lows.as_slice()?,
+        closes.as_slice()?,
+        balances.as_slice()?,
+        position_sizes.as_slice()?,
+        price_step,
+        params,
+    )?;
+    Ok((
+        bids.into_pyarray_bound(py).unbind(),
+        asks.into_pyarray_bound(py).unbind(),
+    ))
 }
 
 fn hard_stop_tier_from_str(raw: &str) -> Result<ehsl::HardStopTier, String> {
