@@ -3,21 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
-from config.metrics import CURRENCY_METRICS, SHARED_METRICS
+from config.metrics import ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, SHARED_METRICS
 from config.scoring import extract_objective_specs
 from utils import trim_analysis_aliases
-
-VISIBLE_ONLY_SHARED_METRICS = {
-    "loss_profit_ratio_long",
-    "loss_profit_ratio_short",
-    "pnl_ratio_long_short",
-    "long_short_profit_ratio",
-    "total_wallet_exposure_max",
-    "total_wallet_exposure_mean",
-    "total_wallet_exposure_median",
-    "entry_initial_balance_pct_long",
-    "entry_initial_balance_pct_short",
-}
 
 
 @dataclass(frozen=True)
@@ -138,7 +126,7 @@ def _expand_metric_name(metric: str, ordered_keys: Sequence[str], key_set: set[s
 
 
 def _known_visible_metric_names() -> set[str]:
-    known = set(CURRENCY_METRICS) | set(SHARED_METRICS) | set(VISIBLE_ONLY_SHARED_METRICS)
+    known = set(CURRENCY_METRICS) | set(ANALYSIS_SHARED_KEYS)
     known |= {
         f"{metric}_{suffix}"
         for metric in CURRENCY_METRICS

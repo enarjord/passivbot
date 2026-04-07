@@ -122,7 +122,7 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
 
 def test_prepare_config_preserves_backtest_visible_metrics():
     source = {
-        "backtest": {"visible_metrics": ["gain", "drawdown_worst_hsl"]},
+        "backtest": {"visible_metrics": ["gain", "drawdown_worst_hsl", "hard_stop_restarts_short"]},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
         "live": {},
@@ -131,7 +131,11 @@ def test_prepare_config_preserves_backtest_visible_metrics():
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["backtest"]["visible_metrics"] == ["gain", "drawdown_worst_hsl"]
+    assert prepared["backtest"]["visible_metrics"] == [
+        "gain",
+        "drawdown_worst_hsl",
+        "hard_stop_restarts_short",
+    ]
 
 
 def test_prepare_config_rejects_unknown_backtest_visible_metrics():
