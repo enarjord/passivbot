@@ -132,6 +132,7 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
                 max_minutes,
                 _to_float(strategy.get("ema_span_0")),
                 _to_float(strategy.get("ema_span_1")),
+                _to_float(strategy.get("offset_volatility_ema_span_minutes")),
             )
             if not is_valid:
                 return 0
@@ -147,10 +148,12 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     bound_keys_minutes = [
         "long_ema_span_0",
         "long_ema_span_1",
+        "long_offset_volatility_ema_span_minutes",
         "long_forager_volume_ema_span",
         "long_forager_volatility_ema_span",
         "short_ema_span_0",
         "short_ema_span_1",
+        "short_offset_volatility_ema_span_minutes",
         "short_forager_volume_ema_span",
         "short_forager_volatility_ema_span",
     ]
@@ -205,6 +208,7 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
                     max_minutes,
                     _to_float(strategy.get("ema_span_0")),
                     _to_float(strategy.get("ema_span_1")),
+                    _to_float(strategy.get("offset_volatility_ema_span_minutes")),
                 )
                 if not is_valid:
                     per_coin[coin] = 0

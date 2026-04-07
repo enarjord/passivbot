@@ -41,6 +41,10 @@ EMA_ANCHOR_PARAM_KEYS = (
     "ema_span_0",
     "ema_span_1",
     "offset",
+    "offset_volatility_ema_span_minutes",
+    "offset_volatility_1m_weight",
+    "entry_volatility_ema_span_hours",
+    "offset_volatility_1h_weight",
     "offset_psize_weight",
 )
 
@@ -110,6 +114,10 @@ STRATEGY_DEFAULTS_BY_KIND = {
             "ema_span_0": 200.0,
             "ema_span_1": 800.0,
             "offset": 0.002,
+            "offset_volatility_ema_span_minutes": 60.0,
+            "offset_volatility_1m_weight": 0.0,
+            "entry_volatility_ema_span_hours": 24.0,
+            "offset_volatility_1h_weight": 0.0,
             "offset_psize_weight": 0.1,
         },
         "short": {
@@ -117,6 +125,10 @@ STRATEGY_DEFAULTS_BY_KIND = {
             "ema_span_0": 200.0,
             "ema_span_1": 800.0,
             "offset": 0.002,
+            "offset_volatility_ema_span_minutes": 60.0,
+            "offset_volatility_1m_weight": 0.0,
+            "entry_volatility_ema_span_hours": 24.0,
+            "offset_volatility_1h_weight": 0.0,
             "offset_psize_weight": 0.1,
         },
     },

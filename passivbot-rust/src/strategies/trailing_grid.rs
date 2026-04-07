@@ -315,6 +315,5 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
             }
         }
     }
-
     generated
 }

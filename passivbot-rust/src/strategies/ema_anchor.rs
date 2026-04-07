@@ -29,9 +29,11 @@ fn calc_bid_price(
     psize: f64,
 ) -> f64 {
     let mid = (state.order_book.bid + state.order_book.ask) * 0.5;
-    let pside_bias = calc_pside_bias(state.balance, mid, psize);
-    let target =
-        state.ema_bands.lower * (1.0 - params.offset - pside_bias * params.offset_psize_weight);
+    let inventory_shift = calc_pside_bias(state.balance, mid, psize) * params.offset_psize_weight;
+    let vol_term = state.offset_volatility_logrange_ema_1m * params.offset_volatility_1m_weight
+        + state.entry_volatility_logrange_ema_1h * params.offset_volatility_1h_weight;
+    let effective_offset = params.offset * (1.0 + vol_term).max(1.0);
+    let target = state.ema_bands.lower * (1.0 - effective_offset - inventory_shift);
     f64::min(state.order_book.bid, round_dn(target, exchange.price_step))
 }
 
@@ -43,9 +45,11 @@ fn calc_ask_price(
     psize: f64,
 ) -> f64 {
     let mid = (state.order_book.bid + state.order_book.ask) * 0.5;
-    let pside_bias = calc_pside_bias(state.balance, mid, psize);
-    let target =
-        state.ema_bands.upper * (1.0 + params.offset - pside_bias * params.offset_psize_weight);
+    let inventory_shift = calc_pside_bias(state.balance, mid, psize) * params.offset_psize_weight;
+    let vol_term = state.offset_volatility_logrange_ema_1m * params.offset_volatility_1m_weight
+        + state.entry_volatility_logrange_ema_1h * params.offset_volatility_1h_weight;
+    let effective_offset = params.offset * (1.0 + vol_term).max(1.0);
+    let target = state.ema_bands.upper * (1.0 + effective_offset - inventory_shift);
     f64::max(state.order_book.ask, round_up(target, exchange.price_step))
 }
 
@@ -241,6 +245,5 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
             }
         }
     }
-
     generated
 }

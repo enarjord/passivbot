@@ -540,6 +540,64 @@ def test_ema_anchor_respects_runtime_budget_for_base_clip_size():
     assert out["orders"][0]["qty"] == pytest.approx(0.3)
 
 
+def test_ema_anchor_volatility_weights_widen_quotes():
+    import passivbot_rust as pbr
+
+    base_strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.01,
+        "offset_volatility_ema_span_minutes": 15.0,
+        "offset_volatility_1m_weight": 2.0,
+        "entry_volatility_ema_span_hours": 8.0,
+        "offset_volatility_1h_weight": 3.0,
+        "offset_psize_weight": 0.0,
+    }
+    calm = make_input(
+        balance=1_000.0,
+        strategy_kind="ema_anchor",
+        global_bp=bot_params_pair(
+            short_overrides={
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0,
+            }
+        ),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_pos_size=1.0,
+                long_pos_price=100.0,
+                long_strategy=base_strategy,
+                short_strategy=base_strategy,
+                emas=ema_bundle(
+                    m1_close=[[10.0, 100.0], [20.0, 100.0], [math.sqrt(10.0 * 20.0), 100.0]],
+                    m1_log_range=[[10.0, 0.01], [15.0, 0.0]],
+                    h1_log_range=[[8.0, 0.0]],
+                ),
+            )
+        ],
+    )
+    wide = copy.deepcopy(calm)
+    wide["symbols"][0]["emas"]["m1"]["log_range"] = [[10.0, 0.01], [15.0, 0.02]]
+    wide["symbols"][0]["emas"]["h1"]["log_range"] = [[8.0, 0.03]]
+
+    calm_out = compute(pbr, calm)
+    wide_out = compute(pbr, wide)
+
+    calm_entry = next(o for o in calm_out["orders"] if o["order_type"] == "entry_ema_anchor_long")
+    calm_close = next(o for o in calm_out["orders"] if o["order_type"] == "close_ema_anchor_long")
+    wide_entry = next(o for o in wide_out["orders"] if o["order_type"] == "entry_ema_anchor_long")
+    wide_close = next(o for o in wide_out["orders"] if o["order_type"] == "close_ema_anchor_long")
+
+    assert calm_entry["price"] == pytest.approx(99.0)
+    assert calm_close["price"] == pytest.approx(101.0)
+    assert wide_entry["price"] < calm_entry["price"]
+    assert wide_close["price"] > calm_close["price"]
+
+
 def test_ema_anchor_one_way_mode_blocks_short_entries_while_long_position_exists():
     import passivbot_rust as pbr
 

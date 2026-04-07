@@ -436,6 +436,7 @@ def compute_live_warmup_windows(
                 max_1m_span,
                 _get_bp(pside, "ema_span_0", sym),
                 _get_bp(pside, "ema_span_1", sym),
+                _get_bp(pside, "offset_volatility_ema_span_minutes", sym),
             )
             if (pside == "long" and is_forager_long) or (pside == "short" and is_forager_short):
                 max_1m_span = max(
@@ -6248,22 +6249,22 @@ class Passivbot:
         # Gather full EMA context for the live symbol universe.
         # Python should provide the market-state bundle; Rust decides which branches use it.
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
+        need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
 
         for pside in ["long", "short"]:
             for symbol in symbols:
+                strategy_params = self._strategy_params_to_rust_dict(pside, symbol)
                 span0 = float(self._strategy_value(pside, "ema_span_0", symbol))
                 span1 = float(self._strategy_value(pside, "ema_span_1", symbol))
                 span2 = float((span0 * span1) ** 0.5) if span0 > 0.0 and span1 > 0.0 else 0.0
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
-                h1_span = float(
-                    self._strategy_params_to_rust_dict(pside, symbol).get(
-                        "entry_volatility_ema_span_hours", 0.0
-                    )
-                    or 0.0
-                )
+                m1_lr_span = float(strategy_params.get("offset_volatility_ema_span_minutes", 0.0) or 0.0)
+                if m1_lr_span > 0.0 and math.isfinite(m1_lr_span):
+                    need_m1_lr_spans[symbol].add(m1_lr_span)
+                h1_span = float(strategy_params.get("entry_volatility_ema_span_hours", 0.0) or 0.0)
                 if h1_span > 0.0 and math.isfinite(h1_span):
                     need_h1_lr_spans[symbol].add(h1_span)
 
@@ -6429,7 +6430,8 @@ class Passivbot:
                 sym, sorted(need_h1_lr_spans[sym]), ema_lr_1h, "h1_log_range"
             )
             vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
-            lr1m = await fetch_map(sym, m1_lr_spans, ema_lr_1m, "m1_log_range")
+            requested_m1_lr_spans = sorted(set(m1_lr_spans) | need_m1_lr_spans[sym])
+            lr1m = await fetch_map(sym, requested_m1_lr_spans, ema_lr_1m, "m1_log_range")
             return close, vol, lr1m, h1
 
         # Ordering: symbols with open positions first (they need EMA data

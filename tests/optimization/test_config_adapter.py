@@ -128,7 +128,9 @@ class TestConfigAdapter:
         assert spec["strategy_kind"] == "ema_anchor"
         assert spec["defaults"]["long"]["base_qty_pct"] == 0.01
         assert spec["defaults"]["short"]["offset"] == 0.002
+        assert spec["defaults"]["long"]["offset_volatility_ema_span_minutes"] == 60.0
         assert spec["optimize_bounds"]["long_offset"] == [0.0, 0.05, 0.0001]
+        assert spec["optimize_bounds"]["long_offset_volatility_1m_weight"] == [0.0, 40.0, 0.1]
         assert any(
             param["config_path"] == ["strategy", "long", "base_qty_pct"]
             and param["legacy_config_paths"] == []
@@ -193,6 +195,10 @@ class TestConfigAdapter:
                             "ema_span_0": 55.0,
                             "ema_span_1": 144.0,
                             "offset": 0.002,
+                            "offset_volatility_ema_span_minutes": 30.0,
+                            "offset_volatility_1m_weight": 2.0,
+                            "entry_volatility_ema_span_hours": 12.0,
+                            "offset_volatility_1h_weight": 1.5,
                             "offset_psize_weight": 0.1,
                         }
                     },
@@ -206,6 +212,10 @@ class TestConfigAdapter:
                             "ema_span_0": 34.0,
                             "ema_span_1": 89.0,
                             "offset": 0.003,
+                            "offset_volatility_ema_span_minutes": 45.0,
+                            "offset_volatility_1m_weight": 3.0,
+                            "entry_volatility_ema_span_hours": 18.0,
+                            "offset_volatility_1h_weight": 0.5,
                             "offset_psize_weight": 0.2,
                         }
                     },
@@ -218,6 +228,7 @@ class TestConfigAdapter:
                     "short_n_positions": [1.0, 2.0, 1.0],
                     "short_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
                     "long_base_qty_pct": [0.001, 0.05, 0.0001],
+                    "long_offset_volatility_1m_weight": [0.0, 10.0, 0.1],
                     "short_offset": [0.0, 0.05, 0.0001],
                 }
             },
@@ -228,5 +239,9 @@ class TestConfigAdapter:
         assert (
             "long_base_qty_pct",
             ("bot", "long", "strategy", "ema_anchor", "base_qty_pct"),
+        ) in key_paths
+        assert (
+            "long_offset_volatility_1m_weight",
+            ("bot", "long", "strategy", "ema_anchor", "offset_volatility_1m_weight"),
         ) in key_paths
         assert ("short_offset", ("bot", "short", "strategy", "ema_anchor", "offset")) in key_paths

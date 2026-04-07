@@ -31,8 +31,10 @@ mod core {
     };
     use crate::strategies::{
         generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
-        strategy_entry_volatility_span_hours, strategy_initial_entry_offset, NextStepHint,
-        PeekBehavior, StrategyKind, StrategyRequest, StrategySide,
+        strategy_entry_volatility_span_hours, strategy_initial_entry_offset,
+        strategy_needs_log_range_1h, strategy_needs_log_range_1m,
+        strategy_offset_volatility_span_minutes, NextStepHint, PeekBehavior, StrategyKind,
+        StrategyRequest, StrategySide,
     };
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
@@ -263,6 +265,8 @@ mod core {
         pub bot_params: BotParams,
         #[serde(default)]
         pub strategy_params: Option<Value>,
+        #[serde(skip)]
+        pub parsed_strategy_params: Option<crate::strategies::StrategyParams>,
         #[serde(default)]
         pub runtime_budget: Option<RuntimeBudgetState>,
     }
@@ -467,6 +471,9 @@ mod core {
         emas: &EmaBundle,
         strategy_params: &crate::strategies::StrategyParams,
     ) -> Result<f64, OrchestratorError> {
+        if !strategy_needs_log_range_1h(strategy_params) {
+            return Ok(0.0);
+        }
         let Some(span) = strategy_entry_volatility_span_hours(strategy_params) else {
             return Ok(0.0);
         };
@@ -478,6 +485,31 @@ mod core {
         if !(v.is_finite() && v >= 0.0) {
             return Err(OrchestratorError::NonFiniteInput {
                 field: "entry_volatility_logrange_ema_1h",
+                symbol_idx: Some(symbol_idx),
+            });
+        }
+        Ok(v)
+    }
+
+    fn derive_offset_volatility_logrange_ema_1m(
+        symbol_idx: usize,
+        emas: &EmaBundle,
+        strategy_params: &crate::strategies::StrategyParams,
+    ) -> Result<f64, OrchestratorError> {
+        if !strategy_needs_log_range_1m(strategy_params) {
+            return Ok(0.0);
+        }
+        let Some(span) = strategy_offset_volatility_span_minutes(strategy_params) else {
+            return Ok(0.0);
+        };
+        if span <= 0.0 {
+            return Ok(0.0);
+        }
+        let v = ema_lookup(&emas.m1.log_range, span)
+            .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
+        if !(v.is_finite() && v >= 0.0) {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "offset_volatility_logrange_ema_1m",
                 symbol_idx: Some(symbol_idx),
             });
         }
@@ -527,7 +559,7 @@ mod core {
         side: &SymbolSideInput,
         effective_n_positions: usize,
     ) -> RuntimeBudgetState {
-        if let Some(runtime_budget) = side.runtime_budget.clone() {
+        if let Some(runtime_budget) = side.runtime_budget {
             return runtime_budget;
         }
         let configured_wallet_exposure_limit =
@@ -538,6 +570,87 @@ mod core {
             configured_n_positions: side.bot_params.n_positions,
             effective_n_positions,
         }
+    }
+
+    fn populate_runtime_budget_cache(
+        symbols: &[SymbolInput],
+        effective_n_positions: usize,
+        pside: PositionSide,
+        out: &mut Vec<RuntimeBudgetState>,
+    ) {
+        out.clear();
+        out.reserve(symbols.len());
+        for symbol in symbols {
+            let side = match pside {
+                PositionSide::Long => &symbol.long,
+                PositionSide::Short => &symbol.short,
+            };
+            out.push(resolve_runtime_budget(side, effective_n_positions));
+        }
+    }
+
+    fn cached_strategy_params_for_symbol_side(
+        cache: &mut [CachedSideDerived],
+        symbol_idx: usize,
+        strategy_kind: StrategyKind,
+        side: &SymbolSideInput,
+    ) -> Result<crate::strategies::StrategyParams, OrchestratorError> {
+        if let Some(params) = cache[symbol_idx].strategy_params {
+            return Ok(params);
+        }
+        if let Some(params) = side.parsed_strategy_params {
+            cache[symbol_idx].strategy_params = Some(params);
+            return Ok(params);
+        }
+        let params = parse_strategy_params(strategy_kind, side.strategy_params.as_ref(), &side.bot_params)
+            .map_err(|_| OrchestratorError::NonFiniteInput {
+                field: "strategy_params",
+                symbol_idx: Some(symbol_idx),
+            })?;
+        cache[symbol_idx].strategy_params = Some(params);
+        Ok(params)
+    }
+
+    fn cached_ema_bands(
+        cache: &mut [CachedSideDerived],
+        symbol_idx: usize,
+        emas: &EmaBundle,
+        strategy_params: &crate::strategies::StrategyParams,
+    ) -> Result<EMABands, OrchestratorError> {
+        if let Some(ema_bands) = cache[symbol_idx].ema_bands {
+            return Ok(ema_bands);
+        }
+        let ema_bands = derive_ema_bands(symbol_idx, emas, strategy_params)?;
+        cache[symbol_idx].ema_bands = Some(ema_bands);
+        Ok(ema_bands)
+    }
+
+    fn cached_entry_volatility_logrange_ema_1h(
+        cache: &mut [CachedSideDerived],
+        symbol_idx: usize,
+        emas: &EmaBundle,
+        strategy_params: &crate::strategies::StrategyParams,
+    ) -> Result<f64, OrchestratorError> {
+        if let Some(v) = cache[symbol_idx].entry_volatility_logrange_ema_1h {
+            return Ok(v);
+        }
+        let v = derive_entry_volatility_logrange_ema_1h(symbol_idx, emas, strategy_params)?;
+        cache[symbol_idx].entry_volatility_logrange_ema_1h = Some(v);
+        Ok(v)
+    }
+
+    fn cached_offset_volatility_logrange_ema_1m(
+        cache: &mut [CachedSideDerived],
+        symbol_idx: usize,
+        emas: &EmaBundle,
+        strategy_params: &crate::strategies::StrategyParams,
+    ) -> Result<f64, OrchestratorError> {
+        if let Some(v) = cache[symbol_idx].offset_volatility_logrange_ema_1m {
+            return Ok(v);
+        }
+        let v = derive_offset_volatility_logrange_ema_1m(symbol_idx, emas, strategy_params)?;
+        cache[symbol_idx].offset_volatility_logrange_ema_1m = Some(v);
+        Ok(v)
     }
 
     fn effective_min_cost_is_low_enough(
@@ -1033,9 +1146,10 @@ mod core {
         hedge_mode: bool,
         filter_enabled: bool,
         balance: f64,
-        effective_n_positions: usize,
+        runtime_budgets: &[RuntimeBudgetState],
         active_flags: Option<&[bool]>,
         cfg: &ForagerSelectionConfig,
+        derived_cache: &mut [CachedSideDerived],
         out: &mut Vec<ForagerCandidate>,
     ) -> Result<(), OrchestratorError> {
         let volume_required = cfg.volume_drop_pct > 0.0 || cfg.weights.volume != 0.0;
@@ -1048,15 +1162,12 @@ mod core {
                 PositionSide::Long => &s.long,
                 PositionSide::Short => &s.short,
             };
-            let strategy_params = parse_strategy_params(
+            let strategy_params = cached_strategy_params_for_symbol_side(
+                derived_cache,
+                s.symbol_idx,
                 strategy_kind,
-                side.strategy_params.as_ref(),
-                &side.bot_params,
-            )
-            .map_err(|_| OrchestratorError::NonFiniteInput {
-                field: "strategy_params",
-                symbol_idx: Some(s.symbol_idx),
-            })?;
+                side,
+            )?;
             // For selection of coins to occupy available slots for initial entries:
             // - We rank across all coins (including those with positions), matching legacy.
             // - We exclude modes which categorically block initial entries when `psize == 0.0`.
@@ -1075,7 +1186,7 @@ mod core {
                     filter_enabled,
                     s.effective_min_cost,
                     &side.bot_params,
-                    &resolve_runtime_budget(side, effective_n_positions),
+                    &runtime_budgets[s.symbol_idx],
                 );
             if !enabled {
                 out.push(ForagerCandidate {
@@ -1121,7 +1232,9 @@ mod core {
             };
             let (bid, ask, ema_lower, ema_upper, entry_initial_ema_dist) = if ema_readiness_required
             {
-                let ema_bands = match derive_ema_bands(s.symbol_idx, &s.emas, &strategy_params) {
+                let ema_bands =
+                    match cached_ema_bands(derived_cache, s.symbol_idx, &s.emas, &strategy_params)
+                    {
                     Ok(v) => v,
                     Err(OrchestratorError::MissingEma { .. })
                     | Err(OrchestratorError::NonFiniteInput {
@@ -1141,7 +1254,7 @@ mod core {
                         continue;
                     }
                     Err(err) => return Err(err),
-                };
+                    };
                 let entry_initial_ema_dist = strategy_initial_entry_offset(&strategy_params);
                 let entry_initial_ema_dist = match require_forager_input(
                     s.symbol_idx,
@@ -1254,21 +1367,6 @@ mod core {
         global.strategy_kind
     }
 
-    fn strategy_params_for_symbol_side(
-        global: &OrchestratorGlobal,
-        side: &SymbolSideInput,
-    ) -> Result<crate::strategies::StrategyParams, OrchestratorError> {
-        parse_strategy_params(
-            strategy_kind_for_symbol_side(global),
-            side.strategy_params.as_ref(),
-            &side.bot_params,
-        )
-        .map_err(|_| OrchestratorError::NonFiniteInput {
-            field: "strategy_params",
-            symbol_idx: None,
-        })
-    }
-
     fn append_strategy_orders_as_ideal(
         target: &mut Vec<IdealOrder>,
         orders: Vec<crate::types::Order>,
@@ -1293,6 +1391,14 @@ mod core {
         closes: Vec<IdealOrder>,
         pos: Position,
         mode: TradingMode,
+    }
+
+    #[derive(Default, Clone)]
+    struct CachedSideDerived {
+        strategy_params: Option<crate::strategies::StrategyParams>,
+        ema_bands: Option<EMABands>,
+        entry_volatility_logrange_ema_1h: Option<f64>,
+        offset_volatility_logrange_ema_1m: Option<f64>,
     }
 
     /// Reusable buffers for performance-critical backtest loops.
@@ -1321,6 +1427,10 @@ mod core {
         /// One-way mode: per-symbol flags to block initial entries
         one_way_block_initial_long: Vec<bool>,
         one_way_block_initial_short: Vec<bool>,
+        runtime_budget_long: Vec<RuntimeBudgetState>,
+        runtime_budget_short: Vec<RuntimeBudgetState>,
+        derived_long: Vec<CachedSideDerived>,
+        derived_short: Vec<CachedSideDerived>,
     }
 
     fn gate_entries_by_twel_deterministic(
@@ -1673,6 +1783,31 @@ mod core {
             workspace.forced_short.len(),
         );
 
+        populate_runtime_budget_cache(
+            &input.symbols,
+            enp_long,
+            PositionSide::Long,
+            &mut workspace.runtime_budget_long,
+        );
+        populate_runtime_budget_cache(
+            &input.symbols,
+            enp_short,
+            PositionSide::Short,
+            &mut workspace.runtime_budget_short,
+        );
+        workspace
+            .derived_long
+            .resize_with(n_symbols, CachedSideDerived::default);
+        workspace
+            .derived_short
+            .resize_with(n_symbols, CachedSideDerived::default);
+        for derived in workspace.derived_long.iter_mut() {
+            *derived = CachedSideDerived::default();
+        }
+        for derived in workspace.derived_short.iter_mut() {
+            *derived = CachedSideDerived::default();
+        }
+
         // Active sets per pside:
         // - Always include all current positions (even if > n_positions), so we keep managing them.
         // - Only when there are open slots (`positions < effective_n_positions`), add forced normals
@@ -1731,9 +1866,10 @@ mod core {
                     input.global.hedge_mode,
                     input.global.filter_by_min_effective_cost,
                     input.balance,
-                    enp_long,
+                    &workspace.runtime_budget_long,
                     Some(actives_long),
                     &cfg,
+                    &mut workspace.derived_long,
                     &mut workspace.features,
                 )?;
                 for idx in select_forager_candidates(&workspace.features, &cfg)
@@ -1799,9 +1935,10 @@ mod core {
                     input.global.hedge_mode,
                     input.global.filter_by_min_effective_cost,
                     input.balance,
-                    enp_short,
+                    &workspace.runtime_budget_short,
                     Some(actives_short),
                     &cfg,
+                    &mut workspace.derived_short,
                     &mut workspace.features,
                 )?;
                 for idx in select_forager_candidates(&workspace.features, &cfg)
@@ -1873,18 +2010,31 @@ mod core {
                     }
 
                     // Both sides are eligible - choose based on EMA band distance.
-                    let strategy_params_long =
-                        strategy_params_for_symbol_side(&input.global, &s.long);
-                    let strategy_params_short =
-                        strategy_params_for_symbol_side(&input.global, &s.short);
+                    let strategy_params_long = cached_strategy_params_for_symbol_side(
+                        &mut workspace.derived_long,
+                        idx,
+                        input.global.strategy_kind,
+                        &s.long,
+                    );
+                    let strategy_params_short = cached_strategy_params_for_symbol_side(
+                        &mut workspace.derived_short,
+                        idx,
+                        input.global.strategy_kind,
+                        &s.short,
+                    );
                     let ema_bands_long = strategy_params_long
                         .as_ref()
                         .ok()
-                        .and_then(|params| derive_ema_bands(idx, &s.emas, params).ok());
+                        .and_then(|params| {
+                            cached_ema_bands(&mut workspace.derived_long, idx, &s.emas, params).ok()
+                        });
                     let ema_bands_short = strategy_params_short
                         .as_ref()
                         .ok()
-                        .and_then(|params| derive_ema_bands(idx, &s.emas, params).ok());
+                        .and_then(|params| {
+                            cached_ema_bands(&mut workspace.derived_short, idx, &s.emas, params)
+                                .ok()
+                        });
 
                     if let (
                         Some(bands_long),
@@ -1964,7 +2114,7 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.long.bot_params,
-                        &resolve_runtime_budget(&s.long, enp_long),
+                        &workspace.runtime_budget_long[s.symbol_idx],
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -1984,22 +2134,40 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let strategy_params =
-                            strategy_params_for_symbol_side(&input.global, &s.long)?;
-                        let ema_bands = derive_ema_bands(s.symbol_idx, &s.emas, &strategy_params)?;
+                        let strategy_params = cached_strategy_params_for_symbol_side(
+                            &mut workspace.derived_long,
+                            s.symbol_idx,
+                            input.global.strategy_kind,
+                            &s.long,
+                        )?;
+                        let ema_bands = cached_ema_bands(
+                            &mut workspace.derived_long,
+                            s.symbol_idx,
+                            &s.emas,
+                            &strategy_params,
+                        )?;
                         let entry_volatility_logrange_ema_1h =
-                            derive_entry_volatility_logrange_ema_1h(
+                            cached_entry_volatility_logrange_ema_1h(
+                                &mut workspace.derived_long,
+                                s.symbol_idx,
+                                &s.emas,
+                                &strategy_params,
+                            )?;
+                        let offset_volatility_logrange_ema_1m =
+                            cached_offset_volatility_logrange_ema_1m(
+                                &mut workspace.derived_long,
                                 s.symbol_idx,
                                 &s.emas,
                                 &strategy_params,
                             )?;
                         let state = StateParams {
                             balance: input.balance,
-                            order_book: s.order_book.clone(),
+                            order_book: s.order_book,
                             ema_bands,
+                            offset_volatility_logrange_ema_1m,
                             entry_volatility_logrange_ema_1h,
                         };
-                        let runtime_budget = resolve_runtime_budget(&s.long, enp_long);
+                        let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
                         let generated = generate_strategy_orders(
                             strategy_kind_for_symbol_side(&input.global),
                             StrategySide::Long,
@@ -2081,7 +2249,7 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.short.bot_params,
-                        &resolve_runtime_budget(&s.short, enp_short),
+                        &workspace.runtime_budget_short[s.symbol_idx],
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -2101,22 +2269,40 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let strategy_params =
-                            strategy_params_for_symbol_side(&input.global, &s.short)?;
-                        let ema_bands = derive_ema_bands(s.symbol_idx, &s.emas, &strategy_params)?;
+                        let strategy_params = cached_strategy_params_for_symbol_side(
+                            &mut workspace.derived_short,
+                            s.symbol_idx,
+                            input.global.strategy_kind,
+                            &s.short,
+                        )?;
+                        let ema_bands = cached_ema_bands(
+                            &mut workspace.derived_short,
+                            s.symbol_idx,
+                            &s.emas,
+                            &strategy_params,
+                        )?;
                         let entry_volatility_logrange_ema_1h =
-                            derive_entry_volatility_logrange_ema_1h(
+                            cached_entry_volatility_logrange_ema_1h(
+                                &mut workspace.derived_short,
+                                s.symbol_idx,
+                                &s.emas,
+                                &strategy_params,
+                            )?;
+                        let offset_volatility_logrange_ema_1m =
+                            cached_offset_volatility_logrange_ema_1m(
+                                &mut workspace.derived_short,
                                 s.symbol_idx,
                                 &s.emas,
                                 &strategy_params,
                             )?;
                         let state = StateParams {
                             balance: input.balance,
-                            order_book: s.order_book.clone(),
+                            order_book: s.order_book,
                             ema_bands,
+                            offset_volatility_logrange_ema_1m,
                             entry_volatility_logrange_ema_1h,
                         };
-                        let runtime_budget = resolve_runtime_budget(&s.short, enp_short);
+                        let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
                         let generated = generate_strategy_orders(
                             strategy_kind_for_symbol_side(&input.global),
                             StrategySide::Short,
@@ -2174,15 +2360,25 @@ mod core {
             }
             let sym = &input.symbols[s.symbol_idx];
             let bot = &sym.long.bot_params;
-            let runtime_budget = resolve_runtime_budget(&sym.long, enp_long);
+            let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
             let enabled = bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
                 && bot.unstuck_threshold > 0.0;
             if !enabled {
                 continue;
             }
-            let strategy_params = strategy_params_for_symbol_side(&input.global, &sym.long)?;
-            let ema_bands = derive_ema_bands(s.symbol_idx, &sym.emas, &strategy_params)?;
+            let strategy_params = cached_strategy_params_for_symbol_side(
+                &mut workspace.derived_long,
+                s.symbol_idx,
+                input.global.strategy_kind,
+                &sym.long,
+            )?;
+            let ema_bands = cached_ema_bands(
+                &mut workspace.derived_long,
+                s.symbol_idx,
+                &sym.emas,
+                &strategy_params,
+            )?;
             workspace.unstuck_inputs.push(UnstuckPositionInput {
                 idx: s.symbol_idx,
                 side: LONG,
@@ -2209,15 +2405,25 @@ mod core {
             }
             let sym = &input.symbols[s.symbol_idx];
             let bot = &sym.short.bot_params;
-            let runtime_budget = resolve_runtime_budget(&sym.short, enp_short);
+            let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
             let enabled = bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
                 && bot.unstuck_threshold > 0.0;
             if !enabled {
                 continue;
             }
-            let strategy_params = strategy_params_for_symbol_side(&input.global, &sym.short)?;
-            let ema_bands = derive_ema_bands(s.symbol_idx, &sym.emas, &strategy_params)?;
+            let strategy_params = cached_strategy_params_for_symbol_side(
+                &mut workspace.derived_short,
+                s.symbol_idx,
+                input.global.strategy_kind,
+                &sym.short,
+            )?;
+            let ema_bands = cached_ema_bands(
+                &mut workspace.derived_short,
+                s.symbol_idx,
+                &sym.emas,
+                &strategy_params,
+            )?;
             workspace.unstuck_inputs.push(UnstuckPositionInput {
                 idx: s.symbol_idx,
                 side: SHORT,
@@ -2284,7 +2490,7 @@ mod core {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
-                let runtime_budget = resolve_runtime_budget(&sym.long, enp_long);
+                let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
                 workspace.twel_positions.push(TwelEnforcerInputPosition {
                     idx: s.symbol_idx,
                     position_size: s.pos.size,
@@ -2340,7 +2546,7 @@ mod core {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
-                let runtime_budget = resolve_runtime_budget(&sym.short, enp_short);
+                let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
                 workspace.twel_positions.push(TwelEnforcerInputPosition {
                     idx: s.symbol_idx,
                     position_size: s.pos.size,
@@ -2608,7 +2814,7 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.long.bot_params,
-                        &resolve_runtime_budget(&s.long, enp_long),
+                        &workspace.runtime_budget_long[s.symbol_idx],
                     );
                 let short_allow_initial = workspace.actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
@@ -2617,7 +2823,7 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.short.bot_params,
-                        &resolve_runtime_budget(&s.short, enp_short),
+                        &workspace.runtime_budget_short[s.symbol_idx],
                     );
                 SymbolStateDiagnostic {
                     symbol_idx: s.symbol_idx,
@@ -2694,6 +2900,7 @@ mod core {
                     trailing: TrailingPriceBundle::default(),
                     bot_params: bp.clone(),
                     strategy_params: None,
+                    parsed_strategy_params: None,
                     runtime_budget: None,
                 },
                 short: SymbolSideInput {
@@ -2702,6 +2909,7 @@ mod core {
                     trailing: TrailingPriceBundle::default(),
                     bot_params: bp,
                     strategy_params: None,
+                    parsed_strategy_params: None,
                     runtime_budget: None,
                 },
             }

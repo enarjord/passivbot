@@ -9,13 +9,14 @@ use crate::orchestrator::{
 };
 use crate::strategies::{
     parse_strategy_params, strategy_ema_spans, strategy_entry_volatility_span_hours,
-    strategy_has_trailing, strategy_needs_log_range_1m, StrategyParams, TrailingGridParams,
+    strategy_has_trailing, strategy_needs_log_range_1h, strategy_needs_log_range_1m,
+    strategy_offset_volatility_span_minutes, StrategyParams, TrailingGridParams,
 };
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
     BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities,
     EquityHardStopLossConfig, ExchangeParams, Fill, Order, OrderBook, OrderType, Position,
-    Positions, RuntimeBudgetState, RuntimeBudgetStatePair, StrategyParamsPairValue,
+    RuntimeBudgetState, RuntimeBudgetStatePair, StrategyParamsPairValue,
     TrailingPriceBundle,
 };
 use crate::utils::{
@@ -48,9 +49,10 @@ const DEBUG_TRACE_WINDOW: Option<(usize, usize)> = None;
 const DEBUG_TRACE_COIN_FILTER: Option<&str> = None;
 use ndarray::{ArrayView1, ArrayView3};
 use serde_json;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::fs::File;
+use std::collections::{HashMap, VecDeque};
+use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
+use std::path::Path;
 use std::time::Instant;
 
 #[derive(Serialize)]
@@ -119,6 +121,8 @@ pub struct EmaAlphas {
     pub vol_alpha_short: f64,
     pub log_range_alpha_long: f64,
     pub log_range_alpha_short: f64,
+    pub offset_volatility_logrange_ema_1m_alpha_long: f64,
+    pub offset_volatility_logrange_ema_1m_alpha_short: f64,
     pub entry_volatility_logrange_ema_1h_alpha_long: f64,
     pub entry_volatility_logrange_ema_1h_alpha_short: f64,
 }
@@ -148,6 +152,12 @@ pub struct EMAs {
     pub log_range_short: f64,
     pub log_range_short_num: f64,
     pub log_range_short_den: f64,
+    pub offset_volatility_logrange_ema_1m_long: f64,
+    pub offset_volatility_logrange_ema_1m_long_num: f64,
+    pub offset_volatility_logrange_ema_1m_long_den: f64,
+    pub offset_volatility_logrange_ema_1m_short: f64,
+    pub offset_volatility_logrange_ema_1m_short_num: f64,
+    pub offset_volatility_logrange_ema_1m_short_den: f64,
     pub entry_volatility_logrange_ema_1h_long: f64,
     pub entry_volatility_logrange_ema_1h_long_num: f64,
     pub entry_volatility_logrange_ema_1h_long_den: f64,
@@ -181,6 +191,91 @@ pub struct EffectiveNPositions {
 struct StrategyParamsPair {
     long: StrategyParams,
     short: StrategyParams,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OrchestratorM1LogRangeSlots {
+    forager_long: usize,
+    forager_short: usize,
+    offset_long: Option<usize>,
+    offset_short: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OrchestratorH1LogRangeSlots {
+    long: Option<usize>,
+    short: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OrchestratorEmaSlots {
+    m1_volume_long: usize,
+    m1_volume_short: usize,
+    m1_log_range: OrchestratorM1LogRangeSlots,
+    h1_log_range: OrchestratorH1LogRangeSlots,
+}
+
+fn make_orchestrator_ema_slots(
+    strategy_params: &StrategyParamsPair,
+    bot_params_master: &BotParamsPair,
+) -> OrchestratorEmaSlots {
+    let _ = bot_params_master;
+    let mut next_m1_log_range = 0usize;
+    let forager_long = next_m1_log_range;
+    next_m1_log_range += 1;
+    let forager_short = next_m1_log_range;
+    next_m1_log_range += 1;
+    let offset_long = if strategy_offset_volatility_span_minutes(&strategy_params.long)
+        .unwrap_or(0.0)
+        > 0.0
+    {
+        let idx = next_m1_log_range;
+        next_m1_log_range += 1;
+        Some(idx)
+    } else {
+        None
+    };
+    let offset_short = if strategy_offset_volatility_span_minutes(&strategy_params.short)
+        .unwrap_or(0.0)
+        > 0.0
+    {
+        let idx = next_m1_log_range;
+        Some(idx)
+    } else {
+        None
+    };
+
+    let mut next_h1_log_range = 0usize;
+    let h1_long = if strategy_entry_volatility_span_hours(&strategy_params.long).unwrap_or(0.0) > 0.0
+    {
+        let idx = next_h1_log_range;
+        next_h1_log_range += 1;
+        Some(idx)
+    } else {
+        None
+    };
+    let h1_short =
+        if strategy_entry_volatility_span_hours(&strategy_params.short).unwrap_or(0.0) > 0.0 {
+            let idx = next_h1_log_range;
+            Some(idx)
+        } else {
+            None
+        };
+
+    OrchestratorEmaSlots {
+        m1_volume_long: 0,
+        m1_volume_short: 1,
+        m1_log_range: OrchestratorM1LogRangeSlots {
+            forager_long,
+            forager_short,
+            offset_long,
+            offset_short,
+        },
+        h1_log_range: OrchestratorH1LogRangeSlots {
+            long: h1_long,
+            short: h1_short,
+        },
+    }
 }
 
 impl EMAs {
@@ -245,10 +340,10 @@ fn update_adjusted_ema(value: f64, alpha: f64, numerator: &mut f64, denominator:
     new_num / new_den
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct OpenOrders {
-    pub long: BTreeMap<usize, OpenOrderBundle>,
-    pub short: BTreeMap<usize, OpenOrderBundle>,
+    pub long: Vec<OpenOrderBundle>,
+    pub short: Vec<OpenOrderBundle>,
 }
 
 #[derive(Debug, Default)]
@@ -265,8 +360,52 @@ pub struct BacktestOrder {
 
 #[derive(Default, Debug)]
 pub struct TrailingPrices {
-    pub long: HashMap<usize, TrailingPriceBundle>,
-    pub short: HashMap<usize, TrailingPriceBundle>,
+    pub long: Vec<TrailingPriceBundle>,
+    pub short: Vec<TrailingPriceBundle>,
+}
+
+#[derive(Debug)]
+pub struct Positions {
+    pub long: Vec<Position>,
+    pub short: Vec<Position>,
+}
+
+impl OpenOrders {
+    fn new(n_coins: usize) -> Self {
+        Self {
+            long: (0..n_coins).map(|_| OpenOrderBundle::default()).collect(),
+            short: (0..n_coins).map(|_| OpenOrderBundle::default()).collect(),
+        }
+    }
+
+    fn clear_all(&mut self) {
+        for bundle in self.long.iter_mut() {
+            bundle.entries.clear();
+            bundle.closes.clear();
+        }
+        for bundle in self.short.iter_mut() {
+            bundle.entries.clear();
+            bundle.closes.clear();
+        }
+    }
+}
+
+impl TrailingPrices {
+    fn new(n_coins: usize) -> Self {
+        Self {
+            long: vec![TrailingPriceBundle::default(); n_coins],
+            short: vec![TrailingPriceBundle::default(); n_coins],
+        }
+    }
+}
+
+impl Positions {
+    fn new(n_coins: usize) -> Self {
+        Self {
+            long: vec![Position::default(); n_coins],
+            short: vec![Position::default(); n_coins],
+        }
+    }
 }
 
 pub struct TrailingEnabled {
@@ -428,7 +567,6 @@ pub struct Backtest<'a> {
     bot_params_master: BotParamsPair,
     bot_params: Vec<BotParamsPair>,
     bot_params_original: Vec<BotParamsPair>,
-    strategy_params_raw: Vec<StrategyParamsPairValue>,
     strategy_params: Vec<StrategyParamsPair>,
     strategy_kind: crate::strategies::StrategyKind,
     runtime_budget: Vec<RuntimeBudgetStatePair>,
@@ -440,10 +578,13 @@ pub struct Backtest<'a> {
     n_coins: usize,
     ema_alphas: Vec<EmaAlphas>,
     emas: Vec<EMAs>,
+    orchestrator_ema_slots: Vec<OrchestratorEmaSlots>,
     needs_volume_ema_long: bool,
     needs_volume_ema_short: bool,
     needs_log_range_long: bool,
     needs_log_range_short: bool,
+    needs_offset_volatility_logrange_ema_1m_long: bool,
+    needs_offset_volatility_logrange_ema_1m_short: bool,
     needs_entry_volatility_logrange_ema_1h_long: bool,
     needs_entry_volatility_logrange_ema_1h_short: bool,
     coin_first_valid_idx: Vec<usize>,
@@ -477,8 +618,8 @@ pub struct Backtest<'a> {
     equities: Equities,
     last_valid_timestamps: HashMap<usize, usize>,
     first_valid_timestamps: HashMap<usize, usize>,
-    did_fill_long: HashSet<usize>,
-    did_fill_short: HashSet<usize>,
+    did_fill_long: Vec<bool>,
+    did_fill_short: Vec<bool>,
     pub total_wallet_exposures: Vec<f64>,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
     equity_tracking_active: bool,
@@ -695,13 +836,22 @@ impl OrchProfile {
         *field = field.saturating_add(elapsed.as_nanos() as u64);
     }
 
-    fn write_to_file(&self) {
-        let fname = "measurements/orch_profile_orchestrator.json";
-        if let Ok(file) = File::create(fname) {
+    fn write_to_path<P: AsRef<Path>>(&self, path: P) {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            if create_dir_all(parent).is_err() {
+                return;
+            }
+        }
+        if let Ok(file) = File::create(path) {
             let mut w = BufWriter::new(file);
             let _ = serde_json::to_writer_pretty(&mut w, self);
             let _ = w.flush();
         }
+    }
+
+    fn write_to_file(&self) {
+        self.write_to_path("measurements/orch_profile_orchestrator.json");
     }
 }
 
@@ -819,8 +969,8 @@ impl<'a> Backtest<'a> {
         }
 
         let position = match side {
-            LONG => self.positions.long.get(&idx).copied().unwrap_or_default(),
-            SHORT => self.positions.short.get(&idx).copied().unwrap_or_default(),
+            LONG => self.positions.long[idx],
+            SHORT => self.positions.short[idx],
             _ => return,
         };
         if position.size == 0.0 || !position.price.is_finite() || position.price <= 0.0 {
@@ -1126,16 +1276,8 @@ impl<'a> Backtest<'a> {
                 };
                 let valid_now = self.coin_is_valid_at(idx, k);
 
-                let pos_long = *self
-                    .positions
-                    .long
-                    .get(&idx)
-                    .unwrap_or(&Position::default());
-                let pos_short = *self
-                    .positions
-                    .short
-                    .get(&idx)
-                    .unwrap_or(&Position::default());
+                let pos_long = self.positions.long[idx];
+                let pos_short = self.positions.short[idx];
 
                 let mut mode_long: Option<orchestrator::TradingMode> = None;
                 let mut mode_short: Option<orchestrator::TradingMode> = None;
@@ -1227,6 +1369,26 @@ impl<'a> Backtest<'a> {
                     .push((lr_span_long, self.emas[idx].log_range_long));
                 m1.log_range
                     .push((lr_span_short, self.emas[idx].log_range_short));
+                if let Some(span) =
+                    strategy_offset_volatility_span_minutes(&self.strategy_params[idx].long)
+                {
+                    if span > 0.0 {
+                        m1.log_range.push((
+                            span,
+                            self.emas[idx].offset_volatility_logrange_ema_1m_long,
+                        ));
+                    }
+                }
+                if let Some(span) =
+                    strategy_offset_volatility_span_minutes(&self.strategy_params[idx].short)
+                {
+                    if span > 0.0 {
+                        m1.log_range.push((
+                            span,
+                            self.emas[idx].offset_volatility_logrange_ema_1m_short,
+                        ));
+                    }
+                }
 
                 if let Some(span) =
                     strategy_entry_volatility_span_hours(&self.strategy_params[idx].long)
@@ -1247,18 +1409,8 @@ impl<'a> Backtest<'a> {
 
                 let emas = OrchestratorEmaBundle { m1, h1 };
 
-                let trailing_long = self
-                    .trailing_prices
-                    .long
-                    .get(&idx)
-                    .cloned()
-                    .unwrap_or_default();
-                let trailing_short = self
-                    .trailing_prices
-                    .short
-                    .get(&idx)
-                    .cloned()
-                    .unwrap_or_default();
+                let trailing_long = self.trailing_prices.long[idx].clone();
+                let trailing_short = self.trailing_prices.short[idx].clone();
 
                 orchestrator::SymbolInput {
                     symbol_idx: idx,
@@ -1273,7 +1425,8 @@ impl<'a> Backtest<'a> {
                         position: pos_long,
                         trailing: trailing_long,
                         bot_params: self.bot_params[idx].long.clone(),
-                        strategy_params: Some(self.strategy_params_raw[idx].long.clone()),
+                        strategy_params: None,
+                        parsed_strategy_params: Some(self.strategy_params[idx].long),
                         runtime_budget: Some(self.runtime_budget[idx].long.clone()),
                     },
                     short: orchestrator::SymbolSideInput {
@@ -1281,7 +1434,8 @@ impl<'a> Backtest<'a> {
                         position: pos_short,
                         trailing: trailing_short,
                         bot_params: self.bot_params[idx].short.clone(),
-                        strategy_params: Some(self.strategy_params_raw[idx].short.clone()),
+                        strategy_params: None,
+                        parsed_strategy_params: Some(self.strategy_params[idx].short),
                         runtime_budget: Some(self.runtime_budget[idx].short.clone()),
                     },
                 }
@@ -1394,31 +1548,13 @@ impl<'a> Backtest<'a> {
             let exchange = &sym.exchange;
             sym.effective_min_cost = calc_effective_min_cost(close_price, exchange);
 
-            let pos_long = *self
-                .positions
-                .long
-                .get(&idx)
-                .unwrap_or(&Position::default());
-            let pos_short = *self
-                .positions
-                .short
-                .get(&idx)
-                .unwrap_or(&Position::default());
+            let pos_long = self.positions.long[idx];
+            let pos_short = self.positions.short[idx];
             sym.long.position = pos_long;
             sym.short.position = pos_short;
 
-            sym.long.trailing = self
-                .trailing_prices
-                .long
-                .get(&idx)
-                .cloned()
-                .unwrap_or_default();
-            sym.short.trailing = self
-                .trailing_prices
-                .short
-                .get(&idx)
-                .cloned()
-                .unwrap_or_default();
+            sym.long.trailing = self.trailing_prices.long[idx].clone();
+            sym.short.trailing = self.trailing_prices.short[idx].clone();
 
             sym.long.runtime_budget = Some(self.runtime_budget[idx].long.clone());
             sym.short.runtime_budget = Some(self.runtime_budget[idx].short.clone());
@@ -1473,35 +1609,39 @@ impl<'a> Backtest<'a> {
                     sym.emas.m1.close[i + 3].1 = v;
                 }
             }
-            if sym.emas.m1.volume.len() >= 2 {
-                sym.emas.m1.volume[0].1 = self.emas[idx].vol_long;
-                sym.emas.m1.volume[1].1 = self.emas[idx].vol_short;
+            let slots = self.orchestrator_ema_slots[idx];
+            if sym.emas.m1.volume.len() > slots.m1_volume_short {
+                sym.emas.m1.volume[slots.m1_volume_long].1 = self.emas[idx].vol_long;
+                sym.emas.m1.volume[slots.m1_volume_short].1 = self.emas[idx].vol_short;
             }
-            if sym.emas.m1.log_range.len() >= 2 {
-                sym.emas.m1.log_range[0].1 = self.emas[idx].log_range_long;
-                sym.emas.m1.log_range[1].1 = self.emas[idx].log_range_short;
+            if sym.emas.m1.log_range.len() > slots.m1_log_range.forager_short {
+                sym.emas.m1.log_range[slots.m1_log_range.forager_long].1 = self.emas[idx].log_range_long;
+                sym.emas.m1.log_range[slots.m1_log_range.forager_short].1 =
+                    self.emas[idx].log_range_short;
             }
-            match sym.emas.h1.log_range.len() {
-                2 => {
-                    sym.emas.h1.log_range[0].1 =
+            if let Some(slot) = slots.m1_log_range.offset_long {
+                if sym.emas.m1.log_range.len() > slot {
+                    sym.emas.m1.log_range[slot].1 =
+                        self.emas[idx].offset_volatility_logrange_ema_1m_long;
+                }
+            }
+            if let Some(slot) = slots.m1_log_range.offset_short {
+                if sym.emas.m1.log_range.len() > slot {
+                    sym.emas.m1.log_range[slot].1 =
+                        self.emas[idx].offset_volatility_logrange_ema_1m_short;
+                }
+            }
+            if let Some(slot) = slots.h1_log_range.long {
+                if sym.emas.h1.log_range.len() > slot {
+                    sym.emas.h1.log_range[slot].1 =
                         self.emas[idx].entry_volatility_logrange_ema_1h_long;
-                    sym.emas.h1.log_range[1].1 =
+                }
+            }
+            if let Some(slot) = slots.h1_log_range.short {
+                if sym.emas.h1.log_range.len() > slot {
+                    sym.emas.h1.log_range[slot].1 =
                         self.emas[idx].entry_volatility_logrange_ema_1h_short;
                 }
-                1 => {
-                    let span0 = sym.emas.h1.log_range[0].0;
-                    let long_span =
-                        strategy_entry_volatility_span_hours(&self.strategy_params[idx].long)
-                            .unwrap_or(0.0);
-                    if (span0 - long_span).abs() < 1e-12 {
-                        sym.emas.h1.log_range[0].1 =
-                            self.emas[idx].entry_volatility_logrange_ema_1h_long;
-                    } else {
-                        sym.emas.h1.log_range[0].1 =
-                            self.emas[idx].entry_volatility_logrange_ema_1h_short;
-                    }
-                }
-                _ => {}
             }
         }
 
@@ -1712,6 +1852,12 @@ impl<'a> Backtest<'a> {
                     log_range_short: 0.0,
                     log_range_short_num: 0.0,
                     log_range_short_den: 1.0,
+                    offset_volatility_logrange_ema_1m_long: 0.0,
+                    offset_volatility_logrange_ema_1m_long_num: 0.0,
+                    offset_volatility_logrange_ema_1m_long_den: 1.0,
+                    offset_volatility_logrange_ema_1m_short: 0.0,
+                    offset_volatility_logrange_ema_1m_short_num: 0.0,
+                    offset_volatility_logrange_ema_1m_short_den: 1.0,
                     entry_volatility_logrange_ema_1h_long: 0.0,
                     entry_volatility_logrange_ema_1h_long_num: 0.0,
                     entry_volatility_logrange_ema_1h_long_den: 1.0,
@@ -1767,6 +1913,10 @@ impl<'a> Backtest<'a> {
                 short: make_runtime_budget_state(&bp.short, configured_n_positions.short),
             })
             .collect();
+        let orchestrator_ema_slots: Vec<OrchestratorEmaSlots> = strategy_params_parsed
+            .iter()
+            .map(|sp| make_orchestrator_ema_slots(sp, &bot_params_master))
+            .collect();
 
         // Calculate EMA alphas for each coin, adjusted for candle interval
         let interval = backtest_params.candle_interval_minutes;
@@ -1801,16 +1951,18 @@ impl<'a> Backtest<'a> {
             || strategy_params_parsed
                 .iter()
                 .any(|sp| strategy_needs_log_range_1m(&sp.short));
+        let needs_offset_volatility_logrange_ema_1m_long = strategy_params_parsed
+            .iter()
+            .any(|sp| strategy_needs_log_range_1m(&sp.long));
+        let needs_offset_volatility_logrange_ema_1m_short = strategy_params_parsed
+            .iter()
+            .any(|sp| strategy_needs_log_range_1m(&sp.short));
         let needs_entry_volatility_logrange_ema_1h_long = strategy_params_parsed.iter().any(|sp| {
-            strategy_entry_volatility_span_hours(&sp.long)
-                .map(|span| span > 0.0)
-                .unwrap_or(false)
+            strategy_needs_log_range_1h(&sp.long)
         });
         let needs_entry_volatility_logrange_ema_1h_short =
             strategy_params_parsed.iter().any(|sp| {
-                strategy_entry_volatility_span_hours(&sp.short)
-                    .map(|span| span > 0.0)
-                    .unwrap_or(false)
+                strategy_needs_log_range_1h(&sp.short)
             });
 
         Backtest {
@@ -1821,7 +1973,6 @@ impl<'a> Backtest<'a> {
             bot_params_master: bot_params_master.clone(),
             bot_params: bot_params.clone(),
             bot_params_original,
-            strategy_params_raw: strategy_params,
             strategy_params: strategy_params_parsed,
             strategy_kind,
             runtime_budget,
@@ -1833,6 +1984,7 @@ impl<'a> Backtest<'a> {
             n_coins,
             ema_alphas,
             emas: initial_emas,
+            orchestrator_ema_slots,
             needs_volume_ema_long: bot_params.iter().any(|bp| {
                 bp.long.forager_volume_drop_pct != 0.0
                     || bp.long.forager_score_weights.volume != 0.0
@@ -1843,20 +1995,22 @@ impl<'a> Backtest<'a> {
             }),
             needs_log_range_long,
             needs_log_range_short,
+            needs_offset_volatility_logrange_ema_1m_long,
+            needs_offset_volatility_logrange_ema_1m_short,
             needs_entry_volatility_logrange_ema_1h_long,
             needs_entry_volatility_logrange_ema_1h_short,
             coin_first_valid_idx: first_valid_idx,
             coin_last_valid_idx: last_valid_idx,
             coin_trade_start_idx: trade_start_idx,
             trade_activation_logged,
-            positions: Positions::default(),
+            positions: Positions::new(n_coins),
             first_timestamp_ms: backtest_params.first_timestamp_ms,
             last_hour_boundary_ms: (backtest_params.first_timestamp_ms / 3_600_000) * 3_600_000,
             latest_hour: vec![HourBucket::default(); n_coins],
             warmup_bars,
             current_step: 0,
-            open_orders: OpenOrders::default(),
-            trailing_prices: TrailingPrices::default(),
+            open_orders: OpenOrders::new(n_coins),
+            trailing_prices: TrailingPrices::new(n_coins),
             pnl_cumsum_running: 0.0,
             pnl_cumsum_max: 0.0,
             pnl_cumsum_running_net: 0.0,
@@ -1887,8 +2041,8 @@ impl<'a> Backtest<'a> {
             equities: equities,
             last_valid_timestamps: HashMap::new(),
             first_valid_timestamps: HashMap::new(),
-            did_fill_long: HashSet::new(),
-            did_fill_short: HashSet::new(),
+            did_fill_long: vec![false; n_coins],
+            did_fill_short: vec![false; n_coins],
             total_wallet_exposures: Vec::with_capacity(n_timesteps),
             equity_tracking_active: false,
             debug_writer: if DEBUG_DUMP_ORDERS {
@@ -1974,14 +2128,6 @@ impl<'a> Backtest<'a> {
 
     pub fn run(&mut self) -> Result<(Vec<Fill>, Equities), String> {
         let n_timesteps = self.hlcvs.shape()[0];
-        for idx in 0..self.n_coins {
-            self.trailing_prices
-                .long
-                .insert(idx, TrailingPriceBundle::default());
-            self.trailing_prices
-                .short
-                .insert(idx, TrailingPriceBundle::default());
-        }
 
         // --- register first & last valid candle for every coin ---
         for idx in 0..self.n_coins {
@@ -2269,8 +2415,8 @@ impl<'a> Backtest<'a> {
     #[inline(always)]
     fn has_open_position_pside(&self, pside: usize) -> bool {
         match pside {
-            LONG => !self.positions.long.is_empty(),
-            SHORT => !self.positions.short.is_empty(),
+            LONG => self.positions.long.iter().any(|p| p.size != 0.0),
+            SHORT => self.positions.short.iter().any(|p| p.size != 0.0),
             _ => unreachable!("invalid pside"),
         }
     }
@@ -2278,16 +2424,8 @@ impl<'a> Backtest<'a> {
     #[inline(always)]
     fn has_blocking_open_orders_pside(&self, pside: usize) -> bool {
         match pside {
-            LONG => self
-                .open_orders
-                .long
-                .values()
-                .any(Self::bundle_has_blocking_open_orders),
-            SHORT => self
-                .open_orders
-                .short
-                .values()
-                .any(Self::bundle_has_blocking_open_orders),
+            LONG => self.open_orders.long.iter().any(Self::bundle_has_blocking_open_orders),
+            SHORT => self.open_orders.short.iter().any(Self::bundle_has_blocking_open_orders),
             _ => unreachable!("invalid pside"),
         }
     }
@@ -3009,10 +3147,10 @@ impl<'a> Backtest<'a> {
         let mut equity_btc = self.balance.btc_total_balance;
 
         // Add the unrealized PNL of all positions
-        let mut long_keys: Vec<usize> = self.positions.long.keys().cloned().collect();
-        long_keys.sort();
-        for idx in long_keys {
-            let position = &self.positions.long[&idx];
+        for (idx, position) in self.positions.long.iter().enumerate() {
+            if position.size == 0.0 {
+                continue;
+            }
             if !self.coin_is_valid_at(idx, k) {
                 continue;
             }
@@ -3030,10 +3168,10 @@ impl<'a> Backtest<'a> {
             equity_btc += upnl / btc_price;
         }
 
-        let mut short_keys: Vec<usize> = self.positions.short.keys().cloned().collect();
-        short_keys.sort();
-        for idx in short_keys {
-            let position = &self.positions.short[&idx];
+        for (idx, position) in self.positions.short.iter().enumerate() {
+            if position.size == 0.0 {
+                continue;
+            }
             if !self.coin_is_valid_at(idx, k) {
                 continue;
             }
@@ -3067,11 +3205,7 @@ impl<'a> Backtest<'a> {
     fn compute_twe_components(&self) -> (f64, f64, f64) {
         let mut twe_long = 0.0;
         let mut twe_short = 0.0;
-        // Deterministic summation order (HashMap iteration order is randomized per process).
-        let mut long_keys: Vec<usize> = self.positions.long.keys().copied().collect();
-        long_keys.sort_unstable();
-        for idx in long_keys {
-            let position = self.positions.long.get(&idx).expect("idx from keys");
+        for (idx, position) in self.positions.long.iter().enumerate() {
             if position.size != 0.0 {
                 twe_long += calc_wallet_exposure(
                     self.exchange_params_list[idx].c_mult,
@@ -3081,10 +3215,7 @@ impl<'a> Backtest<'a> {
                 );
             }
         }
-        let mut short_keys: Vec<usize> = self.positions.short.keys().copied().collect();
-        short_keys.sort_unstable();
-        for idx in short_keys {
-            let position = self.positions.short.get(&idx).expect("idx from keys");
+        for (idx, position) in self.positions.short.iter().enumerate() {
             if position.size != 0.0 {
                 twe_short -= calc_wallet_exposure(
                     self.exchange_params_list[idx].c_mult,
@@ -3099,82 +3230,75 @@ impl<'a> Backtest<'a> {
     }
 
     fn check_for_fills(&mut self, k: usize) {
-        self.did_fill_long.clear();
-        self.did_fill_short.clear();
+        self.did_fill_long.fill(false);
+        self.did_fill_short.fill(false);
         if self.trading_enabled.long {
-            // `BTreeMap` keys are already sorted.
-            let open_orders_keys_long: Vec<usize> = self.open_orders.long.keys().cloned().collect();
-            for idx in open_orders_keys_long {
+            for idx in 0..self.n_coins {
                 // Process close fills long
-                if !self.open_orders.long[&idx].closes.is_empty() {
+                if !self.open_orders.long[idx].closes.is_empty() {
                     let mut closes_to_process = Vec::new();
                     {
-                        for close_order in &self.open_orders.long[&idx].closes {
+                        for close_order in &self.open_orders.long[idx].closes {
                             if let Some(exec) = self.order_fill_execution(k, idx, close_order) {
                                 closes_to_process.push((close_order.order, exec));
                             }
                         }
                     }
                     for (order, exec) in closes_to_process {
-                        //if order.qty != 0.0 && self.positions.long.contains_key(&idx) && self.positions.long.contains_key(&idx)
-                        //if order.qty != 0.0 && self.get_position
-                        if self.positions.long.contains_key(&idx) {
-                            self.did_fill_long.insert(idx);
+                        if self.positions.long[idx].size != 0.0 {
+                            self.did_fill_long[idx] = true;
                             self.process_close_fill_long(k, idx, &order, exec);
                         }
                     }
                 }
                 // Process entry fills long
-                if !self.open_orders.long[&idx].entries.is_empty() {
+                if !self.open_orders.long[idx].entries.is_empty() {
                     let mut entries_to_process = Vec::new();
                     {
-                        for entry_order in &self.open_orders.long[&idx].entries {
+                        for entry_order in &self.open_orders.long[idx].entries {
                             if let Some(exec) = self.order_fill_execution(k, idx, entry_order) {
                                 entries_to_process.push((entry_order.order, exec));
                             }
                         }
                     }
                     for (order, exec) in entries_to_process {
-                        self.did_fill_long.insert(idx);
+                        self.did_fill_long[idx] = true;
                         self.process_entry_fill_long(k, idx, &order, exec);
                     }
                 }
             }
         }
         if self.trading_enabled.short {
-            // `BTreeMap` keys are already sorted.
-            let open_orders_keys_short: Vec<usize> =
-                self.open_orders.short.keys().cloned().collect();
-            for idx in open_orders_keys_short {
+            for idx in 0..self.n_coins {
                 // Process close fills short
-                if !self.open_orders.short[&idx].closes.is_empty() {
+                if !self.open_orders.short[idx].closes.is_empty() {
                     let mut closes_to_process = Vec::new();
                     {
-                        for close_order in &self.open_orders.short[&idx].closes {
+                        for close_order in &self.open_orders.short[idx].closes {
                             if let Some(exec) = self.order_fill_execution(k, idx, close_order) {
                                 closes_to_process.push((close_order.order, exec));
                             }
                         }
                     }
                     for (order, exec) in closes_to_process {
-                        if self.positions.short.contains_key(&idx) {
-                            self.did_fill_short.insert(idx);
+                        if self.positions.short[idx].size != 0.0 {
+                            self.did_fill_short[idx] = true;
                             self.process_close_fill_short(k, idx, &order, exec);
                         }
                     }
                 }
                 // Process entry fills short
-                if !self.open_orders.short[&idx].entries.is_empty() {
+                if !self.open_orders.short[idx].entries.is_empty() {
                     let mut entries_to_process = Vec::new();
                     {
-                        for entry_order in &self.open_orders.short[&idx].entries {
+                        for entry_order in &self.open_orders.short[idx].entries {
                             if let Some(exec) = self.order_fill_execution(k, idx, entry_order) {
                                 entries_to_process.push((entry_order.order, exec));
                             }
                         }
                     }
                     for (order, exec) in entries_to_process {
-                        self.did_fill_short.insert(idx);
+                        self.did_fill_short[idx] = true;
                         self.process_entry_fill_short(k, idx, &order, exec);
                     }
                 }
@@ -3189,8 +3313,9 @@ impl<'a> Backtest<'a> {
         close_fill: &Order,
         exec: OrderFillExecution,
     ) {
+        let current_position = self.positions.long[idx];
         let mut new_psize = round_(
-            self.positions.long[&idx].size + close_fill.qty,
+            current_position.size + close_fill.qty,
             self.exchange_params_list[idx].qty_step,
         );
         let mut adjusted_close_qty = close_fill.qty;
@@ -3201,7 +3326,7 @@ impl<'a> Backtest<'a> {
             println!("close order: {:?}", close_fill);
             println!("bot config: {:?}", self.bp(idx, LONG));
             new_psize = 0.0;
-            adjusted_close_qty = -self.positions.long[&idx].size;
+            adjusted_close_qty = -current_position.size;
         }
         let fee_paid = -qty_to_cost(
             adjusted_close_qty,
@@ -3209,7 +3334,7 @@ impl<'a> Backtest<'a> {
             self.exchange_params_list[idx].c_mult,
         ) * exec.fee_rate;
         let pnl = calc_pnl_long(
-            self.positions.long[&idx].price,
+            current_position.price,
             exec.price,
             adjusted_close_qty,
             self.exchange_params_list[idx].c_mult,
@@ -3241,11 +3366,11 @@ impl<'a> Backtest<'a> {
                 self.hard_stop_panic_close_loss_max.max(panic_loss);
         }
 
-        let current_pprice = self.positions.long[&idx].price;
+        let current_pprice = current_position.price;
         if new_psize == 0.0 {
-            self.positions.long.remove(&idx);
+            self.positions.long[idx] = Position::default();
         } else {
-            self.positions.long.get_mut(&idx).unwrap().size = new_psize;
+            self.positions.long[idx].size = new_psize;
         }
         let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let wallet_exposure = if new_psize != 0.0 {
@@ -3289,8 +3414,9 @@ impl<'a> Backtest<'a> {
         order: &Order,
         exec: OrderFillExecution,
     ) {
+        let current_position = self.positions.short[idx];
         let mut new_psize = round_(
-            self.positions.short[&idx].size + order.qty,
+            current_position.size + order.qty,
             self.exchange_params_list[idx].qty_step,
         );
         let mut adjusted_close_qty = order.qty;
@@ -3300,7 +3426,7 @@ impl<'a> Backtest<'a> {
             println!("new_psize: {}", new_psize);
             println!("close order: {:?}", order);
             new_psize = 0.0;
-            adjusted_close_qty = self.positions.short[&idx].size.abs();
+            adjusted_close_qty = current_position.size.abs();
         }
         let fee_paid = -qty_to_cost(
             adjusted_close_qty,
@@ -3308,7 +3434,7 @@ impl<'a> Backtest<'a> {
             self.exchange_params_list[idx].c_mult,
         ) * exec.fee_rate;
         let pnl = calc_pnl_short(
-            self.positions.short[&idx].price,
+            current_position.price,
             exec.price,
             adjusted_close_qty,
             self.exchange_params_list[idx].c_mult,
@@ -3340,11 +3466,11 @@ impl<'a> Backtest<'a> {
                 self.hard_stop_panic_close_loss_max.max(panic_loss);
         }
 
-        let current_pprice = self.positions.short[&idx].price;
+        let current_pprice = current_position.price;
         if new_psize == 0.0 {
-            self.positions.short.remove(&idx);
+            self.positions.short[idx] = Position::default();
         } else {
-            self.positions.short.get_mut(&idx).unwrap().size = new_psize;
+            self.positions.short[idx].size = new_psize;
         }
         let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let wallet_exposure = if new_psize != 0.0 {
@@ -3409,20 +3535,15 @@ impl<'a> Backtest<'a> {
             balance_after,
         );
 
-        let position_entry = self
-            .positions
-            .long
-            .entry(idx)
-            .or_insert(Position::default());
         let (new_psize, new_pprice) = calc_new_psize_pprice(
-            position_entry.size,
-            position_entry.price,
+            self.positions.long[idx].size,
+            self.positions.long[idx].price,
             order.qty,
             exec.price,
             self.exchange_params_list[idx].qty_step,
         );
-        self.positions.long.get_mut(&idx).unwrap().size = new_psize;
-        self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
+        self.positions.long[idx].size = new_psize;
+        self.positions.long[idx].price = new_pprice;
         let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
@@ -3447,8 +3568,8 @@ impl<'a> Backtest<'a> {
             btc_price: self.btc_usd_prices[k],
             fill_qty: order.qty,
             fill_price: exec.price,
-            position_size: self.positions.long[&idx].size,
-            position_price: self.positions.long[&idx].price,
+            position_size: self.positions.long[idx].size,
+            position_price: self.positions.long[idx].price,
             order_type: order.order_type.clone(),
             liquidity: exec.liquidity.to_string(),
             wallet_exposure,
@@ -3485,20 +3606,15 @@ impl<'a> Backtest<'a> {
             balance_before,
             balance_after,
         );
-        let position_entry = self
-            .positions
-            .short
-            .entry(idx)
-            .or_insert(Position::default());
         let (new_psize, new_pprice) = calc_new_psize_pprice(
-            position_entry.size,
-            position_entry.price,
+            self.positions.short[idx].size,
+            self.positions.short[idx].price,
             order.qty,
             exec.price,
             self.exchange_params_list[idx].qty_step,
         );
-        self.positions.short.get_mut(&idx).unwrap().size = new_psize;
-        self.positions.short.get_mut(&idx).unwrap().price = new_pprice;
+        self.positions.short[idx].size = new_psize;
+        self.positions.short[idx].price = new_pprice;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -3522,8 +3638,8 @@ impl<'a> Backtest<'a> {
             btc_price: self.btc_usd_prices[k],
             fill_qty: order.qty,
             fill_price: exec.price,
-            position_size: self.positions.short[&idx].size,
-            position_price: self.positions.short[&idx].price,
+            position_size: self.positions.short[idx].size,
+            position_price: self.positions.short[idx].price,
             order_type: order.order_type.clone(),
             liquidity: exec.liquidity.to_string(),
             wallet_exposure,
@@ -3536,19 +3652,22 @@ impl<'a> Backtest<'a> {
     fn update_trailing_prices(&mut self, k: usize) {
         // ----- LONG side -----
         if self.trading_enabled.long && self.any_trailing_long {
-            for (&idx, _) in &self.positions.long {
+            for (idx, position) in self.positions.long.iter().enumerate() {
+                if position.size == 0.0 {
+                    continue;
+                }
                 if !self.trailing_enabled[idx].long {
                     continue;
                 }
                 if !self.coin_is_valid_at(idx, k) {
                     continue;
                 }
-                let fill_long = self.did_fill_long.contains(&idx);
+                let fill_long = self.did_fill_long[idx];
                 let col = self.active_coin_indices[idx];
                 let low = self.hlcvs[[k, col, LOW]];
                 let high = self.hlcvs[[k, col, HIGH]];
                 let close = self.hlcvs[[k, col, CLOSE]];
-                let bundle = self.trailing_prices.long.entry(idx).or_default();
+                let bundle = &mut self.trailing_prices.long[idx];
                 if fill_long {
                     reset_trailing_bundle(bundle);
                 } else {
@@ -3559,19 +3678,22 @@ impl<'a> Backtest<'a> {
 
         // ----- SHORT side -----
         if self.trading_enabled.short && self.any_trailing_short {
-            for (&idx, _) in &self.positions.short {
+            for (idx, position) in self.positions.short.iter().enumerate() {
+                if position.size == 0.0 {
+                    continue;
+                }
                 if !self.trailing_enabled[idx].short {
                     continue;
                 }
                 if !self.coin_is_valid_at(idx, k) {
                     continue;
                 }
-                let fill_short = self.did_fill_short.contains(&idx);
+                let fill_short = self.did_fill_short[idx];
                 let col = self.col(idx);
                 let low = self.hlcvs[[k, col, LOW]];
                 let high = self.hlcvs[[k, col, HIGH]];
                 let close = self.hlcvs[[k, col, CLOSE]];
-                let bundle = self.trailing_prices.short.entry(idx).or_default();
+                let bundle = &mut self.trailing_prices.short[idx];
                 if fill_short {
                     reset_trailing_bundle(bundle);
                 } else {
@@ -3653,10 +3775,10 @@ impl<'a> Backtest<'a> {
         let mut upnl = 0.0;
         match pside {
             LONG => {
-                let mut keys: Vec<usize> = self.positions.long.keys().copied().collect();
-                keys.sort_unstable();
-                for idx in keys {
-                    let position = self.positions.long.get(&idx).expect("idx from keys");
+                for (idx, position) in self.positions.long.iter().enumerate() {
+                    if position.size == 0.0 {
+                        continue;
+                    }
                     if !self.coin_is_valid_at(idx, k) {
                         continue;
                     }
@@ -3673,10 +3795,10 @@ impl<'a> Backtest<'a> {
                 }
             }
             SHORT => {
-                let mut keys: Vec<usize> = self.positions.short.keys().copied().collect();
-                keys.sort_unstable();
-                for idx in keys {
-                    let position = self.positions.short.get(&idx).expect("idx from keys");
+                for (idx, position) in self.positions.short.iter().enumerate() {
+                    if position.size == 0.0 {
+                        continue;
+                    }
                     if !self.coin_is_valid_at(idx, k) {
                         continue;
                     }
@@ -3764,8 +3886,7 @@ impl<'a> Backtest<'a> {
         }
 
         let t0 = Instant::now();
-        self.open_orders.long.clear();
-        self.open_orders.short.clear();
+        self.open_orders.clear_all();
         if let Some(p) = self.orch_profile.as_mut() {
             OrchProfile::add_ns(&mut p.clear_orders_ns, t0.elapsed());
         }
@@ -3779,11 +3900,15 @@ impl<'a> Backtest<'a> {
         }
 
         // Debug: dump exact unstuck calculation inputs/components for parity investigations.
-        for (&idx, _pos) in self.positions.long.iter() {
-            self.debug_dump_unstuck_calc(k, idx, LONG);
+        for (idx, position) in self.positions.long.iter().enumerate() {
+            if position.size != 0.0 {
+                self.debug_dump_unstuck_calc(k, idx, LONG);
+            }
         }
-        for (&idx, _pos) in self.positions.short.iter() {
-            self.debug_dump_unstuck_calc(k, idx, SHORT);
+        for (idx, position) in self.positions.short.iter().enumerate() {
+            if position.size != 0.0 {
+                self.debug_dump_unstuck_calc(k, idx, SHORT);
+            }
         }
 
         let (res, input_update_elapsed, compute_elapsed) = {
@@ -3819,7 +3944,7 @@ impl<'a> Backtest<'a> {
             };
             match o.pside {
                 orchestrator::PositionSide::Long => {
-                    let bundle = self.open_orders.long.entry(o.symbol_idx).or_default();
+                    let bundle = &mut self.open_orders.long[o.symbol_idx];
                     if orchestrator::is_close_order_type(order.order_type) {
                         bundle.closes.push(bt_order);
                     } else {
@@ -3827,7 +3952,7 @@ impl<'a> Backtest<'a> {
                     }
                 }
                 orchestrator::PositionSide::Short => {
-                    let bundle = self.open_orders.short.entry(o.symbol_idx).or_default();
+                    let bundle = &mut self.open_orders.short[o.symbol_idx];
                     if orchestrator::is_close_order_type(order.order_type) {
                         bundle.closes.push(bt_order);
                     } else {
@@ -3866,7 +3991,7 @@ impl<'a> Backtest<'a> {
         let want_coin = DEBUG_COIN_FILTER;
         let mut snapshots: Vec<DebugOrderSnapshot> = Vec::new();
 
-        for (&idx, bundle) in self.open_orders.long.iter() {
+        for (idx, bundle) in self.open_orders.long.iter().enumerate() {
             if bundle.entries.is_empty() && bundle.closes.is_empty() {
                 continue;
             }
@@ -3881,7 +4006,7 @@ impl<'a> Backtest<'a> {
                     continue;
                 }
             }
-            let position = self.positions.long.get(&idx).copied().unwrap_or_default();
+            let position = self.positions.long[idx];
             let close_price = self.hlcvs_value(k, idx, CLOSE);
             let mut entries = Vec::with_capacity(bundle.entries.len());
             for o in &bundle.entries {
@@ -3915,7 +4040,7 @@ impl<'a> Backtest<'a> {
             };
             snapshots.push(snapshot);
         }
-        for (&idx, bundle) in self.open_orders.short.iter() {
+        for (idx, bundle) in self.open_orders.short.iter().enumerate() {
             if bundle.entries.is_empty() && bundle.closes.is_empty() {
                 continue;
             }
@@ -3930,7 +4055,7 @@ impl<'a> Backtest<'a> {
                     continue;
                 }
             }
-            let position = self.positions.short.get(&idx).copied().unwrap_or_default();
+            let position = self.positions.short[idx];
             let close_price = self.hlcvs_value(k, idx, CLOSE);
             let mut entries = Vec::with_capacity(bundle.entries.len());
             for o in &bundle.entries {
@@ -4128,7 +4253,11 @@ impl<'a> Backtest<'a> {
             }
 
             // log range metric: ln(high / low)
-            if self.needs_log_range_long || self.needs_log_range_short {
+            if self.needs_log_range_long
+                || self.needs_log_range_short
+                || self.needs_offset_volatility_logrange_ema_1m_long
+                || self.needs_offset_volatility_logrange_ema_1m_short
+            {
                 let log_range = if high > 0.0 && low > 0.0 {
                     (high / low).ln()
                 } else {
@@ -4149,6 +4278,28 @@ impl<'a> Backtest<'a> {
                         &mut emas.log_range_short_num,
                         &mut emas.log_range_short_den,
                     );
+                }
+                if self.needs_offset_volatility_logrange_ema_1m_long {
+                    let alpha = self.ema_alphas[i].offset_volatility_logrange_ema_1m_alpha_long;
+                    if alpha > 0.0 {
+                        emas.offset_volatility_logrange_ema_1m_long = update_adjusted_ema(
+                            log_range,
+                            alpha,
+                            &mut emas.offset_volatility_logrange_ema_1m_long_num,
+                            &mut emas.offset_volatility_logrange_ema_1m_long_den,
+                        );
+                    }
+                }
+                if self.needs_offset_volatility_logrange_ema_1m_short {
+                    let alpha = self.ema_alphas[i].offset_volatility_logrange_ema_1m_alpha_short;
+                    if alpha > 0.0 {
+                        emas.offset_volatility_logrange_ema_1m_short = update_adjusted_ema(
+                            log_range,
+                            alpha,
+                            &mut emas.offset_volatility_logrange_ema_1m_short_num,
+                            &mut emas.offset_volatility_logrange_ema_1m_short_den,
+                        );
+                    }
                 }
             }
         }
@@ -4633,6 +4784,24 @@ fn calc_ema_alphas(
         log_range_alpha_short: clamp_alpha(
             2.0 / (bot_params_pair.short.filter_volatility_ema_span as f64 / interval_f + 1.0),
         ),
+        offset_volatility_logrange_ema_1m_alpha_long: {
+            let span =
+                strategy_offset_volatility_span_minutes(&strategy_params_pair.long).unwrap_or(0.0);
+            if span > 0.0 {
+                clamp_alpha(2.0 / (span / interval_f + 1.0))
+            } else {
+                0.0
+            }
+        },
+        offset_volatility_logrange_ema_1m_alpha_short: {
+            let span =
+                strategy_offset_volatility_span_minutes(&strategy_params_pair.short).unwrap_or(0.0);
+            if span > 0.0 {
+                clamp_alpha(2.0 / (span / interval_f + 1.0))
+            } else {
+                0.0
+            }
+        },
         // Note: entry_volatility spans are in HOURS and computed from hourly buckets,
         // so they do NOT need interval adjustment (hourly buckets are calendar-based)
         entry_volatility_logrange_ema_1h_alpha_long: {
@@ -4661,6 +4830,7 @@ mod tests {
     use super::*;
     use crate::types::EquityHardStopLossConfig;
     use ndarray::{Array1, Array3};
+    use std::fs;
 
     fn adaptive_strategy_pair_from_bot_params(bot_params: &BotParamsPair) -> StrategyParamsPair {
         StrategyParamsPair {
@@ -4807,13 +4977,10 @@ mod tests {
             &backtest_params,
         );
         bt.hard_stop_tier = ehsl::HardStopTier::Orange;
-        bt.positions.long.insert(
-            0,
-            Position {
-                size: 1.0,
-                price: 1.0,
-            },
-        );
+        bt.positions.long[0] = Position {
+            size: 1.0,
+            price: 1.0,
+        };
 
         let input = bt.get_orchestrator_input_cached(1, None);
         assert_eq!(
@@ -4936,13 +5103,10 @@ mod tests {
             &backtest_params,
         );
         bt.hard_stop_tier = ehsl::HardStopTier::Red;
-        bt.positions.long.insert(
-            0,
-            Position {
-                size: 1.0,
-                price: 100.0,
-            },
-        );
+        bt.positions.long[0] = Position {
+            size: 1.0,
+            price: 100.0,
+        };
 
         let input = bt.get_orchestrator_input_cached(1, None);
         assert_eq!(
@@ -5013,19 +5177,11 @@ mod tests {
             vec![ExchangeParams::default()],
             &backtest_params,
         );
-        bt.positions.long.insert(
-            0,
-            Position {
-                size: 1.0,
-                price: 100.0,
-            },
-        );
-        bt.open_orders
-            .long
-            .entry(0)
-            .or_default()
-            .closes
-            .push(BacktestOrder {
+        bt.positions.long[0] = Position {
+            size: 1.0,
+            price: 100.0,
+        };
+        bt.open_orders.long[0].closes.push(BacktestOrder {
                 order: Order {
                     qty: -1.0,
                     price: 200.0,
@@ -5036,7 +5192,7 @@ mod tests {
 
         bt.check_for_fills(1);
 
-        assert!(!bt.positions.long.contains_key(&0));
+        assert_eq!(bt.positions.long[0].size, 0.0);
         assert_eq!(bt.fills.len(), 1);
         assert_eq!(bt.fills[0].order_type, OrderType::ClosePanicLong);
         assert!((bt.fills[0].fill_price - 99.95).abs() < 1e-12);
@@ -5101,19 +5257,11 @@ mod tests {
             vec![ExchangeParams::default()],
             &backtest_params,
         );
-        bt.positions.long.insert(
-            0,
-            Position {
-                size: 1.0,
-                price: 100.0,
-            },
-        );
-        bt.open_orders
-            .long
-            .entry(0)
-            .or_default()
-            .closes
-            .push(BacktestOrder {
+        bt.positions.long[0] = Position {
+            size: 1.0,
+            price: 100.0,
+        };
+        bt.open_orders.long[0].closes.push(BacktestOrder {
                 order: Order {
                     qty: -1.0,
                     price: 200.0,
@@ -5124,7 +5272,7 @@ mod tests {
 
         bt.check_for_fills(1);
 
-        assert!(bt.positions.long.contains_key(&0));
+        assert_ne!(bt.positions.long[0].size, 0.0);
         assert!(bt.fills.is_empty());
     }
 
@@ -5182,12 +5330,7 @@ mod tests {
             vec![ExchangeParams::default()],
             &backtest_params,
         );
-        bt.open_orders
-            .long
-            .entry(0)
-            .or_default()
-            .entries
-            .push(BacktestOrder {
+        bt.open_orders.long[0].entries.push(BacktestOrder {
                 order: Order {
                     qty: 1.0,
                     price: 100.0,
@@ -5198,7 +5341,7 @@ mod tests {
 
         bt.check_for_fills(1);
 
-        assert!(bt.positions.long.contains_key(&0));
+        assert_ne!(bt.positions.long[0].size, 0.0);
         assert_eq!(bt.fills.len(), 1);
         assert_eq!(bt.fills[0].order_type, OrderType::EntryGridNormalLong);
         assert_eq!(bt.fills[0].liquidity, "taker");
@@ -5413,13 +5556,10 @@ mod tests {
                 vec![ExchangeParams::default()],
                 &backtest_params,
             );
-            bt.positions.long.insert(
-                0,
-                Position {
-                    size: 1.0,
-                    price: 100.0,
-                },
-            );
+            bt.positions.long[0] = Position {
+                size: 1.0,
+                price: 100.0,
+            };
             bt.balance.usd_total_balance = 100.0;
             bt.equities.timestamps_ms.push(0);
             bt.equities.usd_total_equity.push(90.0);
@@ -5767,20 +5907,17 @@ mod tests {
             ..Default::default()
         });
         bt.hard_stop_tier = ehsl::HardStopTier::Red;
-        bt.open_orders.long.insert(
-            0,
-            OpenOrderBundle {
-                entries: vec![],
-                closes: vec![BacktestOrder {
-                    order: Order {
-                        qty: -1.0,
-                        price: 100.0,
-                        order_type: OrderType::ClosePanicLong,
-                    },
-                    execution_type: orchestrator::ExecutionType::Limit,
-                }],
-            },
-        );
+        bt.open_orders.long[0] = OpenOrderBundle {
+            entries: vec![],
+            closes: vec![BacktestOrder {
+                order: Order {
+                    qty: -1.0,
+                    price: 100.0,
+                    order_type: OrderType::ClosePanicLong,
+                },
+                execution_type: orchestrator::ExecutionType::Limit,
+            }],
+        };
         bt.balance.usd_total_balance = 90.0;
         bt.equities.timestamps_ms.push(60_000);
         bt.equities.usd_total_equity.push(90.0);
@@ -6880,6 +7017,69 @@ mod tests {
                 alphas.long.alphas[i]
             );
         }
+    }
+
+    #[test]
+    fn test_make_orchestrator_ema_slots_assigns_fixed_positions() {
+        let strategy_pair = StrategyParamsPair {
+            long: StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
+                offset_volatility_ema_span_minutes: 30.0,
+                offset_volatility_1m_weight: 2.0,
+                entry_volatility_ema_span_hours: 12.0,
+                offset_volatility_1h_weight: 1.0,
+                ..Default::default()
+            }),
+            short: StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
+                offset_volatility_ema_span_minutes: 45.0,
+                offset_volatility_1m_weight: 3.0,
+                entry_volatility_ema_span_hours: 18.0,
+                offset_volatility_1h_weight: 0.5,
+                ..Default::default()
+            }),
+        };
+
+        let slots = make_orchestrator_ema_slots(&strategy_pair, &BotParamsPair::default());
+
+        assert_eq!(slots.m1_volume_long, 0);
+        assert_eq!(slots.m1_volume_short, 1);
+        assert_eq!(slots.m1_log_range.forager_long, 0);
+        assert_eq!(slots.m1_log_range.forager_short, 1);
+        assert_eq!(slots.m1_log_range.offset_long, Some(2));
+        assert_eq!(slots.m1_log_range.offset_short, Some(3));
+        assert_eq!(slots.h1_log_range.long, Some(0));
+        assert_eq!(slots.h1_log_range.short, Some(1));
+    }
+
+    #[test]
+    fn test_orch_profile_write_to_path_creates_parent_directory() {
+        let base = std::env::temp_dir().join(format!(
+            "passivbot-orch-profile-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let out_path = base.join("measurements").join("orch_profile_orchestrator.json");
+        let profile = OrchProfile {
+            mode: "test",
+            steps: 1,
+            total_ns: 2,
+            clear_orders_ns: 3,
+            peek_hints_ns: 4,
+            input_update_ns: 5,
+            compute_ns: 6,
+            distribute_ns: 7,
+            sort_bundles_ns: 8,
+        };
+
+        profile.write_to_path(&out_path);
+
+        let contents = fs::read_to_string(&out_path).expect("profile file should be written");
+        assert!(contents.contains("\"mode\": \"test\""));
+
+        let _ = fs::remove_file(&out_path);
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

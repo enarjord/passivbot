@@ -18,7 +18,7 @@ pub enum StrategyKind {
     EmaAnchor,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TrailingGridParams {
     pub close_grid_markup_end: f64,
@@ -148,13 +148,17 @@ impl TrailingGridParams {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EmaAnchorParams {
     pub base_qty_pct: f64,
     pub ema_span_0: f64,
     pub ema_span_1: f64,
     pub offset: f64,
+    pub offset_volatility_ema_span_minutes: f64,
+    pub offset_volatility_1m_weight: f64,
+    pub entry_volatility_ema_span_hours: f64,
+    pub offset_volatility_1h_weight: f64,
     pub offset_psize_weight: f64,
 }
 
@@ -165,12 +169,16 @@ impl Default for EmaAnchorParams {
             ema_span_0: 200.0,
             ema_span_1: 800.0,
             offset: 0.002,
+            offset_volatility_ema_span_minutes: 60.0,
+            offset_volatility_1m_weight: 0.0,
+            entry_volatility_ema_span_hours: 24.0,
+            offset_volatility_1h_weight: 0.0,
             offset_psize_weight: 0.1,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StrategyParams {
     TrailingGrid(TrailingGridParams),
     EmaAnchor(EmaAnchorParams),
@@ -250,7 +258,14 @@ pub fn strategy_ema_spans(params: &StrategyParams) -> (f64, f64) {
 pub fn strategy_entry_volatility_span_hours(params: &StrategyParams) -> Option<f64> {
     match params {
         StrategyParams::TrailingGrid(params) => Some(params.entry_volatility_ema_span_hours),
-        StrategyParams::EmaAnchor(_) => None,
+        StrategyParams::EmaAnchor(params) => Some(params.entry_volatility_ema_span_hours),
+    }
+}
+
+pub fn strategy_offset_volatility_span_minutes(params: &StrategyParams) -> Option<f64> {
+    match params {
+        StrategyParams::TrailingGrid(_) => None,
+        StrategyParams::EmaAnchor(params) => Some(params.offset_volatility_ema_span_minutes),
     }
 }
 
@@ -269,7 +284,18 @@ pub fn strategy_needs_log_range_1m(params: &StrategyParams) -> bool {
                 || params.entry_trailing_retracement_volatility_weight != 0.0
                 || params.entry_trailing_grid_ratio != 0.0
         }
-        StrategyParams::EmaAnchor(_) => false,
+        StrategyParams::EmaAnchor(params) => {
+            params.offset_volatility_1m_weight != 0.0 && params.offset_volatility_ema_span_minutes > 0.0
+        }
+    }
+}
+
+pub fn strategy_needs_log_range_1h(params: &StrategyParams) -> bool {
+    match params {
+        StrategyParams::TrailingGrid(params) => params.entry_volatility_ema_span_hours > 0.0,
+        StrategyParams::EmaAnchor(params) => {
+            params.offset_volatility_1h_weight != 0.0 && params.entry_volatility_ema_span_hours > 0.0
+        }
     }
 }
 

@@ -5,7 +5,6 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::{Py, PyResult, Python};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use strum_macros::{Display, EnumIter, EnumString};
 
 /// Canonical metadata describing one coin/contract entry inside a unified HLCV tensor.
@@ -241,13 +240,7 @@ pub struct Position {
     pub price: f64,
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct Positions {
-    pub long: HashMap<usize, Position>,
-    pub short: HashMap<usize, Position>,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EMABands {
     pub upper: f64,
@@ -272,19 +265,20 @@ impl Default for Order {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrderBook {
     pub bid: f64,
     pub ask: f64,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateParams {
     pub balance: f64,
     pub order_book: OrderBook,
     pub ema_bands: EMABands,
+    pub offset_volatility_logrange_ema_1m: f64,
     pub entry_volatility_logrange_ema_1h: f64,
 }
 
@@ -295,7 +289,7 @@ pub struct BotParamsPair {
     pub short: BotParams,
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeBudgetState {
     pub configured_wallet_exposure_limit: f64,
@@ -304,7 +298,7 @@ pub struct RuntimeBudgetState {
     pub effective_n_positions: usize,
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeBudgetStatePair {
     pub long: RuntimeBudgetState,

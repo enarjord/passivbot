@@ -63,6 +63,10 @@
                     "ema_span_0": 100,
                     "ema_span_1": 570,
                     "offset": 0.015,
+                    "offset_volatility_ema_span_minutes": 60.0,
+                    "offset_volatility_1m_weight": 0.0,
+                    "entry_volatility_ema_span_hours": 24.0,
+                    "offset_volatility_1h_weight": 0.0,
                     "offset_psize_weight": 0.7
                 }
             },
@@ -103,6 +107,10 @@
                     "ema_span_0": 63,
                     "ema_span_1": 636,
                     "offset": 0.0115,
+                    "offset_volatility_ema_span_minutes": 60.0,
+                    "offset_volatility_1m_weight": 0.0,
+                    "entry_volatility_ema_span_hours": 24.0,
+                    "offset_volatility_1h_weight": 0.0,
                     "offset_psize_weight": 0.74
                 }
             },
@@ -208,7 +216,11 @@
                         "base_qty_pct": [0.001,0.1,0.0001],
                         "ema_span_0": [10,2880,1],
                         "ema_span_1": [10,2880,1],
-                        "offset": [0.0001,0.2,0.0001],
+                        "offset": [0.0001,0.02,0.0001],
+                        "offset_volatility_ema_span_minutes": [5,720,1],
+                        "offset_volatility_1m_weight": [0,40,0.1],
+                        "entry_volatility_ema_span_hours": [1,672,1],
+                        "offset_volatility_1h_weight": [0,40,0.1],
                         "offset_psize_weight": [0.0001,100.0,0.0001]
                     }
                 },
@@ -242,11 +254,15 @@
                 },
                 "strategy": {
                     "ema_anchor": {
-                        "base_qty_pct": [0.004,0.02,0.0005],
-                        "ema_span_0": [48,120,1],
-                        "ema_span_1": [288,720,1],
-                        "offset": [0.007,0.02,0.0005],
-                        "offset_psize_weight": [0.2,0.8,0.01]
+                        "base_qty_pct": [0.001,0.1,0.0001],
+                        "ema_span_0": [10,2880,1],
+                        "ema_span_1": [10,2880,1],
+                        "offset": [0.0001,0.02,0.0001],
+                        "offset_volatility_ema_span_minutes": [5,720,1],
+                        "offset_volatility_1m_weight": [0,40,0.1],
+                        "entry_volatility_ema_span_hours": [1,672,1],
+                        "offset_volatility_1h_weight": [0,40,0.1],
+                        "offset_psize_weight": [0.0001,100.0,0.0001]
                     }
                 },
                 "unstuck": {
@@ -340,8 +356,9 @@
         },
         "round_to_n_significant_digits": 3,
         "scoring": [
+            {"metric": "adg_strategy_pnl_rebased", "goal": "max"},
             {"metric": "adg_strategy_pnl_rebased_w", "goal": "max"},
-            {"metric": "mdg_strategy_pnl_rebased_w", "goal": "max"},
+            {"metric": "mdg_strategy_pnl_rebased", "goal": "max"},
             {"metric": "drawdown_worst_hsl", "goal": "min"},
             {"metric": "peak_recovery_hours_hsl", "goal": "min"}
         ],

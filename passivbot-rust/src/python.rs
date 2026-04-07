@@ -1391,6 +1391,10 @@ fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
         "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
         "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
         "offset": extract_value::<f64>(dict, "offset")?,
+        "offset_volatility_ema_span_minutes": extract_optional_f64(dict, "offset_volatility_ema_span_minutes")?,
+        "offset_volatility_1m_weight": extract_optional_f64(dict, "offset_volatility_1m_weight")?,
+        "entry_volatility_ema_span_hours": extract_optional_f64(dict, "entry_volatility_ema_span_hours")?,
+        "offset_volatility_1h_weight": extract_optional_f64(dict, "offset_volatility_1h_weight")?,
         "offset_psize_weight": extract_value::<f64>(dict, "offset_psize_weight")?,
     }))
 }
