@@ -486,6 +486,17 @@ def _build_hlcvs_bundle(
 
 
 @dataclass
+class BacktestExecutionSettings:
+    market_orders_allowed: bool
+    market_orders_allowed_source: str
+    market_order_near_touch_threshold: float
+    market_order_near_touch_threshold_source: str
+    market_order_slippage_pct: float
+    pnls_max_lookback_days: float
+    pnls_max_lookback_days_source: str
+
+
+@dataclass
 class BacktestPayload:
     """Container for everything needed to run a backtest via the Rust engine."""
 
@@ -493,6 +504,7 @@ class BacktestPayload:
     bot_params_list: list
     exchange_params: list
     backtest_params: dict
+    execution_settings: BacktestExecutionSettings | None = None
     hard_stop_plot_data: dict | None = None
 
 
@@ -505,17 +517,19 @@ def build_backtest_payload(
     timestamps=None,
     *,
     coin_indices: list[int] | None = None,
-    log_execution_settings: bool = False,
 ) -> BacktestPayload:
     """
     Assemble the bundle, bot params, and metadata needed to execute a backtest.
     """
 
+    runtime_config = compile_runtime_config(config, runtime="backtest", record_step=False)
+    execution_settings = get_backtest_execution_settings(runtime_config, is_runtime_compiled=True)
     bot_params_list, exchange_params, backtest_params = prep_backtest_args(
-        config,
+        runtime_config,
         mss,
         exchange,
-        log_execution_settings=log_execution_settings,
+        execution_settings=execution_settings,
+        is_runtime_compiled=True,
     )
     backtest_params = dict(backtest_params)
     coins_order = backtest_params.get("coins", [])
@@ -675,6 +689,7 @@ def build_backtest_payload(
         bot_params_list=bot_params_list,
         exchange_params=exchange_params,
         backtest_params=backtest_params,
+        execution_settings=execution_settings,
     )
 
 
@@ -792,6 +807,7 @@ def subset_backtest_payload(
         bot_params_list=new_bot,
         exchange_params=new_exchange_params,
         backtest_params=new_backtest_params,
+        execution_settings=payload.execution_settings,
     )
 
 
@@ -1257,31 +1273,110 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
     return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
 
 
+def _coerce_config_bool(value, *, field_name):
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", ""}:
+            return False
+        raise ValueError(f"{field_name} must be a boolean; got {value!r}")
+    return bool(value)
+
+
+def _field_name_for_source(key, source):
+    if source == "backtest override":
+        return f"backtest.{key}"
+    return f"live.{key}"
+
+
+def get_backtest_execution_settings(config, *, is_runtime_compiled: bool = False) -> BacktestExecutionSettings:
+    if not is_runtime_compiled:
+        config = compile_runtime_config(config, runtime="backtest", record_step=False)
+    market_order_slippage_pct = float(
+        get_optional_config_value(config, "backtest.market_order_slippage_pct", 0.0005) or 0.0
+    )
+    if market_order_slippage_pct < 0.0:
+        raise ValueError("backtest.market_order_slippage_pct must be >= 0.0")
+    market_orders_allowed_raw, market_orders_allowed_source = (
+        get_backtest_override_or_live_value_with_source(config, "market_orders_allowed", False)
+    )
+    market_orders_allowed = _coerce_config_bool(
+        market_orders_allowed_raw,
+        field_name=_field_name_for_source("market_orders_allowed", market_orders_allowed_source),
+    )
+    market_order_near_touch_threshold_raw, market_order_near_touch_threshold_source = (
+        get_backtest_override_or_live_value_with_source(
+            config, "market_order_near_touch_threshold", 0.001
+        )
+    )
+    market_order_near_touch_threshold = float(market_order_near_touch_threshold_raw or 0.0)
+    if market_order_near_touch_threshold < 0.0:
+        raise ValueError(
+            f"{_field_name_for_source('market_order_near_touch_threshold', market_order_near_touch_threshold_source)} must be >= 0.0"
+        )
+    pnls_max_lookback_days_raw, pnls_max_lookback_days_source = (
+        get_backtest_override_or_live_value_with_source(config, "pnls_max_lookback_days", 30.0)
+    )
+    pnls_max_lookback_days = float(pnls_max_lookback_days_raw or 0.0)
+    if not math.isfinite(pnls_max_lookback_days):
+        raise ValueError(
+            f"{_field_name_for_source('pnls_max_lookback_days', pnls_max_lookback_days_source)} must be finite"
+        )
+    if pnls_max_lookback_days < 0.0:
+        raise ValueError(
+            f"{_field_name_for_source('pnls_max_lookback_days', pnls_max_lookback_days_source)} must be >= 0.0"
+        )
+    return BacktestExecutionSettings(
+        market_orders_allowed=market_orders_allowed,
+        market_orders_allowed_source=market_orders_allowed_source,
+        market_order_near_touch_threshold=market_order_near_touch_threshold,
+        market_order_near_touch_threshold_source=market_order_near_touch_threshold_source,
+        market_order_slippage_pct=market_order_slippage_pct,
+        pnls_max_lookback_days=pnls_max_lookback_days,
+        pnls_max_lookback_days_source=pnls_max_lookback_days_source,
+    )
+
+
+def log_backtest_execution_settings(execution_settings: BacktestExecutionSettings | None) -> None:
+    if execution_settings is None:
+        return
+    logging.info("[backtest] effective execution settings:")
+    logging.info(
+        "[backtest]   market_orders_allowed = %s (%s)",
+        execution_settings.market_orders_allowed,
+        execution_settings.market_orders_allowed_source,
+    )
+    logging.info(
+        "[backtest]   market_order_near_touch_threshold = %s (%s)",
+        execution_settings.market_order_near_touch_threshold,
+        execution_settings.market_order_near_touch_threshold_source,
+    )
+    logging.info(
+        "[backtest]   market_order_slippage_pct = %s (backtest)",
+        execution_settings.market_order_slippage_pct,
+    )
+    logging.info(
+        "[backtest]   pnls_max_lookback_days = %s (%s)",
+        execution_settings.pnls_max_lookback_days,
+        execution_settings.pnls_max_lookback_days_source,
+    )
+
+
 def prep_backtest_args(
     config,
     mss,
     exchange,
     exchange_params=None,
     backtest_params=None,
+    execution_settings: BacktestExecutionSettings | None = None,
     *,
-    log_execution_settings: bool = False,
+    is_runtime_compiled: bool = False,
 ):
-    def _coerce_config_bool(value, *, field_name):
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"1", "true", "yes", "y", "on"}:
-                return True
-            if normalized in {"0", "false", "no", "n", "off", ""}:
-                return False
-            raise ValueError(f"{field_name} must be a boolean; got {value!r}")
-        return bool(value)
-
-    def _field_name_for_source(key, source):
-        if source == "backtest override":
-            return f"backtest.{key}"
-        return f"live.{key}"
-
-    config = compile_runtime_config(config, runtime="backtest", record_step=False)
+    if not is_runtime_compiled:
+        config = compile_runtime_config(config, runtime="backtest", record_step=False)
+    if execution_settings is None:
+        execution_settings = get_backtest_execution_settings(config, is_runtime_compiled=True)
     coins = sorted(set(require_config_value(config, f"backtest.coins.{exchange}")))
     candle_interval = int(config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
     bot_params_list = []
@@ -1381,42 +1476,6 @@ def prep_backtest_args(
 
         hard_stop_cfg_long = _normalize_hsl_cfg(hard_stop_cfg_long, "bot.long.hsl")
         hard_stop_cfg_short = _normalize_hsl_cfg(hard_stop_cfg_short, "bot.short.hsl")
-        market_order_slippage_pct = float(
-            get_optional_config_value(config, "backtest.market_order_slippage_pct", 0.0005) or 0.0
-        )
-        if market_order_slippage_pct < 0.0:
-            raise ValueError("backtest.market_order_slippage_pct must be >= 0.0")
-        market_orders_allowed_raw, market_orders_allowed_source = (
-            get_backtest_override_or_live_value_with_source(config, "market_orders_allowed", False)
-        )
-        market_orders_allowed = _coerce_config_bool(
-            market_orders_allowed_raw,
-            field_name=_field_name_for_source(
-                "market_orders_allowed", market_orders_allowed_source
-            ),
-        )
-        market_order_near_touch_threshold_raw, market_order_near_touch_threshold_source = (
-            get_backtest_override_or_live_value_with_source(
-                config, "market_order_near_touch_threshold", 0.001
-            )
-        )
-        market_order_near_touch_threshold = float(market_order_near_touch_threshold_raw or 0.0)
-        if market_order_near_touch_threshold < 0.0:
-            raise ValueError(
-                f"{_field_name_for_source('market_order_near_touch_threshold', market_order_near_touch_threshold_source)} must be >= 0.0"
-            )
-        pnls_max_lookback_days_raw, pnls_max_lookback_days_source = (
-            get_backtest_override_or_live_value_with_source(config, "pnls_max_lookback_days", 30.0)
-        )
-        pnls_max_lookback_days = float(pnls_max_lookback_days_raw or 0.0)
-        if not math.isfinite(pnls_max_lookback_days):
-            raise ValueError(
-                f"{_field_name_for_source('pnls_max_lookback_days', pnls_max_lookback_days_source)} must be finite"
-            )
-        if pnls_max_lookback_days < 0.0:
-            raise ValueError(
-                f"{_field_name_for_source('pnls_max_lookback_days', pnls_max_lookback_days_source)} must be >= 0.0"
-            )
         liquidation_threshold = float(
             get_optional_config_value(config, "backtest.liquidation_threshold", 0.05) or 0.0
         )
@@ -1436,27 +1495,6 @@ def prep_backtest_args(
             taker_fee = mss[coins[0]].get("taker_fee", mss[coins[0]].get("taker", 0.00055))
         else:
             taker_fee = float(taker_fee_override)
-        if log_execution_settings:
-            logging.info("[backtest] effective execution settings:")
-            logging.info(
-                "[backtest]   market_orders_allowed = %s (%s)",
-                market_orders_allowed,
-                market_orders_allowed_source,
-            )
-            logging.info(
-                "[backtest]   market_order_near_touch_threshold = %s (%s)",
-                market_order_near_touch_threshold,
-                market_order_near_touch_threshold_source,
-            )
-            logging.info(
-                "[backtest]   market_order_slippage_pct = %s (backtest)",
-                market_order_slippage_pct,
-            )
-            logging.info(
-                "[backtest]   pnls_max_lookback_days = %s (%s)",
-                pnls_max_lookback_days,
-                pnls_max_lookback_days_source,
-            )
         backtest_params = {
             "starting_balance": require_config_value(config, "backtest.starting_balance"),
             "maker_fee": maker_fee,
@@ -1479,11 +1517,11 @@ def prep_backtest_args(
             ),
             "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
             "max_realized_loss_pct": float(require_config_value(config, "live.max_realized_loss_pct")),
-            "pnls_max_lookback_days": pnls_max_lookback_days,
+            "pnls_max_lookback_days": execution_settings.pnls_max_lookback_days,
             "equity_hard_stop_loss": hard_stop_cfg_long,
-            "market_order_slippage_pct": market_order_slippage_pct,
-            "market_orders_allowed": market_orders_allowed,
-            "market_order_near_touch_threshold": market_order_near_touch_threshold,
+            "market_order_slippage_pct": execution_settings.market_order_slippage_pct,
+            "market_orders_allowed": execution_settings.market_orders_allowed,
+            "market_order_near_touch_threshold": execution_settings.market_order_near_touch_threshold,
             "liquidation_threshold": liquidation_threshold,
         }
     return bot_params_list, exchange_params, backtest_params
@@ -1590,8 +1628,8 @@ def run_backtest(
         exchange,
         btc_usd_prices,
         timestamps,
-        log_execution_settings=True,
     )
+    log_backtest_execution_settings(payload.execution_settings)
     fills, equities_array, analysis = execute_backtest(payload, config)
     logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
     if return_payload:

@@ -631,12 +631,13 @@ def ea_mu_plus_lambda_stream(
     return population, logbook
 
 
-def individual_to_config(individual, optimizer_overrides, overrides_list, template):
+def individual_to_config(individual, optimizer_overrides, overrides_list, template, key_paths=None):
     """
     assume individual is already bound enforced (or will be after)
     """
     config = deepcopy(template)
-    key_paths = get_optimization_key_paths(config)
+    if key_paths is None:
+        key_paths = get_optimization_key_paths(config)
     assert len(individual) == len(key_paths), (
         f"individual length {len(individual)} does not match optimization key count {len(key_paths)}"
     )
@@ -735,6 +736,7 @@ class Evaluator:
         self.seen_hashes = seen_hashes if seen_hashes is not None else {}
         self.duplicate_counter = duplicate_counter if duplicate_counter is not None else {"count": 0}
         self.bounds = extract_bounds_tuple_list_from_config(self.config)
+        self.key_paths = get_optimization_key_paths(self.config)
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
         self.use_duplicate_guard = True
         self.scoring_specs = extract_objective_specs(self.config)
@@ -855,7 +857,13 @@ class Evaluator:
 
     def evaluate(self, individual, overrides_list):
         individual[:] = enforce_bounds(individual, self.bounds, self.sig_digits)
-        config = individual_to_config(individual, optimizer_overrides, overrides_list, self.config)
+        config = individual_to_config(
+            individual,
+            optimizer_overrides,
+            overrides_list,
+            self.config,
+            key_paths=self.key_paths,
+        )
         individual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
             if individual_hash in self.seen_hashes:
@@ -881,7 +889,11 @@ class Evaluator:
                         individual[:] = perturbed
                         self.seen_hashes[new_hash] = None
                         config = individual_to_config(
-                            perturbed, optimizer_overrides, overrides_list, self.config
+                            perturbed,
+                            optimizer_overrides,
+                            overrides_list,
+                            self.config,
+                            key_paths=self.key_paths,
                         )
                         self.duplicate_counter["resolved"] += 1
                         break
@@ -1144,7 +1156,11 @@ class SuiteEvaluator:
     def evaluate(self, individual, overrides_list):
         individual[:] = enforce_bounds(individual, self.base.bounds, self.base.sig_digits)
         config = individual_to_config(
-            individual, optimizer_overrides, overrides_list, self.base.config
+            individual,
+            optimizer_overrides,
+            overrides_list,
+            self.base.config,
+            key_paths=self.base.key_paths,
         )
         individual_hash = calc_hash(individual)
         seen_hashes = self.base.seen_hashes
@@ -1174,7 +1190,11 @@ class SuiteEvaluator:
                         individual[:] = perturbed
                         seen_hashes[new_hash] = None
                         config = individual_to_config(
-                            perturbed, optimizer_overrides, overrides_list, self.base.config
+                            perturbed,
+                            optimizer_overrides,
+                            overrides_list,
+                            self.base.config,
+                            key_paths=self.base.key_paths,
                         )
                         duplicate_counter["resolved"] += 1
                         break
