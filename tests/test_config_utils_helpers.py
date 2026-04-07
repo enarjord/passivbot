@@ -1,12 +1,14 @@
 import logging
 import argparse
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 import json
 
 import config_utils
 import pytest
 
+from cli_utils import build_command_parser, expand_help_all_argv, help_all_requested
 from config import load_input_config, prepare_config
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
@@ -696,6 +698,71 @@ def test_update_config_with_args_records_old_new_values():
     assert diff["path"] == "backtest.start_date"
     assert diff["old"] == "2021-01-01"
     assert diff["new"] == "2022-01-01"
+
+
+def _parse_backtest_args(raw_argv):
+    help_all = help_all_requested(raw_argv)
+    parser = build_command_parser(
+        prog="passivbot backtest",
+        description="run backtest",
+        usage="%(prog)s [config_path] [options]",
+        epilog="test",
+    )
+    parser.add_argument("config_path", type=str, default=None, nargs="?")
+    parser.add_argument("--suite", nargs="?", const="true", default=None, type=config_utils.str2bool)
+    template_config = get_template_config()
+    keep_live_keys = {
+        "approved_coins",
+        "hedge_mode",
+        "ignored_coins",
+        "max_realized_loss_pct",
+        "minimum_coin_age_days",
+    }
+    for key in sorted(template_config["live"]):
+        if key not in keep_live_keys:
+            del template_config["live"][key]
+    if "logging" in template_config and isinstance(template_config["logging"], dict):
+        template_config["logging"].pop("level", None)
+    allowed_config_keys = add_config_arguments(
+        parser,
+        template_config,
+        command="backtest",
+        help_all=help_all,
+        group_map={},
+    )
+    return parser.parse_args(expand_help_all_argv(raw_argv)), allowed_config_keys
+
+
+@pytest.mark.parametrize("start_flag", ["-sd", "--start-date"])
+def test_backtest_cli_start_date_override_creates_missing_backtest_section(start_flag):
+    source_config, _, _ = load_input_config(str(Path("configs/hype.json")))
+    assert "backtest" not in source_config
+
+    args, allowed_config_keys = _parse_backtest_args(
+        [
+            "configs/hype.json",
+            "--bot.long.hsl_ema_span_minutes",
+            "1440",
+            start_flag,
+            "2025-10-11",
+        ]
+    )
+
+    update_config_with_args(source_config, args, verbose=False, allowed_keys=allowed_config_keys)
+
+    assert source_config["backtest"]["start_date"] == "2025-10-11"
+    assert source_config["bot"]["long"]["hsl_ema_span_minutes"] == pytest.approx(1440.0)
+    assert "backtest.start_date" in source_config["_transform_log"][-1]["details"]["keys"]
+
+
+def test_update_config_with_args_ignores_non_config_parser_args():
+    config = {}
+    args = SimpleNamespace(config_path="configs/hype.json", log_level="info", suite=True)
+
+    update_config_with_args(config, args, verbose=False)
+
+    assert "_transform_log" not in config
+    assert config == {}
 
 
 def test_update_config_with_args_logs_optimize_limits_as_diff(caplog):
