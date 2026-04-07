@@ -238,8 +238,9 @@ class CCXTBot(Passivbot):
         ccxt_config = self._build_ccxt_config()
         user_options = self.user_info.get("options", {})
 
-        # REST client
-        exchange_class = getattr(ccxt_async, self.exchange)
+        # REST client — prefer futures-specific id (e.g. binanceusdm) over generic name
+        ccxt_id = getattr(self, "exchange_ccxt_id", self.exchange)
+        exchange_class = getattr(ccxt_async, ccxt_id)
         self.cca = exchange_class(ccxt_config)
         self.cca.options.update(self._build_ccxt_options())
         self.cca.options.update(user_options)
@@ -248,7 +249,7 @@ class CCXTBot(Passivbot):
 
         # WebSocket client - optional, enables faster order updates
         if self.ws_enabled:
-            ws_class = getattr(ccxt_pro, self.exchange)
+            ws_class = getattr(ccxt_pro, ccxt_id)
             self.ccp = ws_class(ccxt_config)
             self.ccp.options.update(self._build_ccxt_options())
             self.ccp.options.update(user_options)
