@@ -80,3 +80,17 @@ def test_visible_metrics_rejects_invalid_config_type():
 
     with pytest.raises(ValueError, match="backtest.visible_metrics must be null, \\[\\], or"):
         filter_analysis_for_visibility(_make_analysis(), cfg)
+
+
+def test_visible_metrics_prefix_match_supports_metric_families():
+    cfg = get_template_config()
+    cfg["backtest"]["visible_metrics"] = ["drawdown_worst"]
+    cfg["optimize"]["scoring"] = []
+    cfg["optimize"]["limits"] = []
+
+    resolved = resolve_visible_metric_names(cfg, _make_analysis().keys())
+
+    assert resolved == [
+        "drawdown_worst_usd",
+        "drawdown_worst_btc",
+    ]

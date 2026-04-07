@@ -35,6 +35,7 @@ def get_template_config():
                 "max_warmup_minutes": 0,
                 "ohlcv_source_dir": None,
                 "market_order_slippage_pct": 0.0005,
+                "visible_metrics": None,
                 "scenarios": [
                     {"label": "base"},
                     {

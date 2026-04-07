@@ -114,9 +114,24 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
 
     template = get_template_config()
     assert prepared["backtest"]["market_order_slippage_pct"] == template["backtest"]["market_order_slippage_pct"]
+    assert prepared["backtest"]["visible_metrics"] is None
     assert prepared["bot"]["long"]["filter_volume_ema_span"] == template["bot"]["long"]["forager_volume_ema_span"]
     assert prepared["_raw"] == template
     assert prepared["_raw_effective"] == template
+
+
+def test_prepare_config_preserves_backtest_visible_metrics():
+    source = {
+        "backtest": {"visible_metrics": ["gain", "drawdown_worst_hsl"]},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["backtest"]["visible_metrics"] == ["gain", "drawdown_worst_hsl"]
 
 
 def test_prepare_config_assigns_current_schema_version_to_legacy_configs():
