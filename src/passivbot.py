@@ -54,6 +54,7 @@ from config.coerce import (
     normalize_hsl_cooldown_position_policy,
     normalize_hsl_signal_mode,
 )
+from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.overrides import parse_overrides
 from logging_setup import (
     configure_logging,
@@ -1019,14 +1020,11 @@ class Passivbot:
         config = getattr(self, "config", None)
         if config is None:
             return None
-        lookback_days_raw = float(require_live_value(config, "pnls_max_lookback_days"))
-        if not math.isfinite(lookback_days_raw):
-            raise ValueError("live.pnls_max_lookback_days must be finite for pnl lookback logic")
-        lookback_days = max(0.0, lookback_days_raw)
-        if lookback_days == 0.0:
-            return None
-        lookback_ms = max(1, int(round(lookback_days * 86_400_000.0)))
-        return self.get_exchange_time() - lookback_ms
+        lookback = parse_pnls_max_lookback_days(
+            require_live_value(config, "pnls_max_lookback_days"),
+            field_name="live.pnls_max_lookback_days",
+        )
+        return lookback.to_start_ms(self.get_exchange_time(), minimum_ms=1)
 
     def _get_effective_pnl_events(self) -> list:
         if self._pnls_manager is None:
@@ -1036,14 +1034,12 @@ class Passivbot:
             return self._pnls_manager.get_events()
         return self._pnls_manager.get_events(start_ms=start_ms)
 
-    def _equity_hard_stop_lookback_ms(self) -> int:
-        lookback_days_raw = float(require_live_value(self.config, "pnls_max_lookback_days"))
-        if not math.isfinite(lookback_days_raw):
-            raise ValueError(
-                "live.pnls_max_lookback_days must be finite for hard-stop rolling-peak logic"
-            )
-        lookback_days = max(0.0, lookback_days_raw)
-        return max(1, int(round(lookback_days * 86_400_000.0)))
+    def _equity_hard_stop_lookback_ms(self) -> Optional[int]:
+        lookback = parse_pnls_max_lookback_days(
+            require_live_value(self.config, "pnls_max_lookback_days"),
+            field_name="live.pnls_max_lookback_days",
+        )
+        return lookback.to_window_ms(minimum_ms=60_000)
 
     def _equity_hard_stop_apply_sample(
         self,
@@ -1075,7 +1071,9 @@ class Passivbot:
         strategy_pnl = realized_pnl + unrealized_pnl
         peak_strategy_pnl = float(
             self._equity_hard_stop_strategy_pnl_peak.update(
-                int(timestamp_ms), float(strategy_pnl), int(lookback_ms)
+                int(timestamp_ms),
+                float(strategy_pnl),
+                int(lookback_ms) if lookback_ms is not None else (2**64 - 1),
             )
         )
         baseline_balance = balance - realized_pnl
@@ -4645,9 +4643,13 @@ class Passivbot:
 
         try:
             # Use the same lookback window
-            age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
-                self.live_value("pnls_max_lookback_days")
+            lookback = parse_pnls_max_lookback_days(
+                self.live_value("pnls_max_lookback_days"),
+                field_name="live.pnls_max_lookback_days",
             )
+            age_limit = lookback.to_start_ms(self.get_exchange_time(), minimum_ms=1)
+            if age_limit is None:
+                age_limit = 0
 
             # Get existing event IDs and source IDs before refresh
             existing_ids: set[str] = set()
@@ -5083,7 +5085,10 @@ class Passivbot:
                     }
                 ],
                 "metadata": {
-                    "lookback_days": float(self.live_value("pnls_max_lookback_days")),
+                    "lookback_days": parse_pnls_max_lookback_days(
+                        self.live_value("pnls_max_lookback_days"),
+                        field_name="live.pnls_max_lookback_days",
+                    ).display_value,
                     "resolution_ms": ONE_MIN_MS,
                     "events_used": 0,
                     "symbols_covered": [],
@@ -5091,10 +5096,12 @@ class Passivbot:
                 },
             }
 
-        lookback_days = float(self.live_value("pnls_max_lookback_days"))
+        lookback = parse_pnls_max_lookback_days(
+            self.live_value("pnls_max_lookback_days"),
+            field_name="live.pnls_max_lookback_days",
+        )
         ts_now = self.get_exchange_time()
-        lookback_ms = max(lookback_days, 0.0) * 24 * 60 * 60 * 1000
-        lookback_start = ts_now - lookback_ms
+        lookback_start = lookback.to_start_ms(ts_now, minimum_ms=ONE_MIN_MS)
 
         balance_now = (
             float(current_balance) if current_balance is not None else self.get_raw_balance()
@@ -5105,9 +5112,13 @@ class Passivbot:
         )
         baseline_balance = balance_now - total_realised
 
-        start_ts = min(ensure_millis(events[0]["timestamp"]), lookback_start)
+        if lookback_start is None:
+            start_ts = ensure_millis(events[0]["timestamp"])
+            record_start_minute = int(math.floor(start_ts / ONE_MIN_MS) * ONE_MIN_MS)
+        else:
+            start_ts = min(ensure_millis(events[0]["timestamp"]), lookback_start)
+            record_start_minute = int(math.floor(lookback_start / ONE_MIN_MS) * ONE_MIN_MS)
         start_minute = int(math.floor(start_ts / ONE_MIN_MS) * ONE_MIN_MS)
-        record_start_minute = int(math.floor(lookback_start / ONE_MIN_MS) * ONE_MIN_MS)
         end_minute = int(math.floor(ts_now / ONE_MIN_MS) * ONE_MIN_MS)
         if end_minute < record_start_minute:
             end_minute = record_start_minute

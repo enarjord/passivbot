@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover
 
     Fore = _Dummy()
 from prettytable import PrettyTable
+from config.pnl_lookback import parse_pnls_max_lookback_days
 from config_utils import dump_config
 from utils import make_get_filepath
 from pure_funcs import denumpyize, ts_to_date
@@ -1027,8 +1028,9 @@ def create_forager_hard_stop_drawdown_figure(
         if df.empty:
             return figures
         df = df[~df.index.duplicated(keep="first")].sort_index()
-        pnls_max_lookback_days = float(
-            (((config or {}).get("live") or {}).get("pnls_max_lookback_days", 30.0) or 30.0)
+        pnls_lookback = parse_pnls_max_lookback_days(
+            (((config or {}).get("live") or {}).get("pnls_max_lookback_days", 30.0) or 30.0),
+            field_name="live.pnls_max_lookback_days",
         )
         if len(df.index) >= 2:
             sample_minutes = max(
@@ -1037,10 +1039,15 @@ def create_forager_hard_stop_drawdown_figure(
             )
         else:
             sample_minutes = 1.0
-        lookback_window = pd.Timedelta(
-            days=max(pnls_max_lookback_days, sample_minutes / (24.0 * 60.0))
-        )
-        peak_strategy_equity = df["usd_total_equity"].rolling(lookback_window, min_periods=1).max()
+        if pnls_lookback.is_all:
+            peak_strategy_equity = df["usd_total_equity"].cummax()
+        else:
+            lookback_window = pd.Timedelta(
+                days=max(pnls_lookback.days, sample_minutes / (24.0 * 60.0))
+            )
+            peak_strategy_equity = (
+                df["usd_total_equity"].rolling(lookback_window, min_periods=1).max()
+            )
         trace_df = pd.DataFrame(
             {
                 "drawdown_raw": (

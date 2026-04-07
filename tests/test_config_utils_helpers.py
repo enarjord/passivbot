@@ -886,7 +886,7 @@ def test_live_default_help_shows_curated_groups():
     assert "--ignored-coins CSV_OR_PATH" in help_text
     assert "--minimum-coin-age-days FLOAT" in help_text
     assert "--hedge-mode Y/N" in help_text
-    assert "--pnls-max-lookback-days FLOAT, -pmld FLOAT" in help_text
+    assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
     assert "--user VALUE, -u VALUE" in help_text
     assert "--live.auto_gs" not in help_text
     assert "--optimize.iters" not in help_text
@@ -924,9 +924,11 @@ def test_live_reserved_pnls_lookback_alias_parses_short_and_long():
 
     parsed_short = parser.parse_args(["-pmld", "14"])
     parsed_long = parser.parse_args(["--pnls-max-lookback-days", "21"])
+    parsed_all = parser.parse_args(["--pnls-max-lookback-days", "all"])
 
     assert getattr(parsed_short, "live.pnls_max_lookback_days") == pytest.approx(14.0)
     assert getattr(parsed_long, "live.pnls_max_lookback_days") == pytest.approx(21.0)
+    assert getattr(parsed_all, "live.pnls_max_lookback_days") == "all"
 
 
 def test_live_reserved_user_alias_parses_short_and_long():

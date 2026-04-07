@@ -2,6 +2,7 @@ from copy import deepcopy
 from typing import Optional
 
 from .access import require_config_dict
+from .pnl_lookback import normalize_pnls_max_lookback_days_config_value
 from .schema import get_template_config
 
 
@@ -263,6 +264,9 @@ def normalize_validation_fields(config: dict, *, raw_optimize=None) -> None:
     config["live"]["hsl_signal_mode"] = normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
     config["live"]["hsl_position_during_cooldown_policy"] = (
         normalize_hsl_cooldown_position_policy(config["live"]["hsl_position_during_cooldown_policy"])
+    )
+    config["live"]["pnls_max_lookback_days"] = normalize_pnls_max_lookback_days_config_value(
+        config["live"]["pnls_max_lookback_days"]
     )
     normalize_logging_config(config)
     normalize_monitor_config(config)

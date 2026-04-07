@@ -44,6 +44,7 @@ from config.limits import (
 )
 from config.log_output import log_config_message
 from config.metrics import CURRENCY_METRICS, SHARED_METRICS
+from config.pnl_lookback import normalize_pnls_max_lookback_days_config_value
 from config.normalize import normalize_config
 from config.overrides import (
     apply_allowed_modifications as staged_apply_allowed_modifications,
@@ -654,11 +655,11 @@ RESERVED_CLI_ARGS = {
     "live.pnls_max_lookback_days": {
         "visible": ["--pnls-max-lookback-days", "-pmld"],
         "hidden": ["--live.pnls_max_lookback_days", "--live_pnls_max_lookback_days"],
-        "type": float,
-        "metavar": "FLOAT",
+        "type": normalize_pnls_max_lookback_days_config_value,
+        "metavar": "FLOAT|all",
         "commands": {"live"},
         "group": {"live": "Behavior"},
-        "help": "How far into the past to fetch realized PnL history, in days.",
+        "help": "How far into the past to fetch realized PnL history: 0=minimal lookback, positive=float days, 'all'=full history.",
     },
     "live.price_distance_threshold": {
         "visible": ["--price-distance-threshold", "-pdt"],

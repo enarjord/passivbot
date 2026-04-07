@@ -33,6 +33,7 @@ passivbot live configs/live/my_config.json
 - Use CLI overrides for temporary experiments, not as your main configuration workflow.
 - Treat `bot`, `live`, `backtest`, and `optimize` as one config file with command-specific sections.
 - Keep shared execution/risk settings in `live`. Backtests inherit `market_orders_allowed`, `market_order_near_touch_threshold`, and `pnls_max_lookback_days` directly from `live`; these fields are not accepted under `backtest`.
+- `live.pnls_max_lookback_days` uses one shared contract across live and backtest: `0` = minimal lookback, positive numbers = that many rolling days, and `"all"` = full available history.
 - Keep new configs on the canonical schema. Do not author new configs using deprecated field names.
 - Use `coin_overrides` for per-coin exceptions instead of cloning whole configs for minor differences.
 - Leave `logging.persist_to_file = true` for normal live operations so each bot run has a durable logfile under `logs/` and monitor tooling can follow the stable `logs/{user}.log` alias.
