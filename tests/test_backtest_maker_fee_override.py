@@ -1,3 +1,5 @@
+import logging
+
 from config_utils import get_template_config
 from backtest import prep_backtest_args
 
@@ -108,3 +110,25 @@ def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():
     config["backtest"]["dynamic_wel_by_tradability"] = False
     _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["dynamic_wel_by_tradability"] is False
+
+
+def test_prep_backtest_args_does_not_log_execution_settings_by_default(caplog):
+    config = _base_config()
+    mss = _base_mss()
+
+    with caplog.at_level(logging.INFO):
+        prep_backtest_args(config, mss, "binance")
+
+    assert "[backtest] effective execution settings:" not in caplog.text
+
+
+def test_prep_backtest_args_logs_execution_settings_when_enabled(caplog):
+    config = _base_config()
+    mss = _base_mss()
+
+    with caplog.at_level(logging.INFO):
+        prep_backtest_args(config, mss, "binance", log_execution_settings=True)
+
+    assert "[backtest] effective execution settings:" in caplog.text
+    assert "market_orders_allowed" in caplog.text
+    assert "pnls_max_lookback_days" in caplog.text

@@ -505,12 +505,18 @@ def build_backtest_payload(
     timestamps=None,
     *,
     coin_indices: list[int] | None = None,
+    log_execution_settings: bool = False,
 ) -> BacktestPayload:
     """
     Assemble the bundle, bot params, and metadata needed to execute a backtest.
     """
 
-    bot_params_list, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
+    bot_params_list, exchange_params, backtest_params = prep_backtest_args(
+        config,
+        mss,
+        exchange,
+        log_execution_settings=log_execution_settings,
+    )
     backtest_params = dict(backtest_params)
     coins_order = backtest_params.get("coins", [])
 
@@ -1251,7 +1257,15 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
     return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
 
 
-def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
+def prep_backtest_args(
+    config,
+    mss,
+    exchange,
+    exchange_params=None,
+    backtest_params=None,
+    *,
+    log_execution_settings: bool = False,
+):
     def _coerce_config_bool(value, *, field_name):
         if isinstance(value, str):
             normalized = value.strip().lower()
@@ -1422,26 +1436,27 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             taker_fee = mss[coins[0]].get("taker_fee", mss[coins[0]].get("taker", 0.00055))
         else:
             taker_fee = float(taker_fee_override)
-        logging.info("[backtest] effective execution settings:")
-        logging.info(
-            "[backtest]   market_orders_allowed = %s (%s)",
-            market_orders_allowed,
-            market_orders_allowed_source,
-        )
-        logging.info(
-            "[backtest]   market_order_near_touch_threshold = %s (%s)",
-            market_order_near_touch_threshold,
-            market_order_near_touch_threshold_source,
-        )
-        logging.info(
-            "[backtest]   market_order_slippage_pct = %s (backtest)",
-            market_order_slippage_pct,
-        )
-        logging.info(
-            "[backtest]   pnls_max_lookback_days = %s (%s)",
-            pnls_max_lookback_days,
-            pnls_max_lookback_days_source,
-        )
+        if log_execution_settings:
+            logging.info("[backtest] effective execution settings:")
+            logging.info(
+                "[backtest]   market_orders_allowed = %s (%s)",
+                market_orders_allowed,
+                market_orders_allowed_source,
+            )
+            logging.info(
+                "[backtest]   market_order_near_touch_threshold = %s (%s)",
+                market_order_near_touch_threshold,
+                market_order_near_touch_threshold_source,
+            )
+            logging.info(
+                "[backtest]   market_order_slippage_pct = %s (backtest)",
+                market_order_slippage_pct,
+            )
+            logging.info(
+                "[backtest]   pnls_max_lookback_days = %s (%s)",
+                pnls_max_lookback_days,
+                pnls_max_lookback_days_source,
+            )
         backtest_params = {
             "starting_balance": require_config_value(config, "backtest.starting_balance"),
             "maker_fee": maker_fee,
@@ -1568,7 +1583,15 @@ def run_backtest(
 
     logging.info(f"Backtesting {exchange}...")
     sts = utc_ms()
-    payload = build_backtest_payload(hlcvs, mss, config, exchange, btc_usd_prices, timestamps)
+    payload = build_backtest_payload(
+        hlcvs,
+        mss,
+        config,
+        exchange,
+        btc_usd_prices,
+        timestamps,
+        log_execution_settings=True,
+    )
     fills, equities_array, analysis = execute_backtest(payload, config)
     logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
     if return_payload:
