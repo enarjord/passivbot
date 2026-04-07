@@ -27,13 +27,6 @@ def _parse_version_tuple(value: object) -> Optional[tuple[int, ...]]:
     return tuple(int(part) for part in parts)
 
 
-def _is_pre_v79_config(version: object) -> bool:
-    parsed = _parse_version_tuple(version)
-    if parsed is None:
-        return version in (None, "")
-    return parsed < (7, 9, 0)
-
-
 def migrate_config_version(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
@@ -214,53 +207,3 @@ def migrate_empty_means_all_approved(
     )
     if tracker is not None:
         tracker.update(["live", "approved_coins"], approved_source, "all")
-
-
-def migrate_pre_v79_backtest_pnls_lookback(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    original_version = result.get("config_version")
-    if not _is_pre_v79_config(original_version):
-        return
-
-    backtest = result.setdefault("backtest", {})
-    if "pnls_max_lookback_days" in backtest:
-        return
-
-    backtest["pnls_max_lookback_days"] = 0.0
-    _log_config(
-        verbose,
-        logging.INFO,
-        "added backtest.pnls_max_lookback_days=0.0 for pre-v7.9 backtest compatibility; "
-        "live.pnls_max_lookback_days remains unchanged",
-    )
-    if tracker is not None:
-        tracker.add(["backtest", "pnls_max_lookback_days"], 0.0)
-
-
-def migrate_pre_v79_backtest_market_orders_allowed(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    original_version = result.get("config_version")
-    if not _is_pre_v79_config(original_version):
-        return
-
-    backtest = result.setdefault("backtest", {})
-    if "market_orders_allowed" in backtest:
-        return
-
-    live_market_orders_allowed = _coerce_legacy_bool(
-        result.setdefault("live", {}).get("market_orders_allowed", False)
-    )
-    if not live_market_orders_allowed:
-        return
-
-    backtest["market_orders_allowed"] = False
-    _log_config(
-        verbose,
-        logging.INFO,
-        "added backtest.market_orders_allowed=false for pre-v7.9 backtest compatibility; "
-        "live.market_orders_allowed remains unchanged",
-    )
-    if tracker is not None:
-        tracker.add(["backtest", "market_orders_allowed"], False)

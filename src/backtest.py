@@ -54,8 +54,8 @@ from config import (
     prepare_config,
 )
 from config.access import (
-    get_backtest_override_or_live_value_with_source,
     get_optional_config_value,
+    get_optional_live_value,
     require_config_value,
     require_live_value,
 )
@@ -418,12 +418,9 @@ def _build_hlcvs_bundle(
 @dataclass
 class BacktestExecutionSettings:
     market_orders_allowed: bool
-    market_orders_allowed_source: str
     market_order_near_touch_threshold: float
-    market_order_near_touch_threshold_source: str
     market_order_slippage_pct: float
     pnls_max_lookback_days: float
-    pnls_max_lookback_days_source: str
 
 
 @dataclass
@@ -1224,12 +1221,6 @@ def _coerce_config_bool(value, *, field_name):
     return bool(value)
 
 
-def _field_name_for_source(key, source):
-    if source == "backtest override":
-        return f"backtest.{key}"
-    return f"live.{key}"
-
-
 def get_backtest_execution_settings(config, *, is_runtime_compiled: bool = False) -> BacktestExecutionSettings:
     if not is_runtime_compiled:
         config = compile_runtime_config(config, runtime="backtest", record_step=False)
@@ -1238,43 +1229,34 @@ def get_backtest_execution_settings(config, *, is_runtime_compiled: bool = False
     )
     if market_order_slippage_pct < 0.0:
         raise ValueError("backtest.market_order_slippage_pct must be >= 0.0")
-    market_orders_allowed_raw, market_orders_allowed_source = (
-        get_backtest_override_or_live_value_with_source(config, "market_orders_allowed", False)
-    )
+    market_orders_allowed_raw = get_optional_live_value(config, "market_orders_allowed", False)
     market_orders_allowed = _coerce_config_bool(
         market_orders_allowed_raw,
-        field_name=_field_name_for_source("market_orders_allowed", market_orders_allowed_source),
+        field_name="live.market_orders_allowed",
     )
-    market_order_near_touch_threshold_raw, market_order_near_touch_threshold_source = (
-        get_backtest_override_or_live_value_with_source(
-            config, "market_order_near_touch_threshold", 0.001
-        )
+    market_order_near_touch_threshold_raw = get_optional_live_value(
+        config, "market_order_near_touch_threshold", 0.001
     )
     market_order_near_touch_threshold = float(market_order_near_touch_threshold_raw or 0.0)
     if market_order_near_touch_threshold < 0.0:
         raise ValueError(
-            f"{_field_name_for_source('market_order_near_touch_threshold', market_order_near_touch_threshold_source)} must be >= 0.0"
+            "live.market_order_near_touch_threshold must be >= 0.0"
         )
-    pnls_max_lookback_days_raw, pnls_max_lookback_days_source = (
-        get_backtest_override_or_live_value_with_source(config, "pnls_max_lookback_days", 30.0)
-    )
+    pnls_max_lookback_days_raw = get_optional_live_value(config, "pnls_max_lookback_days", 30.0)
     pnls_max_lookback_days = float(pnls_max_lookback_days_raw or 0.0)
     if not math.isfinite(pnls_max_lookback_days):
         raise ValueError(
-            f"{_field_name_for_source('pnls_max_lookback_days', pnls_max_lookback_days_source)} must be finite"
+            "live.pnls_max_lookback_days must be finite"
         )
     if pnls_max_lookback_days < 0.0:
         raise ValueError(
-            f"{_field_name_for_source('pnls_max_lookback_days', pnls_max_lookback_days_source)} must be >= 0.0"
+            "live.pnls_max_lookback_days must be >= 0.0"
         )
     return BacktestExecutionSettings(
         market_orders_allowed=market_orders_allowed,
-        market_orders_allowed_source=market_orders_allowed_source,
         market_order_near_touch_threshold=market_order_near_touch_threshold,
-        market_order_near_touch_threshold_source=market_order_near_touch_threshold_source,
         market_order_slippage_pct=market_order_slippage_pct,
         pnls_max_lookback_days=pnls_max_lookback_days,
-        pnls_max_lookback_days_source=pnls_max_lookback_days_source,
     )
 
 
@@ -1283,23 +1265,20 @@ def log_backtest_execution_settings(execution_settings: BacktestExecutionSetting
         return
     logging.info("[backtest] effective execution settings:")
     logging.info(
-        "[backtest]   market_orders_allowed = %s (%s)",
+        "[backtest]   market_orders_allowed = %s (live)",
         execution_settings.market_orders_allowed,
-        execution_settings.market_orders_allowed_source,
     )
     logging.info(
-        "[backtest]   market_order_near_touch_threshold = %s (%s)",
+        "[backtest]   market_order_near_touch_threshold = %s (live)",
         execution_settings.market_order_near_touch_threshold,
-        execution_settings.market_order_near_touch_threshold_source,
     )
     logging.info(
         "[backtest]   market_order_slippage_pct = %s (backtest)",
         execution_settings.market_order_slippage_pct,
     )
     logging.info(
-        "[backtest]   pnls_max_lookback_days = %s (%s)",
+        "[backtest]   pnls_max_lookback_days = %s (live)",
         execution_settings.pnls_max_lookback_days,
-        execution_settings.pnls_max_lookback_days_source,
     )
 
 

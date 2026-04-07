@@ -427,8 +427,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
     - otherwise, if `abs(order_price_diff) <= market_order_near_touch_threshold` => `market`
     - otherwise => `limit`
     - panic closes are still controlled separately by `bot.{long,short}.hsl_panic_close_order_type`
-  - Default ownership is `config.live`. Backtests inherit `live.market_orders_allowed` and `live.market_order_near_touch_threshold` unless you explicitly add `backtest.market_orders_allowed` or `backtest.market_order_near_touch_threshold` as overrides.
-  - Legacy migration note: pre-`v7.9` configs that had `live.market_orders_allowed = true` are migrated with `backtest.market_orders_allowed = false` unless that backtest override was already set explicitly. This preserves old backtest semantics while leaving live behavior unchanged.
+  - Ownership is `config.live`. Backtests always inherit `live.market_orders_allowed` and `live.market_order_near_touch_threshold`; `config.backtest` does not accept overrides for either field.
 - **order_match_tolerance_pct**: Percentage tolerance (in %) used to match near-identical cancel/create pairs and avoid order churn. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling/replacing it.
 - **max_n_cancellations_per_batch**: Cancels `n` open orders per execution.
 - **max_n_creations_per_batch**: Creates `n` new orders per execution.
@@ -439,7 +438,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **balance_hysteresis_snap_pct**: Hysteresis snap percentage applied to balance updates to reduce noise. Set `0.0` to disable hysteresis.
 - **recv_window_ms**: Millisecond tolerance for authenticated REST calls (default `5000`). Increase if your exchange intermittently rejects requests with `invalid request ... recv_window` errors due to clock drift.
 - Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used.
-- **pnls_max_lookback_days**: How far into the past to fetch PnL history. This also feeds the rolling realized-PnL window used by live risk logic and by backtests unless you explicitly override it under `backtest`.
+- **pnls_max_lookback_days**: How far into the past to fetch PnL history. This also feeds the rolling realized-PnL window used by both live risk logic and backtests. Ownership is `config.live`; `config.backtest` does not accept an override.
 - **price_distance_threshold**: Minimum distance to current price action required for EMA-based limit orders.
 - **risk_wel_enforcer_threshold**: Per-symbol multiplier that triggers the WEL enforcer. When a position’s exposure exceeds `wallet_exposure_limit * (1 + risk_we_excess_allowance_pct) * risk_wel_enforcer_threshold` the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming, `1.0` for a hard cap, or ≤0 to disable.
 - **risk_twel_enforcer_threshold**: Fraction of the configured `total_wallet_exposure_limit` that triggers the TWEL enforcer. When aggregate exposure exceeds this threshold the bot queues reduction orders instead of new entries. Set >1.0 to allow a grace margin, `1.0` for strict enforcement, or ≤0 to disable.

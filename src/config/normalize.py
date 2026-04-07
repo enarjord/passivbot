@@ -6,6 +6,7 @@ from .hydrate import (
     apply_non_live_adjustments,
     hydrate_missing_template_fields,
     preserve_coin_sources,
+    reject_backtest_inherited_live_fields,
     seed_missing_compatibility_sections,
     sync_with_template,
 )
@@ -76,6 +77,7 @@ def normalize_config(
     sync_canonical_strategy_config(result, tracker=tracker)
     ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
     hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
+    reject_backtest_inherited_live_fields(result)
     sync_with_template(
         template,
         result,

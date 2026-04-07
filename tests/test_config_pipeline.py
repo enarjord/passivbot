@@ -282,7 +282,7 @@ def test_prepare_config_rejects_malformed_config_version():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
-def test_prepare_config_migrates_pre_v79_backtest_pnls_lookback_override():
+def test_prepare_config_keeps_live_pnls_max_lookback_days_without_backtest_override():
     source = {
         "backtest": {},
         "bot": {"long": {}, "short": {}},
@@ -293,11 +293,11 @@ def test_prepare_config_migrates_pre_v79_backtest_pnls_lookback_override():
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["backtest"]["pnls_max_lookback_days"] == pytest.approx(0.0)
     assert prepared["live"]["pnls_max_lookback_days"] == pytest.approx(30.0)
+    assert "pnls_max_lookback_days" not in prepared["backtest"]
 
 
-def test_prepare_config_migrates_pre_v79_backtest_market_orders_allowed_override():
+def test_prepare_config_keeps_live_market_orders_allowed_without_backtest_override():
     source = {
         "backtest": {},
         "bot": {"long": {}, "short": {}},
@@ -308,8 +308,29 @@ def test_prepare_config_migrates_pre_v79_backtest_market_orders_allowed_override
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["backtest"]["market_orders_allowed"] is False
     assert prepared["live"]["market_orders_allowed"] is True
+    assert "market_orders_allowed" not in prepared["backtest"]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("market_orders_allowed", False),
+        ("market_order_near_touch_threshold", 0.0),
+        ("pnls_max_lookback_days", 0.0),
+    ],
+)
+def test_prepare_config_rejects_backtest_inherited_live_fields(field, value):
+    source = {
+        "backtest": {field: value},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    with pytest.raises(ValueError, match=f"backtest\\.{field}"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 def test_prepare_config_migrates_legacy_backtest_market_slippage_key():

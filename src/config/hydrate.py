@@ -1,11 +1,9 @@
 import logging
-import math
 from copy import deepcopy
 from typing import Any, Dict, Iterable, Optional
 
 from utils import format_end_date, normalize_coins_source, symbol_to_coin
 
-from .access import get_optional_config_value
 from .limits import _resolve_optimize_limits_for_load
 from .log_output import log_config_message
 from .optimize_bounds import sort_optimize_bounds_in_place
@@ -19,13 +17,10 @@ Path = tuple[str, ...]
 PARTIALLY_OPEN_CONFIG_PATHS: set[Path] = {
     ("backtest", "aggregate"),
 }
-BACKTEST_LIVE_OVERRIDE_KEYS: tuple[str, ...] = (
+BACKTEST_INHERITED_LIVE_KEYS: tuple[str, ...] = (
     "market_orders_allowed",
     "market_order_near_touch_threshold",
     "pnls_max_lookback_days",
-)
-BACKTEST_LIVE_OVERRIDE_PATHS: tuple[Path, ...] = tuple(
-    ("backtest", key) for key in BACKTEST_LIVE_OVERRIDE_KEYS
 )
 
 TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
@@ -33,57 +28,20 @@ TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
     ("backtest", "suite", "aggregate"),
     ("backtest", "suite", "scenarios"),
     ("backtest", "market_settings_sources"),
-    *BACKTEST_LIVE_OVERRIDE_PATHS,
     *tuple(PARTIALLY_OPEN_CONFIG_PATHS),
 )
 
 
-def _coerce_config_bool(value: Any, *, field_name: str) -> bool:
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "y", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "n", "off", ""}:
-            return False
-        raise ValueError(f"{field_name} must be a boolean; got {value!r}")
-    return bool(value)
-
-
-def _normalize_backtest_live_override_fields(result: dict, *, verbose: bool = True, tracker=None) -> None:
+def reject_backtest_inherited_live_fields(result: dict) -> None:
     backtest = result.setdefault("backtest", {})
-
-    for key in BACKTEST_LIVE_OVERRIDE_KEYS:
-        if key not in backtest:
-            continue
-        raw_value = backtest[key]
-        if raw_value is None:
-            del backtest[key]
-            if tracker is not None:
-                tracker.remove(["backtest", key], raw_value)
-            continue
-        if key == "market_orders_allowed":
-            normalized_value = _coerce_config_bool(raw_value, field_name=f"backtest.{key}")
-        else:
-            normalized_value = float(raw_value)
-            if not math.isfinite(normalized_value):
-                raise ValueError(f"backtest.{key} must be finite")
-            if normalized_value < 0.0:
-                raise ValueError(f"backtest.{key} must be >= 0.0")
-        if raw_value != normalized_value:
-            backtest[key] = normalized_value
-            if tracker is not None:
-                tracker.update(["backtest", key], raw_value, normalized_value)
-        live_value = get_optional_config_value(result, f"live.{key}")
-        if live_value is not None and backtest[key] != live_value:
-            log_config_message(
-                verbose,
-                logging.WARNING,
-                "backtest.%s overrides live.%s (%s vs %s)",
-                key,
-                key,
-                backtest[key],
-                live_value,
-            )
+    invalid = [key for key in BACKTEST_INHERITED_LIVE_KEYS if key in backtest]
+    if invalid:
+        joined = ", ".join(f"backtest.{key}" for key in invalid)
+        live_joined = ", ".join(f"live.{key}" for key in invalid)
+        raise ValueError(
+            f"{joined} {'is' if len(invalid) == 1 else 'are'} not supported; "
+            f"set {'the value' if len(invalid) == 1 else 'these values'} under {live_joined} instead"
+        )
 
 def hydrate_missing_template_fields(
     template: dict,
@@ -215,7 +173,6 @@ def apply_non_live_adjustments(
     raw_optimize_limits: Any = None,
     raw_optimize_limits_present: Optional[bool] = None,
 ) -> None:
-    _normalize_backtest_live_override_fields(result, verbose=verbose, tracker=tracker)
     for key in ("approved_coins", "ignored_coins"):
         result["live"][key] = normalize_coins_source(
             result["live"].get(key, ""),

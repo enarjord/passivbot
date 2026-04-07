@@ -41,20 +41,3 @@ def require_live_value(config: dict, key: str):
 
 def get_optional_live_value(config: dict, key: str, default=None):
     return get_optional_config_value(config, f"live.{key}", default)
-
-
-def has_backtest_override(config: dict, key: str) -> bool:
-    backtest = config.get("backtest")
-    return isinstance(backtest, dict) and key in backtest and backtest[key] is not None
-
-
-def get_backtest_override_or_live_value(config: dict, key: str, default=None):
-    if has_backtest_override(config, key):
-        return config["backtest"][key]
-    return get_optional_config_value(config, f"live.{key}", default)
-
-
-def get_backtest_override_or_live_value_with_source(config: dict, key: str, default=None):
-    if has_backtest_override(config, key):
-        return config["backtest"][key], "backtest override"
-    return get_optional_config_value(config, f"live.{key}", default), "live"

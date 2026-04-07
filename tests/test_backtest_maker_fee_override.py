@@ -74,31 +74,20 @@ def test_prep_backtest_args_passes_market_order_near_touch_threshold_from_live()
     assert backtest_params["market_order_near_touch_threshold"] == 0.0017
 
 
-def test_prep_backtest_args_prefers_market_order_near_touch_threshold_backtest_override():
-    config = _base_config()
-    config["live"]["market_order_near_touch_threshold"] = 0.0017
-    config["backtest"]["market_order_near_touch_threshold"] = 0.0
-    mss = _base_mss()
-    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["market_order_near_touch_threshold"] == 0.0
-
-
-def test_prep_backtest_args_prefers_market_orders_allowed_backtest_override():
+def test_prep_backtest_args_uses_market_orders_allowed_from_live():
     config = _base_config()
     config["live"]["market_orders_allowed"] = True
-    config["backtest"]["market_orders_allowed"] = False
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["market_orders_allowed"] is False
+    assert backtest_params["market_orders_allowed"] is True
 
 
-def test_prep_backtest_args_prefers_pnls_max_lookback_days_backtest_override():
+def test_prep_backtest_args_uses_pnls_max_lookback_days_from_live():
     config = _base_config()
     config["live"]["pnls_max_lookback_days"] = 30.0
-    config["backtest"]["pnls_max_lookback_days"] = 0.0
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["pnls_max_lookback_days"] == 0.0
+    assert backtest_params["pnls_max_lookback_days"] == 30.0
 
 
 def test_prep_backtest_args_passes_liquidation_threshold():
