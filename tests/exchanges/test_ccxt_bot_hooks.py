@@ -117,6 +117,81 @@ class TestWatchOrdersTemplateMethod:
 class TestCreateCcxtSessionsWebSocketOptional:
     """Test that WebSocket is optional in create_ccxt_sessions()."""
 
+    def test_prefers_exchange_ccxt_id_when_available(self):
+        """Should instantiate CCXT clients with futures-specific id when present."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.user_info = {"exchange": "binance", "apiKey": "test", "options": {"user_opt": "x"}}
+        bot.exchange = "binance"
+        bot.exchange_ccxt_id = "binanceusdm"
+        bot.ws_enabled = True
+        bot.endpoint_override = None
+        bot._build_ccxt_config = MagicMock(return_value={"apiKey": "test"})
+        bot._build_ccxt_options = MagicMock(return_value={"cfg_opt": "y"})
+        bot._apply_endpoint_override = MagicMock()
+
+        import ccxt.async_support as ccxt_async
+        import ccxt.pro as ccxt_pro
+
+        rest_ctor = MagicMock()
+        rest_ctor.return_value = MagicMock()
+        rest_ctor.return_value.options = {}
+        ws_ctor = MagicMock()
+        ws_ctor.return_value = MagicMock()
+        ws_ctor.return_value.options = {}
+        generic_rest_ctor = MagicMock()
+        generic_ws_ctor = MagicMock()
+
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(ccxt_async, "binanceusdm", rest_ctor, raising=False)
+            m.setattr(ccxt_pro, "binanceusdm", ws_ctor, raising=False)
+            m.setattr(ccxt_async, "binance", generic_rest_ctor, raising=False)
+            m.setattr(ccxt_pro, "binance", generic_ws_ctor, raising=False)
+            bot.create_ccxt_sessions()
+
+        rest_ctor.assert_called_once_with({"apiKey": "test"})
+        ws_ctor.assert_called_once_with({"apiKey": "test"})
+        generic_rest_ctor.assert_not_called()
+        generic_ws_ctor.assert_not_called()
+        assert bot.cca.options["cfg_opt"] == "y"
+        assert bot.cca.options["user_opt"] == "x"
+        assert bot.cca.options["defaultType"] == "swap"
+        assert bot.ccp.options["cfg_opt"] == "y"
+        assert bot.ccp.options["user_opt"] == "x"
+        assert bot.ccp.options["defaultType"] == "swap"
+
+    def test_falls_back_to_exchange_when_exchange_ccxt_id_missing(self):
+        """Should support test-created instances without exchange_ccxt_id."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.user_info = {"exchange": "paradex", "apiKey": "test"}
+        bot.exchange = "paradex"
+        bot.ws_enabled = True
+        bot.endpoint_override = None
+        bot._build_ccxt_config = MagicMock(return_value={"apiKey": "test"})
+        bot._build_ccxt_options = MagicMock(return_value={})
+        bot._apply_endpoint_override = MagicMock()
+
+        import ccxt.async_support as ccxt_async
+        import ccxt.pro as ccxt_pro
+
+        rest_ctor = MagicMock()
+        rest_ctor.return_value = MagicMock()
+        rest_ctor.return_value.options = {}
+        ws_ctor = MagicMock()
+        ws_ctor.return_value = MagicMock()
+        ws_ctor.return_value.options = {}
+
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(ccxt_async, "paradex", rest_ctor, raising=False)
+            m.setattr(ccxt_pro, "paradex", ws_ctor, raising=False)
+            bot.create_ccxt_sessions()
+
+        rest_ctor.assert_called_once_with({"apiKey": "test"})
+        ws_ctor.assert_called_once_with({"apiKey": "test"})
+
     def test_sets_ccp_none_when_ws_disabled(self):
         """Should set ccp=None instead of raising when ws_enabled=False."""
         from exchanges.ccxt_bot import CCXTBot
