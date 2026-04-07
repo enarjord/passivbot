@@ -1807,7 +1807,7 @@ async def main():
             del template_config["live"][key]
     if "logging" in template_config and isinstance(template_config["logging"], dict):
         template_config["logging"].pop("level", None)
-    add_config_arguments(
+    allowed_config_keys = add_config_arguments(
         parser,
         template_config,
         command="backtest",
@@ -1820,7 +1820,7 @@ async def main():
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
-    update_config_with_args(source_config, args, verbose=True)
+    update_config_with_args(source_config, args, verbose=True, allowed_keys=allowed_config_keys)
     config = prepare_config(
         source_config,
         base_config_path=base_config_path,

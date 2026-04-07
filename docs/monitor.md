@@ -116,3 +116,11 @@ Current behavior:
 2. Otherwise launches the relay automatically for local relay URLs
 3. Selects the newest `logs/*.log` file by default unless `--log-file` is provided
 4. Passes the selected bot log into the TUI for local tailing
+
+Live bots now keep both:
+
+- a timestamped per-run logfile under `logs/`
+- a stable `logs/{user}.log` alias to the current run
+
+So local monitor tooling can either follow the stable per-user path explicitly or let `monitor-dev`
+pick the newest logfile automatically.

@@ -72,6 +72,7 @@ from config.migrations import (
     build_base_config_from_flavor as build_migration_base_config_from_flavor,
     detect_flavor as detect_migration_flavor,
     migrate_btc_collateral_settings as migrate_btc_collateral_settings_v7,
+    migrate_empty_means_all_approved as migrate_empty_means_all_approved_v7,
     migrate_suite_to_scenarios as migrate_suite_to_scenarios_v7,
     rename_config_keys as rename_migration_config_keys,
 )
@@ -247,6 +248,12 @@ def _migrate_btc_collateral_settings(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
     migrate_btc_collateral_settings_v7(result, verbose=verbose, tracker=tracker)
+
+
+def _migrate_empty_means_all_approved(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    migrate_empty_means_all_approved_v7(result, verbose=verbose, tracker=tracker)
 
 
 def detect_flavor(config: dict, template: dict) -> str:
@@ -561,8 +568,9 @@ RESERVED_CLI_ARGS = {
             "optimize": "Coin Selection",
         },
         "help": (
-            "Approved coins. Comma-separated coins like BTC,ETH,XRP, or path to a JSON "
-            "coin list file. Use coin tickers, not exchange symbols."
+            "Approved coins. Use CSV like BTC,ETH,XRP, the literal 'all', a path to a JSON "
+            "coin list file, or a JSON/HJSON per-side object like "
+            "{\"long\":[\"BTC\"],\"short\":\"all\"}. Use coin tickers, not exchange symbols."
         ),
     },
     "live.ignored_coins": {
@@ -1099,7 +1107,9 @@ def add_reserved_arguments(
     return reserved_acronyms, reserved_keys
 
 
-def add_config_arguments(parser, config, *, command: Optional[str] = None, help_all: bool = False, group_map=None):
+def add_config_arguments(
+    parser, config, *, command: Optional[str] = None, help_all: bool = False, group_map=None
+):
     """Add all CLI arguments for config parameters.
 
     This is the main entry point for adding config-based arguments.
@@ -1113,6 +1123,7 @@ def add_config_arguments(parser, config, *, command: Optional[str] = None, help_
     reserved_acronyms, reserved_keys = add_reserved_arguments(
         parser, command=command, help_all=help_all, group_map=group_map
     )
+    registered_keys = set(reserved_keys)
     add_arguments_recursively(
         parser,
         config,
@@ -1122,7 +1133,9 @@ def add_config_arguments(parser, config, *, command: Optional[str] = None, help_
         command=command,
         help_all=help_all,
         group_map=group_map,
+        registered_keys=registered_keys,
     )
+    return registered_keys
 
 
 def add_arguments_recursively(
@@ -1134,6 +1147,7 @@ def add_arguments_recursively(
     command: Optional[str] = None,
     help_all: bool = False,
     group_map=None,
+    registered_keys=None,
 ):
     """Recursively add CLI arguments for config parameters.
 
@@ -1148,6 +1162,8 @@ def add_arguments_recursively(
         acronyms = set()
     if skip_keys is None:
         skip_keys = set()
+    if registered_keys is None:
+        registered_keys = set()
 
     for key in sorted(config):
         value = config[key]
@@ -1185,6 +1201,7 @@ def add_arguments_recursively(
                     ),
                 )
                 acronyms.add(acronym)
+                registered_keys.add(full_name)
                 continue
             add_arguments_recursively(
                 parser,
@@ -1195,6 +1212,7 @@ def add_arguments_recursively(
                 command=command,
                 help_all=help_all,
                 group_map=group_map,
+                registered_keys=registered_keys,
             )
             continue
         else:
@@ -1247,6 +1265,7 @@ def add_arguments_recursively(
                 ),
             )
             acronyms.add(acronym)
+            registered_keys.add(full_name)
 
 
 def recursive_config_update(config, key, value, path=None, verbose=False):
@@ -1266,35 +1285,59 @@ def recursive_config_update(config, key, value, path=None, verbose=False):
                 return float(new_value)
         return new_value
 
-    if key in config:
-        coerced_value = _coerce_value(config[key], value)
-        if coerced_value != config[key]:
-            full_path = ".".join(path + [key])
-            old_value = deepcopy(config[key])
-            message, args = _format_config_change_message(full_path, config[key], coerced_value)
-            _log_config(verbose, logging.INFO, message, *args)
-            config[key] = coerced_value
-            return {"path": full_path, "old": old_value, "new": deepcopy(coerced_value)}
-        return None
-
     key_split = key.split(".")
-    if key_split[0] in config:
-        new_path = path + [key_split[0]]
-        return recursive_config_update(
-            config[key_split[0]], ".".join(key_split[1:]), value, new_path, verbose=verbose
+    current_key = key_split[0]
+    full_path = ".".join(path + [current_key])
+
+    if len(key_split) == 1:
+        if current_key in config:
+            coerced_value = _coerce_value(config[current_key], value)
+            if coerced_value != config[current_key]:
+                old_value = deepcopy(config[current_key])
+                message, args = _format_config_change_message(
+                    full_path, config[current_key], coerced_value
+                )
+                _log_config(verbose, logging.INFO, message, *args)
+                config[current_key] = coerced_value
+                return {"path": full_path, "old": old_value, "new": deepcopy(coerced_value)}
+            return None
+        _log_config(verbose, logging.INFO, "added %s %s", full_path, value)
+        config[current_key] = deepcopy(value)
+        return {"path": full_path, "old": None, "new": deepcopy(value)}
+
+    if current_key not in config:
+        config[current_key] = {}
+    elif not isinstance(config[current_key], dict):
+        raise TypeError(
+            f"cannot apply nested config override {'.'.join(path + key_split)!r}: "
+            f"{full_path} is {type(config[current_key]).__name__}, expected dict"
         )
 
-    return None
+    return recursive_config_update(
+        config[current_key],
+        ".".join(key_split[1:]),
+        value,
+        path + [current_key],
+        verbose=verbose,
+    )
 
 
-def update_config_with_args(config, args, verbose=False):
+def update_config_with_args(config, args, verbose=False, allowed_keys: Optional[set[str]] = None):
     changed_keys = []
     diffs = []
     for key, value in vars(args).items():
         if value is None:
             continue
+        if allowed_keys is not None:
+            if key not in allowed_keys:
+                continue
+        elif "." not in key:
+            continue
         if key in {"live.approved_coins", "live.ignored_coins"}:
-            normalized = normalize_coins_source(value)
+            normalized = normalize_coins_source(
+                value,
+                allow_all=(key == "live.approved_coins"),
+            )
             change = recursive_config_update(config, key, normalized, verbose=verbose)
             source_key = key.split(".")[-1]
             config.setdefault("_coins_sources", {})[source_key] = deepcopy(normalized)

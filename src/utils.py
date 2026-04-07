@@ -1074,6 +1074,46 @@ def _diff_snapshot(before, after):
     return {"old": _snapshot(before), "new": _snapshot(after)}
 
 
+def _resolve_fake_scenario_path(config) -> Optional[str]:
+    live = config.get("live", {}) if isinstance(config, dict) else {}
+    scenario_path = live.get("fake_scenario_path")
+    if scenario_path:
+        return scenario_path
+    user = live.get("user")
+    if not user:
+        return None
+    from procedures import load_user_info
+
+    user_info = load_user_info(user)
+    return user_info.get("fake_scenario_path")
+
+
+def _load_fake_approved_coins(config, *, quote=None):
+    live = config.get("live", {}) if isinstance(config, dict) else {}
+    scenario_path = _resolve_fake_scenario_path(config)
+    if not scenario_path:
+        raise ValueError(
+            "fake exchange approved_coins='all' requires live.fake_scenario_path "
+            "or api-keys fake_scenario_path during startup"
+        )
+    from exchanges.fake import load_fake_scenario
+
+    scenario = load_fake_scenario(scenario_path)
+    symbols_config = scenario.get("symbols")
+    if not isinstance(symbols_config, dict) or not symbols_config:
+        raise ValueError("Fake scenario must define symbols to expand approved_coins='all'")
+    approved_coins = []
+    for symbol in symbols_config:
+        if quote is not None:
+            symbol_quote = str(symbol).split("/", 1)[1].split(":", 1)[0]
+            if symbol_quote != str(quote):
+                continue
+        coin = symbol_to_coin(symbol)
+        if coin:
+            approved_coins.append(coin)
+    return sorted(set(approved_coins))
+
+
 async def format_approved_ignored_coins(config, exchanges: [str], quote=None, verbose=True):
     if isinstance(exchanges, str):
         exchanges = [exchanges]
@@ -1085,45 +1125,46 @@ async def format_approved_ignored_coins(config, exchanges: [str], quote=None, ve
     if approved_source is None:
         approved_source = _require_live_value(config, "approved_coins")
     coin_sources["approved_coins"] = deepcopy(approved_source)
-    if approved_source in [
-        [""],
-        [],
-        None,
-        "",
-        0,
-        0.0,
-        {"long": [], "short": []},
-        {"long": "", "short": ""},
-        {"long": [""], "short": [""]},
-    ]:
-        if bool(_require_live_value(config, "empty_means_all_approved")):
+    ac = normalize_coins_source(approved_source, allow_all=True)
+    needs_market_expansion = any(
+        _coins_source_side_is_all(ac[pside]) for pside in ("long", "short")
+    )
+
+    approved_coins_sorted = None
+    if needs_market_expansion:
+        approved_coins = set()
+        standard_exchanges = []
+        for ex in exchanges:
+            if str(ex).lower() == "fake":
+                approved_coins.update(_load_fake_approved_coins(config, quote=quote))
+            else:
+                standard_exchanges.append(ex)
+        if standard_exchanges:
             marketss = await asyncio.gather(
-                *[load_markets(ex, verbose=False, quote=quote) for ex in exchanges]
+                *[load_markets(ex, verbose=False, quote=quote) for ex in standard_exchanges]
             )
-            marketss = [filter_markets(m, ex, quote=quote)[0] for m, ex in zip(marketss, exchanges)]
-            approved_coins = set()
+            marketss = [
+                filter_markets(m, ex, quote=quote)[0] for m, ex in zip(marketss, standard_exchanges)
+            ]
             for markets in marketss:
                 for symbol in markets:
                     approved_coins.add(symbol_to_coin(symbol, verbose=verbose))
-            approved_coins_sorted = sorted([x for x in approved_coins if x])
-            config["live"]["approved_coins"] = {
-                "long": approved_coins_sorted,
-                "short": approved_coins_sorted,
-            }
+        approved_coins_sorted = sorted([x for x in approved_coins if x])
+
+    config["live"]["approved_coins"] = {}
+    for pside in ("long", "short"):
+        if _coins_source_side_is_all(ac[pside]):
+            config["live"]["approved_coins"][pside] = list(approved_coins_sorted or [])
         else:
-            # leave empty
-            config["live"]["approved_coins"] = {"long": [], "short": []}
-    else:
-        ac = normalize_coins_source(approved_source)
-        config["live"]["approved_coins"] = {
-            pside: [cf for x in ac[pside] if (cf := symbol_to_coin(x))] for pside in ac
-        }
+            config["live"]["approved_coins"][pside] = [
+                cf for x in ac[pside] if (cf := symbol_to_coin(x))
+            ]
 
     ignored_source = coin_sources.get("ignored_coins", config.get("live", {}).get("ignored_coins"))
     if ignored_source is None:
         ignored_source = _require_live_value(config, "ignored_coins")
     coin_sources["ignored_coins"] = deepcopy(ignored_source)
-    ic = normalize_coins_source(ignored_source)
+    ic = normalize_coins_source(ignored_source, allow_all=False)
     config["live"]["ignored_coins"] = {
         pside: [cf for x in ic[pside] if (cf := symbol_to_coin(x))] for pside in ic
     }
@@ -1144,7 +1185,11 @@ async def format_approved_ignored_coins(config, exchanges: [str], quote=None, ve
         record_transform(config, "format_approved_ignored_coins", details)
 
 
-def normalize_coins_source(src):
+def _coins_source_side_is_all(value) -> bool:
+    return isinstance(value, list) and len(value) == 1 and str(value[0]).strip().lower() == "all"
+
+
+def normalize_coins_source(src, *, allow_all: bool = True):
     """
     Always return: {'long': [symbols…], 'short': [symbols…]}
     – Handles:
@@ -1152,6 +1197,7 @@ def normalize_coins_source(src):
         • lists/tuples containing paths or strings
         • dicts with 'long' / 'short' keys whose values may themselves
           be strings, lists, or paths to external lists
+        • explicit 'all' sentinel for approved coins
     """
 
     # --------------------------------------------------------------------- #
@@ -1234,14 +1280,22 @@ def normalize_coins_source(src):
         value = _load_if_file(value)
         value = _maybe_parse_jsonish(value)
 
-        if isinstance(value, dict) and sorted(value.keys()) == ["long", "short"]:
+        if isinstance(value, dict) and set(value).issubset({"long", "short"}):
             value = value.get(side, [])
+
+        if value in (None, "", [], (), {}, {"long": [], "short": []}):
+            return []
 
         # guarantee a sensible sequence for _expand
         if not isinstance(value, (list, tuple)):
             value = [value]
 
-        return _expand(value)
+        expanded = _expand(value)
+        if not expanded:
+            return []
+        if allow_all and len(expanded) == 1 and expanded[0].strip().lower() == "all":
+            return ["all"]
+        return expanded
 
     # --------------------------------------------------------------------- #
     #  Main logic                                                           #
@@ -1250,7 +1304,25 @@ def normalize_coins_source(src):
     src = _maybe_parse_jsonish(src)
 
     # Case 1 – already a dict with 'long' & 'short' keys
-    if isinstance(src, dict) and sorted(src.keys()) == ["long", "short"]:
+    if isinstance(src, dict):
+        if not src:
+            return {"long": [], "short": []}
+        if set(src).issubset({"long", "short"}):
+            return {
+                "long": _normalize_side(src.get("long", []), "long"),
+                "short": _normalize_side(src.get("short", []), "short"),
+            }
+
+    if src in (None, "", [], (), {}):
+        return {"long": [], "short": []}
+
+    if allow_all:
+        global_tokens = _normalize_side(src, "long")
+        if _coins_source_side_is_all(global_tokens):
+            return {"long": ["all"], "short": ["all"]}
+
+    # Case 1 – already a dict with 'long' / 'short' keys (including partial)
+    if isinstance(src, dict) and set(src).issubset({"long", "short"}):
         return {
             "long": _normalize_side(src.get("long", []), "long"),
             "short": _normalize_side(src.get("short", []), "short"),
@@ -1258,8 +1330,8 @@ def normalize_coins_source(src):
 
     # Case 2 – anything else is treated the same for both sides
     return {
-        "long": _normalize_side(src, "long"),
-        "short": _normalize_side(src, "short"),
+        "long": global_tokens if allow_all else _normalize_side(src, "long"),
+        "short": global_tokens if allow_all else _normalize_side(src, "short"),
     }
 
 

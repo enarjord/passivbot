@@ -1680,7 +1680,7 @@ async def main():
     for key in sorted(template_config["live"]):
         if key not in keep_live_keys:
             del template_config["live"][key]
-    add_config_arguments(
+    allowed_config_keys = add_config_arguments(
         parser,
         template_config,
         command="optimize",
@@ -1715,7 +1715,7 @@ async def main():
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
     existing_limits = deepcopy(source_config.get("optimize", {}).get("limits"))
-    update_config_with_args(source_config, args, verbose=True)
+    update_config_with_args(source_config, args, verbose=True, allowed_keys=allowed_config_keys)
     cli_limits_override = _resolve_cli_limits_override(args, existing_limits=existing_limits)
     if cli_limits_override is not None:
         recursive_config_update(

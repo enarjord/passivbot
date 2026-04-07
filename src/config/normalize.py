@@ -46,6 +46,7 @@ def normalize_config(
         deepcopy(config.get("optimize")) if isinstance(config.get("optimize"), dict) else {}
     )
     coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
+    live_coin_sources_input = {}
     template = get_template_config()
     flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
@@ -58,8 +59,10 @@ def normalize_config(
             tracker.add([section], result[section])
     for path in ("backtest", "bot", "live", "optimize"):
         require_config_dict(result, path)
-
     apply_migrations(result, verbose=verbose, tracker=tracker)
+    for key in ("approved_coins", "ignored_coins"):
+        if isinstance(result.get("live"), dict) and key in result["live"]:
+            live_coin_sources_input[key] = deepcopy(result["live"][key])
     seed_missing_compatibility_sections(template, result, tracker=tracker)
     for path in ("bot.long", "bot.short", "optimize.bounds"):
         require_config_dict(result, path)
@@ -94,7 +97,7 @@ def normalize_config(
 
     if coin_sources_input is not None:
         result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
-    preserve_coin_sources(result)
+    preserve_coin_sources(result, live_sources_input=live_coin_sources_input)
 
     if optimize_suite_defined:
         logging.warning(

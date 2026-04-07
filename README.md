@@ -154,7 +154,7 @@ Passivbot uses Python's logging module throughout the bot, backtester, and suppo
 - Use `--debug-level {0-3}` (alias `--log-level`) on `passivbot live` or `passivbot backtest` to adjust verbosity at runtime: `0 = warnings only`, `1 = info`, `2 = debug`, `3 = trace`.  
 - Use `--verbose` on `passivbot live` to force debug logging (`--log-level debug`).  
 - Persist a default by adding a top-level section to your config: `"logging": {"level": 2}`. The CLI flag always overrides the config value for that run.
-- `passivbot live` now writes a timestamped logfile under `logs/` by default. Control this with `config.logging.persist_to_file`, `config.logging.dir`, and the optional rotation settings in `config.logging`.
+- `passivbot live` now writes a timestamped logfile under `logs/` by default and refreshes `logs/{user}.log` as a stable alias to the current run. Control this with `config.logging.persist_to_file`, `config.logging.dir`, and the optional rotation settings in `config.logging`.
 - CandlestickManager and other subsystems inherit the chosen level so EMA warm-up, data fetching, and cache behaviour can be inspected consistently.
 
 ### Running Multiple Bots

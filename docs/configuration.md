@@ -73,8 +73,8 @@ Example per-metric aggregation:
   - Accepted values: `0` (warnings), `1` (info), `2` (debug), `3` (trace).
   - The CLI flag `--debug-level`/`--log-level` on `passivbot live` and `passivbot backtest` overrides the configured value for a single run.
   - Components such as the CandlestickManager inherit this level, so EMA warm-up and candle maintenance logs follow the same verbosity.
-- **persist_to_file**: When `true`, `passivbot live` also writes the console log stream to a timestamped file on disk. The canonical default is `true`, so live runs write to `logs/` unless you disable it explicitly. In this first integrated version, backtest/optimize still use console logging unless you wrap them externally.
-- **dir**: Directory used for persisted live log files when `persist_to_file` is enabled. Default `logs`.
+- **persist_to_file**: When `true`, `passivbot live` also writes the console log stream to a timestamped file on disk and refreshes `logs/{user}.log` as a stable alias to the current run. The canonical default is `true`, so live runs write to `logs/` unless you disable it explicitly. In this first integrated version, backtest/optimize still use console logging unless you wrap them externally.
+- **dir**: Directory used for persisted live log files and the stable current-run alias when `persist_to_file` is enabled. Default `logs`.
 - **rotation**: Enables rotating live log files instead of appending to one file per process. Default `false`.
 - **max_bytes_mb**: Maximum size in megabytes for each live log file before rotation. Used only when `rotation = true`. Default `10`.
 - **backup_count**: Number of rotated backup files to keep when rotation is enabled. Default `5`.
@@ -368,17 +368,24 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 ## Live Trading Settings
 
 - **approved_coins**:
-  - List of coins approved for trading. If empty, see `live.empty_means_all_approved`.
+  - List of coins approved for trading.
     - Backtester and optimizer use `live.approved_coins` minus `live.ignored_coins`.
   - May be given as a path to an external file, read continuously by Passivbot.
   - May be split into long and short:
     - Example: `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
+    - Example: `{"long": ["COIN1", "COIN2"], "short": "all"}`
+  - Explicit empty values disable trading for the affected side:
+    - `approved_coins = []`, `{}`, `""`, or `null` disables both sides
+    - `approved_coins = {"long": ["BTC"], "short": []}` keeps long curated and disables short
+  - The explicit value `"all"` means all eligible coins for the affected side:
+    - `approved_coins = "all"` enables all eligible coins for both sides
+    - `approved_coins = {"long": "all", "short": ["BTC", "ETH"]}` enables all eligible longs and curated shorts
+  - Older configs using `live.empty_means_all_approved=true` still migrate for now:
+    - A globally empty `approved_coins` input is converted to `approved_coins = "all"`
+    - The parser logs that `live.empty_means_all_approved` is deprecated
 - **auto_gs**: Automatically enable graceful stop for positions on disapproved coins.
   - Graceful stop: The bot continues trading as normal but does not open a new position after the current position is fully closed.
   - If `auto_gs=false`, positions on disapproved coins are put on manual mode.
-- **empty_means_all_approved**:
-  - If `true`, `approved_coins=[]` means all coins are approved.
-  - If `false`, `approved_coins=[]` means no coins are approved.
 - **enable_archive_candle_fetch**: Enables the archive-candle fallback path in live mode. Keep `false` unless you specifically want the live bot to supplement its local candle state from exchange archive endpoints.
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
 - **hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
