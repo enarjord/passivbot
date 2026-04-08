@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
+import tools.run_fake_live as run_fake_live_module
+from fill_events_manager import FillEvent, FillEventCache
 from config_utils import load_config
 from exchanges.fake import FakeCCXTClient
 from passivbot import setup_bot
@@ -510,6 +513,69 @@ async def test_hsl_replay_scenarios_run_end_to_end(
     assert len(step_summaries) == expected_steps
     assert (run_dir / "hsl_trace.json").exists()
     assert expected_log_fragment in (run_dir / "fake_live.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
+async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(tmp_path, monkeypatch):
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    user = "fake_hsl_pnls_lookback_all_test"
+    scenario_path = REPO_ROOT / "scenarios" / "fake_live" / "hsl_long_red_restart.hjson"
+    cache_dir = REPO_ROOT / "caches" / "fill_events" / "fake" / user
+    shutil.rmtree(cache_dir, ignore_errors=True)
+
+    cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
+    cfg["live"]["pnls_max_lookback_days"] = "all"
+    config_path = tmp_path / "fake_live_hsl_btc_all_lookback.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    def _prime_narrow_window_cache(bot, fake_client, cache_root=None):
+        root = Path(cache_root) if cache_root is not None else Path("caches") / "fill_events"
+        cache_path = root / str(bot.exchange) / str(bot.user)
+        shutil.rmtree(cache_path, ignore_errors=True)
+        cache_path.mkdir(parents=True, exist_ok=True)
+        all_events = [FillEvent.from_dict(event) for event in fake_client.get_fill_events(None, None)]
+        narrow_events = [event for event in all_events if str(event.id) != "10"]
+        cache = FillEventCache(cache_path)
+        cache.save(narrow_events)
+        cache.update_metadata_from_events(narrow_events)
+        cache.set_history_scope("window")
+        return cache_path
+
+    monkeypatch.setattr(run_fake_live_module, "_prime_fake_fill_cache", _prime_narrow_window_cache)
+
+    args = argparse.Namespace(
+        config=str(config_path),
+        scenario=str(scenario_path),
+        user=user,
+        max_steps=None,
+        output_dir=str(tmp_path),
+        log_level=1,
+        snapshot_each_step=False,
+    )
+
+    try:
+        assert await _async_main(args) == 0
+        output_dirs = sorted(path for path in tmp_path.iterdir() if path.is_dir())
+        assert len(output_dirs) == 1
+        run_dir = output_dirs[0]
+
+        log_text = (run_dir / "fake_live.log").read_text(encoding="utf-8")
+        assert "[fills] refresh: events=3 (+1)" in log_text
+        assert "initial_entry_boot" in log_text
+        assert log_text.count("id=10") == 1
+
+        cache = FillEventCache(cache_dir)
+        cached_ids = [str(event.id) for event in cache.load()]
+        assert cache.get_history_scope() == "all"
+        assert "10" in cached_ids
+        assert {"10", "11", "12", "13"}.issubset(set(cached_ids))
+    finally:
+        shutil.rmtree(cache_dir, ignore_errors=True)
 
 
 @pytest.mark.asyncio

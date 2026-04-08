@@ -5386,7 +5386,7 @@ class Passivbot:
             for row in timeline
         ]
         metadata = {
-            "lookback_days": lookback_days,
+            "lookback_days": lookback.display_value,
             "resolution_ms": ONE_MIN_MS,
             "events_used": len(events),
             "symbols_covered": sorted(symbols),
