@@ -4664,7 +4664,17 @@ class Passivbot:
             # Check if we need a full refresh (cache empty or too old)
             events = self._pnls_manager.get_events()
             needs_full_refresh = not events
-            if events and age_limit is not None:
+            history_scope = self._pnls_manager.get_history_scope()
+            if lookback.is_all and events and history_scope != "all":
+                needs_full_refresh = True
+                cache_key = "_fills_full_refresh_logged"
+                if not getattr(self, cache_key, False):
+                    setattr(self, cache_key, True)
+                    logging.debug(
+                        "[fills] Cache history scope %s is narrower than requested full history; doing full refresh",
+                        history_scope,
+                    )
+            elif events and age_limit is not None:
                 oldest_event_ts = events[0].timestamp
                 if oldest_event_ts > age_limit + 1000 * 60 * 60 * 24:  # > 1 day newer than limit
                     needs_full_refresh = True
@@ -4691,6 +4701,7 @@ class Passivbot:
                     start_ms=None if age_limit is None else int(age_limit),
                     end_ms=None,
                 )
+                self._pnls_manager.set_history_scope("all" if lookback.is_all else "window")
             else:
                 # Incremental refresh
                 await self._pnls_manager.refresh_latest(overlap=20)

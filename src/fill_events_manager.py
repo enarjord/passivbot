@@ -784,6 +784,7 @@ class CacheMetadata(TypedDict, total=False):
     oldest_event_ts: int  # Oldest event timestamp in cache
     newest_event_ts: int  # Newest event timestamp in cache
     known_gaps: List[KnownGap]  # List of known gaps
+    history_scope: str  # unknown, window, all
 
 
 class FillEventCache:
@@ -863,6 +864,7 @@ class FillEventCache:
             "oldest_event_ts": 0,
             "newest_event_ts": 0,
             "known_gaps": [],
+            "history_scope": "unknown",
         }
 
         if not self.metadata_path.exists():
@@ -927,6 +929,22 @@ class FillEventCache:
     def get_known_gaps(self) -> List[KnownGap]:
         """Return list of known gaps."""
         return self.load_metadata().get("known_gaps", [])
+
+    def get_history_scope(self) -> str:
+        """Return the cached history coverage contract."""
+        scope = str(self.load_metadata().get("history_scope", "unknown") or "unknown").lower()
+        return scope if scope in {"unknown", "window", "all"} else "unknown"
+
+    def set_history_scope(self, scope: str) -> None:
+        """Persist the cache history coverage contract."""
+        normalized = str(scope or "unknown").lower()
+        if normalized not in {"unknown", "window", "all"}:
+            raise ValueError(f"invalid history scope {scope!r}")
+        metadata = self.load_metadata()
+        if metadata.get("history_scope") == normalized:
+            return
+        metadata["history_scope"] = normalized
+        self.save_metadata(metadata)
 
     def add_known_gap(
         self,
@@ -1028,6 +1046,7 @@ class FillEventCache:
             "oldest_event_ts": metadata.get("oldest_event_ts", 0),
             "newest_event_ts": metadata.get("newest_event_ts", 0),
             "last_refresh_ms": metadata.get("last_refresh_ms", 0),
+            "history_scope": self.get_history_scope(),
             "total_gaps": len(gaps),
             "persistent_gaps": len(persistent_gaps),
             "retryable_gaps": len(retryable_gaps),
@@ -2589,6 +2608,12 @@ class FillEventsManager:
             summary["symbols_count"] = len(symbols)
             summary["symbols"] = sorted(symbols)
         return summary
+
+    def get_history_scope(self) -> str:
+        return self.cache.get_history_scope()
+
+    def set_history_scope(self, scope: str) -> None:
+        self.cache.set_history_scope(scope)
 
     @staticmethod
     def _events_for_days(
