@@ -6,6 +6,7 @@ This is the recommended way to work with Passivbot configs on the current config
 
 - The canonical hardcoded defaults live in `src/config/schema.py`.
 - The example config `configs/examples/default_trailing_grid_long_npos10.json` mirrors those defaults exactly.
+- New schema-authored configs should keep the top-level `config_version` field. Older configs without it are treated as legacy and migrated during load.
 - If you run `passivbot live`, `passivbot backtest`, or `passivbot optimize` without a config path, Passivbot starts from the in-code defaults in `src/config/schema.py`.
 
 ## Recommended Workflow
@@ -31,6 +32,7 @@ passivbot live configs/live/my_config.json
 - Keep one normal JSON or HJSON config per strategy/account instead of relying on many CLI overrides.
 - Use CLI overrides for temporary experiments, not as your main configuration workflow.
 - Treat `bot`, `live`, `backtest`, and `optimize` as one config file with command-specific sections.
+- Keep shared execution/risk settings in `live`. Backtests inherit `market_orders_allowed`, `market_order_near_touch_threshold`, and `pnls_max_lookback_days` directly from `live`; these fields are not accepted under `backtest`.
 - Keep new configs on the canonical schema. Do not author new configs using deprecated field names.
 - Use `coin_overrides` for per-coin exceptions instead of cloning whole configs for minor differences.
 - Leave `logging.persist_to_file = true` for normal live operations so each bot run has a durable logfile under `logs/` and monitor tooling can follow the stable `logs/{user}.log` alias.

@@ -4,10 +4,11 @@ from .overrides import parse_overrides
 from .parse import load_raw_config
 from .project import project_config
 from .runtime_compile import compile_runtime_config
-from .schema import DEFAULT_EXAMPLE_CONFIG_PATH, get_template_config
+from .schema import CONFIG_SCHEMA_VERSION, DEFAULT_EXAMPLE_CONFIG_PATH, get_template_config
 from .validate import validate_config
 
 __all__ = [
+    "CONFIG_SCHEMA_VERSION",
     "DEFAULT_EXAMPLE_CONFIG_PATH",
     "compile_runtime_config",
     "get_template_config",

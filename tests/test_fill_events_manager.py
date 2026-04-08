@@ -165,6 +165,29 @@ class _FakeHyperliquidAPI:
         return self._batches.pop(0)
 
 
+class _FakeBinanceTradeAPI:
+    def __init__(self, batches: List[List[Dict[str, Any]]]) -> None:
+        self._batches = list(batches)
+        self.calls: List[Dict[str, Any]] = []
+
+    async def fetch_my_trades(
+        self,
+        symbol: str,
+        limit: Optional[int] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ):
+        self.calls.append(
+            {
+                "symbol": symbol,
+                "limit": limit,
+                "params": dict(params or {}),
+            }
+        )
+        if not self._batches:
+            return []
+        return self._batches.pop(0)
+
+
 # ---------------------------------------------------------------------------
 # Binance fetcher tests
 # ---------------------------------------------------------------------------
@@ -241,6 +264,36 @@ async def test_binance_fetcher_merges_trade_details(monkeypatch):
     assert event["client_order_id"] == client_id
     assert event["pb_order_type"] == custom_id_to_snake(client_id)
     assert detail_cache["trade-1"][0] == client_id
+
+
+@pytest.mark.asyncio
+async def test_binance_fetch_symbol_trades_uses_now_bound_and_one_percent_margin():
+    now_ms = 1_700_000_000_000
+    seven_days_ms = 7 * 24 * 60 * 60 * 1000
+    expected_span = int(seven_days_ms * 0.99)
+    api = _FakeBinanceTradeAPI(batches=[[], []])
+    fetcher = BinanceFetcher(
+        api=api,
+        symbol_resolver=lambda sym: sym or "",
+        now_func=lambda: now_ms,
+        trade_limit=1000,
+    )
+
+    trades = await fetcher._fetch_symbol_trades(
+        "BTC/USDT:USDT",
+        since_ms=now_ms - seven_days_ms,
+        until_ms=None,
+    )
+
+    assert trades == []
+    assert len(api.calls) == 2
+    first_call = api.calls[0]["params"]
+    second_call = api.calls[1]["params"]
+    assert first_call["startTime"] == now_ms - seven_days_ms
+    assert first_call["endTime"] - first_call["startTime"] == expected_span
+    assert second_call["startTime"] == first_call["endTime"] + 1
+    assert second_call["endTime"] == now_ms
+    assert all(call["params"]["endTime"] <= now_ms for call in api.calls)
 
 
 @pytest.mark.asyncio

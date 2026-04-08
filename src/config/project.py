@@ -10,6 +10,7 @@ _TARGET_SECTION_MAP = {
     "optimize": ("backtest", "bot", "coin_overrides", "live", "logging", "optimize"),
     "monitor": ("live", "logging", "monitor"),
 }
+_SHARED_TOP_LEVEL_KEYS = ("config_version",)
 
 
 def project_config(config: dict, target: str, *, record_step: bool = True) -> dict:
@@ -19,6 +20,9 @@ def project_config(config: dict, target: str, *, record_step: bool = True) -> di
         raise ValueError(f"target must be one of {{{allowed}}}, got {target!r}")
 
     result = {}
+    for key in _SHARED_TOP_LEVEL_KEYS:
+        if key in config:
+            result[key] = deepcopy(config[key])
     for section in _TARGET_SECTION_MAP[normalized_target]:
         if section in config:
             result[section] = deepcopy(config[section])

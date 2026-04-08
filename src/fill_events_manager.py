@@ -1742,9 +1742,9 @@ class BinanceFetcher(BaseFetcher):
             if since_ms is None and until_ms is None:
                 return await self.api.fetch_my_trades(ccxt_symbol, limit=limit)
 
-            end_bound = until_ms or (self._now_func() + 60 * 60 * 1000)
+            end_bound = until_ms or self._now_func()
             start_bound = since_ms or max(0, end_bound - 7 * 24 * 60 * 60 * 1000)
-            week_span = int(7 * 24 * 60 * 60 * 1000 * 0.999)
+            week_span = int(7 * 24 * 60 * 60 * 1000 * 0.99)
             params: Dict[str, object] = {}
             fetched: Dict[str, Dict[str, object]] = {}
             previous_key: Optional[Tuple[Tuple[str, object], ...]] = None

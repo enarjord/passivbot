@@ -33,6 +33,8 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 - **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use the exchange-derived maker fees.
 - **taker_fee_override**: Optional taker fee override (part-per-one; use `0.00055` for 0.055%). Leave `null` to use the exchange-derived taker fees.
 - **market_order_slippage_pct**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl_panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `live.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps).
+- **visible_metrics**: Controls which metrics are printed to the terminal after a standalone backtest. `null` shows the metrics implied by `optimize.scoring` and `optimize.limits`, `[]` shows all metrics, and an explicit list adds extra named metrics to the default view. This affects CLI visibility only; the full metric set is still computed and persisted.
+- **config_version**: Top-level schema version string for the config file. Canonical `v7.9` configs use `v7.9.0`. Older configs without this field are treated as legacy and migrated during load.
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
   `balance_and_equity.csv` and related plots. `1` keeps full per-minute resolution; higher values
   thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes.
@@ -368,17 +370,24 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 ## Live Trading Settings
 
 - **approved_coins**:
-  - List of coins approved for trading. If empty, see `live.empty_means_all_approved`.
+  - List of coins approved for trading.
     - Backtester and optimizer use `live.approved_coins` minus `live.ignored_coins`.
   - May be given as a path to an external file, read continuously by Passivbot.
   - May be split into long and short:
     - Example: `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
+    - Example: `{"long": ["COIN1", "COIN2"], "short": "all"}`
+  - Explicit empty values disable trading for the affected side:
+    - `approved_coins = []`, `{}`, `""`, or `null` disables both sides
+    - `approved_coins = {"long": ["BTC"], "short": []}` keeps long curated and disables short
+  - The explicit value `"all"` means all eligible coins for the affected side:
+    - `approved_coins = "all"` enables all eligible coins for both sides
+    - `approved_coins = {"long": "all", "short": ["BTC", "ETH"]}` enables all eligible longs and curated shorts
+  - Older configs using `live.empty_means_all_approved=true` still migrate for now:
+    - A globally empty `approved_coins` input is converted to `approved_coins = "all"`
+    - The parser logs that `live.empty_means_all_approved` is deprecated
 - **auto_gs**: Automatically enable graceful stop for positions on disapproved coins.
   - Graceful stop: The bot continues trading as normal but does not open a new position after the current position is fully closed.
   - If `auto_gs=false`, positions on disapproved coins are put on manual mode.
-- **empty_means_all_approved**:
-  - If `true`, `approved_coins=[]` means all coins are approved.
-  - If `false`, `approved_coins=[]` means no coins are approved.
 - **enable_archive_candle_fetch**: Enables the archive-candle fallback path in live mode. Keep `false` unless you specifically want the live bot to supplement its local candle state from exchange archive endpoints.
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
 - **hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
@@ -418,6 +427,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
     - otherwise, if `abs(order_price_diff) <= market_order_near_touch_threshold` => `market`
     - otherwise => `limit`
     - panic closes are still controlled separately by `bot.{long,short}.hsl_panic_close_order_type`
+  - Ownership is `config.live`. Backtests always inherit `live.market_orders_allowed` and `live.market_order_near_touch_threshold`; `config.backtest` does not accept overrides for either field.
 - **order_match_tolerance_pct**: Percentage tolerance (in %) used to match near-identical cancel/create pairs and avoid order churn. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling/replacing it.
 - **max_n_cancellations_per_batch**: Cancels `n` open orders per execution.
 - **max_n_creations_per_batch**: Creates `n` new orders per execution.
@@ -428,7 +438,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **balance_hysteresis_snap_pct**: Hysteresis snap percentage applied to balance updates to reduce noise. Set `0.0` to disable hysteresis.
 - **recv_window_ms**: Millisecond tolerance for authenticated REST calls (default `5000`). Increase if your exchange intermittently rejects requests with `invalid request ... recv_window` errors due to clock drift.
 - Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used.
-- **pnls_max_lookback_days**: How far into the past to fetch PnL history.
+- **pnls_max_lookback_days**: How far into the past to fetch PnL history. This also feeds the rolling realized-PnL window used by both live risk logic and backtests. Ownership is `config.live`; `config.backtest` does not accept an override.
 - **price_distance_threshold**: Minimum distance to current price action required for EMA-based limit orders.
 - **risk_wel_enforcer_threshold**: Per-symbol multiplier that triggers the WEL enforcer. When a position’s exposure exceeds `wallet_exposure_limit * (1 + risk_we_excess_allowance_pct) * risk_wel_enforcer_threshold` the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming, `1.0` for a hard cap, or ≤0 to disable.
 - **risk_twel_enforcer_threshold**: Fraction of the configured `total_wallet_exposure_limit` that triggers the TWEL enforcer. When aggregate exposure exceeds this threshold the bot queues reduction orders instead of new entries. Set >1.0 to allow a grace margin, `1.0` for strict enforcement, or ≤0 to disable.

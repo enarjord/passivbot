@@ -7,23 +7,30 @@ import json
 import config_utils
 import pytest
 
+from cli_utils import build_command_parser, expand_help_all_argv, help_all_requested
 from config import load_input_config, prepare_config
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
 from config_transform import ConfigTransformTracker, record_transform
+from utils import normalize_coins_source
 from config_utils import (
     _apply_backward_compatibility_renames,
     _apply_non_live_adjustments,
     _ensure_bot_defaults_and_bounds,
     _hydrate_missing_template_fields,
     _migrate_btc_collateral_settings,
+    _migrate_config_version,
+    _migrate_empty_means_all_approved,
     _normalize_position_counts,
     _rename_config_keys,
     _sync_with_template,
     CLI_HELP_GROUPS,
+    FIELD_RUNTIME_RULES,
+    RESERVED_CLI_ARGS,
     add_config_arguments,
     get_template_config,
     load_config,
+    project_template_config_for_cli,
     update_config_with_args,
     parse_overrides,
     format_config,
@@ -219,13 +226,79 @@ def test_apply_non_live_adjustments_supports_legacy_coins_file():
     config = get_template_config()
     config["live"]["approved_coins"] = "configs/approved_coins_topmcap.json"
     config["live"]["ignored_coins"] = {"long": [], "short": []}
-    config["live"]["empty_means_all_approved"] = False
     config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] = [0.1, 0.2]
     config["backtest"]["end_date"] = "2023-01-01"
     _apply_non_live_adjustments(config, verbose=False)
     with open("configs/approved_coins.json") as fp:
         expected = json.load(fp)
     assert config["live"]["approved_coins"]["long"] == expected
+
+
+def test_normalize_coins_source_supports_partial_per_side_dicts():
+    normalized = normalize_coins_source({"long": ["BTC", "ETH"]})
+
+    assert normalized["long"] == ["BTC", "ETH"]
+    assert normalized["short"] == []
+
+
+def test_normalize_coins_source_supports_explicit_all():
+    normalized_global = normalize_coins_source("all")
+    normalized_partial = normalize_coins_source({"long": ["BTC"], "short": "all"})
+
+    assert normalized_global == {"long": ["all"], "short": ["all"]}
+    assert normalized_partial == {"long": ["BTC"], "short": ["all"]}
+
+
+def test_migrate_empty_means_all_approved_converts_global_empty_to_all(caplog):
+    config = {
+        "live": {
+            "approved_coins": [],
+            "ignored_coins": {"long": [], "short": []},
+            "empty_means_all_approved": True,
+        }
+    }
+    tracker = ConfigTransformTracker()
+
+    with caplog.at_level(logging.WARNING):
+        _migrate_empty_means_all_approved(config, verbose=False, tracker=tracker)
+
+    assert config["live"]["approved_coins"] == "all"
+    assert "empty_means_all_approved" not in config["live"]
+    summary = tracker.summary()
+    assert any(
+        event["action"] == "remove" and event["path"] == "live.empty_means_all_approved"
+        for event in summary
+    )
+    assert any(
+        event["action"] == "update"
+        and event["path"] == "live.approved_coins"
+        and event["new"] == "all"
+        for event in summary
+    )
+    assert any("deprecated" in rec.message for rec in caplog.records)
+
+
+def test_migrate_empty_means_all_approved_keeps_explicit_per_side_values():
+    config = {
+        "live": {
+            "approved_coins": {"long": ["BTC"], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+            "empty_means_all_approved": True,
+        }
+    }
+
+    _migrate_empty_means_all_approved(config, verbose=False)
+
+    assert config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
+    assert "empty_means_all_approved" not in config["live"]
+
+
+def test_migrate_config_version_sets_current_schema_version():
+    config = {}
+
+    _migrate_config_version(config, verbose=False)
+
+    assert config["config_version"] == get_template_config()["config_version"]
 
 
 def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatting():
@@ -638,6 +711,79 @@ def test_update_config_with_args_records_old_new_values():
     assert diff["new"] == "2022-01-01"
 
 
+def _parse_backtest_args(raw_argv):
+    help_all = help_all_requested(raw_argv)
+    parser = build_command_parser(
+        prog="passivbot backtest",
+        description="run backtest",
+        usage="%(prog)s [config_path] [options]",
+        epilog="test",
+    )
+    parser.add_argument("config_path", type=str, default=None, nargs="?")
+    parser.add_argument("--suite", nargs="?", const="true", default=None, type=config_utils.str2bool)
+    template_config = get_template_config()
+    keep_live_keys = {
+        "approved_coins",
+        "hedge_mode",
+        "ignored_coins",
+        "max_realized_loss_pct",
+        "minimum_coin_age_days",
+    }
+    for key in sorted(template_config["live"]):
+        if key not in keep_live_keys:
+            del template_config["live"][key]
+    if "logging" in template_config and isinstance(template_config["logging"], dict):
+        template_config["logging"].pop("level", None)
+    allowed_config_keys = add_config_arguments(
+        parser,
+        template_config,
+        command="backtest",
+        help_all=help_all,
+        group_map={},
+    )
+    return parser.parse_args(expand_help_all_argv(raw_argv)), allowed_config_keys
+
+
+def _make_live_only_source_config():
+    return {
+        "bot": {"long": {}, "short": {}},
+        "live": {},
+        "coin_overrides": {},
+    }
+
+
+@pytest.mark.parametrize("start_flag", ["-sd", "--start-date"])
+def test_backtest_cli_start_date_override_creates_missing_backtest_section(start_flag):
+    source_config = _make_live_only_source_config()
+    assert "backtest" not in source_config
+
+    args, allowed_config_keys = _parse_backtest_args(
+        [
+            "configs/hype.json",
+            "--bot.long.hsl_ema_span_minutes",
+            "1440",
+            start_flag,
+            "2025-10-11",
+        ]
+    )
+
+    update_config_with_args(source_config, args, verbose=False, allowed_keys=allowed_config_keys)
+
+    assert source_config["backtest"]["start_date"] == "2025-10-11"
+    assert source_config["bot"]["long"]["hsl_ema_span_minutes"] == pytest.approx(1440.0)
+    assert "backtest.start_date" in source_config["_transform_log"][-1]["details"]["keys"]
+
+
+def test_update_config_with_args_ignores_non_config_parser_args():
+    config = {}
+    args = SimpleNamespace(config_path="configs/hype.json", log_level="info", suite=True)
+
+    update_config_with_args(config, args, verbose=False)
+
+    assert "_transform_log" not in config
+    assert config == {}
+
+
 def test_update_config_with_args_logs_optimize_limits_as_diff(caplog):
     config = get_template_config()
     original_limits = deepcopy(config["optimize"]["limits"])
@@ -672,6 +818,7 @@ def test_backtest_filter_min_cost_inherits_from_live():
 
 
 def _format_parser_help_with_config(command: str, config: dict, help_all: bool) -> str:
+    config = project_template_config_for_cli(config, command)
     parser = argparse.ArgumentParser(prog=command)
     group_map = {
         title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get(command, [])
@@ -717,8 +864,13 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "-l SPEC, --limit SPEC" in help_text
     assert "--clear-limits" in help_text
     assert "--minimum-coin-age-days FLOAT, -mcad FLOAT" in help_text
-    assert "--hedge-mode Y/N, -hm Y/N" not in help_text
-    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" not in help_text
+    assert "--hedge-mode Y/N, -hm Y/N" in help_text
+    assert "--market-orders-allowed Y/N, -moa Y/N" in help_text
+    assert (
+        "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
+    )
+    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
+    assert "--pnls-max-lookback-days FLOAT, -pmld FLOAT" in help_text
     assert "--optimize_population_size" not in help_text
     assert "--optimize.bounds.long_close_grid_markup_end" not in help_text
     assert "Optimize DEAP:" not in help_text
@@ -766,6 +918,14 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     assert "Suite:" in help_text
     assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
     assert "--ignored-coins CSV_OR_PATH" in help_text
+    assert "--minimum-coin-age-days FLOAT, -mcad FLOAT" in help_text
+    assert "--hedge-mode Y/N, -hm Y/N" in help_text
+    assert "--market-orders-allowed Y/N, -moa Y/N" in help_text
+    assert (
+        "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
+    )
+    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
+    assert "--pnls-max-lookback-days FLOAT, -pmld FLOAT" in help_text
     assert "--aggregate-default VALUE" in help_text
     assert "--iters INT, -i INT" not in help_text
 
@@ -791,6 +951,70 @@ def test_live_reserved_pnls_lookback_alias_parses_short_and_long():
 
     assert getattr(parsed_short, "live.pnls_max_lookback_days") == pytest.approx(14.0)
     assert getattr(parsed_long, "live.pnls_max_lookback_days") == pytest.approx(21.0)
+
+
+def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
+    config = project_template_config_for_cli(get_template_config(), "backtest")
+    parser = argparse.ArgumentParser(prog="backtest")
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get("backtest", [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command="backtest",
+        help_all=False,
+        group_map=group_map,
+    )
+
+    parsed_market = parser.parse_args(["-moa", "y"])
+    parsed_hedge = parser.parse_args(["-hm", "n"])
+    parsed_near_touch = parser.parse_args(["-montt", "0.002"])
+    parsed_lookback = parser.parse_args(["-pmld", "14"])
+    parsed_loss = parser.parse_args(["-mrlp", "0.75"])
+
+    assert getattr(parsed_market, "live.market_orders_allowed") is True
+    assert getattr(parsed_hedge, "live.hedge_mode") is False
+    assert getattr(parsed_near_touch, "live.market_order_near_touch_threshold") == pytest.approx(
+        0.002
+    )
+    assert getattr(parsed_lookback, "live.pnls_max_lookback_days") == pytest.approx(14.0)
+    assert getattr(parsed_loss, "live.max_realized_loss_pct") == pytest.approx(0.75)
+
+
+def test_backtest_default_help_shows_live_near_touch_threshold_override():
+    config = get_template_config()
+    help_text = _format_parser_help_with_config("backtest", config, help_all=False)
+
+    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
+
+
+def test_runtime_registry_reserved_help_metadata_stays_in_sync():
+    for full_name, rule in FIELD_RUNTIME_RULES.items():
+        spec = RESERVED_CLI_ARGS.get(full_name)
+        if spec is None:
+            continue
+        assert set(rule.get("cli_exposed_on", set())).issubset(spec.get("commands", set()))
+        for command, group in rule.get("help_group", {}).items():
+            assert spec.get("group", {}).get(command) == group
+
+
+def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_fields():
+    config = project_template_config_for_cli(get_template_config(), "backtest")
+
+    assert "market_orders_allowed" in config["live"]
+    assert "market_order_near_touch_threshold" in config["live"]
+    assert "pnls_max_lookback_days" in config["live"]
+    assert "user" not in config["live"]
+
+
+def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_fields():
+    config = project_template_config_for_cli(get_template_config(), "optimize")
+
+    assert "market_orders_allowed" in config["live"]
+    assert "market_order_near_touch_threshold" in config["live"]
+    assert "pnls_max_lookback_days" in config["live"]
+    assert "user" not in config["live"]
 
 
 def test_live_reserved_user_alias_parses_short_and_long():

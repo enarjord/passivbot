@@ -16,6 +16,11 @@ Path = tuple[str, ...]
 PARTIALLY_OPEN_CONFIG_PATHS: set[Path] = {
     ("backtest", "aggregate"),
 }
+BACKTEST_INHERITED_LIVE_KEYS: tuple[str, ...] = (
+    "market_orders_allowed",
+    "market_order_near_touch_threshold",
+    "pnls_max_lookback_days",
+)
 
 TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
     ("coin_overrides",),
@@ -24,6 +29,18 @@ TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
     ("backtest", "market_settings_sources"),
     *tuple(PARTIALLY_OPEN_CONFIG_PATHS),
 )
+
+
+def reject_backtest_inherited_live_fields(result: dict) -> None:
+    backtest = result.setdefault("backtest", {})
+    invalid = [key for key in BACKTEST_INHERITED_LIVE_KEYS if key in backtest]
+    if invalid:
+        joined = ", ".join(f"backtest.{key}" for key in invalid)
+        live_joined = ", ".join(f"live.{key}" for key in invalid)
+        raise ValueError(
+            f"{joined} {'is' if len(invalid) == 1 else 'are'} not supported; "
+            f"set {'the value' if len(invalid) == 1 else 'these values'} under {live_joined} instead"
+        )
 
 def hydrate_missing_template_fields(
     template: dict,
@@ -45,6 +62,19 @@ def seed_missing_compatibility_sections(template: dict, result: dict, *, tracker
             result["bot"][pside] = seeded
             if tracker is not None:
                 tracker.add(["bot", pside], seeded)
+    for key in ("approved_coins", "ignored_coins"):
+        if key not in result["live"]:
+            seeded = {"long": [], "short": []}
+            result["live"][key] = seeded
+            if tracker is not None:
+                tracker.add(["live", key], seeded)
+            continue
+        if isinstance(result["live"][key], dict) and set(result["live"][key]).issubset({"long", "short"}):
+            for pside in ("long", "short"):
+                if pside not in result["live"][key]:
+                    result["live"][key][pside] = []
+                    if tracker is not None:
+                        tracker.add(["live", key, pside], [])
     if "bounds" not in result["optimize"]:
         seeded_bounds = deepcopy(template["optimize"]["bounds"])
         result["optimize"]["bounds"] = seeded_bounds
@@ -126,11 +156,16 @@ def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
     return normalized
 
 
-def preserve_coin_sources(result: dict) -> None:
+def preserve_coin_sources(result: dict, *, live_sources_input: Optional[Dict[str, Any]] = None) -> None:
     sources = result.setdefault("_coins_sources", {})
     live = result.get("live", {})
     for key in ("approved_coins", "ignored_coins"):
-        if key in live and key not in sources:
+        if key in sources:
+            continue
+        if live_sources_input is not None and key in live_sources_input:
+            sources[key] = deepcopy(live_sources_input[key])
+            continue
+        if key in live:
             sources[key] = deepcopy(live[key])
 
 
@@ -143,7 +178,10 @@ def apply_non_live_adjustments(
     raw_optimize_limits_present: Optional[bool] = None,
 ) -> None:
     for key in ("approved_coins", "ignored_coins"):
-        result["live"][key] = normalize_coins_source(result["live"].get(key, ""))
+        result["live"][key] = normalize_coins_source(
+            result["live"].get(key, ""),
+            allow_all=(key == "approved_coins"),
+        )
     for pside in result["live"]["approved_coins"]:
         result["live"]["approved_coins"][pside] = [
             coin

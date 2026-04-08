@@ -38,6 +38,7 @@ from optimize import (
 )
 from multiprocessing_utils import ignore_sigint_in_worker
 from optimization.bounds import Bound
+from optimization.config_adapter import get_optimization_key_paths
 from optimize_suite import ScenarioEvalContext
 
 
@@ -602,6 +603,29 @@ class TestIndividualToConfig:
         assert result["bot"]["long"]["hsl_red_threshold"] == pytest.approx(0.25)
         assert result["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
         assert template == original_template
+
+    def test_accepts_precomputed_key_paths(self):
+        individual = [10.0, 20.0, 30.0, 40.0]
+        template = {
+            "bot": {
+                "long": {"z_param": 0.0, "a_param": 0.0},
+                "short": {"z_param": 0.0, "a_param": 0.0},
+            }
+        }
+        key_paths = get_optimization_key_paths(template)
+
+        result = individual_to_config(
+            individual,
+            lambda x, y, z: y,
+            [],
+            template,
+            key_paths=key_paths,
+        )
+
+        assert result["bot"]["long"]["a_param"] == 10.0
+        assert result["bot"]["long"]["z_param"] == 20.0
+        assert result["bot"]["short"]["a_param"] == 30.0
+        assert result["bot"]["short"]["z_param"] == 40.0
 class TestConfigToIndividual:
     """Test config_to_individual function."""
 

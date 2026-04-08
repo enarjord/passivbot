@@ -240,7 +240,6 @@ Minimal test config for stock perps:
   "live": {
     "user": "hyperliquid_01",
     "approved_coins": ["TSLA"],
-    "empty_means_all_approved": false,
     "leverage": 2,
     "filter_by_min_effective_cost": false,
     "hedge_mode": false,
