@@ -221,6 +221,33 @@ def test_prepare_config_keeps_live_pnls_max_lookback_days_without_backtest_overr
     assert "pnls_max_lookback_days" not in prepared["backtest"]
 
 
+def test_prepare_config_normalizes_all_pnls_max_lookback_days():
+    source = {
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {"pnls_max_lookback_days": "ALL"},
+        "optimize": {"bounds": {}},
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["live"]["pnls_max_lookback_days"] == "all"
+
+
+def test_prepare_config_rejects_invalid_pnls_max_lookback_days_string():
+    source = {
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {"pnls_max_lookback_days": "everything"},
+        "optimize": {"bounds": {}},
+    }
+
+    with pytest.raises(ValueError, match="live\\.pnls_max_lookback_days must be >= 0 or 'all'"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_keeps_live_market_orders_allowed_without_backtest_override():
     source = {
         "backtest": {},

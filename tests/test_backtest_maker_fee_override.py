@@ -89,6 +89,14 @@ def test_prep_backtest_args_uses_pnls_max_lookback_days_from_live():
     assert backtest_params["pnls_max_lookback_days"] == 30.0
 
 
+def test_prep_backtest_args_encodes_all_pnls_lookback_for_backtest():
+    config = _base_config()
+    config["live"]["pnls_max_lookback_days"] = "all"
+    mss = _base_mss()
+    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    assert backtest_params["pnls_max_lookback_days"] == -1.0
+
+
 def test_prep_backtest_args_passes_liquidation_threshold():
     config = _base_config()
     config["backtest"]["liquidation_threshold"] = 0.07

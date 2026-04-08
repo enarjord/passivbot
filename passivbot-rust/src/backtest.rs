@@ -1760,11 +1760,13 @@ impl<'a> Backtest<'a> {
             pnl_cumsum_max: 0.0,
             pnl_cumsum_running_net: 0.0,
             pnl_cumsum_running_net_pside: [0.0, 0.0],
-            pnl_lookback_bars: if backtest_params.pnls_max_lookback_days > 0.0 {
-                let minutes = backtest_params.pnls_max_lookback_days * 24.0 * 60.0;
-                (minutes / backtest_params.candle_interval_minutes.max(1) as f64).ceil() as usize
+            pnl_lookback_bars: if backtest_params.pnls_max_lookback_days < 0.0 {
+                usize::MAX
             } else {
-                0
+                let minutes = backtest_params.pnls_max_lookback_days * 24.0 * 60.0;
+                (minutes / backtest_params.candle_interval_minutes.max(1) as f64)
+                    .ceil()
+                    .max(1.0) as usize
             },
             pnl_events: VecDeque::new(),
             rolling_pnl_cumsum: 0.0,
@@ -2598,8 +2600,12 @@ impl<'a> Backtest<'a> {
         let realized_pnl = self.pnl_cumsum_running_net;
         let strategy_pnl = realized_pnl + unrealized_pnl;
 
-        let days = self.backtest_params.pnls_max_lookback_days.max(0.0);
-        let lookback_ms = ((days * 86_400_000.0).round() as u64).max(self.interval_ms);
+        let lookback_ms = if self.backtest_params.pnls_max_lookback_days < 0.0 {
+            u64::MAX
+        } else {
+            let days = self.backtest_params.pnls_max_lookback_days.max(0.0);
+            ((days * 86_400_000.0).round() as u64).max(self.interval_ms)
+        };
         let peak_strategy_pnl = Self::update_strategy_pnl_peak_queue(
             &mut self.strategy_equity_rolling_peak_pnl,
             timestamp_ms,
@@ -2635,8 +2641,12 @@ impl<'a> Backtest<'a> {
             })?;
         let strategy_pnl = realized_pnl + unrealized_pnl;
         let baseline_balance = self.balance.usd_total_balance - self.pnl_cumsum_running_net;
-        let days = self.backtest_params.pnls_max_lookback_days.max(0.0);
-        let lookback_ms = ((days * 86_400_000.0).round() as u64).max(self.interval_ms);
+        let lookback_ms = if self.backtest_params.pnls_max_lookback_days < 0.0 {
+            u64::MAX
+        } else {
+            let days = self.backtest_params.pnls_max_lookback_days.max(0.0);
+            ((days * 86_400_000.0).round() as u64).max(self.interval_ms)
+        };
         let peak_strategy_pnl = Self::update_strategy_pnl_peak_queue(
             &mut self.hard_stop_pside[pside].rolling_peak_strategy_pnl,
             timestamp_ms,
@@ -5145,6 +5155,138 @@ mod tests {
             .map(|(_, strategy_pnl)| *strategy_pnl)
             .unwrap_or(0.0);
         assert!((peak_strategy_pnl1 + 10.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn hard_stop_rolling_peak_strategy_pnl_zero_lookback_uses_minimal_window() {
+        let hlcvs = Array3::from_shape_vec((3, 1, 4), vec![1.0; 3 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.red_threshold = 0.99;
+        hs.ema_span_minutes = 1.0;
+        hs.signal_mode = "unified".to_string();
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![2],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 0.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: hs,
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.balance.usd_total_balance = 100.0;
+        bt.equities.timestamps_ms.push(0);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state(0).unwrap();
+
+        bt.balance.usd_total_balance = 100.0;
+        bt.equities.timestamps_ms.push(120_000);
+        bt.equities.usd_total_equity.push(90.0);
+        bt.update_hard_stop_state(1).unwrap();
+        let peak_strategy_equity1 = bt.hard_stop_state.as_ref().unwrap().peak_strategy_equity;
+        assert!((peak_strategy_equity1 - 90.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn hard_stop_rolling_peak_strategy_pnl_all_lookback_uses_full_history() {
+        let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.red_threshold = 0.99;
+        hs.ema_span_minutes = 1.0;
+        hs.signal_mode = "unified".to_string();
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: -1.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: hs,
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.balance.usd_total_balance = 100.0;
+        bt.equities.timestamps_ms.push(0);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state(0).unwrap();
+
+        bt.balance.usd_total_balance = 100.0;
+        bt.equities.timestamps_ms.push(86_460_000);
+        bt.equities.usd_total_equity.push(90.0);
+        bt.update_hard_stop_state(1).unwrap();
+        let peak_strategy_equity1 = bt.hard_stop_state.as_ref().unwrap().peak_strategy_equity;
+        assert!((peak_strategy_equity1 - 100.0).abs() < 1e-12);
     }
 
     #[test]

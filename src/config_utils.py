@@ -44,6 +44,7 @@ from config.limits import (
 )
 from config.log_output import log_config_message
 from config.metrics import CURRENCY_METRICS, SHARED_METRICS
+from config.pnl_lookback import normalize_pnls_max_lookback_days_config_value
 from config.normalize import normalize_config
 from config.overrides import (
     apply_allowed_modifications as staged_apply_allowed_modifications,
@@ -687,9 +688,10 @@ RESERVED_CLI_ARGS = {
         "hidden": ["--live.minimum_coin_age_days", "--live_minimum_coin_age_days"],
         "type": float,
         "metavar": "FLOAT",
-        "commands": {"live", "optimize"},
+        "commands": {"live", "backtest", "optimize"},
         "group": {
             "live": "Coin Selection",
+            "backtest": "Coin Selection",
             "optimize": "Coin Selection",
         },
         "help": "Minimum coin age in days required before a coin is eligible to trade.",
@@ -711,8 +713,12 @@ RESERVED_CLI_ARGS = {
         "hidden": ["--live.hedge_mode", "--live_hedge_mode"],
         "type": str2bool,
         "metavar": "Y/N",
-        "commands": {"live", "optimize"},
-        "group": {"live": "Behavior"},
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
         "help": (
             "Enable or disable hedge mode. If the exchange does not support simultaneous "
             "long and short on the same coin, the bot will use hedge_mode=false."
@@ -748,22 +754,17 @@ RESERVED_CLI_ARGS = {
         ],
         "type": float,
         "metavar": "FLOAT",
-        "commands": {"live"},
-        "group": {"live": "Behavior"},
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
         "help": "Distance threshold for allowing market orders near touch.",
     },
     "live.max_realized_loss_pct": {
         "visible": ["--max-realized-loss-pct", "-mrlp"],
         "hidden": ["--live.max_realized_loss_pct", "--live_max_realized_loss_pct"],
-        "type": float,
-        "metavar": "FLOAT",
-        "commands": {"live", "optimize"},
-        "group": {"live": "Behavior"},
-        "help": "Maximum realized loss percentage allowed before trading is halted.",
-    },
-    "live.pnls_max_lookback_days": {
-        "visible": ["--pnls-max-lookback-days", "-pmld"],
-        "hidden": ["--live.pnls_max_lookback_days", "--live_pnls_max_lookback_days"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -772,7 +773,20 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "How far into the past to fetch realized PnL history, in days.",
+        "help": "Maximum realized loss percentage allowed before trading is halted.",
+    },
+    "live.pnls_max_lookback_days": {
+        "visible": ["--pnls-max-lookback-days", "-pmld"],
+        "hidden": ["--live.pnls_max_lookback_days", "--live_pnls_max_lookback_days"],
+        "type": normalize_pnls_max_lookback_days_config_value,
+        "metavar": "FLOAT|all",
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+        "help": "How far into the past to fetch realized PnL history: 0=minimal lookback, positive=float days, 'all'=full history.",
     },
     "live.price_distance_threshold": {
         "visible": ["--price-distance-threshold", "-pdt"],
@@ -1401,6 +1415,8 @@ def add_arguments_recursively(
                     type_ = str
             elif type_ == bool:
                 type_ = str2bool
+            elif full_name == "live.pnls_max_lookback_days":
+                type_ = normalize_pnls_max_lookback_days_config_value
             elif isinstance(value, (int, float)) and not isinstance(value, bool):
                 type_ = float
             if "combine_ohlcvs" in full_name:

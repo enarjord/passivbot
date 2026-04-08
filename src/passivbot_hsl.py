@@ -19,6 +19,7 @@ from config.coerce import (
     normalize_hsl_cooldown_position_policy,
     normalize_hsl_signal_mode,
 )
+from config.pnl_lookback import parse_pnls_max_lookback_days
 from passivbot_exceptions import RestartBotException
 from utils import make_get_filepath
 
@@ -432,12 +433,12 @@ def _equity_hard_stop_realized_pnl_now(self, pside: Optional[str] = None) -> flo
     return realized
 
 
-def _equity_hard_stop_lookback_ms(self) -> int:
-    lookback_days_raw = float(require_live_value(self.config, "pnls_max_lookback_days"))
-    if not math.isfinite(lookback_days_raw):
-        raise ValueError("live.pnls_max_lookback_days must be finite for hard-stop rolling-peak logic")
-    lookback_days = max(0.0, lookback_days_raw)
-    return max(1, int(round(lookback_days * 86_400_000.0)))
+def _equity_hard_stop_lookback_ms(self) -> int | None:
+    lookback = parse_pnls_max_lookback_days(
+        require_live_value(self.config, "pnls_max_lookback_days"),
+        field_name="live.pnls_max_lookback_days",
+    )
+    return lookback.hsl_window_ms()
 
 
 def _equity_hard_stop_apply_sample(
@@ -493,7 +494,11 @@ def _equity_hard_stop_apply_sample(
     ema_span_minutes = float(cfg["ema_span_minutes"])
     strategy_pnl = realized_pnl_signal + unrealized_pnl_signal
     peak_strategy_pnl = float(
-        state["strategy_pnl_peak"].update(int(timestamp_ms), float(strategy_pnl), int(lookback_ms))
+        state["strategy_pnl_peak"].update(
+            int(timestamp_ms),
+            float(strategy_pnl),
+            int(lookback_ms) if lookback_ms is not None else (2**64 - 1),
+        )
     )
     baseline_balance = balance - realized_pnl_total
     strategy_equity = max(float(baseline_balance + strategy_pnl), 1e-12)
@@ -919,9 +924,13 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
     try:
         self._equity_hard_stop_reset_state()
         signal_mode = self._equity_hard_stop_signal_mode()
+        lookback = parse_pnls_max_lookback_days(
+            self.live_value("pnls_max_lookback_days"),
+            field_name="live.pnls_max_lookback_days",
+        )
         logging.info(
-            "[risk] HSL history replay starting | lookback_days=%.3f signal_mode=%s",
-            float(self.live_value("pnls_max_lookback_days")),
+            "[risk] HSL history replay starting | lookback_days=%s signal_mode=%s",
+            lookback.display_value,
             signal_mode,
         )
         history = await self.get_balance_equity_history(current_balance=self.get_raw_balance())
