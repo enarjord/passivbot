@@ -2084,6 +2084,76 @@ async def test_manager_refresh_for_lookback_persists_coverage_across_restart(tmp
 
 
 @pytest.mark.asyncio
+async def test_manager_refresh_for_lookback_rebuilds_when_metadata_claims_history_but_cache_is_empty(
+    tmp_path: Path,
+):
+    cache_dir = tmp_path / "fills_lookback_rebuild"
+    start_ms = 1_700_000_000_000
+
+    class _RecordingFetcher(BaseFetcher):
+        def __init__(self):
+            self.calls: List[Tuple[Optional[int], Optional[int]]] = []
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            return []
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=_RecordingFetcher(),
+        cache_path=cache_dir,
+    )
+    manager.cache.save_metadata(
+        {
+            "last_refresh_ms": 1,
+            "oldest_event_ts": start_ms + 86_400_000,
+            "newest_event_ts": start_ms + 172_800_000,
+            "covered_start_ms": start_ms,
+            "known_gaps": [],
+        }
+    )
+
+    await manager.refresh_for_lookback(start_ms=start_ms)
+
+    assert manager.fetcher.calls == [(start_ms, None)]
+
+
+@pytest.mark.asyncio
+async def test_manager_refresh_for_lookback_preserves_metadata_only_no_fill_coverage(tmp_path: Path):
+    cache_dir = tmp_path / "fills_lookback_no_fill_coverage"
+    start_ms = 1_700_000_000_000
+
+    class _RecordingFetcher(BaseFetcher):
+        def __init__(self):
+            self.calls: List[Tuple[Optional[int], Optional[int]]] = []
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            return []
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=_RecordingFetcher(),
+        cache_path=cache_dir,
+    )
+    manager.cache.save_metadata(
+        {
+            "last_refresh_ms": 1,
+            "oldest_event_ts": 0,
+            "newest_event_ts": 0,
+            "covered_start_ms": start_ms,
+            "known_gaps": [],
+        }
+    )
+
+    await manager.refresh_for_lookback(start_ms=start_ms)
+
+    assert manager.fetcher.calls == [(None, None)]
+
+
+@pytest.mark.asyncio
 async def test_manager_refresh_range_detects_gaps(tmp_path: Path):
     cache_dir = tmp_path / "fills_range"
     cache = FillEventCache(cache_dir)

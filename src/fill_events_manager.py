@@ -2452,14 +2452,26 @@ class FillEventsManager:
             )
             return
 
-        oldest_event_ts = 0
-        if self._events:
-            oldest_event_ts = int(self._events[0].timestamp)
-        else:
-            oldest_event_ts = int(self.cache.load_metadata().get("oldest_event_ts", 0) or 0)
-        covered_start_ms = self.cache.get_covered_start_ms()
-        lookback_covered = (covered_start_ms > 0 and covered_start_ms <= start_ms) or (
-            oldest_event_ts > 0 and oldest_event_ts <= start_ms
+        metadata = self.cache.load_metadata()
+        covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
+        oldest_event_ts = int(self._events[0].timestamp) if self._events else 0
+        metadata_oldest_event_ts = int(metadata.get("oldest_event_ts", 0) or 0)
+        metadata_newest_event_ts = int(metadata.get("newest_event_ts", 0) or 0)
+        metadata_indicates_no_cached_fills = (
+            metadata_oldest_event_ts <= 0 and metadata_newest_event_ts <= 0
+        )
+        metadata_claims_history_without_events = (
+            not self._events
+            and (metadata_oldest_event_ts > 0 or metadata_newest_event_ts > 0)
+            and covered_start_ms > 0
+            and covered_start_ms <= start_ms
+        )
+        lookback_covered = (
+            covered_start_ms > 0 and covered_start_ms <= start_ms and bool(self._events)
+        ) or (oldest_event_ts > 0 and oldest_event_ts <= start_ms) or (
+            covered_start_ms > 0
+            and covered_start_ms <= start_ms
+            and metadata_indicates_no_cached_fills
         )
 
         if lookback_covered:
@@ -2471,6 +2483,12 @@ class FillEventsManager:
             )
             await self.refresh_latest(overlap=overlap)
             return
+
+        if metadata_claims_history_without_events:
+            logger.warning(
+                "[fills] cache metadata claims lookback coverage from %s, but no cached events were loaded; rebuilding from requested lookback",
+                _format_ms(covered_start_ms),
+            )
 
         if self._events:
             logger.info(

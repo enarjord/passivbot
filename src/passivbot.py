@@ -6400,7 +6400,13 @@ class Passivbot:
         random.shuffle(symbols_without_pos)
         ordered_symbols = symbols_with_pos + symbols_without_pos
 
-        fetch_delay_s = self._get_fetch_delay_seconds()
+        get_fetch_delay_seconds = getattr(self, "_get_fetch_delay_seconds", None)
+        if callable(get_fetch_delay_seconds):
+            fetch_delay_s = float(get_fetch_delay_seconds())
+        elif hasattr(self, "config") or hasattr(self, "exchange"):
+            fetch_delay_s = float(Passivbot._get_fetch_delay_seconds(self))
+        else:
+            fetch_delay_s = 0.0
         if fetch_delay_s > 0:
             # Strict exchanges benefit from pacing expensive 1h refreshes when
             # all symbol TTLs expire at the same hour boundary.
