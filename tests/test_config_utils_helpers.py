@@ -1,7 +1,6 @@
 import logging
 import argparse
 from copy import deepcopy
-from pathlib import Path
 from types import SimpleNamespace
 import json
 
@@ -745,9 +744,17 @@ def _parse_backtest_args(raw_argv):
     return parser.parse_args(expand_help_all_argv(raw_argv)), allowed_config_keys
 
 
+def _make_live_only_source_config():
+    return {
+        "bot": {"long": {}, "short": {}},
+        "live": {},
+        "coin_overrides": {},
+    }
+
+
 @pytest.mark.parametrize("start_flag", ["-sd", "--start-date"])
 def test_backtest_cli_start_date_override_creates_missing_backtest_section(start_flag):
-    source_config, _, _ = load_input_config(str(Path("configs/hype.json")))
+    source_config = _make_live_only_source_config()
     assert "backtest" not in source_config
 
     args, allowed_config_keys = _parse_backtest_args(
