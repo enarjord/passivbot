@@ -89,6 +89,7 @@ from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_
 from config_utils import (
     format_bot_config,
     add_config_arguments,
+    project_template_config_for_cli,
     update_config_with_args,
     recursive_config_update,
     merge_negative_cli_values,
@@ -1659,15 +1660,7 @@ async def main():
         "Advanced Overrides": parser.add_argument_group("Advanced Overrides"),
     }
 
-    template_config = get_template_config()
-    del template_config["bot"]
-    keep_live_keys = {
-        "approved_coins",
-        "minimum_coin_age_days",
-    }
-    for key in sorted(template_config["live"]):
-        if key not in keep_live_keys:
-            del template_config["live"][key]
+    template_config = project_template_config_for_cli(get_template_config(), "optimize")
     allowed_config_keys = add_config_arguments(
         parser,
         template_config,
