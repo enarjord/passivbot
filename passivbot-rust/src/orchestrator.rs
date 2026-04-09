@@ -265,6 +265,8 @@ mod core {
         pub mode: Option<TradingMode>,
         pub position: Position,
         pub trailing: TrailingPriceBundle,
+        #[serde(default)]
+        pub last_increase_fill_timestamp_ms: Option<u64>,
         /// Per-symbol/per-pside params after applying coin_overrides.
         pub bot_params: BotParams,
         #[serde(default)]
@@ -302,6 +304,8 @@ mod core {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct OrchestratorInput {
+        #[serde(default)]
+        pub timestamp_ms: u64,
         /// Hysteresis-snapped balance used for sizing/order-shaping logic.
         pub balance: f64,
         /// True/raw balance used for risk/accounting gates.
@@ -323,6 +327,78 @@ mod core {
         } else {
             input.balance
         }
+    }
+
+    fn cooldown_delay_minutes(cooldown_minutes: f64) -> u64 {
+        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
+            0
+        } else if cooldown_minutes < 1.0 {
+            0
+        } else {
+            cooldown_minutes.ceil() as u64
+        }
+    }
+
+    fn effective_fill_timestamp_ms(fill_timestamp_ms: u64) -> u64 {
+        let minute_ms = 60_000_u64;
+        let minute = fill_timestamp_ms / minute_ms;
+        minute.saturating_add(1).saturating_mul(minute_ms)
+    }
+
+    fn order_increases_position(pside: PositionSide, qty: f64) -> bool {
+        match pside {
+            PositionSide::Long => qty > 0.0,
+            PositionSide::Short => qty < 0.0,
+        }
+    }
+
+    fn add_order_cooldown_active(
+        now_timestamp_ms: u64,
+        last_increase_fill_timestamp_ms: Option<u64>,
+        cooldown_minutes: f64,
+    ) -> bool {
+        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
+            return false;
+        }
+        let Some(last_fill_ts) = last_increase_fill_timestamp_ms else {
+            return false;
+        };
+        let until_ms = effective_fill_timestamp_ms(last_fill_ts).saturating_add(
+            cooldown_delay_minutes(cooldown_minutes).saturating_mul(60_000),
+        );
+        now_timestamp_ms < until_ms
+    }
+
+    fn apply_add_order_cooldown(
+        orders: &mut Vec<IdealOrder>,
+        pside: PositionSide,
+        now_timestamp_ms: u64,
+        last_increase_fill_timestamp_ms: Option<u64>,
+        cooldown_minutes: f64,
+    ) {
+        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
+            return;
+        }
+        if add_order_cooldown_active(
+            now_timestamp_ms,
+            last_increase_fill_timestamp_ms,
+            cooldown_minutes,
+        ) {
+            orders.retain(|order| !order_increases_position(pside, order.qty));
+            return;
+        }
+        let mut seen_add_order = false;
+        orders.retain(|order| {
+            if !order_increases_position(pside, order.qty) {
+                return true;
+            }
+            if seen_add_order {
+                false
+            } else {
+                seen_add_order = true;
+                true
+            }
+        });
     }
 
     pub fn is_close_order_type(order_type: OrderType) -> bool {
@@ -2211,6 +2287,13 @@ mod core {
                             s.symbol_idx,
                             PositionSide::Long,
                         );
+                        apply_add_order_cooldown(
+                            &mut entries,
+                            PositionSide::Long,
+                            input.timestamp_ms,
+                            s.long.last_increase_fill_timestamp_ms,
+                            s.long.bot_params.risk_entry_cooldown_minutes,
+                        );
                         append_strategy_orders_as_ideal(
                             &mut closes,
                             generated.closes,
@@ -2346,6 +2429,13 @@ mod core {
                             generated.entries,
                             s.symbol_idx,
                             PositionSide::Short,
+                        );
+                        apply_add_order_cooldown(
+                            &mut entries,
+                            PositionSide::Short,
+                            input.timestamp_ms,
+                            s.short.last_increase_fill_timestamp_ms,
+                            s.short.bot_params.risk_entry_cooldown_minutes,
                         );
                         append_strategy_orders_as_ideal(
                             &mut closes,
@@ -2917,6 +3007,7 @@ mod core {
                     bot_params: bp.clone(),
                     strategy_params: None,
                     parsed_strategy_params: None,
+                    last_increase_fill_timestamp_ms: None,
                     runtime_budget: None,
                 },
                 short: SymbolSideInput {
@@ -2926,6 +3017,7 @@ mod core {
                     bot_params: bp,
                     strategy_params: None,
                     parsed_strategy_params: None,
+                    last_increase_fill_timestamp_ms: None,
                     runtime_budget: None,
                 },
             }
@@ -3071,6 +3163,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -3138,6 +3231,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -3216,6 +3310,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -3312,6 +3407,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -3348,6 +3444,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -3393,6 +3490,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -3450,6 +3548,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -3504,6 +3603,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -3557,6 +3657,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -3604,6 +3705,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -3716,6 +3818,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1_000_000.0,
                 balance_raw: 1_000_000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -3933,6 +4036,7 @@ mod core {
             let input_open = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -4004,6 +4108,7 @@ mod core {
                 balance: 1000.0,
                 // Missing from JSON deserialization path defaults to NaN.
                 balance_raw: f64::NAN,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -4063,6 +4168,7 @@ mod core {
                 let input = OrchestratorInput {
                     balance: 1000.0,
                     balance_raw: raw_balance,
+                    timestamp_ms: 0,
                     global: OrchestratorGlobal {
                         filter_by_min_effective_cost: false,
                         market_orders_allowed: false,
@@ -4126,6 +4232,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,    // snapped: WE = 500/1000 = 0.5 (under limit)
                 balance_raw: 800.0, // raw: WE = 500/800 = 0.625 (over limit)
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -4182,6 +4289,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 500.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -4244,6 +4352,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
@@ -4291,6 +4400,7 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,

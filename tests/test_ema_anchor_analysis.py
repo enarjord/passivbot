@@ -11,6 +11,7 @@ from ema_anchor_analysis import (
     calc_ema_anchor_inventory_bands_from_artifact,
     calc_ema_anchor_neutral_bands,
     calc_ema_anchor_neutral_bands_from_artifact,
+    load_backtest_artifact_dataset,
 )
 
 
@@ -130,6 +131,35 @@ def test_calc_ema_anchor_inventory_bands_shifts_fill_state_to_next_candle():
 
 
 @requires_extension
+def test_calc_ema_anchor_inventory_bands_backfills_initial_equity_state():
+    candles = _candles_df()
+    fills = pd.DataFrame(
+        columns=["timestamp", "coin", "type", "qty", "price", "psize", "pprice", "usd_total_balance"]
+    )
+    balance_eq = pd.DataFrame(
+        {
+            "timestamp": [candles.loc[2, "timestamp"]],
+            "usd_total_balance": [1000.0],
+            "usd_total_equity": [1002.5],
+        }
+    )
+
+    out = calc_ema_anchor_inventory_bands(
+        _ema_anchor_config(),
+        candles,
+        fills,
+        balance_eq,
+        price_step=0.1,
+        coin="BTC",
+        side_mode="active",
+    )
+
+    assert out["equity"].isna().sum() == 0
+    assert out.loc[0, "equity"] == pytest.approx(1002.5)
+    assert out.loc[1, "equity"] == pytest.approx(1002.5)
+
+
+@requires_extension
 def test_ema_anchor_artifact_helpers_load_dataset_metadata(tmp_path):
     artifact_dir = tmp_path / "artifact"
     cache_dir = tmp_path / "caches" / "hlcvs_data" / "abcd1234"
@@ -149,6 +179,7 @@ def test_ema_anchor_artifact_helpers_load_dataset_metadata(tmp_path):
         "coin_index": {"BTC": 0},
     }
     (artifact_dir / "config.json").write_text(json.dumps(config))
+    (artifact_dir / "analysis.json").write_text(json.dumps({"gain_usd": 1.23}))
     (artifact_dir / "dataset.json").write_text(json.dumps(dataset))
     pd.DataFrame(
         {
@@ -184,9 +215,11 @@ def test_ema_anchor_artifact_helpers_load_dataset_metadata(tmp_path):
     (cache_dir / "coins.json").write_text(json.dumps(["BTC"]))
     (cache_dir / "market_specific_settings.json").write_text(json.dumps({"BTC": {"price_step": 0.1}}))
 
+    loaded = load_backtest_artifact_dataset(artifact_dir)
     neutral = calc_ema_anchor_neutral_bands_from_artifact(artifact_dir, side="long")
     inventory = calc_ema_anchor_inventory_bands_from_artifact(artifact_dir, side_mode="active")
 
+    assert loaded["analysis"]["gain_usd"] == pytest.approx(1.23)
     assert list(neutral.columns) == ["timestamp", "high", "low", "close", "bid", "ask"]
     assert "fill_qty_bid" in inventory.columns
     assert inventory.loc[2, "psize"] == pytest.approx(1.0)

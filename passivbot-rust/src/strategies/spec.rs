@@ -223,6 +223,13 @@ const EMA_ANCHOR_PARAM_SEEDS: &[ParamSeed] = &[
         short_bounds: &[20.0, 1440.0, 1.0],
     },
     ParamSeed {
+        name: "entry_double_down_factor",
+        long_default: 0.0,
+        short_default: 0.0,
+        long_bounds: &[0.0, 2.0, 0.01],
+        short_bounds: &[0.0, 2.0, 0.01],
+    },
+    ParamSeed {
         name: "offset",
         long_default: 0.002,
         short_default: 0.002,

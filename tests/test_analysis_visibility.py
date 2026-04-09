@@ -110,6 +110,18 @@ def test_validate_visible_metrics_config_accepts_explicit_hsl_and_hard_stop_metr
     validate_visible_metrics_config(cfg)
 
 
+def test_validate_visible_metrics_config_accepts_fill_activity_metrics():
+    cfg = get_template_config()
+    cfg["backtest"]["visible_metrics"] = [
+        "fills_per_day",
+        "hours_no_fills_max",
+        "hours_no_fills_mean",
+        "hours_no_fills_median",
+    ]
+
+    validate_visible_metrics_config(cfg)
+
+
 def test_visible_metrics_exact_hsl_and_hard_stop_names_resolve():
     cfg = get_template_config()
     cfg["backtest"]["visible_metrics"] = [

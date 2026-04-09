@@ -1,6 +1,7 @@
 from .access import require_config_dict
 from .bot import validate_forager_config
 from .coerce import normalize_hsl_cooldown_position_policy, normalize_hsl_signal_mode
+from .shared_bot import get_grouped_bot_value
 from .strategy import (
     BOT_POSITION_SIDES,
     SUPPORTED_STRATEGY_KINDS,
@@ -21,6 +22,11 @@ def validate_config(config: dict, *, raw_optimize=None, verbose: bool = True, tr
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
         require_config_dict(bot_side, "strategy")
+        entry_cooldown_minutes = float(
+            get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0) or 0.0
+        )
+        if entry_cooldown_minutes < 0.0:
+            raise ValueError(f"bot.{pside}.risk.entry_cooldown_minutes must be >= 0.0")
         active_strategy = get_active_strategy_side(bot_side, strategy_kind=strategy_kind, pside=pside)
         if not isinstance(active_strategy, dict) or not active_strategy:
             raise ValueError(

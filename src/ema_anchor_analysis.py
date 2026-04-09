@@ -256,6 +256,7 @@ def calc_ema_anchor_inventory_bands(
         balance_df.set_index("timestamp")
         .reindex(candle_index)
         .ffill()
+        .bfill()
         .rename_axis("timestamp")
         .reset_index()
     )
@@ -337,6 +338,7 @@ def load_backtest_artifact_dataset(artifact_dir: str | Path, *, coin: str | None
     artifact_dir = Path(artifact_dir)
     dataset_meta = _load_json(artifact_dir / "dataset.json")
     config = _load_json(artifact_dir / "config.json")
+    analysis = _load_json(artifact_dir / "analysis.json")
     fills_df = pd.read_csv(artifact_dir / "fills.csv")
     balance_df = pd.read_csv(artifact_dir / "balance_and_equity.csv.gz")
 
@@ -373,6 +375,7 @@ def load_backtest_artifact_dataset(artifact_dir: str | Path, *, coin: str | None
         "artifact_dir": artifact_dir,
         "dataset": dataset_meta,
         "config": config,
+        "analysis": analysis,
         "coin": coin,
         "candles": candles_df,
         "fills": fills_df,

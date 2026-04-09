@@ -490,7 +490,9 @@ fn validate_ema_anchor_series_inputs(
 ) -> PyResult<()> {
     let len = timestamps.len();
     if len == 0 {
-        return Err(PyValueError::new_err("timestamps/highs/lows/closes must not be empty"));
+        return Err(PyValueError::new_err(
+            "timestamps/highs/lows/closes must not be empty",
+        ));
     }
     if highs.len() != len
         || lows.len() != len
@@ -509,17 +511,24 @@ fn validate_ema_anchor_series_inputs(
         if i > 0 && timestamps[i] <= timestamps[i - 1] {
             return Err(PyValueError::new_err(format!(
                 "timestamps must be strictly increasing; index {i} ({}) <= previous ({})",
-                timestamps[i], timestamps[i - 1]
+                timestamps[i],
+                timestamps[i - 1]
             )));
         }
         if !highs[i].is_finite() || highs[i] <= 0.0 {
-            return Err(PyValueError::new_err(format!("highs[{i}] must be finite and > 0")));
+            return Err(PyValueError::new_err(format!(
+                "highs[{i}] must be finite and > 0"
+            )));
         }
         if !lows[i].is_finite() || lows[i] <= 0.0 {
-            return Err(PyValueError::new_err(format!("lows[{i}] must be finite and > 0")));
+            return Err(PyValueError::new_err(format!(
+                "lows[{i}] must be finite and > 0"
+            )));
         }
         if !closes[i].is_finite() || closes[i] <= 0.0 {
-            return Err(PyValueError::new_err(format!("closes[{i}] must be finite and > 0")));
+            return Err(PyValueError::new_err(format!(
+                "closes[{i}] must be finite and > 0"
+            )));
         }
         if !balances[i].is_finite() || balances[i] < 0.0 {
             return Err(PyValueError::new_err(format!(
@@ -625,12 +634,8 @@ fn calc_ema_anchor_quote_series(
         let ema_2 = update_adjusted_ema_py(close, ema_alpha_2, &mut ema_2_num, &mut ema_2_den);
 
         let log_range = (high / low).ln();
-        let vol_1m = update_adjusted_ema_py(
-            log_range,
-            vol_1m_alpha,
-            &mut vol_1m_num,
-            &mut vol_1m_den,
-        );
+        let vol_1m =
+            update_adjusted_ema_py(log_range, vol_1m_alpha, &mut vol_1m_num, &mut vol_1m_den);
 
         let lower = ema_0.min(ema_1).min(ema_2);
         let upper = ema_0.max(ema_1).max(ema_2);
@@ -706,6 +711,7 @@ pub fn calc_ema_anchor_quote_series_py<'py>(
         base_qty_pct: 0.0,
         ema_span_0,
         ema_span_1,
+        entry_double_down_factor: 0.0,
         offset,
         offset_volatility_ema_span_minutes,
         offset_volatility_1m_weight,
@@ -1703,6 +1709,7 @@ fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
         "base_qty_pct": extract_value::<f64>(dict, "base_qty_pct")?,
         "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
         "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
+        "entry_double_down_factor": extract_optional_f64(dict, "entry_double_down_factor")?,
         "offset": extract_value::<f64>(dict, "offset")?,
         "offset_volatility_ema_span_minutes": extract_optional_f64(dict, "offset_volatility_ema_span_minutes")?,
         "offset_volatility_1m_weight": extract_optional_f64(dict, "offset_volatility_1m_weight")?,
@@ -1949,6 +1956,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         hsl_tier_ratio_orange,
         hsl_orange_tier_mode,
         hsl_panic_close_order_type,
+        risk_entry_cooldown_minutes: extract_optional_f64(dict, "risk_entry_cooldown_minutes")?,
         n_positions,
         total_wallet_exposure_limit,
         wallet_exposure_limit,

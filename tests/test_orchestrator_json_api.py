@@ -95,6 +95,7 @@ def bot_params(**overrides):
         "risk_wel_enforcer_threshold": 0.0,
         "risk_twel_enforcer_threshold": 0.0,
         "risk_we_excess_allowance_pct": 0.0,
+        "risk_entry_cooldown_minutes": 0.0,
         "unstuck_close_pct": 0.0,
         "unstuck_ema_dist": 0.0,
         "unstuck_loss_allowance_pct": 0.0,
@@ -439,6 +440,137 @@ def test_adaptive_grid_short_entry_output_regression():
     ]
 
 
+def test_entry_cooldown_keeps_only_one_position_adding_order_when_enabled():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.5}),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={"risk_entry_cooldown_minutes": 0.5},
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 120_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert len(long_add_orders) == 1
+    assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
+
+
+def test_entry_cooldown_blocks_position_adding_orders_until_whole_minute_window_expires():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 1.0}),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={"risk_entry_cooldown_minutes": 1.0},
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 120_000
+    inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 60_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert long_add_orders == []
+
+
+def test_fractional_entry_cooldown_allows_next_minute_updates():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.5}),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={"risk_entry_cooldown_minutes": 0.5},
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 120_000
+    inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 61_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert len(long_add_orders) == 1
+
+
+def test_entry_cooldown_is_separated_by_pside_in_hedge_mode():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            long_overrides={"risk_entry_cooldown_minutes": 1.0},
+            short_overrides={
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "risk_entry_cooldown_minutes": 1.0,
+            },
+        ),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={"risk_entry_cooldown_minutes": 1.0},
+                short_bp={
+                    "n_positions": 1,
+                    "total_wallet_exposure_limit": 1.0,
+                    "risk_entry_cooldown_minutes": 1.0,
+                },
+            )
+        ],
+    )
+    inp["global"]["hedge_mode"] = True
+    inp["timestamp_ms"] = 120_000
+    inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 60_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+    short_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "short" and o["qty"] < 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert long_add_orders == []
+    assert len(short_add_orders) == 1
+
+
 def test_ema_anchor_long_position_emits_single_entry_and_close():
     import passivbot_rust as pbr
 
@@ -496,6 +628,84 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
             "execution_type": "limit",
         },
     ]
+
+
+def test_ema_anchor_entry_double_down_factor_scales_same_side_qty_only():
+    import passivbot_rust as pbr
+
+    base_strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+        "entry_double_down_factor": 2.0,
+    }
+    long_inp = make_input(
+        balance=1_000.0,
+        strategy_kind="ema_anchor",
+        global_bp=bot_params_pair(
+            short_overrides={"n_positions": 0, "total_wallet_exposure_limit": 0.0}
+        ),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_pos_size=1.0,
+                long_pos_price=100.0,
+                long_strategy=base_strategy,
+                short_strategy=base_strategy,
+            )
+        ],
+    )
+    base_long = copy.deepcopy(long_inp)
+    base_long["symbols"][0]["long"]["position"] = {"size": 0.0, "price": 0.0}
+
+    scaled_long = next(
+        o for o in compute(pbr, long_inp)["orders"] if o["order_type"] == "entry_ema_anchor_long"
+    )
+    neutral_long = next(
+        o
+        for o in compute(pbr, base_long)["orders"]
+        if o["order_type"] == "entry_ema_anchor_long"
+    )
+    assert scaled_long["qty"] > neutral_long["qty"]
+    assert scaled_long["qty"] == pytest.approx(1.2)
+    assert neutral_long["qty"] == pytest.approx(1.0)
+
+    short_inp = make_input(
+        balance=1_000.0,
+        strategy_kind="ema_anchor",
+        global_bp=bot_params_pair(
+            short_overrides={"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+        ),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                short_pos_size=-1.0,
+                short_pos_price=100.0,
+                long_strategy=base_strategy,
+                short_strategy=base_strategy,
+            )
+        ],
+    )
+    base_short = copy.deepcopy(short_inp)
+    base_short["symbols"][0]["short"]["position"] = {"size": 0.0, "price": 0.0}
+
+    scaled_short = next(
+        o for o in compute(pbr, short_inp)["orders"] if o["order_type"] == "entry_ema_anchor_short"
+    )
+    neutral_short = next(
+        o
+        for o in compute(pbr, base_short)["orders"]
+        if o["order_type"] == "entry_ema_anchor_short"
+    )
+    assert abs(scaled_short["qty"]) > abs(neutral_short["qty"])
+    assert scaled_short["qty"] == pytest.approx(-1.2)
+    assert neutral_short["qty"] == pytest.approx(-1.0)
 
 
 def test_ema_anchor_respects_runtime_budget_for_base_clip_size():

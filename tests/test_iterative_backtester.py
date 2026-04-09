@@ -108,8 +108,35 @@ def test_async_main_passes_cli_overrides_to_session(monkeypatch):
 def test_dataset_signature_changes_for_dataset_affecting_config():
     base = {
         "backtest": {"start_date": "2023-01-01", "coins": {"combined": ["BTC"]}, "cache_dir": {}},
-        "bot": {"long": {"strategy": {"ema_anchor": {"ema_span_0": 48}}}},
-        "live": {"approved_coins": {"long": ["BTC"], "short": []}},
+        "bot": {
+            "long": {
+                "strategy": {
+                    "ema_anchor": {
+                        "ema_span_0": 48,
+                        "ema_span_1": 60,
+                        "entry_volatility_ema_span_hours": 12,
+                        "offset": 0.003,
+                    }
+                }
+            },
+            "short": {
+                "strategy": {
+                    "ema_anchor": {
+                        "ema_span_0": 48,
+                        "ema_span_1": 60,
+                        "entry_volatility_ema_span_hours": 12,
+                        "offset": 0.003,
+                    }
+                }
+            },
+        },
+        "live": {
+            "approved_coins": {"long": ["BTC"], "short": []},
+            "strategy_kind": "ema_anchor",
+            "warmup_ratio": 1.0,
+            "max_warmup_minutes": 0,
+            "minimum_coin_age_days": 365,
+        },
         "optimize": {"scoring": [{"metric": "adg_strategy_pnl_rebased", "goal": "max"}]},
     }
 
@@ -119,11 +146,57 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
     }
     bot_changed = {
         **base,
-        "bot": {"long": {"strategy": {"ema_anchor": {"ema_span_0": 96}}}},
+        "bot": {
+            "long": {
+                "strategy": {
+                    "ema_anchor": {
+                        "ema_span_0": 48,
+                        "ema_span_1": 60,
+                        "entry_volatility_ema_span_hours": 48,
+                        "offset": 0.003,
+                    }
+                }
+            },
+            "short": {
+                "strategy": {
+                    "ema_anchor": {
+                        "ema_span_0": 48,
+                        "ema_span_1": 60,
+                        "entry_volatility_ema_span_hours": 12,
+                        "offset": 0.003,
+                    }
+                }
+            },
+        },
+    }
+    bot_quote_changed = {
+        **base,
+        "bot": {
+            "long": {
+                "strategy": {
+                    "ema_anchor": {
+                        "ema_span_0": 48,
+                        "ema_span_1": 60,
+                        "entry_volatility_ema_span_hours": 12,
+                        "offset": 0.01,
+                    }
+                }
+            },
+            "short": {
+                "strategy": {
+                    "ema_anchor": {
+                        "ema_span_0": 48,
+                        "ema_span_1": 60,
+                        "entry_volatility_ema_span_hours": 12,
+                        "offset": 0.003,
+                    }
+                }
+            },
+        },
     }
     live_changed = {
         **base,
-        "live": {"approved_coins": {"long": ["BTC", "SOL"], "short": []}},
+        "live": {**base["live"], "approved_coins": {"long": ["BTC", "SOL"], "short": []}},
     }
     optimize_changed = {
         **base,
@@ -132,6 +205,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
 
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(same)
     assert ib.make_dataset_signature(base) != ib.make_dataset_signature(bot_changed)
+    assert ib.make_dataset_signature(base) == ib.make_dataset_signature(bot_quote_changed)
     assert ib.make_dataset_signature(base) != ib.make_dataset_signature(live_changed)
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(optimize_changed)
 
@@ -140,7 +214,13 @@ def test_run_signature_changes_for_optimize_changes():
     base = {
         "backtest": {"start_date": "2023-01-01", "coins": {"combined": ["BTC"]}, "cache_dir": {}},
         "bot": {"long": {"strategy": {"ema_anchor": {"ema_span_0": 48}}}},
-        "live": {"approved_coins": {"long": ["BTC"], "short": []}},
+        "live": {
+            "approved_coins": {"long": ["BTC"], "short": []},
+            "strategy_kind": "ema_anchor",
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0,
+            "minimum_coin_age_days": 365,
+        },
         "optimize": {"scoring": [{"metric": "adg_strategy_pnl_rebased", "goal": "max"}]},
     }
     optimize_changed = {

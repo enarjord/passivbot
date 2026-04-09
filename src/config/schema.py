@@ -12,6 +12,7 @@ def _get_shared_bot_defaults():
     return {
         "long": {
             "risk": {
+                "entry_cooldown_minutes": 0.0,
                 "n_positions": 10,
                 "total_wallet_exposure_limit": 1.25,
                 "twel_enforcer_threshold": 1,
@@ -47,6 +48,7 @@ def _get_shared_bot_defaults():
         },
         "short": {
             "risk": {
+                "entry_cooldown_minutes": 0.0,
                 "n_positions": 10,
                 "total_wallet_exposure_limit": 0,
                 "twel_enforcer_threshold": 0.95,

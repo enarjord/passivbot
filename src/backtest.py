@@ -274,6 +274,53 @@ def _int_or(value, default=0):
         return int(default)
 
 
+def _compute_trading_window_days(equities_array: np.ndarray) -> tuple[float, int | None, int | None]:
+    equities_array = np.asarray(equities_array)
+    if equities_array.size == 0 or equities_array.shape[0] == 0:
+        return 0.0, None, None
+    timestamps_ms = equities_array[:, 0].astype(np.int64)
+    start_ts = int(timestamps_ms[0])
+    end_ts = int(timestamps_ms[-1])
+    range_ms = max(0, end_ts - start_ts)
+    if range_ms > 0:
+        n_days = range_ms / (1000 * 60 * 60 * 24)
+    else:
+        n_days = equities_array.shape[0] / 1440.0
+    return float(max(n_days, 1e-9)), start_ts, end_ts
+
+
+def _compute_fill_activity_metrics(fdf: pd.DataFrame, equities_array: np.ndarray) -> dict:
+    n_days, start_ts, end_ts = _compute_trading_window_days(equities_array)
+    fills_per_day = float(len(fdf)) / n_days if n_days > 0.0 else 0.0
+
+    if start_ts is None or end_ts is None:
+        return {
+            "fills_per_day": fills_per_day,
+            "hours_no_fills_max": 0.0,
+            "hours_no_fills_mean": 0.0,
+            "hours_no_fills_median": 0.0,
+        }
+
+    if fdf.empty:
+        gap_hours = np.array([max(0, end_ts - start_ts) / (1000 * 60 * 60)], dtype=float)
+    else:
+        fill_ts = (fdf["timestamp"].astype("int64") // 1_000_000).to_numpy(dtype=np.int64)
+        fill_ts = fill_ts[(fill_ts >= start_ts) & (fill_ts <= end_ts)]
+        if fill_ts.size == 0:
+            gap_hours = np.array([max(0, end_ts - start_ts) / (1000 * 60 * 60)], dtype=float)
+        else:
+            fill_ts = np.sort(fill_ts)
+            boundary_ts = np.concatenate(([start_ts], fill_ts, [end_ts]))
+            gap_hours = np.diff(boundary_ts).astype(np.float64) / (1000 * 60 * 60)
+
+    return {
+        "fills_per_day": fills_per_day,
+        "hours_no_fills_max": float(np.max(gap_hours)) if gap_hours.size else 0.0,
+        "hours_no_fills_mean": float(np.mean(gap_hours)) if gap_hours.size else 0.0,
+        "hours_no_fills_median": float(np.median(gap_hours)) if gap_hours.size else 0.0,
+    }
+
+
 def _build_coin_metadata_entries(
     coins_order,
     exchange,
@@ -826,6 +873,7 @@ def process_forager_fills(
         analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit) if profit != 0.0 else 1.0
     pnl_sum = pnls["long"] + pnls["short"]
     analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / pnl_sum if pnl_sum != 0.0 else 0.5
+    analysis_appendix.update(_compute_fill_activity_metrics(fdf, equities_array))
     sample_divider = max(1, int(balance_sample_divider))
     if not fdf.empty:
         timestamps_ns = fdf["timestamp"].astype("int64")

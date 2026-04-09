@@ -4884,6 +4884,62 @@ class Passivbot:
         pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
         return {"max": float(pnls_cumsum.max()), "last": float(pnls_cumsum[-1])}
 
+    @staticmethod
+    def _fill_event_increases_position(pside: str, side: str, qty: float) -> bool:
+        if qty != 0.0:
+            if pside == "long":
+                return qty > 0.0
+            if pside == "short":
+                return qty < 0.0
+        side = str(side or "").lower()
+        if pside == "long":
+            return side == "buy"
+        if pside == "short":
+            return side == "sell"
+        return False
+
+    def _get_last_increase_fill_timestamps(
+        self, symbols: Iterable[str], *, now_ms: Optional[int] = None
+    ) -> dict[str, dict[str, Optional[int]]]:
+        out = {symbol: {"long": None, "short": None} for symbol in symbols}
+        if self._pnls_manager is None:
+            return out
+
+        relevant_pairs: set[tuple[str, str]] = set()
+        max_cooldown_minutes = 0.0
+        for symbol in out:
+            for pside in ("long", "short"):
+                cooldown_minutes = float(self.bp(pside, "risk_entry_cooldown_minutes", symbol) or 0.0)
+                if cooldown_minutes > 0.0:
+                    relevant_pairs.add((symbol, pside))
+                    max_cooldown_minutes = max(max_cooldown_minutes, cooldown_minutes)
+        if not relevant_pairs:
+            return out
+
+        if now_ms is None:
+            now_ms = int(self.get_exchange_time())
+        lookback_minutes = (
+            1 if max_cooldown_minutes < 1.0 else int(math.ceil(max_cooldown_minutes)) + 1
+        )
+        start_ms = max(0, int(now_ms) - lookback_minutes * 60_000)
+        events = self._pnls_manager.get_events(start_ms=start_ms)
+        unresolved = set(relevant_pairs)
+        for event in reversed(events):
+            symbol = str(getattr(event, "symbol", "") or "")
+            pside = str(getattr(event, "position_side", "") or "").lower()
+            key = (symbol, pside)
+            if key not in unresolved:
+                continue
+            qty = float(getattr(event, "qty", 0.0) or 0.0)
+            side = str(getattr(event, "side", "") or "").lower()
+            if not self._fill_event_increases_position(pside, side, qty):
+                continue
+            out[symbol][pside] = int(getattr(event, "timestamp", 0) or 0)
+            unresolved.remove(key)
+            if not unresolved:
+                break
+        return out
+
     def _log_realized_loss_gate_blocks(self, out: dict, idx_to_symbol: dict[int, str]) -> None:
         """Emit visible warnings for close orders blocked by realized-loss gate."""
         diagnostics = out.get("diagnostics", {}) if isinstance(out, dict) else {}
@@ -5827,6 +5883,7 @@ class Passivbot:
             "forager_volume_ema_span",
             "forager_volume_drop_pct",
             "forager_score_weights",
+            "risk_entry_cooldown_minutes",
             "n_positions",
             "total_wallet_exposure_limit",
             "wallet_exposure_limit",
@@ -6045,6 +6102,7 @@ class Passivbot:
     async def calc_ideal_orders_orchestrator_from_snapshot(
         self, snapshot: dict, *, return_snapshot: bool
     ):
+        timestamp_ms = int(snapshot.get("ts_ms", utc_ms()))
         symbols = snapshot["symbols"]
         last_prices = snapshot["last_prices"]
         Passivbot._monitor_record_price_ticks(self, last_prices, ts=utc_ms(), source="orchestrator_snapshot")
@@ -6055,6 +6113,7 @@ class Passivbot:
 
         unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
         realized_pnl_cumsum = snapshot.get("realized_pnl_cumsum", {"max": 0.0, "last": 0.0})
+        last_increase_fill_timestamps = snapshot.get("last_increase_fill_timestamps", {})
         max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
         if hasattr(self, "_build_orchestrator_mode_overrides"):
             mode_overrides = self._build_orchestrator_mode_overrides(symbols)
@@ -6070,6 +6129,7 @@ class Passivbot:
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
         strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
         input_dict = {
+            "timestamp_ms": timestamp_ms,
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
             "global": {
@@ -6134,6 +6194,7 @@ class Passivbot:
                         "max_since_open": float(trailing.get("max_since_open", 0.0)),
                         "min_since_max": float(trailing.get("min_since_max", 0.0)),
                     },
+                    "last_increase_fill_timestamp_ms": last_increase_fill_timestamps.get(symbol, {}).get(pside),
                     "bot_params": self._bot_params_to_rust_dict(pside, symbol),
                     "strategy_params": self._strategy_params_to_rust_dict(pside, symbol),
                 }
@@ -6605,6 +6666,10 @@ class Passivbot:
             allow_new_unstuck=not self.has_open_unstuck_order()
         )
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
+        now_ms = int(self.get_exchange_time())
+        last_increase_fill_timestamps = self._get_last_increase_fill_timestamps(
+            symbols, now_ms=now_ms
+        )
         max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
 
         global_bp = {
@@ -6616,6 +6681,7 @@ class Passivbot:
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
         strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
         input_dict = {
+            "timestamp_ms": now_ms,
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
             "global": {
@@ -6676,6 +6742,7 @@ class Passivbot:
                         "max_since_open": float(trailing.get("max_since_open", 0.0)),
                         "min_since_max": float(trailing.get("min_since_max", 0.0)),
                     },
+                    "last_increase_fill_timestamp_ms": last_increase_fill_timestamps.get(symbol, {}).get(pside),
                     "bot_params": self._bot_params_to_rust_dict(pside, symbol),
                     "strategy_params": self._strategy_params_to_rust_dict(pside, symbol),
                 }
@@ -6801,11 +6868,12 @@ class Passivbot:
 
         if return_snapshot:
             snapshot = {
-                "ts_ms": int(utc_ms()),
+                "ts_ms": now_ms,
                 "exchange": str(getattr(self, "exchange", "")),
                 "user": str(self.config_get(["live", "user"]) or ""),
                 "active_symbols": list(symbols),
                 "realized_pnl_cumsum": realized_pnl_cumsum,
+                "last_increase_fill_timestamps": last_increase_fill_timestamps,
                 "orchestrator_input": input_dict,
                 "orchestrator_output": out,
             }

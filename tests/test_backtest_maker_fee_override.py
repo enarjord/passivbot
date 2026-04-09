@@ -172,10 +172,12 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
 def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
     config = _base_config()
     config["live"]["strategy_kind"] = "ema_anchor"
+    config["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 3.0
     config["bot"]["long"]["strategy"]["ema_anchor"] = {
             "base_qty_pct": 0.02,
             "ema_span_0": 55.0,
             "ema_span_1": 144.0,
+            "entry_double_down_factor": 0.8,
             "offset": 0.003,
             "offset_volatility_ema_span_minutes": 30.0,
             "offset_volatility_1m_weight": 2.5,
@@ -187,6 +189,7 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
             "base_qty_pct": 0.03,
             "ema_span_0": 34.0,
             "ema_span_1": 89.0,
+            "entry_double_down_factor": 0.5,
             "offset": 0.004,
             "offset_volatility_ema_span_minutes": 45.0,
             "offset_volatility_1m_weight": 3.5,
@@ -205,12 +208,15 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
     assert len(strategy_params_list) == 1
     assert "base_qty_pct" not in bot_params_list[0]["long"]
     assert "offset_volatility_ema_span_minutes" not in bot_params_list[0]["long"]
+    assert bot_params_list[0]["long"]["risk_entry_cooldown_minutes"] == 3.0
     assert strategy_params_list[0]["long"]["base_qty_pct"] == 0.02
+    assert strategy_params_list[0]["long"]["entry_double_down_factor"] == 0.8
     assert strategy_params_list[0]["long"]["offset_volatility_ema_span_minutes"] == 30.0
     assert strategy_params_list[0]["long"]["offset_volatility_1m_weight"] == 2.5
     assert strategy_params_list[0]["short"]["entry_volatility_ema_span_hours"] == 18.0
     assert strategy_params_list[0]["short"]["offset_volatility_1h_weight"] == 0.5
     assert strategy_params_list[0]["short"]["offset"] == 0.004
+    assert strategy_params_list[0]["short"]["entry_double_down_factor"] == 0.5
 
 def test_prep_backtest_args_does_not_log_execution_settings_by_default(caplog):
     config = _base_config()

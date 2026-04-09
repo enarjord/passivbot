@@ -108,10 +108,12 @@ def test_prepare_config_preserves_nested_strategy_namespace():
 def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     source = get_template_config()
     source["live"]["strategy_kind"] = "ema_anchor"
+    source["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 2.5
     source["bot"]["long"]["strategy"]["ema_anchor"] = {
             "base_qty_pct": 0.02,
             "ema_span_0": 55.0,
             "ema_span_1": 144.0,
+            "entry_double_down_factor": 0.8,
             "offset": 0.003,
             "offset_psize_weight": 0.2,
     }
@@ -119,6 +121,7 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
             "base_qty_pct": 0.03,
             "ema_span_0": 34.0,
             "ema_span_1": 89.0,
+            "entry_double_down_factor": 0.4,
             "offset": 0.004,
             "offset_psize_weight": 0.1,
     }
@@ -127,10 +130,14 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     compiled = compile_runtime_config(prepared, runtime="backtest")
 
     assert prepared["live"]["strategy_kind"] == "ema_anchor"
+    assert prepared["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(2.5)
     assert _strategy_side(prepared, "long")["base_qty_pct"] == pytest.approx(0.02)
+    assert _strategy_side(prepared, "long")["entry_double_down_factor"] == pytest.approx(0.8)
     assert _strategy_side(prepared, "short")["offset"] == pytest.approx(0.004)
+    assert _strategy_side(prepared, "short")["entry_double_down_factor"] == pytest.approx(0.4)
     assert "base_qty_pct" not in compiled["bot"]["long"]
     assert "offset" not in compiled["bot"]["short"]
+    assert compiled["bot"]["long"]["risk_entry_cooldown_minutes"] == pytest.approx(2.5)
 
 
 def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missing():
@@ -144,8 +151,17 @@ def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missi
     assert prepared["live"]["strategy_kind"] == "ema_anchor"
     assert _strategy_side(prepared, "long")["base_qty_pct"] == pytest.approx(0.01)
     assert _strategy_side(prepared, "long")["ema_span_0"] == pytest.approx(200.0)
+    assert _strategy_side(prepared, "long")["entry_double_down_factor"] == pytest.approx(0.0)
     assert _strategy_side(prepared, "short")["offset"] == pytest.approx(0.002)
     assert "base_qty_pct" not in prepared["bot"]["long"]
+
+
+def test_prepare_config_rejects_negative_entry_cooldown_minutes():
+    source = get_template_config()
+    source["bot"]["long"]["risk"]["entry_cooldown_minutes"] = -0.1
+
+    with pytest.raises(ValueError, match="bot.long.risk.entry_cooldown_minutes"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 def test_prepare_config_target_and_runtime_preserve_raw_metadata_and_record_steps():

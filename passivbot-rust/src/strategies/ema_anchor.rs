@@ -97,6 +97,38 @@ fn calc_base_clip_qty(
 }
 
 #[inline]
+fn calc_entry_qty(
+    side: StrategySide,
+    exchange: &ExchangeParams,
+    bot_params: &BotParams,
+    params: &EmaAnchorParams,
+    balance: f64,
+    price: f64,
+    effective_wallet_exposure_limit: f64,
+    psize: f64,
+    mid: f64,
+) -> f64 {
+    let base_qty = calc_base_clip_qty(
+        exchange,
+        bot_params,
+        params,
+        balance,
+        price,
+        effective_wallet_exposure_limit,
+    );
+    if base_qty <= 0.0 {
+        return 0.0;
+    }
+    let pside_bias = calc_pside_bias(balance, mid, psize);
+    let same_side_bias = match side {
+        StrategySide::Long => pside_bias.max(0.0),
+        StrategySide::Short => (-pside_bias).max(0.0),
+    };
+    let multiplier = (1.0 + same_side_bias * params.entry_double_down_factor).max(1.0);
+    round_(base_qty * multiplier, exchange.qty_step)
+}
+
+#[inline]
 fn calc_close_qty(
     exchange: &ExchangeParams,
     bot_params: &BotParams,
@@ -157,13 +189,17 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                 );
                 if bid_price.is_finite() && bid_price > 0.0 && effective_wallet_exposure_limit > 0.0
                 {
-                    let qty = calc_base_clip_qty(
+                    let mid = (request.state.order_book.bid + request.state.order_book.ask) * 0.5;
+                    let qty = calc_entry_qty(
+                        StrategySide::Long,
                         request.exchange,
                         request.bot_params,
                         params,
                         request.state.balance,
                         bid_price,
                         effective_wallet_exposure_limit,
+                        request.position.size,
+                        mid,
                     );
                     if qty > 0.0 {
                         generated.entries.push(Order {
@@ -239,13 +275,17 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                 );
                 if ask_price.is_finite() && ask_price > 0.0 && effective_wallet_exposure_limit > 0.0
                 {
-                    let qty = calc_base_clip_qty(
+                    let mid = (request.state.order_book.bid + request.state.order_book.ask) * 0.5;
+                    let qty = calc_entry_qty(
+                        StrategySide::Short,
                         request.exchange,
                         request.bot_params,
                         params,
                         request.state.balance,
                         ask_price,
                         effective_wallet_exposure_limit,
+                        request.position.size,
+                        mid,
                     );
                     if qty > 0.0 {
                         generated.entries.push(Order {

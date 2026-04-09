@@ -62,6 +62,7 @@ from utils import (  # noqa: E402
 )
 from metrics_schema import build_scenario_metrics, flatten_metric_stats  # noqa: E402
 from limit_utils import expand_limit_checks, compute_limit_violation  # noqa: E402
+from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes  # noqa: E402
 
 PENALTY_WEIGHT = 1e6
 
@@ -370,10 +371,33 @@ def _config_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _dataset_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
+    backtest_cfg = config.get("backtest", {}) or {}
+    live_cfg = config.get("live", {}) or {}
+    return {
+        "backtest": {
+            "start_date": backtest_cfg.get("start_date"),
+            "end_date": backtest_cfg.get("end_date"),
+            "exchanges": deepcopy(backtest_cfg.get("exchanges", [])),
+            "gap_tolerance_ohlcvs_minutes": backtest_cfg.get("gap_tolerance_ohlcvs_minutes"),
+            "coin_sources": deepcopy(backtest_cfg.get("coin_sources", {})),
+            "market_settings_sources": deepcopy(backtest_cfg.get("market_settings_sources", {})),
+        },
+        "live": {
+            "approved_coins": deepcopy(live_cfg.get("approved_coins")),
+            "minimum_coin_age_days": live_cfg.get("minimum_coin_age_days"),
+            "max_warmup_minutes": live_cfg.get("max_warmup_minutes"),
+            "warmup_ratio": live_cfg.get("warmup_ratio"),
+        },
+        "warmup": {
+            "global_minutes": compute_backtest_warmup_minutes(config),
+            "per_coin_minutes": compute_per_coin_warmup_minutes(config),
+        },
+    }
+
+
 def make_dataset_signature(config: Dict[str, Any]) -> str:
-    payload = _config_hash_payload(config)
-    payload.pop("optimize", None)
-    return calc_hash(payload)
+    return calc_hash(_dataset_hash_payload(config))
 
 
 def make_run_signature(config: Dict[str, Any]) -> str:
@@ -563,7 +587,7 @@ class IterativeBacktestSession:
 
     # ------------------------------------------------------------------
     async def reload_datasets(self, config: Dict[str, Any]) -> None:
-        logging.info("Backtest configuration changed; reloading datasets...")
+        logging.info("Dataset-affecting configuration changed; reloading datasets...")
         self.history.clear()
         self.best_run_index = None
         self.config_cache.clear()

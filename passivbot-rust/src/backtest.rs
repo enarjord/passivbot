@@ -615,6 +615,8 @@ pub struct Backtest<'a> {
     first_valid_timestamps: HashMap<usize, usize>,
     did_fill_long: Vec<bool>,
     did_fill_short: Vec<bool>,
+    last_increase_fill_timestamp_long: Vec<Option<u64>>,
+    last_increase_fill_timestamp_short: Vec<Option<u64>>,
     pub total_wallet_exposures: Vec<f64>,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
     equity_tracking_active: bool,
@@ -1425,6 +1427,7 @@ impl<'a> Backtest<'a> {
                         mode: mode_long,
                         position: pos_long,
                         trailing: trailing_long,
+                        last_increase_fill_timestamp_ms: self.last_increase_fill_timestamp_long[idx],
                         bot_params: self.bot_params[idx].long.clone(),
                         strategy_params: None,
                         parsed_strategy_params: Some(self.strategy_params[idx].long),
@@ -1434,6 +1437,7 @@ impl<'a> Backtest<'a> {
                         mode: mode_short,
                         position: pos_short,
                         trailing: trailing_short,
+                        last_increase_fill_timestamp_ms: self.last_increase_fill_timestamp_short[idx],
                         bot_params: self.bot_params[idx].short.clone(),
                         strategy_params: None,
                         parsed_strategy_params: Some(self.strategy_params[idx].short),
@@ -1444,6 +1448,7 @@ impl<'a> Backtest<'a> {
             .collect();
 
         orchestrator::OrchestratorInput {
+            timestamp_ms: self.first_timestamp_ms + (k as u64) * self.interval_ms,
             balance,
             balance_raw,
             global: orchestrator::OrchestratorGlobal {
@@ -1485,6 +1490,7 @@ impl<'a> Backtest<'a> {
 
         input.balance = self.balance.usd_total_balance_rounded;
         input.balance_raw = self.balance.usd_total_balance;
+        input.timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
 
         let balance_raw = input.balance_raw;
         let (effective_cumsum_max, effective_cumsum_last) = self.effective_pnl_cumsum();
@@ -1556,6 +1562,9 @@ impl<'a> Backtest<'a> {
 
             sym.long.trailing = self.trailing_prices.long[idx].clone();
             sym.short.trailing = self.trailing_prices.short[idx].clone();
+            sym.long.last_increase_fill_timestamp_ms = self.last_increase_fill_timestamp_long[idx];
+            sym.short.last_increase_fill_timestamp_ms =
+                self.last_increase_fill_timestamp_short[idx];
 
             sym.long.runtime_budget = Some(self.runtime_budget[idx].long.clone());
             sym.short.runtime_budget = Some(self.runtime_budget[idx].short.clone());
@@ -2046,6 +2055,8 @@ impl<'a> Backtest<'a> {
             first_valid_timestamps: HashMap::new(),
             did_fill_long: vec![false; n_coins],
             did_fill_short: vec![false; n_coins],
+            last_increase_fill_timestamp_long: vec![None; n_coins],
+            last_increase_fill_timestamp_short: vec![None; n_coins],
             total_wallet_exposures: Vec::with_capacity(n_timesteps),
             equity_tracking_active: false,
             debug_writer: if DEBUG_DUMP_ORDERS {
@@ -3282,6 +3293,8 @@ impl<'a> Backtest<'a> {
                     }
                     for (order, exec) in entries_to_process {
                         self.did_fill_long[idx] = true;
+                        self.last_increase_fill_timestamp_long[idx] =
+                            Some(self.first_timestamp_ms + (k as u64) * self.interval_ms);
                         self.process_entry_fill_long(k, idx, &order, exec);
                     }
                 }
@@ -3318,6 +3331,8 @@ impl<'a> Backtest<'a> {
                     }
                     for (order, exec) in entries_to_process {
                         self.did_fill_short[idx] = true;
+                        self.last_increase_fill_timestamp_short[idx] =
+                            Some(self.first_timestamp_ms + (k as u64) * self.interval_ms);
                         self.process_entry_fill_short(k, idx, &order, exec);
                     }
                 }

@@ -468,6 +468,8 @@ pub struct BotParams {
     pub hsl_orange_tier_mode: String,
     #[serde(default = "default_hsl_panic_close_order_type")]
     pub hsl_panic_close_order_type: String,
+    #[serde(default)]
+    pub risk_entry_cooldown_minutes: f64,
     pub n_positions: usize,
     pub total_wallet_exposure_limit: f64,
     pub wallet_exposure_limit: f64, // per-position base limit (without excess allowance)

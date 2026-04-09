@@ -19,6 +19,7 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
         "red_threshold": "hsl_red_threshold",
     },
     "risk": {
+        "entry_cooldown_minutes": "risk_entry_cooldown_minutes",
         "n_positions": "n_positions",
         "twel_enforcer_threshold": "risk_twel_enforcer_threshold",
         "we_excess_allowance_pct": "risk_we_excess_allowance_pct",
@@ -58,6 +59,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "red_threshold": [0.01, 0.12, 0.001],
         },
         "risk": {
+            "entry_cooldown_minutes": [0.0, 60.0, 0.1],
             "n_positions": [10, 10, 1],
             "twel_enforcer_threshold": [0.95, 1.01, 0.001],
             "we_excess_allowance_pct": [0, 0.3, 0.01],
@@ -86,6 +88,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "red_threshold": [0.01, 0.12, 0.001],
         },
         "risk": {
+            "entry_cooldown_minutes": [0.0, 60.0, 0.1],
             "n_positions": [10, 10, 1],
             "twel_enforcer_threshold": [0.95, 1.01, 0.001],
             "we_excess_allowance_pct": [0, 0.3, 0.01],
@@ -161,6 +164,7 @@ STRATEGY_OPTIMIZE_BOUNDS_DEFAULTS = {
             "base_qty_pct": [0.001, 0.05, 0.0001],
             "ema_span_0": [20.0, 1440.0, 1.0],
             "ema_span_1": [20.0, 1440.0, 1.0],
+            "entry_double_down_factor": [0.0, 2.0, 0.01],
             "offset": [0.0, 0.05, 0.0001],
             "offset_volatility_ema_span_minutes": [5.0, 720.0, 1.0],
             "offset_volatility_1m_weight": [0.0, 40.0, 0.1],
@@ -172,6 +176,7 @@ STRATEGY_OPTIMIZE_BOUNDS_DEFAULTS = {
             "base_qty_pct": [0.001, 0.05, 0.0001],
             "ema_span_0": [20.0, 1440.0, 1.0],
             "ema_span_1": [20.0, 1440.0, 1.0],
+            "entry_double_down_factor": [0.0, 2.0, 0.01],
             "offset": [0.0, 0.05, 0.0001],
             "offset_volatility_ema_span_minutes": [5.0, 720.0, 1.0],
             "offset_volatility_1m_weight": [0.0, 40.0, 0.1],

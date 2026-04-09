@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 import backtest as bt
 import plotting
@@ -300,6 +301,64 @@ def test_process_forager_fills_no_fills_keeps_datetime_index_for_resample():
     assert not bal_eq.empty
 
 
+def test_process_forager_fills_adds_fill_activity_metrics_from_trading_window():
+    start = 1_740_000_000_000
+    one_hour = 3_600_000
+    equities_array = np.array(
+        [
+            [start, 1000.0, 0.02],
+            [start + one_hour, 1001.0, 0.02],
+            [start + 2 * one_hour, 1002.0, 0.02],
+            [start + 3 * one_hour, 1003.0, 0.02],
+            [start + 4 * one_hour, 1004.0, 0.02],
+        ],
+        dtype=np.float64,
+    )
+    fills = [
+        [1, start + one_hour, "BTC", 1.0, 0.1, 1000.0, 0.0, 1000.0, 50000.0, 0.1, 100.0, 0.1, 100.0, "entry_ema_anchor_long", "maker", 0.1, 0.0, 0.0, 0.0],
+        [3, start + 3 * one_hour, "BTC", -0.5, 0.1, 1005.0, 0.0, 1005.0, 50000.0, -0.1, 110.0, 0.0, 0.0, "close_ema_anchor_long", "maker", 0.0, 0.0, 0.0, 0.0],
+    ]
+
+    _fdf, analysis_appendix, _bal_eq = process_forager_fills(
+        fills=fills,
+        coins=["BTC"],
+        hlcvs=np.empty((0, 0), dtype=np.float64),
+        equities_array=equities_array,
+        balance_sample_divider=1,
+    )
+
+    assert analysis_appendix["fills_per_day"] == pytest.approx(12.0)
+    assert analysis_appendix["hours_no_fills_max"] == pytest.approx(2.0)
+    assert analysis_appendix["hours_no_fills_mean"] == pytest.approx(4.0 / 3.0)
+    assert analysis_appendix["hours_no_fills_median"] == pytest.approx(1.0)
+
+
+def test_process_forager_fills_no_fills_penalizes_whole_trading_window():
+    start = 1_740_000_000_000
+    one_hour = 3_600_000
+    equities_array = np.array(
+        [
+            [start, 1000.0, 0.02],
+            [start + one_hour, 1001.0, 0.02],
+            [start + 2 * one_hour, 1002.0, 0.02],
+        ],
+        dtype=np.float64,
+    )
+
+    _fdf, analysis_appendix, _bal_eq = process_forager_fills(
+        fills=[],
+        coins=[],
+        hlcvs=np.empty((0, 0), dtype=np.float64),
+        equities_array=equities_array,
+        balance_sample_divider=1,
+    )
+
+    assert analysis_appendix["fills_per_day"] == pytest.approx(0.0)
+    assert analysis_appendix["hours_no_fills_max"] == pytest.approx(2.0)
+    assert analysis_appendix["hours_no_fills_mean"] == pytest.approx(2.0)
+    assert analysis_appendix["hours_no_fills_median"] == pytest.approx(2.0)
+
+
 def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, monkeypatch):
     calls = {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
 
@@ -311,6 +370,7 @@ def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, mon
     monkeypatch.setattr(bt, "process_forager_fills", _fake_process_forager_fills)
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
     monkeypatch.setattr(bt, "strip_config_metadata", lambda config: config)
+    monkeypatch.setattr(bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         bt, "dump_config", lambda config, path: open(path, "w", encoding="utf-8").write("{}")
     )
@@ -373,6 +433,7 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     monkeypatch.setattr(bt, "process_forager_fills", _fake_process_forager_fills)
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
     monkeypatch.setattr(bt, "strip_config_metadata", lambda config: config)
+    monkeypatch.setattr(bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         bt, "dump_config", lambda config, path: open(path, "w", encoding="utf-8").write("{}")
     )
@@ -433,6 +494,7 @@ def test_post_process_visible_metrics_filters_terminal_output_only(tmp_path, mon
     monkeypatch.setattr(bt, "process_forager_fills", _fake_process_forager_fills)
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
     monkeypatch.setattr(bt, "strip_config_metadata", lambda config: config)
+    monkeypatch.setattr(bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         bt, "dump_config", lambda config, path: open(path, "w", encoding="utf-8").write("{}")
     )
