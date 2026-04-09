@@ -183,6 +183,18 @@ class HyperliquidBot(CCXTBot):
         tracked = set(getattr(self, "active_symbols", []) or [])
         tracked.update(getattr(self, "open_orders", {}).keys())
         tracked.update(getattr(self, "positions", {}).keys())
+        tracked_hip3 = {
+            symbol
+            for symbol in tracked
+            if symbol in getattr(self, "markets_dict", {}) and self._get_hl_dex_for_symbol(symbol)
+        }
+        if tracked_hip3:
+            return sorted(tracked_hip3)
+        approved = getattr(self, "approved_coins_minus_ignored_coins", {}) or {}
+        if isinstance(approved, dict):
+            for syms in approved.values():
+                tracked.update(syms or [])
+        tracked.update((getattr(self, "coin_overrides", {}) or {}).keys())
         return sorted(
             symbol
             for symbol in tracked
