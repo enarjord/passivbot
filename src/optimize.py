@@ -93,6 +93,7 @@ from config_utils import (
     update_config_with_args,
     recursive_config_update,
     merge_negative_cli_values,
+    clean_config,
     strip_config_metadata,
 )
 from pure_funcs import (
@@ -142,7 +143,13 @@ except ImportError:  # pragma: no cover - allow import in minimal test envs
 import math
 import fcntl
 from optimizer_overrides import optimizer_overrides
-from opt_utils import make_json_serializable, generate_incremental_diff, round_floats, quantize_floats
+from opt_utils import (
+    make_json_serializable,
+    generate_incremental_diff,
+    round_floats,
+    quantize_floats,
+    deep_updated,
+)
 from limit_utils import expand_limit_checks, compute_limit_violation
 from pareto_store import ParetoStore
 import msgpack
@@ -171,6 +178,7 @@ from optimization.backend_shared import cancel_pending_async_results, drain_asyn
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.backends import get_backend_runner
 from optimization.config_adapter import get_optimization_key_paths, OPTIMIZABLE_BOT_KEY_PATHS
+from optimization.shape import OptimizationShape, build_optimization_shape
 from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
@@ -430,7 +438,7 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
     metrics = getattr(individual, "evaluation_metrics", {}) or {}
     suite_metrics = metrics.pop("suite_metrics", None)
     config = individual_to_config(individual, optimizer_overrides, overrides_list, evaluator_config)
-    entry = dict(config)
+    entry = clean_config(strip_config_metadata(config))
     if suite_metrics is not None:
         entry["suite_metrics"] = suite_metrics
         bt = entry.get("backtest")
@@ -442,7 +450,6 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
             if violation is not None:
                 metrics["constraint_violation"] = violation
         entry["metrics"] = metrics
-    entry = strip_config_metadata(entry)
     recorder.record(entry)
     _clear_candidate_metrics(individual)
 
@@ -675,9 +682,23 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
     return config
 
 
-def config_to_individual(config, bounds, sig_digits=None):
+def config_to_individual(
+    config,
+    bounds,
+    sig_digits=None,
+    key_paths=None,
+    optimization_shape: OptimizationShape | None = None,
+):
+    if optimization_shape is not None:
+        bounds = optimization_shape.bounds
+        if sig_digits is None:
+            sig_digits = optimization_shape.sig_digits
+        if key_paths is None:
+            key_paths = optimization_shape.key_paths
     values = []
-    for _, path in get_optimization_key_paths(config):
+    if key_paths is None:
+        key_paths = get_optimization_key_paths(config)
+    for _, path in key_paths:
         target = config
         for part in path:
             target = target[part]
@@ -736,9 +757,10 @@ class Evaluator:
         logging.info("Evaluator ready | exchanges=%d", len(self.exchanges))
         self.seen_hashes = seen_hashes if seen_hashes is not None else {}
         self.duplicate_counter = duplicate_counter if duplicate_counter is not None else {"count": 0}
-        self.bounds = extract_bounds_tuple_list_from_config(self.config)
-        self.key_paths = get_optimization_key_paths(self.config)
-        self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
+        self.optimization_shape = build_optimization_shape(self.config)
+        self.bounds = list(self.optimization_shape.bounds)
+        self.key_paths = list(self.optimization_shape.key_paths)
+        self.sig_digits = self.optimization_shape.sig_digits
         self.use_duplicate_guard = True
         self.scoring_specs = extract_objective_specs(self.config)
         self.scoring_weights = default_scoring_weights()
@@ -1535,6 +1557,9 @@ def _extract_starting_config(raw_config, *, source: str = "<memory>"):
             verbose=False,
         )
     }
+    live_cfg = current.get("live")
+    if isinstance(live_cfg, dict) and live_cfg.get("strategy_kind"):
+        extracted["live"] = {"strategy_kind": live_cfg["strategy_kind"]}
     optimize_cfg = current.get("optimize")
     if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
         extracted["optimize"] = {"bounds": deepcopy(optimize_cfg["bounds"])}
@@ -1553,10 +1578,14 @@ def _build_starting_seed_config(cfg):
     else:
         extracted = _extract_starting_config(cfg)
     seed = get_template_config()
-    seed["bot"] = deepcopy(extracted["bot"])
+    seed["bot"] = deep_updated(seed["bot"], deepcopy(extracted["bot"]))
+    if isinstance(extracted.get("live"), dict):
+        seed["live"] = deep_updated(seed["live"], deepcopy(extracted["live"]))
     optimize_cfg = extracted.get("optimize")
     if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
-        seed["optimize"]["bounds"] = deepcopy(optimize_cfg["bounds"])
+        seed["optimize"]["bounds"] = deep_updated(
+            seed["optimize"]["bounds"], deepcopy(optimize_cfg["bounds"])
+        )
     return seed
 
 
@@ -1573,12 +1602,22 @@ def get_starting_configs(starting_configs: str):
     return extract_configs(starting_configs)
 
 
-def configs_to_individuals(cfgs, bounds, sig_digits=0):
+def configs_to_individuals(
+    cfgs,
+    bounds,
+    sig_digits=0,
+    optimization_shape: OptimizationShape | None = None,
+):
     inds = set()
     for cfg in cfgs:
         try:
             fcfg = _build_starting_seed_config(cfg)
-            individual = config_to_individual(fcfg, bounds, sig_digits)
+            individual = config_to_individual(
+                fcfg,
+                bounds,
+                sig_digits,
+                optimization_shape=optimization_shape,
+            )
             inds.add(tuple(individual))
         except Exception as e:
             logging.warning(f"failed to use starting config as optimizer seed: {e}")
@@ -1988,6 +2027,7 @@ async def main():
             ignore_sigint_in_worker=ignore_sigint_in_worker,
             get_starting_configs=get_starting_configs,
             configs_to_individuals=configs_to_individuals,
+            optimization_shape=evaluator.optimization_shape,
             record_individual_result=_record_individual_result,
             run_evolution=ea_mu_plus_lambda_stream,
             build_config_fn=individual_to_config,

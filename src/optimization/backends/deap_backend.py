@@ -51,6 +51,7 @@ def run_backend(
     ignore_sigint_in_worker: Callable[[], None],
     get_starting_configs: Callable[[str | None], list],
     configs_to_individuals: Callable[[list, Any, int], list],
+    optimization_shape=None,
     record_individual_result: Callable[[Any, dict, list, Any], None],
     run_evolution: Callable[..., tuple[Any, Any]],
     build_config_fn,
@@ -176,6 +177,7 @@ def run_backend(
             population_size=population_size,
             get_starting_configs=get_starting_configs,
             configs_to_individuals=configs_to_individuals,
+            optimization_shape=optimization_shape,
             bounds=bounds,
             sig_digits=sig_digits,
         )

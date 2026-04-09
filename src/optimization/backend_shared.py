@@ -11,6 +11,7 @@ def load_starting_individuals(
     population_size: int,
     get_starting_configs: Callable[[str | None], list],
     configs_to_individuals: Callable[[list, Any, int | None], list],
+    optimization_shape=None,
     bounds,
     sig_digits: int | None,
 ) -> list:
@@ -23,7 +24,14 @@ def load_starting_individuals(
         )
     else:
         logging.info("No starting configs provided; population will be random-initialized")
-    return configs_to_individuals(starting_configs, bounds, sig_digits)
+    if optimization_shape is None:
+        return configs_to_individuals(starting_configs, bounds, sig_digits)
+    return configs_to_individuals(
+        starting_configs,
+        bounds,
+        sig_digits,
+        optimization_shape=optimization_shape,
+    )
 
 
 def cancel_pending_async_results(pending: dict) -> None:

@@ -3,7 +3,9 @@
 Interactive iterative backtesting helper.
 
 Usage:
-    python src/tools/iterative_backtester.py path/to/config.hjson
+    python src/tools/iterative_backtester.py path/to/config.hjson --auto-run
+    python src/tools/iterative_backtester.py path/to/config.hjson --auto-run \\
+        --override backtest.start_date=2022-01-01 --override backtest.end_date=now
 
 The script loads all OHLCV data up-front and then lets you rerun backtests
 quickly after editing bot parameters. It prints a concise metrics table per run
@@ -19,6 +21,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -39,6 +42,7 @@ from backtest import prepare_hlcvs_mss, run_backtest  # noqa: E402
 from config.access import get_optional_config_value, require_config_value  # noqa: E402
 from config.limits import normalize_limit_entries  # noqa: E402
 from config.overrides import parse_overrides  # noqa: E402
+from config_utils import set_nested_value_safe  # noqa: E402
 from config.scoring import (  # noqa: E402
     ObjectiveSpec,
     default_scoring_weights,
@@ -58,6 +62,7 @@ from utils import (  # noqa: E402
 )
 from metrics_schema import build_scenario_metrics, flatten_metric_stats  # noqa: E402
 from limit_utils import expand_limit_checks, compute_limit_violation  # noqa: E402
+from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes  # noqa: E402
 
 PENALTY_WEIGHT = 1e6
 
@@ -106,11 +111,14 @@ class RunSummary:
     scoring_metrics: Dict[str, MetricInfo]
     limit_metrics: List[LimitInfo]
     results_path: Path
-    bot_hash: str
+    config_hash: str
     bot_flat: Dict[str, Any] = field(default_factory=dict)
     param_deltas: Dict[str, Tuple[Any, Any]] = field(default_factory=dict)
     duration_s: float = 0.0
     objective_vector: Tuple[float, ...] = field(default_factory=tuple)
+
+
+CLI_OVERRIDE_RE = re.compile(r"^(?P<path>[^=]+)=(?P<value>.*)$")
 
 
 # ---------------------------------------------------------------------------
@@ -351,25 +359,126 @@ def calc_score_vector(
     return tuple(scores), modifier
 
 
+def _config_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
+    payload = {
+        "backtest": deepcopy(config.get("backtest", {})),
+        "bot": deepcopy(config.get("bot", {})),
+        "live": deepcopy(config.get("live", {})),
+        "optimize": deepcopy(config.get("optimize", {})),
+    }
+    payload["backtest"].pop("coins", None)
+    payload["backtest"].pop("cache_dir", None)
+    return payload
+
+
+def _dataset_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
+    backtest_cfg = config.get("backtest", {}) or {}
+    live_cfg = config.get("live", {}) or {}
+    return {
+        "backtest": {
+            "start_date": backtest_cfg.get("start_date"),
+            "end_date": backtest_cfg.get("end_date"),
+            "exchanges": deepcopy(backtest_cfg.get("exchanges", [])),
+            "gap_tolerance_ohlcvs_minutes": backtest_cfg.get("gap_tolerance_ohlcvs_minutes"),
+            "coin_sources": deepcopy(backtest_cfg.get("coin_sources", {})),
+            "market_settings_sources": deepcopy(backtest_cfg.get("market_settings_sources", {})),
+        },
+        "live": {
+            "approved_coins": deepcopy(live_cfg.get("approved_coins")),
+            "minimum_coin_age_days": live_cfg.get("minimum_coin_age_days"),
+            "max_warmup_minutes": live_cfg.get("max_warmup_minutes"),
+            "warmup_ratio": live_cfg.get("warmup_ratio"),
+        },
+        "warmup": {
+            "global_minutes": compute_backtest_warmup_minutes(config),
+            "per_coin_minutes": compute_per_coin_warmup_minutes(config),
+        },
+    }
+
+
+def make_dataset_signature(config: Dict[str, Any]) -> str:
+    return calc_hash(_dataset_hash_payload(config))
+
+
+def make_run_signature(config: Dict[str, Any]) -> str:
+    return calc_hash(_config_hash_payload(config))
+
+
 def make_backtest_signature(config: Dict[str, Any]) -> str:
-    backtest = deepcopy(config.get("backtest", {}))
-    backtest.pop("coins", None)
-    backtest.pop("cache_dir", None)
-    return calc_hash(backtest)
+    # Kept as a compatibility wrapper for existing imports/tests in this branch.
+    return make_dataset_signature(config)
 
 
 def format_timestamp(ms: float) -> str:
     return ts_to_date(ms)[:19].replace("T", " ")
 
 
+def parse_override_value(raw: str) -> Any:
+    text = raw.strip()
+    lowered = text.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered == "null":
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    if re.fullmatch(r"[+-]?\d+", text):
+        try:
+            return int(text)
+        except ValueError:
+            pass
+    if re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", text):
+        try:
+            return float(text)
+        except ValueError:
+            pass
+    return text
+
+
+def parse_cli_override(entry: str) -> Tuple[List[str], Any]:
+    match = CLI_OVERRIDE_RE.match(entry.strip())
+    if match is None:
+        raise ValueError(
+            f"invalid override {entry!r}; expected dotted.path=value"
+        )
+    path = match.group("path").strip()
+    if not path:
+        raise ValueError(f"invalid override {entry!r}; path cannot be empty")
+    return path.split("."), parse_override_value(match.group("value"))
+
+
+def apply_cli_overrides(config: Dict[str, Any], overrides: Iterable[str]) -> Dict[str, Any]:
+    result = deepcopy(config)
+    for entry in overrides:
+        path_parts, value = parse_cli_override(entry)
+        if not set_nested_value_safe(result, path_parts, value, create_missing=True):
+            dotted = ".".join(path_parts)
+            raise ValueError(f"failed to apply override {dotted}={value!r}")
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Core session class
 # ---------------------------------------------------------------------------
 class IterativeBacktestSession:
-    def __init__(self, config_path: Path, log_level: Optional[str], auto_run: bool) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        log_level: Optional[str],
+        auto_run: bool,
+        *,
+        cli_overrides: Optional[List[str]] = None,
+        quit_after_run: bool = False,
+    ) -> None:
         self.config_path = config_path
         self.log_level = log_level
         self.auto_run = auto_run
+        self.cli_overrides = list(cli_overrides or [])
+        self.quit_after_run = quit_after_run
         self.datasets: Dict[str, ExchangeDataset] = {}
         self.backtest_exchanges: List[str] = []
         self.combine_ohlcvs = False
@@ -389,7 +498,7 @@ class IterativeBacktestSession:
     async def initialize(self) -> None:
         config = await self._load_config()
         self.backtest_exchanges = list(require_config_value(config, "backtest.exchanges"))
-        self.combine_ohlcvs = bool(require_config_value(config, "backtest.combine_ohlcvs"))
+        self.combine_ohlcvs = len(self.backtest_exchanges) > 1
         self.backtest_signature = make_backtest_signature(config)
         base_dir = require_config_value(config, "backtest.base_dir")
         session_label = time.strftime("iterative_%Y%m%d_%H%M%S")
@@ -404,6 +513,9 @@ class IterativeBacktestSession:
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
         config = load_prepared_config(str(self.config_path), verbose=False)
         config = parse_overrides(config, verbose=False)
+        if self.cli_overrides:
+            config = apply_cli_overrides(config, self.cli_overrides)
+            logging.info("Applied iterative overrides: %s", self.cli_overrides)
         # Configure logging lazily based on CLI/debug preference
         level = resolve_log_level(
             self.log_level, get_optional_config_value(config, "logging.level", None), fallback=1
@@ -475,7 +587,7 @@ class IterativeBacktestSession:
 
     # ------------------------------------------------------------------
     async def reload_datasets(self, config: Dict[str, Any]) -> None:
-        logging.info("Backtest configuration changed; reloading datasets...")
+        logging.info("Dataset-affecting configuration changed; reloading datasets...")
         self.history.clear()
         self.best_run_index = None
         self.config_cache.clear()
@@ -496,9 +608,9 @@ class IterativeBacktestSession:
             await self.reload_datasets(config)
 
         bot_section = denumpyize(deepcopy(config.get("bot", {})))
-        bot_hash = calc_hash(json.dumps(bot_section, sort_keys=True))
-        if bot_hash in self.config_cache:
-            cached = self.config_cache[bot_hash]
+        config_hash = make_run_signature(config)
+        if config_hash in self.config_cache:
+            cached = self.config_cache[config_hash]
             self.last_bot_flat = cached.bot_flat
             logging.info(
                 "Configuration unchanged; reusing cached results from run #%d.", cached.index
@@ -627,7 +739,7 @@ class IterativeBacktestSession:
             scoring_metrics=scoring_metrics,
             limit_metrics=limit_metrics,
             results_path=run_dir,
-            bot_hash=bot_hash,
+            config_hash=config_hash,
             bot_flat=current_bot_flat,
             param_deltas=param_deltas,
             duration_s=duration,
@@ -635,7 +747,7 @@ class IterativeBacktestSession:
         )
         self.history.append(summary)
         self._update_best_run(summary)
-        self.config_cache[bot_hash] = summary
+        self.config_cache[config_hash] = summary
         self.last_bot_flat = current_bot_flat
         self.backtest_durations.append(duration)
         if len(self.backtest_durations) > 100:
@@ -742,7 +854,7 @@ class IterativeBacktestSession:
             "modifier": run.modifier,
             "results_path": str(run.results_path),
             "backtest_signature": self.backtest_signature,
-            "bot_hash": run.bot_hash,
+            "config_hash": run.config_hash,
             "duration_s": run.duration_s,
             "objective_vector": run.objective_vector,
             "best_run_index": (
@@ -985,6 +1097,8 @@ class IterativeBacktestSession:
         if self.auto_run:
             run, reused = await self.run_once()
             self.print_summary(run, reused=reused)
+            if self.quit_after_run:
+                return
         while True:
             cmd = (await asyncio.to_thread(input, "iterbt> ")).strip().lower()
             if cmd in ("", "run", "r"):
@@ -1033,9 +1147,31 @@ async def async_main() -> None:
         action="store_true",
         help="Run a backtest immediately after loading datasets",
     )
+    parser.add_argument(
+        "--quit-after-run",
+        action="store_true",
+        help="Exit after the initial auto-run instead of entering the interactive prompt",
+    )
+    parser.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="Apply a dotted config override after loading the config, e.g. "
+        "--override backtest.start_date=2022-01-01",
+    )
     args = parser.parse_args()
 
-    session = IterativeBacktestSession(args.config_path, args.log_level, args.auto_run)
+    if args.quit_after_run and not args.auto_run:
+        parser.error("--quit-after-run requires --auto-run")
+
+    session = IterativeBacktestSession(
+        args.config_path,
+        args.log_level,
+        args.auto_run,
+        cli_overrides=args.override,
+        quit_after_run=args.quit_after_run,
+    )
     await session.initialize()
     await session.interactive_loop()
 
