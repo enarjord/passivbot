@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -210,6 +211,29 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
     assert prepared["backtest"]["visible_metrics"] is None
     assert prepared["_raw"] == template
     assert prepared["_raw_effective"] == template
+
+
+def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifact(tmp_path):
+    source = get_template_config()
+    source["live"]["strategy_kind"] = "ema_anchor"
+    rounded = {
+        "volume": 0.323,
+        "ema_readiness": 0.434,
+        "volatility": 0.242,
+    }
+    source["bot"]["long"]["forager"]["score_weights"] = rounded
+    source["bot"]["short"]["forager"]["score_weights"] = rounded
+    path = tmp_path / "rounded_artifact_like.json"
+    path.write_text(json.dumps(source), encoding="utf-8")
+
+    prepared = load_prepared_config(str(path), verbose=False, log_info=False)
+
+    assert prepared["bot"]["long"]["forager"]["score_weights"]["volume"] == pytest.approx(
+        0.3233233233233233
+    )
+    assert prepared["bot"]["short"]["forager"]["score_weights"]["ema_readiness"] == pytest.approx(
+        0.4344344344344344
+    )
 
 
 def test_prepare_config_preserves_backtest_visible_metrics():
