@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from config.access import get_optional_config_value, require_config_value
+from config.access import get_optional_config_value
 
 
 def _resolve_cache_artifact_path(cache_dir: Path, filename_candidates: Sequence[str]) -> str | None:
@@ -14,9 +14,9 @@ def _resolve_cache_artifact_path(cache_dir: Path, filename_candidates: Sequence[
 
 
 def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
-    cache_dir_raw = require_config_value(config, f"backtest.cache_dir.{exchange}")
+    cache_dir_raw = get_optional_config_value(config, f"backtest.cache_dir.{exchange}")
     cache_dir = Path(cache_dir_raw).resolve() if cache_dir_raw else None
-    coins_from_config = list(require_config_value(config, f"backtest.coins.{exchange}"))
+    coins_from_config = list(get_optional_config_value(config, f"backtest.coins.{exchange}", []) or [])
 
     cache_dir_str = str(cache_dir) if cache_dir else None
     coins_file = None

@@ -66,3 +66,20 @@ def test_dump_backtest_dataset_metadata_writes_dataset_json(tmp_path):
     assert payload["coins"] == ["BTC"]
     assert payload["hlcvs_file"] == str((cache_dir / "hlcvs.npy").resolve())
     assert Path(written) == results_path / "dataset.json"
+
+
+def test_build_backtest_dataset_metadata_tolerates_missing_cache_metadata():
+    config = {
+        "backtest": {
+            "start_date": "2025-01-01",
+            "end_date": "2025-02-01",
+        }
+    }
+
+    metadata = build_backtest_dataset_metadata(config, "combined")
+
+    assert metadata["exchange"] == "combined"
+    assert metadata["hlcv_cache_dir"] is None
+    assert metadata["coins"] == []
+    assert metadata["coin_index"] == {}
+    assert metadata["hlcvs_file"] is None

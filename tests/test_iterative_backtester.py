@@ -43,6 +43,24 @@ def test_apply_cli_overrides_updates_nested_config_paths():
     assert config["backtest"]["start_date"] == "2023-01-01"
 
 
+def test_apply_cli_overrides_uses_backtest_cli_type_parsing_for_known_fields():
+    config = {
+        "backtest": {"exchanges": ["binance"], "combine_ohlcvs": True},
+        "live": {"approved_coins": {"long": ["BTC"], "short": []}},
+    }
+
+    overridden = ib.apply_cli_overrides(
+        config,
+        [
+            "backtest.exchanges=binance,bybit",
+            "backtest.combine_ohlcvs=false",
+        ],
+    )
+
+    assert overridden["backtest"]["exchanges"] == ["binance", "bybit"]
+    assert overridden["backtest"]["combine_ohlcvs"] is False
+
+
 def test_parse_cli_override_rejects_missing_equals():
     with pytest.raises(ValueError, match="expected dotted.path=value"):
         ib.parse_cli_override("backtest.start_date")
