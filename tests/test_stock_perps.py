@@ -255,6 +255,7 @@ class TestHyperliquidBotHIP3:
                 "size": 0.0009,
                 "price": 24982.0,
                 "margin_mode": None,
+                "margin_used": 0.0,
             }
         ]
         bot.cca.fetch_positions.assert_awaited_once_with(symbols=["XYZ-XYZ100/USDC:USDC"])

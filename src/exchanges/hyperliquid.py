@@ -30,6 +30,7 @@ class HyperliquidBot(CCXTBot):
     HIP3_PREFIX = "xyz:"
     HIP3_ALT_PREFIXES = ("XYZ-", "XYZ:")
     HIP3_ISOLATED_SUPPORTED = False
+    HIP3_ORDER_MARGIN_BUFFER = 1.01
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -200,12 +201,21 @@ class HyperliquidBot(CCXTBot):
                 margin_mode = leverage.get("type")
         if margin_mode is None and position.get("isolated") is not None:
             margin_mode = "isolated" if position.get("isolated") else "cross"
+        info_position = {}
+        if isinstance(position.get("info"), dict):
+            info_position = position["info"].get("position", {}) or {}
         return {
             "symbol": position["symbol"],
             "position_side": side,
             "size": contracts,
             "price": float(position.get("entryPrice") or 0.0),
             "margin_mode": str(margin_mode).lower() if margin_mode else None,
+            "margin_used": float(
+                position.get("initialMargin")
+                or position.get("margin")
+                or info_position.get("marginUsed")
+                or 0.0
+            ),
         }
 
     async def _fetch_hip3_positions(self) -> list[dict]:
@@ -387,6 +397,12 @@ class HyperliquidBot(CCXTBot):
                 "position_side": ("long" if size > 0.0 else "short"),
                 "size": size,
                 "price": float(x["position"]["entryPx"]),
+                "margin_mode": (
+                    str(leverage.get("type")).lower()
+                    if isinstance(leverage, dict) and leverage.get("type")
+                    else None
+                ),
+                "margin_used": float(x["position"].get("marginUsed") or 0.0),
             }
             positions[(elm["symbol"], elm["position_side"])] = elm
         for position in await self._fetch_hip3_positions():
@@ -439,6 +455,90 @@ class HyperliquidBot(CCXTBot):
         my_gen = self._hl_cache_generation
         positions, balance = await self._get_positions_and_balance_cached(my_gen)
         return balance
+
+    def _symbol_is_cross_hip3(self, symbol: str) -> bool:
+        if not symbol or not self._get_hl_dex_for_symbol(symbol):
+            return False
+        if self._requires_isolated_margin(symbol):
+            return False
+        return self._get_margin_mode_for_symbol(symbol) == "cross"
+
+    def _has_active_position_on_symbol(self, symbol: str) -> bool:
+        for position in getattr(self, "fetched_positions", []):
+            if position.get("symbol") == symbol and abs(float(position.get("size") or 0.0)) > 0.0:
+                return True
+        return False
+
+    def _position_margin_to_restore(self) -> float:
+        reserve = 0.0
+        for position in getattr(self, "fetched_positions", []):
+            symbol = str(position.get("symbol") or "")
+            if not self._symbol_is_cross_hip3(symbol):
+                continue
+            if abs(float(position.get("size") or 0.0)) <= 0.0:
+                continue
+            reserve += max(0.0, float(position.get("margin_used") or 0.0))
+        return reserve
+
+    def _reserved_margin_for_resting_order(self, order: dict) -> float:
+        symbol = str(order.get("symbol") or "")
+        if not symbol:
+            return 0.0
+        if not self._symbol_is_cross_hip3(symbol) and self._has_active_position_on_symbol(symbol):
+            return 0.0
+        if self._requires_isolated_margin(symbol):
+            return 0.0
+        if self._get_margin_mode_for_symbol(symbol) != "cross":
+            return 0.0
+        if bool(order.get("reduceOnly") or order.get("reduce_only")):
+            return 0.0
+        qty = order.get("qty", order.get("amount"))
+        price = order.get("price")
+        if qty is None or price is None:
+            return 0.0
+        qty = abs(float(qty))
+        price = float(price)
+        if qty <= 0.0 or price <= 0.0:
+            return 0.0
+        leverage = max(1.0, float(self._calc_leverage_for_symbol(symbol)))
+        c_mult = float(self.c_mults.get(symbol, 1.0) or 1.0)
+        notional = qty * price * c_mult
+        return (notional / leverage) * self.HIP3_ORDER_MARGIN_BUFFER
+
+    def _reconcile_balance_from_exchange_state(self, *, include_open_orders: bool) -> bool:
+        if getattr(self, "balance_override", None) is not None:
+            return False
+        exchange_reported = float(
+            getattr(self, "_exchange_reported_balance_raw", self.get_raw_balance()) or 0.0
+        )
+        reserve = self._position_margin_to_restore()
+        if include_open_orders:
+            for orders in getattr(self, "open_orders", {}).values():
+                for order in orders:
+                    reserve += self._reserved_margin_for_resting_order(order)
+        corrected_raw = exchange_reported + reserve
+        current_raw = self.get_raw_balance()
+        if abs(corrected_raw - current_raw) <= 1e-12:
+            return False
+        balance_snapped = corrected_raw
+        if getattr(self, "balance_override", None) is None:
+            if getattr(self, "previous_hysteresis_balance", None) is None:
+                self.previous_hysteresis_balance = corrected_raw
+            balance_snapped = pbr.hysteresis(
+                corrected_raw,
+                self.previous_hysteresis_balance,
+                self.balance_hysteresis_snap_pct,
+            )
+            self.previous_hysteresis_balance = balance_snapped
+        self.balance_raw = corrected_raw
+        self.balance = balance_snapped
+        return True
+
+    def _reconcile_balance_after_open_orders_refresh(self) -> bool:
+        return self._reconcile_balance_from_exchange_state(include_open_orders=True)
+
+    def _reconcile_balance_after_positions_and_balance_refresh(self) -> bool:
+        return self._reconcile_balance_from_exchange_state(include_open_orders=False)
 
     async def fetch_tickers(self):
         fetched = await self.cca.fetch(
