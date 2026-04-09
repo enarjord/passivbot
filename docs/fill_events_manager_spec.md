@@ -233,10 +233,11 @@ python src/fill_events_manager.py \
 - Must use positions history + local computation
 - Time-window-based pagination (24h chunks)
 
-### OKX (TODO)
+### OKX
 - PnL in `fillPnl` field of info
 - Position side in `posSide` field
-- Simple structure but needs wrapper
+- Uses `OkxFetcher` in `fill_events_manager.py`
+- Covered by focused OKX fetcher tests in `tests/test_fill_events_manager.py`
 
 ### Defx (TODO)
 - Basic `fetch_my_trades` with `pnl` in info

@@ -283,10 +283,11 @@ class CCXTBot(Passivbot):
         - _get_balance(): Extract balance value
 
         Returns:
-            float: Total balance in quote currency, or 0.0 if not found.
+            float: Total balance in quote currency.
 
         Raises:
-            Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
+            Exception: On API errors or missing required balance fields
+                (caller handles via restart_bot_on_too_many_errors).
         """
         fetched = await self._do_fetch_balance()
         return self._get_balance(fetched)
