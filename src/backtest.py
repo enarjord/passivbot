@@ -94,6 +94,7 @@ from hlcv_preparation import prepare_hlcvs, prepare_hlcvs_combined
 from ohlcv_utils import aggregate_hlcvs, align_and_aggregate_hlcvs
 from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from pathlib import Path
+import re
 from plotting import (
     create_forager_balance_figures,
     create_forager_coin_figures,
@@ -114,6 +115,9 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 
 PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl", "hard_stop"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
+HLCVS_CACHE_ROOT = Path("caches") / "hlcvs_data"
+HLCVS_CACHE_HASH_LEN = 16
+HLCVS_CACHE_DIR_SEP = "__"
 
 
 def parse_disabled_plot_groups(value) -> set[str]:
@@ -961,11 +965,112 @@ def get_cache_hash(config, exchange):
     return calc_hash(to_hash)
 
 
+def _extract_hlcvs_cache_hash_prefix(cache_hash) -> str:
+    return str(cache_hash)[:HLCVS_CACHE_HASH_LEN]
+
+
+def _sanitize_hlcvs_cache_label(value) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "").strip())
+    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+    return sanitized or "na"
+
+
+def _normalize_hlcvs_cache_coin_label(coin) -> str:
+    coin_str = str(coin or "").strip()
+    if "/" in coin_str:
+        coin_str = coin_str.split("/", 1)[0]
+    return _sanitize_hlcvs_cache_label(coin_str).upper()
+
+
+def _format_hlcvs_cache_coins_label(coins) -> str:
+    normalized = []
+    seen = set()
+    for coin in coins or []:
+        label = _normalize_hlcvs_cache_coin_label(coin)
+        if label in seen:
+            continue
+        seen.add(label)
+        normalized.append(label)
+    if not normalized:
+        return "0_coins"
+    if len(normalized) > 5:
+        return f"{len(normalized)}_coins"
+    joined = "_".join(normalized)
+    if len(joined) > 80:
+        return f"{len(normalized)}_coins"
+    return joined
+
+
+def _format_hlcvs_cache_date_label(config, timestamps=None) -> str:
+    try:
+        if timestamps is not None and len(timestamps) > 0:
+            start_ts = int(timestamps[0])
+            end_ts = int(timestamps[-1])
+            return f"{ts_to_date(start_ts)[:10]}_to_{ts_to_date(end_ts)[:10]}"
+    except Exception:
+        pass
+    start_date = _sanitize_hlcvs_cache_label(require_config_value(config, "backtest.start_date"))
+    end_date = _sanitize_hlcvs_cache_label(
+        format_end_date(require_config_value(config, "backtest.end_date"))
+    )
+    return f"{start_date}_to_{end_date}"
+
+
+def _build_hlcvs_cache_dir_name(config, exchange, coins, cache_hash, timestamps=None) -> str:
+    exchange_label = _sanitize_hlcvs_cache_label(str(exchange).lower())
+    coins_label = _format_hlcvs_cache_coins_label(coins)
+    date_label = _format_hlcvs_cache_date_label(config, timestamps=timestamps)
+    hash_prefix = _extract_hlcvs_cache_hash_prefix(cache_hash)
+    return (
+        f"{exchange_label}{HLCVS_CACHE_DIR_SEP}"
+        f"{coins_label}{HLCVS_CACHE_DIR_SEP}"
+        f"{date_label}{HLCVS_CACHE_DIR_SEP}"
+        f"{hash_prefix}"
+    )
+
+
+def _resolve_hlcvs_cache_dir(cache_hash):
+    hash_prefix = _extract_hlcvs_cache_hash_prefix(cache_hash)
+    legacy_dir = HLCVS_CACHE_ROOT / hash_prefix
+    if legacy_dir.is_dir():
+        return legacy_dir
+    if not HLCVS_CACHE_ROOT.exists():
+        return None
+    suffix = f"{HLCVS_CACHE_DIR_SEP}{hash_prefix}"
+    candidates = sorted(
+        path
+        for path in HLCVS_CACHE_ROOT.iterdir()
+        if path.is_dir() and path.name.endswith(suffix)
+    )
+    if not candidates:
+        return None
+    if len(candidates) > 1:
+        raise RuntimeError(
+            f"multiple HLCV cache directories found for hash {hash_prefix}: "
+            + ", ".join(str(path) for path in candidates)
+        )
+    return candidates[0]
+
+
+def _get_hlcvs_cache_dir_for_save(config, exchange, coins, cache_hash, timestamps=None):
+    existing_dir = _resolve_hlcvs_cache_dir(cache_hash)
+    if existing_dir is not None:
+        return existing_dir
+    dir_name = _build_hlcvs_cache_dir_name(
+        config,
+        exchange,
+        coins,
+        cache_hash,
+        timestamps=timestamps,
+    )
+    return HLCVS_CACHE_ROOT / dir_name
+
+
 def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
     cache_hash = get_cache_hash(config, exchange)
-    cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
+    cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
     compress_cache = bool(require_config_value(config, "backtest.compress_cache"))
-    if os.path.exists(cache_dir):
+    if cache_dir and os.path.exists(cache_dir):
         # Check warmup sufficiency: cached data must cover at least the needed warmup
         meta_path = cache_dir / "cache_meta.json"
         if meta_path.exists():
@@ -1048,7 +1153,13 @@ def save_coins_hlcvs_to_cache(
     warmup_minutes=0,
 ):
     cache_hash = get_cache_hash(config, exchange)
-    cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
+    cache_dir = _get_hlcvs_cache_dir_for_save(
+        config,
+        exchange,
+        coins,
+        cache_hash,
+        timestamps=timestamps,
+    )
     cache_dir.mkdir(parents=True, exist_ok=True)
     is_compressed = bool(require_config_value(config, "backtest.compress_cache"))
     warmup_minutes = int(warmup_minutes)

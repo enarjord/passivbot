@@ -21,12 +21,15 @@ import json
 import os
 
 import numpy as np
+import pytest
 
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from backtest import (
+    _build_hlcvs_cache_dir_name,
+    _resolve_hlcvs_cache_dir,
     ensure_valid_index_metadata,
     get_cache_hash,
     load_coins_hlcvs_from_cache,
@@ -427,6 +430,65 @@ class TestSavePersistsWarmupMetadata:
         meta = json.load(open(meta_path))
         assert meta["warmup_minutes"] == 9999
 
+    def test_save_uses_descriptive_cache_dir_name(self, tmp_path, monkeypatch):
+        """New cache dirs include exchange, coins, date range, and hash suffix."""
+        monkeypatch.chdir(tmp_path)
+        cfg = _base_config()
+
+        coins = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+        hlcvs = np.zeros((10, 2, 4), dtype=np.float64)
+        mss = {"BTC/USDT:USDT": {}, "ETH/USDT:USDT": {}}
+        btc_usd = np.ones(10, dtype=np.float64)
+        timestamps = np.arange(10, dtype=np.int64) * 60_000
+
+        cache_hash = get_cache_hash(cfg, "binance")
+        cache_dir = save_coins_hlcvs_to_cache(
+            cfg,
+            coins,
+            hlcvs,
+            "binance",
+            mss,
+            btc_usd,
+            timestamps,
+            warmup_minutes=9999,
+        )
+
+        assert cache_dir.name == _build_hlcvs_cache_dir_name(
+            cfg, "binance", coins, cache_hash, timestamps=timestamps
+        )
+        assert cache_dir.name.endswith(f"__{cache_hash[:16]}")
+
+    def test_save_falls_back_to_count_for_more_than_five_coins(self, tmp_path, monkeypatch):
+        """Coin label uses N_coins when the dataset contains more than five coins."""
+        monkeypatch.chdir(tmp_path)
+        cfg = _base_config()
+        coins = [
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "XRP/USDT:USDT",
+            "ADA/USDT:USDT",
+            "SOL/USDT:USDT",
+            "DOGE/USDT:USDT",
+        ]
+        cfg["live"]["approved_coins"]["long"] = list(coins)
+        hlcvs = np.zeros((10, len(coins), 4), dtype=np.float64)
+        mss = {coin: {} for coin in coins}
+        btc_usd = np.ones(10, dtype=np.float64)
+        timestamps = np.arange(10, dtype=np.int64) * 60_000
+
+        cache_dir = save_coins_hlcvs_to_cache(
+            cfg,
+            coins,
+            hlcvs,
+            "binance",
+            mss,
+            btc_usd,
+            timestamps,
+            warmup_minutes=60,
+        )
+
+        assert "__6_coins__" in cache_dir.name
+
 
 # ============================================================================
 # Test Class: Ratchet-Up End-to-End
@@ -497,6 +559,46 @@ class TestRatchetUpEndToEnd:
         # Step 6: Load with warmup=5000 → hit
         result = load_coins_hlcvs_from_cache(cfg, "binance", warmup_minutes=5000)
         assert result is not None
+
+
+class TestDescriptiveDirResolution:
+    """Verify descriptive cache dirs resolve via hash suffix without breaking legacy paths."""
+
+    def test_load_resolves_descriptive_dir_by_hash_suffix(self, tmp_path, monkeypatch):
+        cfg = _base_config()
+        cache_hash = get_cache_hash(cfg, "binance")
+        coins = ["BTC/USDT:USDT"]
+        dir_name = _build_hlcvs_cache_dir_name(
+            cfg,
+            "binance",
+            coins,
+            cache_hash,
+            timestamps=np.arange(10, dtype=np.int64) * 60_000,
+        )
+        cache_dir = tmp_path / "caches" / "hlcvs_data" / dir_name
+        _write_fake_cache(str(cache_dir), warmup_minutes=100)
+
+        monkeypatch.chdir(tmp_path)
+        result = load_coins_hlcvs_from_cache(cfg, "binance", warmup_minutes=50)
+
+        assert result is not None
+        assert os.path.abspath(str(result[0])) == str(cache_dir.resolve())
+        assert result[1] == ["BTC"]
+        assert os.path.abspath(str(_resolve_hlcvs_cache_dir(cache_hash))) == str(cache_dir.resolve())
+
+    def test_multiple_descriptive_dirs_for_same_hash_raise(self, tmp_path, monkeypatch):
+        cfg = _base_config()
+        cache_hash = get_cache_hash(cfg, "binance")
+        root = tmp_path / "caches" / "hlcvs_data"
+        cache_dir_a = root / f"binance__BTC__2024_01_01_to_2025_06_01__{cache_hash[:16]}"
+        cache_dir_b = root / f"binance__ETH__2024_01_01_to_2025_06_01__{cache_hash[:16]}"
+        _write_fake_cache(str(cache_dir_a), warmup_minutes=100)
+        _write_fake_cache(str(cache_dir_b), warmup_minutes=100)
+
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError) as exc:
+            load_coins_hlcvs_from_cache(cfg, "binance", warmup_minutes=50)
+        assert cache_hash[:16] in str(exc.value)
 
     def test_cache_hit_uses_current_warmup_after_metadata_normalization(self, tmp_path, monkeypatch):
         """Cache hit must apply current run warmup, not stale cached mss warmup."""
