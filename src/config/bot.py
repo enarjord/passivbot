@@ -182,6 +182,19 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
     return {key: normalized[key] / total for key in ("volume", "ema_readiness", "volatility")}
 
 
+def forager_score_weights_are_normalized(
+    weights: dict,
+    *,
+    path: str,
+    abs_tol: float = 1e-12,
+) -> bool:
+    normalized = normalize_forager_score_weights(weights, path=path)
+    return all(
+        math.isclose(normalized[key], weights[key], rel_tol=0.0, abs_tol=abs_tol)
+        for key in ("volume", "ema_readiness", "volatility")
+    )
+
+
 def normalize_bot_forager_config(
     result: dict,
     *,
@@ -269,7 +282,10 @@ def validate_forager_config(
             bot_cfg["forager_score_weights"],
             path=f"bot.{pside}.forager_score_weights",
         )
-        if normalized != bot_cfg["forager_score_weights"]:
+        if not forager_score_weights_are_normalized(
+            bot_cfg["forager_score_weights"],
+            path=f"bot.{pside}.forager_score_weights",
+        ):
             raise ValueError(
                 f"bot.{pside}.forager_score_weights must be normalized before validation"
             )
