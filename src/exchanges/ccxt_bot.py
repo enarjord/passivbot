@@ -283,10 +283,11 @@ class CCXTBot(Passivbot):
         - _get_balance(): Extract balance value
 
         Returns:
-            float: Total balance in quote currency, or 0.0 if not found.
+            float: Total balance in quote currency.
 
         Raises:
-            Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
+            Exception: On API errors or missing required balance fields
+                (caller handles via restart_bot_on_too_many_errors).
         """
         fetched = await self._do_fetch_balance()
         return self._get_balance(fetched)
@@ -310,7 +311,16 @@ class CCXTBot(Passivbot):
         Default: CCXT unified format total[quote]
         Override: Exchange-specific field paths (e.g., info.totalCrossWalletBalance)
         """
-        return float(fetched.get("total", {}).get(self.quote, 0))
+        total = fetched.get("total")
+        if not isinstance(total, dict):
+            raise KeyError(
+                f"{self.exchange}: fetch_balance response missing 'total' mapping for quote {self.quote}"
+            )
+        if self.quote not in total:
+            raise KeyError(
+                f"{self.exchange}: fetch_balance response missing total[{self.quote!r}]"
+            )
+        return float(total[self.quote])
 
     async def fetch_positions(self) -> list:
         """Template method: Fetch all open positions.
