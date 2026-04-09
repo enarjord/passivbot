@@ -56,6 +56,8 @@ promoting one config out of a large Pareto front without opening the dashboard. 
 methods are practical decision heuristics for high-dimensional Passivbot fronts, not full formal
 multi-criteria decision-analysis implementations.
 
+`passivbot tool pareto-explorer` is a CLI alias for the same tool.
+
 The output also shows the retained front's ideal point: the best observed value for each active
 objective after any `--limit` filters are applied.
 
@@ -83,9 +85,46 @@ passivbot tool iterative-history-plot backtests/.../fills.csv
 
 ## Historical data helpers
 
+- `passivbot download` – Pre-warm OHLCV caches using the same config/date/exchange selection as backtesting.
 - `passivbot tool pad-historical-daily` – Ensures daily OHLCV shards are present for the downloader when new coins are added.
 - `passivbot tool verify-hlcvs-data` – Validates cached OHLCV data (gaps, duplicates) before long optimizations/backtests.
 - `passivbot tool streamline-json` – Normalizes/compacts JSON configs (`passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos10.json`).
+- `passivbot tool candle-doctor` – Audits `caches/ohlcv/...` shards for corruption, stale index entries, and legacy-format issues; add `--fix` to apply automatic repairs.
+- `passivbot tool migrate-historical-data` – Converts legacy `historical_data/ohlcvs_<exchange>/...` shards into the current `caches/ohlcv/...` layout.
+
+## Fill Events Tooling
+
+`passivbot tool fill-events-dash` launches a Dash UI for inspecting cached fill-event history,
+PnL, symbol-level details, cache health, and CSV export.
+
+```shell
+passivbot tool fill-events-dash --users bybit_01
+```
+
+`passivbot tool fill-events-doctor` audits cached fill-event anomalies and optionally repairs them.
+
+```shell
+passivbot tool fill-events-doctor --exchange bybit --user bybit_01
+passivbot tool fill-events-doctor --exchange bybit --user bybit_01 --repair
+```
+
+## Monitor Tooling
+
+Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI surface is:
+
+- `passivbot tool monitor-relay`
+- `passivbot tool monitor-web`
+- `passivbot tool monitor-tui`
+- `passivbot tool monitor-dev`
+
+## Exchange Helpers
+
+`passivbot tool fetch-balance` is a lightweight credential smoke test that loads one user from
+`api-keys.json`, instantiates the matching ccxt exchange, and prints the raw balance payload.
+
+```shell
+passivbot tool fetch-balance --user bybit_01
+```
 
 ## Repro and diagnostics helpers
 

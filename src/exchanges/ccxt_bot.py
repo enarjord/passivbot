@@ -310,7 +310,16 @@ class CCXTBot(Passivbot):
         Default: CCXT unified format total[quote]
         Override: Exchange-specific field paths (e.g., info.totalCrossWalletBalance)
         """
-        return float(fetched.get("total", {}).get(self.quote, 0))
+        total = fetched.get("total")
+        if not isinstance(total, dict):
+            raise KeyError(
+                f"{self.exchange}: fetch_balance response missing 'total' mapping for quote {self.quote}"
+            )
+        if self.quote not in total:
+            raise KeyError(
+                f"{self.exchange}: fetch_balance response missing total[{self.quote!r}]"
+            )
+        return float(total[self.quote])
 
     async def fetch_positions(self) -> list:
         """Template method: Fetch all open positions.

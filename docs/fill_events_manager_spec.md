@@ -1,6 +1,6 @@
 # Fill Events Manager Specification
 
-**Status:** Draft
+**Status:** Current reference for the fill-events cache/normalization layer
 **Module:** `src/fill_events_manager.py`
 **Goal:** Replace exchange-specific `fetch_pnls` functions with a unified `FillEventsManager`
 
@@ -80,11 +80,10 @@ All fields except `psize`, `pprice`, `fees`, and `raw` are required when constru
 | Gate.io | `GateioFetcher` | Working | Uses fetch_closed_orders |
 | KuCoin | `KucoinFetcher` | Working | Trades + positions history, local PnL computation |
 
-### Missing Fetchers (still using legacy `fetch_pnls`)
+### Remaining Legacy Coverage
 
 | Exchange | Current Implementation | Priority | Notes |
 |----------|------------------------|----------|-------|
-| OKX | `exchanges/okx.py:fetch_pnls` | Medium | Uses `fetch_my_trades` with `fillPnl` field |
 | Defx | `exchanges/defx.py:fetch_pnls` | Low | Minimal implementation, TODO for time filters |
 
 ---
@@ -92,11 +91,11 @@ All fields except `psize`, `pprice`, `fees`, and `raw` are required when constru
 ## 4. Current Test Coverage
 
 **Test files:**
-- `tests/test_fill_events_manager.py` - 20 tests
-- `tests/test_fill_events.py` - 2 tests (Passivbot integration)
-- `tests/test_fill_events_hyperliquid_mapping.py` - 1 test
+- `tests/test_fill_events_manager.py`
+- `tests/test_fill_events_hyperliquid_mapping.py`
+- `tests/test_fake_exchange.py`
 
-**All 23 tests pass.**
+Current collected coverage for the fill-events stack is **76 tests** across those files.
 
 ### Covered Scenarios
 
@@ -108,14 +107,15 @@ All fields except `psize`, `pprice`, `fees`, and `raw` are required when constru
 | BinanceFetcher income/trade merging | Yes |
 | BybitFetcher PnL distribution | Yes |
 | HyperliquidFetcher coalescing | Yes |
+| OKXFetcher pagination/detail-cache behavior | Yes |
+| GateioFetcher normalization | Yes |
+| KucoinFetcher pnl matching helpers | Yes |
 | Manager refresh/refresh_latest/refresh_range | Yes |
 | Gap detection | Yes |
 | Detail cache usage | Yes |
 
 ### Not Yet Covered
 
-- `GateioFetcher` unit tests
-- `KucoinFetcher` unit tests
 - Live integration tests
 - Error recovery scenarios
 - Rate limit handling edge cases
@@ -179,59 +179,24 @@ python src/fill_events_manager.py \
 
 ### Current Integration
 
-The `_build_fetcher_for_bot(bot, symbols)` function creates the appropriate fetcher based on `bot.exchange`. This is used by the CLI.
+- `src/passivbot.py` uses `FillEventsManager` directly for live fill/PnL tracking, cache loading,
+  doctor runs, and realized-PnL-derived risk inputs.
+- `fill_events_manager.py` still exposes a direct CLI for manual cache refresh/debugging.
+- `passivbot tool fill-events-doctor` provides cache anomaly scanning/repair against persisted
+  fill-event history.
 
 ### Planned Integration
 
-Replace usage of `bot.fetch_pnls()` in:
-- `src/passivbot.py` - PnL tracking for live dashboard
-- `src/tools/pareto_dash.py` - Historical analysis
+- Retire remaining legacy Defx-specific `fetch_pnls` handling if that exchange remains supported.
+- Expand targeted tests around recovery/rate-limit behavior rather than adding a second caching path.
 
 ---
 
 ## 8. Next Steps
 
-### Phase 1: Complete Fetcher Coverage
-
-1. **Add `OkxFetcher`**
-   - Port logic from `exchanges/okx.py:fetch_pnls`
-   - Use `fetch_my_trades` with `fillPnl` extraction
-   - Add unit tests
-
-2. **Add `DefxFetcher`** (if Defx support continues)
-   - Port logic from `exchanges/defx.py:fetch_pnls`
-   - Implement proper time filtering
-   - Add unit tests
-
-### Phase 2: Add Missing Tests
-
-3. **Add `GateioFetcher` tests**
-   - Pagination through `fetch_closed_orders`
-   - Position side detection
-
-4. **Add `KucoinFetcher` tests**
-   - Trade + position history merging
-   - Local PnL computation
-
-### Phase 3: Integration
-
-5. **Integrate into `Passivbot`**
-   - Replace `fetch_pnls` calls with `FillEventsManager`
-   - Use cached fills for dashboard PnL display
-   - Background refresh task
-
-6. **Integrate into `pareto_dash.py`**
-   - Replace direct `fetch_pnls` usage
-   - Leverage persistent cache for faster startup
-
-### Phase 4: Cleanup
-
-7. **Deprecate legacy `fetch_pnls`**
-   - Mark as deprecated in docstrings
-   - Add warnings when called directly
-
-8. **Remove legacy implementations**
-   - After migration is stable for 1+ releases
+1. Add `DefxFetcher` if Defx support is still intended to be first-class.
+2. Add more targeted tests for retry ceilings, transient exchange failures, and doctor edge cases.
+3. Continue collapsing remaining legacy `fetch_pnls` callers into the manager-backed cache path.
 
 ---
 

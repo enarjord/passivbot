@@ -55,6 +55,17 @@ For a comprehensive list of CLI args:
 passivbot backtest -h
 ```
 
+## Pre-download OHLCV
+
+Use `passivbot download` when you want to warm the OHLCV cache before a long backtest or optimize
+run. It uses the same `backtest.start_date`, `backtest.end_date`, `backtest.exchanges`, and
+approved-coin selection flow as the backtester, but stops after preparing cache data.
+
+```shell
+passivbot download configs/examples/default_trailing_grid_long_npos10.json
+passivbot download --start-date 2025-01-01 --end-date 2025-02-01 --exchanges binance,bybit
+```
+
 ## Suite Runs
 
 Suite mode evaluates multiple scenario slices in one invocation. Configuration uses a flattened structure directly under `backtest`:
@@ -148,9 +159,11 @@ Suite scenarios can add more overrides under `coin_sources`; conflicts between s
 The backtester supports OHLCV data from the following exchanges:
 - **binance** - Binance USDT-M Futures
 - **bybit** - Bybit USDT Perpetuals
+- **bitget** - Bitget USDT Perpetuals
 - **gateio** - Gate.io USDT Perpetuals
 
-All three exchanges are included in the default template configuration.
+The canonical default template currently uses `binance` and `bybit`. Add `bitget` and/or `gateio`
+explicitly in `backtest.exchanges` when you want them included.
 
 ## Exchange Name Conventions
 
