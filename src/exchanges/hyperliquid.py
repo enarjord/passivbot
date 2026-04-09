@@ -201,6 +201,14 @@ class HyperliquidBot(CCXTBot):
             if symbol in getattr(self, "markets_dict", {}) and self._get_hl_dex_for_symbol(symbol)
         )
 
+    def _get_hl_hip3_dex_names(self) -> list[str]:
+        dexes = set()
+        for symbol in getattr(self, "markets_dict", {}) or {}:
+            dex_name = self._get_hl_dex_for_symbol(symbol)
+            if dex_name:
+                dexes.add(dex_name)
+        return sorted(dexes)
+
     def _normalize_ccxt_position(self, position: dict) -> dict:
         side = position.get("side")
         contracts = float(position.get("contracts") or 0.0)
@@ -233,10 +241,17 @@ class HyperliquidBot(CCXTBot):
     async def _fetch_hip3_positions(self) -> list[dict]:
         """Fetch HIP-3 positions via dex-scoped CCXT routes."""
         positions_by_key = {}
-        for symbol in self._get_hl_hip3_state_symbols():
-            fetched = await self.cca.fetch_positions(symbols=[symbol])
+        state_symbols = self._get_hl_hip3_state_symbols()
+        if state_symbols:
+            fetch_specs = [{"symbols": [symbol]} for symbol in state_symbols]
+        else:
+            fetch_specs = [{"params": {"dex": dex_name}} for dex_name in self._get_hl_hip3_dex_names()]
+        for fetch_spec in fetch_specs:
+            fetched = await self.cca.fetch_positions(**fetch_spec)
             for position in fetched:
                 normalized = self._normalize_ccxt_position(position)
+                if not self._get_hl_dex_for_symbol(normalized["symbol"]):
+                    continue
                 self._record_hl_live_margin_mode(
                     normalized["symbol"], normalized.get("margin_mode")
                 )
@@ -367,6 +382,7 @@ class HyperliquidBot(CCXTBot):
         fetched = []
         seen_ids = set()
         query_symbols = [symbol] if symbol is not None else self._get_hl_hip3_state_symbols()
+        query_dexes = []
 
         # Default route covers core perps; HIP-3 symbols need dex-scoped queries.
         if symbol is None or not self._get_hl_dex_for_symbol(symbol):
@@ -378,6 +394,8 @@ class HyperliquidBot(CCXTBot):
 
         if symbol is None:
             hip3_symbols = query_symbols
+            if not hip3_symbols:
+                query_dexes = self._get_hl_hip3_dex_names()
         elif self._get_hl_dex_for_symbol(symbol):
             hip3_symbols = query_symbols
         else:
@@ -385,6 +403,13 @@ class HyperliquidBot(CCXTBot):
 
         for hip3_symbol in hip3_symbols:
             for order in await self.cca.fetch_open_orders(symbol=hip3_symbol):
+                if order["id"] in seen_ids:
+                    continue
+                seen_ids.add(order["id"])
+                fetched.append(order)
+
+        for dex_name in query_dexes:
+            for order in await self.cca.fetch_open_orders(params={"dex": dex_name}):
                 if order["id"] in seen_ids:
                     continue
                 seen_ids.add(order["id"])
