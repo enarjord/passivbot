@@ -113,6 +113,10 @@ def _ignore_sigint():
     return None
 
 
+def _noop_overrides(_overrides_list, config, _pside):
+    return config
+
+
 def test_build_algorithm_uses_nsga3_with_auto_reference_directions():
     bounds = [Bound(0.0, 1.0, 0.1) for _ in range(6)]
     config = {
@@ -257,7 +261,7 @@ def test_run_backend_records_entries(monkeypatch):
         record_individual_result=None,
         run_evolution=None,
         build_config_fn=_build_config,
-        overrides_fn=object(),
+        overrides_fn=_noop_overrides,
     )
 
     assert result["pool_terminated"] is False
@@ -307,7 +311,7 @@ def test_run_backend_supports_single_objective(monkeypatch):
         record_individual_result=None,
         run_evolution=None,
         build_config_fn=_build_config,
-        overrides_fn=object(),
+        overrides_fn=_noop_overrides,
     )
 
     assert result["pool_terminated"] is False
@@ -363,7 +367,7 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
         record_individual_result=None,
         run_evolution=None,
         build_config_fn=_build_config,
-        overrides_fn=object(),
+        overrides_fn=_noop_overrides,
     )
 
     assert result["pool_terminated"] is False
@@ -383,7 +387,7 @@ def test_starting_payloads_are_slimmed_after_recording(monkeypatch):
         recorder=recorder,
         template=evaluator.config,
         build_config_fn=_build_config,
-        overrides_fn=object(),
+        overrides_fn=_noop_overrides,
         overrides_list=[],
     )
 
@@ -456,7 +460,7 @@ def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
         record_individual_result=None,
         run_evolution=None,
         build_config_fn=_build_config,
-        overrides_fn=object(),
+        overrides_fn=_noop_overrides,
     )
     recorder.flush()
     recorder.close()

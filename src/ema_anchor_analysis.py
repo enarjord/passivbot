@@ -233,6 +233,13 @@ def _build_fill_state_series(
     )
 
 
+def _select_flat_active_long_mask(out: pd.DataFrame) -> np.ndarray:
+    close = out["close"].to_numpy(dtype=float)
+    long_dist = np.maximum(0.0, close - out["bid_long"].to_numpy(dtype=float))
+    short_dist = np.maximum(0.0, out["ask_short"].to_numpy(dtype=float) - close)
+    return long_dist <= short_dist
+
+
 def calc_ema_anchor_inventory_bands(
     config: dict,
     candles_df: pd.DataFrame,
@@ -308,8 +315,10 @@ def calc_ema_anchor_inventory_bands(
         out["ask"] = out["ask_short"]
     else:
         psize_values = out["psize"].to_numpy(dtype=float)
-        out["bid"] = np.where(psize_values < 0.0, out["bid_short"], out["bid_long"])
-        out["ask"] = np.where(psize_values > 0.0, out["ask_long"], out["ask_short"])
+        flat_prefers_long = _select_flat_active_long_mask(out)
+        use_long = np.where(psize_values > 0.0, True, np.where(psize_values < 0.0, False, flat_prefers_long))
+        out["bid"] = np.where(use_long, out["bid_long"], out["bid_short"])
+        out["ask"] = np.where(use_long, out["ask_long"], out["ask_short"])
 
     return out.loc[
         :,

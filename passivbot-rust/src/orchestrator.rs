@@ -363,9 +363,8 @@ mod core {
         let Some(last_fill_ts) = last_increase_fill_timestamp_ms else {
             return false;
         };
-        let until_ms = effective_fill_timestamp_ms(last_fill_ts).saturating_add(
-            cooldown_delay_minutes(cooldown_minutes).saturating_mul(60_000),
-        );
+        let until_ms = effective_fill_timestamp_ms(last_fill_ts)
+            .saturating_add(cooldown_delay_minutes(cooldown_minutes).saturating_mul(60_000));
         now_timestamp_ms < until_ms
     }
 

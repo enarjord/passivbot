@@ -160,6 +160,37 @@ def test_calc_ema_anchor_inventory_bands_backfills_initial_equity_state():
 
 
 @requires_extension
+def test_calc_ema_anchor_inventory_bands_active_flat_uses_single_side_band():
+    candles = _candles_df()
+    fills = pd.DataFrame(
+        columns=["timestamp", "coin", "type", "qty", "price", "psize", "pprice", "usd_total_balance"]
+    )
+    balance_eq = pd.DataFrame(
+        {
+            "timestamp": [candles.loc[0, "timestamp"]],
+            "usd_total_balance": [1000.0],
+            "usd_total_equity": [1000.0],
+        }
+    )
+
+    out = calc_ema_anchor_inventory_bands(
+        _ema_anchor_config(),
+        candles,
+        fills,
+        balance_eq,
+        price_step=0.1,
+        coin="BTC",
+        side_mode="active",
+    )
+
+    assert (out["psize"] == 0.0).all()
+    same_as_long = (out["bid"] == out["bid_long"]) & (out["ask"] == out["ask_long"])
+    same_as_short = (out["bid"] == out["bid_short"]) & (out["ask"] == out["ask_short"])
+    assert (same_as_long | same_as_short).all()
+    assert not ((out["bid"] == out["bid_long"]) & (out["ask"] == out["ask_short"])).any()
+
+
+@requires_extension
 def test_ema_anchor_artifact_helpers_load_dataset_metadata(tmp_path):
     artifact_dir = tmp_path / "artifact"
     cache_dir = tmp_path / "caches" / "hlcvs_data" / "abcd1234"

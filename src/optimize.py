@@ -105,6 +105,7 @@ from pure_funcs import (
     flatten,
     str2bool,
 )
+from opt_utils import deep_updated
 from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_approved_ignored_coins
 from logging_setup import configure_logging, resolve_log_level
 from copy import deepcopy
@@ -171,9 +172,9 @@ from optimization.bounds import (
     enforce_bounds,
 )
 from optimization.backend_shared import cancel_pending_async_results, drain_async_results
-from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.backends import get_backend_runner
 from optimization.config_adapter import get_optimization_key_paths, resolve_optimization_bound_path
+from optimization.shape import OptimizationShape, build_optimization_shape
 from config.strategy import normalize_strategy_kind, sync_canonical_strategy_config
 from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
@@ -697,9 +698,22 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
     return config
 
 
-def config_to_individual(config, bounds, sig_digits=None):
+def config_to_individual(
+    config,
+    bounds,
+    sig_digits=None,
+    key_paths=None,
+    optimization_shape: OptimizationShape | None = None,
+):
+    if optimization_shape is not None:
+        bounds = optimization_shape.bounds
+        if sig_digits is None:
+            sig_digits = optimization_shape.sig_digits
+        if key_paths is None:
+            key_paths = optimization_shape.key_paths
     values = []
-    for _, path in get_optimization_key_paths(config):
+    key_paths = key_paths or get_optimization_key_paths(config)
+    for _, path in key_paths:
         target = config
         for part in path:
             target = target[part]
@@ -758,9 +772,10 @@ class Evaluator:
         logging.info("Evaluator ready | exchanges=%d", len(self.exchanges))
         self.seen_hashes = seen_hashes if seen_hashes is not None else {}
         self.duplicate_counter = duplicate_counter if duplicate_counter is not None else {"count": 0}
-        self.bounds = extract_bounds_tuple_list_from_config(self.config)
-        self.key_paths = get_optimization_key_paths(self.config)
-        self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
+        self.optimization_shape = build_optimization_shape(self.config)
+        self.bounds = list(self.optimization_shape.bounds)
+        self.key_paths = list(self.optimization_shape.key_paths)
+        self.sig_digits = self.optimization_shape.sig_digits
         self.use_duplicate_guard = True
         self.scoring_specs = extract_objective_specs(self.config)
         self.scoring_weights = default_scoring_weights()
@@ -1583,12 +1598,14 @@ def _build_starting_seed_config(cfg):
     else:
         extracted = _extract_starting_config(cfg)
     seed = get_template_config()
-    seed["bot"] = deepcopy(extracted["bot"])
+    seed["bot"] = deep_updated(seed["bot"], deepcopy(extracted["bot"]))
     if isinstance(extracted.get("live"), dict):
-        seed["live"] = deepcopy(extracted["live"])
+        seed["live"] = deep_updated(seed["live"], deepcopy(extracted["live"]))
     optimize_cfg = extracted.get("optimize")
     if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
-        seed["optimize"]["bounds"] = deepcopy(optimize_cfg["bounds"])
+        seed["optimize"]["bounds"] = deep_updated(
+            seed["optimize"]["bounds"], deepcopy(optimize_cfg["bounds"])
+        )
     return seed
 
 
@@ -1605,12 +1622,24 @@ def get_starting_configs(starting_configs: str):
     return extract_configs(starting_configs)
 
 
-def configs_to_individuals(cfgs, bounds, sig_digits=0):
+def configs_to_individuals(
+    cfgs,
+    bounds,
+    sig_digits=0,
+    key_paths=None,
+    optimization_shape: OptimizationShape | None = None,
+):
     inds = set()
     for cfg in cfgs:
         try:
             fcfg = _build_starting_seed_config(cfg)
-            individual = config_to_individual(fcfg, bounds, sig_digits)
+            individual = config_to_individual(
+                fcfg,
+                bounds,
+                sig_digits,
+                key_paths=key_paths,
+                optimization_shape=optimization_shape,
+            )
             inds.add(tuple(individual))
         except Exception as e:
             logging.warning(f"failed to use starting config as optimizer seed: {e}")
@@ -2020,6 +2049,7 @@ async def main():
             ignore_sigint_in_worker=ignore_sigint_in_worker,
             get_starting_configs=get_starting_configs,
             configs_to_individuals=configs_to_individuals,
+            optimization_shape=evaluator.optimization_shape,
             record_individual_result=_record_individual_result,
             run_evolution=ea_mu_plus_lambda_stream,
             build_config_fn=individual_to_config,

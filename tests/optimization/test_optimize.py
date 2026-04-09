@@ -44,6 +44,7 @@ from optimization.bounds import Bound
 from optimization.callback import build_pymoo_record_entry
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.config_adapter import get_optimization_key_paths
+from optimization.shape import build_optimization_shape
 from optimize_suite import ScenarioEvalContext
 from config import load_prepared_config
 
@@ -794,6 +795,46 @@ class TestIndividualToConfig:
         )
         assert result["bot"]["short"]["strategy"]["ema_anchor"] == {"ema_span_0": 123.0}
 
+    @pytest.mark.parametrize(
+        ("override_name", "expected_start", "expected_end"),
+        [
+            ("lossless_close_trailing", 0.0015, 0.0015),
+            ("forward_tp_grid", 0.0015, 0.009),
+            ("backward_tp_grid", 0.009, 0.0015),
+        ],
+    )
+    def test_legacy_trailing_grid_overrides_support_canonical_shape(
+        self,
+        override_name,
+        expected_start,
+        expected_end,
+    ):
+        config = load_prepared_config(
+            "configs/examples/default_trailing_grid_long_npos10.json",
+            verbose=False,
+        )
+        long_strategy = config["bot"]["long"]["strategy"]["trailing_grid"]
+        long_strategy["close_grid_markup_start"] = 0.009
+        long_strategy["close_grid_markup_end"] = 0.0015
+        long_strategy["close_trailing_threshold_pct"] = 0.001
+        long_strategy["close_trailing_retracement_pct"] = 0.004
+
+        result = optimize.optimizer_overrides([override_name], deepcopy(config), "long")
+        strategy = result["bot"]["long"]["strategy"]["trailing_grid"]
+
+        if override_name == "lossless_close_trailing":
+            assert strategy["close_trailing_threshold_pct"] == pytest.approx(0.004)
+            assert strategy["close_trailing_retracement_pct"] == pytest.approx(0.004)
+        else:
+            assert strategy["close_grid_markup_start"] == pytest.approx(expected_start)
+            assert strategy["close_grid_markup_end"] == pytest.approx(expected_end)
+
+    def test_legacy_trailing_grid_overrides_reject_non_trailing_grid_strategy(self):
+        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+
+        with pytest.raises(ValueError, match="live.strategy_kind = 'trailing_grid'"):
+            optimize.optimizer_overrides(["forward_tp_grid"], deepcopy(config), "long")
+
     def test_accepts_precomputed_key_paths(self):
         individual = [10.0, 20.0, 30.0, 40.0]
         template = {
@@ -880,6 +921,33 @@ class TestConfigToIndividual:
         result = config_to_individual(config, bounds, sig_digits)
 
         assert result == pytest.approx([1.0, 60.0, 2.0, 3.0, 0.22, 4.0])
+
+    def test_uses_precomputed_key_paths(self):
+        config = {
+            "bot": {
+                "long": {"param1": 1.5, "param2": 2.5},
+                "short": {"param1": 3.5, "param2": 4.5},
+            }
+        }
+        bounds = [Bound(0.0, 10.0) for _ in range(4)]
+        key_paths = [
+            ("long_param2", ("bot", "long", "param2")),
+            ("long_param1", ("bot", "long", "param1")),
+            ("short_param2", ("bot", "short", "param2")),
+            ("short_param1", ("bot", "short", "param1")),
+        ]
+
+        result = config_to_individual(config, bounds, sig_digits=6, key_paths=key_paths)
+
+        assert result == pytest.approx([2.5, 1.5, 4.5, 3.5])
+
+    def test_uses_optimization_shape(self):
+        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        shape = build_optimization_shape(config)
+
+        result = config_to_individual(config, shape.bounds, optimization_shape=shape)
+
+        assert len(result) == len(shape.bounds)
 
 
 class TestValidateArray:
@@ -1317,6 +1385,34 @@ class TestConfigsToIndividuals:
 
         assert len(result) >= 1
         assert len(result[0]) == len(bounds)
+
+    def test_old_starting_seed_inherits_current_template_bounds_and_defaults(self):
+        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        shape = build_optimization_shape(config)
+
+        stale_seed = deepcopy(config)
+        stale_seed["optimize"]["bounds"]["long"]["risk"].pop("entry_cooldown_minutes")
+        stale_seed["optimize"]["bounds"]["short"]["risk"].pop("entry_cooldown_minutes")
+        stale_seed["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"].pop(
+            "entry_double_down_factor"
+        )
+        stale_seed["optimize"]["bounds"]["short"]["strategy"]["ema_anchor"].pop(
+            "entry_double_down_factor"
+        )
+        stale_seed["bot"]["long"]["risk"].pop("entry_cooldown_minutes")
+        stale_seed["bot"]["short"]["risk"].pop("entry_cooldown_minutes")
+        stale_seed["bot"]["long"]["strategy"]["ema_anchor"].pop("entry_double_down_factor")
+        stale_seed["bot"]["short"]["strategy"]["ema_anchor"].pop("entry_double_down_factor")
+
+        result = configs_to_individuals(
+            [stale_seed],
+            shape.bounds,
+            6,
+            optimization_shape=shape,
+        )
+
+        assert len(result) == 1
+        assert len(result[0]) == len(shape.bounds)
 
 
 class TestConstraintAwareFitness:

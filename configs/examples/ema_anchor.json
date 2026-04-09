@@ -51,6 +51,7 @@
                 "tier_ratios": {"orange":0.75,"yellow":0.5}
             },
             "risk": {
+                "entry_cooldown_minutes": 0.0,
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 0.47,
                 "twel_enforcer_threshold": 1,
@@ -62,6 +63,7 @@
                     "base_qty_pct": 0.018,
                     "ema_span_0": 100,
                     "ema_span_1": 570,
+                    "entry_double_down_factor": 0.0,
                     "offset": 0.015,
                     "offset_volatility_ema_span_minutes": 60.0,
                     "offset_volatility_1m_weight": 0.0,
@@ -95,6 +97,7 @@
                 "tier_ratios": {"orange":0.75,"yellow":0.5}
             },
             "risk": {
+                "entry_cooldown_minutes": 0.0,
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 0.19,
                 "twel_enforcer_threshold": 1,
@@ -106,6 +109,7 @@
                     "base_qty_pct": 0.0185,
                     "ema_span_0": 63,
                     "ema_span_1": 636,
+                    "entry_double_down_factor": 0.0,
                     "offset": 0.0115,
                     "offset_volatility_ema_span_minutes": 60.0,
                     "offset_volatility_1m_weight": 0.0,
@@ -205,6 +209,7 @@
                     "red_threshold": [0.01,0.12,0.001]
                 },
                 "risk": {
+                    "entry_cooldown_minutes": [0.0,60.0,0.1],
                     "n_positions": [1,1,1],
                     "total_wallet_exposure_limit": [1.0,10.0,0.01],
                     "twel_enforcer_threshold": [10,10],
@@ -216,6 +221,7 @@
                         "base_qty_pct": [0.001,0.5,0.0001],
                         "ema_span_0": [30,2880,1],
                         "ema_span_1": [30,2880,1],
+                        "entry_double_down_factor": [0.0,2.0,0.01],
                         "offset": [0.0001,0.02,0.0001],
                         "offset_volatility_ema_span_minutes": [5,720,1],
                         "offset_volatility_1m_weight": [0.1,40,0.1],
@@ -246,6 +252,7 @@
                     "red_threshold": [0.01,0.12,0.001]
                 },
                 "risk": {
+                    "entry_cooldown_minutes": [0.0,60.0,0.1],
                     "n_positions": [1,1,1],
                     "total_wallet_exposure_limit": [0.15,0.5,0.01],
                     "twel_enforcer_threshold": [1,1],
@@ -257,6 +264,7 @@
                         "base_qty_pct": [0.001,0.1,0.0001],
                         "ema_span_0": [10,2880,1],
                         "ema_span_1": [10,2880,1],
+                        "entry_double_down_factor": [0.0,2.0,0.01],
                         "offset": [0.0001,0.02,0.0001],
                         "offset_volatility_ema_span_minutes": [5,720,1],
                         "offset_volatility_1m_weight": [0,40,0.1],

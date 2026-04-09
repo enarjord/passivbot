@@ -1427,7 +1427,8 @@ impl<'a> Backtest<'a> {
                         mode: mode_long,
                         position: pos_long,
                         trailing: trailing_long,
-                        last_increase_fill_timestamp_ms: self.last_increase_fill_timestamp_long[idx],
+                        last_increase_fill_timestamp_ms: self.last_increase_fill_timestamp_long
+                            [idx],
                         bot_params: self.bot_params[idx].long.clone(),
                         strategy_params: None,
                         parsed_strategy_params: Some(self.strategy_params[idx].long),
@@ -1437,7 +1438,8 @@ impl<'a> Backtest<'a> {
                         mode: mode_short,
                         position: pos_short,
                         trailing: trailing_short,
-                        last_increase_fill_timestamp_ms: self.last_increase_fill_timestamp_short[idx],
+                        last_increase_fill_timestamp_ms: self.last_increase_fill_timestamp_short
+                            [idx],
                         bot_params: self.bot_params[idx].short.clone(),
                         strategy_params: None,
                         parsed_strategy_params: Some(self.strategy_params[idx].short),
