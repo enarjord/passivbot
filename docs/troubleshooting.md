@@ -106,6 +106,34 @@ python3 -m pip install -e .
 # or: python3 -m pip install -e ".[dev]"
 ```
 
+## `python3 -m pip install -e ".[full]"` fails with `feature edition2024 is required`
+
+This is a Rust toolchain issue, not a Python dependency issue.
+
+If the Rust build logs include errors like:
+
+- `feature edition2024 is required`
+- `cargo metadata ... failed`
+- `failed to parse manifest` inside `~/.cargo/registry/...`
+
+then your local Cargo is too old for the crates it resolved during the build.
+
+Check your toolchain:
+
+```bash
+cargo --version
+rustc --version
+```
+
+Update to the current stable Rust toolchain and retry:
+
+```bash
+rustup update stable
+python3 -m pip install -e ".[full]"
+```
+
+If Rust was installed from system packages instead of `rustup`, prefer switching to the `rustup`-managed toolchain.
+
 ## `maturin develop` says it could not find a virtualenv or conda environment
 
 This usually means the build is running outside the project venv.
