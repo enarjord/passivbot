@@ -1,7 +1,6 @@
 import logging
 import argparse
 from copy import deepcopy
-from pathlib import Path
 from types import SimpleNamespace
 import json
 
@@ -26,9 +25,12 @@ from config_utils import (
     _rename_config_keys,
     _sync_with_template,
     CLI_HELP_GROUPS,
+    FIELD_RUNTIME_RULES,
+    RESERVED_CLI_ARGS,
     add_config_arguments,
     get_template_config,
     load_config,
+    project_template_config_for_cli,
     update_config_with_args,
     parse_overrides,
     format_config,
@@ -769,17 +771,7 @@ def _parse_backtest_args(raw_argv):
     )
     parser.add_argument("config_path", type=str, default=None, nargs="?")
     parser.add_argument("--suite", nargs="?", const="true", default=None, type=config_utils.str2bool)
-    template_config = get_template_config()
-    keep_live_keys = {
-        "approved_coins",
-        "hedge_mode",
-        "ignored_coins",
-        "max_realized_loss_pct",
-        "minimum_coin_age_days",
-    }
-    for key in sorted(template_config["live"]):
-        if key not in keep_live_keys:
-            del template_config["live"][key]
+    template_config = project_template_config_for_cli(get_template_config(), "backtest")
     if "logging" in template_config and isinstance(template_config["logging"], dict):
         template_config["logging"].pop("level", None)
     allowed_config_keys = add_config_arguments(
@@ -790,6 +782,14 @@ def _parse_backtest_args(raw_argv):
         group_map={},
     )
     return parser.parse_args(expand_help_all_argv(raw_argv)), allowed_config_keys
+
+
+def _make_live_only_source_config():
+    return {
+        "bot": {"long": {}, "short": {}},
+        "live": {},
+        "coin_overrides": {},
+    }
 
 
 @pytest.mark.parametrize("start_flag", ["-sd", "--start-date"])
@@ -921,6 +921,7 @@ def test_backtest_filter_min_cost_inherits_from_live():
 
 
 def _format_parser_help_with_config(command: str, config: dict, help_all: bool) -> str:
+    config = project_template_config_for_cli(config, command)
     parser = argparse.ArgumentParser(prog=command)
     group_map = {
         title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get(command, [])
@@ -933,9 +934,32 @@ def _format_parser_help_with_config(command: str, config: dict, help_all: bool) 
         group_map=group_map,
     )
     if command == "optimize":
-        from optimize import add_extra_options
-
-        add_extra_options(group_map["Advanced Overrides"], help_all=help_all)
+        group_map["Advanced Overrides"].add_argument(
+            "-t",
+            "--start",
+            type=str,
+            required=False,
+            dest="starting_configs",
+            default=None,
+            help=(
+                "Start with given live configs. Single json file or dir with multiple json files"
+                if help_all
+                else argparse.SUPPRESS
+            ),
+        )
+        group_map["Advanced Overrides"].add_argument(
+            "-ft",
+            "--fine_tune_params",
+            "--fine-tune-params",
+            type=str,
+            default="",
+            dest="fine_tune_params",
+            help=(
+                "Comma-separated optimize bounds keys to tune; other parameters are fixed to their current config values"
+                if help_all
+                else argparse.SUPPRESS
+            ),
+        )
         group_map["Optimize Common"].add_argument(
             "-l",
             "--limit",
@@ -966,8 +990,11 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "-l SPEC, --limit SPEC" in help_text
     assert "--clear-limits" in help_text
     assert "--minimum-coin-age-days FLOAT, -mcad FLOAT" in help_text
-    assert "--hedge-mode Y/N, -hm Y/N" not in help_text
-    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" not in help_text
+    assert "--hedge-mode Y/N, -hm Y/N" in help_text
+    assert "--market-orders-allowed Y/N, -moa Y/N" in help_text
+    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
+    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
+    assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
     assert "--optimize_population_size" not in help_text
     assert "--optimize.bounds.long.strategy.trailing_grid.close_grid_markup_end" not in help_text
     assert "Optimize DEAP:" not in help_text
@@ -983,6 +1010,7 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     assert "--limits JSON_OR_HJSON" in help_text
     assert "-l SPEC, --limit SPEC" in help_text
     assert "--hedge-mode Y/N, -hm Y/N" in help_text
+    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
     assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
 
 
@@ -999,7 +1027,8 @@ def test_live_default_help_shows_curated_groups():
     assert "--ignored-coins CSV_OR_PATH" in help_text
     assert "--minimum-coin-age-days FLOAT" in help_text
     assert "--hedge-mode Y/N" in help_text
-    assert "--pnls-max-lookback-days FLOAT, -pmld FLOAT" in help_text
+    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
+    assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
     assert "--user VALUE, -u VALUE" in help_text
     assert "--live.auto_gs" not in help_text
     assert "--optimize.iters" not in help_text
@@ -1015,6 +1044,12 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     assert "Suite:" in help_text
     assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
     assert "--ignored-coins CSV_OR_PATH" in help_text
+    assert "--minimum-coin-age-days FLOAT, -mcad FLOAT" in help_text
+    assert "--hedge-mode Y/N, -hm Y/N" in help_text
+    assert "--market-orders-allowed Y/N, -moa Y/N" in help_text
+    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
+    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
+    assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
     assert "--aggregate-default VALUE" in help_text
     assert "--iters INT, -i INT" not in help_text
 
@@ -1037,9 +1072,95 @@ def test_live_reserved_pnls_lookback_alias_parses_short_and_long():
 
     parsed_short = parser.parse_args(["-pmld", "14"])
     parsed_long = parser.parse_args(["--pnls-max-lookback-days", "21"])
+    parsed_all = parser.parse_args(["--pnls-max-lookback-days", "all"])
 
     assert getattr(parsed_short, "live.pnls_max_lookback_days") == pytest.approx(14.0)
     assert getattr(parsed_long, "live.pnls_max_lookback_days") == pytest.approx(21.0)
+    assert getattr(parsed_all, "live.pnls_max_lookback_days") == "all"
+
+
+@pytest.mark.parametrize("command", ["backtest", "optimize"])
+def test_dotted_pnls_lookback_override_accepts_all_for_non_live_commands(command):
+    config = project_template_config_for_cli(get_template_config(), command)
+    parser = argparse.ArgumentParser(prog=command)
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get(command, [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command=command,
+        help_all=False,
+        group_map=group_map,
+    )
+
+    parsed = parser.parse_args(["--live.pnls_max_lookback_days", "all"])
+
+    assert getattr(parsed, "live.pnls_max_lookback_days") == "all"
+
+
+def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
+    config = project_template_config_for_cli(get_template_config(), "backtest")
+    parser = argparse.ArgumentParser(prog="backtest")
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get("backtest", [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command="backtest",
+        help_all=False,
+        group_map=group_map,
+    )
+
+    parsed_market = parser.parse_args(["-moa", "y"])
+    parsed_hedge = parser.parse_args(["-hm", "n"])
+    parsed_near_touch = parser.parse_args(["-montt", "0.002"])
+    parsed_lookback = parser.parse_args(["-pmld", "14"])
+    parsed_loss = parser.parse_args(["-mrlp", "0.75"])
+
+    assert getattr(parsed_market, "live.market_orders_allowed") is True
+    assert getattr(parsed_hedge, "live.hedge_mode") is False
+    assert getattr(parsed_near_touch, "live.market_order_near_touch_threshold") == pytest.approx(
+        0.002
+    )
+    assert getattr(parsed_lookback, "live.pnls_max_lookback_days") == pytest.approx(14.0)
+    assert getattr(parsed_loss, "live.max_realized_loss_pct") == pytest.approx(0.75)
+
+
+def test_backtest_default_help_shows_live_near_touch_threshold_override():
+    config = get_template_config()
+    help_text = _format_parser_help_with_config("backtest", config, help_all=False)
+
+    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
+
+
+def test_runtime_registry_reserved_help_metadata_stays_in_sync():
+    for full_name, rule in FIELD_RUNTIME_RULES.items():
+        spec = RESERVED_CLI_ARGS.get(full_name)
+        if spec is None:
+            continue
+        assert set(rule.get("cli_exposed_on", set())).issubset(spec.get("commands", set()))
+        for command, group in rule.get("help_group", {}).items():
+            assert spec.get("group", {}).get(command) == group
+
+
+def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_fields():
+    config = project_template_config_for_cli(get_template_config(), "backtest")
+
+    assert "market_orders_allowed" in config["live"]
+    assert "market_order_near_touch_threshold" in config["live"]
+    assert "pnls_max_lookback_days" in config["live"]
+    assert "user" not in config["live"]
+
+
+def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_fields():
+    config = project_template_config_for_cli(get_template_config(), "optimize")
+
+    assert "market_orders_allowed" in config["live"]
+    assert "market_order_near_touch_threshold" in config["live"]
+    assert "pnls_max_lookback_days" in config["live"]
+    assert "user" not in config["live"]
 
 
 def test_live_reserved_user_alias_parses_short_and_long():

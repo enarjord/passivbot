@@ -59,6 +59,7 @@ from config.access import (
     require_config_value,
     require_live_value,
 )
+from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.metrics import ANALYSIS_SHARED_KEYS
 from config.coerce import normalize_hsl_signal_mode
 from config.overrides import parse_overrides
@@ -72,6 +73,7 @@ from config.strategy import (
 from config_utils import (
     dump_config,
     add_config_arguments,
+    project_template_config_for_cli,
     update_config_with_args,
     recursive_config_update,
     format_config,
@@ -420,7 +422,8 @@ class BacktestExecutionSettings:
     market_orders_allowed: bool
     market_order_near_touch_threshold: float
     market_order_slippage_pct: float
-    pnls_max_lookback_days: float
+    pnls_max_lookback_days: str | float
+    pnls_max_lookback_days_backtest_value: float
 
 
 @dataclass
@@ -1242,21 +1245,16 @@ def get_backtest_execution_settings(config, *, is_runtime_compiled: bool = False
         raise ValueError(
             "live.market_order_near_touch_threshold must be >= 0.0"
         )
-    pnls_max_lookback_days_raw = get_optional_live_value(config, "pnls_max_lookback_days", 30.0)
-    pnls_max_lookback_days = float(pnls_max_lookback_days_raw or 0.0)
-    if not math.isfinite(pnls_max_lookback_days):
-        raise ValueError(
-            "live.pnls_max_lookback_days must be finite"
-        )
-    if pnls_max_lookback_days < 0.0:
-        raise ValueError(
-            "live.pnls_max_lookback_days must be >= 0.0"
-        )
+    pnls_max_lookback = parse_pnls_max_lookback_days(
+        get_optional_live_value(config, "pnls_max_lookback_days", 30.0),
+        field_name="live.pnls_max_lookback_days",
+    )
     return BacktestExecutionSettings(
         market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=market_order_near_touch_threshold,
         market_order_slippage_pct=market_order_slippage_pct,
-        pnls_max_lookback_days=pnls_max_lookback_days,
+        pnls_max_lookback_days=pnls_max_lookback.display_value,
+        pnls_max_lookback_days_backtest_value=pnls_max_lookback.to_backtest_days_value(),
     )
 
 
@@ -1465,7 +1463,7 @@ def prep_backtest_args(
             ),
             "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
             "max_realized_loss_pct": float(require_config_value(config, "live.max_realized_loss_pct")),
-            "pnls_max_lookback_days": execution_settings.pnls_max_lookback_days,
+            "pnls_max_lookback_days": execution_settings.pnls_max_lookback_days_backtest_value,
             "equity_hard_stop_loss": hard_stop_cfg_long,
             "market_order_slippage_pct": execution_settings.market_order_slippage_pct,
             "market_orders_allowed": execution_settings.market_orders_allowed,
@@ -1826,18 +1824,7 @@ async def main():
         "Advanced Overrides": parser.add_argument_group("Advanced Overrides"),
     }
 
-    template_config = get_template_config()
-    del template_config["optimize"]
-    keep_live_keys = {
-        "approved_coins",
-        "hedge_mode",
-        "ignored_coins",
-        "max_realized_loss_pct",
-        "minimum_coin_age_days",
-    }
-    for key in sorted(template_config["live"]):
-        if key not in keep_live_keys:
-            del template_config["live"][key]
+    template_config = project_template_config_for_cli(get_template_config(), "backtest")
     if "logging" in template_config and isinstance(template_config["logging"], dict):
         template_config["logging"].pop("level", None)
     allowed_config_keys = add_config_arguments(

@@ -40,8 +40,8 @@ def _make_bot_with_events(events, balance=10000.0):
     return bot
 
 
-def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
-    bot.config = {"live": {"pnls_max_lookback_days": float(lookback_days)}}
+def _set_pnl_lookback(bot, *, lookback_days: float | str, now_ms: int) -> None:
+    bot.config = {"live": {"pnls_max_lookback_days": lookback_days}}
     bot.get_exchange_time = lambda: now_ms
 
 
@@ -112,7 +112,7 @@ class TestGetRealizedPnlCumsumStats:
         assert result["max"] == pytest.approx(10.0)
         assert result["last"] == pytest.approx(5.0)
 
-    def test_zero_lookback_uses_full_history_like_backtest(self):
+    def test_zero_lookback_uses_minimal_history(self):
         now_ms = 10 * 86_400_000
         events = [
             _make_fill_event(100.0, timestamp=now_ms - 3 * 86_400_000),
@@ -121,6 +121,21 @@ class TestGetRealizedPnlCumsumStats:
         ]
         bot = _make_bot_with_events(events)
         _set_pnl_lookback(bot, lookback_days=0.0, now_ms=now_ms)
+
+        result = bot._get_realized_pnl_cumsum_stats()
+
+        assert result["max"] == pytest.approx(0.0)
+        assert result["last"] == pytest.approx(0.0)
+
+    def test_all_lookback_uses_full_history(self):
+        now_ms = 10 * 86_400_000
+        events = [
+            _make_fill_event(100.0, timestamp=now_ms - 3 * 86_400_000),
+            _make_fill_event(-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
+            _make_fill_event(10.0, timestamp=now_ms - 60_000),
+        ]
+        bot = _make_bot_with_events(events)
+        _set_pnl_lookback(bot, lookback_days="all", now_ms=now_ms)
 
         result = bot._get_realized_pnl_cumsum_stats()
 

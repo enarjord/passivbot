@@ -2,6 +2,8 @@ import json
 import logging
 import sys
 import types
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -22,6 +24,86 @@ from passivbot import Passivbot
 def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
     bot.config = {"live": {"pnls_max_lookback_days": float(lookback_days)}}
     bot.get_exchange_time = lambda: now_ms
+
+
+@pytest.mark.asyncio
+async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower():
+    bot = Passivbot.__new__(Passivbot)
+    cached_events = [SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])]
+
+    class _Manager:
+        def __init__(self, events, *, history_scope="unknown"):
+            self._events = list(events)
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock()
+            self.history_scope = history_scope
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    bot.stop_signal_received = False
+    bot._pnls_manager = _Manager(cached_events, history_scope="window")
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    result = await bot.update_pnls()
+
+    assert result is True
+    bot._pnls_manager.refresh.assert_awaited_once_with(start_ms=None, end_ms=None)
+    bot._pnls_manager.refresh_latest.assert_not_awaited()
+    assert bot._pnls_manager.history_scope == "all"
+
+
+@pytest.mark.asyncio
+async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_full_history():
+    bot = Passivbot.__new__(Passivbot)
+    cached_events = [SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])]
+
+    class _Manager:
+        def __init__(self, events, *, history_scope="unknown"):
+            self._events = list(events)
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock()
+            self.history_scope = history_scope
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    bot.stop_signal_received = False
+    bot._pnls_manager = _Manager(cached_events, history_scope="all")
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    result = await bot.update_pnls()
+
+    assert result is True
+    bot._pnls_manager.refresh.assert_not_awaited()
+    bot._pnls_manager.refresh_latest.assert_awaited_once_with(overlap=20)
+    assert bot._pnls_manager.history_scope == "all"
 
 
 def test_get_exchange_time_uses_direct_utc_ms(monkeypatch):
