@@ -51,6 +51,7 @@ Common errors:
 - `error: linker cc not found` → install build tools: `sudo apt install build-essential`. On macOS ensure Xcode CLT is installed.
 - `No such command 'maturin'` → re-run `pip install -r requirements-rust.txt`.
 - `failed to run custom build command … cc not found` on WSL/Ubuntu → install `python3-dev` (`sudo apt install python3.12-dev`).
+- `failed to parse manifest ... feature edition2024 is required` or `cargo metadata ... failed` during `python3 -m pip install -e ".[full]"` → your Rust/Cargo is too old for the transitive crates Cargo resolved. Update Rust with `rustup update stable`, confirm `cargo --version` / `rustc --version`, then retry the install. If you installed Rust from distro packages, prefer the `rustup` toolchain instead.
 
 ## 5. Verify the install
 
@@ -98,6 +99,7 @@ If you see linker errors after an OS update (e.g. new glibc), rebuild the extens
 | `venv/bin/passivbot ...` works but `passivbot ...` behaves differently | Run `command -v passivbot`, then refresh shell command lookup with `hash -r` and, if your shell supports it, `rehash`. |
 | `linker cc not found` / `cannot find crt1.o` | Install build-essential + `python3-dev`. |
 | `rustup: command not found` | Install Rust via https://rustup.rs/. |
+| `feature edition2024 is required` during the Rust build | Update Rust with `rustup update stable`, then retry `python3 -m pip install -e ".[full]"`. |
 | `python3 -m pip install … failed due to SSL` | Update `certifi` or set `PIP_CERT` if corporate proxies intercept TLS. |
 | `maturin develop` can’t find Python | Ensure you run it inside the venv (`which python` should point to `venv/bin/python`). |
 | `TypeError: unsupported operand type(s) for |: ...` | You are running an unsupported Python version; install Python 3.12 and recreate the venv with `python3.12 -m venv venv`. |
