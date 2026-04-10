@@ -30,6 +30,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import hlcv_preparation as hp
 from hlcv_preparation import HLCVManager, prepare_hlcvs, prepare_hlcvs_combined
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
 
@@ -1215,6 +1216,60 @@ class TestPrepareHLCVSCombined:
         pytest.skip(
             "Full integration test requires extensive mocking - validated through backtest integration"
         )
+
+    @pytest.mark.asyncio
+    async def test_prepare_hlcvs_combined_forced_source_surfaces_fetch_exception(
+        self, sample_config, monkeypatch
+    ):
+        sample_config["backtest"]["exchanges"] = ["binance", "bybit"]
+        sample_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+
+        class FakeManager:
+            def __init__(self, exchange, start_date, end_date, **kwargs):
+                self.exchange = exchange
+                self.start_date = start_date
+                self.end_date = end_date
+                self.markets = {"BTC/USDT:USDT": {"id": "BTCUSDT"}}
+                self.cc = None
+
+            async def load_markets(self):
+                return None
+
+            def has_coin(self, coin):
+                return coin == "BTC"
+
+            def update_date_range(self, start_ts, end_ts):
+                self.start_ts = start_ts
+                self.end_ts = end_ts
+
+            def get_market_specific_settings(self, coin):
+                return {
+                    "exchange": self.exchange,
+                    "symbol": f"{coin}/USDT:USDT",
+                    "qty_step": 0.001,
+                    "price_step": 0.1,
+                    "min_cost": 5.0,
+                }
+
+            async def close(self):
+                return None
+
+            async def aclose(self):
+                return None
+
+        async def fake_fetch_data_for_coin_and_exchange(*args, **kwargs):
+            raise RuntimeError("binance fetch exploded")
+
+        monkeypatch.setattr(hp, "HLCVManager", FakeManager)
+        monkeypatch.setattr(
+            hp, "get_first_timestamps_unified", AsyncMock(return_value={"BTC": 0})
+        )
+        monkeypatch.setattr(hp, "fetch_data_for_coin_and_exchange", fake_fetch_data_for_coin_and_exchange)
+
+        with pytest.raises(
+            RuntimeError, match=r"Forced exchange binanceusdm failed for coin BTC"
+        ):
+            await prepare_hlcvs_combined(sample_config, forced_sources={"BTC": "binance"})
 
 
 # ============================================================================

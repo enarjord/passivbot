@@ -16,7 +16,7 @@ from config import load_prepared_config
 from config.access import require_config_value, require_live_value
 from config.overrides import parse_overrides
 from config_utils import format_config
-from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from shared_arrays import attach_shared_array
 from suite_runner import (
     SuiteScenario,

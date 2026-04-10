@@ -85,7 +85,7 @@ from config.scoring import (
 )
 from config.parse import load_raw_config as load_hjson_config
 from config.schema import get_template_config
-from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from config_utils import (
     format_bot_config,
     add_config_arguments,

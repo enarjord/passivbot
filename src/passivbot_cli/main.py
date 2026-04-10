@@ -34,7 +34,7 @@ CORE_COMMANDS: dict[str, CommandSpec] = {
         requires_full=True,
     ),
     "download": CommandSpec(
-        "downloader",
+        "ohlcv_download",
         "download OHLCV data (requires full install)",
         requires_full=True,
     ),

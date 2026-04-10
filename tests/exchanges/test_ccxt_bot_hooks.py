@@ -443,14 +443,21 @@ class TestFetchBalanceHooks:
 
         assert result == 1234.56
 
-    def test_get_balance_returns_zero_when_missing(self, bot_with_mock_cca):
-        """_get_balance should return 0.0 when quote not in total."""
+    def test_get_balance_raises_when_quote_missing(self, bot_with_mock_cca):
+        """_get_balance should fail loudly when quote not in total."""
         bot = bot_with_mock_cca
         fetched = {"total": {"BTC": 0.5}}
 
-        result = bot._get_balance(fetched)
+        with pytest.raises(KeyError, match="missing total\\['USDT'\\]"):
+            bot._get_balance(fetched)
 
-        assert result == 0.0
+    def test_get_balance_raises_when_total_missing(self, bot_with_mock_cca):
+        """_get_balance should fail loudly when total mapping is absent."""
+        bot = bot_with_mock_cca
+        fetched = {"free": {"USDT": 12.0}}
+
+        with pytest.raises(KeyError, match="missing 'total' mapping"):
+            bot._get_balance(fetched)
 
     @pytest.mark.asyncio
     async def test_fetch_balance_uses_hooks(self, bot_with_mock_cca):
