@@ -42,6 +42,31 @@ def test_dispatch_core_command_forwards_module_and_prog(monkeypatch):
     assert os.environ.get("PASSIVBOT_CLI_PROG") is None
 
 
+def test_download_dispatch_forwards_new_module_and_prog(monkeypatch):
+    captured = {}
+    original_argv = sys.argv[:]
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["download", "configs/examples/default_trailing_grid_long_npos10.json"]) == 0
+
+    assert captured["module_name"] == "ohlcv_download"
+    assert captured["argv"] == [
+        "passivbot download",
+        "configs/examples/default_trailing_grid_long_npos10.json",
+    ]
+    assert captured["prog_env"] == "passivbot download"
+    assert sys.argv == original_argv
+    assert os.environ.get("PASSIVBOT_CLI_PROG") is None
+
+
 def test_help_subcommand_forwards_to_command_help(monkeypatch):
     captured = {}
 
