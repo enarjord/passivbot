@@ -1,11 +1,13 @@
 import os
 import sys
 from pathlib import Path
+import asyncio
 
 import pytest
 
 from passivbot_cli import main as cli_main
 from cli_utils import expand_help_all_argv, help_requested
+import ohlcv_download
 
 
 def test_root_help_lists_primary_commands(capsys):
@@ -65,6 +67,27 @@ def test_download_dispatch_forwards_new_module_and_prog(monkeypatch):
     assert captured["prog_env"] == "passivbot download"
     assert sys.argv == original_argv
     assert os.environ.get("PASSIVBOT_CLI_PROG") is None
+
+
+def test_download_help_is_scoped_to_download_flags(monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["passivbot download", "-h"],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        asyncio.run(ohlcv_download.main())
+
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "--symbols" in out
+    assert "--exchanges" in out
+    assert "--start-date" in out
+    assert "--end-date" in out
+    assert "--user" not in out
+    assert "--iters" not in out
+    assert "--monitor.enabled" not in out
 
 
 def test_help_subcommand_forwards_to_command_help(monkeypatch):

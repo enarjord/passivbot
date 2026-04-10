@@ -5,8 +5,7 @@ import logging
 from cli_utils import get_cli_prog
 from config import load_input_config, prepare_config
 from config.access import require_config_value, require_live_value
-from config.schema import get_template_config
-from config_utils import add_config_arguments, update_config_with_args
+from config_utils import comma_separated_values, update_config_with_args
 from hlcv_preparation import HLCVManager
 from utils import format_approved_ignored_coins
 
@@ -54,23 +53,78 @@ async def main() -> None:
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
-    template_config = get_template_config()
-    del template_config["optimize"]
-    del template_config["bot"]
-    template_config["live"] = {
-        k: v
-        for k, v in template_config["live"].items()
-        if k in {"approved_coins", "ignored_coins"}
-    }
-    template_config["backtest"] = {
-        k: v
-        for k, v in template_config["backtest"].items()
-        if k in {"combine_ohlcvs", "end_date", "start_date", "exchanges"}
-    }
-    add_config_arguments(parser, template_config)
+    parser.add_argument(
+        "--symbols",
+        "-s",
+        dest="live.approved_coins",
+        type=str,
+        default=None,
+        metavar="CSV_OR_PATH",
+        help=(
+            "Approved coins. Use CSV like BTC,ETH,XRP, the literal 'all', a path to a JSON "
+            "coin list file, or a JSON/HJSON per-side object like "
+            '{"long":["BTC"],"short":"all"}. Use coin tickers, not exchange symbols.'
+        ),
+    )
+    parser.add_argument(
+        "--ignored-coins",
+        "-ic",
+        dest="live.ignored_coins",
+        type=str,
+        default=None,
+        metavar="CSV_OR_PATH",
+        help="Ignored coins. Comma-separated coins or path to a JSON coin list file.",
+    )
+    parser.add_argument(
+        "--minimum-coin-age-days",
+        "-mcad",
+        dest="live.minimum_coin_age_days",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help="Minimum coin age in days required before a coin is eligible to trade.",
+    )
+    parser.add_argument(
+        "--exchanges",
+        "-e",
+        dest="backtest.exchanges",
+        type=comma_separated_values,
+        default=None,
+        metavar="CSV",
+        help="Backtest exchanges to use, for example bybit or binance,bybit.",
+    )
+    parser.add_argument(
+        "--start-date",
+        "-sd",
+        dest="backtest.start_date",
+        type=str,
+        default=None,
+        metavar="DATE",
+        help="Backtest start date. Examples: 2025, 2025-01, 2025-01-15.",
+    )
+    parser.add_argument(
+        "--end-date",
+        "-ed",
+        dest="backtest.end_date",
+        type=str,
+        default=None,
+        metavar="DATE",
+        help='Backtest end date. Use "-ed now" for the latest available candles.',
+    )
     args = parser.parse_args()
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
-    update_config_with_args(source_config, args)
+    update_config_with_args(
+        source_config,
+        args,
+        allowed_keys={
+            "live.approved_coins",
+            "live.ignored_coins",
+            "live.minimum_coin_age_days",
+            "backtest.exchanges",
+            "backtest.start_date",
+            "backtest.end_date",
+        },
+    )
     config = prepare_config(
         source_config,
         base_config_path=base_config_path,
