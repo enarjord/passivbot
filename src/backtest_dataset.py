@@ -4,6 +4,8 @@ from typing import Sequence
 
 from config.access import get_optional_config_value
 
+HLCVS_CACHE_DIR_SEP = "__"
+
 
 def _resolve_cache_artifact_path(cache_dir: Path, filename_candidates: Sequence[str]) -> str | None:
     for filename in filename_candidates:
@@ -11,6 +13,15 @@ def _resolve_cache_artifact_path(cache_dir: Path, filename_candidates: Sequence[
         if candidate.exists():
             return str(candidate.resolve())
     return None
+
+
+def _extract_cache_hash_from_dir(cache_dir: Path | None) -> str | None:
+    if cache_dir is None:
+        return None
+    name = cache_dir.name
+    if HLCVS_CACHE_DIR_SEP not in name:
+        return name
+    return name.rsplit(HLCVS_CACHE_DIR_SEP, 1)[-1] or name
 
 
 def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
@@ -52,7 +63,8 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
     return {
         "exchange": exchange,
         "hlcv_cache_dir": cache_dir_str,
-        "cache_hash": cache_dir.name if cache_dir else None,
+        "cache_hash": _extract_cache_hash_from_dir(cache_dir),
+        "cache_dir_label": cache_dir.name if cache_dir else None,
         "hlcvs_file": hlcvs_file,
         "timestamps_file": timestamps_file,
         "btc_usd_prices_file": btc_usd_prices_file,

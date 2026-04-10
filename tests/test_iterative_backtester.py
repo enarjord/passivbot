@@ -125,7 +125,12 @@ def test_async_main_passes_cli_overrides_to_session(monkeypatch):
 
 def test_dataset_signature_changes_for_dataset_affecting_config():
     base = {
-        "backtest": {"start_date": "2023-01-01", "coins": {"combined": ["BTC"]}, "cache_dir": {}},
+        "backtest": {
+            "start_date": "2023-01-01",
+            "coins": {"combined": ["BTC"]},
+            "cache_dir": {},
+            "ohlcv_source_dir": "/tmp/source-a",
+        },
         "bot": {
             "long": {
                 "strategy": {
@@ -160,7 +165,12 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
 
     same = {
         **base,
-        "backtest": {"start_date": "2023-01-01", "coins": {"combined": ["ETH"]}, "cache_dir": {"combined": "x"}},
+        "backtest": {
+            **base["backtest"],
+            "start_date": "2023-01-01",
+            "coins": {"combined": ["ETH"]},
+            "cache_dir": {"combined": "x"},
+        },
     }
     warmup_changed = {
         **base,
@@ -199,12 +209,17 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
         **base,
         "optimize": {"scoring": [{"metric": "sharpe_ratio_usd", "goal": "max"}]},
     }
+    source_dir_changed = {
+        **base,
+        "backtest": {**base["backtest"], "ohlcv_source_dir": "/tmp/source-b"},
+    }
 
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(same)
     assert ib.make_dataset_signature(base) != ib.make_dataset_signature(warmup_changed)
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(bot_quote_changed)
     assert ib.make_dataset_signature(base) != ib.make_dataset_signature(live_changed)
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(optimize_changed)
+    assert ib.make_dataset_signature(base) != ib.make_dataset_signature(source_dir_changed)
 
 
 def test_run_signature_changes_for_optimize_changes():

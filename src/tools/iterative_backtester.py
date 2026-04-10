@@ -401,6 +401,7 @@ def _dataset_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
             "gap_tolerance_ohlcvs_minutes": backtest_cfg.get("gap_tolerance_ohlcvs_minutes"),
             "coin_sources": deepcopy(backtest_cfg.get("coin_sources", {})),
             "market_settings_sources": deepcopy(backtest_cfg.get("market_settings_sources", {})),
+            "ohlcv_source_dir": backtest_cfg.get("ohlcv_source_dir"),
         },
         "live": {
             "approved_coins": deepcopy(live_cfg.get("approved_coins")),
