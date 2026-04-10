@@ -5,7 +5,16 @@ from typing import Sequence
 import numpy as np
 from pymoo.core.callback import Callback
 
-from config_utils import clean_config, strip_config_metadata
+from config_utils import strip_config_metadata
+
+
+CALLBACK_METADATA_KEYS = (
+    "_raw",
+    "_raw_effective",
+    "_transform_log",
+    "_coins_sources",
+    "_config_path",
+)
 
 
 def build_pymoo_record_entry(
@@ -27,7 +36,7 @@ def build_pymoo_record_entry(
         list(overrides_list or []),
         template,
     )
-    entry = clean_config(strip_config_metadata(config))
+    entry = dict(config)
     if suite_metrics is not None:
         entry["suite_metrics"] = suite_metrics
         backtest = entry.get("backtest")
@@ -35,7 +44,7 @@ def build_pymoo_record_entry(
             backtest.pop("coins", None)
     if metrics:
         entry["metrics"] = metrics
-    return entry
+    return strip_config_metadata(entry, keys=CALLBACK_METADATA_KEYS)
 
 
 class PymooRecorderCallback(Callback):
