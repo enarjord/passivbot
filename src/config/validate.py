@@ -5,9 +5,15 @@ from .coerce import normalize_hsl_cooldown_position_policy, normalize_hsl_signal
 
 def validate_config(config: dict, *, raw_optimize=None, verbose: bool = True, tracker=None) -> None:
     from analysis_visibility import validate_visible_metrics_config
+    from optimization.config_adapter import validate_optimize_bounds_against_bot_config
 
-    del raw_optimize
     require_config_dict(config, "monitor")
+    optimize_bounds = (
+        raw_optimize.get("bounds")
+        if isinstance(raw_optimize, dict) and isinstance(raw_optimize.get("bounds"), dict)
+        else config.get("optimize", {}).get("bounds", {})
+    )
+    validate_optimize_bounds_against_bot_config(config["bot"], optimize_bounds)
     normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
     normalize_hsl_cooldown_position_policy(config["live"]["hsl_position_during_cooldown_policy"])
     monitor_cfg = require_config_dict(config, "monitor")

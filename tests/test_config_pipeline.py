@@ -56,6 +56,27 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert "long_filter_volatility_ema_span" not in prepared["optimize"]["bounds"]
 
 
+@pytest.mark.parametrize(
+    "bound_key",
+    [
+        "long_entry_grid_inflation_enabled",
+        "short_entry_grid_inflation_enabled",
+        "long_hsl_enabled",
+        "short_hsl_enabled",
+        "long_hsl_orange_tier_mode",
+        "short_hsl_orange_tier_mode",
+        "long_hsl_panic_close_order_type",
+        "short_hsl_panic_close_order_type",
+    ],
+)
+def test_prepare_config_rejects_nontunable_bot_bounds(bound_key):
+    cfg = get_template_config()
+    cfg["optimize"]["bounds"][bound_key] = [0.0, 1.0]
+
+    with pytest.raises(KeyError, match=rf"optimize bound {bound_key} must map to a numeric bot\."):
+        prepare_config(cfg, verbose=False, target="canonical", runtime=None)
+
+
 def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_keys():
     canonical = prepare_config(
         get_template_config(),
