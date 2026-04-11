@@ -105,12 +105,12 @@ async def _main() -> int:
 
         if args.side == "buy":
             raw_price = last_price * (1.0 - abs(float(args.distance_pct)))
-            price = _round_to_step(raw_price, price_step, mode="down")
-            amount = _round_to_step(target_notional / max(price, 1e-12), qty_step, mode="up")
+            price = round_to_step(raw_price, price_step, mode="down")
+            amount = round_to_step(target_notional / max(price, 1e-12), qty_step, mode="up")
         else:
             raw_price = last_price * (1.0 + abs(float(args.distance_pct)))
-            price = _round_to_step(raw_price, price_step, mode="up")
-            amount = _round_to_step(target_notional / max(price, 1e-12), qty_step, mode="up")
+            price = round_to_step(raw_price, price_step, mode="up")
+            amount = round_to_step(target_notional / max(price, 1e-12), qty_step, mode="up")
 
         before = await session.fetch_balance()
         before_positions = await session.fetch_positions(symbols=[args.symbol])
