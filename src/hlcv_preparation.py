@@ -1324,6 +1324,7 @@ async def _prepare_hlcvs_combined_impl(
     async def process_coin(coin: str, sem: asyncio.Semaphore):
         """Fetch coin data from all candidate exchanges and select the best one."""
         async with sem:  # Rate limiting
+            forced_exchange = None
             try:
                 is_stock_perp_coin = coin.startswith("xyz:")
                 if coin not in first_timestamps_unified and not (
@@ -1385,6 +1386,14 @@ async def _prepare_hlcvs_combined_impl(
                         )
                     )
                 results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                if forced_exchange:
+                    forced_idx = candidate_exchanges.index(forced_exchange)
+                    forced_result = results[forced_idx]
+                    if isinstance(forced_result, Exception):
+                        raise RuntimeError(
+                            f"Forced exchange {forced_exchange} failed for coin {coin}"
+                        ) from forced_result
 
                 # Filter successful results
                 exchange_candidates = []
@@ -1454,6 +1463,8 @@ async def _prepare_hlcvs_combined_impl(
             except Exception as e:
                 logging.error(f"Error processing coin {coin}: {e}")
                 traceback.print_exc()
+                if forced_exchange:
+                    raise
                 return None
 
     # Parallelize coin processing with rate limiting
@@ -1468,7 +1479,9 @@ async def _prepare_hlcvs_combined_impl(
     for result in results:
         progress.maybe_log()
 
-        if result is None or isinstance(result, Exception):
+        if isinstance(result, Exception):
+            raise result
+        if result is None:
             progress.update()
             continue
 

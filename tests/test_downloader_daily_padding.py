@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src import downloader as dl
+import ohlcv_utils as dl
 
 
 def _build_df(start_ts, rows):

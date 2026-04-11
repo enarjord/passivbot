@@ -945,6 +945,7 @@ class FillEventCache:
         if current == 0 or start_ts < current:
             metadata["covered_start_ms"] = start_ts
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        self.save_metadata(metadata)
 
     def get_history_scope(self) -> str:
         """Return the cached history coverage contract."""
