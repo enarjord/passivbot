@@ -7,7 +7,7 @@ import numpy as np
 sys.modules.setdefault("passivbot_rust", types.SimpleNamespace())
 
 from backtest import ensure_valid_index_metadata
-from downloader import compute_per_coin_warmup_minutes
+from warmup_utils import compute_per_coin_warmup_minutes
 
 
 def test_ensure_valid_index_metadata_infers_ranges_for_each_coin():

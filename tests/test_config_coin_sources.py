@@ -87,3 +87,15 @@ def test_cache_hash_differs_coin_sources_vs_market_settings_sources():
     hash1 = get_cache_hash(cfg1, "combined")
     hash2 = get_cache_hash(cfg2, "combined")
     assert hash1 != hash2
+
+
+def test_cache_hash_includes_ohlcv_source_dir():
+    cfg = _base_config()
+    cfg["live"]["approved_coins"]["long"] = ["BTC/USDT:USDT"]
+    cfg["live"]["approved_coins"]["short"] = []
+    cfg["live"]["ignored_coins"]["long"] = []
+    cfg["live"]["ignored_coins"]["short"] = []
+    hash_without = get_cache_hash(cfg, "combined")
+    cfg["backtest"]["ohlcv_source_dir"] = "/tmp/ohlcvs-a"
+    hash_with = get_cache_hash(cfg, "combined")
+    assert hash_with != hash_without

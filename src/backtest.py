@@ -63,6 +63,7 @@ from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.metrics import ANALYSIS_SHARED_KEYS
 from config.coerce import normalize_hsl_signal_mode
 from config.overrides import parse_overrides
+from backtest_dataset import dump_backtest_dataset_metadata
 from config_utils import (
     dump_config,
     add_config_arguments,
@@ -944,9 +945,10 @@ def get_cache_hash(config, exchange):
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
     approved_coins = require_live_value(config, "approved_coins")
     minimum_coin_age = require_live_value(config, "minimum_coin_age_days")
-    coin_sources = config.get("backtest", {}).get("coin_sources") or {}
+    backtest_cfg = config.get("backtest", {}) or {}
+    coin_sources = backtest_cfg.get("coin_sources") or {}
     coin_sources_sorted = sorted((str(k), str(v)) for k, v in coin_sources.items())
-    market_settings_sources = config.get("backtest", {}).get("market_settings_sources") or {}
+    market_settings_sources = backtest_cfg.get("market_settings_sources") or {}
     market_settings_sources_sorted = sorted(
         (str(k), str(v)) for k, v in market_settings_sources.items()
     )
@@ -961,6 +963,7 @@ def get_cache_hash(config, exchange):
         ),
         "coin_sources": coin_sources_sorted,
         "market_settings_sources": market_settings_sources_sorted,
+        "ohlcv_source_dir": backtest_cfg.get("ohlcv_source_dir"),
     }
     return calc_hash(to_hash)
 
@@ -1697,6 +1700,7 @@ def post_process(
     formatted_config = format_config(config, verbose=False)
     sanitized_config = strip_config_metadata(formatted_config)
     dump_config(sanitized_config, f"{results_path}config.json")
+    dump_backtest_dataset_metadata(config, exchange, results_path)
     fdf.to_csv(f"{results_path}fills.csv")
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv.gz"), compression="gzip")
     if "balance" not in disabled_plot_groups:

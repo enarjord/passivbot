@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import numpy as np
 
@@ -815,3 +816,37 @@ async def test_update_positions_and_balance_cancels_balance_task_when_positions_
         await bot.update_positions_and_balance()
 
     assert bot.balance_cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_update_pos_oos_pnls_ohlcvs_propagates_open_order_failure():
+    import passivbot as pb_mod
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.stop_signal_received = False
+    bot.update_positions_and_balance = AsyncMock(return_value=(True, True))
+    bot.update_open_orders = AsyncMock(side_effect=RuntimeError("open orders failed"))
+    bot.update_pnls = AsyncMock(return_value=True)
+    bot.update_ohlcvs_1m_for_actives = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="open orders failed"):
+        await bot.update_pos_oos_pnls_ohlcvs()
+
+    bot.update_ohlcvs_1m_for_actives.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_open_orders_propagates_unexpected_fetch_errors():
+    import passivbot as pb_mod
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.stop_signal_received = False
+    bot.open_orders = {}
+
+    async def fake_fetch_open_orders():
+        raise RuntimeError("exchange fetch broke")
+
+    bot.fetch_open_orders = fake_fetch_open_orders
+
+    with pytest.raises(RuntimeError, match="exchange fetch broke"):
+        await bot.update_open_orders()

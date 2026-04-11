@@ -8,9 +8,11 @@ to enable safe refactoring. They document how the code actually works today.
 import math
 import os
 import argparse
+import json
 from multiprocessing.reduction import ForkingPickler
 import tempfile
 from copy import deepcopy
+from pathlib import Path
 from unittest.mock import Mock, MagicMock, patch
 
 import numpy as np
@@ -38,8 +40,12 @@ from optimize import (
 )
 from multiprocessing_utils import ignore_sigint_in_worker
 from optimization.bounds import Bound
+from optimization.callback import build_pymoo_record_entry
 from optimization.config_adapter import get_optimization_key_paths
+from optimization.config_adapter import extract_bounds_tuple_list_from_config
+from optimization.shape import build_optimization_shape
 from optimize_suite import ScenarioEvalContext
+from config import load_prepared_config
 
 
 def test_worker_initializer_is_pickleable_for_spawn():
@@ -1439,3 +1445,93 @@ class TestEvaluator:
         assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
         assert "PanicException" in metrics["error"]
         assert metrics["suite_metrics"] == {}
+
+
+def _remove_nested_path(mapping, path):
+    target = mapping
+    for part in path[:-1]:
+        target = target[part]
+    target.pop(path[-1], None)
+
+
+def test_config_to_individual_accepts_precomputed_optimization_shape():
+    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    shape = build_optimization_shape(config)
+
+    result = config_to_individual(config, shape.bounds, optimization_shape=shape)
+
+    assert len(result) == len(shape.bounds)
+
+
+def test_old_starting_seed_inherits_current_template_shape_and_defaults():
+    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    shape = build_optimization_shape(config)
+    stale_seed = deepcopy(config)
+
+    bound_key, path = shape.key_paths[0]
+    stale_seed["optimize"]["bounds"].pop(bound_key, None)
+    _remove_nested_path(stale_seed, path)
+
+    result = configs_to_individuals(
+        [stale_seed],
+        shape.bounds,
+        shape.sig_digits,
+        optimization_shape=shape,
+    )
+
+    assert len(result) == 1
+    assert len(result[0]) == len(shape.bounds)
+
+
+def test_build_pymoo_record_entry_strips_metadata():
+    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    template["_config_path"] = "artifact.json"
+    bounds = extract_bounds_tuple_list_from_config(template)
+    vector = config_to_individual(template, bounds, sig_digits=6)
+
+    entry = build_pymoo_record_entry(
+        vector=vector,
+        metrics={"suite_metrics": {"aggregate": {"stats": {}}}},
+        template=template,
+        build_config_fn=individual_to_config,
+        overrides_fn=optimize.optimizer_overrides,
+        overrides_list=[],
+    )
+
+    assert "_config_path" not in entry
+    assert "suite_metrics" in entry
+
+
+def test_result_recorder_preserves_unquantized_saved_param_values():
+    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    bounds = extract_bounds_tuple_list_from_config(template)
+    entry = deepcopy(template)
+
+    _bound_key, path = get_optimization_key_paths(entry)[0]
+    target = entry
+    for part in path[:-1]:
+        target = target[part]
+    original = float(target[path[-1]])
+    target[path[-1]] = original + 0.000321
+    entry["metrics"] = {"adg": 0.1}
+    entry["optimize"]["scoring"] = ["adg"]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        recorder = ResultRecorder(
+            results_dir=tmpdir,
+            sig_digits=6,
+            flush_interval=60,
+            scoring_keys=["adg"],
+            compress=False,
+            write_all_results=False,
+            bounds=bounds,
+        )
+        recorder.record(entry)
+
+        pareto_files = list((Path(tmpdir) / "pareto").glob("*.json"))
+        assert len(pareto_files) == 1
+        saved = json.loads(pareto_files[0].read_text())
+        saved_target = saved
+        for part in path[:-1]:
+            saved_target = saved_target[part]
+        assert saved_target[path[-1]] == pytest.approx(original + 0.000321)
