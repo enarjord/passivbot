@@ -342,3 +342,35 @@ def test_prepare_config_removes_empty_means_all_approved_from_canonical_shape():
     assert prepared["_coins_sources"]["approved_coins"] == "all"
     assert prepared["_raw"]["live"]["empty_means_all_approved"] is True
     assert prepared["_raw_effective"]["live"]["empty_means_all_approved"] is True
+
+
+def test_prepare_config_accepts_all_zero_long_forager_weights_when_long_enabled():
+    """Regression for all-zero forager score weights on an enabled pside.
+
+    When a user locks all three forager score weights to zero (e.g. single-coin
+    setups where ranking is moot) and also locks forager_volume_ema_span to zero,
+    the all-zero fallback must not produce an impossible validation constraint.
+    The fallback normalizes to ema_readiness-only, which requires no auxiliary
+    forager_*_ema_span — the ema_readiness score is computed from the bot's
+    regular entry EMAs (ema_span_0 / ema_span_1).
+    """
+    source = get_template_config()
+    source["bot"]["long"]["forager_score_weights"] = {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
+    source["bot"]["long"]["forager_volume_ema_span"] = 0.0
+    source["bot"]["long"]["forager_volatility_ema_span"] = 0.0
+    source["bot"]["long"]["forager_volume_drop_pct"] = 0.0
+    # The long side is enabled by template defaults (twel > 0, n_positions > 0),
+    # which is what triggers validate_forager_config's checks.
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["forager_score_weights"] == {
+        "volume": 0.0,
+        "ema_readiness": 1.0,
+        "volatility": 0.0,
+    }
+    assert prepared["bot"]["long"]["forager_volume_ema_span"] == 0.0
