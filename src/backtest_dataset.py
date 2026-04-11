@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from config.access import get_optional_config_value, require_config_value
+from config.access import get_optional_config_value
+
+HLCVS_CACHE_DIR_SEP = "__"
 
 
 def _resolve_cache_artifact_path(cache_dir: Path, filename_candidates: Sequence[str]) -> str | None:
@@ -13,10 +15,19 @@ def _resolve_cache_artifact_path(cache_dir: Path, filename_candidates: Sequence[
     return None
 
 
+def _extract_cache_hash_from_dir(cache_dir: Path | None) -> str | None:
+    if cache_dir is None:
+        return None
+    name = cache_dir.name
+    if HLCVS_CACHE_DIR_SEP not in name:
+        return name
+    return name.rsplit(HLCVS_CACHE_DIR_SEP, 1)[-1] or name
+
+
 def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
-    cache_dir_raw = require_config_value(config, f"backtest.cache_dir.{exchange}")
+    cache_dir_raw = get_optional_config_value(config, f"backtest.cache_dir.{exchange}")
     cache_dir = Path(cache_dir_raw).resolve() if cache_dir_raw else None
-    coins_from_config = list(require_config_value(config, f"backtest.coins.{exchange}"))
+    coins_from_config = list(get_optional_config_value(config, f"backtest.coins.{exchange}", []) or [])
 
     cache_dir_str = str(cache_dir) if cache_dir else None
     coins_file = None
@@ -52,7 +63,8 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
     return {
         "exchange": exchange,
         "hlcv_cache_dir": cache_dir_str,
-        "cache_hash": cache_dir.name if cache_dir else None,
+        "cache_hash": _extract_cache_hash_from_dir(cache_dir),
+        "cache_dir_label": cache_dir.name if cache_dir else None,
         "hlcvs_file": hlcvs_file,
         "timestamps_file": timestamps_file,
         "btc_usd_prices_file": btc_usd_prices_file,

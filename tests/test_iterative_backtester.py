@@ -43,6 +43,24 @@ def test_apply_cli_overrides_updates_nested_config_paths():
     assert config["backtest"]["start_date"] == "2023-01-01"
 
 
+def test_apply_cli_overrides_uses_backtest_cli_type_parsing_for_known_fields():
+    config = {
+        "backtest": {"exchanges": ["binance"], "combine_ohlcvs": True},
+        "live": {"approved_coins": {"long": ["BTC"], "short": []}},
+    }
+
+    overridden = ib.apply_cli_overrides(
+        config,
+        [
+            "backtest.exchanges=binance,bybit",
+            "backtest.combine_ohlcvs=false",
+        ],
+    )
+
+    assert overridden["backtest"]["exchanges"] == ["binance", "bybit"]
+    assert overridden["backtest"]["combine_ohlcvs"] is False
+
+
 def test_parse_cli_override_rejects_missing_equals():
     with pytest.raises(ValueError, match="expected dotted.path=value"):
         ib.parse_cli_override("backtest.start_date")
@@ -107,7 +125,12 @@ def test_async_main_passes_cli_overrides_to_session(monkeypatch):
 
 def test_dataset_signature_changes_for_dataset_affecting_config():
     base = {
-        "backtest": {"start_date": "2023-01-01", "coins": {"combined": ["BTC"]}, "cache_dir": {}},
+        "backtest": {
+            "start_date": "2023-01-01",
+            "coins": {"combined": ["BTC"]},
+            "cache_dir": {},
+            "ohlcv_source_dir": "/tmp/source-a",
+        },
         "bot": {
             "long": {
                 "strategy": {
@@ -142,32 +165,16 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
 
     same = {
         **base,
-        "backtest": {"start_date": "2023-01-01", "coins": {"combined": ["ETH"]}, "cache_dir": {"combined": "x"}},
-    }
-    bot_changed = {
-        **base,
-        "bot": {
-            "long": {
-                "strategy": {
-                    "ema_anchor": {
-                        "ema_span_0": 48,
-                        "ema_span_1": 60,
-                        "entry_volatility_ema_span_hours": 48,
-                        "offset": 0.003,
-                    }
-                }
-            },
-            "short": {
-                "strategy": {
-                    "ema_anchor": {
-                        "ema_span_0": 48,
-                        "ema_span_1": 60,
-                        "entry_volatility_ema_span_hours": 12,
-                        "offset": 0.003,
-                    }
-                }
-            },
+        "backtest": {
+            **base["backtest"],
+            "start_date": "2023-01-01",
+            "coins": {"combined": ["ETH"]},
+            "cache_dir": {"combined": "x"},
         },
+    }
+    warmup_changed = {
+        **base,
+        "live": {**base["live"], "max_warmup_minutes": 720},
     }
     bot_quote_changed = {
         **base,
@@ -202,12 +209,17 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
         **base,
         "optimize": {"scoring": [{"metric": "sharpe_ratio_usd", "goal": "max"}]},
     }
+    source_dir_changed = {
+        **base,
+        "backtest": {**base["backtest"], "ohlcv_source_dir": "/tmp/source-b"},
+    }
 
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(same)
-    assert ib.make_dataset_signature(base) != ib.make_dataset_signature(bot_changed)
+    assert ib.make_dataset_signature(base) != ib.make_dataset_signature(warmup_changed)
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(bot_quote_changed)
     assert ib.make_dataset_signature(base) != ib.make_dataset_signature(live_changed)
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(optimize_changed)
+    assert ib.make_dataset_signature(base) != ib.make_dataset_signature(source_dir_changed)
 
 
 def test_run_signature_changes_for_optimize_changes():

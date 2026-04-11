@@ -94,6 +94,14 @@ def _configs_to_individuals(_cfgs, _bounds, _sig_digits):
     return []
 
 
+def _capturing_configs_to_individuals(captured):
+    def _inner(_cfgs, _bounds, _sig_digits, optimization_shape=None):
+        captured["optimization_shape"] = optimization_shape
+        return []
+
+    return _inner
+
+
 def _many_starting_configs(_path):
     return [{"seed": idx} for idx in range(6)]
 
@@ -471,3 +479,61 @@ def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
     assert records
     run_data = load_pareto_dataframe(str(tmp_path))
     assert not run_data.dataframe.empty
+
+
+def test_run_backend_passes_optimization_shape_to_starting_seed_loader(monkeypatch, tmp_path):
+    monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
+    evaluator = FakeEvaluator(["adg", "drawdown_worst"])
+    evaluator.optimization_shape = object()
+    recorder = ResultRecorder(
+        results_dir=str(tmp_path),
+        sig_digits=4,
+        flush_interval=60,
+        scoring_keys=["adg", "drawdown_worst"],
+        compress=False,
+        write_all_results=False,
+        bounds=evaluator.bounds,
+    )
+    captured = {}
+
+    result = pymoo_backend.run_backend(
+        config={
+            "optimize": {
+                "backend": "pymoo",
+                "population_size": 4,
+                "iters": 1,
+                "n_cpus": 1,
+                "round_to_n_significant_digits": 4,
+                "scoring": ["adg", "drawdown_worst"],
+                "pymoo": {
+                    "algorithm": "nsga2",
+                    "shared": {
+                        "crossover_prob_var": 0.5,
+                        "crossover_eta": 20.0,
+                        "mutation_eta": 20.0,
+                        "mutation_prob_var": 0.5,
+                        "eliminate_duplicates": True,
+                    },
+                },
+            }
+        },
+        evaluator=evaluator,
+        evaluator_for_pool=evaluator,
+        recorder=recorder,
+        overrides_list=[],
+        duplicate_counter={},
+        starting_configs_path="dummy",
+        constraint_fitness_cls=None,
+        ignore_sigint_in_worker=_ignore_sigint,
+        get_starting_configs=_many_starting_configs,
+        configs_to_individuals=_capturing_configs_to_individuals(captured),
+        optimization_shape=evaluator.optimization_shape,
+        record_individual_result=None,
+        run_evolution=None,
+        build_config_fn=_build_config,
+        overrides_fn=_noop_overrides,
+    )
+    result["pool"].close()
+    result["pool"].join()
+
+    assert captured["optimization_shape"] is evaluator.optimization_shape

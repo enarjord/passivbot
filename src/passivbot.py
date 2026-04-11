@@ -110,7 +110,7 @@ from procedures import (
     print_async_exception,
 )
 from utils import get_file_mod_ms
-from downloader import compute_per_coin_warmup_minutes
+from warmup_utils import compute_per_coin_warmup_minutes
 import re
 
 NetworkError = ccxt_errors.NetworkError
@@ -3196,16 +3196,10 @@ class Passivbot:
         if not balance_ok:
             return False
 
-        # Build task list: open_orders and fill events (pnls)
-        tasks = [
+        open_orders_ok, pnls_ok = await asyncio.gather(
             self.update_open_orders(),
             self.update_pnls(),
-        ]
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        open_orders_ok = results[0] is True
-        pnls_ok = results[1] is True
+        )
 
         if not open_orders_ok or not pnls_ok:
             return False
@@ -4759,7 +4753,7 @@ class Passivbot:
             logging.error("[fills] Failed to update FillEventsManager: %s", e)
             if self.logging_level >= 2:
                 traceback.print_exc()
-            return False
+            raise
 
     # -------------------------------------------------------------------------
     # FillEventsManager Helpers
@@ -5531,7 +5525,7 @@ class Passivbot:
             logging.error(f"error with {get_function_name()} {e}")
             print_async_exception(res)
             traceback.print_exc()
-            return False
+            raise
 
     def get_exchange_time(self):
         """Return current exchange time in milliseconds."""

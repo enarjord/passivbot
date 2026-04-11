@@ -26,6 +26,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -42,7 +43,12 @@ from backtest import prepare_hlcvs_mss, run_backtest  # noqa: E402
 from config.access import get_optional_config_value, require_config_value  # noqa: E402
 from config.limits import normalize_limit_entries  # noqa: E402
 from config.overrides import parse_overrides  # noqa: E402
-from config_utils import set_nested_value_safe  # noqa: E402
+from config.schema import get_template_config  # noqa: E402
+from config_utils import (  # noqa: E402
+    add_config_arguments,
+    project_template_config_for_cli,
+    set_nested_value_safe,
+)
 from config.scoring import (  # noqa: E402
     ObjectiveSpec,
     default_scoring_weights,
@@ -119,6 +125,19 @@ class RunSummary:
 
 
 CLI_OVERRIDE_RE = re.compile(r"^(?P<path>[^=]+)=(?P<value>.*)$")
+
+
+class IterativeOverrideParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise ValueError(message)
+
+
+@lru_cache(maxsize=1)
+def build_iterative_override_parser() -> argparse.ArgumentParser:
+    parser = IterativeOverrideParser(add_help=False, allow_abbrev=False)
+    template = project_template_config_for_cli(get_template_config(), "backtest")
+    add_config_arguments(parser, template, command="backtest")
+    return parser
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +401,7 @@ def _dataset_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
             "gap_tolerance_ohlcvs_minutes": backtest_cfg.get("gap_tolerance_ohlcvs_minutes"),
             "coin_sources": deepcopy(backtest_cfg.get("coin_sources", {})),
             "market_settings_sources": deepcopy(backtest_cfg.get("market_settings_sources", {})),
+            "ohlcv_source_dir": backtest_cfg.get("ohlcv_source_dir"),
         },
         "live": {
             "approved_coins": deepcopy(live_cfg.get("approved_coins")),
@@ -448,7 +468,17 @@ def parse_cli_override(entry: str) -> Tuple[List[str], Any]:
     path = match.group("path").strip()
     if not path:
         raise ValueError(f"invalid override {entry!r}; path cannot be empty")
-    return path.split("."), parse_override_value(match.group("value"))
+    raw_value = match.group("value")
+    parser = build_iterative_override_parser()
+    try:
+        namespace, unknown = parser.parse_known_args([f"--{path}", raw_value])
+    except ValueError as exc:
+        raise ValueError(f"invalid override {entry!r}: {exc}") from exc
+    if not unknown and hasattr(namespace, path):
+        parsed = getattr(namespace, path)
+        if parsed is not None:
+            return path.split("."), parsed
+    return path.split("."), parse_override_value(raw_value)
 
 
 def apply_cli_overrides(config: Dict[str, Any], overrides: Iterable[str]) -> Dict[str, Any]:
