@@ -262,23 +262,49 @@ def normalize_entry_grid_inflation_flags(
     *,
     tracker: Optional[object] = None,
 ) -> None:
+    def _normalize_bool_flag(raw_value, *, path: str) -> bool:
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, (int, float)) and raw_value in (0, 1):
+            return bool(raw_value)
+        if isinstance(raw_value, str):
+            return str2bool(raw_value)
+        raise TypeError(f"{path} must be a boolean, got {type(raw_value).__name__}")
+
     for pside in BOT_POSITION_SIDES:
         raw_value = result["bot"][pside].get("entry_grid_inflation_enabled", True)
-        if isinstance(raw_value, bool):
-            normalized = raw_value
-        elif isinstance(raw_value, (int, float)) and raw_value in (0, 1):
-            normalized = bool(raw_value)
-        elif isinstance(raw_value, str):
-            normalized = str2bool(raw_value)
-        else:
-            raise TypeError(
-                "bot."
-                f"{pside}.entry_grid_inflation_enabled must be a boolean, got "
-                f"{type(raw_value).__name__}"
-            )
+        normalized = _normalize_bool_flag(
+            raw_value, path=f"bot.{pside}.entry_grid_inflation_enabled"
+        )
         if tracker is not None and raw_value != normalized:
             tracker.update(["bot", pside, "entry_grid_inflation_enabled"], raw_value, normalized)
         result["bot"][pside]["entry_grid_inflation_enabled"] = normalized
+
+def normalize_coin_override_entry_grid_inflation_flags(result: dict) -> None:
+    for coin, override in (result.get("coin_overrides") or {}).items():
+        if not isinstance(override, dict):
+            continue
+        override_bot = override.get("bot", {})
+        if not isinstance(override_bot, dict):
+            continue
+        for pside in BOT_POSITION_SIDES:
+            bot_cfg = override_bot.get(pside, {})
+            if not isinstance(bot_cfg, dict) or "entry_grid_inflation_enabled" not in bot_cfg:
+                continue
+            raw_value = bot_cfg["entry_grid_inflation_enabled"]
+            if isinstance(raw_value, bool):
+                normalized = raw_value
+            elif isinstance(raw_value, (int, float)) and raw_value in (0, 1):
+                normalized = bool(raw_value)
+            elif isinstance(raw_value, str):
+                normalized = str2bool(raw_value)
+            else:
+                raise TypeError(
+                    "coin_overrides."
+                    f"{coin}.bot.{pside}.entry_grid_inflation_enabled must be a boolean, got "
+                    f"{type(raw_value).__name__}"
+                )
+            bot_cfg["entry_grid_inflation_enabled"] = normalized
 
 
 def warn_on_deprecated_entry_grid_inflation(
@@ -286,21 +312,53 @@ def warn_on_deprecated_entry_grid_inflation(
     *,
     verbose: bool = True,
 ) -> None:
-    enabled_sides = [
-        pside
+    enabled_paths = [
+        f"bot.{pside}.entry_grid_inflation_enabled"
         for pside in BOT_POSITION_SIDES
         if bool(result["bot"][pside].get("entry_grid_inflation_enabled", True))
     ]
-    if not enabled_sides:
+    if not enabled_paths:
         return
-    enabled_paths = ", ".join(f"bot.{pside}.entry_grid_inflation_enabled" for pside in enabled_sides)
     log_config_message(
         verbose,
         logging.WARNING,
         "%s enabled: inflated grid re-entries remain on for backwards compatibility, "
         "but this feature is scheduled for deprecation in a future version. Set the flag "
         "to false to adopt the canonical cropped-only grid behavior now.",
-        enabled_paths,
+        ", ".join(enabled_paths),
+    )
+
+
+def warn_on_deprecated_coin_override_entry_grid_inflation(
+    result: dict,
+    *,
+    verbose: bool = True,
+) -> None:
+    enabled_paths = []
+    for coin, override in (result.get("coin_overrides") or {}).items():
+        if not isinstance(override, dict):
+            continue
+        override_bot = override.get("bot", {})
+        if not isinstance(override_bot, dict):
+            continue
+        for pside in BOT_POSITION_SIDES:
+            bot_cfg = override_bot.get(pside, {})
+            if not isinstance(bot_cfg, dict):
+                continue
+            if not bool(bot_cfg.get("entry_grid_inflation_enabled", False)):
+                continue
+            if bool(result.get("bot", {}).get(pside, {}).get("entry_grid_inflation_enabled", True)):
+                continue
+            enabled_paths.append(f"coin_overrides.{coin}.bot.{pside}.entry_grid_inflation_enabled")
+    if not enabled_paths:
+        return
+    log_config_message(
+        verbose,
+        logging.WARNING,
+        "%s enabled: inflated grid re-entries remain on for backwards compatibility, "
+        "but this feature is scheduled for deprecation in a future version. Set the flag "
+        "to false to adopt the canonical cropped-only grid behavior now.",
+        ", ".join(enabled_paths),
     )
 
 

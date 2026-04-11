@@ -370,3 +370,32 @@ def test_prepare_config_skips_entry_grid_inflation_warning_when_disabled(caplog)
     assert prepared["bot"]["long"]["entry_grid_inflation_enabled"] is False
     assert prepared["bot"]["short"]["entry_grid_inflation_enabled"] is False
     assert not any("entry_grid_inflation_enabled" in rec.message for rec in caplog.records)
+
+
+def test_prepare_config_normalizes_entry_grid_inflation_flag_in_coin_overrides():
+    source = get_template_config()
+    source["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"entry_grid_inflation_enabled": "false"}}}
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["entry_grid_inflation_enabled"] is False
+
+
+def test_prepare_config_warns_when_coin_override_enables_entry_grid_inflation(caplog):
+    source = get_template_config()
+    source["bot"]["long"]["entry_grid_inflation_enabled"] = False
+    source["bot"]["short"]["entry_grid_inflation_enabled"] = False
+    source["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"entry_grid_inflation_enabled": True}}}
+    }
+
+    with caplog.at_level(logging.WARNING):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert any(
+        "coin_overrides.BTC.bot.long.entry_grid_inflation_enabled" in rec.message
+        and "scheduled for deprecation" in rec.message
+        for rec in caplog.records
+    )
