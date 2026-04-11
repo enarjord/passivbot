@@ -5,77 +5,28 @@ import argparse
 import asyncio
 import json
 import math
-import time
-from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
-from typing import Any
-
-import ccxt.async_support as ccxt_async
-
-from procedures import load_user_info
-
-
-def _mask(value: str, *, prefix: int = 6, suffix: int = 4) -> str:
-    if not value:
-        return ""
-    text = str(value)
-    if len(text) <= prefix + suffix:
-        return text
-    return f"{text[:prefix]}...{text[-suffix:]}"
-
-
-def _round_to_step(value: float, step: float, *, mode: str) -> float:
-    if step <= 0.0:
-        return float(value)
-    q = Decimal(str(value)) / Decimal(str(step))
-    rounding = ROUND_CEILING if mode == "up" else ROUND_FLOOR
-    rounded = q.quantize(Decimal("1"), rounding=rounding) * Decimal(str(step))
-    return float(rounded)
-
-
-def _summary(balance: dict[str, Any]) -> dict[str, Any]:
-    info = balance.get("info", {}) if isinstance(balance, dict) else {}
-    margin_summary = info.get("marginSummary", {}) if isinstance(info, dict) else {}
-    cross_margin_summary = info.get("crossMarginSummary", {}) if isinstance(info, dict) else {}
-    return {
-        "free_usdc": (balance.get("free") or {}).get("USDC"),
-        "used_usdc": (balance.get("used") or {}).get("USDC"),
-        "total_usdc": (balance.get("total") or {}).get("USDC"),
-        "withdrawable": info.get("withdrawable"),
-        "margin_account_value": margin_summary.get("accountValue"),
-        "margin_total_margin_used": margin_summary.get("totalMarginUsed"),
-        "margin_total_ntl_pos": margin_summary.get("totalNtlPos"),
-        "margin_total_raw_usd": margin_summary.get("totalRawUsd"),
-        "cross_account_value": cross_margin_summary.get("accountValue"),
-        "cross_total_margin_used": cross_margin_summary.get("totalMarginUsed"),
-        "cross_total_ntl_pos": cross_margin_summary.get("totalNtlPos"),
-        "cross_total_raw_usd": cross_margin_summary.get("totalRawUsd"),
-    }
-
-
-def _position_summary(positions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    summarized = []
-    for position in positions or []:
-        summarized.append(
-            {
-                "symbol": position.get("symbol"),
-                "side": position.get("side"),
-                "contracts": position.get("contracts"),
-                "entryPrice": position.get("entryPrice"),
-                "marginMode": position.get("marginMode"),
-                "isolated": position.get("isolated"),
-                "leverage": position.get("leverage"),
-                "info": position.get("info"),
-            }
-        )
-    return summarized
+from tools.hyperliquid_probe_common import (
+    add_live_mutation_confirmation_arg,
+    add_probe_identity_args,
+    create_hyperliquid_probe_session,
+    extract_balance_summary,
+    extract_position_summary,
+    load_hyperliquid_wallet,
+    mask_secret,
+    require_live_mutation_confirmation,
+    round_to_step,
+)
 
 
 async def _main() -> int:
     parser = argparse.ArgumentParser(
-        description="Place/cancel a tiny Hyperliquid post-only order and inspect balance fields"
+        description=(
+            "Mutating Hyperliquid diagnostic. Places one tiny post-only order, waits for balance "
+            "state to settle, then cancels it and reports before/create/cancel snapshots."
+        )
     )
-    parser.add_argument("--user", default="hyperliquid_01", help="user in api-keys.json")
-    parser.add_argument("--api-keys", default="api-keys.json", help="path to api-keys.json")
+    add_probe_identity_args(parser)
+    add_live_mutation_confirmation_arg(parser)
     parser.add_argument("--symbol", default="BTC/USDC:USDC", help="swap symbol to probe")
     parser.add_argument(
         "--side",
@@ -119,30 +70,14 @@ async def _main() -> int:
         help="include raw balance info and fetched position payloads before/create/cancel",
     )
     args = parser.parse_args()
-
-    user_info = load_user_info(args.user, api_keys_path=args.api_keys)
-    exchange = str(user_info.get("exchange") or "").lower()
-    if exchange != "hyperliquid":
-        raise ValueError(f"user {args.user!r} is exchange={exchange!r}, expected 'hyperliquid'")
-
-    wallet_address = str(user_info.get("wallet_address") or "")
-    private_key = str(user_info.get("private_key") or "")
-    if not wallet_address or not private_key:
-        raise ValueError(f"user {args.user!r} is missing wallet_address/private_key")
-
-    session = ccxt_async.hyperliquid(
-        {
-            "walletAddress": wallet_address,
-            "privateKey": private_key,
-            "enableRateLimit": True,
-            "timeout": 30_000,
-        }
+    require_live_mutation_confirmation(
+        parser, args, action_description="probe_hyperliquid_order_margin"
     )
-    session.options["defaultType"] = "swap"
-    session.options["fetchMarkets"] = {
-        "types": ["swap", "hip3"],
-        "hip3": {"dex": ["xyz"]},
-    }
+
+    _, wallet_address, private_key = load_hyperliquid_wallet(
+        args.user, api_keys_path=args.api_keys
+    )
+    session = create_hyperliquid_probe_session(wallet_address, private_key)
 
     order = None
     order_id = None
@@ -212,7 +147,7 @@ async def _main() -> int:
 
         output = {
             "user": args.user,
-            "wallet_address": _mask(wallet_address),
+            "wallet_address": mask_secret(wallet_address),
             "symbol": args.symbol,
             "side": args.side,
             "last_price": last_price,
@@ -230,12 +165,12 @@ async def _main() -> int:
                 "leverage": int(args.leverage),
                 "response": set_margin_mode_response,
             },
-            "before": _summary(before),
-            "after_create": _summary(after_create),
-            "after_cancel": _summary(after_cancel),
-            "positions_before": _position_summary(before_positions),
-            "positions_after_create": _position_summary(after_create_positions),
-            "positions_after_cancel": _position_summary(after_cancel_positions),
+            "before": extract_balance_summary(before),
+            "after_create": extract_balance_summary(after_create),
+            "after_cancel": extract_balance_summary(after_cancel),
+            "positions_before": extract_position_summary(before_positions),
+            "positions_after_create": extract_position_summary(after_create_positions),
+            "positions_after_cancel": extract_position_summary(after_cancel_positions),
             "open_orders_after_create": [
                 {
                     "id": candidate.get("id"),
