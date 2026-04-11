@@ -290,7 +290,7 @@ class HyperliquidBot(CCXTBot):
                 res = await self.ccp.watch_orders()
                 _ws_consecutive_rate_limits = 0  # reset on success
                 for i in range(len(res)):
-                    res[i]["position_side"] = self.determine_pos_side(res[i])
+                    res[i]["position_side"] = self._get_position_side_for_order(res[i])
                     res[i]["qty"] = res[i]["amount"]
                 self.handle_order_update(res)
             except RateLimitExceeded:
@@ -320,27 +320,6 @@ class HyperliquidBot(CCXTBot):
                 await asyncio.sleep(1)
                 logging.info("[ws] %s: reconnecting...", self.exchange)
 
-    def determine_pos_side(self, order):
-        # hyperliquid is not hedge mode
-        if order["symbol"] in self.positions:
-            if self.positions[order["symbol"]]["long"]["size"] != 0.0:
-                return "long"
-            elif self.positions[order["symbol"]]["short"]["size"] != 0.0:
-                return "short"
-            else:
-                return "long" if order["side"] == "buy" else "short"
-        else:
-            if "reduceOnly" in order:
-                if order["side"] == "buy":
-                    return "short" if order["reduceOnly"] else "long"
-                if order["side"] == "sell":
-                    return "long" if order["reduceOnly"] else "short"
-            return "long" if order["side"] == "buy" else "short"
-
-    def _get_position_side_for_order(self, order: dict) -> str:
-        """Hook: Derive position_side from order data for Hyperliquid (one-way mode)."""
-        return self.determine_pos_side(order)
-
     async def fetch_open_orders(self, symbol: str = None):
         fetched = []
         seen_ids = set()
@@ -369,7 +348,7 @@ class HyperliquidBot(CCXTBot):
                 fetched.append(order)
 
         for elm in fetched:
-            elm["position_side"] = self.determine_pos_side(elm)
+            elm["position_side"] = self._get_position_side_for_order(elm)
             elm["qty"] = elm["amount"]
         return sorted(fetched, key=lambda x: x["timestamp"])
 
@@ -509,27 +488,6 @@ class HyperliquidBot(CCXTBot):
             start_time = fetched[-1]["timestamp"] - 1000
             limit = 2000
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
-
-    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
-        """Return canonical fill events for Hyperliquid (draft placeholder)."""
-        events = []
-        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
-        for fill in fills:
-            events.append(
-                {
-                    "id": fill.get("id"),
-                    "timestamp": fill.get("timestamp"),
-                    "symbol": fill.get("symbol"),
-                    "side": fill.get("side"),
-                    "position_side": fill.get("position_side"),
-                    "qty": fill.get("amount"),
-                    "price": fill.get("price"),
-                    "pnl": fill.get("pnl"),
-                    "fee": fill.get("fee"),
-                    "info": fill.get("info"),
-                }
-            )
-        return events
 
     async def fetch_pnl(
         self,

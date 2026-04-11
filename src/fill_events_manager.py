@@ -3350,6 +3350,172 @@ class HyperliquidFetcher(BaseFetcher):
         }
 
 
+class LighterFetcher(BaseFetcher):
+    """Fetches fill events via ccxt.fetch_my_trades for Lighter."""
+
+    def __init__(
+        self,
+        api,
+        *,
+        trade_limit: int = 100,
+        symbol_resolver: Optional[Callable[[Optional[str]], str]] = None,
+    ) -> None:
+        self.api = api
+        self.trade_limit = max(1, trade_limit)
+        self._symbol_resolver = symbol_resolver
+
+    async def fetch(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        params: Dict[str, object] = {"limit": self.trade_limit}
+        if since_ms is not None:
+            params["since"] = int(since_ms)
+
+        collected: Dict[str, Dict[str, object]] = {}
+        max_fetches = 200
+        fetch_count = 0
+
+        prev_params = None
+        rate_limit_retries = 0
+        max_rate_limit_retries = 5
+        while True:
+            check_params = dict(params)
+            check_params["_page"] = fetch_count
+            new_key = _check_pagination_progress(
+                prev_params,
+                check_params,
+                "LighterFetcher.fetch",
+            )
+            if new_key is None:
+                break
+            prev_params = new_key
+            try:
+                trades = await self.api.fetch_my_trades(params=params)
+            except RateLimitExceeded as exc:
+                rate_limit_retries += 1
+                if rate_limit_retries >= max_rate_limit_retries:
+                    msg = (
+                        "LighterFetcher.fetch: too many consecutive rate-limit retries "
+                        f"({rate_limit_retries}/{max_rate_limit_retries}); aborting fetch"
+                    )
+                    logger.warning("%s", msg)
+                    raise RateLimitExceeded(msg) from exc
+                logger.debug(
+                    "LighterFetcher.fetch: rate limit exceeded (retry %d/%d), sleeping (%s)",
+                    rate_limit_retries,
+                    max_rate_limit_retries,
+                    exc,
+                )
+                await asyncio.sleep(min(30.0, 2.0 ** rate_limit_retries))
+                prev_params = None
+                continue
+            rate_limit_retries = 0
+            fetch_count += 1
+            if fetch_count > 1:
+                logger.debug(
+                    "LighterFetcher.fetch: fetch #%d since=%s size=%d",
+                    fetch_count,
+                    _format_ms(params.get("since")),
+                    len(trades) if trades else 0,
+                )
+            if not trades:
+                break
+            before_count = len(collected)
+            for trade in trades:
+                event = self._normalize_trade(trade)
+                ts = event["timestamp"]
+                if since_ms is not None and ts < since_ms:
+                    continue
+                if until_ms is not None and ts > until_ms:
+                    continue
+                collected[event["id"]] = event
+            added = len(collected) - before_count
+            if len(trades) < self.trade_limit:
+                break
+            last_ts = int(
+                trades[-1].get("timestamp")
+                or trades[-1].get("info", {}).get("timestamp")
+                or 0
+            )
+            if last_ts <= 0:
+                break
+            if until_ms is not None and last_ts >= until_ms:
+                break
+            if added <= 0:
+                logger.debug(
+                    "LighterFetcher.fetch: no new trades added on page (last_ts=%s), stopping",
+                    last_ts,
+                )
+                break
+            params["since"] = last_ts
+            if fetch_count >= max_fetches:
+                logger.warning(
+                    "LighterFetcher.fetch: reached maximum pagination depth (%d)",
+                    max_fetches,
+                )
+                break
+
+        events = sorted(collected.values(), key=lambda ev: ev["timestamp"])
+        events = _coalesce_events(events)
+
+        for event in events:
+            cache_entry = detail_cache.get(event["id"])
+            if cache_entry:
+                event["client_order_id"], event["pb_order_type"] = cache_entry
+            elif event["client_order_id"]:
+                event["pb_order_type"] = custom_id_to_snake(event["client_order_id"])
+            else:
+                event["pb_order_type"] = "unknown"
+            if not event["pb_order_type"]:
+                event["pb_order_type"] = "unknown"
+
+        if on_batch and events:
+            on_batch(events)
+
+        return events
+
+    @staticmethod
+    def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
+        info = trade.get("info", {}) or {}
+        trade_id = str(trade.get("id") or info.get("trade_id") or "")
+        order_id = str(trade.get("order") or "")
+        timestamp = int(trade.get("timestamp") or info.get("timestamp") or 0)
+        symbol_raw = trade.get("symbol") or ""
+        side = str(trade.get("side") or "").lower()
+        qty = abs(float(trade.get("amount") or 0.0))
+        price = float(trade.get("price") or 0.0)
+        pnl = float(trade.get("pnl") or 0.0)
+        fee = trade.get("fee") or {"currency": "USDC", "cost": 0.0}
+        client_order_id = str(
+            trade.get("clientOrderId")
+            or info.get("ask_client_id")
+            or info.get("bid_client_id")
+            or ""
+        )
+        position_side = "long" if side == "buy" else "short"
+        return {
+            "id": trade_id,
+            "order_id": order_id,
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp) if timestamp else "",
+            "symbol": str(symbol_raw),
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": pnl,
+            "fees": fee,
+            "pb_order_type": "",
+            "position_side": position_side,
+            "client_order_id": client_order_id,
+            "raw": [{"source": "fetch_my_trades", "data": trade}],
+            "c_mult": 1.0,
+        }
+
+
 class GateioFetcher(BaseFetcher):
     """Fetches fill events for Gate.io using trades + order PnL.
 
@@ -4674,6 +4840,11 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         return FakeFetcher(api=bot.cca)
     if exchange == "hyperliquid":
         return HyperliquidFetcher(
+            api=bot.cca,
+            symbol_resolver=lambda value: resolver(value),
+        )
+    if exchange == "lighter":
+        return LighterFetcher(
             api=bot.cca,
             symbol_resolver=lambda value: resolver(value),
         )

@@ -4,15 +4,12 @@ from passivbot import logging
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 import asyncio
-import passivbot_rust as pbr
 from utils import ts_to_date, utc_ms
 from procedures import assert_correct_ccxt_version
 from collections import defaultdict
 import hmac
 import hashlib
 import base64
-
-calc_order_price_diff = pbr.calc_order_price_diff
 
 # ---------------------------------------------------------------------------
 # Broker mixin classes for injecting KC-BROKER-NAME on KuCoin futures requests.
@@ -167,22 +164,6 @@ class KucoinBot(CCXTBot):
         """KuCoin: No-op - OHLCV websocket not used."""
         return
 
-    def _get_position_side_for_order(self, order: dict) -> str:
-        """KuCoin: Derive position_side from position state."""
-        return self.determine_pos_side(order)
-
-    def determine_pos_side(self, order):
-        # non hedge mode
-        if self.has_position("long", order["symbol"]):
-            return "long"
-        elif self.has_position("short", order["symbol"]):
-            return "short"
-        elif order["side"] == "buy":
-            return "long"
-        elif order["side"] == "sell":
-            return "short"
-        raise Exception(f"unknown side {order['side']}")
-
     async def fetch_open_orders(self, symbol: str = None) -> list:
         """KuCoin: Fetch open orders with pagination.
 
@@ -201,7 +182,7 @@ class KucoinBot(CCXTBot):
             if not fetched:
                 break
             for order in fetched:
-                order["position_side"] = self.determine_pos_side(order)
+                order["position_side"] = self._get_position_side_for_order(order)
                 order["qty"] = order["amount"]
                 self._record_live_margin_mode_from_payload(order)
             open_orders.extend(fetched)
@@ -217,25 +198,8 @@ class KucoinBot(CCXTBot):
         return float(fetched["info"]["data"]["marginBalance"])
 
     async def calc_ideal_orders(self):
-        # KuCoin enforces a 150 open-order cap; keep only the closest price targets.
         ideal_orders = await super().calc_ideal_orders()
-        flattened = []
-        for symbol, orders in ideal_orders.items():
-            if not orders:
-                continue
-            market_price = await self.cm.get_current_close(symbol, max_age_ms=10_000)
-            for order in orders:
-                price_diff = calc_order_price_diff(order["side"], order["price"], market_price)
-                flattened.append((price_diff, symbol, order))
-        limit = getattr(self, "MAX_OPEN_ORDERS", 150)
-        flattened.sort(key=lambda x: x[0])
-        trimmed = flattened[:limit] if limit and limit > 0 else flattened
-        filtered: dict[str, list] = {symbol: [] for symbol in self.active_symbols}
-        for _, symbol, order in trimmed:
-            filtered.setdefault(symbol, []).append(order)
-        for symbol in ideal_orders:
-            filtered.setdefault(symbol, ideal_orders[symbol])
-        return filtered
+        return await self._trim_orders_by_price_proximity(ideal_orders, 150)
 
     async def fetch_fills(self, start_time=None, end_time=None, limit=None):
         if start_time is None:
@@ -389,33 +353,6 @@ class KucoinBot(CCXTBot):
 
         return sorted(deduped.values(), key=lambda x: x["timestamp"])
 
-    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
-        """Return canonical fill events for KuCoin.
-
-        Returns:
-            list: Fill events with normalized fields.
-
-        Raises:
-            Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
-        """
-        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
-        events = []
-        for fill in fills:
-            events.append(
-                {
-                    "id": fill.get("id") or fill.get("orderId"),
-                    "timestamp": fill.get("timestamp"),
-                    "symbol": fill.get("symbol"),
-                    "side": fill.get("side"),
-                    "position_side": fill.get("position_side"),
-                    "qty": fill.get("qty") or fill.get("amount"),
-                    "price": fill.get("price"),
-                    "pnl": fill.get("pnl"),
-                    "fee": fill.get("fee"),
-                    "info": fill.get("info"),
-                }
-            )
-        return events
 
     def _build_order_params(self, order: dict) -> dict:
         margin_mode = self._get_margin_mode_for_symbol(order["symbol"])

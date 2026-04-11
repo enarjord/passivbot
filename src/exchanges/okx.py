@@ -1,12 +1,9 @@
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
-import passivbot_rust as pbr
 
 import asyncio
 from utils import ts_to_date, utc_ms
 from config.access import require_live_value
-
-calc_order_price_diff = pbr.calc_order_price_diff
 
 
 class OKXBot(CCXTBot):
@@ -49,10 +46,6 @@ class OKXBot(CCXTBot):
             logging.warning(f"Unable to detect OKX account configuration: {e}")
 
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
-
-    def _get_position_side_for_order(self, order: dict) -> str:
-        """OKX provides posSide in info."""
-        return order.get("info", {}).get("posSide", "long").lower()
 
     def _normalize_positions(self, fetched: list) -> list:
         """OKX: Preserve live positions across both cross and isolated margin modes."""
@@ -133,27 +126,6 @@ class OKXBot(CCXTBot):
             logging.debug(f"fetching income {ts_to_date(fetched[-1]['timestamp'])}")
             end_time = fetched[0]["timestamp"]
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
-
-    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
-        """Return canonical fill events for OKX."""
-        events = []
-        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
-        for fill in fills:
-            events.append(
-                {
-                    "id": fill.get("id"),
-                    "timestamp": fill.get("timestamp"),
-                    "symbol": fill.get("symbol"),
-                    "side": fill.get("side"),
-                    "position_side": fill.get("position_side"),
-                    "qty": fill.get("amount"),
-                    "price": fill.get("price"),
-                    "pnl": fill.get("pnl"),
-                    "fee": fill.get("fee"),
-                    "info": fill.get("info"),
-                }
-            )
-        return events
 
     async def fetch_pnl(
         self,
@@ -258,26 +230,8 @@ class OKXBot(CCXTBot):
                 logging.error("[config] error setting hedge mode: %s", e)
 
     async def calc_ideal_orders(self):
-        # okx has max 100 open orders. Drop orders whose pprice diff is greatest.
         ideal_orders = await super().calc_ideal_orders()
-        ideal_orders_tmp = []
-        for s in ideal_orders:
-            for x in ideal_orders[s]:
-                ideal_orders_tmp.append(
-                    (
-                        calc_order_price_diff(
-                            x["side"],
-                            x["price"],
-                            await self.cm.get_current_close(s, max_age_ms=10_000),
-                        ),
-                        {**x, **{"symbol": s}},
-                    )
-                )
-        ideal_orders_tmp = [x[1] for x in sorted(ideal_orders_tmp, key=lambda x: x[0])][:100]
-        ideal_orders = {symbol: [] for symbol in self.active_symbols}
-        for x in ideal_orders_tmp:
-            ideal_orders[x["symbol"]].append(x)
-        return ideal_orders
+        return await self._trim_orders_by_price_proximity(ideal_orders, 100)
 
     def format_custom_id_single(self, order_type_id: int) -> str:
         formatted = super().format_custom_id_single(order_type_id)

@@ -15,7 +15,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from exchanges.ccxt_bot import CCXTBot
-from passivbot import logging
+from passivbot import logging, custom_id_to_snake
 
 
 class ParadexBot(CCXTBot):
@@ -153,6 +153,10 @@ class ParadexBot(CCXTBot):
     def _normalize_order_update(self, order: dict) -> dict:
         """Transform Paradex order format to passivbot format."""
         custom_id = order.get("client_id") or ""
+        reduce_only = bool(order.get("reduce_only"))
+        if not reduce_only and custom_id:
+            snake = custom_id_to_snake(custom_id)
+            reduce_only = "close" in snake
         normalized = {
             "id": order.get("id"),
             "symbol": self._paradex_market_to_symbol(order.get("market")),
@@ -161,6 +165,7 @@ class ParadexBot(CCXTBot):
             "price": float(order.get("price") or 0),
             "amount": float(order.get("size") or 0),
             "qty": float(order.get("size") or 0),
+            "reduceOnly": reduce_only,
             "status": self._normalize_status(order.get("status")),
             "timestamp": order.get("created_at"),
             "clientOrderId": custom_id,

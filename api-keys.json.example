@@ -67,5 +67,13 @@
         "provider": "alpaca",
         "api_key": "your_alpaca_api_key",
         "api_secret": "your_alpaca_api_secret"
+    },
+    "_comment_lighter": "Lighter requires a platform-specific native binary (v1.0.4). Download from: https://github.com/elliottech/lighter-python/tree/b7fc10b2/lighter/signers — newer binaries have breaking ABI changes not yet supported by CCXT.",
+    "lighter_01": {
+        "exchange": "lighter",
+        "private_key": "0x_api_key_private_key_hex",
+        "api_key_index": 0,
+        "account_index": 0,
+        "library_path": "/path/to/lighter-binary"
     }
 }

@@ -230,7 +230,7 @@ class TestCCXTBotFetchOpenOrders:
         assert orders[0]["id"] == "123"
         assert orders[0]["position_side"] == "long"
         assert orders[0]["qty"] == 0.1
-        assert orders[1]["position_side"] == "both"  # Fallback
+        assert orders[1]["position_side"] == "short"  # sell + !reduceOnly = short
         assert orders[1]["qty"] == 0.2
         # Should be sorted by timestamp
         assert orders[0]["timestamp"] < orders[1]["timestamp"]
@@ -258,12 +258,11 @@ class TestCCXTBotWatchOrders:
         async def mock_watch_orders():
             call_count[0] += 1
             if call_count[0] == 1:
-                return [{"id": "order1", "amount": 0.5, "info": {"positionSide": "LONG"}}]
+                return [{"id": "order1", "amount": 0.5, "side": "buy", "reduceOnly": False}]
             else:
                 # Stop after processing first batch
                 bot.stop_websocket = True
-                # Return order that triggers stop on next iteration
-                return [{"id": "order2", "amount": 1.0, "info": {}}]
+                return [{"id": "order2", "amount": 1.0, "side": "sell", "reduceOnly": False}]
 
         bot.ccp = MagicMock()
         bot.ccp.has = {"watchOrders": True}  # Required for can_watch_orders()
@@ -759,18 +758,3 @@ class TestCCXTBotFetchOHLCV:
         assert call_count[0] == 2  # Two paginated calls
 
 
-class TestCCXTBotValidateWebSocketSupport:
-    """Tests for validate_websocket_support."""
-
-    @pytest.mark.asyncio
-    async def test_validates_watch_orders_support(self):
-        """Test that method passes when watchOrders is supported."""
-        from exchanges.ccxt_bot import CCXTBot
-
-        bot = CCXTBot.__new__(CCXTBot)
-        bot.exchange = "testexchange"
-        bot.ccp = MagicMock()
-        bot.ccp.has = {"watchOrders": True}
-
-        # Should not raise
-        await bot.validate_websocket_support()

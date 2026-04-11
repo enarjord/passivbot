@@ -392,3 +392,6 @@ Cargo.lock
 
 # Git worktrees
 .worktrees/
+
+# Monitor
+monitor/
