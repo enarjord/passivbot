@@ -63,7 +63,7 @@ import asyncio
 import argparse
 import multiprocessing
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from cli_utils import (
     add_help_all_argument,
     build_command_parser,
@@ -85,7 +85,8 @@ from config.scoring import (
 )
 from config.parse import load_raw_config as load_hjson_config
 from config.schema import get_template_config
-from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+from downloader import compute_backtest_warmup_minutes
+from warmup_utils import compute_per_coin_warmup_minutes
 from config_utils import (
     format_bot_config,
     add_config_arguments,
@@ -255,6 +256,102 @@ def _maybe_aggregate_backtest_data(hlcvs, timestamps, btc_usd_prices, mss, confi
         meta["effective_start_ts"] = int(timestamps[0])
         meta["effective_start_date"] = ts_to_date(int(timestamps[0]))
     return hlcvs, timestamps, btc_usd_prices
+
+
+def _stamp_optimizer_warmup(config: dict, mss: dict, coins: list[str]) -> None:
+    """
+    Overwrite ``mss[coin]["warmup_minutes"]`` and ``["trade_start_index"]``
+    with the worst-case warmup the optimizer's search space can actually
+    produce, computed from ``optimize.bounds`` rather than the template bot
+    values.
+
+    ``prepare_hlcvs_mss`` stamps those fields from
+    ``compute_per_coin_warmup_minutes(config)``, which reads ``bot.*``
+    directly and knows nothing about bounds. When a user's template bot has
+    large decorative values (e.g. ``entry_volatility_ema_span_hours=1690``)
+    but the bounds pin those fields low, every optimizer backtest ends up
+    trading on a window sized for the template — not for the search space.
+    This helper corrects the stamping by synthesizing a max-bounds
+    individual, running it through ``individual_to_config``, and recomputing
+    warmup from the resulting config.
+
+    Must be called *after* ``prepare_hlcvs_mss`` and *before* the Evaluator
+    reads ``mss``.
+    """
+    bounds = extract_bounds_tuple_list_from_config(config)
+    if not bounds:
+        return
+    max_vector = [bound.high for bound in bounds]
+    overrides_list = config.get("optimize", {}).get("enable_overrides", []) or []
+    max_config = individual_to_config(
+        max_vector,
+        optimizer_overrides,
+        overrides_list,
+        config,
+    )
+    warmup_map = compute_per_coin_warmup_minutes(max_config)
+    default_warmup = int(warmup_map.get("__default__", 0))
+    stamped: Counter = Counter()
+    for coin in coins:
+        meta = mss.get(coin)
+        if not isinstance(meta, dict):
+            continue
+        warmup_minutes = int(warmup_map.get(coin, default_warmup))
+        first_idx = int(meta.get("first_valid_index", 0))
+        last_idx = int(meta.get("last_valid_index", 0))
+        if first_idx > last_idx:
+            trade_start = first_idx
+        else:
+            trade_start = min(last_idx, first_idx + warmup_minutes)
+        meta["warmup_minutes"] = warmup_minutes
+        meta["trade_start_index"] = trade_start
+        stamped[(warmup_minutes, trade_start)] += 1
+    if stamped:
+        summary = ", ".join(
+            f"{count}x(warmup={w},start={s})" for (w, s), count in stamped.items()
+        )
+        logging.info(
+            "Optimizer warmup stamped from bounds | %d coins | %s",
+            sum(stamped.values()),
+            summary,
+        )
+
+
+def _register_exchange_data(
+    exchange: str,
+    prepare_result: tuple,
+    config: dict,
+    *,
+    msss: dict,
+    hlcvs_specs: dict,
+    btc_usd_specs: dict,
+    timestamps_dict: dict,
+    array_manager: SharedArrayManager,
+) -> tuple[list[str], dict]:
+    """
+    Register one exchange's prepared data into the optimizer's shared-memory
+    pools. Consolidates the previously-duplicated setup logic for the
+    combined and per-exchange branches. No behavioral change from the
+    original inline code; see commit history for the fix that later hooks
+    into this helper.
+    """
+    coins, hlcvs, mss, _results_path, _cache_dir, btc_usd_prices, timestamps = prepare_result
+    hlcvs, timestamps, btc_usd_prices = _maybe_aggregate_backtest_data(
+        hlcvs, timestamps, btc_usd_prices, mss, config
+    )
+    _stamp_optimizer_warmup(config, mss, coins)
+    timestamps_dict[exchange] = timestamps
+    config["backtest"]["coins"][exchange] = coins
+    msss[exchange] = mss
+    validate_array(hlcvs, "hlcvs")
+    hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
+    hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
+    hlcvs_specs[exchange] = hlcvs_spec
+    btc_usd_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+    validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
+    btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
+    btc_usd_specs[exchange] = btc_usd_spec
+    return coins, mss
 
 
 class ResultRecorder:
@@ -1858,54 +1955,37 @@ async def main():
 
             if use_combined:
                 exchange = "combined"
-                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
-                    await prepare_hlcvs_mss(config, exchange)
+                coins, mss = _register_exchange_data(
+                    exchange,
+                    await prepare_hlcvs_mss(config, exchange),
+                    config,
+                    msss=msss,
+                    hlcvs_specs=hlcvs_specs,
+                    btc_usd_specs=btc_usd_specs,
+                    timestamps_dict=timestamps_dict,
+                    array_manager=array_manager,
                 )
-                hlcvs, _timestamps, btc_usd_prices = _maybe_aggregate_backtest_data(
-                    hlcvs, _timestamps, btc_usd_prices, mss, config
-                )
-                timestamps_dict[exchange] = _timestamps
                 exchange_preference = defaultdict(list)
                 for coin in coins:
                     exchange_preference[mss[coin]["exchange"]].append(coin)
                 for ex in exchange_preference:
                     logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
-                config["backtest"]["coins"][exchange] = coins
-                msss[exchange] = mss
-                validate_array(hlcvs, "hlcvs")
-                hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
-                hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
-                hlcvs_specs[exchange] = hlcvs_spec
-
-                btc_usd_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
-                validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
-                btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
-                btc_usd_specs[exchange] = btc_usd_spec
-                del hlcvs, hlcvs_array, btc_usd_prices, btc_usd_array
             else:
-                tasks = {}
-                for exchange in backtest_exchanges:
-                    tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
-                for exchange in backtest_exchanges:
-                    coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
-                        await tasks[exchange]
+                tasks = {
+                    exchange: asyncio.create_task(prepare_hlcvs_mss(config, exchange))
+                    for exchange in backtest_exchanges
+                }
+                for exchange, task in tasks.items():
+                    _register_exchange_data(
+                        exchange,
+                        await task,
+                        config,
+                        msss=msss,
+                        hlcvs_specs=hlcvs_specs,
+                        btc_usd_specs=btc_usd_specs,
+                        timestamps_dict=timestamps_dict,
+                        array_manager=array_manager,
                     )
-                    hlcvs, _timestamps, btc_usd_prices = _maybe_aggregate_backtest_data(
-                        hlcvs, _timestamps, btc_usd_prices, mss, config
-                    )
-                    timestamps_dict[exchange] = _timestamps
-                    config["backtest"]["coins"][exchange] = coins
-                    msss[exchange] = mss
-                    validate_array(hlcvs, "hlcvs")
-                    hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
-                    hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
-                    hlcvs_specs[exchange] = hlcvs_spec
-
-                    btc_usd_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
-                    validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
-                    btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
-                    btc_usd_specs[exchange] = btc_usd_spec
-                    del hlcvs, hlcvs_array, btc_usd_prices, btc_usd_array
         exchanges = backtest_exchanges
         exchanges_fname = "combined" if len(backtest_exchanges) > 1 else "_".join(exchanges)
         date_fname = ts_to_date(utc_ms())[:19].replace(":", "_")
