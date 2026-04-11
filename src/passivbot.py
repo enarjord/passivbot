@@ -105,7 +105,7 @@ from procedures import (
     print_async_exception,
 )
 from utils import get_file_mod_ms
-from downloader import compute_per_coin_warmup_minutes
+from warmup_utils import compute_per_coin_warmup_minutes
 import re
 
 NetworkError = ccxt_errors.NetworkError

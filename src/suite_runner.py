@@ -32,7 +32,7 @@ from utils import (
     utc_ms,
     date_to_ts,
 )
-from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from ohlcv_utils import align_and_aggregate_hlcvs
 from shared_arrays import SharedArraySpec
 from metrics_schema import flatten_metric_stats, merge_suite_payload
