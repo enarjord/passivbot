@@ -3,7 +3,7 @@ import math
 from copy import deepcopy
 from typing import Optional
 
-from pure_funcs import sort_dict_keys
+from pure_funcs import sort_dict_keys, str2bool
 
 from .log_output import log_config_message
 from .migrations import apply_backward_compatibility_renames
@@ -257,6 +257,53 @@ def normalize_position_counts(result: dict, *, tracker: Optional[object] = None)
         result["bot"][pside]["n_positions"] = rounded
 
 
+def normalize_entry_grid_inflation_flags(
+    result: dict,
+    *,
+    tracker: Optional[object] = None,
+) -> None:
+    for pside in BOT_POSITION_SIDES:
+        raw_value = result["bot"][pside].get("entry_grid_inflation_enabled", True)
+        if isinstance(raw_value, bool):
+            normalized = raw_value
+        elif isinstance(raw_value, (int, float)) and raw_value in (0, 1):
+            normalized = bool(raw_value)
+        elif isinstance(raw_value, str):
+            normalized = str2bool(raw_value)
+        else:
+            raise TypeError(
+                "bot."
+                f"{pside}.entry_grid_inflation_enabled must be a boolean, got "
+                f"{type(raw_value).__name__}"
+            )
+        if tracker is not None and raw_value != normalized:
+            tracker.update(["bot", pside, "entry_grid_inflation_enabled"], raw_value, normalized)
+        result["bot"][pside]["entry_grid_inflation_enabled"] = normalized
+
+
+def warn_on_deprecated_entry_grid_inflation(
+    result: dict,
+    *,
+    verbose: bool = True,
+) -> None:
+    enabled_sides = [
+        pside
+        for pside in BOT_POSITION_SIDES
+        if bool(result["bot"][pside].get("entry_grid_inflation_enabled", True))
+    ]
+    if not enabled_sides:
+        return
+    enabled_paths = ", ".join(f"bot.{pside}.entry_grid_inflation_enabled" for pside in enabled_sides)
+    log_config_message(
+        verbose,
+        logging.WARNING,
+        "%s enabled: inflated grid re-entries remain on for backwards compatibility, "
+        "but this feature is scheduled for deprecation in a future version. Set the flag "
+        "to false to adopt the canonical cropped-only grid behavior now.",
+        enabled_paths,
+    )
+
+
 def validate_forager_config(
     result: dict,
     *,
@@ -341,6 +388,8 @@ def format_bot_config(
     )
     normalize_bot_forager_config(result, verbose=verbose, tracker=tracker)
     normalize_position_counts(result, tracker=tracker)
+    normalize_entry_grid_inflation_flags(result, tracker=tracker)
+    warn_on_deprecated_entry_grid_inflation(result, verbose=verbose)
     return sort_dict_keys(result["bot"])
 
 

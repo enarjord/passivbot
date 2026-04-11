@@ -209,6 +209,7 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         _float(inputs.get("min_cost")),
         c_mult,
         _float(inputs.get("entry_grid_double_down_factor")),
+        bool(inputs.get("entry_grid_inflation_enabled", True)),
         _float(inputs.get("entry_grid_spacing_volatility_weight")),
         _float(inputs.get("entry_grid_spacing_we_weight")),
         _float(inputs.get("entry_grid_spacing_pct")),

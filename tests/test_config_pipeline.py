@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+import logging
 
 import pytest
 
@@ -342,3 +343,30 @@ def test_prepare_config_removes_empty_means_all_approved_from_canonical_shape():
     assert prepared["_coins_sources"]["approved_coins"] == "all"
     assert prepared["_raw"]["live"]["empty_means_all_approved"] is True
     assert prepared["_raw_effective"]["live"]["empty_means_all_approved"] is True
+
+
+def test_prepare_config_warns_when_entry_grid_inflation_enabled(caplog):
+    source = get_template_config()
+
+    with caplog.at_level(logging.WARNING):
+        prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["entry_grid_inflation_enabled"] is True
+    assert prepared["bot"]["short"]["entry_grid_inflation_enabled"] is True
+    assert any(
+        "entry_grid_inflation_enabled" in rec.message and "scheduled for deprecation" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_prepare_config_skips_entry_grid_inflation_warning_when_disabled(caplog):
+    source = get_template_config()
+    source["bot"]["long"]["entry_grid_inflation_enabled"] = False
+    source["bot"]["short"]["entry_grid_inflation_enabled"] = False
+
+    with caplog.at_level(logging.WARNING):
+        prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["entry_grid_inflation_enabled"] is False
+    assert prepared["bot"]["short"]["entry_grid_inflation_enabled"] is False
+    assert not any("entry_grid_inflation_enabled" in rec.message for rec in caplog.records)
