@@ -1,0 +1,182 @@
+{
+  "meta": {
+    "exchange": "hyperliquid",
+    "quote": "USDC"
+  },
+  "markets": {
+    "raw": {
+      "ABCD-USA500/USDC:USDC": {
+        "active": false,
+        "base": "ABCD-USA500",
+        "baseName": "abcd:USA500",
+        "contractSize": 1.0,
+        "id": "160000",
+        "info": {
+          "hip3": true,
+          "maxLeverage": "25",
+          "onlyIsolated": true,
+          "openInterest": "0.0"
+        },
+        "limits": {
+          "amount": {
+            "min": null
+          },
+          "cost": {
+            "min": 10.0
+          }
+        },
+        "linear": true,
+        "precision": {
+          "amount": 0.001,
+          "price": 0.1
+        },
+        "swap": true
+      },
+      "PARA-BTCD/USDC:USDC": {
+        "active": true,
+        "base": "PARA-BTCD",
+        "baseName": "para:BTCD",
+        "contractSize": 1.0,
+        "id": "180002",
+        "info": {
+          "hip3": true,
+          "maxLeverage": "20",
+          "openInterest": "1847.4"
+        },
+        "limits": {
+          "amount": {
+            "min": null
+          },
+          "cost": {
+            "min": 10.0
+          }
+        },
+        "linear": true,
+        "precision": {
+          "amount": 0.1,
+          "price": 0.001
+        },
+        "swap": true
+      },
+      "PARA-OTHERS/USDC:USDC": {
+        "active": true,
+        "base": "PARA-OTHERS",
+        "baseName": "para:OTHERS",
+        "contractSize": 1.0,
+        "id": "180001",
+        "info": {
+          "hip3": true,
+          "maxLeverage": "10",
+          "openInterest": "1474.0"
+        },
+        "limits": {
+          "amount": {
+            "min": null
+          },
+          "cost": {
+            "min": 10.0
+          }
+        },
+        "linear": true,
+        "precision": {
+          "amount": 0.01,
+          "price": 0.01
+        },
+        "swap": true
+      }
+    },
+    "summary": {
+      "coin_to_symbol_map": {
+        "ABCD-USA500": [
+          "ABCD-USA500/USDC:USDC"
+        ],
+        "BTCD": [
+          "PARA-BTCD/USDC:USDC"
+        ],
+        "OTHERS": [
+          "PARA-OTHERS/USDC:USDC"
+        ],
+        "PARA-BTCD": [
+          "PARA-BTCD/USDC:USDC"
+        ],
+        "PARA-OTHERS": [
+          "PARA-OTHERS/USDC:USDC"
+        ],
+        "USA500": [
+          "ABCD-USA500/USDC:USDC"
+        ],
+        "abcd:USA500": [
+          "ABCD-USA500/USDC:USDC"
+        ],
+        "para:BTCD": [
+          "PARA-BTCD/USDC:USDC"
+        ],
+        "para:OTHERS": [
+          "PARA-OTHERS/USDC:USDC"
+        ]
+      },
+      "contracts": {
+        "ABCD-USA500/USDC:USDC": {
+          "contract_size": 1.0,
+          "id": "160000",
+          "margin_capability": "isolated_only",
+          "max_leverage": 10,
+          "min_cost": 10.1,
+          "min_qty": 0.001,
+          "price_step": 0.1,
+          "qty_step": 0.001,
+          "requires_isolated_margin": true
+        },
+        "PARA-BTCD/USDC:USDC": {
+          "contract_size": 1.0,
+          "id": "180002",
+          "margin_capability": "both",
+          "max_leverage": 20,
+          "min_cost": 10.1,
+          "min_qty": 0.1,
+          "price_step": 0.001,
+          "qty_step": 0.1,
+          "requires_isolated_margin": false
+        },
+        "PARA-OTHERS/USDC:USDC": {
+          "contract_size": 1.0,
+          "id": "180001",
+          "margin_capability": "both",
+          "max_leverage": 10,
+          "min_cost": 10.1,
+          "min_qty": 0.01,
+          "price_step": 0.01,
+          "qty_step": 0.01,
+          "requires_isolated_margin": false
+        }
+      },
+      "eligible_symbols": [
+        "PARA-BTCD/USDC:USDC",
+        "PARA-OTHERS/USDC:USDC"
+      ],
+      "ineligible_reasons": {
+        "ABCD-USA500/USDC:USDC": "not active"
+      },
+      "ineligible_symbols": [
+        "ABCD-USA500/USDC:USDC"
+      ],
+      "symbol_to_coin_map": {
+        "160000": "abcd:USA500",
+        "180001": "para:OTHERS",
+        "180002": "para:BTCD",
+        "ABCD-USA500": "abcd:USA500",
+        "ABCD-USA500/USDC:USDC": "abcd:USA500",
+        "BTCD": "para:BTCD",
+        "OTHERS": "para:OTHERS",
+        "PARA-BTCD": "para:BTCD",
+        "PARA-BTCD/USDC:USDC": "para:BTCD",
+        "PARA-OTHERS": "para:OTHERS",
+        "PARA-OTHERS/USDC:USDC": "para:OTHERS",
+        "USA500": "abcd:USA500",
+        "abcd:USA500": "abcd:USA500",
+        "para:BTCD": "para:BTCD",
+        "para:OTHERS": "para:OTHERS"
+      }
+    }
+  }
+}
