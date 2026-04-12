@@ -1,7 +1,12 @@
 import logging
 from copy import deepcopy
 
-from .bot import ensure_optimize_bounds_for_bot, format_bot_config
+from .bot import (
+    ensure_optimize_bounds_for_bot,
+    format_bot_config,
+    normalize_coin_override_entry_grid_inflation_flags,
+    warn_on_deprecated_coin_override_entry_grid_inflation,
+)
 from .hydrate import (
     apply_non_live_adjustments,
     hydrate_missing_template_fields,
@@ -72,6 +77,8 @@ def normalize_config(
         verbose=verbose,
         tracker=tracker,
     )
+    normalize_coin_override_entry_grid_inflation_flags(result)
+    warn_on_deprecated_coin_override_entry_grid_inflation(result, verbose=verbose)
     ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
     hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
     reject_backtest_inherited_live_fields(result)

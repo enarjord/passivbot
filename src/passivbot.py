@@ -5809,6 +5809,7 @@ class Passivbot:
             "close_trailing_qty_pct",
             "close_trailing_threshold_pct",
             "entry_grid_double_down_factor",
+            "entry_grid_inflation_enabled",
             "entry_grid_spacing_volatility_weight",
             "entry_grid_spacing_we_weight",
             "entry_grid_spacing_pct",
@@ -5840,7 +5841,7 @@ class Passivbot:
             "unstuck_loss_allowance_pct",
             "unstuck_threshold",
         ]
-        out: dict[str, float | int] = {}
+        out: dict[str, object] = {}
         for key in fields:
             if key in global_keys:
                 val = self.bot_value(pside, key)
@@ -5863,6 +5864,8 @@ class Passivbot:
                 }
             elif key == "n_positions":
                 out[out_key] = int(round(val or 0.0))
+            elif key == "entry_grid_inflation_enabled":
+                out[out_key] = bool(val)
             else:
                 out[out_key] = float(val or 0.0)
         out.update(

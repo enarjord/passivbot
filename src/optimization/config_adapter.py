@@ -55,12 +55,45 @@ DEPRECATED_OPTIMIZE_BOUND_ALIASES = {
 }
 
 
+def _validate_standard_optimize_bound_target(bound_key: str, bot_config) -> None:
+    if "_" not in bound_key:
+        return
+    pside, key = bound_key.split("_", 1)
+    if pside not in ("long", "short"):
+        return
+    if key not in bot_config[pside]:
+        raise KeyError(f"optimize bound {bound_key} does not map to bot.{pside}.{key}")
+    value = bot_config[pside][key]
+    if isinstance(value, dict):
+        raise KeyError(f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise KeyError(
+            f"optimize bound {bound_key} must map to a numeric bot.{pside}.{key}, "
+            f"got {type(value).__name__}"
+        )
+
+
+def validate_optimize_bounds_against_bot_config(bot_config, optimize_bounds) -> None:
+    if not isinstance(optimize_bounds, dict):
+        return
+    for bound_key in optimize_bounds:
+        if not isinstance(bound_key, str):
+            continue
+        canonical_key = DEPRECATED_OPTIMIZE_BOUND_ALIASES.get(bound_key)
+        if canonical_key is not None and canonical_key in optimize_bounds:
+            continue
+        if bound_key in OPTIMIZABLE_BOT_KEY_PATHS:
+            continue
+        _validate_standard_optimize_bound_target(bound_key, bot_config)
+
+
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     key_paths: List[Tuple[str, Tuple[str, ...]]] = []
     bot_config = config.get("bot")
     if bot_config is None:
         bot_config = get_template_config()["bot"]
     optimize_bounds = config.get("optimize", {}).get("bounds", {})
+    validate_optimize_bounds_against_bot_config(bot_config, optimize_bounds)
     if not optimize_bounds:
         for pside in ("long", "short"):
             pside_cfg = bot_config.get(pside, {})
@@ -79,15 +112,7 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
         if bound_key in OPTIMIZABLE_BOT_KEY_PATHS:
             key_paths.append((bound_key, OPTIMIZABLE_BOT_KEY_PATHS[bound_key]))
             continue
-        if "_" not in bound_key:
-            continue
         pside, key = bound_key.split("_", 1)
-        if pside not in ("long", "short"):
-            continue
-        if key not in bot_config[pside]:
-            raise KeyError(f"optimize bound {bound_key} does not map to bot.{pside}.{key}")
-        if isinstance(bot_config[pside][key], dict):
-            raise KeyError(f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}")
         key_paths.append((bound_key, ("bot", pside, key)))
     return key_paths
 
