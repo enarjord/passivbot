@@ -4,6 +4,8 @@
 
 :warning: **Used at one's own risk** :warning:
 
+Current development target on `refactor/rust-strategy-runtime-plan`: `v8.0.0`
+
 
 ## Overview
 

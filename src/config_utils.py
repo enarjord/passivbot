@@ -214,6 +214,77 @@ FIELD_RUNTIME_RULES = {
     },
 }
 
+OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
+    "bot.long.entry_grid_inflation_enabled": {
+        "visible": ["--bot.long.entry_grid_inflation_enabled"],
+        "hidden": ["--bot_long_entry_grid_inflation_enabled"],
+        "type": str2bool,
+        "metavar": "Y/N",
+        "commands": {"optimize"},
+        "help": "Override bot.long.entry_grid_inflation_enabled for this optimize run.",
+    },
+    "bot.short.entry_grid_inflation_enabled": {
+        "visible": ["--bot.short.entry_grid_inflation_enabled"],
+        "hidden": ["--bot_short_entry_grid_inflation_enabled"],
+        "type": str2bool,
+        "metavar": "Y/N",
+        "commands": {"optimize"},
+        "help": "Override bot.short.entry_grid_inflation_enabled for this optimize run.",
+    },
+    "bot.long.hsl_enabled": {
+        "visible": ["--bot.long.hsl_enabled"],
+        "hidden": ["--bot_long_hsl_enabled"],
+        "type": str2bool,
+        "metavar": "Y/N",
+        "commands": {"optimize"},
+        "help": "Override bot.long.hsl_enabled for this optimize run.",
+    },
+    "bot.short.hsl_enabled": {
+        "visible": ["--bot.short.hsl_enabled"],
+        "hidden": ["--bot_short_hsl_enabled"],
+        "type": str2bool,
+        "metavar": "Y/N",
+        "commands": {"optimize"},
+        "help": "Override bot.short.hsl_enabled for this optimize run.",
+    },
+    "bot.long.hsl_orange_tier_mode": {
+        "visible": ["--bot.long.hsl_orange_tier_mode"],
+        "hidden": ["--bot_long_hsl_orange_tier_mode"],
+        "type": str,
+        "metavar": "VALUE",
+        "commands": {"optimize"},
+        "choices": ["manual", "panic", "graceful_stop", "tp_only", "tp_only_with_active_entry_cancellation"],
+        "help": "Override bot.long.hsl_orange_tier_mode for this optimize run.",
+    },
+    "bot.short.hsl_orange_tier_mode": {
+        "visible": ["--bot.short.hsl_orange_tier_mode"],
+        "hidden": ["--bot_short_hsl_orange_tier_mode"],
+        "type": str,
+        "metavar": "VALUE",
+        "commands": {"optimize"},
+        "choices": ["manual", "panic", "graceful_stop", "tp_only", "tp_only_with_active_entry_cancellation"],
+        "help": "Override bot.short.hsl_orange_tier_mode for this optimize run.",
+    },
+    "bot.long.hsl_panic_close_order_type": {
+        "visible": ["--bot.long.hsl_panic_close_order_type"],
+        "hidden": ["--bot_long_hsl_panic_close_order_type"],
+        "type": str,
+        "metavar": "VALUE",
+        "commands": {"optimize"},
+        "choices": ["limit", "market"],
+        "help": "Override bot.long.hsl_panic_close_order_type for this optimize run.",
+    },
+    "bot.short.hsl_panic_close_order_type": {
+        "visible": ["--bot.short.hsl_panic_close_order_type"],
+        "hidden": ["--bot_short_hsl_panic_close_order_type"],
+        "type": str,
+        "metavar": "VALUE",
+        "commands": {"optimize"},
+        "choices": ["limit", "market"],
+        "help": "Override bot.short.hsl_panic_close_order_type for this optimize run.",
+    },
+}
+
 
 def get_field_runtime_rule(full_name: str) -> dict:
     return FIELD_RUNTIME_RULES.get(full_name, {})
@@ -952,6 +1023,8 @@ RESERVED_CLI_ARGS = {
         "help": "Replace optimize.limits for this run with a JSON/HJSON list of limit objects.",
     },
 }
+
+RESERVED_CLI_ARGS.update(OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS)
 
 
 def _merge_runtime_rules_into_reserved_cli_args():

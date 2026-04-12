@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+import logging
 
 import pytest
 
@@ -65,6 +66,27 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert _strategy_side(prepared, "long")["ema_span_0"] == _strategy_side(
         get_template_config(), "long", "trailing_grid"
     )["ema_span_0"]
+
+
+@pytest.mark.parametrize(
+    "bound_key",
+    [
+        "long_entry_grid_inflation_enabled",
+        "short_entry_grid_inflation_enabled",
+        "long_hsl_enabled",
+        "short_hsl_enabled",
+        "long_hsl_orange_tier_mode",
+        "short_hsl_orange_tier_mode",
+        "long_hsl_panic_close_order_type",
+        "short_hsl_panic_close_order_type",
+    ],
+)
+def test_prepare_config_rejects_nontunable_bot_bounds(bound_key):
+    cfg = get_template_config()
+    cfg["optimize"]["bounds"][bound_key] = [0.0, 1.0]
+
+    with pytest.raises(KeyError, match=rf"optimize bound {bound_key} must map to a numeric bot\."):
+        prepare_config(cfg, verbose=False, target="canonical", runtime=None)
 
 
 def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_keys():
@@ -435,3 +457,59 @@ def test_prepare_config_removes_empty_means_all_approved_from_canonical_shape():
     assert prepared["_coins_sources"]["approved_coins"] == "all"
     assert prepared["_raw"]["live"]["empty_means_all_approved"] is True
     assert prepared["_raw_effective"]["live"]["empty_means_all_approved"] is True
+
+
+def test_prepare_config_warns_when_entry_grid_inflation_enabled(caplog):
+    source = get_template_config()
+
+    with caplog.at_level(logging.WARNING):
+        prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["entry_grid_inflation_enabled"] is True
+    assert prepared["bot"]["short"]["entry_grid_inflation_enabled"] is True
+    assert any(
+        "entry_grid_inflation_enabled" in rec.message and "scheduled for deprecation" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_prepare_config_skips_entry_grid_inflation_warning_when_disabled(caplog):
+    source = get_template_config()
+    source["bot"]["long"]["entry_grid_inflation_enabled"] = False
+    source["bot"]["short"]["entry_grid_inflation_enabled"] = False
+
+    with caplog.at_level(logging.WARNING):
+        prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["entry_grid_inflation_enabled"] is False
+    assert prepared["bot"]["short"]["entry_grid_inflation_enabled"] is False
+    assert not any("entry_grid_inflation_enabled" in rec.message for rec in caplog.records)
+
+
+def test_prepare_config_normalizes_entry_grid_inflation_flag_in_coin_overrides():
+    source = get_template_config()
+    source["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"entry_grid_inflation_enabled": "false"}}}
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["entry_grid_inflation_enabled"] is False
+
+
+def test_prepare_config_warns_when_coin_override_enables_entry_grid_inflation(caplog):
+    source = get_template_config()
+    source["bot"]["long"]["entry_grid_inflation_enabled"] = False
+    source["bot"]["short"]["entry_grid_inflation_enabled"] = False
+    source["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"entry_grid_inflation_enabled": True}}}
+    }
+
+    with caplog.at_level(logging.WARNING):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert any(
+        "coin_overrides.BTC.bot.long.entry_grid_inflation_enabled" in rec.message
+        and "scheduled for deprecation" in rec.message
+        for rec in caplog.records
+    )

@@ -65,6 +65,33 @@ DEPRECATED_OPTIMIZE_BOUND_ALIASES = {
 }
 
 
+def _flatten_bounds_for_config(config: dict, optimize_bounds: dict) -> dict:
+    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    has_flat_keys = any(
+        isinstance(key, str) and (key.startswith("long_") or key.startswith("short_"))
+        for key in optimize_bounds
+    )
+    if not has_flat_keys:
+        return flatten_optimize_bounds(optimize_bounds, strategy_kind=strategy_kind)
+
+    flat_bounds = {
+        key: value
+        for key, value in optimize_bounds.items()
+        if isinstance(key, str) and (key.startswith("long_") or key.startswith("short_"))
+    }
+    nested_bounds = {
+        key: value
+        for key, value in optimize_bounds.items()
+        if not (isinstance(key, str) and (key.startswith("long_") or key.startswith("short_")))
+    }
+    if nested_bounds:
+        flat_bounds = {
+            **flatten_optimize_bounds(nested_bounds, strategy_kind=strategy_kind),
+            **flat_bounds,
+        }
+    return flat_bounds
+
+
 @lru_cache(maxsize=None)
 def get_strategy_spec(strategy_kind: str = "trailing_grid") -> dict:
     return pbr.get_strategy_spec(normalize_strategy_kind(strategy_kind))
@@ -118,6 +145,41 @@ def resolve_optimization_bound_path(config: dict, bound_key: str) -> Tuple[str, 
     return resolve_shared_bot_path(bot_side, pside, key) or ("bot", pside, key)
 
 
+def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -> None:
+    if not isinstance(optimize_bounds, dict):
+        return
+    bot_config = config.get("bot") or get_template_config()["bot"]
+    optimize_bounds = _flatten_bounds_for_config(config, optimize_bounds)
+    strategy_path_map = _strategy_path_map(config)
+    for bound_key in optimize_bounds:
+        if not isinstance(bound_key, str):
+            continue
+        canonical_key = DEPRECATED_OPTIMIZE_BOUND_ALIASES.get(bound_key, bound_key)
+        if canonical_key != bound_key and canonical_key in optimize_bounds:
+            continue
+        resolved = resolve_optimization_bound_path(config, bound_key)
+        if resolved is None:
+            raise KeyError(f"optimize bound {bound_key} does not map to a known bot parameter")
+        if canonical_key in strategy_path_map or canonical_key in OPTIMIZABLE_BOT_KEY_PATHS:
+            continue
+        try:
+            pside = resolved[1]
+        except IndexError as exc:
+            raise KeyError(f"optimize bound {bound_key} resolved to invalid path {resolved!r}") from exc
+        flat_pside_cfg = flatten_shared_bot_side(bot_config[pside])
+        key = canonical_key.split("_", 1)[1] if "_" in canonical_key else canonical_key
+        if key not in flat_pside_cfg:
+            raise KeyError(f"optimize bound {bound_key} does not map to bot.{pside}.{key}")
+        value = flat_pside_cfg[key]
+        if isinstance(value, dict):
+            raise KeyError(f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise KeyError(
+                f"optimize bound {bound_key} must map to a numeric bot.{pside}.{key}, "
+                f"got {type(value).__name__}"
+            )
+
+
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     key_paths: List[Tuple[str, Tuple[str, ...]]] = []
     template = get_template_config()
@@ -128,10 +190,8 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     strategy_config = get_active_strategy_config(config, strategy_kind=strategy_kind)
     strategy_fields = _strategy_field_names_by_side(config)
     strategy_path_map = _strategy_path_map(config)
-    optimize_bounds = flatten_optimize_bounds(
-        config.get("optimize", {}).get("bounds", {}),
-        strategy_kind=strategy_kind,
-    )
+    optimize_bounds = _flatten_bounds_for_config(config, config.get("optimize", {}).get("bounds", {}))
+    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
     if not optimize_bounds:
         for pside in ("long", "short"):
             scalar_paths: dict[str, Tuple[str, ...]] = {}
@@ -175,8 +235,6 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
         if canonical_key in strategy_path_map:
             key_paths.append((bound_key, resolved))
             continue
-        if "_" not in bound_key:
-            continue
         pside, key = bound_key.split("_", 1)
         if pside not in ("long", "short"):
             continue
@@ -201,11 +259,7 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
         - single value: fixed parameter (low=high, step=None)
     """
     bounds = []
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
-    optimize_bounds = flatten_optimize_bounds(
-        config["optimize"]["bounds"],
-        strategy_kind=strategy_kind,
-    )
+    optimize_bounds = _flatten_bounds_for_config(config, config["optimize"]["bounds"])
     key_paths = get_optimization_key_paths(config)
     bot_config = config.get("bot")
     if bot_config is None:

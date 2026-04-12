@@ -5873,6 +5873,29 @@ class Passivbot:
         }
         # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
         fields = [
+            "close_grid_markup_end",
+            "close_grid_markup_start",
+            "close_grid_qty_pct",
+            "close_trailing_retracement_pct",
+            "close_trailing_grid_ratio",
+            "close_trailing_qty_pct",
+            "close_trailing_threshold_pct",
+            "entry_grid_double_down_factor",
+            "entry_grid_inflation_enabled",
+            "entry_grid_spacing_volatility_weight",
+            "entry_grid_spacing_we_weight",
+            "entry_grid_spacing_pct",
+            "entry_volatility_ema_span_hours",
+            "entry_initial_ema_dist",
+            "entry_initial_qty_pct",
+            "entry_trailing_double_down_factor",
+            "entry_trailing_retracement_pct",
+            "entry_trailing_retracement_we_weight",
+            "entry_trailing_retracement_volatility_weight",
+            "entry_trailing_grid_ratio",
+            "entry_trailing_threshold_pct",
+            "entry_trailing_threshold_we_weight",
+            "entry_trailing_threshold_volatility_weight",
             "forager_volatility_ema_span",
             "forager_volume_ema_span",
             "forager_volume_drop_pct",
@@ -5889,12 +5912,7 @@ class Passivbot:
             "unstuck_loss_allowance_pct",
             "unstuck_threshold",
         ]
-        symbol_override = (
-            getattr(self, "coin_overrides", {}).get(symbol, {}).get("bot", {}).get(pside, {})
-            if symbol is not None
-            else {}
-        )
-        out: dict[str, float | int] = {}
+        out: dict[str, object] = {}
         for key in fields:
             if key in global_keys:
                 val = self.bot_value(pside, key)
@@ -5917,6 +5935,8 @@ class Passivbot:
                 }
             elif key == "n_positions":
                 out[out_key] = int(round(val or 0.0))
+            elif key == "entry_grid_inflation_enabled":
+                out[out_key] = bool(val)
             else:
                 out[out_key] = float(val or 0.0)
         out.update(

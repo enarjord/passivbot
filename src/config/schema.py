@@ -242,10 +242,12 @@ def get_template_config():
             "bot": {
                 "long": {
                     **deepcopy(_get_shared_bot_defaults()["long"]),
+                    "entry_grid_inflation_enabled": True,
                     "strategy": get_all_strategy_defaults()["long"],
                 },
                 "short": {
                     **deepcopy(_get_shared_bot_defaults()["short"]),
+                    "entry_grid_inflation_enabled": True,
                     "strategy": get_all_strategy_defaults()["short"],
                 },
             },
