@@ -229,11 +229,7 @@ class HyperliquidBot(CCXTBot):
     async def _fetch_hip3_positions(self) -> list[dict]:
         """Fetch HIP-3 positions via dex-scoped CCXT routes."""
         positions_by_key = {}
-        state_symbols = self._get_hl_hip3_state_symbols()
-        if state_symbols:
-            fetch_specs = [{"symbols": [symbol]} for symbol in state_symbols]
-        else:
-            fetch_specs = [{"params": {"dex": dex_name}} for dex_name in self._get_hl_hip3_dex_names()]
+        fetch_specs = [{"params": {"dex": dex_name}} for dex_name in self._get_hl_hip3_dex_names()]
         for fetch_spec in fetch_specs:
             fetched = await self.cca.fetch_positions(**fetch_spec)
             for position in fetched:
@@ -369,8 +365,8 @@ class HyperliquidBot(CCXTBot):
     async def fetch_open_orders(self, symbol: str = None):
         fetched = []
         seen_ids = set()
-        query_symbols = [symbol] if symbol is not None else self._get_hl_hip3_state_symbols()
-        query_dexes = []
+        query_symbols = [symbol] if symbol is not None else []
+        query_dexes = self._get_hl_hip3_dex_names() if symbol is None else []
 
         # Default route covers core perps; HIP-3 symbols need dex-scoped queries.
         if symbol is None or not self._get_hl_dex_for_symbol(symbol):
@@ -380,11 +376,7 @@ class HyperliquidBot(CCXTBot):
                 seen_ids.add(order["id"])
                 fetched.append(order)
 
-        if symbol is None:
-            hip3_symbols = query_symbols
-            if not hip3_symbols:
-                query_dexes = self._get_hl_hip3_dex_names()
-        elif self._get_hl_dex_for_symbol(symbol):
+        if symbol is not None and self._get_hl_dex_for_symbol(symbol):
             hip3_symbols = query_symbols
         else:
             hip3_symbols = []
