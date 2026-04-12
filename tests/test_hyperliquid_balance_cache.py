@@ -385,6 +385,29 @@ def test_hyperliquid_reconcile_skips_external_hip3_entry_order(stubbed_modules):
     assert bot.balance == pytest.approx(51.194323)
 
 
+def test_hyperliquid_reconcile_skips_external_hex_prefixed_order_ids(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_probe_bot(HyperliquidBot)
+    bot.open_orders = {
+        "XYZ-SP500/USDC:USDC": [
+            {
+                "id": "1",
+                "symbol": "XYZ-SP500/USDC:USDC",
+                "qty": 0.003,
+                "price": 5088.8,
+                "reduce_only": False,
+                "clientOrderId": "deadbeef",
+            }
+        ]
+    }
+
+    changed = bot._reconcile_balance_after_open_orders_refresh()
+
+    assert changed is False
+    assert bot.balance_raw == pytest.approx(51.194323)
+    assert bot.balance == pytest.approx(51.194323)
+
+
 @pytest.mark.asyncio
 async def test_update_positions_and_balance_applies_hip3_position_reconciliation(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot

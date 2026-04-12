@@ -11,6 +11,7 @@ from tools.hyperliquid_probe_common import (
     create_hyperliquid_probe_session,
     extract_balance_summary,
     extract_position_summary,
+    hyperliquid_probe_vault_params,
     load_hyperliquid_wallet,
     mask_secret,
     require_live_mutation_confirmation,
@@ -74,10 +75,11 @@ async def _main() -> int:
         parser, args, action_description="probe_hyperliquid_order_margin"
     )
 
-    _, wallet_address, private_key = load_hyperliquid_wallet(
+    user_info, wallet_address, private_key = load_hyperliquid_wallet(
         args.user, api_keys_path=args.api_keys
     )
     session = create_hyperliquid_probe_session(wallet_address, private_key)
+    vault_params = hyperliquid_probe_vault_params(user_info)
 
     order = None
     order_id = None
@@ -91,7 +93,7 @@ async def _main() -> int:
             set_margin_mode_response = await session.set_margin_mode(
                 args.set_margin_mode,
                 symbol=args.symbol,
-                params={"leverage": int(args.leverage)},
+                params={**vault_params, "leverage": int(args.leverage)},
             )
         ticker = await session.fetch_ticker(args.symbol)
         last_price = float(ticker.get("last") or ticker.get("bid") or ticker.get("ask"))
@@ -120,7 +122,7 @@ async def _main() -> int:
             args.side,
             amount,
             price,
-            {"timeInForce": "Alo"},
+            {**vault_params, "timeInForce": "Alo"},
         )
         order_id = order.get("id")
         await asyncio.sleep(float(args.settle_seconds))
@@ -129,7 +131,7 @@ async def _main() -> int:
         open_orders = await session.fetch_open_orders(symbol=args.symbol)
 
         if order_id is not None:
-            await session.cancel_order(order_id, symbol=args.symbol)
+            await session.cancel_order(order_id, symbol=args.symbol, params=vault_params)
         else:
             for candidate in open_orders:
                 if (
@@ -139,7 +141,7 @@ async def _main() -> int:
                     and float(candidate.get("price") or 0.0) == price
                 ):
                     order_id = candidate.get("id")
-                    await session.cancel_order(order_id, symbol=args.symbol)
+                    await session.cancel_order(order_id, symbol=args.symbol, params=vault_params)
                     break
         await asyncio.sleep(float(args.settle_seconds))
         after_cancel = await session.fetch_balance()
@@ -196,7 +198,7 @@ async def _main() -> int:
         try:
             if order_id is not None:
                 try:
-                    await session.cancel_order(order_id, symbol=args.symbol)
+                    await session.cancel_order(order_id, symbol=args.symbol, params=vault_params)
                 except Exception:
                     pass
             await session.close()

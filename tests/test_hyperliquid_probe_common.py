@@ -4,6 +4,7 @@ import pytest
 
 from tools.hyperliquid_probe_common import (
     extract_balance_summary,
+    hyperliquid_probe_vault_params,
     mask_secret,
     require_live_mutation_confirmation,
     round_to_step,
@@ -74,3 +75,13 @@ def test_require_live_mutation_confirmation_accepts_yes():
         args,
         action_description="probe_hyperliquid_position_balance",
     )
+
+
+def test_hyperliquid_probe_vault_params_empty_for_regular_wallet():
+    assert hyperliquid_probe_vault_params({"is_vault": False, "wallet_address": "0xabc"}) == {}
+
+
+def test_hyperliquid_probe_vault_params_includes_vault_address():
+    assert hyperliquid_probe_vault_params({"is_vault": True, "wallet_address": "0xabc"}) == {
+        "vaultAddress": "0xabc"
+    }

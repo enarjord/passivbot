@@ -1,6 +1,7 @@
 import asyncio
 import json
 import random
+import re
 import traceback
 
 import ccxt.pro as ccxt_pro
@@ -9,7 +10,7 @@ import passivbot_rust as pbr
 from ccxt.base.errors import RateLimitExceeded
 
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
-from passivbot import logging, try_decode_type_id_from_custom_id
+from passivbot import logging
 from utils import ts_to_date, utc_ms
 from config.access import require_live_value
 from pure_funcs import calc_hash
@@ -19,6 +20,8 @@ round_ = pbr.round_
 round_dynamic = pbr.round_dynamic
 round_dynamic_up = pbr.round_dynamic_up
 round_dynamic_dn = pbr.round_dynamic_dn
+
+_PASSIVBOT_CUSTOM_ID_MARKER_RE = re.compile(r"0x[0-9a-fA-F]{4}")
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
@@ -535,7 +538,7 @@ class HyperliquidBot(CCXTBot):
             order.get("order_link_id"),
             order.get("orderLinkId"),
         ):
-            if cid and try_decode_type_id_from_custom_id(str(cid)) is not None:
+            if cid and _PASSIVBOT_CUSTOM_ID_MARKER_RE.search(str(cid)):
                 return True
         return False
 

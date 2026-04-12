@@ -11,6 +11,7 @@ from tools.hyperliquid_probe_common import (
     create_hyperliquid_probe_session,
     extract_balance_summary,
     extract_position_summary,
+    hyperliquid_probe_vault_params,
     load_hyperliquid_wallet,
     mask_secret,
     require_live_mutation_confirmation,
@@ -84,10 +85,11 @@ async def _main() -> int:
         parser, args, action_description="probe_hyperliquid_position_balance"
     )
 
-    _, wallet_address, private_key = load_hyperliquid_wallet(
+    user_info, wallet_address, private_key = load_hyperliquid_wallet(
         args.user, api_keys_path=args.api_keys
     )
     session = create_hyperliquid_probe_session(wallet_address, private_key)
+    vault_params = hyperliquid_probe_vault_params(user_info)
 
     reduce_only_order_id = None
     extra_entry_order_id = None
@@ -101,7 +103,7 @@ async def _main() -> int:
         set_margin_mode_response = await session.set_margin_mode(
             args.set_margin_mode,
             symbol=args.symbol,
-            params={"leverage": int(args.leverage)},
+            params={**vault_params, "leverage": int(args.leverage)},
         )
 
         before_balance = await session.fetch_balance()
@@ -125,7 +127,7 @@ async def _main() -> int:
                     close_side,
                     close_amount,
                     last_price,
-                    params={"reduceOnly": True},
+                    params={**vault_params, "reduceOnly": True},
                 )
                 await asyncio.sleep(float(args.settle_seconds))
             after_flat_balance = await session.fetch_balance()
@@ -149,7 +151,14 @@ async def _main() -> int:
             print(json.dumps(output, indent=2, sort_keys=True, default=str))
             return 0
 
-        entry = await session.create_order(args.symbol, "market", args.side, amount, last_price)
+        entry = await session.create_order(
+            args.symbol,
+            "market",
+            args.side,
+            amount,
+            last_price,
+            params=vault_params,
+        )
         await asyncio.sleep(float(args.settle_seconds))
         after_entry_balance = await session.fetch_balance()
         after_entry_positions = await session.fetch_positions(symbols=[args.symbol])
@@ -166,7 +175,7 @@ async def _main() -> int:
                 args.side,
                 amount,
                 entry_price,
-                {"timeInForce": "Alo"},
+                {**vault_params, "timeInForce": "Alo"},
             )
             extra_entry_order_id = extra_entry_order.get("id")
             await asyncio.sleep(float(args.settle_seconds))
@@ -223,7 +232,7 @@ async def _main() -> int:
                 close_side,
                 amount,
                 close_price,
-                {"timeInForce": "Alo", "reduceOnly": True},
+                {**vault_params, "timeInForce": "Alo", "reduceOnly": True},
             )
             reduce_only_order_id = close_order.get("id")
             await asyncio.sleep(float(args.settle_seconds))
@@ -232,10 +241,14 @@ async def _main() -> int:
         open_orders_after_close_order = await session.fetch_open_orders(symbol=args.symbol)
 
         if reduce_only_order_id is not None:
-            await session.cancel_order(reduce_only_order_id, symbol=args.symbol)
+            await session.cancel_order(
+                reduce_only_order_id, symbol=args.symbol, params=vault_params
+            )
             await asyncio.sleep(float(args.settle_seconds))
         if extra_entry_order_id is not None:
-            await session.cancel_order(extra_entry_order_id, symbol=args.symbol)
+            await session.cancel_order(
+                extra_entry_order_id, symbol=args.symbol, params=vault_params
+            )
             await asyncio.sleep(float(args.settle_seconds))
 
         close_side = "sell" if args.side == "buy" else "buy"
@@ -245,7 +258,7 @@ async def _main() -> int:
             close_side,
             amount,
             last_price,
-            params={"reduceOnly": True},
+            params={**vault_params, "reduceOnly": True},
         )
         await asyncio.sleep(float(args.settle_seconds))
         after_flat_balance = await session.fetch_balance()
@@ -299,12 +312,16 @@ async def _main() -> int:
         try:
             if reduce_only_order_id is not None:
                 try:
-                    await session.cancel_order(reduce_only_order_id, symbol=args.symbol)
+                    await session.cancel_order(
+                        reduce_only_order_id, symbol=args.symbol, params=vault_params
+                    )
                 except Exception:
                     pass
             if extra_entry_order_id is not None:
                 try:
-                    await session.cancel_order(extra_entry_order_id, symbol=args.symbol)
+                    await session.cancel_order(
+                        extra_entry_order_id, symbol=args.symbol, params=vault_params
+                    )
                 except Exception:
                     pass
             await session.close()

@@ -143,3 +143,12 @@ def create_hyperliquid_probe_session(wallet_address: str, private_key: str):
         "hip3": {"dex": ["xyz"]},
     }
     return session
+
+
+def hyperliquid_probe_vault_params(user_info: dict[str, Any]) -> dict[str, Any]:
+    if not bool(user_info.get("is_vault")):
+        return {}
+    wallet_address = str(user_info.get("wallet_address") or "")
+    if not wallet_address:
+        raise ValueError("vault user is missing wallet_address")
+    return {"vaultAddress": wallet_address}
