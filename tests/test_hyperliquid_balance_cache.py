@@ -136,6 +136,10 @@ def _make_probe_bot(HyperliquidBot):
     return bot
 
 
+def _pb_order_id(type_hex: str = "0000") -> str:
+    return f"pb-0x{type_hex}-test"
+
+
 def test_hyperliquid_reconcile_adds_back_cross_hip3_order_margin(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
@@ -147,6 +151,7 @@ def test_hyperliquid_reconcile_adds_back_cross_hip3_order_margin(stubbed_modules
                 "qty": 0.003,
                 "price": 5088.8,
                 "reduce_only": False,
+                "clientOrderId": _pb_order_id(),
             }
         ]
     }
@@ -170,6 +175,7 @@ def test_hyperliquid_reconcile_adds_back_flat_standard_perp_entry_reserve(stubbe
                 "qty": 0.00022,
                 "price": 54161.0,
                 "reduce_only": False,
+                "clientOrderId": _pb_order_id(),
             }
         ]
     }
@@ -204,6 +210,7 @@ def test_hyperliquid_reconcile_skips_standard_perp_entry_reserve_when_position_e
                 "qty": 0.00016,
                 "price": 54072.0,
                 "reduce_only": False,
+                "clientOrderId": _pb_order_id(),
             }
         ]
     }
@@ -255,6 +262,7 @@ def test_hyperliquid_reconcile_adds_back_hip3_position_and_entry_order_margin(st
                 "qty": 0.002,
                 "price": 5110.7,
                 "reduce_only": False,
+                "clientOrderId": _pb_order_id(),
             }
         ]
     }
@@ -282,6 +290,7 @@ def test_hyperliquid_reconcile_skips_balance_override(stubbed_modules):
                 "qty": 0.003,
                 "price": 5088.8,
                 "reduce_only": False,
+                "clientOrderId": _pb_order_id(),
             }
         ]
     }
@@ -309,6 +318,7 @@ async def test_update_open_orders_applies_hyperliquid_balance_reconciliation(stu
                 "price": 5088.8,
                 "timestamp": 1,
                 "reduce_only": False,
+                "clientOrderId": _pb_order_id(),
             }
         ]
 
@@ -327,6 +337,52 @@ async def test_update_open_orders_applies_hyperliquid_balance_reconciliation(stu
     assert seen_sources == ["REST+open_orders"]
     assert bot.balance_raw == pytest.approx(51.194323 + expected_reserve)
     assert bot.open_orders["XYZ-SP500/USDC:USDC"][0]["id"] == "1"
+
+
+def test_hyperliquid_reconcile_skips_external_standard_perp_entry_order(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_probe_bot(HyperliquidBot)
+    bot.open_orders = {
+        "BTC/USDC:USDC": [
+            {
+                "id": "1",
+                "symbol": "BTC/USDC:USDC",
+                "qty": 0.00022,
+                "price": 54161.0,
+                "reduce_only": False,
+                "clientOrderId": "",
+            }
+        ]
+    }
+
+    changed = bot._reconcile_balance_after_open_orders_refresh()
+
+    assert changed is False
+    assert bot.balance_raw == pytest.approx(51.194323)
+    assert bot.balance == pytest.approx(51.194323)
+
+
+def test_hyperliquid_reconcile_skips_external_hip3_entry_order(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = _make_probe_bot(HyperliquidBot)
+    bot.open_orders = {
+        "XYZ-SP500/USDC:USDC": [
+            {
+                "id": "1",
+                "symbol": "XYZ-SP500/USDC:USDC",
+                "qty": 0.003,
+                "price": 5088.8,
+                "reduce_only": False,
+                "clientOrderId": "manual-order-123",
+            }
+        ]
+    }
+
+    changed = bot._reconcile_balance_after_open_orders_refresh()
+
+    assert changed is False
+    assert bot.balance_raw == pytest.approx(51.194323)
+    assert bot.balance == pytest.approx(51.194323)
 
 
 @pytest.mark.asyncio

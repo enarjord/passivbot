@@ -9,7 +9,7 @@ import passivbot_rust as pbr
 from ccxt.base.errors import RateLimitExceeded
 
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
-from passivbot import logging
+from passivbot import logging, try_decode_type_id_from_custom_id
 from utils import ts_to_date, utc_ms
 from config.access import require_live_value
 from pure_funcs import calc_hash
@@ -501,6 +501,8 @@ class HyperliquidBot(CCXTBot):
         symbol = str(order.get("symbol") or "")
         if not symbol:
             return 0.0
+        if not self._is_passivbot_managed_open_order(order):
+            return 0.0
         if not self._symbol_is_cross_hip3(symbol) and self._has_active_position_on_symbol(symbol):
             return 0.0
         if self._requires_isolated_margin(symbol):
@@ -521,6 +523,21 @@ class HyperliquidBot(CCXTBot):
         c_mult = float(self.c_mults.get(symbol, 1.0) or 1.0)
         notional = qty * price * c_mult
         return (notional / leverage) * self.HIP3_ORDER_MARGIN_BUFFER
+
+    def _is_passivbot_managed_open_order(self, order: dict) -> bool:
+        for cid in (
+            order.get("custom_id"),
+            order.get("customId"),
+            order.get("client_order_id"),
+            order.get("clientOrderId"),
+            order.get("client_oid"),
+            order.get("clientOid"),
+            order.get("order_link_id"),
+            order.get("orderLinkId"),
+        ):
+            if cid and try_decode_type_id_from_custom_id(str(cid)) is not None:
+                return True
+        return False
 
     def _reconcile_balance_from_exchange_state(self, *, include_open_orders: bool) -> bool:
         if getattr(self, "balance_override", None) is not None:
