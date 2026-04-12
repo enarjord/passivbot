@@ -1,0 +1,104 @@
+{
+  "meta": {
+    "exchange": "kucoin",
+    "quote": "USDT"
+  },
+  "markets": {
+    "raw": {
+      "EDGE/USDT:USDT": {
+        "active": true,
+        "base": "EDGE",
+        "contractSize": 1.0,
+        "id": "EDGEUSDTM",
+        "info": {
+          "supportCross": true
+        },
+        "limits": {
+          "amount": {
+            "min": 1.0
+          },
+          "cost": {
+            "min": null
+          }
+        },
+        "linear": true,
+        "precision": {
+          "amount": 1.0,
+          "price": 0.0001
+        },
+        "swap": true
+      },
+      "HOT/USDT:USDT": {
+        "active": true,
+        "base": "HOT",
+        "contractSize": 1000.0,
+        "id": "HOTUSDTM",
+        "info": {
+          "supportCross": true
+        },
+        "limits": {
+          "amount": {
+            "min": 1.0
+          },
+          "cost": {
+            "min": null
+          }
+        },
+        "linear": true,
+        "precision": {
+          "amount": 1.0,
+          "price": 1e-07
+        },
+        "swap": true
+      }
+    },
+    "summary": {
+      "coin_to_symbol_map": {
+        "EDGE": [
+          "EDGE/USDT:USDT"
+        ],
+        "HOT": [
+          "HOT/USDT:USDT"
+        ]
+      },
+      "contracts": {
+        "EDGE/USDT:USDT": {
+          "contract_size": 1.0,
+          "id": "EDGEUSDTM",
+          "margin_capability": "both",
+          "max_leverage": null,
+          "min_cost": 0.1,
+          "min_qty": 1.0,
+          "price_step": 0.0001,
+          "qty_step": 1.0,
+          "requires_isolated_margin": false
+        },
+        "HOT/USDT:USDT": {
+          "contract_size": 1000.0,
+          "id": "HOTUSDTM",
+          "margin_capability": "both",
+          "max_leverage": null,
+          "min_cost": 0.1,
+          "min_qty": 1.0,
+          "price_step": 1e-07,
+          "qty_step": 1.0,
+          "requires_isolated_margin": false
+        }
+      },
+      "eligible_symbols": [
+        "EDGE/USDT:USDT",
+        "HOT/USDT:USDT"
+      ],
+      "ineligible_reasons": {},
+      "ineligible_symbols": [],
+      "symbol_to_coin_map": {
+        "EDGE": "EDGE",
+        "EDGE/USDT:USDT": "EDGE",
+        "EDGEUSDTM": "EDGE",
+        "HOT": "HOT",
+        "HOT/USDT:USDT": "HOT",
+        "HOTUSDTM": "HOT"
+      }
+    }
+  }
+}
