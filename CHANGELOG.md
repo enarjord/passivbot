@@ -51,6 +51,7 @@ All notable user-facing changes will be documented in this file.
 - **Monitor web wrapper** - Added `passivbot tool monitor-web` to reuse or launch the local relay and keep the browser dashboard available from one command.
 - **Terminal monitor TUI** - Added a local `monitor-tui` tool consuming the relay for current-state panels, live recent activity, focus cycling, pause/resume, and screen dumps.
 - **Monitor dev wrapper** - Added a `monitor-dev` helper that reuses or launches the local relay and opens the terminal monitor with the newest bot log tailed by default.
+- **Lighter exchange support** - New `LighterBot` adapter for the Lighter zero-fee DEX (USDC quote, one-way mode) with native WebSocket order watching and a direct signer bypass for margin/leverage updates (CCXT's `load_account`-based path is broken for this endpoint). Configure via `private_key`, `api_key_index`, `account_index`, and `library_path` in `api-keys.json`; `library_path` points at Lighter's platform-specific native signer binary.
 
 ### Changed
 - **Optimizer scoring now has explicit min/max goals** - `optimize.scoring` is normalized to `{metric, goal}` entries, optimizer engines receive minimization-space values internally, and user-facing logging/Pareto tools now show raw metric values with named objectives instead of signed `w_i` fields. Legacy string-list scoring configs and legacy Pareto result files remain readable.

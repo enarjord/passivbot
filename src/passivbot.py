@@ -5970,6 +5970,97 @@ class Passivbot:
         res = log_dict_changes(previous_PB_modes, self.PB_modes)
         self._log_mode_changes(res, previous_PB_modes)
 
+    def _log_inactive_symbol_reasons(
+        self,
+        diagnostics: dict,
+        idx_to_symbol: dict[int, str],
+        input_dict: dict,
+    ) -> None:
+        """Log why symbols were not activated by the orchestrator.
+
+        Checks each inactive symbol against known rejection causes (min cost,
+        one-way block, pside disabled) and emits an INFO log with specifics.
+        Throttled to once per 5 minutes per symbol/pside to avoid spam.
+        """
+        if not hasattr(self, "_inactive_reason_last_log_ms"):
+            self._inactive_reason_last_log_ms = {}
+        throttle_ms = 300_000
+        now_ms = utc_ms()
+
+        symbol_states = diagnostics.get("symbol_states", [])
+        if not symbol_states:
+            return
+
+        balance = float(input_dict.get("balance", 0.0))
+        filter_enabled = bool(
+            input_dict.get("global", {}).get("filter_by_min_effective_cost", False)
+        )
+
+        for row in symbol_states:
+            if not isinstance(row, dict):
+                continue
+            symbol_idx = int(row.get("symbol_idx", -1))
+            symbol = idx_to_symbol.get(symbol_idx)
+            if symbol is None:
+                continue
+
+            for pside in ("long", "short"):
+                if not self.is_pside_enabled(pside):
+                    continue
+                side_state = row.get(pside, {})
+                if not isinstance(side_state, dict):
+                    continue
+                if side_state.get("active", False):
+                    continue
+
+                # Symbol is inactive for this pside — diagnose why
+                throttle_key = f"{symbol}:{pside}"
+                last_ms = self._inactive_reason_last_log_ms.get(throttle_key, 0)
+                if (now_ms - last_ms) < throttle_ms:
+                    continue
+                self._inactive_reason_last_log_ms[throttle_key] = now_ms
+
+                coin = symbol.split("/")[0] if "/" in symbol else symbol
+                reasons = []
+
+                # Check effective min cost
+                if filter_enabled:
+                    emc = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
+                    if emc <= 0.0:
+                        mprice = float(
+                            input_dict.get("symbols", [{}])[symbol_idx]
+                            .get("order_book", {})
+                            .get("bid", 0.0)
+                            if symbol_idx < len(input_dict.get("symbols", []))
+                            else 0.0
+                        )
+                        if mprice > 0.0:
+                            emc = self._calc_effective_min_cost_at_price(symbol, mprice)
+                    wel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+                    n_pos = float(self.bot_value(pside, "n_positions") or 0.0)
+                    if n_pos > 0.0:
+                        wel_per_sym = wel / n_pos
+                    else:
+                        wel_per_sym = wel
+                    qty_pct = float(self.bp(pside, "entry_initial_qty_pct", symbol))
+                    budget = balance * wel_per_sym * qty_pct
+                    if emc > 0.0 and budget < emc:
+                        reasons.append(
+                            f"min_cost: budget={budget:.2f} < effective_min_cost={emc:.2f}"
+                            f" (balance={balance:.2f} × WEL/n={wel_per_sym:.2f}"
+                            f" × qty_pct={qty_pct:.4f})"
+                        )
+
+                if not reasons:
+                    reasons.append("not selected by orchestrator (check forager scoring or EMA data)")
+
+                logging.info(
+                    "[orchestrator] %s %s inactive: %s",
+                    coin,
+                    pside,
+                    "; ".join(reasons),
+                )
+
     def _orchestrator_mode_override(self, pside: str, symbol: str) -> Optional[str]:
         if self._equity_hard_stop_enabled(pside):
             state = self._hsl_state(pside)
@@ -6714,6 +6805,11 @@ class Passivbot:
                 idx_to_symbol,
                 mode_overrides,
             )
+        self._log_inactive_symbol_reasons(
+            out.get("diagnostics", {}),
+            idx_to_symbol,
+            input_dict,
+        )
         orders = out.get("orders", [])
         if hasattr(self, "_update_monitor_runtime_hints"):
             self._update_monitor_runtime_hints(
@@ -8292,6 +8388,10 @@ def setup_bot(config):
         from exchanges.kucoin import KucoinBot
 
         bot = KucoinBot(config)
+    elif user_info["exchange"] == "lighter":
+        from exchanges.lighter import LighterBot
+
+        bot = LighterBot(config)
     elif user_info["exchange"] == "paradex":
         from exchanges.paradex import ParadexBot
 

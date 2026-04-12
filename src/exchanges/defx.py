@@ -22,29 +22,6 @@ class DefxBot(CCXTBot):
         self.quote = "USDC"
         self.hedge_mode = False
 
-    def _get_position_side_for_order(self, order: dict) -> str:
-        """Defx: Derive from position state (one-way mode)."""
-        return self.determine_pos_side(order)
-
-    def determine_pos_side(self, order):
-        # non hedge mode
-        if self.has_position("long", order["symbol"]):
-            return "long"
-        elif self.has_position("short", order["symbol"]):
-            return "short"
-        elif order["side"] == "buy":
-            return "long"
-        elif order["side"] == "sell":
-            return "short"
-        raise Exception(f"unknown side {order['side']}")
-
-    async def fetch_open_orders(self, symbol: str = None):
-        fetched = await self.cca.fetch_open_orders(symbol=symbol)
-        for order in fetched:
-            order["position_side"] = self.determine_pos_side(order)
-            order["qty"] = order["amount"]
-        return sorted(fetched, key=lambda x: x["timestamp"])
-
     async def fetch_positions(self):
         fetched_positions = await self.cca.fetch_positions()
         positions = []
@@ -95,27 +72,6 @@ class DefxBot(CCXTBot):
             else:
                 raise Exception(f"invalid side {res[i]}")
         return res
-
-    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
-        """Return canonical fill events for dYdX/DeFX adapter (draft placeholder)."""
-        events = []
-        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
-        for fill in fills:
-            events.append(
-                {
-                    "id": fill.get("id"),
-                    "timestamp": fill.get("timestamp"),
-                    "symbol": fill.get("symbol"),
-                    "side": fill.get("side"),
-                    "position_side": fill.get("position_side"),
-                    "qty": fill.get("qty"),
-                    "price": fill.get("price"),
-                    "pnl": fill.get("pnl"),
-                    "fee": fill.get("fee"),
-                    "info": fill.get("info"),
-                }
-            )
-        return events
 
     def _build_order_params(self, order: dict) -> dict:
         return {

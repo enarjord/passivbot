@@ -1,6 +1,6 @@
 ![Passivbot](docs/images/pbot_logo_full.svg)
 
-# Trading bot running on Bybit, OKX, Bitget, GateIO, Binance, Kucoin and Hyperliquid
+# Trading bot running on Bybit, OKX, Bitget, GateIO, Binance, Kucoin, Hyperliquid and Lighter
 
 :warning: **Used at one's own risk** :warning:
 
@@ -188,6 +188,7 @@ For more detailed information about Passivbot, see documentation files here: [do
 Useful entry points:
 
 - [Installation](docs/installation.md)
+- [Lighter exchange guide](docs/lighter_guide.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Backtesting](docs/backtesting.md)
 - [Optimizing](docs/optimizing.md)

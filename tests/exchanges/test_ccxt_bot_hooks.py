@@ -40,14 +40,15 @@ class TestCanWatchOrders:
 class TestNormalizeOrderUpdate:
     """Test _normalize_order_update() hook."""
 
-    def test_adds_position_side_from_info(self):
-        """Should extract position_side from info.positionSide."""
+    def test_adds_position_side_from_side_and_reduce_only(self):
+        """Should derive position_side from side + reduceOnly."""
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
         order = {
             "amount": 1.5,
-            "info": {"positionSide": "LONG"},
+            "side": "buy",
+            "reduceOnly": False,
         }
 
         result = bot._normalize_order_update(order)
@@ -55,12 +56,12 @@ class TestNormalizeOrderUpdate:
         assert result["position_side"] == "long"
         assert result["qty"] == 1.5
 
-    def test_defaults_position_side_to_both(self):
-        """Should default position_side to 'both' when not in info."""
+    def test_defaults_position_side_to_both_when_no_side(self):
+        """Should default position_side to 'both' when no side field."""
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
-        order = {"amount": 2.0, "info": {}}
+        order = {"amount": 2.0}
 
         result = bot._normalize_order_update(order)
 
@@ -95,7 +96,7 @@ class TestWatchOrdersTemplateMethod:
 
         # Mock the hooks
         bot._do_watch_orders = AsyncMock(
-            return_value=[{"amount": 1.0, "info": {"positionSide": "LONG"}}]
+            return_value=[{"amount": 1.0, "side": "buy", "reduceOnly": False}]
         )
 
         # Set stop_websocket = True after first call to exit loop
@@ -216,35 +217,6 @@ class TestCreateCcxtSessionsWebSocketOptional:
             bot.create_ccxt_sessions()
 
         assert bot.ccp is None
-
-
-class TestValidateWebsocketSupport:
-    """Test validate_websocket_support() is non-fatal."""
-
-    @pytest.mark.asyncio
-    async def test_does_not_raise_when_watch_orders_not_supported(self):
-        """Should log warning instead of raising when watchOrders not supported."""
-        from exchanges.ccxt_bot import CCXTBot
-
-        bot = CCXTBot.__new__(CCXTBot)
-        bot.ccp = MagicMock()
-        bot.ccp.has = {"watchOrders": False}
-        bot.exchange = "test_exchange"
-
-        # Should not raise
-        await bot.validate_websocket_support()
-
-    @pytest.mark.asyncio
-    async def test_does_not_raise_when_ccp_is_none(self):
-        """Should handle ccp=None gracefully."""
-        from exchanges.ccxt_bot import CCXTBot
-
-        bot = CCXTBot.__new__(CCXTBot)
-        bot.ccp = None
-        bot.exchange = "test_exchange"
-
-        # Should not raise
-        await bot.validate_websocket_support()
 
 
 class TestGetPnlFromTrade:

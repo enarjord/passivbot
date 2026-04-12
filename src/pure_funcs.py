@@ -18,7 +18,6 @@ __all__ = [
     "flatten",
     "floatify",
     "shorten_custom_id",
-    "determine_pos_side_ccxt",
     "calc_hash",
     "ensure_millis",
     "multi_replace",
@@ -150,36 +149,6 @@ def shorten_custom_id(id_: str) -> str:
     for before, after in replacements:
         id_ = id_.replace(before, after)
     return id_
-
-
-def determine_pos_side_ccxt(open_order: dict) -> str:
-    info = open_order.get("info", open_order)
-    if "positionIdx" in info:
-        idx = float(info["positionIdx"])
-        if idx == 1.0:
-            return "long"
-        if idx == 2.0:
-            return "short"
-
-    keys_map = {key.lower().replace("_", ""): key for key in info}
-    for pos_key in ("posside", "positionside"):
-        if pos_key in keys_map:
-            return info[keys_map[pos_key]].lower()
-
-    if info.get("side", "").lower() == "buy":
-        if "reduceonly" in keys_map:
-            return "long" if not info[keys_map["reduceonly"]] else "short"
-        if "closedsize" in keys_map:
-            return "long" if float(info[keys_map["closedsize"]]) != 0.0 else "short"
-
-    for key in ["order_link_id", "clOrdId", "clientOid", "orderLinkId"]:
-        if key in info:
-            value = info[key].lower()
-            if "long" in value or "lng" in value:
-                return "long"
-            if "short" in value or "shrt" in value:
-                return "short"
-    return "both"
 
 
 def calc_hash(data) -> str:

@@ -36,7 +36,8 @@ import math
 import time
 import traceback
 
-from passivbot import Passivbot, logging, custom_id_to_snake
+from passivbot import Passivbot, logging
+import passivbot_rust as pbr
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 from procedures import assert_correct_ccxt_version
@@ -130,27 +131,13 @@ class CCXTBot(Passivbot):
         return order
 
     def _get_position_side_for_order(self, order: dict) -> str:
-        """Hook: Derive position_side from order data.
-
-        Default: Use CCXT unified fields, fall back to custom_id derivation.
-        Override: Exchange-specific logic when neither source is available.
-        """
-        info = order.get("info", {})
-
-        # 1. Exchange provides positionSide directly
-        pos_side = info.get("positionSide", "")
-        if pos_side:
-            return pos_side.lower()
-
-        # 2. Derive from CCXT unified clientOrderId
-        custom_id = order.get("clientOrderId", "")
-        if custom_id:
-            order_type = custom_id_to_snake(custom_id)
-            if order_type.endswith("_long"):
-                return "long"
-            if order_type.endswith("_short"):
-                return "short"
-
+        """Derive position_side from CCXT unified side + reduceOnly."""
+        side = order.get("side", "")
+        reduce_only = order.get("reduceOnly", False)
+        if side == "buy":
+            return "short" if reduce_only else "long"
+        if side == "sell":
+            return "long" if reduce_only else "short"
         return "both"
 
     # ═══════════════════ PNL FETCHING HOOKS ═══════════════════
@@ -258,22 +245,6 @@ class CCXTBot(Passivbot):
         else:
             self.ccp = None
             logging.info(f"{self.exchange}: WebSocket disabled, using REST polling")
-
-    async def validate_websocket_support(self):
-        """Check WebSocket capabilities (informational, non-fatal).
-
-        Logs whether watchOrders is available. Does not raise.
-        Subclasses can override to set ws_orders_supported=True if
-        implementing native WebSocket.
-        """
-        if self.ccp is None:
-            logging.info(f"{self.exchange}: WebSocket client not initialized")
-            return
-
-        if self.ccp.has.get("watchOrders"):
-            logging.info(f"{self.exchange}: watchOrders support confirmed")
-        else:
-            logging.info(f"{self.exchange}: watchOrders not supported in CCXT, using REST polling")
 
     async def fetch_balance(self) -> float:
         """Template method: Fetch account balance for quote currency.
@@ -1017,6 +988,20 @@ class CCXTBot(Passivbot):
                 params["timeInForce"] = "GTC"
 
         return params
+
+    async def _trim_orders_by_price_proximity(self, ideal_orders, max_orders):
+        """Keep only the max_orders closest to current price across all symbols."""
+        flattened = []
+        for symbol, orders in ideal_orders.items():
+            market_price = await self.cm.get_current_close(symbol, max_age_ms=10_000)
+            for order in orders:
+                price_diff = pbr.calc_order_price_diff(order["side"], order["price"], market_price)
+                flattened.append((price_diff, symbol, order))
+        flattened.sort(key=lambda x: x[0])
+        result = {symbol: [] for symbol in self.active_symbols}
+        for _, symbol, order in flattened[:max_orders]:
+            result[symbol].append(order)
+        return result
 
     async def execute_orders(self, orders: list[dict]) -> list[dict]:
         """Execute order creations in parallel using asyncio.gather.

@@ -7,9 +7,6 @@ from typing import Dict, List, Tuple
 from utils import utc_ms, ts_to_date
 from config.access import require_live_value
 from pure_funcs import calc_hash
-import passivbot_rust as pbr
-
-calc_order_price_diff = pbr.calc_order_price_diff
 
 
 def deduce_side_pside(fill: dict) -> tuple[str, str]:
@@ -90,10 +87,6 @@ class BitgetBot(CCXTBot):
         self.custom_id_max_length = 64
 
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
-
-    def _get_position_side_for_order(self, order: dict) -> str:
-        """Bitget provides posSide in info."""
-        return order.get("info", {}).get("posSide", "long").lower()
 
     def get_symbol_id(self, symbol):
         """Return the exchange-native identifier for `symbol`, caching defaults."""
@@ -576,28 +569,8 @@ class BitgetBot(CCXTBot):
                 logging.info(f"{symbol}: {to_print}")
 
     async def calc_ideal_orders(self):
-        # Bitget returns max 100 open orders per fetch_open_orders.
-        # Only create 100 open orders.
-        # Drop orders whose pprice diff is greatest.
         ideal_orders = await super().calc_ideal_orders()
-        ideal_orders_tmp = []
-        for s in ideal_orders:
-            for x in ideal_orders[s]:
-                ideal_orders_tmp.append(
-                    (
-                        calc_order_price_diff(
-                            x["side"],
-                            x["price"],
-                            await self.cm.get_current_close(s, max_age_ms=10_000),
-                        ),
-                        {**x, **{"symbol": s}},
-                    )
-                )
-        ideal_orders_tmp = [x[1] for x in sorted(ideal_orders_tmp, key=lambda item: item[0])][:100]
-        ideal_orders = {symbol: [] for symbol in self.active_symbols}
-        for x in ideal_orders_tmp:
-            ideal_orders[x["symbol"]].append(x)
-        return ideal_orders
+        return await self._trim_orders_by_price_proximity(ideal_orders, 100)
 
     async def update_exchange_config(self):
         res = None

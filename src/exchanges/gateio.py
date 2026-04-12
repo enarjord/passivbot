@@ -29,18 +29,6 @@ class GateIOBot(CCXTBot):
 
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
-    def _get_position_side_for_order(self, order: dict) -> str:
-        """GateIO: Derive position side from order side + reduceOnly (one-way mode)."""
-        return self.determine_pos_side(order)
-
-    def determine_pos_side(self, order):
-        """GateIO-specific logic for one-way mode position side derivation."""
-        if order["side"] == "buy":
-            return "short" if order["reduceOnly"] else "long"
-        if order["side"] == "sell":
-            return "long" if order["reduceOnly"] else "short"
-        raise Exception(f"unsupported order side {order['side']}")
-
     # ═══════════════════ GATEIO-SPECIFIC METHODS ═══════════════════
 
     async def fetch_balance(self) -> float:
@@ -92,27 +80,6 @@ class GateIOBot(CCXTBot):
             offset += limit
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 
-    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
-        """Return canonical fill events for Gate.io."""
-        events = []
-        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
-        for fill in fills:
-            events.append(
-                {
-                    "id": fill.get("id"),
-                    "timestamp": fill.get("timestamp"),
-                    "symbol": fill.get("symbol"),
-                    "side": fill.get("side"),
-                    "position_side": fill.get("position_side"),
-                    "qty": fill.get("amount") or fill.get("filled"),
-                    "price": fill.get("price"),
-                    "pnl": fill.get("pnl"),
-                    "fee": fill.get("fee"),
-                    "info": fill.get("info"),
-                }
-            )
-        return events
-
     async def fetch_pnl(
         self,
         offset=0,
@@ -122,7 +89,7 @@ class GateIOBot(CCXTBot):
         fetched = await self.cca.fetch_closed_orders(limit=n_pnls_limit, params={"offset": offset})
         for i in range(len(fetched)):
             fetched[i]["pnl"] = float(fetched[i]["info"]["pnl"])
-            fetched[i]["position_side"] = self.determine_pos_side(fetched[i])
+            fetched[i]["position_side"] = self._get_position_side_for_order(fetched[i])
         return sorted(fetched, key=lambda x: x["timestamp"])
 
     def did_cancel_order(self, executed, order=None):

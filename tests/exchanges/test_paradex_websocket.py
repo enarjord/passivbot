@@ -390,8 +390,8 @@ class TestParadexNormalizeOrderUpdate:
             assert result["position_side"] == "long"  # NOT short!
             assert result["side"] == "sell"
 
-    def test_normalize_order_update_no_client_id_returns_both(self):
-        """Orders without client_id get position_side='both'."""
+    def test_normalize_order_update_no_client_id_sell_returns_short(self):
+        """Orders without client_id: sell + !reduceOnly = short."""
         with patch("exchanges.paradex.CCXTBot.__init__", return_value=None):
             from exchanges.paradex import ParadexBot
 
@@ -400,7 +400,7 @@ class TestParadexNormalizeOrderUpdate:
 
             result = bot._normalize_order_update({"side": "SELL", "market": "X"})
 
-            assert result["position_side"] == "both"
+            assert result["position_side"] == "short"
 
     def test_normalize_status_mappings(self):
         """Paradex statuses map to CCXT-style statuses."""
