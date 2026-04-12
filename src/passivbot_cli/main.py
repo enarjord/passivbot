@@ -47,6 +47,18 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         requires_full=True,
     ),
     "fetch-balance": CommandSpec("tools.fetch_balance", "fetch exchange balances"),
+    "hyperliquid-balance-probe": CommandSpec(
+        "tools.probe_hyperliquid_balance",
+        "read-only Hyperliquid balance smoke test",
+    ),
+    "hyperliquid-order-margin-probe": CommandSpec(
+        "tools.probe_hyperliquid_order_margin",
+        "mutating Hyperliquid order-margin diagnostic",
+    ),
+    "hyperliquid-position-probe": CommandSpec(
+        "tools.probe_hyperliquid_position_balance",
+        "mutating Hyperliquid position/balance diagnostic",
+    ),
     "fill-events-dash": CommandSpec(
         "tools.fill_events_dash",
         "launch fill events dashboard (requires full install)",
