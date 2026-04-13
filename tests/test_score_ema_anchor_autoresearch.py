@@ -114,3 +114,25 @@ def test_score_suite_aggregates_multiple_runs(tmp_path):
     assert scored["suite_score"] == pytest.approx(
         sum(result["score"] for result in scored["results"]) / 2.0
     )
+
+
+def test_score_analysis_accepts_optimize_stats_payload():
+    optimize_member = {
+        "metrics": {
+            "stats": {
+                "adg_strategy_pnl_rebased": {"mean": 0.002},
+                "drawdown_worst_hsl": {"mean": 0.12},
+                "peak_recovery_hours_hsl": {"mean": 24.0},
+                "fills_per_day": {"mean": 1.3},
+                "hours_no_fills_max": {"mean": 10.0},
+                "hours_no_fills_mean": {"mean": 4.0},
+                "hours_no_fills_median": {"mean": 2.0},
+                "liquidated": False,
+            }
+        }
+    }
+
+    scored = score_analysis(optimize_member)
+
+    assert scored["passed"] is True
+    assert scored["score"] > 0.0

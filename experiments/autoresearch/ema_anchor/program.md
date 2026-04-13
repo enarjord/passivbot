@@ -60,14 +60,32 @@ Do not weaken:
 3. Make a minimal code change.
 4. Rebuild Rust:
    - `cd passivbot-rust && maturin develop --release && cd ..`
-5. Run the fixed inner-loop suite:
-   - `passivbot backtest configs/examples/ema_anchor.json -s XMR -sd 2024-01-01 -ed 2026-04-01 --disable_plotting all`
-   - `passivbot backtest configs/examples/ema_anchor.json -s DOGE -sd 2024-01-01 -ed 2026-04-01 --disable_plotting all`
-   - `passivbot backtest configs/examples/ema_anchor.json -s SOL -sd 2024-01-01 -ed 2026-04-01 --disable_plotting all`
-6. Score the newest artifacts:
-   - `python3 src/tools/score_ema_anchor_autoresearch.py backtests/combined/<artifact1> backtests/combined/<artifact2> backtests/combined/<artifact3> --require-pass`
-7. Keep the candidate only if the full suite improves.
-8. If not improved, revert and try a different hypothesis.
+5. Do not judge a strategy code change from one arbitrary config backtest.
+6. Evaluate via warm-started optimize:
+   - build one strong baseline XMR Pareto front first
+   - after each code change, use that baseline Pareto front as seed input
+   - run the candidate optimize round with `src/tools/run_ema_anchor_autoresearch_round.py candidate`
+7. Compare the candidate run against the baseline run using the scorer.
+8. Keep the candidate only if the best scored tuned candidate improves over the best scored tuned baseline.
+9. If not improved, revert and try a different hypothesis.
+
+## Fixed Evaluation Window
+
+- symbol: `XMR`
+- start date: `2024-10-01`
+- end date: `2026-04-01`
+- CPUs: `3`
+- candle interval: `1`
+
+## Default Commands
+
+Baseline:
+
+- `PYTHONPATH=src python3 src/tools/run_ema_anchor_autoresearch_round.py baseline --run`
+
+Candidate:
+
+- `PYTHONPATH=src python3 src/tools/run_ema_anchor_autoresearch_round.py candidate --baseline-pareto optimize_results/autoresearch_baseline_<timestamp>_XMR/pareto --run`
 
 ## Style Rules
 

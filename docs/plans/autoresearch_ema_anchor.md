@@ -59,22 +59,79 @@ Default constraints in the scorer:
 
 These are deliberately conservative starting gates. Tighten them only after the loop is stable.
 
-## Suggested Inner-Loop Suite
+## Concrete Protocol
 
-Start with a short fixed suite and disable plotting:
+Use a two-stage loop:
 
-1. `passivbot backtest configs/examples/ema_anchor.json -s XMR -sd 2024-01-01 -ed 2026-04-01 --disable_plotting all`
-2. `passivbot backtest configs/examples/ema_anchor.json -s DOGE -sd 2024-01-01 -ed 2026-04-01 --disable_plotting all`
-3. `passivbot backtest configs/examples/ema_anchor.json -s SOL -sd 2024-01-01 -ed 2026-04-01 --disable_plotting all`
+1. build a strong XMR-only baseline with a serious optimize run
+2. after each strategy-code change, warm-start from the baseline Pareto front and run a much smaller
+   fine-tune optimize budget
 
-Then score the newest three artifacts with the scorer.
+This is required for Passivbot because code changes and parameter tuning interact strongly.
+
+### Fixed Research Window
+
+- symbol: `XMR`
+- `backtest.candle_interval_minutes = 1`
+- start date: `2024-10-01`
+- end date: `2026-04-01`
+- CPUs: `3`
+
+This is roughly an 18-month window and keeps the benchmark stable across candidates.
+
+### Step 1: Baseline Generation
+
+Run a serious baseline optimize budget on the unmodified strategy:
+
+```bash
+PYTHONPATH=src python3 src/tools/run_ema_anchor_autoresearch_round.py baseline
+```
+
+Defaults:
+
+- config: `configs/examples/ema_anchor.json`
+- symbol: `XMR`
+- iterations: `100000`
+- CPUs: `3`
+
+This prints the exact optimize command. Add `--run` to execute it.
+
+### Step 2: Candidate Evaluation
+
+After a code edit, evaluate the candidate against the same fixed XMR window using the baseline Pareto
+front as seed input and a smaller fine-tune budget:
+
+```bash
+PYTHONPATH=src python3 src/tools/run_ema_anchor_autoresearch_round.py candidate \
+  --baseline-pareto optimize_results/autoresearch_baseline_<timestamp>_XMR/pareto
+```
+
+Defaults:
+
+- iterations: `3000`
+- warm-start seeds: baseline Pareto front
+- tunable params: a fixed `ema_anchor`-centric subset including exposure, unstuck EMA dist, and
+  strategy-local params such as offset, EMA spans, volatility weights, and double-down factor
+
+This is a bounded local search around a known strong region, not a fresh blind optimize run.
+
+### Promotion Rule
+
+Promote a code change only if:
+
+- the candidate optimize run passes the scorer constraints
+- the best scored Pareto member from the candidate run beats the best scored Pareto member from the
+  baseline run
+- the code diff remains localized to the allowed strategy surface
+
+Do not promote based on one arbitrary config backtest. Always compare tuned-vs-tuned.
 
 ## Promotion Rule
 
 Do not keep a candidate only because one run improved. Promote only when:
 
-- all suite members pass constraints
-- aggregate suite score improves
+- all scored candidate results pass constraints
+- the best candidate score improves over the baseline best score
 - diff is reviewable and localized
 
 For now, keep the loop human-supervised at the commit boundary.

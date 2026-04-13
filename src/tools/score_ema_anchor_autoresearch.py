@@ -2,6 +2,7 @@ import argparse
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -18,10 +19,15 @@ class EmaAnchorResearchConstraints:
 DEFAULT_CONSTRAINTS = EmaAnchorResearchConstraints()
 
 
-def _require_metric(analysis: dict, key: str) -> float:
-    if key not in analysis:
+def _require_metric(metrics: dict, key: str) -> float:
+    if key not in metrics:
         raise KeyError(f"analysis missing required metric {key!r}")
-    value = analysis[key]
+    value = metrics[key]
+    if isinstance(value, dict):
+        if "mean" in value:
+            value = value["mean"]
+        elif "value" in value:
+            value = value["value"]
     try:
         return float(value)
     except (TypeError, ValueError) as exc:
@@ -43,19 +49,42 @@ def load_analysis(path: str | Path) -> dict:
         return json.load(f)
 
 
+def extract_metrics_payload(payload: dict) -> dict:
+    if "metrics" in payload and isinstance(payload.get("metrics"), dict):
+        stats = payload["metrics"].get("stats")
+        if isinstance(stats, dict):
+            return stats
+    return payload
+
+
+def _resolve_paths(path: str | Path) -> list[Path]:
+    candidate = Path(path)
+    if candidate.is_dir():
+        analysis_path = candidate / "analysis.json"
+        if analysis_path.exists():
+            return [analysis_path]
+        pareto_dir = candidate / "pareto"
+        if pareto_dir.is_dir():
+            return sorted(pareto_dir.glob("*.json"))
+        if candidate.name == "pareto":
+            return sorted(candidate.glob("*.json"))
+    return [candidate]
+
+
 def score_analysis(
     analysis: dict,
     *,
     constraints: EmaAnchorResearchConstraints = DEFAULT_CONSTRAINTS,
 ) -> dict:
-    adg = _require_metric(analysis, "adg_strategy_pnl_rebased")
-    drawdown = _require_metric(analysis, "drawdown_worst_hsl")
-    recovery = _require_metric(analysis, "peak_recovery_hours_hsl")
-    fills_per_day = _require_metric(analysis, "fills_per_day")
-    no_fills_max = _require_metric(analysis, "hours_no_fills_max")
-    no_fills_mean = _require_metric(analysis, "hours_no_fills_mean")
-    no_fills_median = _require_metric(analysis, "hours_no_fills_median")
-    liquidated = bool(analysis.get("liquidated", False))
+    metrics = extract_metrics_payload(analysis)
+    adg = _require_metric(metrics, "adg_strategy_pnl_rebased")
+    drawdown = _require_metric(metrics, "drawdown_worst_hsl")
+    recovery = _require_metric(metrics, "peak_recovery_hours_hsl")
+    fills_per_day = _require_metric(metrics, "fills_per_day")
+    no_fills_max = _require_metric(metrics, "hours_no_fills_max")
+    no_fills_mean = _require_metric(metrics, "hours_no_fills_mean")
+    no_fills_median = _require_metric(metrics, "hours_no_fills_median")
+    liquidated = bool(metrics.get("liquidated", False))
 
     violations = []
     if liquidated:
@@ -143,22 +172,25 @@ def score_analysis(
 
 
 def score_suite(
-    paths: list[str | Path],
+    paths: Iterable[str | Path],
     *,
     constraints: EmaAnchorResearchConstraints = DEFAULT_CONSTRAINTS,
 ) -> dict:
     results = []
     for path in paths:
-        resolved = resolve_analysis_path(path)
-        analysis = load_analysis(resolved)
-        result = score_analysis(analysis, constraints=constraints)
-        result["path"] = str(resolved)
-        results.append(result)
+        for resolved in _resolve_paths(path):
+            with resolved.open(encoding="utf-8") as f:
+                payload = json.load(f)
+            result = score_analysis(payload, constraints=constraints)
+            result["path"] = str(resolved)
+            results.append(result)
     suite_score = sum(result["score"] for result in results) / len(results) if results else 0.0
+    best_result = max(results, key=lambda result: result["score"]) if results else None
     return {
         "constraints": asdict(constraints),
         "suite_passed": all(result["passed"] for result in results),
         "suite_score": suite_score,
+        "best_result": best_result,
         "results": results,
     }
 
