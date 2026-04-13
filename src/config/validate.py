@@ -1,5 +1,5 @@
 from .access import require_config_dict
-from .bot import validate_forager_config
+from .bot import validate_bot_config, validate_forager_config
 from .coerce import normalize_hsl_cooldown_position_policy, normalize_hsl_signal_mode
 
 
@@ -13,6 +13,7 @@ def validate_config(config: dict, *, raw_optimize=None, verbose: bool = True, tr
         if isinstance(raw_optimize, dict) and isinstance(raw_optimize.get("bounds"), dict)
         else config.get("optimize", {}).get("bounds", {})
     )
+    validate_bot_config(config)
     validate_optimize_bounds_against_bot_config(config["bot"], optimize_bounds)
     normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
     normalize_hsl_cooldown_position_policy(config["live"]["hsl_position_during_cooldown_policy"])
