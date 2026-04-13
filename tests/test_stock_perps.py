@@ -246,9 +246,12 @@ class TestHyperliquidBotHIP3:
             ]
         )
 
-        positions, balance = await bot._fetch_positions_and_balance()
+        raw_snapshot, positions, balance = await bot._fetch_positions_and_balance()
 
         assert balance == 1000.0
+        assert raw_snapshot["balance"]["info"]["marginSummary"]["accountValue"] == "1000.0"
+        assert raw_snapshot["positions"]["core"] == []
+        assert raw_snapshot["positions"]["hip3"][0]["fetch_spec"] == {"params": {"dex": "xyz"}}
         assert positions == [
             {
                 "symbol": "XYZ-XYZ100/USDC:USDC",
@@ -303,9 +306,12 @@ class TestHyperliquidBotHIP3:
             ]
         )
 
-        positions, balance = await bot._fetch_positions_and_balance()
+        raw_snapshot, positions, balance = await bot._fetch_positions_and_balance()
 
         assert balance == 1000.0
+        assert raw_snapshot["balance"]["info"]["marginSummary"]["accountValue"] == "1000.0"
+        assert raw_snapshot["positions"]["core"] == []
+        assert raw_snapshot["positions"]["hip3"][0]["fetch_spec"] == {"params": {"dex": "xyz"}}
         assert positions == [
             {
                 "symbol": "XYZ-XYZ100/USDC:USDC",
@@ -362,9 +368,12 @@ class TestHyperliquidBotHIP3:
             ]
         )
 
-        positions, balance = await bot._fetch_positions_and_balance()
+        raw_snapshot, positions, balance = await bot._fetch_positions_and_balance()
 
         assert balance == 1000.0
+        assert raw_snapshot["balance"]["info"]["marginSummary"]["accountValue"] == "1000.0"
+        assert raw_snapshot["positions"]["core"] == []
+        assert raw_snapshot["positions"]["hip3"][0]["fetch_spec"] == {"params": {"dex": "xyz"}}
         assert positions == [
             {
                 "symbol": "XYZ-XYZ200/USDC:USDC",
@@ -426,9 +435,12 @@ class TestHyperliquidBotHIP3:
             ]
         )
 
-        positions, balance = await bot._fetch_positions_and_balance()
+        raw_snapshot, positions, balance = await bot._fetch_positions_and_balance()
 
         assert balance == 1000.0
+        assert raw_snapshot["balance"]["info"]["marginSummary"]["accountValue"] == "1000.0"
+        assert raw_snapshot["positions"]["core"] == []
+        assert raw_snapshot["positions"]["hip3"][0]["fetch_spec"] == {"params": {"dex": "xyz"}}
         assert positions == [
             {
                 "symbol": "XYZ-XYZ200/USDC:USDC",
@@ -482,9 +494,12 @@ class TestHyperliquidBotHIP3:
             ]
         )
 
-        positions, balance = await bot._fetch_positions_and_balance()
+        raw_snapshot, positions, balance = await bot._fetch_positions_and_balance()
 
         assert balance == 1000.0
+        assert raw_snapshot["balance"]["info"]["marginSummary"]["accountValue"] == "1000.0"
+        assert raw_snapshot["positions"]["core"] == []
+        assert raw_snapshot["positions"]["hip3"][0]["fetch_spec"] == {"params": {"dex": "xyz"}}
         assert positions == [
             {
                 "symbol": "XYZ-XYZ100/USDC:USDC",
