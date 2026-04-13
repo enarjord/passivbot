@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+## v7.9.1 - 2026-04-13
+
 - Removed the legacy `python src/downloader.py ...` entrypoint. Use `passivbot download ...` for OHLCV cache warming.
 - Added formal top-level `config_version` schema tagging starting at `v7.9.0`. Canonical defaults and the mirrored example config now carry the schema version, older configs log a migration attempt during load, and the loader upgrades them to the current schema version.
 - Backtests now read `market_orders_allowed`, `market_order_near_touch_threshold`, and `pnls_max_lookback_days` from `config.live` only. `config.backtest` no longer accepts those fields, which avoids silent drift between live and backtest behavior.
