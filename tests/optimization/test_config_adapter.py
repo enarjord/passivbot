@@ -25,11 +25,15 @@ class TestConfigAdapter:
         template = get_template_config()
         for pside in template["bot"]:
             for key in template["bot"][pside]:
-                if isinstance(template["bot"][pside][key], dict):
+                value = template["bot"][pside][key]
+                if isinstance(value, dict) or isinstance(value, bool) or not isinstance(value, (int, float)):
                     continue
                 bound_key = f"{pside}_{key}"
                 if bound_key not in config["optimize"]["bounds"]:
-                    config["optimize"]["bounds"][bound_key] = [0.0, 1.0]
+                    if bound_key == "short_unstuck_ema_dist":
+                        config["optimize"]["bounds"][bound_key] = [0.0, 0.99]
+                    else:
+                        config["optimize"]["bounds"][bound_key] = [0.0, 1.0]
 
         bounds = extract_bounds_tuple_list_from_config(config)
         assert len(bounds) > 0
