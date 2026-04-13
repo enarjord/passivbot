@@ -446,6 +446,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - `0`: minimal lookback window at the consumer's native sampling resolution (resets as often as that path can meaningfully observe).
   - `> 0`: rolling window of that many days.
   - `"all"`: full available history.
+  - Live and backtest use the same contract for realized-PnL risk windows: filter realized fill events to the active lookback window, then recompute cumulative PnL, current value, and peak from only that filtered sequence.
 - **price_distance_threshold**: Minimum distance to current price action required for EMA-based limit orders.
 - **risk_wel_enforcer_threshold**: Per-symbol multiplier that triggers the WEL enforcer. When a position’s exposure exceeds `wallet_exposure_limit * (1 + risk_we_excess_allowance_pct) * risk_wel_enforcer_threshold` the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming, `1.0` for a hard cap, or ≤0 to disable.
 - **risk_twel_enforcer_threshold**: Fraction of the configured `total_wallet_exposure_limit` that triggers the TWEL enforcer. When aggregate exposure exceeds this threshold the bot queues reduction orders instead of new entries. Set >1.0 to allow a grace margin, `1.0` for strict enforcement, or ≤0 to disable.

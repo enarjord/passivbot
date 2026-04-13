@@ -5,6 +5,7 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Upgraded the pinned `ccxt` dependency from `4.5.22` to `4.5.48` and added a dedicated CCXT upgrade validation workflow with live snapshot capture/diff tooling plus offline contract fixtures for upgrade drift.
+- Fixed backtest `pnls_max_lookback_days` rolling realized-PnL reconstruction to match live semantics exactly: both now derive peak/current PnL stats from the active lookback window only by filtering in-window fills and recomputing cumulative realized PnL from that filtered sequence. This fixes overstated auto-unstuck allowance and related risk gating drift caused by the old rebased rolling-peak implementation.
 
 ## v7.9.1 - 2026-04-13
 - Removed the legacy `python src/downloader.py ...` entrypoint. Use `passivbot download ...` for OHLCV cache warming.
