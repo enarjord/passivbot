@@ -29,6 +29,34 @@ FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
     "short_forager_volume_drop_pct": "short_filter_volume_drop_pct",
 }
 
+
+def validate_unstuck_ema_dist_value(value, *, path: str, pside: str) -> None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{path} must be numeric") from exc
+    if not math.isfinite(numeric):
+        raise ValueError(f"{path} must be finite")
+    if pside == "long" and numeric <= -1.0:
+        raise ValueError(
+            f"{path} must be > -1.0; -1.0 disables auto unstuck by producing a non-positive "
+            f"EMA trigger price. Use -0.99 for near-always-on behavior."
+        )
+    if pside == "short" and numeric >= 1.0:
+        raise ValueError(
+            f"{path} must be < 1.0; 1.0 disables auto unstuck by producing a non-positive "
+            f"EMA trigger price. Use -0.99 for near-always-on behavior."
+        )
+
+
+def validate_bot_config(result: dict) -> None:
+    for pside in BOT_POSITION_SIDES:
+        validate_unstuck_ema_dist_value(
+            result["bot"][pside]["unstuck_ema_dist"],
+            path=f"bot.{pside}.unstuck_ema_dist",
+            pside=pside,
+        )
+
 def ensure_bot_defaults(
     result: dict, *, verbose: bool = True, tracker: Optional[object] = None
 ) -> None:

@@ -143,6 +143,14 @@ if equity < unstuck_allowed:
 Positions become eligible when
 `wallet_exposure / wel_base > unstuck_threshold`.
 
+`unstuck_ema_dist` must keep the EMA-derived trigger price positive:
+- `bot.long.unstuck_ema_dist > -1.0`
+- `bot.short.unstuck_ema_dist < 1.0`
+
+Configs that cross those boundaries now hard-fail during validation instead of silently
+disabling auto-unstuck. For near-always-on EMA triggering on either side, use a value like
+`-0.99`, not `-1.0`.
+
 ## WEL Enforcer (Auto Reduce)
 
 The per-position wallet exposure limit (WEL) enforcer trims individual symbols

@@ -7,6 +7,7 @@ optimization-specific bounds logic.
 
 from typing import List, Tuple
 
+from config.bot import validate_unstuck_ema_dist_value
 from config.schema import get_template_config
 from optimization.bounds import Bound
 
@@ -85,6 +86,20 @@ def validate_optimize_bounds_against_bot_config(bot_config, optimize_bounds) -> 
         if bound_key in OPTIMIZABLE_BOT_KEY_PATHS:
             continue
         _validate_standard_optimize_bound_target(bound_key, bot_config)
+        if bound_key == "long_unstuck_ema_dist":
+            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+            validate_unstuck_ema_dist_value(
+                bound.low,
+                path="optimize.bounds.long_unstuck_ema_dist lower bound",
+                pside="long",
+            )
+        elif bound_key == "short_unstuck_ema_dist":
+            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+            validate_unstuck_ema_dist_value(
+                bound.high,
+                path="optimize.bounds.short_unstuck_ema_dist upper bound",
+                pside="short",
+            )
 
 
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
