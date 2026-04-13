@@ -318,33 +318,35 @@ async def capture_contract_snapshot(
             snapshot["capabilities"] = summarize_capabilities(getattr(bot.cca, "has", {}) or {})
 
         if "balance" in section_set:
-            raw_balance = await bot.cca.fetch_balance()
+            raw_balance, normalized_balance = await bot.capture_balance_snapshot()
             snapshot["balance"] = {
                 "raw": sanitize_for_json(raw_balance),
-                "normalized": sanitize_for_json(await bot.fetch_balance()),
+                "normalized": sanitize_for_json(normalized_balance),
             }
 
         if "positions" in section_set:
-            raw_positions = await bot._do_fetch_positions()
+            raw_positions, normalized_positions = await bot.capture_positions_snapshot()
             snapshot["positions"] = {
                 "raw": sanitize_for_json(raw_positions),
-                "normalized": sanitize_for_json(await bot.fetch_positions()),
+                "normalized": sanitize_for_json(normalized_positions),
             }
 
         if "open_orders" in section_set:
-            open_orders_section: dict[str, Any] = {
-                "normalized_all": sanitize_for_json(await bot.fetch_open_orders())
-            }
+            _, normalized_all_orders = await bot.capture_open_orders_snapshot()
+            open_orders_section: dict[str, Any] = {"normalized_all": sanitize_for_json(normalized_all_orders)}
             if symbols:
                 open_orders_section["by_symbol"] = {}
                 for symbol in symbols:
                     try:
-                        raw_symbol_orders = await bot.cca.fetch_open_orders(symbol=symbol)
+                        raw_symbol_orders, normalized_symbol_orders = await bot.capture_open_orders_snapshot(
+                            symbol=symbol
+                        )
                     except Exception as exc:
                         raw_symbol_orders = {"error": f"{type(exc).__name__}: {exc}"}
+                        normalized_symbol_orders = raw_symbol_orders
                     open_orders_section["by_symbol"][symbol] = {
                         "raw": sanitize_for_json(raw_symbol_orders),
-                        "normalized": sanitize_for_json(await bot.fetch_open_orders(symbol=symbol)),
+                        "normalized": sanitize_for_json(normalized_symbol_orders),
                     }
             snapshot["open_orders"] = open_orders_section
 

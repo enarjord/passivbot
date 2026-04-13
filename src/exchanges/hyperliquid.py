@@ -3,6 +3,7 @@ import json
 import random
 import re
 import traceback
+from copy import deepcopy
 
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
@@ -365,7 +366,7 @@ class HyperliquidBot(CCXTBot):
         """Hook: Derive position_side from order data for Hyperliquid (one-way mode)."""
         return self.determine_pos_side(order)
 
-    async def fetch_open_orders(self, symbol: str = None):
+    async def _do_fetch_open_orders(self, symbol: str = None):
         fetched = []
         seen_ids = set()
         query_symbols = [symbol] if symbol is not None else []
@@ -397,11 +398,17 @@ class HyperliquidBot(CCXTBot):
                     continue
                 seen_ids.add(order["id"])
                 fetched.append(order)
+        return fetched
 
+    def _normalize_open_orders(self, fetched: list) -> list:
         for elm in fetched:
             elm["position_side"] = self.determine_pos_side(elm)
             elm["qty"] = elm["amount"]
         return sorted(fetched, key=lambda x: x["timestamp"])
+
+    async def fetch_open_orders(self, symbol: str = None):
+        fetched = await self._do_fetch_open_orders(symbol=symbol)
+        return self._normalize_open_orders(fetched)
 
     async def _fetch_positions_and_balance(self):
         info = await self.cca.fetch_balance()
@@ -464,6 +471,13 @@ class HyperliquidBot(CCXTBot):
         self._hl_balance_consumed = False
         return positions
 
+    async def capture_positions_snapshot(self) -> tuple[list, list]:
+        my_gen = self._hl_cache_generation
+        positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        self._last_hl_balance = balance
+        self._hl_balance_consumed = False
+        return deepcopy(getattr(self, "fetched_positions", [])), deepcopy(positions)
+
     async def fetch_balance(self):
         # Check if fetch_positions already got us a fresh balance
         if getattr(self, "_last_hl_balance", None) is not None and not getattr(
@@ -475,6 +489,11 @@ class HyperliquidBot(CCXTBot):
         my_gen = self._hl_cache_generation
         positions, balance = await self._get_positions_and_balance_cached(my_gen)
         return balance
+
+    async def capture_balance_snapshot(self) -> tuple[dict, float]:
+        my_gen = self._hl_cache_generation
+        positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        return deepcopy(getattr(self, "fetched_balance", {})), float(balance)
 
     def _symbol_is_cross_hip3(self, symbol: str) -> bool:
         if not symbol or not self._get_hl_dex_for_symbol(symbol):
