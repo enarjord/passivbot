@@ -116,7 +116,6 @@ This is the durable local truth for:
 This store is optimized for:
 
 - incremental updates
-- explicit coverage tracking
 - cheap range slicing
 - mmap-friendly local reads
 
@@ -140,7 +139,7 @@ persistent caches as the main architecture.
 Use SQLite:
 
 - path: `caches/ohlcvs/catalog.sqlite`
-- stores coverage, gap state, chunk metadata, symbol bounds, and fetch history
+- stores chunk metadata, gap state, symbol bounds, and fetch history
 
 Reason:
 
@@ -192,13 +191,11 @@ caches/ohlcvs/
           2026/
             04.npy
             04.valid.npy
-            04.meta.json
       1h/
         {symbol}/
           2026/
             04.npy
             04.valid.npy
-            04.meta.json
 ```
 
 ### Ephemeral materialized payload
@@ -237,21 +234,11 @@ Validity file:
 - shape: `[minutes_in_month]`
 - `true` means candle data is present locally for that minute
 
-Metadata file:
+Optional sidecar metadata/debug file:
 
-- path: `.../{YYYY}/{MM}.meta.json`
-- fields:
-  - `exchange`
-  - `timeframe`
-  - `symbol`
-  - `year`
-  - `month`
-  - `status` = `open` or `sealed`
-  - `first_present_ts`
-  - `last_present_ts`
-  - `schema_version`
-  - `updated_at`
-  - optional checksums or integrity fields
+- if used at all, it must not be authoritative
+- SQLite remains the metadata source of truth
+- sidecars are for integrity/debugging only, not required state
 
 ### Why fixed-size month grids
 
@@ -377,29 +364,6 @@ Fields:
 - `checksum`
 - `updated_at`
 
-### `coverage`
-
-Tracks known local coverage intervals.
-
-Fields:
-
-- `exchange`
-- `timeframe`
-- `symbol`
-- `start_ts`
-- `end_ts`
-- `status`
-- `updated_at`
-
-Suggested `status` values:
-
-- `present`
-- `missing_retryable`
-- `missing_verified_exchange_gap`
-- `missing_verified_market_closed`
-- `missing_no_archive`
-- `missing_fetch_failed`
-
 ### `gaps`
 
 Tracks explicit missing intervals and retry policy.
@@ -440,7 +404,6 @@ Fields:
 
 Responsibilities:
 
-- coverage lookup
 - gap lookup
 - symbol bounds lookup
 - chunk registration
@@ -452,7 +415,6 @@ Suggested API sketch:
 ```python
 class OhlcvCatalog:
     def get_symbol_bounds(self, exchange: str, timeframe: str, symbol: str) -> tuple[int | None, int | None]: ...
-    def get_coverage(self, exchange: str, timeframe: str, symbol: str, start_ts: int, end_ts: int): ...
     def get_gaps(self, exchange: str, timeframe: str, symbol: str, start_ts: int, end_ts: int): ...
     def register_chunk(...): ...
     def mark_gap(...): ...
@@ -489,7 +451,7 @@ Responsibilities:
   - EMA warmup
   - minimum coin age
   - per-coin first available timestamp
-  - known local coverage
+  - local chunk availability derived from `chunks` plus chunk validity masks
   - persistent gaps
 - emit fetch plans and materialization plans
 
@@ -649,9 +611,10 @@ The v2 hot path should be mostly:
 
 ### Backtest
 
-- canonical remote/base timeframe: `1m`
-- all higher timeframes derived from `1m`
-- no requirement to fetch remote `1h`
+- canonical historical timeframe: `1m`
+- `1m` is the authoritative historical truth for backtesting
+- all higher timeframes are derived from canonical `1m`
+- backtest has no requirement to fetch or trust remote `1h`
 
 ### Live
 
@@ -661,36 +624,44 @@ The v2 hot path should be mostly:
   - live startup should not need deep `1m` reconstruction for every symbol
   - some live indicators use `1h`
 
-### Shared store, different policy
+### Authority rule
 
-This should be one storage system with consumer-specific rules, not two unrelated systems.
+- this is one storage system with two policies
+- `1m` is canonical historical truth
+- direct `1h` is a live-only optimization cache
+- direct `1h` is not authoritative against `1m`
+- direct `1h` may be rebuilt or discarded at any time without affecting backtest/history correctness
 
 ## Migration Plan
 
-### Phase 1: Introduce the new store beside the current system
+### Phase 1: Prove the hot path with the smallest viable slice
 
 1. Add:
-   - `ohlcv_catalog.py`
    - `ohlcv_store.py`
-   - `ohlcv_planner.py`
-   - `ohlcv_fetcher.py`
    - `backtest_dataset_materializer.py`
+   - minimal SQLite catalog support inside one small metadata module
 2. Start writing fetched OHLCV data into `caches/ohlcvs/`
-3. Keep current `caches/hlcvs_data/` backtest path unchanged
+3. Build a no-fetch local materialization path from canonical chunks
+4. Keep current `caches/hlcvs_data/` backtest path unchanged as the comparison baseline
 
 Goal:
 
-- prove the new storage and gap model without disrupting current backtests
+- prove the fast local assembly path and shared-memory contract before introducing broader
+  abstractions
 
-### Phase 2: Read from the new canonical store for backtest preparation
+### Phase 2: Add the minimal fetch/gap planning needed for correctness
 
-1. Teach backtest prep to consult the new planner/store first
-2. Materialize shared memmap payloads from canonical chunks
-3. Keep fallback compatibility with the current `hlcvs_data` path while validating behavior
+1. Add minimal planning around:
+   - effective date range
+   - warmup
+   - min coin age
+   - symbol inception clipping
+2. Add gap persistence in SQLite
+3. Add incremental fetch/patch flows for open months
 
 Goal:
 
-- validate correctness and performance on the no-fetch local path
+- validate correctness for partial local coverage and real source-side gaps
 
 ### Phase 3: Switch optimizer/backtest to shared materialized payloads
 
@@ -724,7 +695,7 @@ Goal:
    - retryable
    - persistent verified
    - force-refetch override
-5. Planner range computation:
+5. Range planning computation:
    - requested range
    - warmup
    - min coin age
@@ -734,7 +705,7 @@ Goal:
 
 1. No-fetch local assembly from canonical chunks into Rust-ready payload
 2. Optimizer worker attach to shared memmap payload without extra copies
-3. Mixed coin universe with partial coverage and real gaps
+3. Mixed coin universe with partial local chunks and real gaps
 4. Live direct `1h` fetch/storage remains functional
 
 ### Performance tests
@@ -766,6 +737,7 @@ Implement the minimum vertical slice that proves the hardest requirement first:
 
 Do **not** start with:
 
+- a broad planner/fetcher abstraction split
 - a full downloader rewrite
 - Parquet adoption
 - broad live-path rewrites
