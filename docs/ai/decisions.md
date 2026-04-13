@@ -26,6 +26,14 @@ Decision: cursor + time-window pagination with deduplication.
 
 Impact: improved fill/PnL completeness over single-strategy pagination.
 
+## 2026-04: PnL Lookback Contract Must Match Live Semantics
+
+Decision: `pnls_max_lookback_days` consumers use the live-style contract: filter realized fills inside the active lookback window, then recompute rolling cumsum/current/peak from only those fills.
+
+Impact:
+- backtest/runtime optimizations must remain observationally equivalent to naive filter-and-recompute behavior
+- separate live/backtest implementations are acceptable only with explicit parity tests against that contract
+
 ## Note
 
 Historical/deep decision context remains in git history; keep this file short and current.
