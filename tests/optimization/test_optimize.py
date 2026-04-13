@@ -5,6 +5,7 @@ These tests capture the current behavior of optimize.py functions and classes
 to enable safe refactoring. They document how the code actually works today.
 """
 
+import logging
 import math
 import os
 import argparse
@@ -47,6 +48,7 @@ from optimization.config_adapter import get_optimization_key_paths
 from optimization.shape import build_optimization_shape
 from optimize_suite import ScenarioEvalContext
 from config import load_prepared_config
+from config.parse import load_raw_config
 from config.schema import get_template_config
 
 
@@ -1435,6 +1437,16 @@ class TestConfigsToIndividuals:
 
         assert len(result) == 1
         assert len(result[0]) == len(shape.bounds)
+
+    def test_extract_configs_suppresses_entry_grid_inflation_warning_for_starting_seeds(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            result = extract_configs("configs/examples/default_trailing_grid_long_npos10.json")
+
+        assert len(result) == 1
+        assert not any(
+            "entry_grid_inflation_enabled" in rec.message and "scheduled for deprecation" in rec.message
+            for rec in caplog.records
+        )
 
 
 class TestConstraintAwareFitness:

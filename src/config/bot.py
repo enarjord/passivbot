@@ -380,6 +380,7 @@ def format_bot_config(
     *,
     live_cfg: Optional[dict] = None,
     verbose: bool = True,
+    warn_deprecations: bool = True,
     tracker: Optional[object] = None,
 ) -> dict:
     if not isinstance(bot_cfg, dict):
@@ -410,7 +411,8 @@ def format_bot_config(
     normalize_bot_forager_config(result, verbose=verbose, tracker=tracker)
     normalize_position_counts(result, tracker=tracker)
     normalize_entry_grid_inflation_flags(result, tracker=tracker)
-    warn_on_deprecated_entry_grid_inflation(result, verbose=verbose)
+    if warn_deprecations:
+        warn_on_deprecated_entry_grid_inflation(result, verbose=verbose)
     return sort_dict_keys(result["bot"])
 
 

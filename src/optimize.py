@@ -1573,6 +1573,7 @@ def _extract_starting_config(raw_config, *, source: str = "<memory>"):
             bot_cfg,
             live_cfg=current.get("live"),
             verbose=False,
+            warn_deprecations=False,
         )
     }
     live_cfg = current.get("live")
@@ -1592,7 +1593,7 @@ def _build_starting_seed_config(cfg):
     if not isinstance(cfg, dict):
         raise TypeError(f"expected dict, got {type(cfg).__name__}")
     if all(pside in cfg and isinstance(cfg.get(pside), dict) for pside in ("long", "short")):
-        extracted = {"bot": format_bot_config(cfg, verbose=False)}
+        extracted = {"bot": format_bot_config(cfg, verbose=False, warn_deprecations=False)}
     elif "bot" in cfg and isinstance(cfg.get("bot"), dict):
         extracted = cfg
     else:

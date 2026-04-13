@@ -461,12 +461,14 @@ def format_bot_config(
     *,
     live_cfg: Optional[dict] = None,
     verbose: bool = True,
+    warn_deprecations: bool = True,
     tracker: Optional[ConfigTransformTracker] = None,
 ) -> dict:
     return staged_format_bot_config(
         bot_cfg,
         live_cfg=live_cfg,
         verbose=verbose,
+        warn_deprecations=warn_deprecations,
         tracker=tracker,
     )
 
