@@ -5513,6 +5513,9 @@ class Passivbot:
                 if elm["symbol"] not in self.open_orders:
                     self.open_orders[elm["symbol"]] = []
                 self.open_orders[elm["symbol"]].append(elm)
+            balance_reconciled = self._reconcile_balance_after_open_orders_refresh()
+            if balance_reconciled:
+                await self.handle_balance_update(source="REST+open_orders")
             if schedule_update_positions:
                 await asyncio.sleep(1.5)
                 await self.update_positions_and_balance()
@@ -5735,6 +5738,8 @@ class Passivbot:
             self.balance_hysteresis_snap_pct = 0.02
         if not hasattr(self, "balance_raw"):
             self.balance_raw = self.get_raw_balance()
+        if not hasattr(self, "_exchange_reported_balance_raw"):
+            self._exchange_reported_balance_raw = self.balance_raw
 
         if self.balance_override is not None:
             balance_raw = float(self.balance_override)
@@ -5760,6 +5765,7 @@ class Passivbot:
             logging.warning("non-finite balance fetch result; keeping previous balance")
             return False
 
+        self._exchange_reported_balance_raw = balance_raw
         balance_snapped = balance_raw
         if self.balance_override is None:
             if self.previous_hysteresis_balance is None:
@@ -5771,6 +5777,14 @@ class Passivbot:
         self.balance_raw = balance_raw
         self.balance = balance_snapped
         return True
+
+    def _reconcile_balance_after_open_orders_refresh(self) -> bool:
+        """Exchange hook: adjust balance after fresh open-order state if needed."""
+        return False
+
+    def _reconcile_balance_after_positions_and_balance_refresh(self) -> bool:
+        """Exchange hook: adjust balance after fresh positions+balance state if needed."""
+        return False
 
     async def update_positions_and_balance(self):
         """Convenience helper to refresh both positions and balance concurrently."""
@@ -5791,6 +5805,7 @@ class Passivbot:
             except Exception as e:
                 logging.error(f"error logging position changes {e}")
         if balance_ok and positions_ok:
+            self._reconcile_balance_after_positions_and_balance_refresh()
             await self.handle_balance_update(source="REST")
         return balance_ok, positions_ok
 

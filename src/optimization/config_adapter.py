@@ -10,6 +10,7 @@ from typing import List, Tuple
 
 import passivbot_rust as pbr
 
+from config.bot import validate_unstuck_ema_dist_value
 from config.optimize_bounds import flatten_optimize_bounds
 from config.shared_bot import flatten_shared_bot_side, resolve_shared_bot_path
 from config.schema import get_template_config
@@ -177,6 +178,20 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
             raise KeyError(
                 f"optimize bound {bound_key} must map to a numeric bot.{pside}.{key}, "
                 f"got {type(value).__name__}"
+            )
+        if bound_key == "long_unstuck_ema_dist":
+            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+            validate_unstuck_ema_dist_value(
+                bound.low,
+                path="optimize.bounds.long_unstuck_ema_dist lower bound",
+                pside="long",
+            )
+        elif bound_key == "short_unstuck_ema_dist":
+            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+            validate_unstuck_ema_dist_value(
+                bound.high,
+                path="optimize.bounds.short_unstuck_ema_dist upper bound",
+                pside="short",
             )
 
 

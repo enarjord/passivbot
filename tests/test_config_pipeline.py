@@ -386,6 +386,30 @@ def test_prepare_config_rejects_invalid_pnls_max_lookback_days_string():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+@pytest.mark.parametrize(
+    ("pside", "value", "expected"),
+    [
+        ("long", -1.0, r"bot\.long\.unstuck_ema_dist must be > -1\.0"),
+        ("short", 1.0, r"bot\.short\.unstuck_ema_dist must be < 1\.0"),
+    ],
+)
+def test_prepare_config_rejects_invalid_unstuck_ema_dist(pside, value, expected):
+    source = {
+        "backtest": {},
+        "bot": {
+            "long": {},
+            "short": {},
+        },
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+    source["bot"][pside]["unstuck_ema_dist"] = value
+
+    with pytest.raises(ValueError, match=expected):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_keeps_live_market_orders_allowed_without_backtest_override():
     source = {
         "backtest": {},
