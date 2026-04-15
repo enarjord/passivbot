@@ -353,7 +353,7 @@ def test_forager_respects_n_positions_selects_one_coin():
     assert {o["symbol_idx"] for o in out["orders"]} == {1}
 
 
-def test_select_forager_candidates_all_zero_weights_fall_back_to_volatility_only():
+def test_select_forager_candidates_all_zero_weights_fall_back_to_ema_readiness_only():
     import passivbot_rust as pbr
 
     candidates = [
@@ -375,7 +375,7 @@ def test_select_forager_candidates_all_zero_weights_fall_back_to_volatility_only
             "volatility_score": 0.9,
             "bid": 100.0,
             "ask": 100.0,
-            "ema_lower": 100.0,
+            "ema_lower": 90.0,
             "ema_upper": 100.0,
             "entry_initial_ema_dist": 0.0,
         },
@@ -392,7 +392,7 @@ def test_select_forager_candidates_all_zero_weights_fall_back_to_volatility_only
         },
         True,
     )
-    assert selected == [1]
+    assert selected == [0]
 
 
 def test_json_output_is_deterministic():

@@ -332,7 +332,7 @@ Forager coin selection now uses a two-stage model: coarse volume pruning, then w
   - Required keys: `volume`, `ema_readiness`, `volatility`.
   - Default: `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}`.
   - Positive weights are relative and normalized to unit sum before use.
-  - If all three are `0.0`, Passivbot normalizes them to the default volatility-only ranking.
+  - If all three are `0.0`, Passivbot normalizes them to EMA-readiness-only ranking.
   - `ema_readiness` ranks by distance to the actual offset initial-entry threshold, not raw EMA bands.
 
 See [docs/forager.md](forager.md) for a full description of motivation, ranking rules, caveats, and usage examples.

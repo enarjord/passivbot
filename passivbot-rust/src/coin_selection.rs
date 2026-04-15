@@ -685,9 +685,9 @@ mod tests {
     }
 
     #[test]
-    fn zero_weights_fall_back_to_default_volatility_only_ranking() {
+    fn zero_weights_fall_back_to_ema_readiness_only_ranking() {
         let features = vec![
-            make_feature(2, 10.0, 0.9, 0.0),
+            make_feature(2, 10.0, 0.9, 0.3),
             make_feature(0, 1.0, 0.2, -0.1),
             make_feature(1, 5.0, 0.5, 0.2),
         ];
@@ -700,7 +700,7 @@ mod tests {
             },
             ..default_config()
         };
-        assert_eq!(select_coins(&features, &cfg), vec![2, 1]);
+        assert_eq!(select_coins(&features, &cfg), vec![0, 1]);
     }
 
     #[test]

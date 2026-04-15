@@ -100,7 +100,7 @@ Rules:
 - each value must be finite and non-negative
 - positive weights are relative; only their proportions matter
 - positive weights are normalized to unit sum before scoring
-- if all three weights are zero, Passivbot normalizes them to the default volatility-only ranking
+- if all three weights are zero, Passivbot normalizes them to EMA-readiness-only ranking
 
 Examples:
 
@@ -113,7 +113,7 @@ Examples:
 - `{"volume": 0.2, "ema_readiness": 0.6, "volatility": 0.2}`
   - bias toward actual setups while still preferring liquid, active symbols
 - `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 0.0}`
-  - normalize to the default volatility-only ranking
+  - normalize to EMA-readiness-only ranking
 
 These sub-weights are also available under `optimize.bounds` as:
 
