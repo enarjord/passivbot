@@ -322,7 +322,6 @@ def _build_hlcvs_bundle(
     hlcvs,
     btc_usd_prices,
     timestamps,
-    config,
     exchange,
     mss,
     coins_order,
@@ -330,7 +329,7 @@ def _build_hlcvs_bundle(
     last_valid_indices,
     warmup_minutes,
     trade_start_indices,
-    requested_start_ts,
+    bundle_meta_base: dict,
     *,
     coin_indices: list[int] | None = None,
 ) -> pbr.HlcvsBundle:
@@ -380,15 +379,6 @@ def _build_hlcvs_bundle(
         timestamps_arr = np.arange(hlcvs_arr.shape[0], dtype=np.int64)
     else:
         timestamps_arr = np.ascontiguousarray(timestamps, dtype=np.int64)
-    meta_overrides = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
-    warmup_requested = int(
-        meta_overrides.get("warmup_minutes_requested", compute_backtest_warmup_minutes(config))
-    )
-    warmup_provided = int(meta_overrides.get("warmup_minutes_provided", warmup_requested))
-    requested_ts = int(meta_overrides.get("requested_start_ts", requested_start_ts))
-    effective_start_ts = int(
-        meta_overrides.get("effective_start_ts", int(timestamps_arr[0]) if len(timestamps_arr) else 0)
-    )
     coin_meta_entries = _build_coin_metadata_entries(
         coins_order,
         exchange,
@@ -398,13 +388,7 @@ def _build_hlcvs_bundle(
         warmup_minutes,
         trade_start_indices,
     )
-    bundle_meta = {
-        "requested_start_timestamp_ms": requested_ts,
-        "effective_start_timestamp_ms": effective_start_ts,
-        "warmup_minutes_requested": warmup_requested,
-        "warmup_minutes_provided": warmup_provided,
-        "coins": coin_meta_entries,
-    }
+    bundle_meta = {**bundle_meta_base, "coins": coin_meta_entries}
     rss_after = _rss_mb()
     if hasattr(logger, "trace"):
         logger.trace(
@@ -497,13 +481,6 @@ def build_backtest_payload(
             hlcvs.shape[0],
             offset_bars,
         )
-        if isinstance(mss, dict):
-            meta = mss.setdefault("__meta__", {})
-            meta["data_interval_minutes"] = int(candle_interval)
-            meta["candle_interval_offset_bars"] = int(offset_bars)
-            if timestamps is not None and len(timestamps) > 0:
-                meta["effective_start_ts"] = int(timestamps[0])
-                meta["effective_start_date"] = ts_to_date(int(timestamps[0]))
 
     # Inject first timestamp (ms) into backtest params; default to 0 if unknown
     try:
@@ -587,17 +564,35 @@ def build_backtest_payload(
     except Exception:
         requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
     backtest_params["requested_start_timestamp_ms"] = requested_start_ts
-    if isinstance(meta, dict) and timestamps is not None and len(timestamps) > 0:
-        meta["effective_start_ts"] = int(timestamps[0])
-        meta["effective_start_date"] = ts_to_date(int(timestamps[0]))
-        warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // 60_000))
-        meta["warmup_minutes_provided"] = warmup_provided
+
+    warmup_requested = int(
+        meta.get("warmup_minutes_requested", compute_backtest_warmup_minutes(config))
+    )
+    if "warmup_minutes_provided" in meta:
+        warmup_provided = int(meta["warmup_minutes_provided"])
+    elif timestamps is not None and len(timestamps) > 0:
+        warmup_provided = max(
+            0, (requested_start_ts - int(timestamps[0])) // 60_000
+        )
+    else:
+        warmup_provided = warmup_requested
+
+    if timestamps is not None and len(timestamps) > 0:
+        effective_start_ts = int(timestamps[0])
+    else:
+        effective_start_ts = 0
+
+    bundle_meta_base = {
+        "requested_start_timestamp_ms": requested_start_ts,
+        "effective_start_timestamp_ms": effective_start_ts,
+        "warmup_minutes_requested": warmup_requested,
+        "warmup_minutes_provided": warmup_provided,
+    }
 
     bundle = _build_hlcvs_bundle(
         hlcvs,
         btc_usd_prices,
         timestamps,
-        config,
         exchange,
         mss,
         coins_order,
@@ -605,7 +600,7 @@ def build_backtest_payload(
         last_valid_indices,
         warmup_minutes,
         trade_start_indices,
-        requested_start_ts,
+        bundle_meta_base,
         coin_indices=coin_indices,
     )
 
