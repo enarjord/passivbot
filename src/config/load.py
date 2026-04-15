@@ -28,6 +28,7 @@ def prepare_config(
     base_config_path: str = "",
     live_only: bool = False,
     verbose: bool = True,
+    log_config_transforms: bool | None = None,
     target: str = "canonical",
     runtime: str | None = None,
     raw_snapshot: dict | None = None,
@@ -40,11 +41,12 @@ def prepare_config(
         effective_snapshot = deepcopy(source.get("_raw_effective", source))
     source["_raw"] = deepcopy(raw_snapshot)
     source["_raw_effective"] = deepcopy(effective_snapshot)
+    normalize_verbose = verbose if log_config_transforms is None else log_config_transforms
     result = normalize_config(
         source,
         base_config_path=base_config_path,
         live_only=live_only,
-        verbose=verbose,
+        verbose=normalize_verbose,
         record_step=True,
     )
     if target != "canonical":
@@ -59,6 +61,7 @@ def load_prepared_config(
     *,
     live_only: bool = False,
     verbose: bool = True,
+    log_config_transforms: bool | None = None,
     target: str = "canonical",
     runtime: str | None = None,
     log_info: bool = True,
@@ -69,6 +72,7 @@ def load_prepared_config(
         base_config_path=base_config_path,
         live_only=live_only,
         verbose=verbose,
+        log_config_transforms=log_config_transforms,
         target=target,
         runtime=runtime,
         raw_snapshot=raw_snapshot,
