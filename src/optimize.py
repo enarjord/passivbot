@@ -63,7 +63,7 @@ import asyncio
 import argparse
 import multiprocessing
 import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 from cli_utils import (
     add_help_all_argument,
     build_command_parser,
@@ -73,7 +73,6 @@ from cli_utils import (
 )
 from config import load_input_config, load_prepared_config, prepare_config
 from config.access import get_optional_config_value, require_config_value
-from config.bot import normalize_forager_score_weights
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
 from config.scoring import (
     ObjectiveSpec,
@@ -86,7 +85,6 @@ from config.scoring import (
 from config.parse import load_raw_config as load_hjson_config
 from config.schema import get_template_config
 from downloader import compute_backtest_warmup_minutes
-from warmup_utils import compute_per_coin_warmup_minutes
 from config_utils import (
     format_bot_config,
     add_config_arguments,
@@ -172,6 +170,11 @@ from optimization.backend_shared import cancel_pending_async_results, drain_asyn
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.backends import get_backend_runner
 from optimization.config_adapter import get_optimization_key_paths, OPTIMIZABLE_BOT_KEY_PATHS
+from optimization.warmup import (
+    build_optimizer_vector_config,
+    compute_optimizer_per_coin_warmup_minutes,
+    stamp_warmup_metadata,
+)
 from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
@@ -278,34 +281,8 @@ def _stamp_optimizer_warmup(config: dict, mss: dict, coins: list[str]) -> None:
     Must be called *after* ``prepare_hlcvs_mss`` and *before* the Evaluator
     reads ``mss``.
     """
-    bounds = extract_bounds_tuple_list_from_config(config)
-    if not bounds:
-        return
-    max_vector = [bound.high for bound in bounds]
-    overrides_list = config.get("optimize", {}).get("enable_overrides", []) or []
-    max_config = individual_to_config(
-        max_vector,
-        optimizer_overrides,
-        overrides_list,
-        config,
-    )
-    warmup_map = compute_per_coin_warmup_minutes(max_config)
-    default_warmup = int(warmup_map.get("__default__", 0))
-    stamped: Counter = Counter()
-    for coin in coins:
-        meta = mss.get(coin)
-        if not isinstance(meta, dict):
-            continue
-        warmup_minutes = int(warmup_map.get(coin, default_warmup))
-        first_idx = int(meta.get("first_valid_index", 0))
-        last_idx = int(meta.get("last_valid_index", 0))
-        if first_idx > last_idx:
-            trade_start = first_idx
-        else:
-            trade_start = min(last_idx, first_idx + warmup_minutes)
-        meta["warmup_minutes"] = warmup_minutes
-        meta["trade_start_index"] = trade_start
-        stamped[(warmup_minutes, trade_start)] += 1
+    warmup_map = compute_optimizer_per_coin_warmup_minutes(config)
+    stamped = stamp_warmup_metadata(mss, coins, warmup_map)
     if stamped:
         summary = ", ".join(
             f"{count}x(warmup={w},start={s})" for (w, s), count in stamped.items()
@@ -733,43 +710,12 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
     """
     assume individual is already bound enforced (or will be after)
     """
-    config = deepcopy(template)
-    if key_paths is None:
-        key_paths = get_optimization_key_paths(config)
-    assert len(individual) == len(key_paths), (
-        f"individual length {len(individual)} does not match optimization key count {len(key_paths)}"
+    return build_optimizer_vector_config(
+        individual,
+        template,
+        key_paths=key_paths,
+        overrides_list=overrides_list,
     )
-    for value, (_, path) in zip(individual, key_paths):
-        target = config
-        for part in path[:-1]:
-            target = target[part]
-        target[path[-1]] = value
-    _apply_config_overrides(
-        config,
-        config.get("optimize", {}).get("fixed_runtime_overrides", {}),
-    )
-    for pside in ("long", "short"):
-        pside_cfg = config.get("bot", {}).get(pside, {})
-        if not isinstance(pside_cfg, dict):
-            continue
-        red_threshold = pside_cfg.get("hsl_red_threshold")
-        no_restart = pside_cfg.get("hsl_no_restart_drawdown_threshold")
-        if red_threshold is not None and no_restart is not None:
-            if float(no_restart) < float(red_threshold):
-                pside_cfg["hsl_no_restart_drawdown_threshold"] = float(red_threshold)
-    for pside in sorted(config["bot"]):
-        config = optimizer_overrides(overrides_list, config, pside)
-
-    for pside in ("long", "short"):
-        pside_cfg = config.get("bot", {}).get(pside, {})
-        if not isinstance(pside_cfg, dict) or "forager_score_weights" not in pside_cfg:
-            continue
-        pside_cfg["forager_score_weights"] = normalize_forager_score_weights(
-            pside_cfg["forager_score_weights"],
-            path=f"bot.{pside}.forager_score_weights",
-        )
-
-    return config
 
 
 def config_to_individual(config, bounds, sig_digits=None):

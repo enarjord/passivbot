@@ -5,10 +5,14 @@ from the template bot's decorative values (e.g. entry_volatility_ema_span_hours)
 instead of the worst case the optimizer's search space can actually produce.
 """
 
-import numpy as np
+from pathlib import Path
 
-from backtest import ensure_valid_index_metadata
 from config_utils import get_template_config
+from optimization.warmup import (
+    compute_optimizer_backtest_warmup_minutes,
+    compute_optimizer_per_coin_warmup_minutes,
+    stamp_warmup_metadata,
+)
 from warmup_utils import compute_per_coin_warmup_minutes
 
 
@@ -57,24 +61,15 @@ def _make_optimizer_config() -> dict:
     return config
 
 
-def _dummy_hlcvs(shape: tuple[int, int, int]) -> np.ndarray:
-    """Return a finite OHLCV-shaped array so ensure_valid_index_metadata
-    treats every bar as valid."""
-    return np.ones(shape, dtype=np.float64)
-
-
 def test_stamp_optimizer_warmup_uses_bounds_when_template_bot_exceeds_them():
-    """Bug regression: the optimizer must size warmup from bounds, not the
-    decorative template bot values."""
-    from optimize import _stamp_optimizer_warmup  # noqa: PLC0415 — fails loudly if missing
-
+    """Bug regression: optimizer stamping must use bounds, not decorative bot values."""
     config = _make_optimizer_config()
     mss = {"HYPE": {"first_valid_index": 0, "last_valid_index": 180000}}
 
-    # Simulate prepare_hlcvs_mss's template-derived stamping to establish
-    # the buggy baseline we're repairing.
+    # Simulate the buggy template-derived stamping to establish the baseline
+    # we're repairing.
     template_warmup_map = compute_per_coin_warmup_minutes(config)
-    ensure_valid_index_metadata(mss, _dummy_hlcvs((180001, 1, 4)), ["HYPE"], template_warmup_map)
+    stamp_warmup_metadata(mss, ["HYPE"], template_warmup_map)
     assert mss["HYPE"]["warmup_minutes"] == 30420, (
         "baseline sanity check: compute_per_coin_warmup_minutes on the "
         "template config should produce the buggy 30420-minute warmup "
@@ -82,27 +77,46 @@ def test_stamp_optimizer_warmup_uses_bounds_when_template_bot_exceeds_them():
         "assumptions about the template/bounds disagreement no longer hold."
     )
 
-    # The fix: after _stamp_optimizer_warmup runs, the stamped warmup
-    # reflects the max the optimizer's search space can produce
-    # (ema_span_0 ∈ [1, 100] ⇒ 100 * 0.3 = 30 min).
-    _stamp_optimizer_warmup(config, mss, ["HYPE"])
+    # The fix: optimizer stamping reflects the max the optimizer's search
+    # space can produce (ema_span_0 ∈ [1, 100] ⇒ 100 * 0.3 = 30 min).
+    warmup_map = compute_optimizer_per_coin_warmup_minutes(config)
+    stamp_warmup_metadata(mss, ["HYPE"], warmup_map)
 
     assert mss["HYPE"]["warmup_minutes"] == 30
     assert mss["HYPE"]["trade_start_index"] == 30
 
 
+def test_shared_optimizer_warmup_helper_uses_bounds_when_template_bot_exceeds_them():
+    config = _make_optimizer_config()
+
+    warmup_map = compute_optimizer_per_coin_warmup_minutes(config)
+
+    assert warmup_map["__default__"] == 30
+    assert "HYPE" not in warmup_map
+    assert compute_optimizer_backtest_warmup_minutes(config) == 30
+
+
 def test_stamp_optimizer_warmup_respects_last_valid_index_cap():
     """trade_start_index must never exceed last_valid_index, even if the
     bounds-derived warmup would push it past the end of the data."""
-    from optimize import _stamp_optimizer_warmup  # noqa: PLC0415
 
     config = _make_optimizer_config()
     config["optimize"]["bounds"]["long_ema_span_0"] = [1, 100000, 1]
     mss = {"HYPE": {"first_valid_index": 0, "last_valid_index": 10}}
 
-    _stamp_optimizer_warmup(config, mss, ["HYPE"])
+    stamp_warmup_metadata(mss, ["HYPE"], compute_optimizer_per_coin_warmup_minutes(config))
 
     # Warmup = 100000 * 0.3 = 30000 min. Clamp to last_valid_index = 10.
+    assert mss["HYPE"]["warmup_minutes"] == 30000
+    assert mss["HYPE"]["trade_start_index"] == 10
+
+
+def test_stamp_warmup_metadata_respects_last_valid_index_cap():
+    warmup_map = {"__default__": 30000}
+    mss = {"HYPE": {"first_valid_index": 0, "last_valid_index": 10}}
+
+    stamp_warmup_metadata(mss, ["HYPE"], warmup_map)
+
     assert mss["HYPE"]["warmup_minutes"] == 30000
     assert mss["HYPE"]["trade_start_index"] == 10
 
@@ -113,14 +127,16 @@ def test_stamp_optimizer_warmup_is_wired_into_register_exchange_data():
     they exercise _stamp_optimizer_warmup directly. This test pins the
     wiring so a missing call site fails a test rather than re-introducing
     the bug."""
-    import inspect
-
-    from optimize import _register_exchange_data
-
-    source = inspect.getsource(_register_exchange_data)
+    source = Path("src/optimize.py").read_text(encoding="utf-8")
     assert "_stamp_optimizer_warmup(" in source, (
         "_register_exchange_data must call _stamp_optimizer_warmup. "
         "If this test fails, the warmup-from-bounds fix has regressed: "
         "the optimizer will size per-coin warmup from template bot values "
         "again instead of from optimize.bounds."
     )
+
+
+def test_prepare_suite_contexts_uses_shared_optimizer_warmup_helper():
+    source = Path("src/optimize_suite.py").read_text(encoding="utf-8")
+    assert "compute_optimizer_per_coin_warmup_minutes(" in source
+    assert "stamp_warmup_metadata(" in source
