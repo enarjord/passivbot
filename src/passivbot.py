@@ -105,7 +105,7 @@ from procedures import (
     print_async_exception,
 )
 from utils import get_file_mod_ms
-from downloader import compute_per_coin_warmup_minutes
+from warmup_utils import compute_per_coin_warmup_minutes
 import re
 
 NetworkError = ccxt_errors.NetworkError
@@ -3190,16 +3190,10 @@ class Passivbot:
         if not balance_ok:
             return False
 
-        # Build task list: open_orders and fill events (pnls)
-        tasks = [
+        open_orders_ok, pnls_ok = await asyncio.gather(
             self.update_open_orders(),
             self.update_pnls(),
-        ]
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        open_orders_ok = results[0] is True
-        pnls_ok = results[1] is True
+        )
 
         if not open_orders_ok or not pnls_ok:
             return False
@@ -4753,7 +4747,7 @@ class Passivbot:
             logging.error("[fills] Failed to update FillEventsManager: %s", e)
             if self.logging_level >= 2:
                 traceback.print_exc()
-            return False
+            raise
 
     # -------------------------------------------------------------------------
     # FillEventsManager Helpers
@@ -5457,6 +5451,9 @@ class Passivbot:
                 if elm["symbol"] not in self.open_orders:
                     self.open_orders[elm["symbol"]] = []
                 self.open_orders[elm["symbol"]].append(elm)
+            balance_reconciled = self._reconcile_balance_after_open_orders_refresh()
+            if balance_reconciled:
+                await self.handle_balance_update(source="REST+open_orders")
             if schedule_update_positions:
                 await asyncio.sleep(1.5)
                 await self.update_positions_and_balance()
@@ -5469,7 +5466,7 @@ class Passivbot:
             logging.error(f"error with {get_function_name()} {e}")
             print_async_exception(res)
             traceback.print_exc()
-            return False
+            raise
 
     def get_exchange_time(self):
         """Return current exchange time in milliseconds."""
@@ -5679,6 +5676,8 @@ class Passivbot:
             self.balance_hysteresis_snap_pct = 0.02
         if not hasattr(self, "balance_raw"):
             self.balance_raw = self.get_raw_balance()
+        if not hasattr(self, "_exchange_reported_balance_raw"):
+            self._exchange_reported_balance_raw = self.balance_raw
 
         if self.balance_override is not None:
             balance_raw = float(self.balance_override)
@@ -5704,6 +5703,7 @@ class Passivbot:
             logging.warning("non-finite balance fetch result; keeping previous balance")
             return False
 
+        self._exchange_reported_balance_raw = balance_raw
         balance_snapped = balance_raw
         if self.balance_override is None:
             if self.previous_hysteresis_balance is None:
@@ -5715,6 +5715,14 @@ class Passivbot:
         self.balance_raw = balance_raw
         self.balance = balance_snapped
         return True
+
+    def _reconcile_balance_after_open_orders_refresh(self) -> bool:
+        """Exchange hook: adjust balance after fresh open-order state if needed."""
+        return False
+
+    def _reconcile_balance_after_positions_and_balance_refresh(self) -> bool:
+        """Exchange hook: adjust balance after fresh positions+balance state if needed."""
+        return False
 
     async def update_positions_and_balance(self):
         """Convenience helper to refresh both positions and balance concurrently."""
@@ -5735,6 +5743,7 @@ class Passivbot:
             except Exception as e:
                 logging.error(f"error logging position changes {e}")
         if balance_ok and positions_ok:
+            self._reconcile_balance_after_positions_and_balance_refresh()
             await self.handle_balance_update(source="REST")
         return balance_ok, positions_ok
 
@@ -5800,6 +5809,7 @@ class Passivbot:
             "close_trailing_qty_pct",
             "close_trailing_threshold_pct",
             "entry_grid_double_down_factor",
+            "entry_grid_inflation_enabled",
             "entry_grid_spacing_volatility_weight",
             "entry_grid_spacing_we_weight",
             "entry_grid_spacing_pct",
@@ -5831,7 +5841,7 @@ class Passivbot:
             "unstuck_loss_allowance_pct",
             "unstuck_threshold",
         ]
-        out: dict[str, float | int] = {}
+        out: dict[str, object] = {}
         for key in fields:
             if key in global_keys:
                 val = self.bot_value(pside, key)
@@ -5854,6 +5864,8 @@ class Passivbot:
                 }
             elif key == "n_positions":
                 out[out_key] = int(round(val or 0.0))
+            elif key == "entry_grid_inflation_enabled":
+                out[out_key] = bool(val)
             else:
                 out[out_key] = float(val or 0.0)
         out.update(

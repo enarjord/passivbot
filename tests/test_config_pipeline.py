@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+import logging
 
 import pytest
 
@@ -53,6 +54,27 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert "filter_volatility_ema_span" not in prepared["bot"]["long"]
     assert "long_filter_volume_ema_span" not in prepared["optimize"]["bounds"]
     assert "long_filter_volatility_ema_span" not in prepared["optimize"]["bounds"]
+
+
+@pytest.mark.parametrize(
+    "bound_key",
+    [
+        "long_entry_grid_inflation_enabled",
+        "short_entry_grid_inflation_enabled",
+        "long_hsl_enabled",
+        "short_hsl_enabled",
+        "long_hsl_orange_tier_mode",
+        "short_hsl_orange_tier_mode",
+        "long_hsl_panic_close_order_type",
+        "short_hsl_panic_close_order_type",
+    ],
+)
+def test_prepare_config_rejects_nontunable_bot_bounds(bound_key):
+    cfg = get_template_config()
+    cfg["optimize"]["bounds"][bound_key] = [0.0, 1.0]
+
+    with pytest.raises(KeyError, match=rf"optimize bound {bound_key} must map to a numeric bot\."):
+        prepare_config(cfg, verbose=False, target="canonical", runtime=None)
 
 
 def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_keys():
@@ -271,6 +293,30 @@ def test_prepare_config_rejects_invalid_pnls_max_lookback_days_string():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+@pytest.mark.parametrize(
+    ("pside", "value", "expected"),
+    [
+        ("long", -1.0, r"bot\.long\.unstuck_ema_dist must be > -1\.0"),
+        ("short", 1.0, r"bot\.short\.unstuck_ema_dist must be < 1\.0"),
+    ],
+)
+def test_prepare_config_rejects_invalid_unstuck_ema_dist(pside, value, expected):
+    source = {
+        "backtest": {},
+        "bot": {
+            "long": {},
+            "short": {},
+        },
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+    source["bot"][pside]["unstuck_ema_dist"] = value
+
+    with pytest.raises(ValueError, match=expected):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_keeps_live_market_orders_allowed_without_backtest_override():
     source = {
         "backtest": {},
@@ -342,3 +388,120 @@ def test_prepare_config_removes_empty_means_all_approved_from_canonical_shape():
     assert prepared["_coins_sources"]["approved_coins"] == "all"
     assert prepared["_raw"]["live"]["empty_means_all_approved"] is True
     assert prepared["_raw_effective"]["live"]["empty_means_all_approved"] is True
+
+
+def test_prepare_config_warns_when_entry_grid_inflation_enabled(caplog):
+    source = get_template_config()
+
+    with caplog.at_level(logging.WARNING):
+        prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["entry_grid_inflation_enabled"] is True
+    assert prepared["bot"]["short"]["entry_grid_inflation_enabled"] is True
+    assert any(
+        "entry_grid_inflation_enabled" in rec.message and "scheduled for deprecation" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(caplog):
+    source = get_template_config()
+    for key in [
+        "entry_trailing_retracement_volatility_weight",
+        "entry_trailing_retracement_we_weight",
+        "entry_trailing_threshold_volatility_weight",
+        "entry_trailing_threshold_we_weight",
+        "entry_volatility_ema_span_hours",
+        "risk_twel_enforcer_threshold",
+        "risk_we_excess_allowance_pct",
+        "risk_wel_enforcer_threshold",
+    ]:
+        source["bot"]["long"].pop(key)
+
+    with caplog.at_level(logging.INFO):
+        prepared = prepare_config(source, verbose=True, target="canonical", runtime=None)
+
+    long_cfg = prepared["bot"]["long"]
+    assert long_cfg["entry_trailing_retracement_volatility_weight"] == 0.0
+    assert long_cfg["entry_trailing_retracement_we_weight"] == 0.0
+    assert long_cfg["entry_trailing_threshold_volatility_weight"] == 0.0
+    assert long_cfg["entry_trailing_threshold_we_weight"] == 0.0
+    assert long_cfg["entry_volatility_ema_span_hours"] == 0.0
+    assert long_cfg["risk_twel_enforcer_threshold"] == 0.0
+    assert long_cfg["risk_we_excess_allowance_pct"] == 0.0
+    assert long_cfg["risk_wel_enforcer_threshold"] == 0.0
+    assert any(
+        "hydrating omitted bot.long.risk_wel_enforcer_threshold" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
+    prepared = load_prepared_config("configs/fake_live_hsl_btc.hjson", verbose=False, target="live")
+
+    assert prepared["bot"]["short"]["total_wallet_exposure_limit"] == 0.0
+    assert prepared["bot"]["short"]["entry_trailing_double_down_factor"] == pytest.approx(1.0)
+
+
+def test_prepare_config_skips_entry_grid_inflation_warning_when_disabled(caplog):
+    source = get_template_config()
+    source["bot"]["long"]["entry_grid_inflation_enabled"] = False
+    source["bot"]["short"]["entry_grid_inflation_enabled"] = False
+
+    with caplog.at_level(logging.WARNING):
+        prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["entry_grid_inflation_enabled"] is False
+    assert prepared["bot"]["short"]["entry_grid_inflation_enabled"] is False
+    assert not any("entry_grid_inflation_enabled" in rec.message for rec in caplog.records)
+
+
+def test_prepare_config_normalizes_entry_grid_inflation_flag_in_coin_overrides():
+    source = get_template_config()
+    source["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"entry_grid_inflation_enabled": "false"}}}
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["entry_grid_inflation_enabled"] is False
+
+
+def test_prepare_config_warns_when_coin_override_enables_entry_grid_inflation(caplog):
+    source = get_template_config()
+    source["bot"]["long"]["entry_grid_inflation_enabled"] = False
+    source["bot"]["short"]["entry_grid_inflation_enabled"] = False
+    source["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"entry_grid_inflation_enabled": True}}}
+    }
+
+    with caplog.at_level(logging.WARNING):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert any(
+        "coin_overrides.BTC.bot.long.entry_grid_inflation_enabled" in rec.message
+        and "scheduled for deprecation" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readiness_only():
+    source = get_template_config()
+    source["bot"]["long"]["forager_score_weights"] = {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
+    source["bot"]["long"]["forager_volume_ema_span"] = 0.0
+    source["bot"]["long"]["forager_volatility_ema_span"] = 0.0
+    source["bot"]["long"]["forager_volume_drop_pct"] = 0.0
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["forager_score_weights"] == {
+        "volume": 0.0,
+        "ema_readiness": 1.0,
+        "volatility": 0.0,
+    }
+    assert prepared["bot"]["long"]["forager_volume_ema_span"] == 0.0
+    assert prepared["bot"]["long"]["forager_volatility_ema_span"] == 0.0

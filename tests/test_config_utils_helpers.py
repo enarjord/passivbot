@@ -882,6 +882,8 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
     assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
     assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
+    assert "--bot.long.entry_grid_inflation_enabled" not in help_text
+    assert "--bot.long.hsl_enabled" not in help_text
     assert "--optimize_population_size" not in help_text
     assert "--optimize.bounds.long_close_grid_markup_end" not in help_text
     assert "Optimize DEAP:" not in help_text
@@ -899,6 +901,14 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     assert "--hedge-mode Y/N, -hm Y/N" in help_text
     assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
     assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
+    assert "--bot.long.entry_grid_inflation_enabled Y/N" in help_text
+    assert "--bot.short.entry_grid_inflation_enabled Y/N" in help_text
+    assert "--bot.long.hsl_enabled Y/N" in help_text
+    assert "--bot.short.hsl_enabled Y/N" in help_text
+    assert "--bot.long.hsl_orange_tier_mode VALUE" in help_text
+    assert "--bot.short.hsl_orange_tier_mode VALUE" in help_text
+    assert "--bot.long.hsl_panic_close_order_type VALUE" in help_text
+    assert "--bot.short.hsl_panic_close_order_type VALUE" in help_text
 
 
 def test_live_default_help_shows_curated_groups():
@@ -984,6 +994,39 @@ def test_dotted_pnls_lookback_override_accepts_all_for_non_live_commands(command
     parsed = parser.parse_args(["--live.pnls_max_lookback_days", "all"])
 
     assert getattr(parsed, "live.pnls_max_lookback_days") == "all"
+
+
+def test_optimize_fixed_bot_runtime_overrides_parse():
+    config = project_template_config_for_cli(get_template_config(), "optimize")
+    parser = argparse.ArgumentParser(prog="optimize")
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get("optimize", [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command="optimize",
+        help_all=False,
+        group_map=group_map,
+    )
+
+    parsed = parser.parse_args(
+        [
+            "--bot.long.entry_grid_inflation_enabled",
+            "n",
+            "--bot.short.hsl_enabled",
+            "y",
+            "--bot.long.hsl_orange_tier_mode",
+            "tp_only",
+            "--bot.short.hsl_panic_close_order_type",
+            "market",
+        ]
+    )
+
+    assert getattr(parsed, "bot.long.entry_grid_inflation_enabled") is False
+    assert getattr(parsed, "bot.short.hsl_enabled") is True
+    assert getattr(parsed, "bot.long.hsl_orange_tier_mode") == "tp_only"
+    assert getattr(parsed, "bot.short.hsl_panic_close_order_type") == "market"
 
 
 def test_backtest_reserved_execution_live_aliases_parse_short_and_long():

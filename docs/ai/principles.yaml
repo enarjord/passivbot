@@ -1,7 +1,8 @@
 passivbot_agent_principles:
   architecture:
     - Rust is the source of truth for order logic, risk, unstuck, and backtesting behavior.
-    - Backtester and live bot must use equivalent Rust behavior.
+    - Backtester and live bot must use equivalent trading/risk contracts.
+    - If live and backtest keep separate implementations because their runtime contexts differ, parity tests against a naive shared contract are required.
     - Python is orchestration, exchange I/O, config, and data plumbing.
 
   statelessness:

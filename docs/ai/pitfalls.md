@@ -144,6 +144,19 @@ Avoid: debugging behavior before validating which extension binary is loaded.
 
 Do: read `build_pitfalls.md` and verify module path + rebuild status first.
 
+## 12) Re-Implementing Live Rolling Risk Logic Without Parity Tests
+
+Avoid: optimizing rolling PnL / lookback logic in backtest with a different internal coordinate system or peak bookkeeping than live.
+
+Because:
+- these paths can look mathematically similar while drifting semantically
+- once peak/current reconstruction diverges, unstuck allowance and realized-loss gating can become silently wrong
+
+Do:
+1. define the contract using the naive live behavior first
+2. optimize only as an implementation detail
+3. add regression tests that compare the optimized path against a naive filter-and-recompute reference
+
 ## Pre-PR Safety Scan
 
 ```bash

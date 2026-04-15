@@ -109,8 +109,8 @@ class TestCCXTBotFetchBalance:
         assert balance == 1000.50
 
     @pytest.mark.asyncio
-    async def test_fetch_balance_returns_zero_when_missing(self):
-        """Should return 0 when quote currency not in balance."""
+    async def test_fetch_balance_raises_when_quote_missing(self):
+        """Should fail loudly when quote currency is missing from total balance."""
         from exchanges.ccxt_bot import CCXTBot
 
         # Use __new__ to bypass complex Passivbot initialization
@@ -124,9 +124,10 @@ class TestCCXTBotFetchBalance:
             }
         )
 
-        balance = await bot.fetch_balance()
-
-        assert balance == 0.0
+        with pytest.raises(
+            KeyError, match=r"testexchange: fetch_balance response missing total\['USDC'\]"
+        ):
+            await bot.fetch_balance()
 
 
 class TestCCXTBotFetchPositions:

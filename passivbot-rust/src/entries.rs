@@ -299,6 +299,13 @@ pub fn calc_grid_entry_long(
             order_type: OrderType::EntryGridCroppedLong,
         };
     }
+    if !bot_params.entry_grid_inflation_enabled {
+        return Order {
+            qty: reentry_qty,
+            price: reentry_price,
+            order_type: OrderType::EntryGridNormalLong,
+        };
+    }
     // preview next order to check if reentry qty is to be inflated
     let (psize_if_filled, pprice_if_filled) = calc_new_psize_pprice(
         position.size,
@@ -727,6 +734,13 @@ pub fn calc_grid_entry_short(
             qty: -reentry_qty_cropped,
             price: reentry_price,
             order_type: OrderType::EntryGridCroppedShort,
+        };
+    }
+    if !bot_params.entry_grid_inflation_enabled {
+        return Order {
+            qty: -reentry_qty,
+            price: reentry_price,
+            order_type: OrderType::EntryGridNormalShort,
         };
     }
     // preview next order to check if reentry qty is to be inflated

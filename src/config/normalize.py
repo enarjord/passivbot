@@ -1,7 +1,12 @@
 import logging
 from copy import deepcopy
 
-from .bot import ensure_optimize_bounds_for_bot, format_bot_config
+from .bot import (
+    ensure_optimize_bounds_for_bot,
+    format_bot_config,
+    normalize_coin_override_entry_grid_inflation_flags,
+    warn_on_deprecated_coin_override_entry_grid_inflation,
+)
 from .hydrate import (
     apply_non_live_adjustments,
     hydrate_missing_template_fields,
@@ -11,7 +16,12 @@ from .hydrate import (
     sync_with_template,
 )
 from .coerce import normalize_validation_fields
-from .migrations import apply_migrations, build_base_config_from_flavor, detect_flavor
+from .migrations import (
+    apply_backward_compatibility_renames,
+    apply_migrations,
+    build_base_config_from_flavor,
+    detect_flavor,
+)
 from .scoring import normalize_scoring_config
 from .schema import get_template_config
 from .transform_log import ConfigTransformTracker, record_transform
@@ -65,6 +75,16 @@ def normalize_config(
     seed_missing_compatibility_sections(template, result, tracker=tracker)
     for path in ("bot.long", "bot.short", "optimize.bounds"):
         require_config_dict(result, path)
+    apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
+    if isinstance(raw_optimize_snapshot, dict):
+        raw_optimize_compat = {
+            "bot": {"long": {}, "short": {}},
+            "live": {},
+            "logging": {},
+            "optimize": deepcopy(raw_optimize_snapshot),
+        }
+        apply_backward_compatibility_renames(raw_optimize_compat, verbose=False, tracker=None)
+        raw_optimize_snapshot = raw_optimize_compat["optimize"]
 
     result["bot"] = format_bot_config(
         result["bot"],
@@ -72,6 +92,8 @@ def normalize_config(
         verbose=verbose,
         tracker=tracker,
     )
+    normalize_coin_override_entry_grid_inflation_flags(result)
+    warn_on_deprecated_coin_override_entry_grid_inflation(result, verbose=verbose)
     ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
     hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
     reject_backtest_inherited_live_fields(result)

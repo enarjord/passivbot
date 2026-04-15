@@ -218,6 +218,10 @@ Passivbot can be configured to create a grid of entry orders, with prices and qu
   - Quantity of the next grid entry is position size times the double down factor.
   - Example: If position size is `1.4` and `double_down_factor` is `0.9`, then the next entry quantity is `1.4 * 0.9 = 1.26`.
   - Also applies to trailing entries.
+- **entry_grid_inflation_enabled**:
+  - When `true`, grid-mode re-entries may inflate the current order near the effective wallet exposure cap if the next grid step would otherwise become tiny.
+  - When `false`, grid re-entries are only normal or cropped so the bot observes effective WEL without pulling future size forward.
+  - `false` is the canonical setting going forward. The current default remains `true` for backwards compatibility, and config parsing warns that the inflated path is scheduled for deprecation.
 - **entry_grid_spacing_pct**, **entry_grid_spacing_we_weight**:
   - Grid re-entry prices are determined as follows:
     - `next_reentry_price_long = pos_price * (1 - entry_grid_spacing_pct * multiplier)`
@@ -327,8 +331,8 @@ Forager coin selection now uses a two-stage model: coarse volume pruning, then w
 - **forager_score_weights**: Final weighted forager ranking weights.
   - Required keys: `volume`, `ema_readiness`, `volatility`.
   - Default: `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}`.
-  - Weights are relative. Positive weights are normalized to unit sum before use.
-  - If all three are `0.0`, Passivbot interprets that as volume-only ranking.
+  - Positive weights are relative and normalized to unit sum before use.
+  - If all three are `0.0`, Passivbot normalizes them to EMA-readiness-only ranking.
   - `ema_readiness` ranks by distance to the actual offset initial-entry threshold, not raw EMA bands.
 
 See [docs/forager.md](forager.md) for a full description of motivation, ranking rules, caveats, and usage examples.
@@ -442,6 +446,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - `0`: minimal lookback window at the consumer's native sampling resolution (resets as often as that path can meaningfully observe).
   - `> 0`: rolling window of that many days.
   - `"all"`: full available history.
+  - Live and backtest use the same contract for realized-PnL risk windows: filter realized fill events to the active lookback window, then recompute cumulative PnL, current value, and peak from only that filtered sequence.
 - **price_distance_threshold**: Minimum distance to current price action required for EMA-based limit orders.
 - **risk_wel_enforcer_threshold**: Per-symbol multiplier that triggers the WEL enforcer. When a position’s exposure exceeds `wallet_exposure_limit * (1 + risk_we_excess_allowance_pct) * risk_wel_enforcer_threshold` the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming, `1.0` for a hard cap, or ≤0 to disable.
 - **risk_twel_enforcer_threshold**: Fraction of the configured `total_wallet_exposure_limit` that triggers the TWEL enforcer. When aggregate exposure exceeds this threshold the bot queues reduction orders instead of new entries. Set >1.0 to allow a grace margin, `1.0` for strict enforcement, or ≤0 to disable.

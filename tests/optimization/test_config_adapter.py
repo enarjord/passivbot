@@ -1,6 +1,7 @@
 from optimization.bounds import Bound
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.config_adapter import get_optimization_key_paths
+import pytest
 
 
 class TestConfigAdapter:
@@ -24,11 +25,15 @@ class TestConfigAdapter:
         template = get_template_config()
         for pside in template["bot"]:
             for key in template["bot"][pside]:
-                if isinstance(template["bot"][pside][key], dict):
+                value = template["bot"][pside][key]
+                if isinstance(value, dict) or isinstance(value, bool) or not isinstance(value, (int, float)):
                     continue
                 bound_key = f"{pside}_{key}"
                 if bound_key not in config["optimize"]["bounds"]:
-                    config["optimize"]["bounds"][bound_key] = [0.0, 1.0]
+                    if bound_key == "short_unstuck_ema_dist":
+                        config["optimize"]["bounds"][bound_key] = [0.0, 0.99]
+                    else:
+                        config["optimize"]["bounds"][bound_key] = [0.0, 1.0]
 
         bounds = extract_bounds_tuple_list_from_config(config)
         assert len(bounds) > 0
@@ -105,3 +110,48 @@ class TestConfigAdapter:
             ("long_a", ("bot", "long", "a")),
             ("long_b", ("bot", "long", "b")),
         ]
+
+    @pytest.mark.parametrize(
+        ("bound_key", "bound_value", "expected"),
+        [
+            (
+                "long_unstuck_ema_dist",
+                [-1.0, -0.5, 0.01],
+                r"optimize\.bounds\.long_unstuck_ema_dist lower bound must be > -1\.0",
+            ),
+            (
+                "short_unstuck_ema_dist",
+                [-0.99, 1.0, 0.01],
+                r"optimize\.bounds\.short_unstuck_ema_dist upper bound must be < 1\.0",
+            ),
+        ],
+    )
+    def test_get_optimization_key_paths_rejects_invalid_unstuck_ema_dist_bounds(
+        self, bound_key, bound_value, expected
+    ):
+        config = {
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "total_wallet_exposure_limit": 1.0,
+                    "unstuck_ema_dist": -0.2,
+                },
+                "short": {
+                    "n_positions": 1.0,
+                    "total_wallet_exposure_limit": 1.0,
+                    "unstuck_ema_dist": -0.2,
+                },
+            },
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 2.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
+                    "short_n_positions": [1.0, 2.0, 1.0],
+                    "short_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
+                    bound_key: bound_value,
+                }
+            },
+        }
+
+        with pytest.raises(ValueError, match=expected):
+            get_optimization_key_paths(config)

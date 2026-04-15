@@ -330,6 +330,10 @@ fn default_hsl_panic_close_order_type() -> String {
     "market".to_string()
 }
 
+fn default_entry_grid_inflation_enabled() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ForagerScoreWeights {
@@ -360,8 +364,8 @@ impl ForagerScoreWeights {
         let total = self.volume + self.ema_readiness + self.volatility;
         if total <= 0.0 {
             return Ok(Self {
-                volume: 1.0,
-                ema_readiness: 0.0,
+                volume: 0.0,
+                ema_readiness: 1.0,
                 volatility: 0.0,
             });
         }
@@ -384,6 +388,8 @@ pub struct BotParams {
     pub close_trailing_qty_pct: f64,
     pub close_trailing_threshold_pct: f64,
     pub entry_grid_double_down_factor: f64,
+    #[serde(default = "default_entry_grid_inflation_enabled")]
+    pub entry_grid_inflation_enabled: bool,
     pub entry_grid_spacing_volatility_weight: f64,
     pub entry_grid_spacing_we_weight: f64,
     pub entry_grid_spacing_pct: f64,

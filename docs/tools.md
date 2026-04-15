@@ -126,6 +126,37 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
 passivbot tool fetch-balance --user bybit_01
 ```
 
+## Hyperliquid live probes
+
+These probes were added to investigate live Hyperliquid balance/state quirks, especially HIP-3
+stock perps. They are intended to be reused for future live diagnostics instead of creating new
+one-off scripts.
+
+- `passivbot tool hyperliquid-balance-probe` is read-only. It fetches one wallet balance and prints
+  a normalized summary.
+- `passivbot tool hyperliquid-order-margin-probe` is mutating. It places one tiny post-only order,
+  snapshots balance changes, then cancels it.
+- `passivbot tool hyperliquid-position-probe` is mutating. It can open/flatten a tiny position and
+  optionally place resting entry or reduce-only close orders to inspect live state transitions.
+
+The mutating probes require `--yes` and are intended for test wallets or deliberately tiny live
+positions only.
+
+```shell
+passivbot tool hyperliquid-balance-probe --user hyperliquid_01
+passivbot tool hyperliquid-order-margin-probe --user hyperliquid_01 --symbol BTC/USDC:USDC --yes
+passivbot tool hyperliquid-position-probe --user hyperliquid_01 --symbol XYZ-SP500/USDC:USDC --yes
+passivbot tool hyperliquid-position-probe --user hyperliquid_01 --symbol XYZ-SP500/USDC:USDC --flatten-only --yes
+```
+
+Recommended usage:
+
+- Start with `hyperliquid-balance-probe` to confirm the wallet and baseline balance fields.
+- Use `hyperliquid-order-margin-probe` to inspect how a single resting order changes
+  `accountValue`, `withdrawable`, and related fields.
+- Use `hyperliquid-position-probe` only when you need to inspect live position-margin behavior,
+  startup-state handling, or combined position-plus-order effects.
+
 ## Repro and diagnostics helpers
 
 `src/repro_harness.py` replays a stored config or Pareto JSON through both the optimizer-evaluation path and the backtest path in one process, then compares the resulting metrics and Rust binary provenance.

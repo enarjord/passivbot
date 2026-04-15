@@ -107,7 +107,7 @@ class BinanceBot(CCXTBot):
 
     # ═══════════════════ BINANCE-SPECIFIC METHODS ═══════════════════
 
-    async def fetch_open_orders(self, symbol: str = None, all=False) -> list:
+    async def _do_fetch_open_orders(self, symbol: str = None, all=False) -> list:
         """Binance: Parallel fetch per-symbol to avoid expensive all-symbols query."""
         if all:
             self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
@@ -124,7 +124,9 @@ class BinanceBot(CCXTBot):
                 *[self.cca.fetch_open_orders(symbol=s) for s in sorted(symbols_)]
             )
             fetched = [x for sublist in results for x in sublist]
+        return fetched
 
+    def _normalize_open_orders(self, fetched: list) -> list:
         open_orders = {}
         for elm in fetched:
             elm["position_side"] = elm["info"]["positionSide"].lower()
@@ -132,6 +134,10 @@ class BinanceBot(CCXTBot):
             self._record_live_margin_mode_from_payload(elm)
             open_orders[elm["id"]] = elm
         return sorted(open_orders.values(), key=lambda x: x["timestamp"])
+
+    async def fetch_open_orders(self, symbol: str = None, all=False) -> list:
+        fetched = await self._do_fetch_open_orders(symbol=symbol, all=all)
+        return self._normalize_open_orders(fetched)
 
     async def fetch_tickers(self) -> dict:
         """Binance: Use bookticker endpoint for efficiency."""

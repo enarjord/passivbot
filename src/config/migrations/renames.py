@@ -23,6 +23,11 @@ OBSOLETE_BOT_KEYS = {
 }
 
 LEGACY_ENTRY_GRID_KEYS = {
+    "ddown_factor": "entry_grid_double_down_factor",
+    "initial_eprice_ema_dist": "entry_initial_ema_dist",
+    "initial_qty_pct": "entry_initial_qty_pct",
+    "rentry_pprice_dist": "entry_grid_spacing_pct",
+    "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_we_weight",
     "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
     "entry_grid_spacing_log_span_hours": "entry_volatility_ema_span_hours",
     "entry_log_range_ema_span_hours": "entry_volatility_ema_span_hours",
@@ -32,6 +37,10 @@ LEGACY_ENTRY_GRID_KEYS = {
 }
 
 LEGACY_BOUNDS_KEYS = {
+    "long_min_markup": "long_close_grid_markup_start",
+    "short_min_markup": "short_close_grid_markup_start",
+    "long_close_grid_min_markup": "long_close_grid_markup_end",
+    "short_close_grid_min_markup": "short_close_grid_markup_end",
     "long_filter_volatility_ema_span": "long_forager_volatility_ema_span",
     "long_filter_noisiness_rolling_window": "long_forager_volatility_ema_span",
     "long_filter_noisiness_ema_span": "long_forager_volatility_ema_span",
