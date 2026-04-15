@@ -237,12 +237,19 @@ pub fn select_forager_candidates(
     cfg: &ForagerSelectionConfig,
 ) -> Result<Vec<usize>, ForagerSelectionError> {
     let normalized_weights = validate_forager_weights(&cfg.weights)?;
-    let features = build_coin_features(candidates, cfg)?;
-    let selection_cfg = SelectionConfig {
+    let normalized_cfg = ForagerSelectionConfig {
         slots_to_fill: cfg.slots_to_fill,
         volume_drop_pct: cfg.volume_drop_pct,
         weights: normalized_weights,
         require_forager: cfg.require_forager,
+        position_side: cfg.position_side,
+    };
+    let features = build_coin_features(candidates, &normalized_cfg)?;
+    let selection_cfg = SelectionConfig {
+        slots_to_fill: normalized_cfg.slots_to_fill,
+        volume_drop_pct: normalized_cfg.volume_drop_pct,
+        weights: normalized_cfg.weights,
+        require_forager: normalized_cfg.require_forager,
     };
     Ok(select_coins(&features, &selection_cfg))
 }
@@ -675,6 +682,25 @@ mod tests {
             make_feature(2, 1.0, 0.5, 0.0),
         ];
         assert_eq!(select_coins(&features, &default_config()), vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn zero_weights_fall_back_to_default_volatility_only_ranking() {
+        let features = vec![
+            make_feature(2, 10.0, 0.9, 0.0),
+            make_feature(0, 1.0, 0.2, -0.1),
+            make_feature(1, 5.0, 0.5, 0.2),
+        ];
+        let cfg = SelectionConfig {
+            slots_to_fill: 2,
+            weights: ForagerScoreWeights {
+                volume: 0.0,
+                ema_readiness: 0.0,
+                volatility: 0.0,
+            },
+            ..default_config()
+        };
+        assert_eq!(select_coins(&features, &cfg), vec![2, 1]);
     }
 
     #[test]

@@ -205,7 +205,7 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
         total += value
 
     if total <= 0.0:
-        return {"volume": 1.0, "ema_readiness": 0.0, "volatility": 0.0}
+        return {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
 
     return {key: normalized[key] / total for key in ("volume", "ema_readiness", "volatility")}
 
@@ -260,7 +260,8 @@ def normalize_bot_forager_config(
                 log_config_message(
                     verbose,
                     logging.INFO,
-                    "normalizing bot.%s.forager_score_weights all-zero vector to volume-only",
+                    "normalizing bot.%s.forager_score_weights all-zero vector to default"
+                    " volatility-only ranking",
                     pside,
                 )
             else:

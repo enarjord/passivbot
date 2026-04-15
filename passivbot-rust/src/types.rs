@@ -364,9 +364,9 @@ impl ForagerScoreWeights {
         let total = self.volume + self.ema_readiness + self.volatility;
         if total <= 0.0 {
             return Ok(Self {
-                volume: 1.0,
+                volume: 0.0,
                 ema_readiness: 0.0,
-                volatility: 0.0,
+                volatility: 1.0,
             });
         }
         Ok(Self {

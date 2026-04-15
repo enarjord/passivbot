@@ -444,3 +444,21 @@ def test_prepare_config_warns_when_coin_override_enables_entry_grid_inflation(ca
         and "scheduled for deprecation" in rec.message
         for rec in caplog.records
     )
+
+
+def test_prepare_config_normalizes_all_zero_long_forager_weights_to_volatility_only():
+    source = get_template_config()
+    source["bot"]["long"]["forager_score_weights"] = {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
+    source["bot"]["long"]["forager_volume_drop_pct"] = 0.0
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["forager_score_weights"] == {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 1.0,
+    }
