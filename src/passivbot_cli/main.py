@@ -84,6 +84,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "plot iterative history files (requires full install)",
         requires_full=True,
     ),
+    "inspect-ohlcvs": CommandSpec(
+        "tools.inspect_ohlcvs",
+        "inspect v2 OHLCV cache metadata and gaps (requires full install)",
+        requires_full=True,
+    ),
     "migrate-historical-data": CommandSpec(
         "tools.migrate_historical_data",
         "migrate historical data layout (requires full install)",

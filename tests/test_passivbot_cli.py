@@ -131,6 +131,7 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "hyperliquid-balance-probe" in out
     assert "hyperliquid-order-margin-probe" in out
     assert "hyperliquid-position-probe" in out
+    assert "inspect-ohlcvs" in out
     assert "monitor-dev" in out
     assert "monitor-relay" in out
     assert "monitor-web" in out
@@ -304,6 +305,25 @@ def test_monitor_relay_tool_dispatch_forwards_module_and_prog(monkeypatch):
     assert captured["module_name"] == "tools.monitor_relay"
     assert captured["argv"] == ["passivbot tool monitor-relay", "--port", "9000"]
     assert captured["prog_env"] == "passivbot tool monitor-relay"
+
+
+def test_inspect_ohlcvs_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "inspect-ohlcvs", "--exchange", "binance"]) == 0
+
+    assert captured["module_name"] == "tools.inspect_ohlcvs"
+    assert captured["argv"] == ["passivbot tool inspect-ohlcvs", "--exchange", "binance"]
+    assert captured["prog_env"] == "passivbot tool inspect-ohlcvs"
 
 
 def test_monitor_dev_tool_dispatch_forwards_module_and_prog(monkeypatch):
