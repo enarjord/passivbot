@@ -82,10 +82,24 @@ Do not weaken:
 Baseline:
 
 - `PYTHONPATH=src python3 src/tools/run_ema_anchor_autoresearch_round.py baseline --run`
+- `PYTHONPATH=src python3 src/tools/write_ema_anchor_autoresearch_baseline.py optimize_results/autoresearch_baseline_<timestamp>_XMR`
 
 Candidate:
 
 - `PYTHONPATH=src python3 src/tools/run_ema_anchor_autoresearch_round.py candidate --baseline-pareto optimize_results/autoresearch_baseline_<timestamp>_XMR/pareto --run`
+
+## Baseline Reference File
+
+After the baseline optimize run, write `baseline.json` in the baseline run dir.
+
+That file is the stable reference for:
+
+- best baseline score
+- best baseline Pareto member
+- constrained metrics for the best member
+- candidate command template
+
+When comparing a candidate run, compare against `baseline.json`, not against an arbitrary config.
 
 ## Style Rules
 

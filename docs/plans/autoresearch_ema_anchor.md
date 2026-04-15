@@ -96,6 +96,23 @@ Defaults:
 
 This prints the exact optimize command. Add `--run` to execute it.
 
+After the baseline run finishes, write a stable manifest for agents and follow-up tools:
+
+```bash
+PYTHONPATH=src python3 src/tools/write_ema_anchor_autoresearch_baseline.py \
+  optimize_results/autoresearch_baseline_<timestamp>_XMR
+```
+
+This writes `baseline.json` beside the optimize run and records:
+
+- baseline run dir
+- baseline pareto dir
+- constrained scorer settings
+- best Pareto member path
+- best score
+- best metrics
+- candidate command template
+
 ### Step 2: Candidate Evaluation
 
 After a code edit, evaluate the candidate against the same fixed XMR window using the baseline Pareto
@@ -120,8 +137,8 @@ This is a bounded local search around a known strong region, not a fresh blind o
 Promote a code change only if:
 
 - the candidate optimize run passes the scorer constraints
-- the best scored Pareto member from the candidate run beats the best scored Pareto member from the
-  baseline run
+- the best scored Pareto member from the candidate run beats the `best_score` recorded in
+  `baseline.json`
 - the code diff remains localized to the allowed strategy surface
 
 Do not promote based on one arbitrary config backtest. Always compare tuned-vs-tuned.
