@@ -72,6 +72,7 @@ from config_utils import (
     recursive_config_update,
     format_config,
     strip_config_metadata,
+    sanitize_prepared_config_for_dump,
     HSL_PSIDE_KEYS,
 )
 from analysis_visibility import filter_analysis_for_visibility
@@ -1696,9 +1697,7 @@ def post_process(
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
-    config["analysis"] = analysis
-    formatted_config = format_config(config, verbose=False)
-    sanitized_config = strip_config_metadata(formatted_config)
+    sanitized_config = sanitize_prepared_config_for_dump(config)
     dump_config(sanitized_config, f"{results_path}config.json")
     dump_backtest_dataset_metadata(config, exchange, results_path)
     fdf.to_csv(f"{results_path}fills.csv")
@@ -1907,6 +1906,7 @@ async def main():
         source_config,
         base_config_path=base_config_path,
         verbose=False,
+        log_config_transforms=True,
         raw_snapshot=raw_snapshot,
     )
     config_logging_value = get_optional_config_value(config, "logging.level", None)
