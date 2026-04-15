@@ -81,6 +81,11 @@ def test_sanitize_prepared_config_for_dump_removes_analysis_and_metadata():
         "_raw_effective": {"bot": {}},
         "_transform_log": ["normalize"],
         "_coins_sources": {"approved_coins": "all"},
+        "disable_plotting": "all",
+        "backtest": {
+            "cache_dir": "tmp/cache",
+            "coins": {"binance": ["BTC"]},
+        },
         "bot": {"long": {"n_positions": 3}, "short": {"n_positions": 0}},
     }
 
@@ -91,6 +96,9 @@ def test_sanitize_prepared_config_for_dump_removes_analysis_and_metadata():
     assert "_raw_effective" not in sanitized
     assert "_transform_log" not in sanitized
     assert "_coins_sources" not in sanitized
+    assert "disable_plotting" not in sanitized
+    assert "cache_dir" not in sanitized["backtest"]
+    assert "coins" not in sanitized["backtest"]
 
 
 def test_dump_config_clean_preserves_backtest_aggregate_overrides(tmp_path):

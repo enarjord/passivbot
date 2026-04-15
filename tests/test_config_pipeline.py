@@ -436,6 +436,13 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
     )
 
 
+def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
+    prepared = load_prepared_config("configs/fake_live_hsl_btc.hjson", verbose=False, target="live")
+
+    assert prepared["bot"]["short"]["total_wallet_exposure_limit"] == 0.0
+    assert prepared["bot"]["short"]["entry_trailing_double_down_factor"] == pytest.approx(1.0)
+
+
 def test_prepare_config_skips_entry_grid_inflation_warning_when_disabled(caplog):
     source = get_template_config()
     source["bot"]["long"]["entry_grid_inflation_enabled"] = False

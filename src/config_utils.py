@@ -627,7 +627,8 @@ def sanitize_prepared_config_for_dump(config: dict, *, extra_keys: Iterable[str]
     removal = ["_raw", "_raw_effective", "_transform_log", "_coins_sources", "analysis"]
     if extra_keys is not None:
         removal.extend(extra_keys)
-    return strip_config_metadata(config, keys=tuple(removal))
+    stripped = strip_config_metadata(config, keys=tuple(removal))
+    return clean_config(stripped)
 
 
 def _limits_structurally_equal(raw_limits: Any, normalized_limits: List[Dict[str, Any]]) -> bool:

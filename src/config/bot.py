@@ -458,13 +458,21 @@ def ensure_bot_defaults(
                     tracker=tracker,
                 )
                 bot_cfg = result["bot"][pside]
-        if "entry_trailing_double_down_factor" not in bot_cfg and "entry_grid_double_down_factor" in bot_cfg:
+        if "entry_trailing_double_down_factor" not in bot_cfg:
+            default_entry_trailing_double_down_factor = bot_cfg.get(
+                "entry_grid_double_down_factor", 1.0
+            )
+            reason = (
+                "entry_grid_double_down_factor"
+                if "entry_grid_double_down_factor" in bot_cfg
+                else "legacy trailing double-down compatibility default"
+            )
             _set_hydrated_bot_value(
                 result,
                 pside=pside,
                 key="entry_trailing_double_down_factor",
-                value=bot_cfg["entry_grid_double_down_factor"],
-                reason="entry_grid_double_down_factor",
+                value=default_entry_trailing_double_down_factor,
+                reason=reason,
                 verbose=verbose,
                 tracker=tracker,
             )
