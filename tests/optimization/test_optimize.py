@@ -34,7 +34,9 @@ from optimize import (
     apply_fine_tune_bounds,
     extract_configs,
     get_starting_configs,
+    iter_starting_configs,
     configs_to_individuals,
+    configs_to_individuals_streaming,
     ConstraintAwareFitness,
     ResultRecorder,
 )
@@ -1049,6 +1051,20 @@ class TestGetStartingConfigs:
             result = get_starting_configs(tmpdir)
             assert len(result) == 2
 
+    def test_iter_directory(self):
+        from config_utils import get_template_config
+        import json
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            template = get_template_config()
+            with open(os.path.join(tmpdir, "config1.json"), "w") as f:
+                f.write(json.dumps(template))
+            with open(os.path.join(tmpdir, "config2.json"), "w") as f:
+                f.write(json.dumps(template))
+
+            result = list(iter_starting_configs(tmpdir))
+            assert len(result) == 2
+
 
 class TestConfigsToIndividuals:
     """Test configs_to_individuals function."""
@@ -1071,6 +1087,18 @@ class TestConfigsToIndividuals:
         # Should return 2 individuals: original + one with lowered TWE
         assert len(result) >= 1
         assert len(result[0]) == len(bounds)
+
+    def test_streaming_matches_eager(self):
+        from config_utils import get_template_config
+
+        config = get_template_config()
+        bounds = extract_bounds_tuple_list_from_config(config)
+
+        eager = configs_to_individuals([config, config], bounds, 6)
+        streamed, raw_count = configs_to_individuals_streaming(iter([config, config]), bounds, 6)
+
+        assert raw_count == 2
+        assert sorted(map(tuple, streamed)) == sorted(map(tuple, eager))
 
     def test_bot_only_config(self):
         from config_utils import get_template_config
