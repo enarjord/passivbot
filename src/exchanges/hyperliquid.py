@@ -1,7 +1,6 @@
 import asyncio
 import json
 import random
-import re
 import traceback
 from copy import deepcopy
 
@@ -23,8 +22,6 @@ round_dynamic = pbr.round_dynamic
 round_dynamic_up = pbr.round_dynamic_up
 round_dynamic_dn = pbr.round_dynamic_dn
 
-_PASSIVBOT_CUSTOM_ID_MARKER_RE = re.compile(r"0x[0-9a-fA-F]{4}")
-
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
@@ -35,7 +32,6 @@ class HyperliquidBot(CCXTBot):
     HIP3_PREFIX = "xyz:"
     HIP3_ALT_PREFIXES = ("XYZ-", "XYZ:")
     HIP3_ISOLATED_SUPPORTED = False
-    HIP3_ORDER_MARGIN_BUFFER = 1.01
     HIP3_FULL_DEX_SWEEP_INTERVAL_MS = 300_000
 
     def __init__(self, config: dict):
@@ -495,6 +491,8 @@ class HyperliquidBot(CCXTBot):
                     res[i]["qty"] = res[i]["amount"]
                 self._hl_note_ws_symbols_for_dex_scope(res)
                 self.handle_order_update(res)
+            except asyncio.CancelledError:
+                break
             except RateLimitExceeded:
                 self._health_ws_reconnects += 1
                 self._health_rate_limits += 1
@@ -827,111 +825,6 @@ class HyperliquidBot(CCXTBot):
             elif key == "fills":
                 out["pnls_ok"] = result
         return out
-
-    def _symbol_is_cross_hip3(self, symbol: str) -> bool:
-        if not symbol or not self._get_hl_dex_for_symbol(symbol):
-            return False
-        if self._requires_isolated_margin(symbol):
-            return False
-        return self._get_margin_mode_for_symbol(symbol) == "cross"
-
-    def _position_margin_to_restore(self) -> float:
-        reserve = 0.0
-        for position in getattr(self, "fetched_positions", []):
-            symbol = str(position.get("symbol") or "")
-            if not self._symbol_is_cross_hip3(symbol):
-                continue
-            if abs(float(position.get("size") or 0.0)) <= 0.0:
-                continue
-            reserve += max(0.0, float(position.get("margin_used") or 0.0))
-        return reserve
-
-    def _reserved_margin_for_resting_order(self, order: dict) -> float:
-        symbol = str(order.get("symbol") or "")
-        if not symbol:
-            return 0.0
-        if not self._is_passivbot_managed_open_order(order):
-            return 0.0
-        if not self._symbol_is_cross_hip3(symbol):
-            return 0.0
-        if self._requires_isolated_margin(symbol):
-            return 0.0
-        if self._get_margin_mode_for_symbol(symbol) != "cross":
-            return 0.0
-        if bool(order.get("reduceOnly") or order.get("reduce_only")):
-            return 0.0
-        qty = order.get("qty", order.get("amount"))
-        price = order.get("price")
-        if qty is None or price is None:
-            return 0.0
-        qty = abs(float(qty))
-        price = float(price)
-        if qty <= 0.0 or price <= 0.0:
-            return 0.0
-        leverage = max(1.0, float(self._calc_leverage_for_symbol(symbol)))
-        c_mult = float(self.c_mults.get(symbol, 1.0) or 1.0)
-        notional = qty * price * c_mult
-        return (notional / leverage) * self.HIP3_ORDER_MARGIN_BUFFER
-
-    def _is_passivbot_managed_open_order(self, order: dict) -> bool:
-        for cid in (
-            order.get("custom_id"),
-            order.get("customId"),
-            order.get("client_order_id"),
-            order.get("clientOrderId"),
-            order.get("client_oid"),
-            order.get("clientOid"),
-            order.get("order_link_id"),
-            order.get("orderLinkId"),
-        ):
-            if cid and _PASSIVBOT_CUSTOM_ID_MARKER_RE.search(str(cid)):
-                return True
-        return False
-
-    def _reconcile_balance_from_exchange_state(self, *, include_open_orders: bool) -> bool:
-        if getattr(self, "_hl_balance_payload_mode", "") == "unified_total":
-            return False
-        if getattr(self, "balance_override", None) is not None:
-            return False
-        exchange_reported = float(
-            getattr(self, "_exchange_reported_balance_raw", self.get_raw_balance()) or 0.0
-        )
-        del include_open_orders
-        # In non-unified mode, do not feed bot-managed resting-order reserve back into the
-        # published balance. That reserve changes as the bot cancels/recreates orders and can
-        # create self-referential balance churn. Keep restoring live HIP-3 position margin only.
-        reserve = self._position_margin_to_restore()
-        corrected_raw = exchange_reported + reserve
-        current_raw = self.get_raw_balance()
-        if abs(corrected_raw - current_raw) <= 1e-12:
-            return False
-        balance_snapped = corrected_raw
-        if getattr(self, "balance_override", None) is None:
-            if getattr(self, "previous_hysteresis_balance", None) is None:
-                self.previous_hysteresis_balance = corrected_raw
-            balance_snapped = pbr.hysteresis(
-                corrected_raw,
-                self.previous_hysteresis_balance,
-                self.balance_hysteresis_snap_pct,
-            )
-            self.previous_hysteresis_balance = balance_snapped
-        self.balance_raw = corrected_raw
-        self.balance = balance_snapped
-        return True
-
-    def _reconcile_balance_after_open_orders_refresh(self) -> bool:
-        return self._reconcile_balance_from_exchange_state(include_open_orders=True)
-
-    def _reconcile_balance_after_positions_and_balance_refresh(self) -> bool:
-        return self._reconcile_balance_from_exchange_state(include_open_orders=True)
-
-    def _staged_defer_balance_publication(self) -> bool:
-        """Publish staged balance only after open orders are also fresh for HIP-3 reserve math."""
-        return True
-
-    def _staged_balance_update_source(self) -> str:
-        """Hyperliquid staged balance is finalized from coherent REST state plus open orders."""
-        return "REST+open_orders"
 
     async def fetch_tickers(self):
         fetched = await self.cca.fetch(

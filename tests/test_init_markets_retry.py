@@ -1,4 +1,5 @@
 import pytest
+from passivbot_exceptions import FatalBotException
 
 
 class _FakeBot:
@@ -7,8 +8,9 @@ class _FakeBot:
     cca = object()
     sym_padding = 0
 
-    def __init__(self, update_exchange_config_impl):
+    def __init__(self, update_exchange_config_impl, assert_supported_live_state_impl=None):
         self._update_exchange_config_impl = update_exchange_config_impl
+        self._assert_supported_live_state_impl = assert_supported_live_state_impl
         self.update_exchange_config_calls = 0
         self.determine_utc_offset_calls = 0
         self.market_specific_settings_calls = 0
@@ -16,6 +18,7 @@ class _FakeBot:
         self.open_orders_calls = 0
         self.min_cost_calls = 0
         self.abstraction_refresh_calls = 0
+        self.assert_supported_live_state_calls = 0
 
     async def update_exchange_config(self):
         self.update_exchange_config_calls += 1
@@ -49,6 +52,9 @@ class _FakeBot:
         self.open_orders_calls += 1
 
     def _assert_supported_live_state(self):
+        self.assert_supported_live_state_calls += 1
+        if self._assert_supported_live_state_impl is not None:
+            self._assert_supported_live_state_impl(self.assert_supported_live_state_calls)
         return None
 
     async def update_effective_min_cost(self):
@@ -150,3 +156,36 @@ async def test_init_markets_reraises_after_max_network_retries(monkeypatch):
 
     assert bot.update_exchange_config_calls == 3
     assert sleeps == [5, 10]
+
+
+@pytest.mark.asyncio
+async def test_init_markets_fails_before_refresh_when_supported_state_invalid(monkeypatch):
+    import passivbot as pb_mod
+
+    async def _load_markets(*_args, **_kwargs):
+        return {"BTC/USDT:USDT": {"id": "BTCUSDT"}}
+
+    monkeypatch.setattr(pb_mod, "load_markets", _load_markets)
+    monkeypatch.setattr(
+        pb_mod,
+        "filter_markets",
+        lambda *_args, **_kwargs: (["BTC/USDT:USDT"], [], {}),
+    )
+
+    async def _update_exchange_config(_attempt):
+        return None
+
+    def _assert_supported_live_state(call_number):
+        if call_number == 1:
+            raise FatalBotException("unsupported config state")
+
+    bot = _FakeBot(_update_exchange_config, _assert_supported_live_state)
+
+    with pytest.raises(FatalBotException, match="unsupported config state"):
+        await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert bot.abstraction_refresh_calls == 1
+    assert bot.assert_supported_live_state_calls == 1
+    assert bot.positions_balance_calls == 0
+    assert bot.open_orders_calls == 0
+    assert bot.min_cost_calls == 0

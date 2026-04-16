@@ -534,237 +534,6 @@ def _pb_order_id(type_hex: str = "0000") -> str:
 
 async def _return_async(value, _payload):
     return value
-
-
-def test_hyperliquid_reconcile_does_not_publish_cross_hip3_order_margin(stubbed_modules):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    bot.open_orders = {
-        "XYZ-SP500/USDC:USDC": [
-            {
-                "id": "1",
-                "symbol": "XYZ-SP500/USDC:USDC",
-                "qty": 0.003,
-                "price": 5088.8,
-                "reduce_only": False,
-                "clientOrderId": _pb_order_id(),
-            }
-        ]
-    }
-
-    changed = bot._reconcile_balance_after_open_orders_refresh()
-
-    assert changed is False
-    assert bot.balance_raw == pytest.approx(51.194323)
-    assert bot.balance == pytest.approx(51.194323)
-
-
-def test_hyperliquid_reconcile_noops_for_unified_total_balance_payload(stubbed_modules):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    bot._hl_balance_payload_mode = "unified_total"
-    bot.open_orders = {
-        "XYZ-SP500/USDC:USDC": [
-            {
-                "id": "1",
-                "symbol": "XYZ-SP500/USDC:USDC",
-                "qty": 0.003,
-                "price": 5088.8,
-                "reduce_only": False,
-                "clientOrderId": _pb_order_id(),
-            }
-        ]
-    }
-    bot.fetched_positions = [
-        {
-            "symbol": "XYZ-SP500/USDC:USDC",
-            "position_side": "long",
-            "size": 0.002,
-            "price": 6813.8,
-            "margin_used": 0.68139,
-        }
-    ]
-
-    changed = bot._reconcile_balance_after_open_orders_refresh()
-
-    assert changed is False
-    assert bot.balance_raw == pytest.approx(51.194323)
-    assert bot.balance == pytest.approx(51.194323)
-
-
-def test_hyperliquid_reconcile_skips_flat_standard_perp_entry_reserve(stubbed_modules):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    bot.open_orders = {
-        "BTC/USDC:USDC": [
-            {
-                "id": "1",
-                "symbol": "BTC/USDC:USDC",
-                "qty": 0.00022,
-                "price": 54161.0,
-                "reduce_only": False,
-                "clientOrderId": _pb_order_id(),
-            }
-        ]
-    }
-
-    changed = bot._reconcile_balance_after_open_orders_refresh()
-
-    assert changed is False
-    assert bot.balance_raw == pytest.approx(51.194323)
-    assert bot.balance == pytest.approx(51.194323)
-
-
-def test_hyperliquid_reconcile_skips_standard_perp_entry_reserve_when_position_exists(
-    stubbed_modules,
-):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    bot.fetched_positions = [
-        {
-            "symbol": "BTC/USDC:USDC",
-            "position_side": "long",
-            "size": 0.00016,
-            "price": 72029.0,
-            "margin_used": 0.57616,
-        }
-    ]
-    bot.open_orders = {
-        "BTC/USDC:USDC": [
-            {
-                "id": "1",
-                "symbol": "BTC/USDC:USDC",
-                "qty": 0.00016,
-                "price": 54072.0,
-                "reduce_only": False,
-                "clientOrderId": _pb_order_id(),
-            }
-        ]
-    }
-
-    changed = bot._reconcile_balance_after_open_orders_refresh()
-
-    assert changed is False
-    assert bot.balance_raw == pytest.approx(51.194323)
-    assert bot.balance == pytest.approx(51.194323)
-
-
-def test_hyperliquid_reconcile_adds_back_hip3_position_margin(stubbed_modules):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    bot.fetched_positions = [
-        {
-            "symbol": "XYZ-SP500/USDC:USDC",
-            "position_side": "long",
-            "size": 0.002,
-            "price": 6813.8,
-            "margin_used": 0.68139,
-        }
-    ]
-
-    changed = bot._reconcile_balance_after_positions_and_balance_refresh()
-
-    assert changed is True
-    assert bot.balance_raw == pytest.approx(51.194323 + 0.68139)
-    assert bot.balance == pytest.approx(51.194323 + 0.68139)
-
-
-def test_hyperliquid_reconcile_adds_back_hip3_position_and_entry_order_margin(stubbed_modules):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    bot.fetched_positions = [
-        {
-            "symbol": "XYZ-SP500/USDC:USDC",
-            "position_side": "long",
-            "size": 0.002,
-            "price": 6814.3,
-            "margin_used": 0.68144,
-        }
-    ]
-    bot.open_orders = {
-        "XYZ-SP500/USDC:USDC": [
-            {
-                "id": "1",
-                "symbol": "XYZ-SP500/USDC:USDC",
-                "qty": 0.002,
-                "price": 5110.7,
-                "reduce_only": False,
-                "clientOrderId": _pb_order_id(),
-            }
-        ]
-    }
-
-    changed = bot._reconcile_balance_after_open_orders_refresh()
-
-    expected = 51.194323 + 0.68144
-    assert changed is True
-    assert bot.balance_raw == pytest.approx(expected)
-    assert bot.balance == pytest.approx(expected)
-
-
-def test_hyperliquid_reconcile_skips_balance_override(stubbed_modules):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    bot.balance_override = 40.0
-    bot.balance_raw = 40.0
-    bot.balance = 40.0
-    bot._exchange_reported_balance_raw = 35.0
-    bot.open_orders = {
-        "XYZ-SP500/USDC:USDC": [
-            {
-                "id": "1",
-                "symbol": "XYZ-SP500/USDC:USDC",
-                "qty": 0.003,
-                "price": 5088.8,
-                "reduce_only": False,
-                "clientOrderId": _pb_order_id(),
-            }
-        ]
-    }
-
-    changed = bot._reconcile_balance_after_open_orders_refresh()
-
-    assert changed is False
-    assert bot.balance_raw == pytest.approx(40.0)
-    assert bot.balance == pytest.approx(40.0)
-
-
-@pytest.mark.asyncio
-async def test_update_open_orders_applies_hyperliquid_balance_reconciliation(stubbed_modules):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    seen_sources = []
-
-    async def fake_fetch_open_orders():
-        return [
-            {
-                "id": "1",
-                "symbol": "XYZ-SP500/USDC:USDC",
-                "qty": 0.003,
-                "amount": 0.003,
-                "price": 5088.8,
-                "timestamp": 1,
-                "reduce_only": False,
-                "clientOrderId": _pb_order_id(),
-            }
-        ]
-
-    async def fake_handle_balance_update(source="REST"):
-        seen_sources.append(source)
-
-    bot.fetch_open_orders = fake_fetch_open_orders
-    bot.handle_balance_update = fake_handle_balance_update
-    bot.order_was_recently_cancelled = lambda order: False
-    bot.log_order_action = lambda *args, **kwargs: None
-
-    ok = await bot.update_open_orders()
-
-    assert ok is True
-    assert seen_sources == []
-    assert bot.balance_raw == pytest.approx(51.194323)
-    assert bot.open_orders["XYZ-SP500/USDC:USDC"][0]["id"] == "1"
-
-
 @pytest.mark.asyncio
 async def test_update_open_orders_suppresses_missing_log_for_exact_recent_bot_cancel(
     stubbed_modules,
@@ -830,173 +599,6 @@ async def test_update_open_orders_suppresses_missing_log_for_exact_recent_bot_ca
     assert seen[0][1].get("context") == "bot_cancel_confirmed"
 
 
-def test_hyperliquid_reconcile_skips_external_standard_perp_entry_order(stubbed_modules):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    bot.open_orders = {
-        "BTC/USDC:USDC": [
-            {
-                "id": "1",
-                "symbol": "BTC/USDC:USDC",
-                "qty": 0.00022,
-                "price": 54161.0,
-                "reduce_only": False,
-                "clientOrderId": "",
-            }
-        ]
-    }
-
-    changed = bot._reconcile_balance_after_open_orders_refresh()
-
-    assert changed is False
-    assert bot.balance_raw == pytest.approx(51.194323)
-    assert bot.balance == pytest.approx(51.194323)
-
-
-def test_hyperliquid_reconcile_skips_external_hip3_entry_order(stubbed_modules):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    bot.open_orders = {
-        "XYZ-SP500/USDC:USDC": [
-            {
-                "id": "1",
-                "symbol": "XYZ-SP500/USDC:USDC",
-                "qty": 0.003,
-                "price": 5088.8,
-                "reduce_only": False,
-                "clientOrderId": "manual-order-123",
-            }
-        ]
-    }
-
-    changed = bot._reconcile_balance_after_open_orders_refresh()
-
-    assert changed is False
-    assert bot.balance_raw == pytest.approx(51.194323)
-    assert bot.balance == pytest.approx(51.194323)
-
-
-def test_hyperliquid_reconcile_skips_external_hex_prefixed_order_ids(stubbed_modules):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    bot.open_orders = {
-        "XYZ-SP500/USDC:USDC": [
-            {
-                "id": "1",
-                "symbol": "XYZ-SP500/USDC:USDC",
-                "qty": 0.003,
-                "price": 5088.8,
-                "reduce_only": False,
-                "clientOrderId": "deadbeef",
-            }
-        ]
-    }
-
-    changed = bot._reconcile_balance_after_open_orders_refresh()
-
-    assert changed is False
-    assert bot.balance_raw == pytest.approx(51.194323)
-    assert bot.balance == pytest.approx(51.194323)
-
-
-@pytest.mark.asyncio
-async def test_update_positions_and_balance_applies_hip3_position_reconciliation(stubbed_modules):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    seen_sources = []
-
-    async def fake_fetch_balance():
-        return 50.499284
-
-    async def fake_fetch_positions():
-        return [
-            {
-                "symbol": "XYZ-SP500/USDC:USDC",
-                "position_side": "long",
-                "size": 0.002,
-                "price": 6813.8,
-                "margin_used": 0.68139,
-            }
-        ]
-
-    async def fake_handle_balance_update(source="REST"):
-        seen_sources.append(source)
-
-    async def fake_log_position_changes(*args, **kwargs):
-        return None
-
-    bot.fetch_balance = fake_fetch_balance
-    bot.fetch_positions = fake_fetch_positions
-    bot.handle_balance_update = fake_handle_balance_update
-    bot.active_symbols = []
-    bot.positions = {}
-    bot.log_position_changes = fake_log_position_changes
-
-    balance_ok, positions_ok = await bot.update_positions_and_balance()
-
-    assert (balance_ok, positions_ok) == (True, True)
-    assert seen_sources == ["REST"]
-    assert bot.balance_raw == pytest.approx(50.499284 + 0.68139)
-    assert bot.fetched_positions[0]["symbol"] == "XYZ-SP500/USDC:USDC"
-
-
-@pytest.mark.asyncio
-async def test_update_positions_and_balance_does_not_publish_cached_hip3_order_reserve(
-    stubbed_modules,
-):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
-    bot = _make_probe_bot(HyperliquidBot)
-    seen_sources = []
-    bot.open_orders = {
-        "XYZ-SP500/USDC:USDC": [
-            {
-                "id": "1",
-                "symbol": "XYZ-SP500/USDC:USDC",
-                "qty": 0.002,
-                "amount": 0.002,
-                "price": 5110.7,
-                "timestamp": 1,
-                "reduce_only": False,
-                "clientOrderId": _pb_order_id(),
-            }
-        ]
-    }
-
-    async def fake_fetch_balance():
-        return 50.499284
-
-    async def fake_fetch_positions():
-        return [
-            {
-                "symbol": "XYZ-SP500/USDC:USDC",
-                "position_side": "long",
-                "size": 0.002,
-                "price": 6813.8,
-                "margin_used": 0.68139,
-            }
-        ]
-
-    async def fake_handle_balance_update(source="REST"):
-        seen_sources.append(source)
-
-    async def fake_log_position_changes(*args, **kwargs):
-        return None
-
-    bot.fetch_balance = fake_fetch_balance
-    bot.fetch_positions = fake_fetch_positions
-    bot.handle_balance_update = fake_handle_balance_update
-    bot.active_symbols = []
-    bot.positions = {}
-    bot.log_position_changes = fake_log_position_changes
-
-    balance_ok, positions_ok = await bot.update_positions_and_balance()
-
-    assert (balance_ok, positions_ok) == (True, True)
-    assert seen_sources == ["REST"]
-    assert bot.balance_raw == pytest.approx(50.499284 + 0.68139)
-    assert bot.fetched_positions[0]["symbol"] == "XYZ-SP500/USDC:USDC"
-
-
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_hyperliquid_publishes_final_balance_once(
     stubbed_modules,
@@ -1017,6 +619,10 @@ async def test_refresh_authoritative_state_staged_hyperliquid_publishes_final_ba
     bot.state_change_detected_by_symbol = set()
     bot.execution_scheduled = False
     bot.recent_order_cancellations = []
+    bot.previous_hysteresis_balance = 0.0
+    bot.balance_raw = 0.0
+    bot.balance = 0.0
+    bot._exchange_reported_balance_raw = 0.0
     seen_sources = []
     seen = {}
 
@@ -1070,12 +676,12 @@ async def test_refresh_authoritative_state_staged_hyperliquid_publishes_final_ba
 
     ok = await bot.refresh_authoritative_state()
 
-    expected_balance = 50.499284 + 0.68139
+    expected_balance = 50.499284
     assert ok is True
     assert bot.balance_raw == pytest.approx(expected_balance)
     assert bot.balance == pytest.approx(expected_balance)
     assert seen["balance_raw_when_logged"] == pytest.approx(expected_balance)
-    assert seen_sources == ["REST+open_orders"]
+    assert seen_sources == ["REST"]
     assert bot.open_orders["XYZ-SP500/USDC:USDC"][0]["id"] == "1"
 
 
@@ -1086,20 +692,12 @@ async def test_hyperliquid_open_orders_refresh_does_not_republish_same_hip3_effe
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
     seen_sources = []
-    bot.fetched_positions = [
-        {
-            "symbol": "XYZ-SP500/USDC:USDC",
-            "position_side": "long",
-            "size": 0.002,
-            "price": 6813.8,
-            "margin_used": 0.68139,
-        }
-    ]
+    bot.fetched_positions = []
     bot.open_orders = {
-        "XYZ-SP500/USDC:USDC": [
+        "BTC/USDC:USDC": [
             {
                 "id": "1",
-                "symbol": "XYZ-SP500/USDC:USDC",
+                "symbol": "BTC/USDC:USDC",
                 "qty": 0.002,
                 "amount": 0.002,
                 "price": 5110.7,
@@ -1109,7 +707,7 @@ async def test_hyperliquid_open_orders_refresh_does_not_republish_same_hip3_effe
             }
         ]
     }
-    bot.balance_raw = 50.499284 + 0.68139
+    bot.balance_raw = 50.499284
     bot.balance = bot.balance_raw
     bot._exchange_reported_balance_raw = 50.499284
 
@@ -1117,7 +715,7 @@ async def test_hyperliquid_open_orders_refresh_does_not_republish_same_hip3_effe
         return [
             {
                 "id": "1",
-                "symbol": "XYZ-SP500/USDC:USDC",
+                "symbol": "BTC/USDC:USDC",
                 "qty": 0.002,
                 "amount": 0.002,
                 "price": 5110.7,
@@ -1139,4 +737,4 @@ async def test_hyperliquid_open_orders_refresh_does_not_republish_same_hip3_effe
 
     assert ok is True
     assert seen_sources == []
-    assert bot.balance_raw == pytest.approx(50.499284 + 0.68139)
+    assert bot.balance_raw == pytest.approx(50.499284)

@@ -280,6 +280,7 @@ from pure_funcs import (
 )
 
 ONE_MIN_MS = 60_000
+bot = None
 
 
 def signal_handler(sig, frame):
@@ -2130,20 +2131,48 @@ class Passivbot:
                     boot_stagger,
                 )
                 await asyncio.sleep(delay)
+                if self.stop_signal_received:
+                    self._monitor_emit_stop(
+                        "startup_aborted",
+                        ts=utc_ms(),
+                        payload={"stage": boot_stage, "stop_signal_received": True},
+                    )
+                    return
 
             boot_stage = "format_approved_ignored_coins"
             await format_approved_ignored_coins(
                 self.config, self.user_info["exchange"], quote=self.quote
             )
+            if self.stop_signal_received:
+                self._monitor_emit_stop(
+                    "startup_aborted",
+                    ts=utc_ms(),
+                    payload={"stage": boot_stage, "stop_signal_received": True},
+                )
+                return
             boot_stage = "init_markets"
             await self.init_markets()
             await self._monitor_flush_snapshot(force=True, ts=utc_ms())
+            if self.stop_signal_received:
+                self._monitor_emit_stop(
+                    "startup_aborted",
+                    ts=utc_ms(),
+                    payload={"stage": boot_stage, "stop_signal_received": True},
+                )
+                return
             # Staggered warmup of candles for approved symbols (large sets handled gracefully)
             boot_stage = "warmup_candles_staggered"
             try:
                 await self.warmup_candles_staggered()
             except Exception as e:
                 logging.info("[boot] warmup skipped due to: %s", e)
+            if self.stop_signal_received:
+                self._monitor_emit_stop(
+                    "startup_aborted",
+                    ts=utc_ms(),
+                    payload={"stage": boot_stage, "stop_signal_received": True},
+                )
+                return
             if self._equity_hard_stop_enabled():
                 boot_stage = "equity_hard_stop_initialize_from_history"
                 await self._equity_hard_stop_initialize_from_history()
@@ -2156,6 +2185,13 @@ class Passivbot:
                     return
             boot_stage = "post_init_sleep"
             await asyncio.sleep(1)
+            if self.stop_signal_received:
+                self._monitor_emit_stop(
+                    "startup_aborted",
+                    ts=utc_ms(),
+                    payload={"stage": boot_stage, "stop_signal_received": True},
+                )
+                return
             self._log_memory_snapshot()
             logging.info("[boot] starting data maintainers...")
             boot_stage = "start_data_maintainers"
@@ -2235,6 +2271,7 @@ class Passivbot:
         self.init_coin_overrides()
         # await self.update_tickers()
         self.refresh_approved_ignored_coins_lists()
+        self._assert_supported_live_state()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
         if self._authoritative_refresh_mode() == "staged" and str(self.exchange).lower() in {
@@ -3199,10 +3236,23 @@ class Passivbot:
         stop_ts = utc_ms()
         self._monitor_emit_stop("shutdown_gracefully", ts=stop_ts)
         logging.info("[shutdown] shutdown requested; closing background tasks and sessions")
+        maintainer_tasks = []
         try:
             self.stop_data_maintainers(verbose=False)
+            for task_map_name in ("maintainers", "WS_ohlcvs_1m_tasks"):
+                task_map = getattr(self, task_map_name, None)
+                if not task_map:
+                    continue
+                for task in task_map.values():
+                    if task is not None:
+                        maintainer_tasks.append(task)
         except Exception as e:
             logging.error("[shutdown] error stopping maintainers: %s", e)
+        if maintainer_tasks:
+            try:
+                await asyncio.gather(*maintainer_tasks, return_exceptions=True)
+            except Exception as e:
+                logging.error("[shutdown] error awaiting maintainer cancellation: %s", e)
         await asyncio.sleep(0)
         try:
             if getattr(self, "ccp", None) is not None:
@@ -3238,11 +3288,17 @@ class Passivbot:
         return True
 
     def _authoritative_refresh_mode(self) -> str:
-        mode = str(
-            get_optional_live_value(getattr(self, "config", {}), "authoritative_refresh_mode", "legacy")
-            or "legacy"
-        ).lower()
-        return mode if mode in {"legacy", "staged"} else "legacy"
+        config = getattr(self, "config", {}) or {}
+        exchange = str(getattr(self, "exchange", "") or "").lower()
+        if "_raw_effective" in config:
+            explicit_mode = get_optional_config_value(
+                config, "_raw_effective.live.authoritative_refresh_mode", None
+            )
+        else:
+            explicit_mode = get_optional_live_value(config, "authoritative_refresh_mode", None)
+        default_mode = "staged" if exchange == "hyperliquid" else "legacy"
+        mode = str(explicit_mode if explicit_mode is not None else default_mode).lower()
+        return mode if mode in {"legacy", "staged"} else default_mode
 
     async def refresh_authoritative_state(self) -> bool:
         """Refresh authoritative account state before planning/execution."""
@@ -9089,6 +9145,7 @@ async def shutdown_bot(bot):
 
 async def main():
     """Entry point: parse CLI args, load config, and launch the bot lifecycle."""
+    global bot
     raw_argv = sys.argv[1:]
     help_all = help_all_requested(raw_argv)
     parser = build_command_parser(
@@ -9270,11 +9327,18 @@ async def main():
             traceback.print_exc()
         finally:
             try:
-                bot.stop_data_maintainers()
-                if bot.ccp is not None:
-                    await bot.ccp.close()
-                if bot.cca is not None:
-                    await bot.cca.close()
+                if bot.stop_signal_received or getattr(bot, "_shutdown_in_progress", False):
+                    shutdown_task = getattr(bot, "_shutdown_task", None)
+                    if shutdown_task is not None:
+                        await shutdown_task
+                    else:
+                        await bot.shutdown_gracefully()
+                else:
+                    bot.stop_data_maintainers()
+                    if bot.ccp is not None:
+                        await bot.ccp.close()
+                    if bot.cca is not None:
+                        await bot.cca.close()
             except:
                 pass
         if bot.stop_signal_received:
@@ -9301,3 +9365,12 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nBot shutdown complete.")
+    except RuntimeError as e:
+        if "Event loop stopped before Future completed" in str(e):
+            bot = globals().get("bot")
+            if bot is not None and getattr(bot, "stop_signal_received", False):
+                print("\nBot shutdown complete.")
+            else:
+                raise
+        else:
+            raise

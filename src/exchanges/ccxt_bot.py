@@ -459,6 +459,8 @@ class CCXTBot(Passivbot):
                 raw_orders = await self._do_watch_orders()
                 normalized = [self._normalize_order_update(o) for o in raw_orders]
                 self.handle_order_update(normalized)
+            except asyncio.CancelledError:
+                break
             except Exception as e:
                 self._health_ws_reconnects += 1
                 logging.warning(

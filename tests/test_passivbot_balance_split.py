@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import sys
@@ -21,6 +22,67 @@ sys.modules.setdefault(
 
 from passivbot import Passivbot
 import passivbot as passivbot_module
+
+
+def test_authoritative_refresh_mode_defaults_to_staged_for_hyperliquid_without_explicit_choice():
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "hyperliquid"
+    bot.config = {"live": {"authoritative_refresh_mode": "legacy"}, "_raw_effective": {"live": {}}}
+
+    assert bot._authoritative_refresh_mode() == "staged"
+
+
+def test_authoritative_refresh_mode_respects_explicit_legacy_opt_out_for_hyperliquid():
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "hyperliquid"
+    bot.config = {
+        "live": {"authoritative_refresh_mode": "legacy"},
+        "_raw_effective": {"live": {"authoritative_refresh_mode": "legacy"}},
+    }
+
+    assert bot._authoritative_refresh_mode() == "legacy"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_awaits_cancelled_maintainers():
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+
+    seen = {"maintainer_cancelled": False, "ccp_closed": False, "cca_closed": False}
+
+    async def _maintainer():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            seen["maintainer_cancelled"] = True
+            raise
+
+    class _Closer:
+        def __init__(self, key):
+            self.key = key
+
+        async def close(self):
+            seen[self.key] = True
+
+    maintainer_task = asyncio.create_task(_maintainer())
+    bot.maintainers = {"watch_orders": maintainer_task}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Closer("ccp_closed")
+    bot.cca = _Closer("cca_closed")
+
+    await asyncio.sleep(0)
+    await bot.shutdown_gracefully()
+
+    assert seen == {
+        "maintainer_cancelled": True,
+        "ccp_closed": True,
+        "cca_closed": True,
+    }
+    assert maintainer_task.done() is True
 
 
 def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
