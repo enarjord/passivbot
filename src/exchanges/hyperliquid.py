@@ -88,7 +88,14 @@ class HyperliquidBot(CCXTBot):
         self._hl_fetch_breakdown_last_log_ms[label] = now_ms
         parts = list(extra_parts or [])
         parts.extend(f"{key}={int(timings_ms[key])}ms" for key in sorted(timings_ms))
-        logging.info("[state] hyperliquid %s timings | wall=%dms | %s", label, wall_ms, " ".join(parts))
+        log_level = logging.INFO if wall_ms >= 10_000 else logging.DEBUG
+        logging.log(
+            log_level,
+            "[state] hyperliquid %s timings | wall=%dms | %s",
+            label,
+            wall_ms,
+            " ".join(parts),
+        )
 
     def _hl_info_url(self) -> str:
         """Derive the Hyperliquid /info endpoint from the CCXT session URL config."""
@@ -203,7 +210,7 @@ class HyperliquidBot(CCXTBot):
         self.n_decimal_places = 6
         self.n_significant_figures = 5
         if isolated_count:
-            logging.info(
+            logging.debug(
                 f"Detected {isolated_count} isolated-margin-only symbols (HIP-3/stock perps)"
             )
 
@@ -1096,7 +1103,7 @@ class HyperliquidBot(CCXTBot):
             except Exception as e:
                 logging.error(f"{symbol}: error setting margin mode and leverage {e}")
             if to_print:
-                logging.info(f"{symbol}: {to_print}")
+                logging.debug(f"{symbol}: {to_print}")
             # Small delay between margin-mode API calls to avoid rate-limit bursts
             await asyncio.sleep(0.2)
 

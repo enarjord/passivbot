@@ -8,14 +8,21 @@ class _FakeBot:
     cca = object()
     sym_padding = 0
 
-    def __init__(self, update_exchange_config_impl, assert_supported_live_state_impl=None):
+    def __init__(
+        self,
+        update_exchange_config_impl,
+        assert_supported_live_state_impl=None,
+        authoritative_refresh_mode="legacy",
+    ):
         self._update_exchange_config_impl = update_exchange_config_impl
         self._assert_supported_live_state_impl = assert_supported_live_state_impl
+        self._authoritative_refresh_mode_value = authoritative_refresh_mode
         self.update_exchange_config_calls = 0
         self.determine_utc_offset_calls = 0
         self.market_specific_settings_calls = 0
         self.positions_balance_calls = 0
         self.open_orders_calls = 0
+        self.refresh_authoritative_state_calls = 0
         self.min_cost_calls = 0
         self.abstraction_refresh_calls = 0
         self.assert_supported_live_state_calls = 0
@@ -43,7 +50,10 @@ class _FakeBot:
         return None
 
     def _authoritative_refresh_mode(self):
-        return "legacy"
+        return self._authoritative_refresh_mode_value
+
+    async def refresh_authoritative_state(self):
+        self.refresh_authoritative_state_calls += 1
 
     async def update_positions_and_balance(self):
         self.positions_balance_calls += 1
@@ -189,3 +199,30 @@ async def test_init_markets_fails_before_refresh_when_supported_state_invalid(mo
     assert bot.positions_balance_calls == 0
     assert bot.open_orders_calls == 0
     assert bot.min_cost_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_init_markets_uses_staged_refresh_for_bybit(monkeypatch):
+    import passivbot as pb_mod
+
+    async def _load_markets(*_args, **_kwargs):
+        return {"BTC/USDT:USDT": {"id": "BTCUSDT"}}
+
+    monkeypatch.setattr(pb_mod, "load_markets", _load_markets)
+    monkeypatch.setattr(
+        pb_mod,
+        "filter_markets",
+        lambda *_args, **_kwargs: (["BTC/USDT:USDT"], [], {}),
+    )
+
+    async def _update_exchange_config(_attempt):
+        return None
+
+    bot = _FakeBot(_update_exchange_config, authoritative_refresh_mode="staged")
+
+    await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert bot.refresh_authoritative_state_calls == 1
+    assert bot.positions_balance_calls == 0
+    assert bot.open_orders_calls == 0
+    assert bot.min_cost_calls == 1

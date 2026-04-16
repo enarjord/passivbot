@@ -536,6 +536,9 @@ class Passivbot:
         self.max_leverage = {}
         self.pside_int_map = {"long": 0, "short": 1}
         self.PB_modes = {"long": {}, "short": {}}
+        self.approved_coins = {"long": set(), "short": set()}
+        self.ignored_coins = {"long": set(), "short": set()}
+        self.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
         # Legacy pnls_cache_filepath removed; FillEventsManager handles caching
         self.quote = "USDT"
 
@@ -2277,6 +2280,7 @@ class Passivbot:
         if self._authoritative_refresh_mode() == "staged" and str(self.exchange).lower() in {
             "fake",
             "hyperliquid",
+            "bybit",
         }:
             await self.refresh_authoritative_state()
         else:
@@ -3153,6 +3157,8 @@ class Passivbot:
                         await self.restart_bot_on_too_many_errors()
                     continue
                 failed_update_pos_oos_pnls_ohlcvs_count = 0
+                if self.stop_signal_received:
+                    break
                 if self._equity_hard_stop_enabled():
                     await self._equity_hard_stop_check()
                     if any(
@@ -3176,16 +3182,22 @@ class Passivbot:
                     )
                     await asyncio.sleep(self._authoritative_confirmation_retry_delay_seconds(details=barrier_details))
                     continue
+                if self.stop_signal_received:
+                    break
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="refresh_market_state_if_needed"
                 )
                 if not await self.refresh_market_state_if_needed():
                     await asyncio.sleep(0.5)
                     continue
+                if self.stop_signal_received:
+                    break
                 self._set_log_silence_watchdog_context(phase="runtime", stage="execute_to_exchange")
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
                     return res
+                if self.stop_signal_received:
+                    break
                 # Track loop duration for health reporting
                 self._last_loop_duration_ms = utc_ms() - loop_start_ms
                 # Periodic health summary
@@ -3198,7 +3210,7 @@ class Passivbot:
                 sleep_duration = 30
                 self._set_log_silence_watchdog_context(phase="runtime", stage="scheduled_wait")
                 for i in range(sleep_duration * 10):
-                    if self.execution_scheduled:
+                    if self.execution_scheduled or self.stop_signal_received:
                         break
                     await asyncio.sleep(0.1)
             except (RestartBotException, FatalBotException):
@@ -3257,18 +3269,19 @@ class Passivbot:
         try:
             if getattr(self, "ccp", None) is not None:
                 await self.ccp.close()
+                self.ccp = None
         except Exception as e:
             logging.error("[shutdown] error closing private ccxt session: %s", e)
         try:
             if getattr(self, "cca", None) is not None:
                 await self.cca.close()
+                self.cca = None
         except Exception as e:
             logging.error("[shutdown] error closing public ccxt session: %s", e)
         await self._monitor_flush_snapshot(force=True, ts=utc_ms())
         publisher = getattr(self, "monitor_publisher", None)
         if publisher is not None:
             publisher.close()
-        logging.info("[shutdown] cleanup complete")
 
     async def update_pos_oos_pnls_ohlcvs(self) -> bool:
         """Refresh positions, open orders, realised PnL, and 1m candles."""
@@ -3308,7 +3321,7 @@ class Passivbot:
         mode = self._authoritative_refresh_mode()
         if mode == "staged":
             exchange = str(getattr(self, "exchange", "") or "").lower()
-            if exchange in {"fake", "hyperliquid"}:
+            if exchange in {"fake", "hyperliquid", "bybit"}:
                 return await self._refresh_authoritative_state_staged()
             self.log_once(
                 f"[state] authoritative_refresh_mode=staged not yet supported for {exchange or 'unknown'}; using legacy refresh"
@@ -3443,16 +3456,24 @@ class Passivbot:
         if not timings_ms:
             return
         sum_ms = int(sum(int(v) for v in timings_ms.values()))
-        # Only log materially slow refreshes or any full multi-surface cohort.
-        if wall_ms < 1_000 and not (len(plan) > 1 and wall_ms >= 500):
-            return
+        pending_confirmations = bool(getattr(self, "_authoritative_pending_confirmations", {}) or {})
+        interesting = wall_ms >= 8_000 or (pending_confirmations and wall_ms >= 2_000)
+        if not interesting:
+            if wall_ms < 1_000 and not (len(plan) > 1 and wall_ms >= 500):
+                return
+            log_level = logging.DEBUG
+        else:
+            log_level = logging.INFO
         parts = [f"{surface}={int(timings_ms[surface])}ms" for surface in sorted(timings_ms)]
-        logging.info(
-            "[state] staged refresh timings | plan=%s | wall=%dms | sum=%dms | %s",
+        suffix = " | pending_confirmations=yes" if pending_confirmations else ""
+        logging.log(
+            log_level,
+            "[state] staged refresh timings | plan=%s | wall=%dms | sum=%dms | %s%s",
             ",".join(sorted(plan)),
             wall_ms,
             sum_ms,
             " ".join(parts),
+            suffix,
         )
 
     async def _fetch_authoritative_state_staged_snapshot(self, plan: set[str]) -> dict:
@@ -5254,7 +5275,7 @@ class Passivbot:
             return
 
         try:
-            logging.info("[fills] initializing FillEventsManager")
+            logging.debug("[fills] initializing FillEventsManager")
 
             # Extract symbol pool from config
             symbol_pool = _extract_symbol_pool(self.config, None)
@@ -5298,7 +5319,7 @@ class Passivbot:
                 )
 
             cached_count = len(self._pnls_manager._events)
-            logging.info("[fills] initialized: %d cached events loaded", cached_count)
+            logging.info("[fills] cache ready: %d cached events loaded", cached_count)
 
             self._pnls_initialized = True
 
@@ -9009,7 +9030,7 @@ class Passivbot:
         counts = coin_symbol_warning_counts()
         if counts != self._last_coin_symbol_warning_counts:
             if counts["symbol_to_coin_fallbacks"] or counts["coin_to_symbol_fallbacks"]:
-                logging.info(
+                logging.debug(
                     "[mapping] fallbacks: symbol->coin=%d | coin->symbol=%d (unique)",
                     counts["symbol_to_coin_fallbacks"],
                     counts["coin_to_symbol_fallbacks"],
@@ -9051,8 +9072,11 @@ class Passivbot:
             # Detect "order already filled/cancelled" errors - not harmful, just a race condition
             already_gone_indicators = [
                 "100004",  # KuCoin: "The order cannot be canceled"
+                "110001",  # Bybit: "order not exists or too late to cancel"
+                "order not exists",
                 "order does not exist",
                 "order not found",
+                "too late to cancel",
                 "already filled",
                 "already cancelled",
                 "already canceled",
@@ -9335,12 +9359,16 @@ async def main():
                         await bot.shutdown_gracefully()
                 else:
                     bot.stop_data_maintainers()
-                    if bot.ccp is not None:
-                        await bot.ccp.close()
-                    if bot.cca is not None:
-                        await bot.cca.close()
+                if bot.ccp is not None:
+                    await bot.ccp.close()
+                    bot.ccp = None
+                if bot.cca is not None:
+                    await bot.cca.close()
+                    bot.cca = None
             except:
                 pass
+            if bot is not None and getattr(bot, "_shutdown_in_progress", False):
+                logging.info("[%s] [shutdown] cleanup complete", getattr(bot, "exchange", "?"))
         if bot.stop_signal_received:
             logging.info("Bot stopped via signal; exiting main loop.")
             break
@@ -9348,9 +9376,14 @@ async def main():
         logging.info(f"restarting bot...")
         print()
         for z in range(cooldown_secs, -1, -1):
+            if bot is not None and getattr(bot, "stop_signal_received", False):
+                break
             print(f"\rcountdown {z}...  ")
             await asyncio.sleep(1)
         print()
+        if bot is not None and getattr(bot, "stop_signal_received", False):
+            logging.info("Bot stopped via signal during restart cooldown; exiting main loop.")
+            break
 
         restarts.append(utc_ms())
         restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]

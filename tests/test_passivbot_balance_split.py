@@ -204,18 +204,33 @@ def test_handle_order_update_fill_hint_requests_full_confirmation(caplog, monkey
 
 def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
     bot = Passivbot.__new__(Passivbot)
+    bot._authoritative_pending_confirmations = {}
 
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         bot._log_staged_refresh_timings({"open_orders"}, {"open_orders": 250}, 250)
         bot._log_staged_refresh_timings(
             {"balance", "positions", "open_orders", "fills"},
             {"balance": 250, "positions": 300, "open_orders": 200, "fills": 400},
             650,
         )
+        bot._log_staged_refresh_timings(
+            {"balance", "positions", "open_orders", "fills"},
+            {"balance": 2500, "positions": 3000, "open_orders": 2000, "fills": 4000},
+            8500,
+        )
 
-    state_logs = [record.message for record in caplog.records if "[state]" in record.message]
+    state_logs = [
+        (record.levelname, record.message) for record in caplog.records if "[state]" in record.message
+    ]
     assert state_logs == [
-        "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=650ms | sum=1150ms | balance=250ms fills=400ms open_orders=200ms positions=300ms"
+        (
+            "DEBUG",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=650ms | sum=1150ms | balance=250ms fills=400ms open_orders=200ms positions=300ms",
+        ),
+        (
+            "INFO",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=8500ms | sum=11500ms | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms",
+        ),
     ]
 
 
@@ -413,6 +428,91 @@ async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
     assert seen["balance_raw_when_logged"] == pytest.approx(123.45)
     assert bot.positions["BTC/USDT:USDT"]["long"]["size"] == pytest.approx(0.01)
     assert bot.open_orders["BTC/USDT:USDT"][0]["id"] == "1"
+    bot.handle_balance_update.assert_awaited_once_with(source="REST")
+
+
+@pytest.mark.asyncio
+async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.exchange = "bybit"
+    bot.stop_signal_received = False
+    bot.balance_override = None
+    bot._balance_override_logged = False
+    bot.previous_hysteresis_balance = None
+    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_raw = 0.0
+    bot.balance = 0.0
+    bot._exchange_reported_balance_raw = 0.0
+    bot.fetched_positions = []
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.fetched_open_orders = []
+    bot.active_symbols = []
+    bot.state_change_detected_by_symbol = set()
+    bot.execution_scheduled = False
+    bot._authoritative_surface_signatures = {}
+    bot._authoritative_surface_generations = {}
+    bot._authoritative_refresh_epoch = 0
+    bot._authoritative_refresh_epoch_fresh = set()
+    bot._authoritative_refresh_epoch_changed = set()
+    bot.recent_order_cancellations = []
+    seen = {}
+
+    async def fake_capture_balance_snapshot():
+        return {"raw": "balance"}, 456.78
+
+    async def fake_capture_positions_snapshot():
+        return (
+            {"raw": "positions"},
+            [
+                {
+                    "symbol": "ETH/USDT:USDT",
+                    "position_side": "long",
+                    "size": 0.25,
+                    "price": 2500.0,
+                }
+            ],
+        )
+
+    async def fake_fetch_open_orders():
+        return [
+            {
+                "id": "2",
+                "symbol": "ETH/USDT:USDT",
+                "side": "buy",
+                "position_side": "long",
+                "qty": 0.25,
+                "amount": 0.25,
+                "price": 2400.0,
+                "timestamp": 2,
+                "reduce_only": False,
+            }
+        ]
+
+    async def _log_position_changes(*args, **kwargs):
+        del args, kwargs
+        seen["balance_raw_when_logged"] = bot.balance_raw
+
+    bot.capture_balance_snapshot = fake_capture_balance_snapshot
+    bot.capture_positions_snapshot = fake_capture_positions_snapshot
+    bot.fetch_open_orders = fake_fetch_open_orders
+    bot.update_pnls = AsyncMock(return_value=True)
+    bot.log_position_changes = AsyncMock(side_effect=_log_position_changes)
+    bot.handle_balance_update = AsyncMock()
+    bot.order_matches_bot_cancellation = lambda order: False
+    bot.order_was_recently_cancelled = lambda order: 0.0
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._reconcile_balance_after_positions_and_balance_refresh = lambda: False
+    bot._reconcile_balance_after_open_orders_refresh = lambda: False
+
+    result = await bot.refresh_authoritative_state()
+
+    assert result is True
+    assert bot.balance_raw == pytest.approx(456.78)
+    assert seen["balance_raw_when_logged"] == pytest.approx(456.78)
+    assert bot.positions["ETH/USDT:USDT"]["long"]["size"] == pytest.approx(0.25)
+    assert bot.open_orders["ETH/USDT:USDT"][0]["id"] == "2"
     bot.handle_balance_update.assert_awaited_once_with(source="REST")
 
 
@@ -1291,6 +1391,55 @@ async def test_run_execution_loop_waits_for_clean_authoritative_cycle_before_exe
 
     assert result == {"executed_cycle": 1}
     assert executes == [1]
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_stops_before_execute_when_signal_arrives_after_refresh():
+    bot = Passivbot.__new__(Passivbot)
+    market_refreshes = []
+    executes = []
+
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = False
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_refresh_authoritative_state():
+        bot._begin_authoritative_refresh_epoch()
+        for surface, sig in (
+            ("balance", ("b", 1)),
+            ("positions", ("p", 1)),
+            ("open_orders", ("o", 1)),
+            ("fills", ("f", 1)),
+        ):
+            bot._record_authoritative_surface(surface, sig)
+        bot.stop_signal_received = True
+        return True
+
+    async def fake_refresh_market_state_if_needed():
+        market_refreshes.append(True)
+        return True
+
+    async def fake_execute_to_exchange():
+        executes.append(True)
+        return {"unexpected": True}
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
+    bot.execute_to_exchange = fake_execute_to_exchange
+
+    result = await bot.run_execution_loop()
+
+    assert result is None
+    assert market_refreshes == []
+    assert executes == []
 
 
 @pytest.mark.asyncio

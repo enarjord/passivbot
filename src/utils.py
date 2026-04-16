@@ -462,10 +462,11 @@ def filter_markets(markets: dict, exchange: str, quote=None, verbose=False) -> (
     if verbose:
         for line in sorted(set(reasons.values())):
             syms = [k for k in reasons if reasons[k] == line]
+            log = logging.debug if line in {"not active", "wrong quote"} else logging.info
             if len(syms) > 12:
-                logging.info(f"{line}: {len(syms)} symbols")
+                log(f"{line}: {len(syms)} symbols")
             elif len(syms) > 0:
-                logging.info(f"{line}: {','.join(sorted(set([s for s in syms])))}")
+                log(f"{line}: {','.join(sorted(set([s for s in syms])))}")
 
     return eligible, ineligible, reasons
 
