@@ -23,6 +23,11 @@ OBSOLETE_BOT_KEYS = {
 }
 
 LEGACY_ENTRY_GRID_KEYS = {
+    "ddown_factor": "entry_grid_double_down_factor",
+    "initial_eprice_ema_dist": "entry_initial_ema_dist",
+    "initial_qty_pct": "entry_initial_qty_pct",
+    "rentry_pprice_dist": "entry_grid_spacing_pct",
+    "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_we_weight",
     "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
     "entry_grid_spacing_log_span_hours": "entry_volatility_ema_span_hours",
     "entry_log_range_ema_span_hours": "entry_volatility_ema_span_hours",

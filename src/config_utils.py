@@ -618,6 +618,19 @@ def strip_config_metadata(config: dict, *, keys: Iterable[str] | None = None) ->
     return _strip(config)
 
 
+def sanitize_prepared_config_for_dump(config: dict, *, extra_keys: Iterable[str] | None = None) -> dict:
+    """
+    Return a prepared config stripped of runtime/metadata payload so the dumped artifact remains
+    clean and directly reusable.
+    """
+
+    removal = ["_raw", "_raw_effective", "_transform_log", "_coins_sources", "analysis"]
+    if extra_keys is not None:
+        removal.extend(extra_keys)
+    stripped = strip_config_metadata(config, keys=tuple(removal))
+    return clean_config(stripped)
+
+
 def _limits_structurally_equal(raw_limits: Any, normalized_limits: List[Dict[str, Any]]) -> bool:
     if not isinstance(raw_limits, list) or len(raw_limits) != len(normalized_limits):
         return False
