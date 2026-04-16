@@ -429,6 +429,7 @@ def build_backtest_payload(
     timestamps=None,
     *,
     coin_indices: list[int] | None = None,
+    metrics_only: bool = False,
 ) -> BacktestPayload:
     """
     Assemble the bundle, bot params, and metadata needed to execute a backtest.
@@ -442,6 +443,7 @@ def build_backtest_payload(
         exchange,
         execution_settings=execution_settings,
         is_runtime_compiled=True,
+        metrics_only=metrics_only,
     )
     backtest_params = dict(backtest_params)
     coins_order = backtest_params.get("coins", [])
@@ -642,6 +644,11 @@ def execute_backtest(payload: BacktestPayload, config: dict):
         raise ValueError(
             f"run_backtest_bundle returned {len(backtest_result)} values; expected 4 or 5"
         )
+
+    if payload.backtest_params.get("metrics_only", False):
+        payload.hard_stop_plot_data = {}
+        analysis = expand_analysis(analysis_usd, analysis_btc, None, None, config)
+        return None, None, analysis
 
     equities_array = np.asarray(equities_array)
     payload.hard_stop_plot_data = dict(hard_stop_plot_data or {})
@@ -1381,6 +1388,7 @@ def prep_backtest_args(
     execution_settings: BacktestExecutionSettings | None = None,
     *,
     is_runtime_compiled: bool = False,
+    metrics_only: bool = False,
 ):
     if not is_runtime_compiled:
         config = compile_runtime_config(config, runtime="backtest", record_step=False)
@@ -1517,7 +1525,7 @@ def prep_backtest_args(
             "warmup_minutes": [],
             "trade_start_indices": [],
             "global_warmup_bars": 0,
-            "metrics_only": False,
+            "metrics_only": bool(metrics_only),
             "filter_by_min_effective_cost": bool(
                 require_config_value(config, "backtest.filter_by_min_effective_cost")
             ),

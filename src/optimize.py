@@ -979,6 +979,7 @@ class Evaluator:
                 exchange,
                 self.shared_btc_np[exchange],
                 self.timestamps.get(exchange),
+                metrics_only=True,
             )
             try:
                 fills, equities_array, analysis = execute_backtest(payload, config)
@@ -1322,6 +1323,7 @@ class SuiteEvaluator:
                     btc_data,
                     ctx.timestamps.get(exchange),
                     coin_indices=coin_indices,
+                    metrics_only=True,
                 )
                 try:
                     fills, equities_array, analysis = execute_backtest(payload, scenario_config)

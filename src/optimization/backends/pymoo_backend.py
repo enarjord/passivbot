@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import logging
 import math
 import multiprocessing
@@ -33,7 +34,8 @@ from optimization.problem import (
     PassivbotProblem,
     PymooAsyncRecordingRunner,
     PymooEvaluatorAdapter,
-    _evaluate_pymoo_worker,
+    _evaluate_pymoo_worker_from_globals,
+    initialize_pymoo_worker,
 )
 from optimization.repair import BoundsRepair
 
@@ -168,14 +170,8 @@ def _evaluate_starting_individuals(
         enumerate(starting_individuals),
         submit=lambda item: (
             runner.pool.apply_async(
-                _evaluate_pymoo_worker,
-                (
-                    evaluator,
-                    item[1],
-                    overrides_list,
-                    n_obj,
-                    has_constraints,
-                ),
+                _evaluate_pymoo_worker_from_globals,
+                (item[1],),
             ),
             item,
         ),
@@ -514,13 +510,21 @@ def run_backend(
             approx_bytes=approx_object_size(starting_individuals),
         )
         sampling = _build_random_sampling(bounds, population_size)
-        pool = multiprocessing.Pool(
-            processes=config["optimize"]["n_cpus"],
-            initializer=ignore_sigint_in_worker,
-        )
         evaluator_adapter = PymooEvaluatorAdapter(
             evaluator_for_pool,
             overrides_list=overrides_list,
+        )
+        worker_initializer = functools.partial(
+            initialize_pymoo_worker,
+            evaluator_for_pool,
+            overrides_list,
+            len(config["optimize"]["scoring"]),
+            evaluator_adapter.has_constraints,
+            ignore_sigint_in_worker,
+        )
+        pool = multiprocessing.Pool(
+            processes=config["optimize"]["n_cpus"],
+            initializer=worker_initializer,
         )
         runner = PymooAsyncRecordingRunner(
             evaluator=evaluator_for_pool,

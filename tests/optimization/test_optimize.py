@@ -1430,7 +1430,7 @@ class TestEvaluator:
             config_to_individual(mock_config, evaluator.bounds, evaluator.sig_digits)
         )
 
-        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+        with patch("optimize.build_backtest_payload", return_value=object()) as build_payload, patch(
             "optimize.execute_backtest",
             side_effect=PanicException(
                 "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
@@ -1443,6 +1443,7 @@ class TestEvaluator:
         assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
         assert "PanicException" in metrics["error"]
         assert metrics["stats"] == {}
+        assert build_payload.call_args.kwargs["metrics_only"] is True
 
     def test_suite_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
         from optimize import Evaluator, SuiteEvaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
@@ -1482,7 +1483,7 @@ class TestEvaluator:
         evaluator = SuiteEvaluator(base, [ctx], {})
         individual = DummyIndividual(config_to_individual(mock_config, base.bounds, base.sig_digits))
 
-        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+        with patch("optimize.build_backtest_payload", return_value=object()) as build_payload, patch(
             "optimize.execute_backtest",
             side_effect=PanicException(
                 "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
@@ -1495,6 +1496,7 @@ class TestEvaluator:
         assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
         assert "PanicException" in metrics["error"]
         assert metrics["suite_metrics"] == {}
+        assert build_payload.call_args.kwargs["metrics_only"] is True
 
 
 def _remove_nested_path(mapping, path):
