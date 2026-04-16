@@ -224,3 +224,67 @@ async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_s
     assert volumes == {"AAA": 0.0, "BBB": 0.0, "CCC": 0.0}
     assert log_ranges == {"AAA": 0.0, "BBB": 0.0, "CCC": 0.0}
     assert bot.cm.calls == 0
+
+
+def test_log_min_effective_cost_blocks_includes_concrete_numbers(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot._min_effective_cost_last_log_ms = {}
+    bot._min_effective_cost_log_interval_ms = 300_000
+    bot.is_pside_enabled = lambda pside: pside == "long"
+
+    seen = []
+    monkeypatch.setattr("passivbot.logging.warning", lambda msg, *args: seen.append(msg % args))
+
+    out = {
+        "diagnostics": {
+            "min_effective_cost_blocks": [
+                {
+                    "symbol_idx": 0,
+                    "pside": "long",
+                    "balance": 51.154957,
+                    "effective_limit": 1.5,
+                    "entry_initial_qty_pct": 0.0192,
+                    "projected_initial_cost": 1.4732627616,
+                    "effective_min_cost": 10.1,
+                }
+            ]
+        }
+    }
+    bot._log_min_effective_cost_blocks(out, {0: "BTC/USDC:USDC"})
+    assert len(seen) == 1
+    assert "symbol=BTC/USDC:USDC side=long" in seen[0]
+    assert "projected_initial_cost=1.473263" in seen[0]
+    assert "required_effective_min_cost=10.100000" in seen[0]
+    assert "live.filter_by_min_effective_cost=false" in seen[0]
+    assert "exchange-min-clamped initial entries" in seen[0]
+    assert "may exceed configured initial sizing" in seen[0]
+
+
+def test_log_min_effective_cost_blocks_is_throttled(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot._min_effective_cost_last_log_ms = {}
+    bot._min_effective_cost_log_interval_ms = 300_000
+    bot.is_pside_enabled = lambda _pside: True
+
+    seen = []
+    monkeypatch.setattr("passivbot.logging.warning", lambda msg, *args: seen.append(msg % args))
+
+    out = {
+        "diagnostics": {
+            "min_effective_cost_blocks": [
+                {
+                    "symbol_idx": 0,
+                    "pside": "long",
+                    "balance": 51.154957,
+                    "effective_limit": 1.5,
+                    "entry_initial_qty_pct": 0.0192,
+                    "projected_initial_cost": 1.4732627616,
+                    "effective_min_cost": 10.1,
+                }
+            ]
+        }
+    }
+    idx_to_symbol = {0: "BTC/USDC:USDC"}
+    bot._log_min_effective_cost_blocks(out, idx_to_symbol)
+    bot._log_min_effective_cost_blocks(out, idx_to_symbol)
+    assert len(seen) == 1

@@ -128,6 +128,7 @@ def test_tool_help_lists_supported_tools(capsys):
     assert cli_main.main(["tool", "-h"]) == 0
 
     out = capsys.readouterr().out
+    assert "hyperliquid-abstraction-probe" in out
     assert "hyperliquid-balance-probe" in out
     assert "hyperliquid-order-margin-probe" in out
     assert "hyperliquid-position-probe" in out
@@ -400,6 +401,29 @@ def test_hyperliquid_position_probe_dispatch_forwards_module_and_prog(monkeypatc
         "--yes",
     ]
     assert captured["prog_env"] == "passivbot tool hyperliquid-position-probe"
+
+
+def test_hyperliquid_abstraction_probe_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "hyperliquid-abstraction-probe", "--user", "hyperliquid_01"]) == 0
+
+    assert captured["module_name"] == "tools.probe_hyperliquid_abstraction"
+    assert captured["argv"] == [
+        "passivbot tool hyperliquid-abstraction-probe",
+        "--user",
+        "hyperliquid_01",
+    ]
+    assert captured["prog_env"] == "passivbot tool hyperliquid-abstraction-probe"
 
 
 def test_unknown_command_exits_with_error():

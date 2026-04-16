@@ -210,3 +210,51 @@ async def test_hyperliquid_position_probe_threads_vault_address(monkeypatch, cap
     assert session.created[0]["params"] == {"vaultAddress": "0xvault"}
     assert session.created[1]["params"] == {"vaultAddress": "0xvault", "timeInForce": "Alo"}
     assert session.closed is True
+
+
+class _AbstractionDummySession:
+    def __init__(self):
+        self.closed = False
+
+    async def is_unified_enabled(self, method_name, wallet_address, enable_unified_margin, params):
+        assert method_name == "fetchBalance"
+        assert wallet_address == "wallet"
+        assert enable_unified_margin is True
+        assert params == {}
+        return True, {}
+
+    async def publicPostInfo(self, payload):
+        assert payload == {"type": "userAbstraction", "user": "wallet"}
+        return '"unifiedAccount"'
+
+    async def close(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_abstraction_probe_smoke(monkeypatch, capsys):
+    mod = importlib.import_module("tools.probe_hyperliquid_abstraction")
+    session = _AbstractionDummySession()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "probe_hyperliquid_abstraction.py",
+            "--user",
+            "hyperliquid_01",
+        ],
+    )
+    monkeypatch.setattr(
+        mod,
+        "load_hyperliquid_wallet",
+        lambda user, api_keys_path: ({"is_vault": False}, "wallet", "key"),
+    )
+    monkeypatch.setattr(mod, "create_hyperliquid_probe_session", lambda wallet, key: session)
+
+    assert await mod._main() == 0
+
+    out = capsys.readouterr().out
+    assert '"abstraction": "unifiedAccount"' in out
+    assert '"ccxt_is_unified_enabled": true' in out
+    assert session.closed is True

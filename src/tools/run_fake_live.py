@@ -34,6 +34,12 @@ def _build_output_dir(root: str | None, scenario: dict) -> Path:
     return base / f"{stamp}_{scenario_name}"
 
 
+def _mode_run_user(user: str | None, mode: str) -> str | None:
+    if user is None:
+        return None
+    return f"{user}_{mode}"
+
+
 def _dump_json(path: Path, data: Any) -> None:
     ensure_parent_directory(path)
     with path.open("w", encoding="utf-8") as handle:
@@ -397,24 +403,161 @@ async def _run_fake_cycle(bot):
             return {"red_supervisor": True}
     return await bot.execute_to_exchange()
 
+def _load_run_artifacts(output_dir: Path) -> dict[str, Any]:
+    def _load(name: str, default):
+        path = output_dir / name
+        if not path.exists():
+            return default
+        return json.loads(path.read_text(encoding="utf-8"))
 
-async def _async_main(args: argparse.Namespace) -> int:
-    configure_logging(debug=args.log_level)
+    log_path = output_dir / "fake_live.log"
+    return {
+        "step_summaries": _load("step_summaries.json", []),
+        "fake_exchange_state": _load("fake_exchange_state.json", {}),
+        "fills": _load("fills.json", []),
+        "positions": _load("positions.json", []),
+        "hsl_trace": _load("hsl_trace.json", {}),
+        "run_metadata": _load("run_metadata.json", {}),
+        "log_text": log_path.read_text(encoding="utf-8") if log_path.exists() else "",
+    }
+
+
+def _canonical_fill(fill: dict[str, Any]) -> dict[str, Any]:
+    normalized = {}
+    for key, value in fill.items():
+        if key in {"clientOrderId", "id", "order"}:
+            continue
+        if key == "info" and isinstance(value, dict):
+            normalized[key] = {
+                info_key: info_value
+                for info_key, info_value in value.items()
+                if info_key not in {"clientOrderId"}
+            }
+            continue
+        normalized[key] = value
+    return normalized
+
+
+def _canonical_hsl_trace(trace: dict[str, Any]) -> dict[str, Any]:
+    normalized = json.loads(json.dumps(trace))
+    for pside_state in normalized.values():
+        if not isinstance(pside_state, dict):
+            continue
+        stop_event = pside_state.get("last_stop_event")
+        if isinstance(stop_event, dict):
+            stop_event.pop("triggered_at", None)
+            stop_event.pop("user", None)
+    return normalized
+
+
+def _canonicalize_artifact(name: str, payload: Any) -> Any:
+    if name == "step_summaries":
+        return payload
+    if name == "fills":
+        return sorted(
+            [_canonical_fill(fill) for fill in payload],
+            key=lambda x: (
+                x.get("timestamp"),
+                x.get("symbol"),
+                x.get("position_side"),
+                x.get("side"),
+                x.get("price"),
+                x.get("amount"),
+                x.get("pnl"),
+                x.get("reduceOnly"),
+            ),
+        )
+    if name == "positions":
+        return sorted(
+            payload,
+            key=lambda x: (
+                x.get("symbol"),
+                x.get("position_side"),
+                x.get("entry_price"),
+                x.get("size"),
+            ),
+        )
+    if name == "fake_exchange_state":
+        normalized = dict(payload)
+        if isinstance(normalized.get("fills"), list):
+            normalized["fills"] = _canonicalize_artifact("fills", normalized["fills"])
+        if isinstance(normalized.get("positions"), list):
+            normalized["positions"] = _canonicalize_artifact("positions", normalized["positions"])
+        if isinstance(normalized.get("open_orders"), list):
+            normalized["open_orders"] = sorted(
+                [
+                    {
+                        key: value
+                        for key, value in order.items()
+                        if key not in {"clientOrderId", "id"}
+                    }
+                    for order in normalized["open_orders"]
+                ],
+                key=lambda x: (
+                    x.get("symbol"),
+                    x.get("position_side"),
+                    x.get("side"),
+                    x.get("price"),
+                    x.get("amount"),
+                    x.get("qty"),
+                ),
+            )
+        return normalized
+    if name == "hsl_trace":
+        return _canonical_hsl_trace(payload)
+    return payload
+
+
+def _compare_run_artifacts(legacy: dict[str, Any], staged: dict[str, Any]) -> dict[str, Any]:
+    keys = ("step_summaries", "fake_exchange_state", "fills", "positions", "hsl_trace")
+    diffs = []
+    for key in keys:
+        legacy_normalized = _canonicalize_artifact(key, legacy.get(key))
+        staged_normalized = _canonicalize_artifact(key, staged.get(key))
+        if legacy_normalized != staged_normalized:
+            diffs.append(
+                {
+                    "artifact": key,
+                    "legacy": legacy_normalized,
+                    "staged": staged_normalized,
+                }
+            )
+    return {
+        "match": not diffs,
+        "diff_count": len(diffs),
+        "diffs": diffs,
+        "legacy_mode": legacy.get("run_metadata", {}).get("authoritative_refresh_mode"),
+        "staged_mode": staged.get("run_metadata", {}).get("authoritative_refresh_mode"),
+    }
+
+
+async def _run_fake_case(
+    *,
+    config_path: str,
+    scenario_path: str,
+    user: str | None,
+    max_steps: int | None,
+    output_dir: Path,
+    log_level: int,
+    snapshot_each_step: bool,
+    authoritative_refresh_mode: str,
+    enforce_assertions: bool = True,
+) -> Path:
     config = load_prepared_config(
-        args.config,
+        config_path,
         verbose=False,
         target="live",
         runtime="live",
     )
     config.setdefault("live", {})
-    config["live"]["fake_scenario_path"] = args.scenario
+    config["live"]["fake_scenario_path"] = scenario_path
+    config["live"]["authoritative_refresh_mode"] = str(authoritative_refresh_mode or "legacy")
 
-    scenario = load_fake_scenario(args.scenario)
-    output_dir = _build_output_dir(args.output_dir, scenario)
+    scenario = load_fake_scenario(scenario_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = output_dir / "fake_live.log"
     log_handler = _attach_file_logging(log_path)
-    _, restore_user_override = _install_fake_user_override(config, args.scenario, args.user)
+    _, restore_user_override = _install_fake_user_override(config, scenario_path, user)
     bot = None
 
     try:
@@ -431,32 +574,43 @@ async def _async_main(args: argparse.Namespace) -> int:
         _install_runtime_overrides(bot, scenario)
         await bot.start_bot()
         bot.debug_mode = False
-        snapshot_dir = (output_dir / "snapshots") if args.snapshot_each_step else None
+        snapshot_dir = (output_dir / "snapshots") if snapshot_each_step else None
         if snapshot_dir is not None:
             snapshot_dir.mkdir(parents=True, exist_ok=True)
         step_summaries = await _run_fake_bot(
             bot,
             bot.cca,
-            args.max_steps,
+            max_steps,
             snapshot_dir=snapshot_dir,
             run_initial_cycle=bool(scenario.get("run_initial_cycle", True)),
         )
         log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
-        _apply_assertions(
-            bot,
-            bot.cca,
-            scenario,
-            step_summaries=step_summaries,
-            log_text=log_text,
-        )
+        if enforce_assertions:
+            _apply_assertions(
+                bot,
+                bot.cca,
+                scenario,
+                step_summaries=step_summaries,
+                log_text=log_text,
+            )
 
         _dump_json(output_dir / "step_summaries.json", step_summaries)
         _dump_json(output_dir / "fake_exchange_state.json", bot.cca.export_state())
         _dump_json(output_dir / "fills.json", bot.cca.fills)
         _dump_json(output_dir / "positions.json", bot.cca.export_positions())
         _dump_json(output_dir / "hsl_trace.json", _extract_hsl_trace(bot))
-        print(str(output_dir))
-        return 0
+        _dump_json(
+            output_dir / "run_metadata.json",
+            {
+                "authoritative_refresh_mode": str(
+                    config.get("live", {}).get("authoritative_refresh_mode", "legacy")
+                ),
+                "assertions_enforced": bool(enforce_assertions),
+                "user": str(config.get("live", {}).get("user") or ""),
+                "scenario_path": str(scenario_path),
+            },
+        )
+        return output_dir
     finally:
         try:
             if bot is not None:
@@ -465,6 +619,60 @@ async def _async_main(args: argparse.Namespace) -> int:
             restore_user_override()
             logging.getLogger().removeHandler(log_handler)
             log_handler.close()
+
+
+async def _async_main(args: argparse.Namespace) -> int:
+    configure_logging(debug=args.log_level)
+    scenario = load_fake_scenario(args.scenario)
+    output_dir = _build_output_dir(args.output_dir, scenario)
+
+    if getattr(args, "compare_authoritative_refresh_modes", False):
+        legacy_dir = output_dir / "legacy"
+        staged_dir = output_dir / "staged"
+        legacy_run = await _run_fake_case(
+            config_path=args.config,
+            scenario_path=args.scenario,
+            user=_mode_run_user(args.user, "legacy"),
+            max_steps=args.max_steps,
+            output_dir=legacy_dir,
+            log_level=args.log_level,
+            snapshot_each_step=args.snapshot_each_step,
+            authoritative_refresh_mode="legacy",
+            enforce_assertions=False,
+        )
+        staged_run = await _run_fake_case(
+            config_path=args.config,
+            scenario_path=args.scenario,
+            user=_mode_run_user(args.user, "staged"),
+            max_steps=args.max_steps,
+            output_dir=staged_dir,
+            log_level=args.log_level,
+            snapshot_each_step=args.snapshot_each_step,
+            authoritative_refresh_mode="staged",
+            enforce_assertions=False,
+        )
+        report = _compare_run_artifacts(
+            _load_run_artifacts(legacy_run),
+            _load_run_artifacts(staged_run),
+        )
+        _dump_json(output_dir / "comparison.json", report)
+        print(str(output_dir))
+        return 0
+
+    run_dir = await _run_fake_case(
+        config_path=args.config,
+        scenario_path=args.scenario,
+        user=args.user,
+        max_steps=args.max_steps,
+        output_dir=output_dir,
+        log_level=args.log_level,
+        snapshot_each_step=args.snapshot_each_step,
+        authoritative_refresh_mode=str(
+            getattr(args, "authoritative_refresh_mode", "legacy") or "legacy"
+        ),
+    )
+    print(str(run_dir))
+    return 0
 
 
 def main() -> int:
@@ -493,6 +701,17 @@ def main() -> int:
         "--snapshot-each-step",
         action="store_true",
         help="Write a JSON snapshot after each execution cycle",
+    )
+    parser.add_argument(
+        "--authoritative-refresh-mode",
+        choices=("legacy", "staged"),
+        default="legacy",
+        help="Select which authoritative refresh path to use during fake-live runs",
+    )
+    parser.add_argument(
+        "--compare-authoritative-refresh-modes",
+        action="store_true",
+        help="Run both legacy and staged authoritative refresh modes and write a structured comparison report",
     )
     args = parser.parse_args()
     return asyncio.run(_async_main(args))

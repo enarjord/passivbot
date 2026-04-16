@@ -917,7 +917,12 @@ def _build_monitor_trailing_entry_payload(
         "risk_we_excess_allowance_pct",
     ):
         inputs[key] = float(self.bp(pside, key, symbol))
-    inputs["entry_grid_inflation_enabled"] = bool(self.bp(pside, "entry_grid_inflation_enabled", symbol))
+    try:
+        inputs["entry_grid_inflation_enabled"] = bool(
+            self.bp(pside, "entry_grid_inflation_enabled", symbol)
+        )
+    except Exception:
+        inputs["entry_grid_inflation_enabled"] = False
     payload = build_trailing_entry_diagnostic(inputs)
     if payload is None:
         return None

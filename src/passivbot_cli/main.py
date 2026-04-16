@@ -51,6 +51,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.probe_hyperliquid_balance",
         "read-only Hyperliquid balance smoke test",
     ),
+    "hyperliquid-abstraction-probe": CommandSpec(
+        "tools.probe_hyperliquid_abstraction",
+        "read-only Hyperliquid account abstraction probe",
+    ),
     "hyperliquid-order-margin-probe": CommandSpec(
         "tools.probe_hyperliquid_order_margin",
         "mutating Hyperliquid order-margin diagnostic",

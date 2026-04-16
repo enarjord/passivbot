@@ -629,7 +629,7 @@ def test_update_config_with_args_updates_coin_sources():
     vars(args)["live.approved_coins"] = ["BTC", "ETH"]
     update_config_with_args(config, args, verbose=False)
     assert config["live"]["approved_coins"]["long"] == ["BTC", "ETH"]
-    assert config["_coins_sources"]["approved_coins"]["long"] == ["BTC", "ETH"]
+    assert config["_coins_sources"]["approved_coins"] == ["BTC", "ETH"]
     log_entry = config["_transform_log"][-1]
     assert log_entry["step"] == "update_config_with_args"
     diff = log_entry["details"]["diffs"][0]
@@ -644,10 +644,30 @@ def test_update_config_with_args_replaces_path_coin_source():
     vars(args)["live.ignored_coins"] = ["DOGE"]
     update_config_with_args(config, args, verbose=False)
     assert config["live"]["ignored_coins"]["long"] == ["DOGE"]
-    assert config["_coins_sources"]["ignored_coins"]["long"] == ["DOGE"]
+    assert config["_coins_sources"]["ignored_coins"] == ["DOGE"]
     entry = config["_transform_log"][-1]
     assert entry["step"] == "update_config_with_args"
     assert entry["details"]["diffs"][0]["path"] == "live.ignored_coins"
+
+
+def test_update_config_with_args_preserves_cli_coin_file_source_for_live_reload(tmp_path):
+    approved_file = tmp_path / "approved.hjson"
+    approved_file.write_text('["BTC","ETH"]', encoding="utf-8")
+
+    config = get_template_config()
+    config["_coins_sources"] = {}
+    args = SimpleNamespace()
+    vars(args)["live.approved_coins"] = [str(approved_file)]
+
+    update_config_with_args(config, args, verbose=False)
+
+    assert config["live"]["approved_coins"]["long"] == ["BTC", "ETH"]
+    assert config["_coins_sources"]["approved_coins"] == [str(approved_file)]
+
+    approved_file.write_text('["BTC","XRP"]', encoding="utf-8")
+    refreshed = normalize_coins_source(config["_coins_sources"]["approved_coins"])
+
+    assert set(refreshed["long"]) == {"BTC", "XRP"}
 
 
 def test_load_config_preserves_raw_and_effective_snapshots(tmp_path):

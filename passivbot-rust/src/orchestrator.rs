@@ -130,6 +130,18 @@ mod core {
         pub max_realized_loss_pct: f64,
     }
 
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct MinEffectiveCostBlock {
+        pub symbol_idx: usize,
+        pub pside: PositionSide,
+        pub balance: f64,
+        pub effective_limit: f64,
+        pub entry_initial_qty_pct: f64,
+        pub projected_initial_cost: f64,
+        pub effective_min_cost: f64,
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case", deny_unknown_fields)]
     pub enum OrchestratorError {
@@ -158,6 +170,8 @@ mod core {
         pub loss_gate_blocks: Vec<LossGateBlock>,
         #[serde(default)]
         pub symbol_states: Vec<SymbolStateDiagnostic>,
+        #[serde(default)]
+        pub min_effective_cost_blocks: Vec<MinEffectiveCostBlock>,
     }
 
     #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -511,22 +525,71 @@ mod core {
         if !filter_enabled {
             return true;
         }
+        if let Some((_effective_limit, req)) =
+            min_effective_cost_projection(balance, filter_enabled, effective_min_cost, bot)
+        {
+            req >= effective_min_cost
+        } else {
+            false
+        }
+    }
+
+    fn min_effective_cost_projection(
+        balance: f64,
+        filter_enabled: bool,
+        effective_min_cost: f64,
+        bot: &BotParams,
+    ) -> Option<(f64, f64)> {
+        if !filter_enabled {
+            return None;
+        }
         if !(balance.is_finite()
             && balance > 0.0
             && effective_min_cost.is_finite()
             && effective_min_cost > 0.0)
         {
-            return false;
+            return None;
         }
         let base_limit = bot.wallet_exposure_limit;
         let allowance_pct = bot.risk_we_excess_allowance_pct;
         let allowance_multiplier = 1.0 + allowance_pct.max(0.0);
         let effective_limit = base_limit * allowance_multiplier;
         if !(effective_limit.is_finite() && effective_limit > 0.0) {
-            return false;
+            return None;
         }
         let req = balance * effective_limit * bot.entry_initial_qty_pct;
-        req >= effective_min_cost
+        if !(req.is_finite() && req > 0.0) {
+            return None;
+        }
+        Some((effective_limit, req))
+    }
+
+    fn maybe_record_min_effective_cost_block(
+        diagnostics: &mut OrchestratorDiagnostics,
+        symbol_idx: usize,
+        pside: PositionSide,
+        balance: f64,
+        effective_min_cost: f64,
+        filter_enabled: bool,
+        bot: &BotParams,
+    ) {
+        if let Some((effective_limit, projected_initial_cost)) =
+            min_effective_cost_projection(balance, filter_enabled, effective_min_cost, bot)
+        {
+            if projected_initial_cost + 1e-12 < effective_min_cost {
+                diagnostics
+                    .min_effective_cost_blocks
+                    .push(MinEffectiveCostBlock {
+                        symbol_idx,
+                        pside,
+                        balance,
+                        effective_limit,
+                        entry_initial_qty_pct: bot.entry_initial_qty_pct,
+                        projected_initial_cost,
+                        effective_min_cost,
+                    });
+            }
+        }
     }
 
     fn market_price_for_order_side(ob: &OrderBook, qty: f64) -> f64 {
@@ -1007,6 +1070,7 @@ mod core {
         active_flags: Option<&[bool]>,
         cfg: &ForagerSelectionConfig,
         out: &mut Vec<ForagerCandidate>,
+        diagnostics: &mut OrchestratorDiagnostics,
     ) -> Result<(), OrchestratorError> {
         let volume_required = cfg.volume_drop_pct > 0.0 || cfg.weights.volume != 0.0;
         let volatility_required = cfg.weights.volatility != 0.0;
@@ -1027,17 +1091,34 @@ mod core {
                 .and_then(|flags| flags.get(s.symbol_idx))
                 .copied()
                 .unwrap_or(false);
+            let min_cost_ok = effective_min_cost_is_low_enough(
+                balance,
+                filter_enabled,
+                s.effective_min_cost,
+                &side.bot_params,
+            );
             let enabled = s.tradable
                 && !already_active
                 && one_way_allows_initial_slot(symbols, s.symbol_idx, pside, hedge_mode)
                 && can_open_initial
-                && effective_min_cost_is_low_enough(
-                    balance,
-                    filter_enabled,
-                    s.effective_min_cost,
-                    &side.bot_params,
-                );
+                && min_cost_ok;
             if !enabled {
+                if s.tradable
+                    && !already_active
+                    && one_way_allows_initial_slot(symbols, s.symbol_idx, pside, hedge_mode)
+                    && can_open_initial
+                    && !min_cost_ok
+                {
+                    maybe_record_min_effective_cost_block(
+                        diagnostics,
+                        s.symbol_idx,
+                        pside,
+                        balance,
+                        s.effective_min_cost,
+                        filter_enabled,
+                        &side.bot_params,
+                    );
+                }
                 out.push(ForagerCandidate {
                     index: s.symbol_idx,
                     enabled: false,
@@ -1656,6 +1737,7 @@ mod core {
                     Some(actives_long),
                     &cfg,
                     &mut workspace.features,
+                    &mut diagnostics,
                 )?;
                 for idx in select_forager_candidates(&workspace.features, &cfg)
                     .map_err(map_forager_selection_error)?
@@ -1722,6 +1804,7 @@ mod core {
                     Some(actives_short),
                     &cfg,
                     &mut workspace.features,
+                    &mut diagnostics,
                 )?;
                 for idx in select_forager_candidates(&workspace.features, &cfg)
                     .map_err(map_forager_selection_error)?
@@ -2816,6 +2899,21 @@ mod core {
                         s.effective_min_cost,
                         &s.long.bot_params,
                     );
+                if workspace.actives_long[s.symbol_idx]
+                    && !workspace.one_way_block_initial_long[s.symbol_idx]
+                    && s.long.position.size == 0.0
+                    && !long_allow_initial
+                {
+                    maybe_record_min_effective_cost_block(
+                        &mut diagnostics,
+                        s.symbol_idx,
+                        PositionSide::Long,
+                        input.balance,
+                        s.effective_min_cost,
+                        input.global.filter_by_min_effective_cost,
+                        &s.long.bot_params,
+                    );
+                }
                 let short_allow_initial = workspace.actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
@@ -2824,6 +2922,21 @@ mod core {
                         s.effective_min_cost,
                         &s.short.bot_params,
                     );
+                if workspace.actives_short[s.symbol_idx]
+                    && !workspace.one_way_block_initial_short[s.symbol_idx]
+                    && s.short.position.size == 0.0
+                    && !short_allow_initial
+                {
+                    maybe_record_min_effective_cost_block(
+                        &mut diagnostics,
+                        s.symbol_idx,
+                        PositionSide::Short,
+                        input.balance,
+                        s.effective_min_cost,
+                        input.global.filter_by_min_effective_cost,
+                        &s.short.bot_params,
+                    );
+                }
                 SymbolStateDiagnostic {
                     symbol_idx: s.symbol_idx,
                     long: SymbolSideStateDiagnostic {
@@ -2944,6 +3057,50 @@ mod core {
             assert!(should_use_market_execution(&order, &global, &order_book));
             let executable = to_executable_order(order, &global, &order_book);
             assert_eq!(executable.execution_type, ExecutionType::Market);
+        }
+
+        #[test]
+        fn min_effective_cost_block_diagnostic_emitted_for_forager_candidates() {
+            let mut sym = make_basic_symbol(0);
+            sym.effective_min_cost = 10.1;
+            sym.long.bot_params.wallet_exposure_limit = 1.5;
+            sym.long.bot_params.entry_initial_qty_pct = 0.0192;
+
+            let input = OrchestratorInput {
+                balance: 51.154957,
+                balance_raw: 51.154957,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: true,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: {
+                        let mut pair = BotParamsPair::default();
+                        pair.long.n_positions = 1;
+                        pair.long.total_wallet_exposure_limit = 1.5;
+                        pair
+                    },
+                    hedge_mode: true,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            assert_eq!(out.orders.len(), 0);
+            assert_eq!(out.diagnostics.min_effective_cost_blocks.len(), 1);
+            let block = &out.diagnostics.min_effective_cost_blocks[0];
+            assert_eq!(block.symbol_idx, 0);
+            assert_eq!(block.pside, PositionSide::Long);
+            assert!((block.effective_limit - 1.5).abs() < 1e-12);
+            assert!((block.projected_initial_cost - 1.4732627616).abs() < 1e-9);
+            assert!((block.effective_min_cost - 10.1).abs() < 1e-12);
         }
 
         #[test]

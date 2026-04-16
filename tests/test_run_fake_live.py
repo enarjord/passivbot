@@ -15,9 +15,11 @@ from passivbot import setup_bot
 from tools.run_fake_live import (
     _async_main,
     _apply_assertions,
+    _compare_run_artifacts,
     _extract_hsl_trace,
     _install_fake_user_override,
     _install_runtime_overrides,
+    _load_run_artifacts,
     _prime_fake_candles,
     _prime_fake_fill_cache,
     _run_fake_bot,
@@ -400,6 +402,185 @@ def test_install_runtime_overrides_sets_exchange_time_override():
     bot = type("Bot", (), {"cca": client})()
     _install_runtime_overrides(bot, {})
     assert bot.get_exchange_time() == client.now_ms
+
+
+def test_main_parses_authoritative_refresh_mode(monkeypatch):
+    seen = {}
+
+    async def fake_async_main(args):
+        seen["mode"] = args.authoritative_refresh_mode
+        return 0
+
+    monkeypatch.setattr(run_fake_live_module, "_async_main", fake_async_main)
+    monkeypatch.setattr(
+        run_fake_live_module.sys,
+        "argv",
+        [
+            "run_fake_live.py",
+            "config.json",
+            "scenario.hjson",
+            "--authoritative-refresh-mode",
+            "staged",
+        ],
+    )
+
+    assert run_fake_live_module.main() == 0
+    assert seen["mode"] == "staged"
+
+
+def test_compare_run_artifacts_reports_no_diff_for_matching_payloads():
+    payload = {
+        "step_summaries": [{"step_index": 0, "fills": 0}],
+        "fake_exchange_state": {"balance_total": 1000.0},
+        "fills": [],
+        "positions": [],
+        "hsl_trace": {"long": {"halted": False}},
+        "run_metadata": {"authoritative_refresh_mode": "legacy"},
+    }
+    report = _compare_run_artifacts(payload, {**payload, "run_metadata": {"authoritative_refresh_mode": "staged"}})
+    assert report["match"] is True
+    assert report["diff_count"] == 0
+
+
+def test_compare_run_artifacts_ignores_nondeterministic_fields():
+    legacy = {
+        "step_summaries": [{"step_index": 0, "fills": 1}],
+        "fake_exchange_state": {
+            "balance_total": 1000.0,
+            "fills": [
+                {
+                    "id": "1",
+                    "order": "1",
+                    "clientOrderId": "legacy-oid",
+                    "symbol": "BTC/USDT:USDT",
+                    "position_side": "long",
+                    "side": "buy",
+                    "price": 100.0,
+                    "amount": 0.01,
+                    "timestamp": 1,
+                    "pnl": 0.0,
+                    "reduceOnly": False,
+                    "info": {"clientOrderId": "legacy-oid", "positionSide": "LONG"},
+                }
+            ],
+        },
+        "fills": [
+            {
+                "id": "1",
+                "order": "1",
+                "clientOrderId": "legacy-oid",
+                "symbol": "BTC/USDT:USDT",
+                "position_side": "long",
+                "side": "buy",
+                "price": 100.0,
+                "amount": 0.01,
+                "timestamp": 1,
+                "pnl": 0.0,
+                "reduceOnly": False,
+                "info": {"clientOrderId": "legacy-oid", "positionSide": "LONG"},
+            }
+        ],
+        "positions": [],
+        "hsl_trace": {
+            "long": {
+                "halted": False,
+                "last_stop_event": {"triggered_at": "a", "user": "legacy_user", "tier": "red"},
+            }
+        },
+        "run_metadata": {"authoritative_refresh_mode": "legacy"},
+    }
+    staged = {
+        "step_summaries": [{"step_index": 0, "fills": 1}],
+        "fake_exchange_state": {
+            "balance_total": 1000.0,
+            "fills": [
+                {
+                    "id": "99",
+                    "order": "99",
+                    "clientOrderId": "staged-oid",
+                    "symbol": "BTC/USDT:USDT",
+                    "position_side": "long",
+                    "side": "buy",
+                    "price": 100.0,
+                    "amount": 0.01,
+                    "timestamp": 1,
+                    "pnl": 0.0,
+                    "reduceOnly": False,
+                    "info": {"clientOrderId": "staged-oid", "positionSide": "LONG"},
+                }
+            ],
+        },
+        "fills": [
+            {
+                "id": "99",
+                "order": "99",
+                "clientOrderId": "staged-oid",
+                "symbol": "BTC/USDT:USDT",
+                "position_side": "long",
+                "side": "buy",
+                "price": 100.0,
+                "amount": 0.01,
+                "timestamp": 1,
+                "pnl": 0.0,
+                "reduceOnly": False,
+                "info": {"clientOrderId": "staged-oid", "positionSide": "LONG"},
+            }
+        ],
+        "positions": [],
+        "hsl_trace": {
+            "long": {
+                "halted": False,
+                "last_stop_event": {"triggered_at": "b", "user": "staged_user", "tier": "red"},
+            }
+        },
+        "run_metadata": {"authoritative_refresh_mode": "staged"},
+    }
+
+    report = _compare_run_artifacts(legacy, staged)
+
+    assert report["match"] is True
+    assert report["diff_count"] == 0
+
+
+def test_load_run_artifacts_reads_expected_files(tmp_path):
+    (tmp_path / "step_summaries.json").write_text(json.dumps([{"step_index": 0}]), encoding="utf-8")
+    (tmp_path / "fake_exchange_state.json").write_text(json.dumps({"balance_total": 1}), encoding="utf-8")
+    (tmp_path / "fills.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "positions.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "hsl_trace.json").write_text(json.dumps({"long": {"halted": False}}), encoding="utf-8")
+    (tmp_path / "run_metadata.json").write_text(
+        json.dumps({"authoritative_refresh_mode": "legacy"}), encoding="utf-8"
+    )
+    (tmp_path / "fake_live.log").write_text("hello\n", encoding="utf-8")
+
+    loaded = _load_run_artifacts(tmp_path)
+
+    assert loaded["step_summaries"][0]["step_index"] == 0
+    assert loaded["fake_exchange_state"]["balance_total"] == 1
+    assert loaded["log_text"] == "hello\n"
+
+
+def test_main_parses_compare_authoritative_refresh_modes(monkeypatch):
+    seen = {}
+
+    async def fake_async_main(args):
+        seen["compare"] = args.compare_authoritative_refresh_modes
+        return 0
+
+    monkeypatch.setattr(run_fake_live_module, "_async_main", fake_async_main)
+    monkeypatch.setattr(
+        run_fake_live_module.sys,
+        "argv",
+        [
+            "run_fake_live.py",
+            "config.json",
+            "scenario.hjson",
+            "--compare-authoritative-refresh-modes",
+        ],
+    )
+
+    assert run_fake_live_module.main() == 0
+    assert seen["compare"] is True
 
 
 def test_refresh_halted_runtime_forced_modes_keeps_active_red_pside_in_panic():

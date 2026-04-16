@@ -15,6 +15,7 @@ class _FakeBot:
         self.positions_balance_calls = 0
         self.open_orders_calls = 0
         self.min_cost_calls = 0
+        self.abstraction_refresh_calls = 0
 
     async def update_exchange_config(self):
         self.update_exchange_config_calls += 1
@@ -22,6 +23,9 @@ class _FakeBot:
 
     async def determine_utc_offset(self, verbose=True):
         self.determine_utc_offset_calls += 1
+
+    async def refresh_and_log_user_abstraction_state(self):
+        self.abstraction_refresh_calls += 1
 
     def set_market_specific_settings(self):
         self.market_specific_settings_calls += 1
@@ -34,6 +38,9 @@ class _FakeBot:
 
     def set_wallet_exposure_limits(self):
         return None
+
+    def _authoritative_refresh_mode(self):
+        return "legacy"
 
     async def update_positions_and_balance(self):
         self.positions_balance_calls += 1
@@ -85,6 +92,7 @@ async def test_init_markets_retries_request_timeout_then_succeeds(monkeypatch):
     assert bot.eligible_symbols == {"BTC/USDT:USDT"}
     assert bot.ineligible_symbols == {"DOGE/USDT:USDT": "bad"}
     assert bot.market_specific_settings_calls == 1
+    assert bot.abstraction_refresh_calls == 1
     assert bot.positions_balance_calls == 1
     assert bot.open_orders_calls == 1
     assert bot.min_cost_calls == 1

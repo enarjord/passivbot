@@ -49,6 +49,10 @@ OPTIMIZABLE_BOT_KEY_PATHS = {
 }
 
 DEPRECATED_OPTIMIZE_BOUND_ALIASES = {
+    "long_min_markup": "long_close_grid_markup_start",
+    "short_min_markup": "short_close_grid_markup_start",
+    "long_close_grid_min_markup": "long_close_grid_markup_end",
+    "short_close_grid_min_markup": "short_close_grid_markup_end",
     "long_filter_volume_ema_span": "long_forager_volume_ema_span",
     "long_filter_volatility_ema_span": "long_forager_volatility_ema_span",
     "short_filter_volume_ema_span": "short_forager_volume_ema_span",
@@ -83,18 +87,19 @@ def validate_optimize_bounds_against_bot_config(bot_config, optimize_bounds) -> 
         canonical_key = DEPRECATED_OPTIMIZE_BOUND_ALIASES.get(bound_key)
         if canonical_key is not None and canonical_key in optimize_bounds:
             continue
-        if bound_key in OPTIMIZABLE_BOT_KEY_PATHS:
+        target_key = canonical_key or bound_key
+        if target_key in OPTIMIZABLE_BOT_KEY_PATHS:
             continue
-        _validate_standard_optimize_bound_target(bound_key, bot_config)
-        if bound_key == "long_unstuck_ema_dist":
-            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+        _validate_standard_optimize_bound_target(target_key, bot_config)
+        if target_key == "long_unstuck_ema_dist":
+            bound = Bound.from_config(target_key, optimize_bounds[bound_key])
             validate_unstuck_ema_dist_value(
                 bound.low,
                 path="optimize.bounds.long_unstuck_ema_dist lower bound",
                 pside="long",
             )
-        elif bound_key == "short_unstuck_ema_dist":
-            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+        elif target_key == "short_unstuck_ema_dist":
+            bound = Bound.from_config(target_key, optimize_bounds[bound_key])
             validate_unstuck_ema_dist_value(
                 bound.high,
                 path="optimize.bounds.short_unstuck_ema_dist upper bound",
@@ -124,10 +129,11 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
         canonical_key = DEPRECATED_OPTIMIZE_BOUND_ALIASES.get(bound_key)
         if canonical_key is not None and canonical_key in optimize_bounds:
             continue
-        if bound_key in OPTIMIZABLE_BOT_KEY_PATHS:
-            key_paths.append((bound_key, OPTIMIZABLE_BOT_KEY_PATHS[bound_key]))
+        target_key = canonical_key or bound_key
+        if target_key in OPTIMIZABLE_BOT_KEY_PATHS:
+            key_paths.append((bound_key, OPTIMIZABLE_BOT_KEY_PATHS[target_key]))
             continue
-        pside, key = bound_key.split("_", 1)
+        pside, key = target_key.split("_", 1)
         key_paths.append((bound_key, ("bot", pside, key)))
     return key_paths
 

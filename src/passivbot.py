@@ -39,7 +39,7 @@ from fill_events_manager import (
     compute_psize_pprice,
 )
 from monitor_publisher import MonitorPublisher
-from passivbot_exceptions import RestartBotException
+from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
@@ -553,6 +553,14 @@ class Passivbot:
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
+        self._authoritative_surface_signatures = {}
+        self._authoritative_surface_generations = {}
+        self._authoritative_refresh_epoch = 0
+        self._authoritative_refresh_epoch_fresh = set()
+        self._authoritative_refresh_epoch_changed = set()
+        self._authoritative_pending_confirmations = {}
+        self._authoritative_barrier_last_log_key = None
+        self._authoritative_barrier_last_log_ms = 0
         self._disabled_psides_logged = set()
         self._last_coin_symbol_warning_counts = {
             "symbol_to_coin_fallbacks": 0,
@@ -785,6 +793,9 @@ class Passivbot:
         # Realized-loss gate logging throttle
         self._loss_gate_last_log_ms = {}
         self._loss_gate_log_interval_ms = 5 * 60 * 1000  # 5 minutes
+        # Effective min-cost gate logging throttle
+        self._min_effective_cost_last_log_ms = {}
+        self._min_effective_cost_log_interval_ms = 5 * 60 * 1000  # 5 minutes
         self._orchestrator_prev_close_ema = {}
         self._orchestrator_close_ema_fallback_counts = {}
         self.hsl = self._parse_hsl_config()
@@ -1756,6 +1767,8 @@ class Passivbot:
                     await self.execute_to_exchange()
                 except RestartBotException as e:
                     logging.error("[risk] RED supervisor ignored restart request: %s", e)
+                except FatalBotException:
+                    raise
                 except Exception as e:
                     logging.error("[risk] RED supervisor execute_to_exchange failed: %s", e)
                     traceback.print_exc()
@@ -2206,6 +2219,8 @@ class Passivbot:
         self.markets_dict = await load_markets(
             self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote
         )
+        if hasattr(self, "refresh_and_log_user_abstraction_state"):
+            await self.refresh_and_log_user_abstraction_state()
         # ineligible symbols cannot open new positions
         eligible, _, reasons = filter_markets(
             self.markets_dict, self.exchange, quote=self.quote, verbose=verbose
@@ -2222,8 +2237,14 @@ class Passivbot:
         self.refresh_approved_ignored_coins_lists()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
-        await self.update_positions_and_balance()
-        await self.update_open_orders()
+        if self._authoritative_refresh_mode() == "staged" and str(self.exchange).lower() in {
+            "fake",
+            "hyperliquid",
+        }:
+            await self.refresh_authoritative_state()
+        else:
+            await self.update_positions_and_balance()
+            await self.update_open_orders()
         self._assert_supported_live_state()
         await self.update_effective_min_cost()
         # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
@@ -3086,9 +3107,9 @@ class Passivbot:
                 self.execution_scheduled = False
                 self.state_change_detected_by_symbol = set()
                 self._set_log_silence_watchdog_context(
-                    phase="runtime", stage="update_pos_oos_pnls_ohlcvs"
+                    phase="runtime", stage="refresh_authoritative_state"
                 )
-                if not await self.update_pos_oos_pnls_ohlcvs():
+                if not await self.refresh_authoritative_state():
                     await asyncio.sleep(0.5)
                     failed_update_pos_oos_pnls_ohlcvs_count += 1
                     if failed_update_pos_oos_pnls_ohlcvs_count > max_n_fails:
@@ -3105,6 +3126,25 @@ class Passivbot:
                     ):
                         await self._equity_hard_stop_run_red_supervisor()
                         continue
+                blocked, barrier_details = self._authoritative_execution_barrier_state()
+                if blocked:
+                    self._log_authoritative_execution_barrier(barrier_details)
+                    self._last_loop_duration_ms = utc_ms() - loop_start_ms
+                    self._maybe_log_health_summary()
+                    self._maybe_log_unstuck_status()
+                    self._set_log_silence_watchdog_context(phase="runtime", stage="flush_snapshot")
+                    await self._monitor_flush_snapshot()
+                    self._set_log_silence_watchdog_context(
+                        phase="runtime", stage="confirmation_delay"
+                    )
+                    await asyncio.sleep(self._authoritative_confirmation_retry_delay_seconds(details=barrier_details))
+                    continue
+                self._set_log_silence_watchdog_context(
+                    phase="runtime", stage="refresh_market_state_if_needed"
+                )
+                if not await self.refresh_market_state_if_needed():
+                    await asyncio.sleep(0.5)
+                    continue
                 self._set_log_silence_watchdog_context(phase="runtime", stage="execute_to_exchange")
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
@@ -3124,7 +3164,7 @@ class Passivbot:
                     if self.execution_scheduled:
                         break
                     await asyncio.sleep(0.1)
-            except RestartBotException:
+            except (RestartBotException, FatalBotException):
                 raise  # Propagate restart without incrementing error count
             except RateLimitExceeded as e:
                 self._health_errors += 1
@@ -3184,6 +3224,43 @@ class Passivbot:
         """Refresh positions, open orders, realised PnL, and 1m candles."""
         if self.stop_signal_received:
             return False
+        if not await self.refresh_authoritative_state():
+            return False
+        if self.stop_signal_received:
+            return False
+        return await self.refresh_market_state_if_needed()
+
+    async def refresh_market_state_if_needed(self) -> bool:
+        """Refresh market data needed before planning/execution."""
+        if self.stop_signal_received:
+            return False
+        await self.update_ohlcvs_1m_for_actives()
+        return True
+
+    def _authoritative_refresh_mode(self) -> str:
+        mode = str(
+            get_optional_live_value(getattr(self, "config", {}), "authoritative_refresh_mode", "legacy")
+            or "legacy"
+        ).lower()
+        return mode if mode in {"legacy", "staged"} else "legacy"
+
+    async def refresh_authoritative_state(self) -> bool:
+        """Refresh authoritative account state before planning/execution."""
+        if self.stop_signal_received:
+            return False
+        self._begin_authoritative_refresh_epoch()
+        mode = self._authoritative_refresh_mode()
+        if mode == "staged":
+            exchange = str(getattr(self, "exchange", "") or "").lower()
+            if exchange in {"fake", "hyperliquid"}:
+                return await self._refresh_authoritative_state_staged()
+            self.log_once(
+                f"[state] authoritative_refresh_mode=staged not yet supported for {exchange or 'unknown'}; using legacy refresh"
+            )
+        return await self._refresh_authoritative_state_legacy()
+
+    async def _refresh_authoritative_state_legacy(self) -> bool:
+        """Current production refresh path: positions+balance, then open orders+fills."""
         balance_ok, positions_ok = await self.update_positions_and_balance()
         if not positions_ok:
             return False
@@ -3194,13 +3271,207 @@ class Passivbot:
             self.update_open_orders(),
             self.update_pnls(),
         )
+        if open_orders_ok and pnls_ok:
+            self._finalize_authoritative_refresh_consistency(
+                {"balance", "positions", "open_orders", "fills"}
+            )
+        return bool(open_orders_ok and pnls_ok)
 
-        if not open_orders_ok or not pnls_ok:
+    async def _refresh_authoritative_state_staged(self) -> bool:
+        """Experimental staged refresh path used for side-by-side harness comparisons."""
+        plan = self._authoritative_staged_refresh_plan()
+        snapshot = await self._fetch_authoritative_state_staged_snapshot(plan)
+        fetched_balance = snapshot.get("balance")
+        fetched_positions = snapshot.get("positions")
+        fetched_open_orders = snapshot.get("open_orders")
+        pnls_ok = snapshot.get("pnls_ok", True)
+
+        fetched_positions_old = None
+        fetched_positions_new = None
+        if "positions" in plan:
+            if fetched_positions in [None, False]:
+                return False
+            fetched_positions_old, fetched_positions_new = self._apply_positions_snapshot(
+                fetched_positions
+            )
+        if "balance" in plan:
+            if not self._apply_balance_snapshot(fetched_balance):
+                return False
+        if "positions" in plan:
+            self._record_authoritative_surface(
+                "positions",
+                self._positions_signature(fetched_positions_new),
+            )
+        defer_balance_publication = bool(self._staged_defer_balance_publication())
+        if "balance" in plan and not defer_balance_publication:
+            self._reconcile_balance_after_positions_and_balance_refresh()
+            self._record_authoritative_surface(
+                "balance", round(float(self.get_hysteresis_snapped_balance()), 12)
+            )
+            try:
+                await self.log_position_changes(fetched_positions_old, fetched_positions_new)
+            except Exception as e:
+                logging.error(f"error logging position changes {e}")
+            await self.handle_balance_update(source="REST")
+
+        if "open_orders" in plan:
+            if fetched_open_orders in [None, False]:
+                return False
+            open_orders_ok = await self._apply_open_orders_snapshot(
+                fetched_open_orders,
+                allow_followup_positions_refresh=False,
+                reconcile_balance=not defer_balance_publication,
+            )
+            if not open_orders_ok:
+                return False
+        if "fills" in plan and not pnls_ok:
             return False
-        if self.stop_signal_received:
-            return False
-        await self.update_ohlcvs_1m_for_actives()
+        if defer_balance_publication and "open_orders" in plan:
+            self._reconcile_balance_after_staged_refresh()
+            if "balance" in plan:
+                self._record_authoritative_surface(
+                    "balance", round(float(self.get_hysteresis_snapped_balance()), 12)
+                )
+            if fetched_positions_old is not None:
+                try:
+                    await self.log_position_changes(fetched_positions_old, fetched_positions_new)
+                except Exception as e:
+                    logging.error(f"error logging position changes {e}")
+            await self.handle_balance_update(source=self._staged_balance_update_source())
+        self._finalize_authoritative_refresh_consistency(plan)
         return True
+
+    async def _capture_balance_staged_snapshot(self) -> tuple[object, float]:
+        """Fetch a single balance payload and its normalized value for staged refresh."""
+        if hasattr(self, "capture_balance_snapshot"):
+            return await self.capture_balance_snapshot()
+        balance = await self.fetch_balance()
+        return None, balance
+
+    async def _capture_positions_staged_snapshot(self) -> tuple[object, list[dict]]:
+        """Fetch a single positions payload and its normalized value for staged refresh."""
+        if hasattr(self, "capture_positions_snapshot"):
+            return await self.capture_positions_snapshot()
+        positions = await self.fetch_positions()
+        return None, positions
+
+    def _authoritative_staged_refresh_plan(self) -> set[str]:
+        """Return the minimal staged authoritative surfaces needed this cycle."""
+        pending = set(getattr(self, "_authoritative_pending_confirmations", {}) or {})
+        if pending == {"open_orders"}:
+            return {"open_orders"}
+        return {"balance", "positions", "open_orders", "fills"}
+
+    async def capture_authoritative_state_staged_snapshot(
+        self, plan: set[str], timings_ms: dict[str, int]
+    ) -> dict | None:
+        """Hook: exchange-specific staged cohort fetch.
+
+        Return `None` to use the default per-surface staged fetch behavior.
+        """
+        del plan, timings_ms
+        return None
+
+    async def _timed_authoritative_fetch(self, surface: str, coro, timings_ms: dict[str, int]):
+        """Measure one staged authoritative fetch while preserving exceptions."""
+        started = utc_ms()
+        try:
+            return await coro
+        finally:
+            timings_ms[surface] = int(max(0, utc_ms() - started))
+
+    def _log_staged_refresh_timings(
+        self, plan: set[str], timings_ms: dict[str, int], wall_ms: int
+    ) -> None:
+        """Emit a compact timing line for slow staged refresh cohorts."""
+        if not timings_ms:
+            return
+        sum_ms = int(sum(int(v) for v in timings_ms.values()))
+        # Only log materially slow refreshes or any full multi-surface cohort.
+        if wall_ms < 1_000 and not (len(plan) > 1 and wall_ms >= 500):
+            return
+        parts = [f"{surface}={int(timings_ms[surface])}ms" for surface in sorted(timings_ms)]
+        logging.info(
+            "[state] staged refresh timings | plan=%s | wall=%dms | sum=%dms | %s",
+            ",".join(sorted(plan)),
+            wall_ms,
+            sum_ms,
+            " ".join(parts),
+        )
+
+    async def _fetch_authoritative_state_staged_snapshot(self, plan: set[str]) -> dict:
+        """Fetch staged authoritative components concurrently without mutating live state."""
+        wall_started = utc_ms()
+        timings_ms = {}
+        exchange_snapshot = await self.capture_authoritative_state_staged_snapshot(plan, timings_ms)
+        if exchange_snapshot is not None:
+            wall_ms = int(max(0, utc_ms() - wall_started))
+            self._log_staged_refresh_timings(plan, timings_ms, wall_ms)
+            exchange_snapshot.setdefault("plan", set(plan))
+            exchange_snapshot.setdefault("pnls_ok", True)
+            return exchange_snapshot
+        tasks = {}
+        if "balance" in plan:
+            tasks["balance"] = asyncio.create_task(
+                self._timed_authoritative_fetch(
+                    "balance", self._capture_balance_staged_snapshot(), timings_ms
+                )
+            )
+        if "positions" in plan:
+            tasks["positions"] = asyncio.create_task(
+                self._timed_authoritative_fetch(
+                    "positions", self._capture_positions_staged_snapshot(), timings_ms
+                )
+            )
+        if "open_orders" in plan:
+            tasks["open_orders"] = asyncio.create_task(
+                self._timed_authoritative_fetch("open_orders", self.fetch_open_orders(), timings_ms)
+            )
+        if "fills" in plan:
+            tasks["fills"] = asyncio.create_task(
+                self._timed_authoritative_fetch("fills", self.update_pnls(), timings_ms)
+            )
+        try:
+            keys = list(tasks)
+            results = await asyncio.gather(*[tasks[key] for key in keys])
+        except Exception:
+            for task in tasks.values():
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(
+                *tasks.values(),
+                return_exceptions=True,
+            )
+            wall_ms = int(max(0, utc_ms() - wall_started))
+            self._log_staged_refresh_timings(plan, timings_ms, wall_ms)
+            raise
+        wall_ms = int(max(0, utc_ms() - wall_started))
+        self._log_staged_refresh_timings(plan, timings_ms, wall_ms)
+        out = {"plan": set(plan), "pnls_ok": True}
+        for key, result in zip(keys, results):
+            if key == "balance":
+                _raw_balance, fetched_balance = result
+                out["balance"] = fetched_balance
+            elif key == "positions":
+                _raw_positions, fetched_positions = result
+                out["positions"] = fetched_positions
+            elif key == "open_orders":
+                out["open_orders"] = result
+            elif key == "fills":
+                out["pnls_ok"] = result
+        return out
+
+    def _staged_defer_balance_publication(self) -> bool:
+        """Hook: allow exchanges to publish balance only after all staged surfaces are applied."""
+        return False
+
+    def _reconcile_balance_after_staged_refresh(self) -> bool:
+        """Hook: finalize staged balance after open orders are also authoritative."""
+        return self._reconcile_balance_after_open_orders_refresh()
+
+    def _staged_balance_update_source(self) -> str:
+        """Hook: describe the staged balance source in operator logs."""
+        return "REST"
 
     def add_to_recent_order_cancellations(self, order):
         """Record a recently cancelled order to throttle repeated cancellations."""
@@ -3218,9 +3489,69 @@ class Passivbot:
             return max(0.0, (matching["execution_timestamp"] + max_age_ms) - utc_ms())
         return 0.0
 
+    def order_matches_bot_cancellation(self, order, max_age_ms=180_000) -> bool:
+        """Return True when an exact recent bot cancellation strongly explains the disappearance."""
+        age_limit = utc_ms() - max_age_ms
+        self.recent_order_cancellations = [
+            x for x in self.recent_order_cancellations if x["execution_timestamp"] > age_limit
+        ]
+        return bool(
+            order_has_match(
+                order,
+                self.recent_order_cancellations,
+                tolerance_price=0.0,
+                tolerance_qty=0.0,
+            )
+        )
+
     def add_to_recent_order_executions(self, order):
         """Track newly created orders to limit duplicate submissions."""
         self.recent_order_executions.append({**order, **{"execution_timestamp": utc_ms()}})
+
+    def order_matches_recent_execution(self, order, max_age_ms=180_000) -> bool:
+        """Return True when an exact recent bot creation strongly explains a new open order."""
+        age_limit = utc_ms() - max_age_ms
+        if not hasattr(self, "recent_order_executions"):
+            self.recent_order_executions = []
+        self.recent_order_executions = [
+            x for x in self.recent_order_executions if x["execution_timestamp"] > age_limit
+        ]
+        return bool(
+            order_has_match(
+                order,
+                self.recent_order_executions,
+                tolerance_price=0.0,
+                tolerance_qty=0.0,
+            )
+        )
+
+    def _local_order_open_orders_confirmed(self, max_age_ms=15_000) -> bool:
+        """Return True when recent local creates/cancels are reflected in the current open-orders view."""
+        age_limit = utc_ms() - max_age_ms
+        if not hasattr(self, "recent_order_cancellations"):
+            self.recent_order_cancellations = []
+        if not hasattr(self, "recent_order_executions"):
+            self.recent_order_executions = []
+        self.recent_order_cancellations = [
+            x for x in self.recent_order_cancellations if x["execution_timestamp"] > age_limit
+        ]
+        self.recent_order_executions = [
+            x for x in self.recent_order_executions if x["execution_timestamp"] > age_limit
+        ]
+        current_open_orders = [elm for sublist in self.open_orders.values() for elm in sublist]
+        for cancelled in self.recent_order_cancellations:
+            if order_has_match(
+                cancelled, current_open_orders, tolerance_price=0.0, tolerance_qty=0.0
+            ):
+                return False
+        for created in self.recent_order_executions:
+            if order_has_match(
+                created, self.recent_order_cancellations, tolerance_price=0.0, tolerance_qty=0.0
+            ):
+                continue
+            if not order_has_match(created, current_open_orders, tolerance_price=0.0, tolerance_qty=0.0):
+                return False
+        return True
 
     def order_was_recently_updated(self, order, max_age_ms=15_000) -> float:
         """Return throttle delay if the order was placed within `max_age_ms`."""
@@ -3361,6 +3692,10 @@ class Passivbot:
                     pside=elm.get("position_side"),
                 )
             self._health_orders_placed += len(to_return)
+            if hasattr(self, "_request_authoritative_confirmation"):
+                self._request_authoritative_confirmation({"open_orders"})
+            else:
+                Passivbot._request_authoritative_confirmation(self, {"open_orders"})
         return to_return
 
     async def execute_cancellations_parent(self, orders: [dict]) -> [dict]:
@@ -3428,6 +3763,10 @@ class Passivbot:
                     pside=elm.get("position_side"),
                 )
             self._health_orders_cancelled += len(to_return)
+            if hasattr(self, "_request_authoritative_confirmation"):
+                self._request_authoritative_confirmation({"open_orders"})
+            else:
+                Passivbot._request_authoritative_confirmation(self, {"open_orders"})
         return to_return
 
     def log_order_action(
@@ -4481,6 +4820,195 @@ class Passivbot:
             return float(getattr(self, "balance_raw", 0.0) or 0.0)
         return self.get_hysteresis_snapped_balance()
 
+    def _begin_authoritative_refresh_epoch(self) -> None:
+        """Start a new authoritative state refresh cohort for execution gating."""
+        self._authoritative_refresh_epoch = int(
+            getattr(self, "_authoritative_refresh_epoch", 0) or 0
+        ) + 1
+        self._authoritative_refresh_epoch_fresh = set()
+        self._authoritative_refresh_epoch_changed = set()
+
+    def _record_authoritative_surface(self, surface: str, signature) -> bool:
+        """Record a fresh authoritative surface snapshot and whether it changed."""
+        if not hasattr(self, "_authoritative_surface_signatures"):
+            self._authoritative_surface_signatures = {}
+        if not hasattr(self, "_authoritative_surface_generations"):
+            self._authoritative_surface_generations = {}
+        if not hasattr(self, "_authoritative_refresh_epoch_fresh"):
+            self._authoritative_refresh_epoch_fresh = set()
+        if not hasattr(self, "_authoritative_refresh_epoch_changed"):
+            self._authoritative_refresh_epoch_changed = set()
+        prev = self._authoritative_surface_signatures.get(surface)
+        changed = prev != signature
+        self._authoritative_surface_signatures[surface] = signature
+        self._authoritative_refresh_epoch_fresh.add(surface)
+        if changed:
+            self._authoritative_surface_generations[surface] = (
+                int(self._authoritative_surface_generations.get(surface, 0) or 0) + 1
+            )
+            self._authoritative_refresh_epoch_changed.add(surface)
+        return changed
+
+    def _positions_signature(self, positions: list[dict]) -> tuple:
+        return tuple(
+            sorted(
+                (
+                    str(position.get("symbol") or ""),
+                    str(position.get("position_side") or ""),
+                    round(float(position.get("size") or 0.0), 12),
+                    round(float(position.get("price") or 0.0), 12),
+                )
+                for position in positions
+            )
+        )
+
+    def _open_orders_signature(self, orders: list[dict]) -> tuple:
+        return tuple(
+            sorted(
+                (
+                    str(order.get("id") or ""),
+                    str(order.get("symbol") or ""),
+                    str(order.get("side") or ""),
+                    str(order.get("position_side") or ""),
+                    round(float(order.get("qty", order.get("amount", 0.0)) or 0.0), 12),
+                    round(float(order.get("price") or 0.0), 12),
+                    bool(order.get("reduce_only") or order.get("reduceOnly")),
+                    str(
+                        order.get("custom_id")
+                        or order.get("customId")
+                        or order.get("client_order_id")
+                        or order.get("clientOrderId")
+                        or order.get("client_oid")
+                        or order.get("clientOid")
+                        or order.get("order_link_id")
+                        or order.get("orderLinkId")
+                        or ""
+                    ),
+                )
+                for order in orders
+            )
+        )
+
+    def _fill_events_signature(self, events) -> tuple:
+        def _event_key(ev):
+            source_ids = tuple(str(x) for x in (getattr(ev, "source_ids", None) or ()) if x)
+            return (
+                int(getattr(ev, "timestamp", 0) or 0),
+                str(getattr(ev, "id", "") or ""),
+                source_ids,
+                str(getattr(ev, "symbol", "") or ""),
+                str(getattr(ev, "position_side", "") or ""),
+                str(getattr(ev, "side", "") or ""),
+                round(float(getattr(ev, "qty", 0.0) or 0.0), 12),
+                round(float(getattr(ev, "price", 0.0) or 0.0), 12),
+                round(float(getattr(ev, "pnl", 0.0) or 0.0), 12),
+                round(float(getattr(ev, "fee", 0.0) or 0.0), 12),
+            )
+
+        return tuple(_event_key(ev) for ev in events)
+
+    def _authoritative_required_surfaces(self) -> set[str]:
+        pending = set(getattr(self, "_authoritative_pending_confirmations", {}) or {})
+        return pending if pending else {"balance", "positions", "open_orders", "fills"}
+
+    def _request_authoritative_confirmation(
+        self, surfaces: str | list[str] | set[str] | tuple[str, ...], *, min_epoch: int | None = None
+    ) -> None:
+        """Require fresh authoritative confirmation surfaces before the next execution."""
+        if isinstance(surfaces, str):
+            requested = {surfaces}
+        else:
+            requested = set(surfaces)
+        if not requested:
+            return
+        if not hasattr(self, "_authoritative_pending_confirmations"):
+            self._authoritative_pending_confirmations = {}
+        target_epoch = int(
+            min_epoch
+            if min_epoch is not None
+            else int(getattr(self, "_authoritative_refresh_epoch", 0) or 0) + 1
+        )
+        for surface in requested:
+            prev = int(self._authoritative_pending_confirmations.get(surface, 0) or 0)
+            self._authoritative_pending_confirmations[surface] = max(prev, target_epoch)
+
+    def _clear_authoritative_confirmations(self, surfaces: set[str]) -> None:
+        if not hasattr(self, "_authoritative_pending_confirmations"):
+            return
+        for surface in surfaces:
+            self._authoritative_pending_confirmations.pop(surface, None)
+
+    def _authoritative_execution_barrier_state(self) -> tuple[bool, dict]:
+        """Return whether execution must be skipped until authoritative state settles."""
+        required = self._authoritative_required_surfaces()
+        fresh = set(getattr(self, "_authoritative_refresh_epoch_fresh", set()) or set())
+        changed_all = set(getattr(self, "_authoritative_refresh_epoch_changed", set()) or set())
+        changed = sorted(changed_all & {"positions", "open_orders", "fills"})
+        pending = dict(getattr(self, "_authoritative_pending_confirmations", {}) or {})
+        current_epoch = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0)
+        missing = sorted(
+            surface
+            for surface in required
+            if surface not in fresh or current_epoch < int(pending.get(surface, 0) or 0)
+        )
+        blocked = bool(missing)
+        if not blocked:
+            self._clear_authoritative_confirmations(required)
+        return blocked, {
+            "missing": missing,
+            "changed": changed,
+            "required": sorted(required),
+        }
+
+    def _log_authoritative_execution_barrier(self, details: dict) -> None:
+        """Log why execution is being delayed until exchange state is coherent."""
+        missing = tuple(details.get("missing", ()))
+        changed = tuple(details.get("changed", ()))
+        required = tuple(details.get("required", ()))
+        log_key = (missing, changed, required)
+        now_ms = utc_ms()
+        last_log_ms = int(getattr(self, "_authoritative_barrier_last_log_ms", 0) or 0)
+        if (
+            log_key == getattr(self, "_authoritative_barrier_last_log_key", None)
+            and now_ms - last_log_ms < 15_000
+        ):
+            return
+        self._authoritative_barrier_last_log_key = log_key
+        self._authoritative_barrier_last_log_ms = now_ms
+        parts = []
+        if required:
+            parts.append(f"pending confirmations={','.join(required)}")
+        if missing:
+            parts.append(f"missing fresh surfaces={','.join(missing)}")
+        if changed:
+            parts.append(f"state changed this cycle={','.join(changed)}")
+        logging.info("[state] execution barrier active | %s", " | ".join(parts))
+
+    def _authoritative_confirmation_retry_delay_seconds(self, *, details: dict) -> float:
+        """Use a tighter retry cadence while waiting for narrow confirmation refreshes."""
+        base_delay = float(self.live_value("execution_delay_seconds"))
+        required = set(details.get("required", ()) or ())
+        if required == {"open_orders"}:
+            return min(base_delay, 1.0) if base_delay > 0.0 else 0.5
+        return base_delay
+
+    def _finalize_authoritative_refresh_consistency(self, refreshed_surfaces: set[str]) -> None:
+        """Escalate follow-up confirmations only when the current refresh cohort was insufficient."""
+        refreshed_surfaces = set(refreshed_surfaces or set())
+        changed_all = set(getattr(self, "_authoritative_refresh_epoch_changed", set()) or set())
+        if refreshed_surfaces == {"open_orders"} and not self._local_order_open_orders_confirmed():
+            self._request_authoritative_confirmation(
+                {"balance", "positions", "open_orders", "fills"}
+            )
+        if (
+            "positions" in changed_all
+            and "fills" in refreshed_surfaces
+            and "fills" not in changed_all
+        ):
+            self._request_authoritative_confirmation(
+                {"balance", "positions", "open_orders", "fills"}
+            )
+
     def add_new_order(self, order, source="WS"):
         """No-op placeholder; subclasses update open orders through REST synchronisation."""
         return  # only add new orders via REST in self.update_open_orders()
@@ -4489,9 +5017,102 @@ class Passivbot:
         """No-op placeholder; subclasses remove open orders through REST synchronisation."""
         return  # only remove orders via REST in self.update_open_orders()
 
+    def _summarize_order_update_batch(self, upd_list: list[dict]) -> tuple[tuple, str, str]:
+        """Return a compact, operator-facing summary for websocket order updates."""
+        symbols = sorted(
+            {
+                str(symbol)
+                for symbol in (
+                    order.get("symbol")
+                    for order in upd_list
+                    if isinstance(order, dict)
+                )
+                if symbol
+            }
+        )
+        statuses = sorted(
+            {
+                str(status).lower()
+                for status in (
+                    order.get("status")
+                    for order in upd_list
+                    if isinstance(order, dict)
+                )
+                if status
+            }
+        )
+        status_set = set(statuses)
+        if status_set == {"closed"}:
+            cause = "fill_hint"
+        elif status_set and status_set <= {"canceled", "cancelled"}:
+            cause = "cancel_hint"
+        elif status_set == {"open"}:
+            cause = "open_hint"
+        elif "open" in status_set and status_set & {"canceled", "cancelled"}:
+            cause = "replace_hint"
+        else:
+            cause = "mixed_hint"
+        symbol_preview = ",".join(symbols[:3]) if symbols else "unknown"
+        if len(symbols) > 3:
+            symbol_preview += f",+{len(symbols) - 3} more"
+        status_preview = ",".join(statuses[:3]) if statuses else "unknown"
+        if len(statuses) > 3:
+            status_preview += f",+{len(statuses) - 3} more"
+        key = (
+            len(upd_list),
+            tuple(symbols[:6]),
+            len(symbols),
+            tuple(statuses[:6]),
+            len(statuses),
+            cause,
+        )
+        msg = (
+            "[ws] order update detected | cause=%s | events=%d | symbols=%s | statuses=%s | "
+            "scheduling refresh"
+        ) % (cause, len(upd_list), symbol_preview, status_preview)
+        return key, msg, cause
+
+    def _ws_order_update_is_self_echo(self, upd_list: list[dict]) -> bool:
+        """Return True when a WS batch only confirms recent local creates/cancels."""
+        if not upd_list:
+            return False
+        recognized = 0
+        for order in upd_list:
+            if not isinstance(order, dict):
+                return False
+            status = str(order.get("status") or "").lower()
+            if status == "open":
+                if not self.order_matches_recent_execution(order):
+                    return False
+                recognized += 1
+                continue
+            if status in ("canceled", "cancelled"):
+                if not self.order_matches_bot_cancellation(order):
+                    return False
+                recognized += 1
+                continue
+            return False
+        return recognized == len(upd_list)
+
     def handle_order_update(self, upd_list):
         """Mark the execution loop dirty when websocket order updates arrive."""
         if upd_list:
+            _log_key = None
+            _log_msg = None
+            _cause = None
+            if not self._ws_order_update_is_self_echo(upd_list):
+                _log_key, _log_msg, _cause = self._summarize_order_update_batch(upd_list)
+                now = time.time()
+                last_log_key = getattr(self, "_ws_order_update_last_log_key", None)
+                last_log_ts = float(getattr(self, "_ws_order_update_last_log_ts", 0.0) or 0.0)
+                if _log_key != last_log_key or now - last_log_ts >= 5.0:
+                    logging.info(_log_msg)
+                    self._ws_order_update_last_log_key = _log_key
+                    self._ws_order_update_last_log_ts = now
+            if _cause in {"fill_hint", "mixed_hint"}:
+                self._request_authoritative_confirmation(
+                    {"balance", "positions", "open_orders", "fills"}
+                )
             self.execution_scheduled = True
         return
 
@@ -4725,6 +5346,7 @@ class Passivbot:
                 seen_new_source_ids.update(src_ids)
             if new_events:
                 self._log_new_fill_events(new_events)
+            self._record_authoritative_surface("fills", self._fill_events_signature(all_events))
 
             return True
 
@@ -4909,6 +5531,53 @@ class Passivbot:
                 projected_balance,
                 balance_floor,
                 max_loss_pct,
+            )
+
+    def _log_min_effective_cost_blocks(self, out: dict, idx_to_symbol: dict[int, str]) -> None:
+        """Emit visible warnings for initial entries blocked by effective min-cost gating."""
+        diagnostics = out.get("diagnostics", {}) if isinstance(out, dict) else {}
+        blocks = diagnostics.get("min_effective_cost_blocks", [])
+        if not isinstance(blocks, list) or not blocks:
+            return
+        if not hasattr(self, "_min_effective_cost_last_log_ms"):
+            self._min_effective_cost_last_log_ms = {}
+        if not hasattr(self, "_min_effective_cost_log_interval_ms"):
+            self._min_effective_cost_log_interval_ms = 5 * 60 * 1000
+        now_ms = utc_ms()
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            symbol = idx_to_symbol.get(int(block.get("symbol_idx", -1)), "unknown")
+            pside = str(block.get("pside", "unknown"))
+            if pside not in ("long", "short") or not self.is_pside_enabled(pside):
+                continue
+            throttle_key = f"{symbol}:{pside}"
+            last_log_ms = self._min_effective_cost_last_log_ms.get(throttle_key, 0)
+            if (now_ms - last_log_ms) < self._min_effective_cost_log_interval_ms:
+                continue
+            self._min_effective_cost_last_log_ms[throttle_key] = now_ms
+            balance = float(block.get("balance", 0.0) or 0.0)
+            effective_limit = float(block.get("effective_limit", 0.0) or 0.0)
+            entry_initial_qty_pct = float(block.get("entry_initial_qty_pct", 0.0) or 0.0)
+            projected_initial_cost = float(block.get("projected_initial_cost", 0.0) or 0.0)
+            effective_min_cost = float(block.get("effective_min_cost", 0.0) or 0.0)
+            logging.warning(
+                "[entry] initial entries blocked by min effective cost\n"
+                "  symbol=%s side=%s\n"
+                "  projected_initial_cost=%.6f required_effective_min_cost=%.6f\n"
+                "  balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f\n"
+                "  next steps: increase balance, reduce bot.%s.n_positions, or increase per-slot sizing\n"
+                "  override: set live.filter_by_min_effective_cost=false to allow exchange-min-clamped initial entries\n"
+                "  caution: disabling the gate lets Passivbot size initial entries up to the exchange executable minimum, "
+                "which may exceed configured initial sizing and can still cause venue-specific churn or rejects in edge cases",
+                symbol,
+                pside,
+                projected_initial_cost,
+                effective_min_cost,
+                balance,
+                effective_limit,
+                entry_initial_qty_pct,
+                pside,
             )
 
     # Legacy init_fill_events, update_fill_events, etc. removed - using FillEventsManager
@@ -5410,56 +6079,9 @@ class Passivbot:
         res = None
         try:
             res = await self.fetch_open_orders()
-            if res in [None, False]:
-                return False
-            self.fetched_open_orders = res
-            open_orders = res
-            oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
-            oo_ids_new = {elm["id"] for elm in open_orders}
-            added_orders = [oo for oo in open_orders if oo["id"] not in oo_ids_old]
-            removed_orders = [
-                oo
-                for oo in [elm for sublist in self.open_orders.values() for elm in sublist]
-                if oo["id"] not in oo_ids_new
-            ]
-            schedule_update_positions = False
-            if len(removed_orders) > 20:
-                logging.info(f"removed {len(removed_orders)} orders")
-            else:
-                for order in removed_orders:
-                    if not self.order_was_recently_cancelled(order):
-                        # means order is no longer in open orders, but wasn't cancelled by bot
-                        # possible fill
-                        # force another update_positions
-                        schedule_update_positions = True
-                        self.log_order_action(
-                            order, "missing order", "fetch_open_orders", level=logging.INFO
-                        )
-                    else:
-                        self.log_order_action(
-                            order, "removed order", "fetch_open_orders", level=logging.DEBUG
-                        )
-            if len(added_orders) > 20:
-                logging.info(f"[order] added {len(added_orders)} new orders")
-            else:
-                for order in added_orders:
-                    self.log_order_action(
-                        order, "added order", "fetch_open_orders", level=logging.DEBUG
-                    )
-            self.open_orders = {}
-            for elm in open_orders:
-                if elm["symbol"] not in self.open_orders:
-                    self.open_orders[elm["symbol"]] = []
-                self.open_orders[elm["symbol"]].append(elm)
-            balance_reconciled = self._reconcile_balance_after_open_orders_refresh()
-            if balance_reconciled:
-                await self.handle_balance_update(source="REST+open_orders")
-            if schedule_update_positions:
-                await asyncio.sleep(1.5)
-                await self.update_positions_and_balance()
-            return True
+            return await self._apply_open_orders_snapshot(res)
         except RateLimitExceeded:
-            self._health_rate_limits += 1
+            self._health_rate_limits = int(getattr(self, "_health_rate_limits", 0) or 0) + 1
             logging.warning("[rate] hit rate limit while fetching open orders; retrying next cycle")
             return False
         except Exception as e:
@@ -5609,21 +6231,13 @@ class Passivbot:
         for line in table.get_string().splitlines():
             logging.info("[pos] %s", line)
 
-    async def _fetch_and_apply_positions(self):
-        """Fetch raw positions, apply them to local state and return snapshots.
-
-        Returns:
-            Tuple of (success: bool, old_positions, new_positions).
-
-        Raises:
-            Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
-        """
+    def _apply_positions_snapshot(self, positions_list_new: list[dict]) -> tuple[list[dict], list[dict]]:
+        """Apply a normalized positions snapshot and return (old_positions, new_positions)."""
         if not hasattr(self, "positions"):
             self.positions = {}
-        res = await self.fetch_positions()
-        if res is None:
-            return False, None, None
-        positions_list_new = res
+        if not hasattr(self, "fetched_positions"):
+            self.fetched_positions = []
+        active_symbols = list(getattr(self, "active_symbols", []) or [])
         fetched_positions_old = deepcopy(self.fetched_positions)
         self.fetched_positions = positions_list_new
         positions_new = {
@@ -5631,7 +6245,7 @@ class Passivbot:
                 "long": {"size": 0.0, "price": 0.0},
                 "short": {"size": 0.0, "price": 0.0},
             }
-            for sym in set(list(self.positions) + list(self.active_symbols))
+            for sym in set(list(self.positions) + active_symbols)
         }
         for elm in positions_list_new:
             symbol, pside, pprice = elm["symbol"], elm["position_side"], elm["price"]
@@ -5643,29 +6257,10 @@ class Passivbot:
                 }
             positions_new[symbol][pside] = {"size": psize, "price": pprice}
         self.positions = positions_new
-        return True, fetched_positions_old, self.fetched_positions
+        return fetched_positions_old, self.fetched_positions
 
-    async def update_positions(self, *, log_changes: bool = True):
-        """Fetch positions, update local caches, and optionally log any changes."""
-        ok, fetched_positions_old, fetched_positions_new = await self._fetch_and_apply_positions()
-        if not ok:
-            return False
-        if log_changes and fetched_positions_old is not None:
-            try:
-                await self.log_position_changes(fetched_positions_old, fetched_positions_new)
-            except Exception as e:
-                logging.error(f"error logging position changes {e}")
-        return True
-
-    async def update_balance(self):
-        """Fetch and apply the latest wallet balance.
-
-        Returns:
-            bool: True on success, False if balance_override is used but invalid.
-
-        Raises:
-            Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
-        """
+    def _apply_balance_snapshot(self, balance_raw) -> bool:
+        """Validate and apply a fetched balance snapshot to raw/snapped fields."""
         if not hasattr(self, "balance_override"):
             self.balance_override = None
         if not hasattr(self, "_balance_override_logged"):
@@ -5679,18 +6274,6 @@ class Passivbot:
         if not hasattr(self, "_exchange_reported_balance_raw"):
             self._exchange_reported_balance_raw = self.balance_raw
 
-        if self.balance_override is not None:
-            balance_raw = float(self.balance_override)
-            if not self._balance_override_logged:
-                logging.info("Using balance override: %.6f", balance_raw)
-                self._balance_override_logged = True
-        else:
-            if not hasattr(self, "fetch_balance"):
-                logging.debug("update_balance: no fetch_balance implemented")
-                return False
-            balance_raw = await self.fetch_balance()
-
-        # Only accept numeric balances; keep previous value on failure
         if balance_raw is None:
             logging.warning("balance fetch returned None; keeping previous balance")
             return False
@@ -5715,6 +6298,146 @@ class Passivbot:
         self.balance_raw = balance_raw
         self.balance = balance_snapped
         return True
+
+    async def _apply_open_orders_snapshot(
+        self,
+        open_orders: list[dict] | None,
+        *,
+        allow_followup_positions_refresh: bool = True,
+        reconcile_balance: bool = True,
+    ) -> bool:
+        """Apply a normalized open-orders snapshot, preserving legacy diff logging."""
+        if open_orders in [None, False]:
+            return False
+        if not hasattr(self, "open_orders"):
+            self.open_orders = {}
+        if not hasattr(self, "state_change_detected_by_symbol"):
+            self.state_change_detected_by_symbol = set()
+        self.fetched_open_orders = open_orders
+        self._record_authoritative_surface("open_orders", self._open_orders_signature(open_orders))
+        oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
+        oo_ids_new = {elm["id"] for elm in open_orders}
+        added_orders = [oo for oo in open_orders if oo["id"] not in oo_ids_old]
+        removed_orders = [
+            oo
+            for oo in [elm for sublist in self.open_orders.values() for elm in sublist]
+            if oo["id"] not in oo_ids_new
+        ]
+        unexpected_open_orders_change = False
+        schedule_update_positions = False
+        unexpected_removed_symbols = set()
+        if len(removed_orders) > 20:
+            logging.info(f"removed {len(removed_orders)} orders")
+        else:
+            for order in removed_orders:
+                cancelled_by_bot = False
+                if hasattr(self, "order_matches_bot_cancellation"):
+                    cancelled_by_bot = self.order_matches_bot_cancellation(order)
+                else:
+                    cancelled_by_bot = Passivbot.order_matches_bot_cancellation(self, order)
+                if not cancelled_by_bot and not self.order_was_recently_cancelled(order):
+                    unexpected_open_orders_change = True
+                    schedule_update_positions = True
+                    unexpected_removed_symbols.add(order["symbol"])
+                    self.log_order_action(
+                        order, "missing order", "fetch_open_orders", level=logging.INFO
+                    )
+                else:
+                    self.log_order_action(
+                        order,
+                        "removed order",
+                        "fetch_open_orders",
+                        level=logging.DEBUG,
+                        context="bot_cancel_confirmed" if cancelled_by_bot else None,
+                    )
+        if len(added_orders) > 20:
+            logging.info(f"[order] added {len(added_orders)} new orders")
+        else:
+            for order in added_orders:
+                created_by_bot = False
+                if hasattr(self, "order_matches_recent_execution"):
+                    created_by_bot = self.order_matches_recent_execution(order)
+                else:
+                    created_by_bot = Passivbot.order_matches_recent_execution(self, order)
+                if not created_by_bot:
+                    unexpected_open_orders_change = True
+                self.log_order_action(order, "added order", "fetch_open_orders", level=logging.DEBUG)
+        self.open_orders = {}
+        for elm in open_orders:
+            if elm["symbol"] not in self.open_orders:
+                self.open_orders[elm["symbol"]] = []
+            self.open_orders[elm["symbol"]].append(elm)
+        balance_reconciled = False
+        if reconcile_balance:
+            balance_reconciled = self._reconcile_balance_after_open_orders_refresh()
+        if balance_reconciled:
+            await self.handle_balance_update(source="REST+open_orders")
+        if schedule_update_positions:
+            if allow_followup_positions_refresh:
+                await asyncio.sleep(1.5)
+                await self.update_positions_and_balance()
+            else:
+                self.execution_scheduled = True
+                self.state_change_detected_by_symbol.update(unexpected_removed_symbols)
+                self._request_authoritative_confirmation(
+                    {"balance", "positions", "open_orders", "fills"}
+                )
+        elif unexpected_open_orders_change and not allow_followup_positions_refresh:
+            self._request_authoritative_confirmation(
+                {"balance", "positions", "open_orders", "fills"}
+            )
+        return True
+
+    async def _fetch_and_apply_positions(self):
+        """Fetch raw positions, apply them to local state and return snapshots.
+
+        Returns:
+            Tuple of (success: bool, old_positions, new_positions).
+
+        Raises:
+            Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
+        """
+        if not hasattr(self, "positions"):
+            self.positions = {}
+        res = await self.fetch_positions()
+        if res is None:
+            return False, None, None
+        fetched_positions_old, fetched_positions_new = self._apply_positions_snapshot(res)
+        return True, fetched_positions_old, fetched_positions_new
+
+    async def update_positions(self, *, log_changes: bool = True):
+        """Fetch positions, update local caches, and optionally log any changes."""
+        ok, fetched_positions_old, fetched_positions_new = await self._fetch_and_apply_positions()
+        if not ok:
+            return False
+        if log_changes and fetched_positions_old is not None:
+            try:
+                await self.log_position_changes(fetched_positions_old, fetched_positions_new)
+            except Exception as e:
+                logging.error(f"error logging position changes {e}")
+        return True
+
+    async def update_balance(self):
+        """Fetch and apply the latest wallet balance.
+
+        Returns:
+            bool: True on success, False if balance_override is used but invalid.
+
+        Raises:
+            Exception: On API errors (caller handles via restart_bot_on_too_many_errors).
+        """
+        balance_override = getattr(self, "balance_override", None)
+        if balance_override is not None:
+            balance_raw = float(balance_override)
+            if not self._balance_override_logged:
+                logging.info("Using balance override: %.6f", balance_raw)
+                self._balance_override_logged = True
+        else:
+            if not hasattr(self, "fetch_balance"):
+                logging.debug("update_balance: no fetch_balance implemented")
+                return False
+            balance_raw = await self.fetch_balance()
+        return self._apply_balance_snapshot(balance_raw)
 
     def _reconcile_balance_after_open_orders_refresh(self) -> bool:
         """Exchange hook: adjust balance after fresh open-order state if needed."""
@@ -5742,8 +6465,15 @@ class Passivbot:
                 await self.log_position_changes(fetched_positions_old, fetched_positions_new)
             except Exception as e:
                 logging.error(f"error logging position changes {e}")
+        if positions_ok:
+            self._record_authoritative_surface(
+                "positions", self._positions_signature(fetched_positions_new)
+            )
         if balance_ok and positions_ok:
             self._reconcile_balance_after_positions_and_balance_refresh()
+            self._record_authoritative_surface(
+                "balance", round(float(self.get_hysteresis_snapped_balance()), 12)
+            )
             await self.handle_balance_update(source="REST")
         return balance_ok, positions_ok
 
@@ -6189,6 +6919,10 @@ class Passivbot:
             raise
         out = json.loads(out_json)
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
+        if hasattr(self, "_log_min_effective_cost_blocks"):
+            self._log_min_effective_cost_blocks(out, idx_to_symbol)
+        else:
+            Passivbot._log_min_effective_cost_blocks(self, out, idx_to_symbol)
         if hasattr(self, "_apply_orchestrator_symbol_states"):
             self._apply_orchestrator_symbol_states(
                 out.get("diagnostics", {}),
@@ -6723,6 +7457,10 @@ class Passivbot:
             raise
         out = json.loads(out_json)
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
+        if hasattr(self, "_log_min_effective_cost_blocks"):
+            self._log_min_effective_cost_blocks(out, idx_to_symbol)
+        else:
+            Passivbot._log_min_effective_cost_blocks(self, out, idx_to_symbol)
         if hasattr(self, "_apply_orchestrator_symbol_states"):
             self._apply_orchestrator_symbol_states(
                 out.get("diagnostics", {}),
@@ -8187,10 +8925,21 @@ class Passivbot:
                                 for s in stock_syms
                             }
                         )
-                        logging.warning(
-                            "Stock perps detected in approved_coins (%s). HIP-3 isolated margin is currently unsupported; isolated-only symbols will be skipped and existing isolated live state will fail loudly.",
-                            ",".join(coins),
-                        )
+                        if (
+                            str(getattr(self, "exchange", "")).lower() == "hyperliquid"
+                            and not bool(getattr(self, "_hl_unified_enabled", False))
+                        ):
+                            logging.error(
+                                "HIP-3 symbols detected in approved_coins (%s) on a non-unified "
+                                "Hyperliquid account. Passivbot will fail until the account is "
+                                "upgraded to unifiedAccount or the HIP-3 symbols are removed.",
+                                ",".join(coins),
+                            )
+                        elif str(getattr(self, "exchange", "")).lower() != "hyperliquid":
+                            logging.warning(
+                                "Stock perps detected in approved_coins (%s). HIP-3 isolated margin is currently unsupported; isolated-only symbols will be skipped and existing isolated live state will fail loudly.",
+                                ",".join(coins),
+                            )
                         self._stock_perps_warning_logged = True
             except Exception:
                 pass
@@ -8512,6 +9261,10 @@ async def main():
         bot = setup_bot(config)
         try:
             await bot.start_bot()
+        except FatalBotException as e:
+            logging.error(f"passivbot fatal error {e}")
+            traceback.print_exc()
+            break
         except Exception as e:
             logging.error(f"passivbot error {e}")
             traceback.print_exc()

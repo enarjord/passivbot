@@ -32,6 +32,10 @@ LEGACY_ENTRY_GRID_KEYS = {
 }
 
 LEGACY_BOUNDS_KEYS = {
+    "long_min_markup": "long_close_grid_markup_start",
+    "short_min_markup": "short_close_grid_markup_start",
+    "long_close_grid_min_markup": "long_close_grid_markup_end",
+    "short_close_grid_min_markup": "short_close_grid_markup_end",
     "long_filter_volatility_ema_span": "long_forager_volatility_ema_span",
     "long_filter_noisiness_rolling_window": "long_forager_volatility_ema_span",
     "long_filter_noisiness_ema_span": "long_forager_volatility_ema_span",

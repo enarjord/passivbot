@@ -332,6 +332,21 @@ def test_prepare_config_keeps_live_market_orders_allowed_without_backtest_overri
     assert "market_orders_allowed" not in prepared["backtest"]
 
 
+def test_prepare_config_rejects_cancellations_not_greater_than_creations():
+    source = get_template_config()
+    source["live"]["max_n_creations_per_batch"] = 3
+    source["live"]["max_n_cancellations_per_batch"] = 3
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "config\\.live\\.max_n_cancellations_per_batch must be greater than "
+            "config\\.live\\.max_n_creations_per_batch"
+        ),
+    ):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
