@@ -181,7 +181,7 @@ def _pb_order_id(type_hex: str = "0000") -> str:
     return f"pb-0x{type_hex}-test"
 
 
-def test_hyperliquid_reconcile_adds_back_cross_hip3_order_margin(stubbed_modules):
+def test_hyperliquid_reconcile_skips_cross_hip3_resting_order_margin(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
     bot.open_orders = {
@@ -199,13 +199,12 @@ def test_hyperliquid_reconcile_adds_back_cross_hip3_order_margin(stubbed_modules
 
     changed = bot._reconcile_balance_after_open_orders_refresh()
 
-    expected_reserve = 0.003 * 5088.8 / 20.0 * 1.01
-    assert changed is True
-    assert bot.balance_raw == pytest.approx(51.194323 + expected_reserve)
-    assert bot.balance == pytest.approx(51.194323 + expected_reserve)
+    assert changed is False
+    assert bot.balance_raw == pytest.approx(51.194323)
+    assert bot.balance == pytest.approx(51.194323)
 
 
-def test_hyperliquid_reconcile_adds_back_flat_standard_perp_entry_reserve(stubbed_modules):
+def test_hyperliquid_reconcile_skips_flat_standard_perp_entry_reserve(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
     bot.open_orders = {
@@ -223,10 +222,9 @@ def test_hyperliquid_reconcile_adds_back_flat_standard_perp_entry_reserve(stubbe
 
     changed = bot._reconcile_balance_after_open_orders_refresh()
 
-    expected_reserve = 0.00022 * 54161.0 / 20.0 * 1.01
-    assert changed is True
-    assert bot.balance_raw == pytest.approx(51.194323 + expected_reserve)
-    assert bot.balance == pytest.approx(51.194323 + expected_reserve)
+    assert changed is False
+    assert bot.balance_raw == pytest.approx(51.194323)
+    assert bot.balance == pytest.approx(51.194323)
 
 
 def test_hyperliquid_reconcile_skips_standard_perp_entry_reserve_when_position_exists(
@@ -283,7 +281,9 @@ def test_hyperliquid_reconcile_adds_back_hip3_position_margin(stubbed_modules):
     assert bot.balance == pytest.approx(51.194323 + 0.68139)
 
 
-def test_hyperliquid_reconcile_adds_back_hip3_position_and_entry_order_margin(stubbed_modules):
+def test_hyperliquid_reconcile_restores_only_hip3_position_margin_on_open_orders_refresh(
+    stubbed_modules,
+):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
     bot.fetched_positions = [
@@ -310,7 +310,7 @@ def test_hyperliquid_reconcile_adds_back_hip3_position_and_entry_order_margin(st
 
     changed = bot._reconcile_balance_after_open_orders_refresh()
 
-    expected = 51.194323 + 0.68144 + (0.002 * 5110.7 / 20.0 * 1.01)
+    expected = 51.194323 + 0.68144
     assert changed is True
     assert bot.balance_raw == pytest.approx(expected)
     assert bot.balance == pytest.approx(expected)
@@ -344,7 +344,7 @@ def test_hyperliquid_reconcile_skips_balance_override(stubbed_modules):
 
 
 @pytest.mark.asyncio
-async def test_update_open_orders_applies_hyperliquid_balance_reconciliation(stubbed_modules):
+async def test_update_open_orders_does_not_republish_resting_order_reserve(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
     seen_sources = []
@@ -373,10 +373,9 @@ async def test_update_open_orders_applies_hyperliquid_balance_reconciliation(stu
 
     ok = await bot.update_open_orders()
 
-    expected_reserve = 0.003 * 5088.8 / 20.0 * 1.01
     assert ok is True
-    assert seen_sources == ["REST+open_orders"]
-    assert bot.balance_raw == pytest.approx(51.194323 + expected_reserve)
+    assert seen_sources == []
+    assert bot.balance_raw == pytest.approx(51.194323)
     assert bot.open_orders["XYZ-SP500/USDC:USDC"][0]["id"] == "1"
 
 

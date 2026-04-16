@@ -583,9 +583,10 @@ class HyperliquidBot(CCXTBot):
         )
         reserve = self._position_margin_to_restore()
         if include_open_orders:
-            for orders in getattr(self, "open_orders", {}).values():
-                for order in orders:
-                    reserve += self._reserved_margin_for_resting_order(order)
+            # Do not feed bot-managed resting-order reserve back into published balance.
+            # That reserve changes as the bot cancels/recreates entries and can create
+            # self-referential REST/REST+open_orders balance churn.
+            pass
         corrected_raw = exchange_reported + reserve
         current_raw = self.get_raw_balance()
         if abs(corrected_raw - current_raw) <= 1e-12:
