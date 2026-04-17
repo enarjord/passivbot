@@ -121,7 +121,7 @@ class HyperliquidBot(CCXTBot):
         self.n_decimal_places = 6
         self.n_significant_figures = 5
         if isolated_count:
-            logging.info(
+            logging.debug(
                 f"Detected {isolated_count} isolated-margin-only symbols (HIP-3/stock perps)"
             )
 
@@ -881,7 +881,7 @@ class HyperliquidBot(CCXTBot):
             except Exception as e:
                 logging.error(f"{symbol}: error setting margin mode and leverage {e}")
             if to_print:
-                logging.info(f"{symbol}: {to_print}")
+                logging.debug(f"{symbol}: {to_print}")
             # Small delay between margin-mode API calls to avoid rate-limit bursts
             await asyncio.sleep(0.2)
 
