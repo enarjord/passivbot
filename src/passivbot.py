@@ -202,6 +202,14 @@ def try_decode_type_id_from_custom_id(custom_id: str) -> int | None:
     return None
 
 
+def custom_id_has_explicit_passivbot_marker(custom_id) -> bool:
+    """Return True only when the custom id contains the explicit 0xABCD Passivbot marker."""
+    try:
+        return bool(_TYPE_MARKER_RE.search(str(custom_id)))
+    except Exception:
+        return False
+
+
 def order_type_id_to_hex4(type_id: int) -> str:
     """Return the four-hex-digit representation of an order type id."""
     return f"{type_id:04x}"
@@ -3349,6 +3357,8 @@ class Passivbot:
                 continue
             custom_id = self._extract_order_custom_id(order)
             if not custom_id:
+                continue
+            if not custom_id_has_explicit_passivbot_marker(custom_id):
                 continue
             pb_type = custom_id_to_snake(custom_id)
             if not pb_type or pb_type == "unknown":

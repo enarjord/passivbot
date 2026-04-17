@@ -108,6 +108,12 @@ async def test_detect_foreign_passivbot_orders_ignores_manual_and_prestart_order
             "id": "3",
             "symbol": "BTC/USDT:USDT",
             "timestamp": 1_020_000,
+            "custom_id": "0004-manual",
+        },
+        {
+            "id": "4",
+            "symbol": "BTC/USDT:USDT",
+            "timestamp": 1_020_000,
         },
     ]
 
