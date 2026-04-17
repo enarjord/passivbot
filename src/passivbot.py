@@ -6684,54 +6684,16 @@ class Passivbot:
         if not symbols:
             return ({}, None) if return_snapshot else {}
         mode_overrides = self._build_orchestrator_mode_overrides(symbols)
-
-        # Get latest prices: prefer bulk allMids (1 API call for all symbols)
-        # over per-symbol get_current_close (N API calls). Falls back to CM if unavailable.
-        last_prices = {}
-        try:
-            if (
-                hasattr(self, "cca")
-                and self.cca is not None
-                and self.exchange
-                and self.exchange.lower() == "hyperliquid"
-            ):
-                # Call allMids directly – much cheaper than fetch_tickers which tries
-                # to map ALL coins (including unmapped HIP-3 @NNN IDs → warning spam).
-                fetched = await self.cca.fetch(
-                    self._hl_info_url(),
-                    method="POST",
-                    headers={"Content-Type": "application/json"},
-                    body=json.dumps({"type": "allMids"}),
-                )
-                # Build reverse map: coin_name → symbol (e.g. "BTC" → "BTC/USDC:USDC")
-                coin_to_sym = {v: k for k, v in self.symbol_ids.items()} if self.symbol_ids else {}
-                for coin, mid_str in fetched.items():
-                    sym = coin_to_sym.get(coin)
-                    if sym and sym in symbols:
-                        try:
-                            last_prices[sym] = float(mid_str)
-                        except (ValueError, TypeError):
-                            pass
-            elif hasattr(self, "fetch_tickers"):
-                tickers = await self.fetch_tickers()
-                for sym in symbols:
-                    tick = tickers.get(sym)
-                    if tick and tick.get("last") is not None:
-                        last_prices[sym] = float(tick["last"])
-            # Feed prices into CM cache so downstream EMA/close lookups hit cache
-            if last_prices:
-                now_ms = int(utc_ms())
-                for sym, price in last_prices.items():
-                    self.cm.set_current_close(sym, price, now_ms)
-        except Exception as e:
-            logging.debug("bulk price fetch failed, falling back to CM: %s", e)
-            last_prices = {}
-        # Fill any symbols still missing via CandlestickManager (individual fetches)
-        missing = [s for s in symbols if s not in last_prices or last_prices[s] <= 0.0]
-        if missing:
-            cm_prices = await self.cm.get_last_prices(missing, max_age_ms=10_000)
-            last_prices.update(cm_prices)
-        Passivbot._monitor_record_price_ticks(self, last_prices, ts=utc_ms(), source="orchestrator_live")
+        last_prices = await self._get_orchestrator_last_prices(symbols)
+        refresh_mode = str(
+            ((self.config.get("live") or {}).get("authoritative_refresh_mode")) or "legacy"
+        )
+        monitor_source = (
+            "orchestrator_live_cm_staged"
+            if refresh_mode == "staged"
+            else "orchestrator_live"
+        )
+        Passivbot._monitor_record_price_ticks(self, last_prices, ts=utc_ms(), source=monitor_source)
 
         # Ensure effective min cost is up to date.
         if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:
@@ -6953,6 +6915,93 @@ class Passivbot:
             }
             return ideal_orders_f, snapshot
         return ideal_orders_f
+
+    async def _get_orchestrator_last_prices(self, symbols: list[str]) -> dict[str, float]:
+        """Return latest prices for orchestrator planning.
+
+        In staged mode, market-price reads go through CandlestickManager only so CM owns
+        caching, TTL, and remote-fetch economy. Legacy mode retains the existing direct
+        bulk-ticker path and falls back to CM for any missing symbols.
+        """
+        ttl_ms = 10_000
+        refresh_mode = str(
+            ((self.config.get("live") or {}).get("authoritative_refresh_mode")) or "legacy"
+        )
+        if refresh_mode == "staged":
+            logging.debug(
+                "[state] staged orchestrator requesting cm last prices | symbols=%s | ttl=%sms",
+                len(symbols),
+                ttl_ms,
+            )
+            last_prices = await self.cm.get_last_prices(symbols, max_age_ms=ttl_ms)
+            invalid = []
+            normalized = {}
+            for symbol in symbols:
+                raw = last_prices.get(symbol, 0.0)
+                try:
+                    price = float(raw)
+                except (TypeError, ValueError):
+                    price = 0.0
+                normalized[symbol] = price
+                if not math.isfinite(price) or price <= 0.0:
+                    invalid.append(symbol)
+            if invalid:
+                logging.debug(
+                    "[state] staged orchestrator cm last prices ready | symbols=%s | ok=%s | invalid=%s | invalid_symbols=%s",
+                    len(symbols),
+                    len(symbols) - len(invalid),
+                    len(invalid),
+                    ",".join(invalid[:12]),
+                )
+            else:
+                logging.debug(
+                    "[state] staged orchestrator cm last prices ready | symbols=%s | ok=%s | invalid=0",
+                    len(symbols),
+                    len(symbols),
+                )
+            return normalized
+
+        # Legacy mode: prefer direct bulk exchange prices, then fill holes via CM.
+        last_prices = {}
+        try:
+            if (
+                hasattr(self, "cca")
+                and self.cca is not None
+                and self.exchange
+                and self.exchange.lower() == "hyperliquid"
+            ):
+                fetched = await self.cca.fetch(
+                    self._hl_info_url(),
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                    body=json.dumps({"type": "allMids"}),
+                )
+                coin_to_sym = {v: k for k, v in self.symbol_ids.items()} if self.symbol_ids else {}
+                for coin, mid_str in fetched.items():
+                    sym = coin_to_sym.get(coin)
+                    if sym and sym in symbols:
+                        try:
+                            last_prices[sym] = float(mid_str)
+                        except (ValueError, TypeError):
+                            pass
+            elif hasattr(self, "fetch_tickers"):
+                tickers = await self.fetch_tickers()
+                for sym in symbols:
+                    tick = tickers.get(sym)
+                    if tick and tick.get("last") is not None:
+                        last_prices[sym] = float(tick["last"])
+            if last_prices:
+                now_ms = int(utc_ms())
+                for sym, price in last_prices.items():
+                    self.cm.set_current_close(sym, price, now_ms)
+        except Exception as e:
+            logging.debug("bulk price fetch failed, falling back to CM: %s", e)
+            last_prices = {}
+        missing = [s for s in symbols if s not in last_prices or last_prices[s] <= 0.0]
+        if missing:
+            cm_prices = await self.cm.get_last_prices(missing, max_age_ms=ttl_ms)
+            last_prices.update(cm_prices)
+        return last_prices
 
     def _to_executable_orders(
         self, ideal_orders: dict, last_prices: Dict[str, float]

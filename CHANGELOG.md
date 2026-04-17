@@ -12,6 +12,7 @@ All notable user-facing changes will be documented in this file.
 - Stopped hydrating omitted `config.bot.{long,short}` fields from schema-tuned bot defaults in legacy/current configs. Newly omitted feature-style params now hydrate to explicit off/compatibility values with config logs, sparse disabled sides remain loadable, legacy `n_closes` and `min_markup` aliases are preserved, and the Rust parser now fails loudly instead of silently supplying bot-key fallbacks.
 - Hyperliquid live balance reconciliation no longer republishes bot-managed resting-order reserve after `fetch_open_orders()`. This removes the old `REST`/`REST+open_orders` balance oscillation path that could trigger self-induced order-size churn.
 - Live bots now watch for newer Passivbot-managed open orders they did not emit during the current runtime and stop after repeated detections within a rolling window. This ignores manual/non-Passivbot orders and older inherited orders, reducing the chance of two Passivbot instances silently competing on the same account indefinitely.
+- Staged live bots now route orchestrator latest-price reads through `CandlestickManager`, and `CandlestickManager.get_last_prices()` now uses cheap cache hits plus one bulk ticker snapshot when safe before any per-symbol fallback. This materially reduces staged live market-data call bursts on exchanges like Bybit.
 
 ## v7.9.1 - 2026-04-13
 - Removed the legacy `python src/downloader.py ...` entrypoint. Use `passivbot download ...` for OHLCV cache warming.
