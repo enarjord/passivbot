@@ -12,6 +12,7 @@ from ccxt.base.errors import RateLimitExceeded
 
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
+from passivbot_exceptions import FatalBotException
 from utils import ts_to_date, utc_ms
 from config.access import require_live_value
 from pure_funcs import calc_hash
@@ -51,12 +52,58 @@ class HyperliquidBot(CCXTBot):
         self.custom_id_max_length = 34
         self._hl_fetch_lock = asyncio.Lock()
         self._hl_cache_generation = 0
+        self._hl_user_abstraction = "unknown"
+        self._hl_unified_enabled = False
 
     def _hl_info_url(self) -> str:
         """Derive the Hyperliquid /info endpoint from the CCXT session URL config."""
         base = self.cca.urls.get("api", {}).get("public", "https://api.hyperliquid.xyz")
         hostname = getattr(self.cca, "hostname", "hyperliquid.xyz")
         return base.replace("{hostname}", hostname).rstrip("/") + "/info"
+
+    def _normalize_hl_user_abstraction(self, raw) -> str:
+        """Normalize Hyperliquid userAbstraction response into a stable string."""
+        if raw is None:
+            return "unknown"
+        text = str(raw).strip()
+        if len(text) >= 2 and text[0] == text[-1] == '"':
+            text = text[1:-1]
+        return text or "unknown"
+
+    async def fetch_user_abstraction_state(self) -> str:
+        """Fetch and cache the Hyperliquid account abstraction mode."""
+        wallet_address = str(self.user_info.get("wallet_address") or "")
+        if not wallet_address:
+            raise ValueError(f"user {self.user!r} missing wallet_address for Hyperliquid abstraction")
+        raw = await self.cca.publicPostInfo({"type": "userAbstraction", "user": wallet_address})
+        abstraction = self._normalize_hl_user_abstraction(raw)
+        self._hl_user_abstraction = abstraction
+        self._hl_unified_enabled = abstraction == "unifiedAccount"
+        if getattr(self, "cca", None) is not None:
+            self.cca.options["enableUnifiedMargin"] = bool(self._hl_unified_enabled)
+        if getattr(self, "ccp", None) is not None:
+            self.ccp.options["enableUnifiedMargin"] = bool(self._hl_unified_enabled)
+        return abstraction
+
+    async def refresh_and_log_user_abstraction_state(self) -> str:
+        """Refresh Hyperliquid account abstraction mode and log first sighting or changes."""
+        abstraction = await self.fetch_user_abstraction_state()
+        previous = getattr(self, "_hl_last_logged_user_abstraction", None)
+        if previous is None:
+            logging.info(
+                "[account] Hyperliquid abstraction=%s | unified=%s",
+                abstraction,
+                "yes" if abstraction == "unifiedAccount" else "no",
+            )
+        elif previous != abstraction:
+            logging.warning(
+                "[account] Hyperliquid abstraction changed %s -> %s | unified=%s",
+                previous,
+                abstraction,
+                "yes" if abstraction == "unifiedAccount" else "no",
+            )
+        self._hl_last_logged_user_abstraction = abstraction
+        return abstraction
 
     def create_ccxt_sessions(self):
         creds = {
@@ -254,30 +301,28 @@ class HyperliquidBot(CCXTBot):
         return normalized_positions
 
     def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
-        kept = set()
-        if not hasattr(self, "_unsupported_hip3_symbols_warned"):
-            self._unsupported_hip3_symbols_warned = set()
-        for symbol in symbols:
-            if self._requires_isolated_margin(symbol):
-                warn_key = (pside, symbol)
-                if warn_key not in self._unsupported_hip3_symbols_warned:
-                    self._unsupported_hip3_symbols_warned.add(warn_key)
-                    logging.warning(
-                        "[margin] disabling %s %s for new entries: HIP-3 isolated margin is "
-                        "currently unsupported in Passivbot. The symbol is isolated-only by "
-                        "exchange metadata and will be ignored for now.",
-                        pside,
-                        symbol,
-                    )
-                continue
-            kept.add(symbol)
-        return kept
+        del pside
+        return symbols
+
+    def _hl_supports_hip3_live_trading(self) -> bool:
+        return bool(getattr(self, "_hl_unified_enabled", False))
 
     def _assert_supported_live_state(self) -> None:
-        if self.HIP3_ISOLATED_SUPPORTED:
+        if self.HIP3_ISOLATED_SUPPORTED or self._hl_supports_hip3_live_trading():
             return
         unsupported = []
-        for symbol in sorted(set(getattr(self, "positions", {})) | set(getattr(self, "open_orders", {}))):
+        approved = set()
+        for syms in getattr(self, "approved_coins_minus_ignored_coins", {}).values():
+            approved.update(syms)
+        approved_hip3 = sorted(symbol for symbol in approved if self._get_hl_dex_for_symbol(symbol))
+        if approved_hip3:
+            unsupported.append(
+                "approved_coins="
+                + ",".join(sorted({symbol.split("/")[0] if "/" in symbol else symbol for symbol in approved_hip3}))
+            )
+        for symbol in sorted(
+            set(getattr(self, "positions", {})) | set(getattr(self, "open_orders", {}))
+        ):
             if not self._get_hl_dex_for_symbol(symbol):
                 continue
             has_pos = False
@@ -289,15 +334,15 @@ class HyperliquidBot(CCXTBot):
             has_orders = bool(getattr(self, "open_orders", {}).get(symbol))
             if not (has_pos or has_orders):
                 continue
-            isolated_live_mode = self._hl_live_margin_modes.get(symbol) == "isolated"
+            isolated_live_mode = getattr(self, "_hl_live_margin_modes", {}).get(symbol) == "isolated"
             isolated_only = self._requires_isolated_margin(symbol)
-            if not (isolated_live_mode or isolated_only):
-                continue
             reasons = []
             if isolated_only:
                 reasons.append("isolated-only market")
             if isolated_live_mode:
                 reasons.append("live isolated margin state")
+            if not reasons:
+                reasons.append("hip3 live state")
             state_bits = []
             if has_pos:
                 state_bits.append("position")
@@ -305,10 +350,12 @@ class HyperliquidBot(CCXTBot):
                 state_bits.append("open_orders")
             unsupported.append(f"{symbol} ({'/'.join(state_bits)}; {', '.join(reasons)})")
         if unsupported:
-            raise NotImplementedError(
-                "Hyperliquid HIP-3 isolated margin is currently unsupported in Passivbot. "
-                f"Unsupported live state detected: {'; '.join(unsupported)}. "
-                "Close/cancel the isolated state before running the bot."
+            raise FatalBotException(
+                "Hyperliquid HIP-3/non-standard perps require unifiedAccount mode in Passivbot. "
+                f"Current abstraction={getattr(self, '_hl_user_abstraction', 'unknown')}. "
+                f"Unsupported HIP-3 state detected: {'; '.join(unsupported)}. "
+                "Upgrade the Hyperliquid account to unifiedAccount or remove all HIP-3 "
+                "symbols, positions, and open orders before running the bot."
             )
 
     async def watch_orders(self):

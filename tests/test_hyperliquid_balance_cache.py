@@ -3,6 +3,7 @@ import sys
 import types
 
 import pytest
+from passivbot_exceptions import FatalBotException
 
 
 @pytest.fixture
@@ -179,6 +180,75 @@ def _make_probe_bot(HyperliquidBot):
 
 def _pb_order_id(type_hex: str = "0000") -> str:
     return f"pb-0x{type_hex}-test"
+
+
+def test_hyperliquid_non_unified_approved_hip3_requires_unified(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    bot = _make_probe_bot(HyperliquidBot)
+    bot._hl_user_abstraction = "dexAbstraction"
+    bot._hl_unified_enabled = False
+    bot.approved_coins_minus_ignored_coins = {
+        "long": {"XYZ-SP500/USDC:USDC"},
+        "short": set(),
+    }
+    bot.positions = {}
+    bot.markets_dict = {
+        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+    }
+
+    with pytest.raises(FatalBotException, match="require unifiedAccount mode"):
+        bot._assert_supported_live_state()
+
+
+def test_hyperliquid_non_unified_live_hip3_state_requires_unified(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    bot = _make_probe_bot(HyperliquidBot)
+    bot._hl_user_abstraction = "dexAbstraction"
+    bot._hl_unified_enabled = False
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.positions = {
+        "XYZ-SP500/USDC:USDC": {
+            "long": {"size": 0.002, "price": 6953.4},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.open_orders = {}
+    bot.markets_dict = {
+        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+    }
+
+    with pytest.raises(FatalBotException, match="Unsupported HIP-3 state detected"):
+        bot._assert_supported_live_state()
+
+
+def test_hyperliquid_unified_allows_hip3_symbols(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    bot = _make_probe_bot(HyperliquidBot)
+    bot._hl_user_abstraction = "unifiedAccount"
+    bot._hl_unified_enabled = True
+    bot.approved_coins_minus_ignored_coins = {
+        "long": {"XYZ-SP500/USDC:USDC"},
+        "short": set(),
+    }
+    bot.positions = {
+        "XYZ-SP500/USDC:USDC": {
+            "long": {"size": 0.002, "price": 6953.4},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.open_orders = {
+        "XYZ-SP500/USDC:USDC": [
+            {"id": "1", "symbol": "XYZ-SP500/USDC:USDC", "qty": 0.002}
+        ]
+    }
+    bot.markets_dict = {
+        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+    }
+
+    bot._assert_supported_live_state()
 
 
 def test_hyperliquid_reconcile_skips_cross_hip3_resting_order_margin(stubbed_modules):

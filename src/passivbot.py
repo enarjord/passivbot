@@ -39,7 +39,7 @@ from fill_events_manager import (
     compute_psize_pprice,
 )
 from monitor_publisher import MonitorPublisher
-from passivbot_exceptions import RestartBotException
+from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
@@ -1773,6 +1773,8 @@ class Passivbot:
                     await self.execute_to_exchange()
                 except RestartBotException as e:
                     logging.error("[risk] RED supervisor ignored restart request: %s", e)
+                except FatalBotException:
+                    raise
                 except Exception as e:
                     logging.error("[risk] RED supervisor execute_to_exchange failed: %s", e)
                     traceback.print_exc()
@@ -2223,6 +2225,8 @@ class Passivbot:
         self.markets_dict = await load_markets(
             self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote
         )
+        if hasattr(self, "refresh_and_log_user_abstraction_state"):
+            await self.refresh_and_log_user_abstraction_state()
         # ineligible symbols cannot open new positions
         eligible, _, reasons = filter_markets(
             self.markets_dict, self.exchange, quote=self.quote, verbose=verbose
@@ -2237,6 +2241,7 @@ class Passivbot:
         self.init_coin_overrides()
         # await self.update_tickers()
         self.refresh_approved_ignored_coins_lists()
+        self._assert_supported_live_state()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
         await self.update_positions_and_balance()
@@ -3149,6 +3154,8 @@ class Passivbot:
                     await asyncio.sleep(0.1)
             except RestartBotException:
                 raise  # Propagate restart without incrementing error count
+            except FatalBotException:
+                raise
             except RateLimitExceeded as e:
                 self._health_errors += 1
                 self._health_rate_limits += 1
@@ -8411,7 +8418,7 @@ class Passivbot:
                             }
                         )
                         logging.warning(
-                            "Stock perps detected in approved_coins (%s). HIP-3 isolated margin is currently unsupported; isolated-only symbols will be skipped and existing isolated live state will fail loudly.",
+                            "Stock perps detected in approved_coins (%s). On Hyperliquid, HIP-3/non-standard perps require unifiedAccount mode; non-unified accounts will fail loudly.",
                             ",".join(coins),
                         )
                         self._stock_perps_warning_logged = True
@@ -8737,8 +8744,12 @@ async def main():
 
         bot = setup_bot(config)
         globals()["bot"] = bot
+        fatal_error = None
         try:
             await bot.start_bot()
+        except FatalBotException as e:
+            fatal_error = e
+            logging.error(f"passivbot fatal error {e}")
         except Exception as e:
             logging.error(f"passivbot error {e}")
             traceback.print_exc()
@@ -8764,6 +8775,8 @@ async def main():
                 logging.info("[%s] [shutdown] cleanup complete", getattr(bot, "exchange", "?"))
         if bot.stop_signal_received:
             logging.info("Bot stopped via signal; exiting main loop.")
+            break
+        if fatal_error is not None:
             break
 
         logging.info(f"restarting bot...")
