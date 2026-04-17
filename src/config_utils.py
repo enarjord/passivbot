@@ -1606,7 +1606,10 @@ def update_config_with_args(config, args, verbose=False, allowed_keys: Optional[
             )
             change = recursive_config_update(config, key, normalized, verbose=verbose)
             source_key = key.split(".")[-1]
-            config.setdefault("_coins_sources", {})[source_key] = deepcopy(normalized)
+            # Preserve the raw CLI source so live coin-list refreshes can re-read external files
+            # passed via CLI (e.g. `-s path/to/approved_coins.json`) instead of freezing the
+            # first parsed snapshot into `_coins_sources`.
+            config.setdefault("_coins_sources", {})[source_key] = deepcopy(value)
             if change:
                 changed_keys.append(key)
                 diffs.append(change)

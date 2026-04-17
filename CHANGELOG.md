@@ -14,6 +14,7 @@ All notable user-facing changes will be documented in this file.
 - Live bots now watch for newer Passivbot-managed open orders they did not emit during the current runtime and stop after repeated detections within a rolling window. This ignores manual/non-Passivbot orders and older inherited orders, reducing the chance of two Passivbot instances silently competing on the same account indefinitely.
 - Staged live bots now route orchestrator latest-price reads through `CandlestickManager`, and `CandlestickManager.get_last_prices()` now uses cheap cache hits plus one bulk ticker snapshot when safe before any per-symbol fallback. This materially reduces staged live market-data call bursts on exchanges like Bybit.
 - Live runtime shutdown is now cleaner: Ctrl-C and stop-signal paths stop execution sooner, await cancelled maintainer tasks during shutdown, exit restart cooldowns promptly, and classify Bybit `110001 / order not exists or too late to cancel` as the expected benign cancel race instead of logging a noisy error traceback.
+- Fixed CLI `live.approved_coins` / `live.ignored_coins` file overrides so live reload keeps the original file path in `_coins_sources` instead of freezing the first parsed snapshot. Mid-run edits to `-s path/to/file` coin lists now take effect correctly.
 
 ## v7.9.1 - 2026-04-13
 - Removed the legacy `python src/downloader.py ...` entrypoint. Use `passivbot download ...` for OHLCV cache warming.
