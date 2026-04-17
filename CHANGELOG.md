@@ -17,6 +17,7 @@ All notable user-facing changes will be documented in this file.
 - Fixed CLI `live.approved_coins` / `live.ignored_coins` file overrides so live reload keeps the original file path in `_coins_sources` instead of freezing the first parsed snapshot. Mid-run edits to `-s path/to/file` coin lists now take effect correctly.
 - Fixed optimizer Pareto artifact persistence so saved `pareto/*.json` candidates now preserve the exact evaluated bot parameter values instead of being re-rounded again inside `ParetoStore`. This restores replay fidelity between `passivbot tool pareto` selections and standalone `passivbot backtest` runs of the selected file.
 - Fixed `passivbot optimize/backtest -cim/--candle-interval-minutes` type handling so integral values stay integers through the Python/Rust backtest boundary. This fixes crashes like `TypeError: 'float' object cannot be interpreted as an integer` when using `-cim 2`.
+- Hyperliquid non-unified (`dexAbstraction`) accounts now hard-fail if any HIP-3/non-standard perp symbol appears in effective `approved_coins` or live exchange state. Those symbols now require `unifiedAccount` mode instead of being partially skipped or partially supported.
 
 ## v7.9.1 - 2026-04-13
 - Removed the legacy `python src/downloader.py ...` entrypoint. Use `passivbot download ...` for OHLCV cache warming.

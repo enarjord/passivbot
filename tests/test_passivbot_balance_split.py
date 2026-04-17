@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from passivbot_exceptions import FatalBotException
 
 # Stub passivbot_rust before importing passivbot to avoid native dependency during unit test.
 sys.modules.setdefault(
@@ -903,3 +904,29 @@ async def test_run_execution_loop_stops_before_execute_when_signal_arrives_after
 
     assert result is None
     assert executes == []
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_propagates_fatal_bot_exception():
+    bot = Passivbot.__new__(Passivbot)
+
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = False
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_update_pos_oos_pnls_ohlcvs():
+        raise FatalBotException("fatal")
+
+    bot.update_pos_oos_pnls_ohlcvs = fake_update_pos_oos_pnls_ohlcvs
+    bot.execute_to_exchange = AsyncMock()
+
+    with pytest.raises(FatalBotException, match="fatal"):
+        await bot.run_execution_loop()
