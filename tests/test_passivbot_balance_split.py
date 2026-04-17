@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import sys
@@ -19,6 +20,48 @@ sys.modules.setdefault(
 )
 
 from passivbot import Passivbot
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_awaits_cancelled_maintainers():
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+
+    seen = {"maintainer_cancelled": False, "ccp_closed": False, "cca_closed": False}
+
+    async def _maintainer():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            seen["maintainer_cancelled"] = True
+            raise
+
+    class _Closer:
+        def __init__(self, key):
+            self.key = key
+
+        async def close(self):
+            seen[self.key] = True
+
+    maintainer_task = asyncio.create_task(_maintainer())
+    bot.maintainers = {"watch_orders": maintainer_task}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Closer("ccp_closed")
+    bot.cca = _Closer("cca_closed")
+
+    await asyncio.sleep(0)
+    await bot.shutdown_gracefully()
+
+    assert seen == {
+        "maintainer_cancelled": True,
+        "ccp_closed": True,
+        "cca_closed": True,
+    }
+    assert maintainer_task.done() is True
 
 
 def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
@@ -826,3 +869,37 @@ async def test_ws_balance_update_sets_balance_raw_correctly():
     assert bot.get_hysteresis_snapped_balance() == pytest.approx(1000.0)
     # Execution should have been scheduled due to balance_raw change
     assert bot.execution_scheduled is True
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_stops_before_execute_when_signal_arrives_after_refresh():
+    bot = Passivbot.__new__(Passivbot)
+    executes = []
+
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = False
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_update_pos_oos_pnls_ohlcvs():
+        bot.stop_signal_received = True
+        return True
+
+    async def fake_execute_to_exchange():
+        executes.append(True)
+        return {"unexpected": True}
+
+    bot.update_pos_oos_pnls_ohlcvs = fake_update_pos_oos_pnls_ohlcvs
+    bot.execute_to_exchange = fake_execute_to_exchange
+
+    result = await bot.run_execution_loop()
+
+    assert result is None
+    assert executes == []

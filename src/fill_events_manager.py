@@ -812,7 +812,7 @@ class FillEventCache:
                 except Exception:
                     logger.debug("[fills] cache load: skipping malformed record in %s", path)
         events.sort(key=lambda ev: ev.timestamp)
-        logger.info(
+        logger.debug(
             "[fills] cache loaded: %d events from %d files in %s",
             len(events),
             len(files),
@@ -1974,7 +1974,7 @@ class FillEventsManager:
                 compute_psize_pprice(payload)
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
 
-            logger.info(
+            logger.debug(
                 "[fills] ensure_loaded: %d cached events (dropped %d without raw)",
                 len(self._events),
                 dropped,

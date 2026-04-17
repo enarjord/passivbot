@@ -522,7 +522,7 @@ class BybitBot(CCXTBot):
                 else:
                     raise
             if to_print:
-                logging.info(f"{symbol}: {to_print.strip()}")
+                logging.debug(f"{symbol}: {to_print.strip()}")
 
     async def update_exchange_config(self):
         res = await self.cca.set_position_mode(True)
