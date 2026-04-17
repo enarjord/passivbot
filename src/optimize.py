@@ -99,7 +99,6 @@ from pure_funcs import (
     denumpyize,
     sort_dict_keys,
     calc_hash,
-    flatten,
     str2bool,
 )
 from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_approved_ignored_coins
@@ -980,6 +979,7 @@ class Evaluator:
                 exchange,
                 self.shared_btc_np[exchange],
                 self.timestamps.get(exchange),
+                metrics_only=True,
             )
             try:
                 fills, equities_array, analysis = execute_backtest(payload, config)
@@ -1026,13 +1026,14 @@ class Evaluator:
             self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
         return tuple(objectives), total_penalty, metrics_payload
 
-    def build_limit_checks(self):
+    def build_limit_checks(self, aggregate_cfg: Dict[str, Any] | None = None):
         limits = self.config["optimize"].get("limits", [])
         self.limit_checks = expand_limit_checks(
             limits,
             self.scoring_weights,
             penalty_weight=1e6,
             objective_index_map=objective_index_map(self.scoring_specs),
+            aggregate_cfg=aggregate_cfg,
         )
 
     def calc_fitness(self, analyses_combined, *, return_raw_objectives: bool = False):
@@ -1144,6 +1145,7 @@ class SuiteEvaluator:
         self.base = base_evaluator
         self.contexts = scenario_contexts
         self.aggregate_cfg = aggregate_cfg
+        self.base.build_limit_checks(self.aggregate_cfg)
         # Cache for master dataset attachments (shared across scenarios)
         self._master_attachments: Dict[str, Dict[str, Any]] = {"hlcvs": {}, "btc": {}}
         self._master_arrays: Dict[str, Dict[str, np.ndarray]] = {"hlcvs": {}, "btc": {}}
@@ -1323,6 +1325,7 @@ class SuiteEvaluator:
                     btc_data,
                     ctx.timestamps.get(exchange),
                     coin_indices=coin_indices,
+                    metrics_only=True,
                 )
                 try:
                     fills, equities_array, analysis = execute_backtest(payload, scenario_config)
@@ -1560,28 +1563,30 @@ def apply_fine_tune_bounds(
 
 
 def extract_configs(path):
-    cfgs = []
-    if os.path.exists(path):
-        if path.endswith("_all_results.bin"):
-            logging.info(f"Skipping {path}")
-            return []
-        if path.endswith(".json"):
-            try:
-                raw = load_hjson_config(path, log_errors=False)
-                cfgs.append(_extract_starting_config(raw, source=path))
-                return cfgs
-            except Exception as e:
-                logging.warning(f"failed to extract bot config from starting config {path}: {e}")
-                return []
-        if path.endswith("_pareto.txt"):
-            with open(path) as f:
-                for line in f.readlines():
-                    try:
-                        cfg = json.loads(line)
-                        cfgs.append(_extract_starting_config(cfg, source=path))
-                    except Exception as e:
-                        logging.warning(f"failed to extract bot config from starting config {path}: {e}")
-    return cfgs
+    return list(iter_extract_configs(path))
+
+
+def iter_extract_configs(path):
+    if not os.path.exists(path):
+        return
+    if path.endswith("_all_results.bin"):
+        logging.info(f"Skipping {path}")
+        return
+    if path.endswith(".json"):
+        try:
+            raw = load_hjson_config(path, log_errors=False)
+            yield _extract_starting_config(raw, source=path)
+        except Exception as e:
+            logging.warning(f"failed to extract bot config from starting config {path}: {e}")
+        return
+    if path.endswith("_pareto.txt"):
+        with open(path) as f:
+            for line in f:
+                try:
+                    cfg = json.loads(line)
+                    yield _extract_starting_config(cfg, source=path)
+                except Exception as e:
+                    logging.warning(f"failed to extract bot config from starting config {path}: {e}")
 
 
 def _extract_starting_config(raw_config, *, source: str = "<memory>"):
@@ -1633,16 +1638,18 @@ def _build_starting_seed_config(cfg):
 
 
 def get_starting_configs(starting_configs: str):
+    return list(iter_starting_configs(starting_configs))
+
+
+def iter_starting_configs(starting_configs: str):
     if starting_configs is None:
-        return []
+        return
     if os.path.isdir(starting_configs):
-        return flatten(
-            [
-                get_starting_configs(os.path.join(starting_configs, f))
-                for f in os.listdir(starting_configs)
-            ]
-        )
-    return extract_configs(starting_configs)
+        with os.scandir(starting_configs) as entries:
+            for entry in entries:
+                yield from iter_starting_configs(entry.path)
+        return
+    yield from iter_extract_configs(starting_configs)
 
 
 def configs_to_individuals(
@@ -1651,8 +1658,25 @@ def configs_to_individuals(
     sig_digits=0,
     optimization_shape: OptimizationShape | None = None,
 ):
+    inds, _ = configs_to_individuals_streaming(
+        cfgs,
+        bounds,
+        sig_digits=sig_digits,
+        optimization_shape=optimization_shape,
+    )
+    return inds
+
+
+def configs_to_individuals_streaming(
+    cfgs,
+    bounds,
+    sig_digits=0,
+    optimization_shape: OptimizationShape | None = None,
+):
     inds = set()
+    raw_count = 0
     for cfg in cfgs:
+        raw_count += 1
         try:
             fcfg = _build_starting_seed_config(cfg)
             individual = config_to_individual(
@@ -1664,7 +1688,7 @@ def configs_to_individuals(
             inds.add(tuple(individual))
         except Exception as e:
             logging.warning(f"failed to use starting config as optimizer seed: {e}")
-    return list(inds)
+    return list(inds), raw_count
 
 
 async def main():
@@ -2053,6 +2077,8 @@ async def main():
             ignore_sigint_in_worker=ignore_sigint_in_worker,
             get_starting_configs=get_starting_configs,
             configs_to_individuals=configs_to_individuals,
+            iter_starting_configs=iter_starting_configs,
+            configs_to_individuals_streaming=configs_to_individuals_streaming,
             optimization_shape=evaluator.optimization_shape,
             record_individual_result=_record_individual_result,
             run_evolution=ea_mu_plus_lambda_stream,

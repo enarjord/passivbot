@@ -139,6 +139,26 @@ def test_build_backtest_payload_honors_explicit_warmup_provided_override():
     assert payload.bundle.meta["warmup_minutes_provided"] == 99
 
 
+def test_build_backtest_payload_propagates_metrics_only_flag():
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    mss = _base_mss(start_ts)
+    hlcvs, btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+
+    payload = build_backtest_payload(
+        hlcvs,
+        mss,
+        config,
+        "binance",
+        btc,
+        timestamps,
+        metrics_only=True,
+    )
+
+    assert payload.backtest_params["metrics_only"] is True
+
+
 def test_build_backtest_payload_aggregation_recomputes_effective_start_ts_over_stale_mss():
     """Pin that `build_backtest_payload` recomputes `effective_start_timestamp_ms`
     from the post-aggregation timestamps even when the caller pre-set a stale

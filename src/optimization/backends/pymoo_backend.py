@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import logging
 import math
 import multiprocessing
@@ -23,15 +24,18 @@ except ImportError:  # pragma: no cover
     get_reference_directions = None
 
 from optimization.backend_shared import (
+    approx_object_size,
     cancel_pending_async_results,
     load_starting_individuals,
+    log_seed_memory,
     stream_async_results,
 )
 from optimization.problem import (
     PassivbotProblem,
     PymooAsyncRecordingRunner,
     PymooEvaluatorAdapter,
-    _evaluate_pymoo_worker,
+    _evaluate_pymoo_worker_from_globals,
+    initialize_pymoo_worker,
 )
 from optimization.repair import BoundsRepair
 
@@ -88,6 +92,11 @@ def _reduce_starting_population(
         return _build_random_sampling(bounds, population_size)
 
     seed_vectors = np.asarray(starting_individuals, dtype=np.float64)
+    log_seed_memory(
+        "pymoo_seed_vectors_allocated",
+        count=len(starting_individuals),
+        array_bytes=int(seed_vectors.nbytes),
+    )
     if len(seed_vectors) <= population_size:
         return _extend_sampling_to_size(seed_vectors, bounds, population_size)
 
@@ -130,6 +139,13 @@ def _evaluate_starting_individuals(
         * int(config["optimize"].get("max_pending_starting_evals_per_cpu", 1)),
     )
     ordered_payloads: list[dict[str, Any] | None] = [None] * len(starting_individuals)
+    log_seed_memory(
+        "pymoo_starting_eval_begin",
+        count=len(starting_individuals),
+        max_pending=max_pending,
+        starting_individuals_bytes=approx_object_size(starting_individuals),
+        ordered_payload_slots_bytes=approx_object_size(ordered_payloads),
+    )
     completed = {"count": 0}
 
     def _on_result(context, payload):
@@ -151,17 +167,11 @@ def _evaluate_starting_individuals(
         runner.pool.terminate()
 
     stream_async_results(
-        list(enumerate(starting_individuals)),
+        enumerate(starting_individuals),
         submit=lambda item: (
             runner.pool.apply_async(
-                _evaluate_pymoo_worker,
-                (
-                    evaluator,
-                    item[1],
-                    overrides_list,
-                    n_obj,
-                    has_constraints,
-                ),
+                _evaluate_pymoo_worker_from_globals,
+                (item[1],),
             ),
             item,
         ),
@@ -170,7 +180,13 @@ def _evaluate_starting_individuals(
         poll_interval_seconds=runner.poll_interval_seconds,
         on_interrupt=_on_interrupt,
     )
-    return [payload for payload in ordered_payloads if payload is not None]
+    slim_payloads = [payload for payload in ordered_payloads if payload is not None]
+    log_seed_memory(
+        "pymoo_starting_eval_complete",
+        count=len(slim_payloads),
+        payloads_bytes=approx_object_size(slim_payloads),
+    )
+    return slim_payloads
 
 
 def _extend_sampling_to_size(sampling: np.ndarray, bounds, target_size: int) -> np.ndarray:
@@ -449,6 +465,8 @@ def run_backend(
     ignore_sigint_in_worker,
     get_starting_configs,
     configs_to_individuals,
+    iter_starting_configs=None,
+    configs_to_individuals_streaming=None,
     optimization_shape=None,
     record_individual_result,
     run_evolution,
@@ -480,18 +498,33 @@ def run_backend(
             population_size=population_size,
             get_starting_configs=get_starting_configs,
             configs_to_individuals=configs_to_individuals,
+            iter_starting_configs=iter_starting_configs,
+            configs_to_individuals_streaming=configs_to_individuals_streaming,
             optimization_shape=optimization_shape,
             bounds=bounds,
             sig_digits=sig_digits,
         )
-        sampling = _build_random_sampling(bounds, population_size)
-        pool = multiprocessing.Pool(
-            processes=config["optimize"]["n_cpus"],
-            initializer=ignore_sigint_in_worker,
+        log_seed_memory(
+            "pymoo_starting_individuals_ready",
+            count=len(starting_individuals),
+            approx_bytes=approx_object_size(starting_individuals),
         )
+        sampling = _build_random_sampling(bounds, population_size)
         evaluator_adapter = PymooEvaluatorAdapter(
             evaluator_for_pool,
             overrides_list=overrides_list,
+        )
+        worker_initializer = functools.partial(
+            initialize_pymoo_worker,
+            evaluator_for_pool,
+            overrides_list,
+            len(config["optimize"]["scoring"]),
+            evaluator_adapter.has_constraints,
+            ignore_sigint_in_worker,
+        )
+        pool = multiprocessing.Pool(
+            processes=config["optimize"]["n_cpus"],
+            initializer=worker_initializer,
         )
         runner = PymooAsyncRecordingRunner(
             evaluator=evaluator_for_pool,
@@ -528,6 +561,11 @@ def run_backend(
                 has_constraints=evaluator_adapter.has_constraints,
             )
             logging.info("Evaluated %d starting configs", len(seed_payloads))
+            log_seed_memory(
+                "pymoo_starting_payloads_ready",
+                count=len(seed_payloads),
+                approx_bytes=approx_object_size(seed_payloads),
+            )
             algorithm.initialization.sampling = _reduce_starting_population(
                 problem=problem,
                 algorithm=algorithm,

@@ -1065,6 +1065,15 @@ fn run_backtest_core<'py>(
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
         let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
+        if metrics_only {
+            return Ok((
+                py.None().into_py(py),
+                py.None().into_py(py),
+                py_analysis_usd,
+                py_analysis_btc,
+                py.None().into_py(py),
+            ));
+        }
         let hard_stop_plot_data = backtest.hard_stop_plot_data();
         let py_events_long = PyList::empty_bound(py);
         for event in hard_stop_plot_data.events_long {
@@ -1110,15 +1119,6 @@ fn run_backtest_core<'py>(
             hard_stop_plot_data.drawdown_score_short,
         )?;
         py_hard_stop_plot.set_item("events_short", py_events_short)?;
-        if metrics_only {
-            return Ok((
-                py.None().into_py(py),
-                py.None().into_py(py),
-                py_analysis_usd,
-                py_analysis_btc,
-                py_hard_stop_plot.into_py(py),
-            ));
-        }
         let mut py_fills = Array2::from_elem((fills.len(), 19), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);

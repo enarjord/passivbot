@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 import passivbot_rust as pbr
+from config.limits import resolve_aggregate_mode
 from config.scoring import extract_objective_specs
 from opt_utils import round_floats
 from pure_funcs import calc_hash
@@ -29,6 +30,10 @@ from pareto_core import (
 )
 
 STAT_FIELDS = {"mean", "min", "max", "std"}
+
+
+def _resolve_aggregate_mode(metric: str, aggregate_cfg: Optional[Dict[str, str]]) -> str:
+    return resolve_aggregate_mode(metric, aggregate_cfg)
 
 
 @dataclass(frozen=True)
@@ -74,17 +79,6 @@ def _resolve_limit_value(
         field = "mean"
     key = f"{resolved_metric.replace('.', '_')}_{field}"
     return stats_flat.get(key)
-
-
-def _resolve_aggregate_mode(metric: str, aggregate_cfg: Optional[Dict[str, str]]) -> str:
-    """Return the aggregate mode for *metric* given an aggregate config dict."""
-    if not aggregate_cfg:
-        return "mean"
-    mode = aggregate_cfg.get(metric)
-    if mode is None and "_" in metric:
-        base = metric.rsplit("_", 1)[0]
-        mode = aggregate_cfg.get(base)
-    return str(mode or aggregate_cfg.get("default", "mean")).lower()
 
 
 def _suite_metrics_to_stats(

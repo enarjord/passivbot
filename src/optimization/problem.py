@@ -10,6 +10,32 @@ from optimization.bounds import Bound
 from optimization.callback import build_pymoo_record_entry
 
 
+_PYMOO_WORKER_EVALUATOR = None
+_PYMOO_WORKER_OVERRIDES_LIST: list[str] = []
+_PYMOO_WORKER_N_OBJ = 0
+_PYMOO_WORKER_HAS_CONSTRAINTS = False
+
+
+def initialize_pymoo_worker(
+    evaluator,
+    overrides_list: Sequence[str] | None,
+    n_obj: int,
+    has_constraints: bool,
+    ignore_sigint_in_worker=None,
+) -> None:
+    global _PYMOO_WORKER_EVALUATOR
+    global _PYMOO_WORKER_OVERRIDES_LIST
+    global _PYMOO_WORKER_N_OBJ
+    global _PYMOO_WORKER_HAS_CONSTRAINTS
+
+    if ignore_sigint_in_worker is not None:
+        ignore_sigint_in_worker()
+    _PYMOO_WORKER_EVALUATOR = evaluator
+    _PYMOO_WORKER_OVERRIDES_LIST = list(overrides_list or [])
+    _PYMOO_WORKER_N_OBJ = int(n_obj)
+    _PYMOO_WORKER_HAS_CONSTRAINTS = bool(has_constraints)
+
+
 def _evaluate_pymoo_worker(
     evaluator,
     vector: Sequence[float],
@@ -36,6 +62,18 @@ def _evaluate_pymoo_worker(
         violation = float(constraint_violation)
         payload["G"] = np.asarray([violation if violation > 0.0 else -1.0], dtype=np.float64)
     return payload
+
+
+def _evaluate_pymoo_worker_from_globals(vector: Sequence[float]) -> dict[str, Any]:
+    if _PYMOO_WORKER_EVALUATOR is None:
+        raise RuntimeError("pymoo worker evaluator not initialized")
+    return _evaluate_pymoo_worker(
+        _PYMOO_WORKER_EVALUATOR,
+        vector,
+        _PYMOO_WORKER_OVERRIDES_LIST,
+        _PYMOO_WORKER_N_OBJ,
+        _PYMOO_WORKER_HAS_CONSTRAINTS,
+    )
 
 
 class PymooEvaluatorAdapter:
@@ -103,17 +141,17 @@ class PymooAsyncRecordingRunner:
 
     def __call__(self, _f, X):
         xs = list(X)
+        initialize_pymoo_worker(
+            self.evaluator,
+            self.overrides_list,
+            self.n_obj,
+            self.has_constraints,
+        )
         ordered_results: list[dict[str, Any] | None] = [None] * len(xs)
         pending = {
             self.pool.apply_async(
-                _evaluate_pymoo_worker,
-                (
-                    self.evaluator,
-                    x,
-                    self.overrides_list,
-                    self.n_obj,
-                    self.has_constraints,
-                ),
+                _evaluate_pymoo_worker_from_globals,
+                (x,),
             ): (idx, x)
             for idx, x in enumerate(xs)
         }

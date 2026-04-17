@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed suite-mode limit semantics so `passivbot optimize` and `passivbot tool pareto` now resolve omitted `stat=` the same way: explicit `stat=` still wins, otherwise both defer to `backtest.aggregate.<metric>`, then `backtest.aggregate.default`, then `mean`. This removes the old optimizer-only behavior where `>` silently implied `min` and `<` silently implied `max`.
+- Reduced optimizer startup memory pressure when warming from large starting-config sets. Starting configs now stream into quantization instead of being fully materialized up front, and pymoo worker evaluations now reuse per-worker evaluator state plus metrics-only backtests instead of serializing full evaluator payloads and full backtest histories for every candidate.
 - Upgraded the pinned `ccxt` dependency from `4.5.22` to `4.5.48` and added a dedicated CCXT upgrade validation workflow with live snapshot capture/diff tooling plus offline contract fixtures for upgrade drift.
 - Fixed backtest `pnls_max_lookback_days` rolling realized-PnL reconstruction to match live semantics exactly: both now derive peak/current PnL stats from the active lookback window only by filtering in-window fills and recomputing cumulative realized PnL from that filtered sequence. This fixes overstated auto-unstuck allowance and related risk gating drift caused by the old rebased rolling-peak implementation.
 - Live orchestrator runs now log explicit warnings when `filter_by_min_effective_cost` blocks initial entries, including the current balance, effective per-slot limit, projected initial entry cost, and required executable minimum. The warning now also tells operators how to disable the gate and explains that doing so allows exchange-min-clamped initial entries which may exceed configured initial sizing.
@@ -16,6 +18,7 @@ All notable user-facing changes will be documented in this file.
 - Repeated `[entry] initial entries blocked by min effective cost` warnings are now throttled per symbol/side to once every 15 minutes instead of every 5 minutes.
 - Fixed all-zero `forager_score_weights` configs to normalize to EMA-readiness-only ranking consistently across Python config prep, Rust selection, and optimizer inputs instead of drifting into ambiguous fallback behavior.
 - Stopped hydrating omitted `config.bot.{long,short}` fields from schema-tuned bot defaults in legacy/current configs. Newly omitted feature-style params now hydrate to explicit off/compatibility values with config logs, sparse disabled sides remain loadable, legacy `n_closes` and `min_markup` aliases are preserved, and the Rust parser now fails loudly instead of silently supplying bot-key fallbacks.
+- Hyperliquid live balance reconciliation no longer republishes bot-managed resting-order reserve after `fetch_open_orders()`. This removes the old `REST`/`REST+open_orders` balance oscillation path that could trigger self-induced order-size churn.
 
 ## v7.9.1 - 2026-04-13
 - Removed the legacy `python src/downloader.py ...` entrypoint. Use `passivbot download ...` for OHLCV cache warming.

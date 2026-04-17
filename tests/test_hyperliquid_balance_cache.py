@@ -534,6 +534,8 @@ def _pb_order_id(type_hex: str = "0000") -> str:
 
 async def _return_async(value, _payload):
     return value
+
+
 @pytest.mark.asyncio
 async def test_update_open_orders_suppresses_missing_log_for_exact_recent_bot_cancel(
     stubbed_modules,
@@ -584,7 +586,6 @@ async def test_update_open_orders_suppresses_missing_log_for_exact_recent_bot_ca
     bot.update_positions_and_balance = fail_update_positions_and_balance
     bot.order_was_recently_cancelled = lambda order: 0.0
     bot.log_order_action = lambda order, action, source, **kwargs: seen.append((action, kwargs))
-
     import passivbot as pb_mod
 
     original_utc_ms = pb_mod.utc_ms
@@ -593,7 +594,6 @@ async def test_update_open_orders_suppresses_missing_log_for_exact_recent_bot_ca
         ok = await bot.update_open_orders()
     finally:
         pb_mod.utc_ms = original_utc_ms
-
     assert ok is True
     assert [action for action, _kwargs in seen] == ["removed order"]
     assert seen[0][1].get("context") == "bot_cancel_confirmed"
