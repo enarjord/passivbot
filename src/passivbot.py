@@ -117,6 +117,11 @@ RequestTimeout = getattr(ccxt_errors, "RequestTimeout", NetworkError)
 # Orchestrator-only: ideal orders are computed via Rust orchestrator (JSON API).
 # Legacy Python order calculation paths are removed in this branch.
 
+FOREIGN_PASSIVBOT_LOOKBACK_MS = 24 * 60 * 60 * 1000
+FOREIGN_PASSIVBOT_GRACE_MS = 15_000
+FOREIGN_PASSIVBOT_WINDOW_MS = 60 * 60 * 1000
+FOREIGN_PASSIVBOT_MAX_UNIQUE_PER_WINDOW = 3
+
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
     configure_custom_endpoint_loader,
@@ -195,6 +200,14 @@ def try_decode_type_id_from_custom_id(custom_id: str) -> int | None:
         return int(m.group(1), 16)
 
     return None
+
+
+def custom_id_has_explicit_passivbot_marker(custom_id) -> bool:
+    """Return True only when the custom id contains the explicit 0xABCD Passivbot marker."""
+    try:
+        return bool(_TYPE_MARKER_RE.search(str(custom_id)))
+    except Exception:
+        return False
 
 
 def order_type_id_to_hex4(type_id: int) -> str:
@@ -561,6 +574,10 @@ class Passivbot:
         self._last_plan_detail: dict[str, tuple[int, int, int]] = {}
         self._last_action_summary: dict[tuple[str, str], str] = {}
         self.start_time_ms = utc_ms()
+        self.bot_start_exchange_ts = int(self.get_exchange_time())
+        self.orders_emitted_to_exchange: dict[str, int] = {}
+        self.foreign_passivbot_seen: dict[str, int] = {}
+        self._foreign_passivbot_stop_requested = False
         self._bot_ready = False
         self._monitor_last_equity = float(self.balance_raw)
         self._monitor_stop_emitted = False
@@ -3232,6 +3249,140 @@ class Passivbot:
             return max(0.0, (matching["execution_timestamp"] + max_age_ms) - utc_ms())
         return 0.0
 
+    def _extract_order_custom_id(self, order: dict) -> str:
+        """Return the first normalized client/custom order id from unified or raw fields."""
+        if not isinstance(order, dict):
+            return ""
+        candidates = (
+            "custom_id",
+            "customId",
+            "client_order_id",
+            "clientOrderId",
+            "client_oid",
+            "clientOid",
+            "order_link_id",
+            "orderLinkId",
+            "clOrdId",
+            "text",
+        )
+        for source in (order, order.get("info", {})):
+            if not isinstance(source, dict):
+                continue
+            for key in candidates:
+                value = source.get(key)
+                if value not in (None, ""):
+                    return str(value)
+        return ""
+
+    def _prune_emitted_order_custom_ids(self, now_ts: int) -> None:
+        """Drop emitted custom ids outside the foreign-writer lookback window."""
+        cutoff_ts = int(now_ts) - FOREIGN_PASSIVBOT_LOOKBACK_MS
+        self.orders_emitted_to_exchange = {
+            cid: ts
+            for cid, ts in getattr(self, "orders_emitted_to_exchange", {}).items()
+            if int(ts) >= cutoff_ts
+        }
+
+    def _prune_foreign_passivbot_seen(self, now_ts: int) -> None:
+        """Drop old foreign Passivbot detections outside the rolling stop window."""
+        cutoff_ts = int(now_ts) - FOREIGN_PASSIVBOT_WINDOW_MS
+        self.foreign_passivbot_seen = {
+            cid: ts
+            for cid, ts in getattr(self, "foreign_passivbot_seen", {}).items()
+            if int(ts) >= cutoff_ts
+        }
+
+    def _record_emitted_order_custom_id(self, order: dict, emitted_ts: Optional[int] = None) -> None:
+        """Remember a successfully acknowledged create so later refreshes can adopt it."""
+        custom_id = Passivbot._extract_order_custom_id(self, order)
+        if not custom_id:
+            return
+        if emitted_ts is None:
+            emitted_ts = (
+                int(self.get_exchange_time()) if hasattr(self, "get_exchange_time") else utc_ms()
+            )
+        if not hasattr(self, "orders_emitted_to_exchange"):
+            self.orders_emitted_to_exchange = {}
+        self.orders_emitted_to_exchange[custom_id] = int(emitted_ts)
+
+    async def _stop_for_foreign_passivbot_orders(
+        self, detections: list[tuple[dict, str, str, int]], unique_count: int
+    ) -> None:
+        """Stop the bot after repeated evidence of a competing Passivbot writer."""
+        if getattr(self, "_foreign_passivbot_stop_requested", False):
+            return
+        self._foreign_passivbot_stop_requested = True
+        orders_summary = ", ".join(
+            f"{symbol_to_coin(order.get('symbol'), verbose=False) or order.get('symbol')}"
+            f":{pb_type}:{shorten_custom_id(custom_id)}"
+            for order, pb_type, custom_id, _ in detections
+        )
+        logging.critical(
+            "[safety] detected %s unique foreign Passivbot orders in the last %.1f minutes; "
+            "stopping bot to avoid competing writers | latest=%s",
+            unique_count,
+            FOREIGN_PASSIVBOT_WINDOW_MS / (60 * 1000),
+            orders_summary,
+        )
+        self.stop_signal_received = True
+        if hasattr(self, "stop_data_maintainers"):
+            try:
+                self.stop_data_maintainers(verbose=False)
+            except Exception as exc:
+                logging.error("[safety] failed to stop data maintainers: %s", exc)
+        raise Exception("foreign Passivbot writer detected; stopping bot")
+
+    async def _detect_foreign_passivbot_orders(self, open_orders: list[dict]) -> None:
+        """Detect newer Passivbot-managed open orders not emitted by this running bot instance."""
+        now_ts = int(self.get_exchange_time())
+        bot_start_ts = int(getattr(self, "bot_start_exchange_ts", now_ts))
+        self._prune_emitted_order_custom_ids(now_ts)
+        self._prune_foreign_passivbot_seen(now_ts)
+        if not open_orders:
+            return
+        cutoff_ts = max(
+            bot_start_ts + FOREIGN_PASSIVBOT_GRACE_MS,
+            now_ts - FOREIGN_PASSIVBOT_LOOKBACK_MS,
+        )
+        new_detections: list[tuple[dict, str, str, int]] = []
+        for order in open_orders:
+            ts_raw = order.get("timestamp")
+            if ts_raw is None:
+                continue
+            try:
+                order_ts = int(float(ts_raw))
+            except Exception:
+                continue
+            if order_ts < cutoff_ts:
+                continue
+            custom_id = self._extract_order_custom_id(order)
+            if not custom_id:
+                continue
+            if not custom_id_has_explicit_passivbot_marker(custom_id):
+                continue
+            pb_type = custom_id_to_snake(custom_id)
+            if not pb_type or pb_type == "unknown":
+                continue
+            if custom_id in self.orders_emitted_to_exchange or custom_id in self.foreign_passivbot_seen:
+                continue
+            self.foreign_passivbot_seen[custom_id] = order_ts
+            new_detections.append((order, pb_type, custom_id, order_ts))
+        if not new_detections:
+            return
+        for order, pb_type, custom_id, order_ts in new_detections:
+            logging.error(
+                "[safety] detected foreign Passivbot order candidate | symbol=%s type=%s "
+                "custom_id=%s ts=%s",
+                order.get("symbol"),
+                pb_type,
+                shorten_custom_id(custom_id),
+                ts_to_date(order_ts),
+            )
+        if len(self.foreign_passivbot_seen) >= FOREIGN_PASSIVBOT_MAX_UNIQUE_PER_WINDOW:
+            await self._stop_for_foreign_passivbot_orders(
+                new_detections, unique_count=len(self.foreign_passivbot_seen)
+            )
+
     async def execute_to_exchange(self):
         """Run one execution cycle including config sync and order placement/cancellation."""
         await self.execution_cycle()
@@ -3313,6 +3464,7 @@ class Passivbot:
         """Submit a batch of orders after throttling and bookkeeping."""
         orders = orders[: int(self.live_value("max_n_creations_per_batch"))]
         grouped_orders: dict[str, list[dict]] = defaultdict(list)
+        emitted_ts = int(self.get_exchange_time()) if hasattr(self, "get_exchange_time") else utc_ms()
         for order in orders:
             self.add_to_recent_order_executions(order)
             self.log_order_action(
@@ -3349,6 +3501,7 @@ class Passivbot:
                     ex[key] = order[key]
             if debug_prints and self.debug_mode:
                 print("debug create_orders", debug_prints)
+            Passivbot._record_emitted_order_custom_id(self, ex, emitted_ts=emitted_ts)
             to_return.append(ex)
         if to_return:
             for elm in to_return:
@@ -5451,6 +5604,7 @@ class Passivbot:
                 if elm["symbol"] not in self.open_orders:
                     self.open_orders[elm["symbol"]] = []
                 self.open_orders[elm["symbol"]].append(elm)
+            await self._detect_foreign_passivbot_orders(open_orders)
             balance_reconciled = self._reconcile_balance_after_open_orders_refresh()
             if balance_reconciled:
                 await self.handle_balance_update(source="REST+open_orders")
