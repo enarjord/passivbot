@@ -1,13 +1,16 @@
-import json
-import shlex
 import math
+import json
 import re
+import shlex
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import hjson
 
 from .metrics import canonicalize_limit_name, canonicalize_metric_name
+
+
+SUPPORTED_LIMIT_STATS = {"min", "max", "mean", "std", "median"}
 
 
 def parse_limits_string(limits_str: Union[str, dict]) -> dict:
@@ -288,7 +291,7 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
     normalized_stat: Optional[str] = None
     if stat is not None:
         stat = str(stat).lower()
-        if stat not in {"min", "max", "mean", "std"}:
+        if stat not in SUPPORTED_LIMIT_STATS:
             raise ValueError(f"Unsupported stat '{stat}' for limit on {metric}.")
         normalized_stat = stat
     result: Dict[str, Any] = {"metric": metric, "penalize_if": penalize_if}
@@ -432,6 +435,39 @@ def normalize_limit_entries(
     for entry in entries:
         normalized.append(_normalize_limit_entry_preserve_extras(entry))
     return normalized
+
+
+def resolve_aggregate_mode(metric: str, aggregate_cfg: Optional[Dict[str, Any]]) -> str:
+    if not aggregate_cfg:
+        return "mean"
+    mode = aggregate_cfg.get(metric)
+    if mode is None and "_" in metric:
+        base = metric.rsplit("_", 1)[0]
+        mode = aggregate_cfg.get(base)
+    resolved = str(mode or aggregate_cfg.get("default", "mean")).strip().lower()
+    if resolved not in SUPPORTED_LIMIT_STATS:
+        raise ValueError(
+            f"Unsupported aggregate mode '{resolved}' for metric '{metric}'. "
+            f"Expected one of {sorted(SUPPORTED_LIMIT_STATS)}."
+        )
+    return resolved
+
+
+def resolve_limit_stat(
+    entry: Dict[str, Any],
+    aggregate_cfg: Optional[Dict[str, Any]] = None,
+) -> str:
+    metric = canonicalize_metric_name(str(entry.get("metric", "") or ""))
+    explicit_stat = entry.get("stat")
+    if explicit_stat is not None:
+        resolved = str(explicit_stat).strip().lower()
+        if resolved not in SUPPORTED_LIMIT_STATS:
+            raise ValueError(
+                f"Unsupported stat '{resolved}' for limit on {metric}. "
+                f"Expected one of {sorted(SUPPORTED_LIMIT_STATS)}."
+            )
+        return resolved
+    return resolve_aggregate_mode(metric, aggregate_cfg)
 
 
 def _resolve_optimize_limits_for_load(

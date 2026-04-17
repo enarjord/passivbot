@@ -1026,13 +1026,14 @@ class Evaluator:
             self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
         return tuple(objectives), total_penalty, metrics_payload
 
-    def build_limit_checks(self):
+    def build_limit_checks(self, aggregate_cfg: Dict[str, Any] | None = None):
         limits = self.config["optimize"].get("limits", [])
         self.limit_checks = expand_limit_checks(
             limits,
             self.scoring_weights,
             penalty_weight=1e6,
             objective_index_map=objective_index_map(self.scoring_specs),
+            aggregate_cfg=aggregate_cfg,
         )
 
     def calc_fitness(self, analyses_combined, *, return_raw_objectives: bool = False):
@@ -1144,6 +1145,7 @@ class SuiteEvaluator:
         self.base = base_evaluator
         self.contexts = scenario_contexts
         self.aggregate_cfg = aggregate_cfg
+        self.base.build_limit_checks(self.aggregate_cfg)
         # Cache for master dataset attachments (shared across scenarios)
         self._master_attachments: Dict[str, Dict[str, Any]] = {"hlcvs": {}, "btc": {}}
         self._master_arrays: Dict[str, Dict[str, np.ndarray]] = {"hlcvs": {}, "btc": {}}
