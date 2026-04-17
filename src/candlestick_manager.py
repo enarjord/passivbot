@@ -6046,11 +6046,37 @@ class CandlestickManager:
     async def get_last_prices(self, symbols: List[str], max_age_ms: int = 10_000) -> Dict[str, float]:
         """Return latest close for current minute per symbol.
 
-        Uses get_current_close per symbol with TTL. Returns 0.0 on failure.
+        Uses a cheap cache pass first, then one bulk ticker snapshot when safe,
+        and only falls back to per-symbol get_current_close for any leftovers.
+        Returns 0.0 on failure.
         """
         out: Dict[str, float] = {}
         if not symbols:
             return out
+
+        ordered_symbols = list(dict.fromkeys(symbols))
+        now = _utc_now_ms()
+        end_current = _floor_minute(now)
+
+        for symbol in ordered_symbols:
+            cached = self._get_last_price_cached_fast(
+                symbol,
+                now_ms=now,
+                end_current_ms=end_current,
+                max_age_ms=max_age_ms,
+            )
+            if cached is not None:
+                out[symbol] = cached
+
+        remaining = [s for s in ordered_symbols if s not in out]
+        if remaining:
+            bulk_prices = await self._get_last_prices_via_bulk_tickers(
+                remaining,
+                now_ms=now,
+            )
+            for symbol, price in bulk_prices.items():
+                if isinstance(price, (int, float)) and np.isfinite(float(price)) and float(price) > 0.0:
+                    out[symbol] = float(price)
 
         async def one(sym: str) -> float:
             try:
@@ -6059,9 +6085,125 @@ class CandlestickManager:
             except Exception:
                 return 0.0
 
-        tasks = {s: asyncio.create_task(one(s)) for s in symbols}
+        remaining = [s for s in ordered_symbols if s not in out]
+        tasks = {s: asyncio.create_task(one(s)) for s in remaining}
         for s, t in tasks.items():
             out[s] = await t
+        return out
+
+    def _get_last_price_cached_fast(
+        self,
+        symbol: str,
+        *,
+        now_ms: int,
+        end_current_ms: int,
+        max_age_ms: Optional[int],
+    ) -> Optional[float]:
+        """Cheap non-fetching latest-price probe for bulk get_last_prices()."""
+        try:
+            if max_age_ms is not None and max_age_ms > 0:
+                prev = self._current_close_cache.get(symbol)
+                if prev is not None:
+                    price, updated = prev
+                    if (int(now_ms) - int(updated)) <= int(max_age_ms):
+                        self._log("debug", "get_last_prices_cache_hit", symbol=symbol)
+                        return float(price)
+        except Exception:
+            pass
+
+        try:
+            arr = self._cache.get(symbol)
+            if arr is None or not arr.size:
+                return None
+            arr_sorted = np.sort(_ensure_dtype(arr), order="ts")
+            last_ts = int(arr_sorted[-1]["ts"])
+            if last_ts == int(end_current_ms):
+                fresh_enough = True
+                if max_age_ms is not None and max_age_ms > 0:
+                    last_refresh = self._get_last_refresh_ms(symbol)
+                    fresh_enough = (int(now_ms) - int(last_refresh)) <= int(max_age_ms)
+                if fresh_enough:
+                    price = float(arr_sorted[-1]["c"])
+                    self._current_close_cache[symbol] = (price, int(now_ms))
+                    self._log("debug", "get_last_prices_mem_candle", symbol=symbol)
+                    return price
+        except Exception:
+            return None
+        return None
+
+    def _bulk_last_price_tickers_allowed(self) -> bool:
+        """Return True when bulk ticker snapshot is a safe latest-price fallback."""
+        ex = str(getattr(self, "exchange_name", "") or getattr(self, "_ex_id", "") or "").lower()
+        # Hyperliquid staged paths intentionally avoid generic fetch_tickers because
+        # CCXT ticker mapping can fan out awkwardly across non-standard markets.
+        return ex not in {"hyperliquid"}
+
+    async def _get_last_prices_via_bulk_tickers(
+        self,
+        symbols: List[str],
+        *,
+        now_ms: int,
+    ) -> Dict[str, float]:
+        """Fetch latest prices for many symbols via one bulk ticker snapshot when safe."""
+        out: Dict[str, float] = {}
+        if (
+            len(symbols) <= 1
+            or self.exchange is None
+            or not hasattr(self.exchange, "fetch_tickers")
+            or not self._bulk_last_price_tickers_allowed()
+        ):
+            return out
+        self._log("debug", "get_last_prices_bulk_tickers_try", symbols=len(symbols))
+        fetched = None
+        try:
+            if getattr(self, "_net_sem", None) is not None:
+                async with self._net_sem:  # type: ignore[attr-defined]
+                    try:
+                        fetched = await self.exchange.fetch_tickers(symbols)
+                    except TypeError:
+                        fetched = await self.exchange.fetch_tickers()
+            else:
+                try:
+                    fetched = await self.exchange.fetch_tickers(symbols)
+                except TypeError:
+                    fetched = await self.exchange.fetch_tickers()
+        except Exception as exc:
+            self._log(
+                "debug",
+                "get_last_prices_bulk_tickers_failed",
+                symbols=len(symbols),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return out
+        if not isinstance(fetched, dict):
+            return out
+        hits = 0
+        for symbol in symbols:
+            tick = fetched.get(symbol)
+            if not isinstance(tick, dict):
+                continue
+            raw = tick.get("last")
+            if raw is None:
+                raw = tick.get("close")
+            if raw is None:
+                raw = tick.get("bid") or tick.get("ask")
+            try:
+                price = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(price) or price <= 0.0:
+                continue
+            out[symbol] = price
+            self._current_close_cache[symbol] = (price, int(now_ms))
+            hits += 1
+        self._log(
+            "debug",
+            "get_last_prices_bulk_tickers_ok",
+            symbols=len(symbols),
+            hits=hits,
+            misses=max(0, len(symbols) - hits),
+        )
         return out
 
     async def get_ema_bounds_many(

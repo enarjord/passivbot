@@ -793,13 +793,20 @@ class Passivbot:
         # Unstuck logging throttle
         self._unstuck_last_log_ms = 0
         self._unstuck_log_interval_ms = 5 * 60 * 1000  # 5 minutes
+        self._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000  # 1 hour
+        self._unstuck_last_status_signature = None
+        self._unstuck_last_status_info_ms = 0
+        self._unstuck_last_selection_signature = None
+        self._unstuck_last_selection_info_ms = 0
+        self._unstuck_allowance_log_hyst_snap_pct = 0.002
+        self._unstuck_allowance_log_snap_by_pside = {}
 
         # Realized-loss gate logging throttle
         self._loss_gate_last_log_ms = {}
         self._loss_gate_log_interval_ms = 5 * 60 * 1000  # 5 minutes
         # Effective min-cost gate logging throttle
         self._min_effective_cost_last_log_ms = {}
-        self._min_effective_cost_log_interval_ms = 5 * 60 * 1000  # 5 minutes
+        self._min_effective_cost_log_interval_ms = 15 * 60 * 1000  # 15 minutes
         self._orchestrator_prev_close_ema = {}
         self._orchestrator_close_ema_fallback_counts = {}
         self.hsl = self._parse_hsl_config()
@@ -2058,20 +2065,27 @@ class Passivbot:
             "pct_from_peak": pct_from_peak,
         }
 
-    def _log_unstuck_status(self) -> None:
-        """Log unstuck allowance budget for both sides."""
+    def _get_unstuck_status_parts_and_signature(self) -> tuple[list[str], tuple]:
+        """Build the current unstuck status log line and a comparable signature."""
         parts = []
+        signature_parts = []
         for pside in ["long", "short"]:
             info = self._calc_unstuck_allowance_for_logging(pside)
             status = info.get("status")
             if status == "disabled":
                 parts.append(f"{pside}: disabled")
+                signature_parts.append((pside, "disabled"))
             elif status == "unstuck_disabled":
                 parts.append(f"{pside}: unstuck disabled")
+                signature_parts.append((pside, "unstuck_disabled"))
             elif status == "no_pnl_manager" or status == "no_history":
                 parts.append(f"{pside}: no pnl history")
+                signature_parts.append((pside, "no_history"))
             else:
                 allowance = info["allowance"]
+                snapped_allowance = self._get_hysteresis_snapped_unstuck_allowance(
+                    pside, allowance
+                )
                 if allowance < 0:
                     parts.append(
                         "%s: allowance=%.2f (over budget) | peak=%.2f | pct_from_peak=%.1f%%"
@@ -2082,15 +2096,82 @@ class Passivbot:
                         "%s: allowance=%.2f | peak=%.2f | pct_from_peak=%.1f%%"
                         % (pside, allowance, info["peak"], info["pct_from_peak"])
                     )
-        logging.info("[unstuck] %s", " | ".join(parts))
+                signature_parts.append(
+                    (
+                        pside,
+                        "over_budget" if allowance < 0 else "ok",
+                        round(float(snapped_allowance), 2),
+                    )
+                )
+        return parts, tuple(signature_parts)
+
+    def _get_hysteresis_snapped_unstuck_allowance(self, pside: str, allowance_raw: float) -> float:
+        """Return the hysteresis-snapped allowance used for INFO log change detection."""
+        snaps = getattr(self, "_unstuck_allowance_log_snap_by_pside", None)
+        if snaps is None:
+            snaps = {}
+            self._unstuck_allowance_log_snap_by_pside = snaps
+        prev = snaps.get(pside)
+        if prev is None:
+            snaps[pside] = float(allowance_raw)
+            return float(allowance_raw)
+        denom = max(abs(float(allowance_raw)), 1e-9)
+        threshold = float(getattr(self, "_unstuck_allowance_log_hyst_snap_pct", 0.002) or 0.002)
+        if abs(float(allowance_raw) - float(prev)) / denom > threshold:
+            snaps[pside] = float(allowance_raw)
+        return float(snaps[pside])
 
     def _maybe_log_unstuck_status(self) -> None:
-        """Log periodic unstuck status if interval has elapsed."""
+        """Log unstuck status on meaningful change, with an hourly INFO heartbeat."""
         now_ms = utc_ms()
         if (now_ms - self._unstuck_last_log_ms) < self._unstuck_log_interval_ms:
             return
         self._unstuck_last_log_ms = now_ms
-        self._log_unstuck_status()
+        parts, signature = self._get_unstuck_status_parts_and_signature()
+        status_changed = signature != getattr(self, "_unstuck_last_status_signature", None)
+        last_info_ms = int(getattr(self, "_unstuck_last_status_info_ms", 0) or 0)
+        if status_changed or (now_ms - last_info_ms) >= self._unstuck_unchanged_info_log_interval_ms:
+            logging.info("[unstuck] %s", " | ".join(parts))
+            self._unstuck_last_status_info_ms = now_ms
+            self._unstuck_last_status_signature = signature
+
+    def _maybe_log_unstuck_selection(
+        self,
+        *,
+        symbol: str,
+        pside: str,
+        entry_price: float,
+        current_price: float,
+        allowance: float,
+    ) -> None:
+        """Log unstuck coin selection on change, with an hourly INFO heartbeat."""
+        now_ms = utc_ms()
+        signature = (symbol, pside, round(float(allowance), 2))
+        last_signature = getattr(self, "_unstuck_last_selection_signature", None)
+        last_info_ms = int(getattr(self, "_unstuck_last_selection_info_ms", 0) or 0)
+        if signature == last_signature and (
+            now_ms - last_info_ms
+        ) < self._unstuck_unchanged_info_log_interval_ms:
+            return
+        if entry_price > 0 and current_price > 0:
+            price_diff_pct = (current_price / entry_price - 1.0) * 100
+            sign = "+" if price_diff_pct >= 0 else ""
+        else:
+            price_diff_pct = 0.0
+            sign = ""
+        coin = symbol.split("/")[0] if "/" in symbol else symbol
+        logging.info(
+            "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
+            coin,
+            pside,
+            entry_price,
+            current_price,
+            sign,
+            price_diff_pct,
+            allowance,
+        )
+        self._unstuck_last_selection_signature = signature
+        self._unstuck_last_selection_info_ms = now_ms
 
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
@@ -2407,6 +2488,19 @@ class Passivbot:
         if hasattr(self, "debug_mode") and self.debug_mode:
             print(*args)
 
+    def _memory_snapshot_is_interesting(
+        self,
+        *,
+        prev: Optional[dict],
+        pct_change: Optional[float],
+    ) -> bool:
+        """Return True when a memory snapshot deserves INFO visibility."""
+        if prev is None:
+            return True
+        if pct_change is not None and abs(pct_change) >= 25.0:
+            return True
+        return False
+
     def _log_memory_snapshot(self, *, now_ms: Optional[int] = None) -> None:
         """Log process RSS and key cache metrics for observability."""
         if now_ms is None:
@@ -2520,10 +2614,35 @@ class Passivbot:
                 parts.append(f"task_top={top_tasks}")
         except Exception:
             pass
-        logging.info("; ".join(parts))
+        log_level = (
+            logging.INFO
+            if self._memory_snapshot_is_interesting(prev=prev, pct_change=pct_change)
+            else logging.DEBUG
+        )
+        logging.log(log_level, "%s", "; ".join(parts))
         self._mem_log_prev = {"timestamp": now_ms, "rss": rss}
         if cache_bytes is not None:
             self._mem_log_prev["cm_cache_bytes"] = cache_bytes
+
+    def _order_plan_summary_is_interesting(
+        self,
+        *,
+        total_pre_cancel: int,
+        total_cancel: int,
+        total_pre_create: int,
+        total_create: int,
+        total_skipped: int,
+    ) -> bool:
+        """Return True when an order-plan summary is worth emitting at INFO."""
+        unchanged_cancel = max(0, total_pre_cancel - total_cancel)
+        unchanged_create = max(0, total_pre_create - total_create)
+        actual_work = total_cancel + total_create
+        return (
+            actual_work >= 4
+            or total_skipped >= 4
+            or unchanged_cancel >= 3
+            or unchanged_create >= 3
+        )
 
     def init_coin_overrides(self):
         """Populate coin override map keyed by symbols for quick lookup."""
@@ -5619,7 +5738,7 @@ class Passivbot:
         if not hasattr(self, "_min_effective_cost_last_log_ms"):
             self._min_effective_cost_last_log_ms = {}
         if not hasattr(self, "_min_effective_cost_log_interval_ms"):
-            self._min_effective_cost_log_interval_ms = 5 * 60 * 1000
+            self._min_effective_cost_log_interval_ms = 15 * 60 * 1000
         now_ms = utc_ms()
         for block in blocks:
             if not isinstance(block, dict):
@@ -7029,23 +7148,13 @@ class Passivbot:
                     pos = self.positions.get(symbol, {}).get(pside, {})
                     entry_price = pos.get("price", 0.0)
                     current_price = last_prices.get(symbol, 0.0)
-                    if entry_price > 0 and current_price > 0:
-                        price_diff_pct = (current_price / entry_price - 1.0) * 100
-                        sign = "+" if price_diff_pct >= 0 else ""
-                    else:
-                        price_diff_pct = 0.0
-                        sign = ""
-                    coin = symbol.split("/")[0] if "/" in symbol else symbol
                     allowance = unstuck_allowances.get(pside, 0.0)
-                    logging.info(
-                        "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
-                        coin,
-                        pside,
-                        entry_price,
-                        current_price,
-                        sign,
-                        price_diff_pct,
-                        allowance,
+                    self._maybe_log_unstuck_selection(
+                        symbol=symbol,
+                        pside=pside,
+                        entry_price=entry_price,
+                        current_price=current_price,
+                        allowance=allowance,
                     )
                 break  # Only one unstuck order per cycle
 
@@ -7341,54 +7450,13 @@ class Passivbot:
         if not symbols:
             return ({}, None) if return_snapshot else {}
         mode_overrides = self._build_orchestrator_mode_overrides(symbols)
-
-        # Get latest prices: prefer bulk allMids (1 API call for all symbols)
-        # over per-symbol get_current_close (N API calls). Falls back to CM if unavailable.
-        last_prices = {}
-        try:
-            if (
-                hasattr(self, "cca")
-                and self.cca is not None
-                and self.exchange
-                and self.exchange.lower() == "hyperliquid"
-            ):
-                # Call allMids directly – much cheaper than fetch_tickers which tries
-                # to map ALL coins (including unmapped HIP-3 @NNN IDs → warning spam).
-                fetched = await self.cca.fetch(
-                    self._hl_info_url(),
-                    method="POST",
-                    headers={"Content-Type": "application/json"},
-                    body=json.dumps({"type": "allMids"}),
-                )
-                # Build reverse map: coin_name → symbol (e.g. "BTC" → "BTC/USDC:USDC")
-                coin_to_sym = {v: k for k, v in self.symbol_ids.items()} if self.symbol_ids else {}
-                for coin, mid_str in fetched.items():
-                    sym = coin_to_sym.get(coin)
-                    if sym and sym in symbols:
-                        try:
-                            last_prices[sym] = float(mid_str)
-                        except (ValueError, TypeError):
-                            pass
-            elif hasattr(self, "fetch_tickers"):
-                tickers = await self.fetch_tickers()
-                for sym in symbols:
-                    tick = tickers.get(sym)
-                    if tick and tick.get("last") is not None:
-                        last_prices[sym] = float(tick["last"])
-            # Feed prices into CM cache so downstream EMA/close lookups hit cache
-            if last_prices:
-                now_ms = int(utc_ms())
-                for sym, price in last_prices.items():
-                    self.cm.set_current_close(sym, price, now_ms)
-        except Exception as e:
-            logging.debug("bulk price fetch failed, falling back to CM: %s", e)
-            last_prices = {}
-        # Fill any symbols still missing via CandlestickManager (individual fetches)
-        missing = [s for s in symbols if s not in last_prices or last_prices[s] <= 0.0]
-        if missing:
-            cm_prices = await self.cm.get_last_prices(missing, max_age_ms=10_000)
-            last_prices.update(cm_prices)
-        Passivbot._monitor_record_price_ticks(self, last_prices, ts=utc_ms(), source="orchestrator_live")
+        last_prices = await self._get_orchestrator_last_prices(symbols)
+        monitor_source = (
+            "orchestrator_live_cm_staged"
+            if self._authoritative_refresh_mode() == "staged"
+            else "orchestrator_live"
+        )
+        Passivbot._monitor_record_price_ticks(self, last_prices, ts=utc_ms(), source=monitor_source)
 
         # Ensure effective min cost is up to date.
         if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:
@@ -7576,23 +7644,13 @@ class Passivbot:
                     pos = self.positions.get(symbol, {}).get(pside, {})
                     entry_price = pos.get("price", 0.0)
                     current_price = last_prices.get(symbol, 0.0)
-                    if entry_price > 0 and current_price > 0:
-                        price_diff_pct = (current_price / entry_price - 1.0) * 100
-                        sign = "+" if price_diff_pct >= 0 else ""
-                    else:
-                        price_diff_pct = 0.0
-                        sign = ""
-                    coin = symbol.split("/")[0] if "/" in symbol else symbol
                     allowance = unstuck_allowances.get(pside, 0.0)
-                    logging.info(
-                        "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
-                        coin,
-                        pside,
-                        entry_price,
-                        current_price,
-                        sign,
-                        price_diff_pct,
-                        allowance,
+                    self._maybe_log_unstuck_selection(
+                        symbol=symbol,
+                        pside=pside,
+                        entry_price=entry_price,
+                        current_price=current_price,
+                        allowance=allowance,
                     )
                 break  # Only one unstuck order per cycle
 
@@ -7614,6 +7672,90 @@ class Passivbot:
             }
             return ideal_orders_f, snapshot
         return ideal_orders_f
+
+    async def _get_orchestrator_last_prices(self, symbols: list[str]) -> dict[str, float]:
+        """Return latest prices for orchestrator planning.
+
+        In staged mode, market-price reads go through CandlestickManager only so CM owns
+        caching, TTL, and remote-fetch economy. Legacy mode retains the existing direct
+        bulk-ticker path and falls back to CM for any missing symbols.
+        """
+        ttl_ms = 10_000
+        if self._authoritative_refresh_mode() == "staged":
+            logging.debug(
+                "[state] staged orchestrator requesting cm last prices | symbols=%s | ttl=%sms",
+                len(symbols),
+                ttl_ms,
+            )
+            last_prices = await self.cm.get_last_prices(symbols, max_age_ms=ttl_ms)
+            invalid = []
+            normalized = {}
+            for symbol in symbols:
+                raw = last_prices.get(symbol, 0.0)
+                try:
+                    price = float(raw)
+                except (TypeError, ValueError):
+                    price = 0.0
+                normalized[symbol] = price
+                if not math.isfinite(price) or price <= 0.0:
+                    invalid.append(symbol)
+            if invalid:
+                logging.debug(
+                    "[state] staged orchestrator cm last prices ready | symbols=%s | ok=%s | invalid=%s | invalid_symbols=%s",
+                    len(symbols),
+                    len(symbols) - len(invalid),
+                    len(invalid),
+                    ",".join(invalid[:12]),
+                )
+            else:
+                logging.debug(
+                    "[state] staged orchestrator cm last prices ready | symbols=%s | ok=%s | invalid=0",
+                    len(symbols),
+                    len(symbols),
+                )
+            return normalized
+
+        # Legacy mode: prefer direct bulk exchange prices, then fill holes via CM.
+        last_prices = {}
+        try:
+            if (
+                hasattr(self, "cca")
+                and self.cca is not None
+                and self.exchange
+                and self.exchange.lower() == "hyperliquid"
+            ):
+                fetched = await self.cca.fetch(
+                    self._hl_info_url(),
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                    body=json.dumps({"type": "allMids"}),
+                )
+                coin_to_sym = {v: k for k, v in self.symbol_ids.items()} if self.symbol_ids else {}
+                for coin, mid_str in fetched.items():
+                    sym = coin_to_sym.get(coin)
+                    if sym and sym in symbols:
+                        try:
+                            last_prices[sym] = float(mid_str)
+                        except (ValueError, TypeError):
+                            pass
+            elif hasattr(self, "fetch_tickers"):
+                tickers = await self.fetch_tickers()
+                for sym in symbols:
+                    tick = tickers.get(sym)
+                    if tick and tick.get("last") is not None:
+                        last_prices[sym] = float(tick["last"])
+            if last_prices:
+                now_ms = int(utc_ms())
+                for sym, price in last_prices.items():
+                    self.cm.set_current_close(sym, price, now_ms)
+        except Exception as e:
+            logging.debug("bulk price fetch failed, falling back to CM: %s", e)
+            last_prices = {}
+        missing = [s for s in symbols if s not in last_prices or last_prices[s] <= 0.0]
+        if missing:
+            cm_prices = await self.cm.get_last_prices(missing, max_age_ms=ttl_ms)
+            last_prices.update(cm_prices)
+        return last_prices
 
     def _to_executable_orders(
         self, ideal_orders: dict, last_prices: Dict[str, float]
@@ -7824,8 +7966,17 @@ class Passivbot:
                         extra.append(f"unchanged_cancel={untouched_cancel}")
                     if untouched_create:
                         extra.append(f"unchanged_create={untouched_create}")
-                    # Use DEBUG when no actual work was done (all orders skipped/unchanged)
-                    log_level = logging.INFO if (total_cancel or total_create) else logging.DEBUG
+                    log_level = (
+                        logging.INFO
+                        if self._order_plan_summary_is_interesting(
+                            total_pre_cancel=total_pre_cancel,
+                            total_cancel=total_cancel,
+                            total_pre_create=total_pre_create,
+                            total_create=total_create,
+                            total_skipped=total_skipped,
+                        )
+                        else logging.DEBUG
+                    )
                     logging.log(
                         log_level,
                         "[order] order plan summary | cancel %d->%d | create %d->%d | skipped=%d%s%s",

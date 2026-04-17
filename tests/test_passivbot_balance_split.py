@@ -234,6 +234,147 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
     ]
 
 
+def test_order_plan_summary_is_interesting_only_for_large_or_clipped_waves():
+    bot = Passivbot.__new__(Passivbot)
+
+    assert (
+        bot._order_plan_summary_is_interesting(
+            total_pre_cancel=1,
+            total_cancel=1,
+            total_pre_create=1,
+            total_create=1,
+            total_skipped=0,
+        )
+        is False
+    )
+    assert (
+        bot._order_plan_summary_is_interesting(
+            total_pre_cancel=6,
+            total_cancel=3,
+            total_pre_create=5,
+            total_create=2,
+            total_skipped=4,
+        )
+        is True
+    )
+
+
+def test_memory_snapshot_is_interesting_only_initially_or_on_large_change():
+    bot = Passivbot.__new__(Passivbot)
+
+    assert bot._memory_snapshot_is_interesting(prev=None, pct_change=None) is True
+    assert (
+        bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=10.0) is False
+    )
+    assert bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=30.0) is True
+
+
+def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._unstuck_last_log_ms = 0
+    bot._unstuck_log_interval_ms = 5 * 60 * 1000
+    bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
+    bot._unstuck_allowance_log_hyst_snap_pct = 0.002
+    bot._unstuck_allowance_log_snap_by_pside = {}
+    bot._unstuck_last_status_signature = None
+    bot._unstuck_last_status_info_ms = 0
+    now = [5 * 60 * 1000]
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
+
+    state_by_pside = {
+        "long": {"status": "ok", "allowance": -41.01, "peak": 16400.0, "pct_from_peak": -0.3},
+        "short": {"status": "disabled"},
+    }
+
+    def _calc(pside):
+        return state_by_pside[pside]
+
+    bot._calc_unstuck_allowance_for_logging = _calc
+
+    with caplog.at_level(logging.INFO):
+        bot._maybe_log_unstuck_status()
+        state_by_pside["long"] = {
+            "status": "ok",
+            "allowance": -41.03,
+            "peak": 16550.0,
+            "pct_from_peak": -0.2,
+        }
+        now[0] += 5 * 60 * 1000
+        bot._maybe_log_unstuck_status()
+        state_by_pside["long"] = {
+            "status": "ok",
+            "allowance": -41.20,
+            "peak": 16580.0,
+            "pct_from_peak": -0.2,
+        }
+        now[0] += 5 * 60 * 1000
+        bot._maybe_log_unstuck_status()
+        now[0] += 60 * 60 * 1000
+        bot._maybe_log_unstuck_status()
+
+    unstuck_logs = [record.message for record in caplog.records if "[unstuck]" in record.message]
+    assert len(unstuck_logs) == 3
+
+
+def test_hysteresis_snapped_unstuck_allowance_updates_only_after_threshold():
+    bot = Passivbot.__new__(Passivbot)
+    bot._unstuck_allowance_log_hyst_snap_pct = 0.002
+    bot._unstuck_allowance_log_snap_by_pside = {}
+
+    first = bot._get_hysteresis_snapped_unstuck_allowance("long", -41.00)
+    small = bot._get_hysteresis_snapped_unstuck_allowance("long", -41.03)
+    large = bot._get_hysteresis_snapped_unstuck_allowance("long", -41.20)
+
+    assert first == pytest.approx(-41.00)
+    assert small == pytest.approx(-41.00)
+    assert large == pytest.approx(-41.20)
+
+
+def test_unstuck_selection_logs_on_change_then_hourly(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
+    bot._unstuck_last_selection_signature = None
+    bot._unstuck_last_selection_info_ms = 0
+    now = [0]
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
+
+    with caplog.at_level(logging.INFO):
+        bot._maybe_log_unstuck_selection(
+            symbol="SUI/USDT:USDT",
+            pside="long",
+            entry_price=1.0,
+            current_price=1.1,
+            allowance=-41.0,
+        )
+        now[0] += 5 * 60 * 1000
+        bot._maybe_log_unstuck_selection(
+            symbol="SUI/USDT:USDT",
+            pside="long",
+            entry_price=1.0,
+            current_price=1.1,
+            allowance=-41.0,
+        )
+        now[0] += 60 * 60 * 1000
+        bot._maybe_log_unstuck_selection(
+            symbol="SUI/USDT:USDT",
+            pside="long",
+            entry_price=1.0,
+            current_price=1.1,
+            allowance=-41.0,
+        )
+        now[0] += 1
+        bot._maybe_log_unstuck_selection(
+            symbol="ADA/USDT:USDT",
+            pside="long",
+            entry_price=1.0,
+            current_price=1.05,
+            allowance=-41.0,
+        )
+
+    unstuck_logs = [record.message for record in caplog.records if "[unstuck] selecting" in record.message]
+    assert len(unstuck_logs) == 3
+
+
 @pytest.mark.asyncio
 async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower():
     bot = Passivbot.__new__(Passivbot)

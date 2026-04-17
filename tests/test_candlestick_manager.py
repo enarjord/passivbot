@@ -607,6 +607,41 @@ async def test_get_current_close_primes_ttl_for_candles(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_get_last_prices_prefers_bulk_tickers_for_multi_symbol(monkeypatch, tmp_path):
+    class _Ex:
+        id = "bybit"
+
+        def __init__(self):
+            self.calls = []
+
+        async def fetch_tickers(self, symbols=None):
+            self.calls.append(list(symbols) if symbols is not None else None)
+            return {
+                "ADA/USDT:USDT": {"last": 0.75},
+                "SOL/USDT:USDT": {"last": 180.0},
+            }
+
+    ex = _Ex()
+    cm = CandlestickManager(exchange=ex, exchange_name="bybit", cache_dir=str(tmp_path / "caches"))
+    fallback_calls = {"count": 0}
+
+    async def fake_get_current_close(symbol, max_age_ms=None):
+        fallback_calls["count"] += 1
+        raise AssertionError("bulk get_last_prices should not fall back to get_current_close() here")
+
+    monkeypatch.setattr(cm, "get_current_close", fake_get_current_close)
+
+    prices = await cm.get_last_prices(["ADA/USDT:USDT", "SOL/USDT:USDT"], max_age_ms=10_000)
+
+    assert ex.calls == [["ADA/USDT:USDT", "SOL/USDT:USDT"]]
+    assert fallback_calls["count"] == 0
+    assert prices == {
+        "ADA/USDT:USDT": pytest.approx(0.75),
+        "SOL/USDT:USDT": pytest.approx(180.0),
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_current_close_tail_fetch_merges_and_primes(monkeypatch, tmp_path):
     fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
     monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)

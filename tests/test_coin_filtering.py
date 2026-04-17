@@ -229,7 +229,7 @@ async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_s
 def test_log_min_effective_cost_blocks_includes_concrete_numbers(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot._min_effective_cost_last_log_ms = {}
-    bot._min_effective_cost_log_interval_ms = 300_000
+    bot._min_effective_cost_log_interval_ms = 900_000
     bot.is_pside_enabled = lambda pside: pside == "long"
 
     seen = []
@@ -263,7 +263,7 @@ def test_log_min_effective_cost_blocks_includes_concrete_numbers(monkeypatch):
 def test_log_min_effective_cost_blocks_is_throttled(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot._min_effective_cost_last_log_ms = {}
-    bot._min_effective_cost_log_interval_ms = 300_000
+    bot._min_effective_cost_log_interval_ms = 900_000
     bot.is_pside_enabled = lambda _pside: True
 
     seen = []
