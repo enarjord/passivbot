@@ -48,6 +48,66 @@ def _write_candidate(
         json.dump(payload, f, indent=2)
 
 
+def _write_suite_candidate(
+    path: Path,
+    name: str,
+    *,
+    adg_mean: float,
+    adg_min: float,
+    recovery_mean: float,
+    recovery_max: float,
+    drawdown_mean: float,
+    drawdown_max: float,
+) -> None:
+    payload = {
+        "optimize": {
+            "scoring": [
+                {"metric": "adg_strategy_pnl_rebased", "goal": "max"},
+                {"metric": "peak_recovery_hours_hsl", "goal": "min"},
+                {"metric": "drawdown_worst_hsl", "goal": "min"},
+            ]
+        },
+        "backtest": {
+            "aggregate": {
+                "default": "mean",
+                "peak_recovery_hours_hsl": "mean",
+                "drawdown_worst_hsl": "max",
+            }
+        },
+        "suite_metrics": {
+            "aggregate": {
+                "stats": {
+                    "adg_strategy_pnl_rebased": {
+                        "mean": adg_mean,
+                        "min": adg_min,
+                        "max": max(adg_mean, adg_min),
+                        "std": 0.0,
+                    },
+                    "peak_recovery_hours_hsl": {
+                        "mean": recovery_mean,
+                        "min": recovery_mean,
+                        "max": recovery_max,
+                        "std": 0.0,
+                    },
+                    "drawdown_worst_hsl": {
+                        "mean": drawdown_mean,
+                        "min": drawdown_mean,
+                        "max": drawdown_max,
+                        "std": 0.0,
+                    },
+                },
+                "aggregated": {
+                    "adg_strategy_pnl_rebased": adg_mean,
+                    "peak_recovery_hours_hsl": recovery_mean,
+                    "drawdown_worst_hsl": drawdown_max,
+                },
+            }
+        },
+    }
+    with open(path / f"{name}.json", "w") as f:
+        json.dump(payload, f, indent=2)
+
+
 @pytest.fixture()
 def sample_pareto_dir(tmp_path: Path) -> Path:
     pareto_dir = tmp_path / "run" / "pareto"
@@ -114,6 +174,73 @@ def test_filter_candidates_with_cli_keep_condition(sample_pareto_dir: Path):
     )
     assert len(limits) == 1
     assert sorted(candidate.path.stem for candidate in filtered) == ["a_extreme", "balanced"]
+
+
+def test_filter_candidates_uses_suite_aggregate_defaults_for_omitted_stat(tmp_path: Path):
+    pareto_dir = tmp_path / "run" / "pareto"
+    pareto_dir.mkdir(parents=True)
+    _write_suite_candidate(
+        pareto_dir,
+        "passes_by_aggregate_defaults",
+        adg_mean=0.02,
+        adg_min=-0.05,
+        recovery_mean=4000.0,
+        recovery_max=9000.0,
+        drawdown_mean=0.4,
+        drawdown_max=0.7,
+    )
+    _write_suite_candidate(
+        pareto_dir,
+        "fails_drawdown_max",
+        adg_mean=0.03,
+        adg_min=0.01,
+        recovery_mean=3000.0,
+        recovery_max=3500.0,
+        drawdown_mean=0.5,
+        drawdown_max=0.9,
+    )
+    _pareto_dir, candidates, _specs = load_candidates(pareto_dir)
+
+    filtered, limits = filter_candidates(
+        candidates,
+        limits_payload=None,
+        limit_entries=[
+            "adg_strategy_pnl_rebased>0.0",
+            "peak_recovery_hours_hsl<5000",
+            "drawdown_worst_hsl<0.8",
+        ],
+    )
+
+    assert len(limits) == 3
+    assert [candidate.path.stem for candidate in filtered] == ["passes_by_aggregate_defaults"]
+
+
+def test_filter_candidates_explicit_stat_overrides_suite_aggregate_defaults(tmp_path: Path):
+    pareto_dir = tmp_path / "run" / "pareto"
+    pareto_dir.mkdir(parents=True)
+    _write_suite_candidate(
+        pareto_dir,
+        "strict_failure",
+        adg_mean=0.02,
+        adg_min=-0.05,
+        recovery_mean=4000.0,
+        recovery_max=9000.0,
+        drawdown_mean=0.4,
+        drawdown_max=0.7,
+    )
+    _pareto_dir, candidates, _specs = load_candidates(pareto_dir)
+
+    filtered, _limits = filter_candidates(
+        candidates,
+        limits_payload=None,
+        limit_entries=[
+            "adg_strategy_pnl_rebased>0.0 stat=min",
+            "peak_recovery_hours_hsl<5000 stat=max",
+            "drawdown_worst_hsl<0.8 stat=max",
+        ],
+    )
+
+    assert filtered == []
 
 
 def test_select_candidate_knee_prefers_balanced_candidate(sample_pareto_dir: Path):

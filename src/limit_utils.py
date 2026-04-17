@@ -3,7 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-ALLOWED_STATS = {"min", "max", "mean", "std"}
+from config.limits import resolve_limit_stat
+
 _BOUNDARY_VIOLATION_EPSILON = 1e-12
 
 
@@ -13,6 +14,7 @@ def expand_limit_checks(
     *,
     penalty_weight: float,
     objective_index_map: Optional[Dict[str, List[int]]] = None,
+    aggregate_cfg: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Transform normalized limit entries into executable checks.
@@ -48,6 +50,7 @@ def expand_limit_checks(
                 mode,
                 penalty_weight,
                 objective_index_map,
+                aggregate_cfg,
             )
             if check:
                 checks.append(check)
@@ -58,6 +61,7 @@ def expand_limit_checks(
                 penalty_weight,
                 mode,
                 objective_index_map,
+                aggregate_cfg,
             )
             if check:
                 checks.append(check)
@@ -68,6 +72,7 @@ def expand_limit_checks(
                 penalty_weight,
                 mode,
                 objective_index_map,
+                aggregate_cfg,
             )
             if check:
                 checks.append(check)
@@ -130,35 +135,19 @@ def _ensure_float(value: Any) -> Optional[float]:
         return None
 
 
-def _normalize_stat(raw_stat: Optional[str], fallback: str) -> str:
-    stat = (raw_stat or "").strip().lower()
-    if not stat:
-        return fallback
-    if stat not in ALLOWED_STATS:
-        raise ValueError(f"Unsupported stat '{stat}' for limit.")
-    return stat
-
-
 def _build_single_bound_check(
     entry: Dict[str, Any],
     metric: str,
     mode: str,
     penalty_weight: float,
     objective_index_map: Optional[Dict[str, List[int]]],
+    aggregate_cfg: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     bound = entry.get("value")
     numeric_bound = _ensure_float(bound)
     if numeric_bound is None:
         return None
-    if mode in {"less_than", "less_than_or_equal"}:
-        fallback_stat = "min"
-    elif mode in {"greater_than", "greater_than_or_equal"}:
-        fallback_stat = "max"
-    elif mode in {"equal_to", "not_equal"}:
-        fallback_stat = "mean"
-    else:
-        fallback_stat = "mean"
-    stat = _normalize_stat(entry.get("stat"), fallback_stat)
+    stat = resolve_limit_stat(entry, aggregate_cfg=aggregate_cfg)
     metric_key = f"{metric}_{stat}"
     return {
         "metric": metric,
@@ -177,6 +166,7 @@ def _build_range_check(
     penalty_weight: float,
     mode: str,
     objective_index_map: Optional[Dict[str, List[int]]],
+    aggregate_cfg: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     rng = entry.get("range")
     if not isinstance(rng, (list, tuple)) or len(rng) != 2:
@@ -187,8 +177,7 @@ def _build_range_check(
         return None
     if low > high:
         low, high = high, low
-    fallback_stat = "mean"
-    stat = _normalize_stat(entry.get("stat"), fallback_stat)
+    stat = resolve_limit_stat(entry, aggregate_cfg=aggregate_cfg)
     metric_key = f"{metric}_{stat}"
     return {
         "metric": metric,

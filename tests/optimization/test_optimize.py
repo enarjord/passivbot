@@ -1402,6 +1402,74 @@ class TestEvaluator:
         # Check that metric key is created (could be max, mean, etc.)
         assert "drawdown_worst_usd" in evaluator.limit_checks[0]["metric_key"]
 
+    def test_build_limit_checks_uses_suite_aggregate_defaults(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = [
+            {
+                "metric": "adg_strategy_pnl_rebased",
+                "penalize_if": "less_than_or_equal",
+                "value": 0.0,
+            },
+            {
+                "metric": "peak_recovery_hours_hsl",
+                "penalize_if": "greater_than_or_equal",
+                "value": 5000,
+            },
+        ]
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+
+        assert [check["metric_key"] for check in base.limit_checks] == [
+            "adg_strategy_pnl_rebased_mean",
+            "peak_recovery_hours_hsl_mean",
+        ]
+
+        _suite = SuiteEvaluator(base, [], {"default": "mean", "peak_recovery_hours_hsl": "mean"})
+        assert [check["metric_key"] for check in base.limit_checks] == [
+            "adg_strategy_pnl_rebased_mean",
+            "peak_recovery_hours_hsl_mean",
+        ]
+
+    def test_suite_limit_checks_keep_explicit_stat_override(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = [
+            {
+                "metric": "adg_strategy_pnl_rebased",
+                "penalize_if": "less_than_or_equal",
+                "value": 0.0,
+                "stat": "min",
+            },
+            {
+                "metric": "drawdown_worst_hsl",
+                "penalize_if": "greater_than",
+                "value": 0.8,
+            },
+        ]
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+        _suite = SuiteEvaluator(base, [], {"default": "mean", "drawdown_worst_hsl": "max"})
+
+        assert [check["metric_key"] for check in base.limit_checks] == [
+            "adg_strategy_pnl_rebased_min",
+            "drawdown_worst_hsl_max",
+        ]
+
     def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
         from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
         from config_utils import get_template_config
