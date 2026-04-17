@@ -765,6 +765,70 @@ async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
     assert snapshot["orchestrator_input"]["symbols"][0]["long"]["mode"] == "panic"
 
 
+@pytest.mark.asyncio
+async def test_staged_orchestrator_uses_cm_last_prices_only(monkeypatch):
+    cfg = _dummy_config()
+    cfg["live"]["authoritative_refresh_mode"] = "staged"
+    bot = _make_dummy_bot(cfg)
+    bot.exchange = "bybit"
+    bot.user_info["exchange"] = "bybit"
+    symbol = _set_basic_state(bot)
+    import passivbot_rust as pbr
+
+    bot.markets_dict = {symbol: {"active": True}}
+    bot.effective_min_cost = {symbol: 1.0}
+    bot.trailing_prices = {
+        symbol: {
+            "long": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+            "short": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+        }
+    }
+
+    cm_calls = []
+
+    async def fake_get_last_prices(symbols, max_age_ms=None):
+        cm_calls.append((list(symbols), max_age_ms))
+        return {s: 101.0 for s in symbols}
+
+    async def forbidden_fetch_tickers():
+        raise AssertionError("staged orchestrator should not call fetch_tickers()")
+
+    async def fake_load_bundle(self, symbols, modes):
+        m1_close = {symbol: {1.0: 100.0, 2.0: 100.0}}
+        m1_volume = {symbol: {10.0: 1_000.0}}
+        m1_log_range = {symbol: {10.0: 0.01}}
+        h1_log_range = {symbol: {10.0: 0.01}}
+        return m1_close, m1_volume, m1_log_range, h1_log_range, {}, {}
+
+    captured = {}
+
+    def fake_compute(input_json: str) -> str:
+        captured["input"] = json.loads(input_json)
+        return '{"orders": [], "diagnostics": {"warnings": []}}'
+
+    bot.cm.get_last_prices = fake_get_last_prices
+    monkeypatch.setattr(bot, "fetch_tickers", forbidden_fetch_tickers, raising=False)
+    monkeypatch.setattr(bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot))
+    monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
+
+    await bot.calc_ideal_orders_orchestrator()
+
+    assert cm_calls == [([symbol], 10_000)]
+    rust_symbol = captured["input"]["symbols"][0]
+    assert rust_symbol["order_book"]["bid"] == pytest.approx(101.0)
+    assert rust_symbol["order_book"]["ask"] == pytest.approx(101.0)
+
+
 def test_hsl_halted_universe_keeps_managed_symbols_and_blocks_flat_candidates():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
