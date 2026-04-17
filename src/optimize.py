@@ -1912,11 +1912,17 @@ async def main():
                 config["backtest"]["coins"][exchange] = coins
                 msss[exchange] = mss
                 validate_array(hlcvs, "hlcvs")
-                hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
+                hlcvs_array = np.asarray(hlcvs)
+                if not (hlcvs_array.dtype == np.dtype(np.float64) and hlcvs_array.flags.c_contiguous):
+                    hlcvs_array = np.ascontiguousarray(hlcvs_array, dtype=np.float64)
                 hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
                 hlcvs_specs[exchange] = hlcvs_spec
 
-                btc_usd_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+                btc_usd_array = np.asarray(btc_usd_prices)
+                if not (
+                    btc_usd_array.dtype == np.dtype(np.float64) and btc_usd_array.flags.c_contiguous
+                ):
+                    btc_usd_array = np.ascontiguousarray(btc_usd_array, dtype=np.float64)
                 validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
                 btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
                 btc_usd_specs[exchange] = btc_usd_spec
@@ -1936,11 +1942,20 @@ async def main():
                     config["backtest"]["coins"][exchange] = coins
                     msss[exchange] = mss
                     validate_array(hlcvs, "hlcvs")
-                    hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
+                    hlcvs_array = np.asarray(hlcvs)
+                    if not (
+                        hlcvs_array.dtype == np.dtype(np.float64) and hlcvs_array.flags.c_contiguous
+                    ):
+                        hlcvs_array = np.ascontiguousarray(hlcvs_array, dtype=np.float64)
                     hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
                     hlcvs_specs[exchange] = hlcvs_spec
 
-                    btc_usd_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+                    btc_usd_array = np.asarray(btc_usd_prices)
+                    if not (
+                        btc_usd_array.dtype == np.dtype(np.float64)
+                        and btc_usd_array.flags.c_contiguous
+                    ):
+                        btc_usd_array = np.ascontiguousarray(btc_usd_array, dtype=np.float64)
                     validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
                     btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
                     btc_usd_specs[exchange] = btc_usd_spec

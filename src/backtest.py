@@ -91,7 +91,7 @@ from pure_funcs import (
 )
 import pprint
 from copy import deepcopy
-from hlcv_preparation import prepare_hlcvs, prepare_hlcvs_combined
+from hlcv_preparation import prepare_hlcvs, prepare_hlcvs_combined, try_prepare_hlcvs_v2_local
 from ohlcv_utils import aggregate_hlcvs, align_and_aggregate_hlcvs
 from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from pathlib import Path
@@ -317,6 +317,14 @@ def _build_coin_metadata_entries(
     return entries
 
 
+def _as_c_contiguous_native_array(arr, dtype):
+    dtype = np.dtype(dtype)
+    out = np.asarray(arr)
+    if out.dtype == dtype and out.flags.c_contiguous:
+        return out
+    return np.ascontiguousarray(out, dtype=dtype)
+
+
 def _build_hlcvs_bundle(
     hlcvs,
     btc_usd_prices,
@@ -373,12 +381,12 @@ def _build_hlcvs_bundle(
         hlcvs_view = hlcvs[:, subset_positions, :]
         hlcvs_arr = np.ascontiguousarray(hlcvs_view, dtype=np.float64)
     else:
-        hlcvs_arr = np.ascontiguousarray(hlcvs, dtype=np.float64)
-    btc_arr = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+        hlcvs_arr = _as_c_contiguous_native_array(hlcvs, np.float64)
+    btc_arr = _as_c_contiguous_native_array(btc_usd_prices, np.float64)
     if timestamps is None:
         timestamps_arr = np.arange(hlcvs_arr.shape[0], dtype=np.int64)
     else:
-        timestamps_arr = np.ascontiguousarray(timestamps, dtype=np.int64)
+        timestamps_arr = _as_c_contiguous_native_array(timestamps, np.int64)
     meta_overrides = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
     warmup_requested = int(
         meta_overrides.get("warmup_minutes_requested", compute_backtest_warmup_minutes(config))
@@ -701,8 +709,8 @@ def subset_backtest_payload(
 
     hlcvs_np = np.asarray(payload.bundle.hlcvs)
     subset_hlcvs = np.ascontiguousarray(hlcvs_np[:, selected_positions, :], dtype=np.float64)
-    btc_np = np.ascontiguousarray(np.asarray(payload.bundle.btc_usd), dtype=np.float64)
-    ts_np = np.ascontiguousarray(np.asarray(payload.bundle.timestamps), dtype=np.int64)
+    btc_np = _as_c_contiguous_native_array(payload.bundle.btc_usd, np.float64)
+    ts_np = _as_c_contiguous_native_array(payload.bundle.timestamps, np.int64)
 
     new_meta = deepcopy(bundle_meta)
     new_meta["coins"] = []
@@ -1275,6 +1283,16 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
     except Exception as e:
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
+    local_v2 = None
+    if exchange != "combined":
+        try:
+            local_v2 = await try_prepare_hlcvs_v2_local(
+                config, exchange, force_refetch_gaps=force_refetch_gaps
+            )
+        except Exception as e:
+            logging.info(f"Unable to prepare hlcvs from local v2 store: {e}. Falling back.")
+    if local_v2 is not None:
+        mss, timestamps, hlcvs, btc_usd_prices = local_v2
     if exchange == "combined":
         forced_sources = config.get("backtest", {}).get("coin_sources")
         market_settings_sources = config.get("backtest", {}).get("market_settings_sources")
@@ -1284,7 +1302,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             market_settings_sources=market_settings_sources,
             force_refetch_gaps=force_refetch_gaps,
         )
-    else:
+    elif local_v2 is None:
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(
             config, exchange, force_refetch_gaps=force_refetch_gaps
         )
