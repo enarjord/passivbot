@@ -1065,6 +1065,15 @@ fn run_backtest_core<'py>(
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
         let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
+        if metrics_only {
+            return Ok((
+                py.None().into_py(py),
+                py.None().into_py(py),
+                py_analysis_usd,
+                py_analysis_btc,
+                py.None().into_py(py),
+            ));
+        }
         let hard_stop_plot_data = backtest.hard_stop_plot_data();
         let py_events_long = PyList::empty_bound(py);
         for event in hard_stop_plot_data.events_long {
@@ -1110,15 +1119,6 @@ fn run_backtest_core<'py>(
             hard_stop_plot_data.drawdown_score_short,
         )?;
         py_hard_stop_plot.set_item("events_short", py_events_short)?;
-        if metrics_only {
-            return Ok((
-                py.None().into_py(py),
-                py.None().into_py(py),
-                py_analysis_usd,
-                py_analysis_btc,
-                py_hard_stop_plot.into_py(py),
-            ));
-        }
         let mut py_fills = Array2::from_elem((fills.len(), 19), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
@@ -1322,67 +1322,30 @@ fn extract_grid_spacing_we_weight(dict: &PyDict) -> PyResult<f64> {
 }
 
 fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
-    let risk_wel_enforcer_threshold = match dict.get_item("risk_wel_enforcer_threshold")? {
-        Some(item) => item.extract::<f64>()?,
-        None => 1.0,
-    };
-    let risk_twel_enforcer_threshold = match dict.get_item("risk_twel_enforcer_threshold")? {
-        Some(item) => item.extract::<f64>()?,
-        None => 1.0,
-    };
+    let risk_wel_enforcer_threshold: f64 = extract_value(dict, "risk_wel_enforcer_threshold")?;
+    let risk_twel_enforcer_threshold: f64 = extract_value(dict, "risk_twel_enforcer_threshold")?;
     let risk_we_excess_allowance_pct: f64 = extract_value(dict, "risk_we_excess_allowance_pct")?;
     let total_wallet_exposure_limit: f64 = extract_value(dict, "total_wallet_exposure_limit")?;
     let wallet_exposure_limit_raw: f64 = extract_value(dict, "wallet_exposure_limit")?;
     let n_positions_float: f64 = extract_value(dict, "n_positions")?;
     let n_positions = n_positions_float.round() as usize;
-    let hsl_enabled = match dict.get_item("hsl_enabled")? {
-        Some(item) => item.extract::<bool>()?,
-        None => false,
-    };
-    let entry_grid_inflation_enabled = match dict.get_item("entry_grid_inflation_enabled")? {
-        Some(item) => item.extract::<bool>()?,
-        None => true,
-    };
-    let hsl_red_threshold = match dict.get_item("hsl_red_threshold")? {
-        Some(item) => item.extract::<f64>()?,
-        None => 0.25,
-    };
-    let hsl_ema_span_minutes = match dict.get_item("hsl_ema_span_minutes")? {
-        Some(item) => item.extract::<f64>()?,
-        None => 60.0,
-    };
-    let hsl_cooldown_minutes_after_red = match dict.get_item("hsl_cooldown_minutes_after_red")? {
-        Some(item) => item.extract::<f64>()?,
-        None => 0.0,
-    };
-    let hsl_no_restart_drawdown_threshold =
-        match dict.get_item("hsl_no_restart_drawdown_threshold")? {
-            Some(item) => item.extract::<f64>()?,
-            None => 1.0,
-        };
-    let hsl_tier_ratios = match dict.get_item("hsl_tier_ratios")? {
-        Some(item) if !item.is_none() => Some(
-            item.downcast::<PyDict>()
-                .map_err(|_| PyValueError::new_err("hsl_tier_ratios must be a dict"))?,
-        ),
-        _ => None,
-    };
-    let hsl_tier_ratio_yellow = match hsl_tier_ratios {
-        Some(ratios) => extract_value(ratios, "yellow")?,
-        None => 0.5,
-    };
-    let hsl_tier_ratio_orange = match hsl_tier_ratios {
-        Some(ratios) => extract_value(ratios, "orange")?,
-        None => 0.75,
-    };
-    let hsl_orange_tier_mode = match dict.get_item("hsl_orange_tier_mode")? {
-        Some(item) => item.extract::<String>()?,
-        None => "tp_only_with_active_entry_cancellation".to_string(),
-    };
-    let hsl_panic_close_order_type = match dict.get_item("hsl_panic_close_order_type")? {
-        Some(item) => item.extract::<String>()?,
-        None => "market".to_string(),
-    };
+    let hsl_enabled: bool = extract_value(dict, "hsl_enabled")?;
+    let entry_grid_inflation_enabled: bool = extract_value(dict, "entry_grid_inflation_enabled")?;
+    let hsl_red_threshold: f64 = extract_value(dict, "hsl_red_threshold")?;
+    let hsl_ema_span_minutes: f64 = extract_value(dict, "hsl_ema_span_minutes")?;
+    let hsl_cooldown_minutes_after_red: f64 =
+        extract_value(dict, "hsl_cooldown_minutes_after_red")?;
+    let hsl_no_restart_drawdown_threshold: f64 =
+        extract_value(dict, "hsl_no_restart_drawdown_threshold")?;
+    let hsl_tier_ratios = dict
+        .get_item("hsl_tier_ratios")?
+        .ok_or_else(|| PyValueError::new_err("position missing 'hsl_tier_ratios'"))?
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("hsl_tier_ratios must be a dict"))?;
+    let hsl_tier_ratio_yellow: f64 = extract_value(hsl_tier_ratios, "yellow")?;
+    let hsl_tier_ratio_orange: f64 = extract_value(hsl_tier_ratios, "orange")?;
+    let hsl_orange_tier_mode: String = extract_value(dict, "hsl_orange_tier_mode")?;
+    let hsl_panic_close_order_type: String = extract_value(dict, "hsl_panic_close_order_type")?;
     let wallet_exposure_limit = if wallet_exposure_limit_raw < 0.0 {
         wallet_exposure_limit_raw
     } else if wallet_exposure_limit_raw > 0.0 {

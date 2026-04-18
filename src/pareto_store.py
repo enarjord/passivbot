@@ -12,8 +12,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 import passivbot_rust as pbr
+from config.limits import resolve_aggregate_mode
 from config.scoring import extract_objective_specs
-from opt_utils import round_floats
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
@@ -29,6 +29,10 @@ from pareto_core import (
 )
 
 STAT_FIELDS = {"mean", "min", "max", "std"}
+
+
+def _resolve_aggregate_mode(metric: str, aggregate_cfg: Optional[Dict[str, str]]) -> str:
+    return resolve_aggregate_mode(metric, aggregate_cfg)
 
 
 @dataclass(frozen=True)
@@ -74,17 +78,6 @@ def _resolve_limit_value(
         field = "mean"
     key = f"{resolved_metric.replace('.', '_')}_{field}"
     return stats_flat.get(key)
-
-
-def _resolve_aggregate_mode(metric: str, aggregate_cfg: Optional[Dict[str, str]]) -> str:
-    """Return the aggregate mode for *metric* given an aggregate config dict."""
-    if not aggregate_cfg:
-        return "mean"
-    mode = aggregate_cfg.get(metric)
-    if mode is None and "_" in metric:
-        base = metric.rsplit("_", 1)[0]
-        mode = aggregate_cfg.get(base)
-    return str(mode or aggregate_cfg.get("default", "mean")).lower()
 
 
 def _suite_metrics_to_stats(
@@ -214,17 +207,16 @@ class ParetoStore:
         if self.scoring_keys is None:
             self.scoring_specs = extract_objective_specs(entry)
             self.scoring_keys = [spec.metric for spec in self.scoring_specs]
-        rounded = round_floats(entry, self.sig_digits)
-        h = calc_hash(rounded)
+        h = calc_hash(entry)
         with self._lock:
             if h in self._entries:  # fast‑dedupe
                 return False
 
-            metrics_block = rounded.get("metrics", {}) or {}
+            metrics_block = entry.get("metrics", {}) or {}
             obj, _ = extract_objectives(
-                rounded, scoring_keys=self.scoring_specs or entry.get("optimize", {}).get("scoring")
+                entry, scoring_keys=self.scoring_specs or entry.get("optimize", {}).get("scoring")
             )
-            violation = extract_violation(rounded)
+            violation = extract_violation(entry)
 
             # ───────────── NEW: dedupe on the objective vector ──────────────
             existing_hash = self._objective_lookup.get(obj)
@@ -270,7 +262,7 @@ class ParetoStore:
                 self._remove_from_front(idx)
 
             # add new member
-            self._persist_entry(h, rounded, source_path=source_path)
+            self._persist_entry(h, entry, source_path=source_path)
             self._objectives[h] = obj
             self._violations[h] = violation
             self._front.append(h)

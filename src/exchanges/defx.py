@@ -6,6 +6,7 @@ custom balance fetching, and leverage configuration.
 """
 
 import asyncio
+from copy import deepcopy
 
 import passivbot_rust as pbr
 from exchanges.ccxt_bot import CCXTBot
@@ -38,12 +39,15 @@ class DefxBot(CCXTBot):
             return "short"
         raise Exception(f"unknown side {order['side']}")
 
-    async def fetch_open_orders(self, symbol: str = None):
-        fetched = await self.cca.fetch_open_orders(symbol=symbol)
+    def _normalize_open_orders(self, fetched: list) -> list:
         for order in fetched:
             order["position_side"] = self.determine_pos_side(order)
             order["qty"] = order["amount"]
         return sorted(fetched, key=lambda x: x["timestamp"])
+
+    async def fetch_open_orders(self, symbol: str = None):
+        fetched = await self._do_fetch_open_orders(symbol=symbol)
+        return self._normalize_open_orders(fetched)
 
     async def fetch_positions(self):
         fetched_positions = await self.cca.fetch_positions()
@@ -61,6 +65,30 @@ class DefxBot(CCXTBot):
                 }
             )
         return positions
+
+    def _normalize_positions_fetched(self, fetched_positions: list) -> list:
+        positions = []
+        for p in fetched_positions:
+            positions.append(
+                {
+                    **p,
+                    **{
+                        "symbol": p["symbol"],
+                        "position_side": p["info"]["positionSide"].lower(),
+                        "size": float(p["contracts"]),
+                        "price": float(p["entryPrice"]),
+                    },
+                }
+            )
+        return positions
+
+    async def capture_positions_snapshot(self) -> tuple[list, list]:
+        fetched_positions = await self._do_fetch_positions()
+        return fetched_positions, self._normalize_positions_fetched(deepcopy(fetched_positions))
+
+    async def capture_balance_snapshot(self) -> tuple[list, float]:
+        fetched_balance = await self.fetch_wallet_collaterals()
+        return fetched_balance, sum([x["marginValue"] for x in deepcopy(fetched_balance)])
 
     async def fetch_wallet_collaterals(self):
         fetched = await self.cca.fetch2(

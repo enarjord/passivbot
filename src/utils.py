@@ -462,10 +462,15 @@ def filter_markets(markets: dict, exchange: str, quote=None, verbose=False) -> (
     if verbose:
         for line in sorted(set(reasons.values())):
             syms = [k for k in reasons if reasons[k] == line]
+            log = (
+                logging.debug
+                if line in {"not active", "wrong quote", "not swap", "not linear"}
+                else logging.info
+            )
             if len(syms) > 12:
-                logging.info(f"{line}: {len(syms)} symbols")
+                log(f"{line}: {len(syms)} symbols")
             elif len(syms) > 0:
-                logging.info(f"{line}: {','.join(sorted(set([s for s in syms])))}")
+                log(f"{line}: {','.join(sorted(set([s for s in syms])))}")
 
     return eligible, ineligible, reasons
 
@@ -757,6 +762,28 @@ def _build_coin_symbol_maps(markets, quote):
     Build coin_to_symbol_map (as dict of lists) and symbol_to_coin_map from markets data.
     This function is pure and performs no disk I/O.
     """
+
+    def _namespaced_aliases(base: str, market: dict) -> set[str]:
+        aliases = set()
+        if not isinstance(base, str) or not base:
+            return aliases
+        is_namespaced_hip3 = bool((market.get("info") or {}).get("hip3")) or base.startswith(
+            ("XYZ-", "xyz:")
+        )
+        if not is_namespaced_hip3:
+            return aliases
+        if ":" in base:
+            prefix, ticker = base.split(":", 1)
+            if prefix and ticker:
+                aliases.add(ticker)
+                aliases.add(f"{prefix.upper()}-{ticker}")
+        elif "-" in base:
+            prefix, ticker = base.split("-", 1)
+            if prefix and ticker:
+                aliases.add(ticker)
+                aliases.add(f"{prefix.lower()}:{ticker}")
+        return aliases
+
     coin_to_symbol_map = defaultdict(set)
     symbol_to_coin_map = {}
     for k, v in markets.items():
@@ -780,16 +807,7 @@ def _build_coin_symbol_maps(markets, quote):
                     variants.add(cleaned)
                     if not coin:
                         coin = cleaned
-                    # Handle HIP-3 stock perps: XYZ-TSLA -> TSLA
-                    # Also handle xyz:TSLA format from CCXT
-                    if base.startswith("XYZ-"):
-                        ticker = base[4:]  # Extract TSLA from XYZ-TSLA
-                        variants.add(ticker)
-                        variants.add(f"xyz:{ticker}")  # Also map xyz:TSLA
-                    elif base.startswith("xyz:"):
-                        ticker = base[4:]  # Extract TSLA from xyz:TSLA
-                        variants.add(ticker)
-                        variants.add(f"XYZ-{ticker}")  # Also map XYZ-TSLA
+                    variants.update(_namespaced_aliases(base, v))
             symbol_to_coin_map[k] = coin
             for variant in variants:
                 existing = symbol_to_coin_map.get(variant)

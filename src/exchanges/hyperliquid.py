@@ -3,6 +3,7 @@ import json
 import random
 import re
 import traceback
+from copy import deepcopy
 
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
@@ -120,7 +121,7 @@ class HyperliquidBot(CCXTBot):
         self.n_decimal_places = 6
         self.n_significant_figures = 5
         if isolated_count:
-            logging.info(
+            logging.debug(
                 f"Detected {isolated_count} isolated-margin-only symbols (HIP-3/stock perps)"
             )
 
@@ -229,12 +230,15 @@ class HyperliquidBot(CCXTBot):
             ),
         }
 
-    async def _fetch_hip3_positions(self) -> list[dict]:
+    async def _fetch_hip3_positions(self, *, include_raw: bool = False):
         """Fetch HIP-3 positions via dex-scoped CCXT routes."""
         positions_by_key = {}
+        raw_payloads = []
         fetch_specs = [{"params": {"dex": dex_name}} for dex_name in self._get_hl_hip3_dex_names()]
         for fetch_spec in fetch_specs:
             fetched = await self.cca.fetch_positions(**fetch_spec)
+            if include_raw:
+                raw_payloads.append({"fetch_spec": deepcopy(fetch_spec), "response": deepcopy(fetched)})
             for position in fetched:
                 normalized = self._normalize_ccxt_position(position)
                 if not self._get_hl_dex_for_symbol(normalized["symbol"]):
@@ -244,7 +248,10 @@ class HyperliquidBot(CCXTBot):
                 )
                 key = (normalized["symbol"], normalized["position_side"])
                 positions_by_key[key] = normalized
-        return list(positions_by_key.values())
+        normalized_positions = list(positions_by_key.values())
+        if include_raw:
+            return raw_payloads, normalized_positions
+        return normalized_positions
 
     def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
         kept = set()
@@ -365,7 +372,7 @@ class HyperliquidBot(CCXTBot):
         """Hook: Derive position_side from order data for Hyperliquid (one-way mode)."""
         return self.determine_pos_side(order)
 
-    async def fetch_open_orders(self, symbol: str = None):
+    async def _do_fetch_open_orders(self, symbol: str = None):
         fetched = []
         seen_ids = set()
         query_symbols = [symbol] if symbol is not None else []
@@ -397,11 +404,17 @@ class HyperliquidBot(CCXTBot):
                     continue
                 seen_ids.add(order["id"])
                 fetched.append(order)
+        return fetched
 
+    def _normalize_open_orders(self, fetched: list) -> list:
         for elm in fetched:
             elm["position_side"] = self.determine_pos_side(elm)
             elm["qty"] = elm["amount"]
         return sorted(fetched, key=lambda x: x["timestamp"])
+
+    async def fetch_open_orders(self, symbol: str = None):
+        fetched = await self._do_fetch_open_orders(symbol=symbol)
+        return self._normalize_open_orders(fetched)
 
     async def _fetch_positions_and_balance(self):
         info = await self.cca.fetch_balance()
@@ -425,12 +438,20 @@ class HyperliquidBot(CCXTBot):
                 "margin_used": float(x["position"].get("marginUsed") or 0.0),
             }
             positions[(elm["symbol"], elm["position_side"])] = elm
-        for position in await self._fetch_hip3_positions():
+        hip3_raw, hip3_positions = await self._fetch_hip3_positions(include_raw=True)
+        for position in hip3_positions:
             positions[(position["symbol"], position["position_side"])] = position
         balance = float(info["info"]["marginSummary"]["accountValue"]) - sum(
             [float(x["position"]["unrealizedPnl"]) for x in info["info"]["assetPositions"]]
         )
-        return list(positions.values()), balance
+        raw_snapshot = {
+            "balance": deepcopy(info),
+            "positions": {
+                "core": deepcopy(info["info"].get("assetPositions", [])),
+                "hip3": hip3_raw,
+            },
+        }
+        return raw_snapshot, list(positions.values()), balance
 
     async def _get_positions_and_balance_cached(self, my_gen: int = 0):
         """Fetch positions+balance with dedup: concurrent callers share one API call.
@@ -459,10 +480,17 @@ class HyperliquidBot(CCXTBot):
     async def fetch_positions(self):
         # Snapshot generation *before* lock so each caller tracks its own view.
         my_gen = self._hl_cache_generation
-        positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        _, positions, balance = await self._get_positions_and_balance_cached(my_gen)
         self._last_hl_balance = balance
         self._hl_balance_consumed = False
         return positions
+
+    async def capture_positions_snapshot(self) -> tuple[list, list]:
+        my_gen = self._hl_cache_generation
+        raw_snapshot, positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        self._last_hl_balance = balance
+        self._hl_balance_consumed = False
+        return deepcopy(raw_snapshot["positions"]), deepcopy(positions)
 
     async def fetch_balance(self):
         # Check if fetch_positions already got us a fresh balance
@@ -473,8 +501,13 @@ class HyperliquidBot(CCXTBot):
             return self._last_hl_balance
         # Snapshot generation *before* lock so each caller tracks its own view.
         my_gen = self._hl_cache_generation
-        positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        _, positions, balance = await self._get_positions_and_balance_cached(my_gen)
         return balance
+
+    async def capture_balance_snapshot(self) -> tuple[dict, float]:
+        my_gen = self._hl_cache_generation
+        raw_snapshot, positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        return deepcopy(raw_snapshot["balance"]), float(balance)
 
     def _symbol_is_cross_hip3(self, symbol: str) -> bool:
         if not symbol or not self._get_hl_dex_for_symbol(symbol):
@@ -550,9 +583,10 @@ class HyperliquidBot(CCXTBot):
         )
         reserve = self._position_margin_to_restore()
         if include_open_orders:
-            for orders in getattr(self, "open_orders", {}).values():
-                for order in orders:
-                    reserve += self._reserved_margin_for_resting_order(order)
+            # Do not feed bot-managed resting-order reserve back into published balance.
+            # That reserve changes as the bot cancels/recreates entries and can create
+            # self-referential REST/REST+open_orders balance churn.
+            pass
         corrected_raw = exchange_reported + reserve
         current_raw = self.get_raw_balance()
         if abs(corrected_raw - current_raw) <= 1e-12:
@@ -847,7 +881,7 @@ class HyperliquidBot(CCXTBot):
             except Exception as e:
                 logging.error(f"{symbol}: error setting margin mode and leverage {e}")
             if to_print:
-                logging.info(f"{symbol}: {to_print}")
+                logging.debug(f"{symbol}: {to_print}")
             # Small delay between margin-mode API calls to avoid rate-limit bursts
             await asyncio.sleep(0.2)
 

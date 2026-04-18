@@ -111,22 +111,22 @@ def test_build_hlcvs_bundle_applies_coin_indices():
     hlcvs = np.zeros((3, 5, 4), dtype=np.float64)
     btc = np.zeros(3, dtype=np.float64)
     timestamps = np.array([0, 60_000, 120_000], dtype=np.int64)
-    config = {
-        "backtest": {"start_date": "2021-01-01", "end_date": "2021-01-02"},
-        "live": {"warmup_ratio": 0.0, "max_warmup_minutes": 0},
-        "bot": {"long": {}, "short": {}},
-    }
     coins_order = ["COIN_A", "COIN_B", "COIN_C"]
     mss = {coin: {"symbol": f"{coin}/USDT:USDT"} for coin in coins_order}
     first_valid = [0, 0, 0]
     last_valid = [2, 2, 2]
     warmup = [0, 0, 0]
     trade_start = [0, 0, 0]
+    bundle_meta_base = {
+        "requested_start_timestamp_ms": 0,
+        "effective_start_timestamp_ms": 0,
+        "warmup_minutes_requested": 0,
+        "warmup_minutes_provided": 0,
+    }
     bundle = _build_hlcvs_bundle(
         hlcvs,
         btc,
         timestamps,
-        config,
         "binanceusdm",
         mss,
         coins_order,
@@ -134,7 +134,7 @@ def test_build_hlcvs_bundle_applies_coin_indices():
         last_valid,
         warmup,
         trade_start,
-        requested_start_ts=0,
+        bundle_meta_base,
         coin_indices=[0, 2, 4],
     )
     assert bundle.hlcvs.shape[1] == 3

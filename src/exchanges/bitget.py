@@ -3,6 +3,7 @@ from passivbot import logging, custom_id_to_snake, clip_by_timestamp
 import asyncio
 import json
 import os
+from copy import deepcopy
 from typing import Dict, List, Tuple
 from utils import utc_ms, ts_to_date
 from config.access import require_live_value
@@ -133,9 +134,8 @@ class BitgetBot(CCXTBot):
                         return "sell"
         raise Exception(f"failed to determine side {order}")
 
-    async def fetch_open_orders(self, symbol: str = None):
+    def _normalize_open_orders(self, fetched: list) -> list:
         """Bitget override: derive side from tradeSide/posSide."""
-        fetched = await self.cca.fetch_open_orders(symbol=symbol)
         for elm in fetched:
             elm["position_side"] = elm["info"]["posSide"]
             elm["qty"] = elm["amount"]
@@ -144,9 +144,28 @@ class BitgetBot(CCXTBot):
             self._record_live_margin_mode_from_payload(elm)
         return sorted(fetched, key=lambda x: x["timestamp"])
 
+    async def fetch_open_orders(self, symbol: str = None):
+        fetched = await self._do_fetch_open_orders(symbol=symbol)
+        return self._normalize_open_orders(fetched)
+
     async def fetch_positions(self):
         """Bitget: use CCXT unified fields (contracts, entryPrice, side)."""
         fetched = await self.cca.fetch_positions()
+        for elm in fetched:
+            elm["position_side"] = elm["side"]
+            elm["size"] = elm["contracts"]
+            elm["price"] = elm["entryPrice"]
+            margin_mode = self._extract_live_margin_mode(elm)
+            if margin_mode is not None:
+                elm["margin_mode"] = margin_mode
+                self._record_live_margin_mode(elm["symbol"], margin_mode)
+        return fetched
+
+    async def capture_positions_snapshot(self) -> tuple[list, list]:
+        fetched = await self._do_fetch_positions()
+        return fetched, self.fetch_positions_from_fetched(deepcopy(fetched))
+
+    def fetch_positions_from_fetched(self, fetched: list) -> list:
         for elm in fetched:
             elm["position_side"] = elm["side"]
             elm["size"] = elm["contracts"]

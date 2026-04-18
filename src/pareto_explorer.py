@@ -11,7 +11,12 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 import numpy as np
 
-from config.limits import normalize_limit_entries, parse_limit_cli_entries
+from config.limits import (
+    normalize_limit_entries,
+    parse_limit_cli_entries,
+    resolve_aggregate_mode,
+    resolve_limit_stat,
+)
 from config.scoring import (
     ObjectiveSpec,
     default_objective_goal,
@@ -405,21 +410,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _extract_suite_metrics(
     entry: Mapping[str, Any],
+    aggregate_cfg: Mapping[str, Any] | None = None,
 ) -> tuple[Dict[str, float], Dict[str, float]]:
     aggregated_values: Dict[str, float] = {}
     stats_flat: Dict[str, float] = {}
     suite_metrics = entry.get("suite_metrics")
     if not isinstance(suite_metrics, Mapping):
         return stats_flat, aggregated_values
+    effective_aggregate_cfg = (
+        aggregate_cfg
+        if aggregate_cfg is not None
+        else entry.get("backtest", {}).get("aggregate")
+        if isinstance(entry.get("backtest"), Mapping)
+        else None
+    )
 
     if "metrics" in suite_metrics:
         for metric, payload in suite_metrics["metrics"].items():
             if not isinstance(payload, Mapping):
                 continue
             aggregated = payload.get("aggregated")
+            stats = payload.get("stats") or {}
+            if aggregated is None and isinstance(stats, Mapping):
+                mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                aggregated = stats.get(mode, stats.get("mean"))
             if isinstance(aggregated, (int, float)) and math.isfinite(float(aggregated)):
                 aggregated_values[str(metric)] = float(aggregated)
-            stats = payload.get("stats") or {}
             if isinstance(stats, Mapping):
                 stats_flat.update(flatten_metric_stats({str(metric): dict(stats)}))
         return stats_flat, aggregated_values
@@ -432,6 +448,14 @@ def _extract_suite_metrics(
         aggregated = aggregate.get("aggregated") or {}
         if isinstance(aggregated, Mapping):
             for metric, value in aggregated.items():
+                if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                    aggregated_values[str(metric)] = float(value)
+        elif isinstance(stats, Mapping):
+            for metric, metric_stats in stats.items():
+                if not isinstance(metric_stats, Mapping):
+                    continue
+                mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                value = metric_stats.get(mode, metric_stats.get("mean"))
                 if isinstance(value, (int, float)) and math.isfinite(float(value)):
                     aggregated_values[str(metric)] = float(value)
     return stats_flat, aggregated_values
@@ -697,16 +721,27 @@ def _normalize_reference_targets(
     return np.array(target_values, dtype=float)
 
 
-def _resolve_limit_value(candidate: ParetoCandidate, entry: Mapping[str, Any]) -> Optional[float]:
+def _resolve_limit_value(
+    candidate: ParetoCandidate,
+    entry: Mapping[str, Any],
+    aggregate_cfg: Mapping[str, Any] | None = None,
+) -> Optional[float]:
     metric = str(entry.get("metric", "")).strip()
     if not metric:
         return None
-    raw_stat = entry.get("stat")
-    if raw_stat is not None:
-        key = f"{metric}_{str(raw_stat).strip().lower()}"
-        value = candidate.stats_flat.get(key)
+    stat = resolve_limit_stat(dict(entry), aggregate_cfg=dict(aggregate_cfg) if aggregate_cfg else None)
+    if "stat" not in entry and metric in candidate.aggregated_values:
+        value = candidate.aggregated_values.get(metric)
         return float(value) if isinstance(value, (int, float)) and math.isfinite(float(value)) else None
-    return _resolve_candidate_metric_value(candidate, metric)
+    key = f"{metric}_{stat}"
+    value = candidate.stats_flat.get(key)
+    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        return float(value)
+    if "stat" not in entry:
+        fallback = _resolve_candidate_metric_value(candidate, metric)
+        if isinstance(fallback, (int, float)) and math.isfinite(float(fallback)):
+            return float(fallback)
+    return None
 
 
 def _limit_rejects(entry: Mapping[str, Any], value: float) -> bool:
@@ -747,12 +782,17 @@ def filter_candidates(
     enabled_limits = [entry for entry in normalized_limits if bool(entry.get("enabled", True))]
     if not enabled_limits:
         return list(candidates), enabled_limits
+    aggregate_cfg = None
+    if candidates:
+        backtest_cfg = candidates[0].entry.get("backtest")
+        if isinstance(backtest_cfg, Mapping):
+            aggregate_cfg = backtest_cfg.get("aggregate")
 
     filtered: List[ParetoCandidate] = []
     for candidate in candidates:
         rejected = False
         for entry in enabled_limits:
-            value = _resolve_limit_value(candidate, entry)
+            value = _resolve_limit_value(candidate, entry, aggregate_cfg)
             if value is None:
                 continue
             if _limit_rejects(entry, value):

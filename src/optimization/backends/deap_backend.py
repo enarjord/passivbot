@@ -14,8 +14,10 @@ except ImportError:  # pragma: no cover - allow import in minimal test envs
 
 from optimization.bounds import enforce_bounds
 from optimization.backend_shared import (
+    approx_object_size,
     cancel_pending_async_results,
     load_starting_individuals,
+    log_seed_memory,
     stream_async_results,
 )
 from optimization.deap_adapters import (
@@ -51,6 +53,8 @@ def run_backend(
     ignore_sigint_in_worker: Callable[[], None],
     get_starting_configs: Callable[[str | None], list],
     configs_to_individuals: Callable[[list, Any, int], list],
+    iter_starting_configs=None,
+    configs_to_individuals_streaming=None,
     optimization_shape=None,
     record_individual_result: Callable[[Any, dict, list, Any], None],
     run_evolution: Callable[..., tuple[Any, Any]],
@@ -177,6 +181,8 @@ def run_backend(
             population_size=population_size,
             get_starting_configs=get_starting_configs,
             configs_to_individuals=configs_to_individuals,
+            iter_starting_configs=iter_starting_configs,
+            configs_to_individuals_streaming=configs_to_individuals_streaming,
             optimization_shape=optimization_shape,
             bounds=bounds,
             sig_digits=sig_digits,
@@ -188,14 +194,34 @@ def run_backend(
 
         population = [_make_random_individual() for _ in range(population_size)]
         if starting_individuals:
+            log_seed_memory(
+                "deap_starting_individuals_ready",
+                count=len(starting_individuals),
+                approx_bytes=approx_object_size(starting_individuals),
+            )
             evaluated_seeds = [creator.Individual(ind) for ind in starting_individuals]
+            log_seed_memory(
+                "deap_evaluated_seeds_allocated",
+                count=len(evaluated_seeds),
+                approx_bytes=approx_object_size(evaluated_seeds),
+            )
             eval_count = _evaluate_initial(evaluated_seeds)
             logging.info("Evaluated %d starting configs", eval_count)
+            log_seed_memory(
+                "deap_starting_eval_complete",
+                count=len(evaluated_seeds),
+                approx_bytes=approx_object_size(evaluated_seeds),
+            )
             if len(evaluated_seeds) > population_size:
                 evaluated_seeds = tools.selNSGA2(evaluated_seeds, population_size)
                 logging.info(
                     "Trimmed starting configs to population size via NSGA-II crowding (kept %d)",
                     len(evaluated_seeds),
+                )
+                log_seed_memory(
+                    "deap_starting_trim_complete",
+                    count=len(evaluated_seeds),
+                    approx_bytes=approx_object_size(evaluated_seeds),
                 )
             for i, ind in enumerate(evaluated_seeds):
                 population[i] = creator.Individual(ind)

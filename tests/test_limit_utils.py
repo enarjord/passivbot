@@ -75,3 +75,39 @@ def test_disabled_limit_entry_is_skipped():
     }
     checks = expand_limit_checks([entry], {}, penalty_weight=1000.0)
     assert checks == []
+
+
+def test_omitted_stat_uses_aggregate_default_instead_of_operator_direction():
+    entry = {"metric": "adg", "penalize_if": "less_than_or_equal", "value": 0.001}
+    checks = expand_limit_checks(
+        [entry],
+        {},
+        penalty_weight=1000.0,
+        aggregate_cfg={"default": "mean"},
+    )
+    assert checks[0]["stat"] == "mean"
+    assert checks[0]["metric_key"] == "adg_mean"
+
+
+def test_omitted_stat_uses_metric_specific_aggregate_override():
+    entry = {"metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.8}
+    checks = expand_limit_checks(
+        [entry],
+        {},
+        penalty_weight=1000.0,
+        aggregate_cfg={"default": "mean", "drawdown_worst_hsl": "max"},
+    )
+    assert checks[0]["stat"] == "max"
+    assert checks[0]["metric_key"] == "drawdown_worst_hsl_max"
+
+
+def test_explicit_stat_overrides_aggregate_config():
+    entry = {"metric": "adg", "penalize_if": "less_than_or_equal", "value": 0.001, "stat": "min"}
+    checks = expand_limit_checks(
+        [entry],
+        {},
+        penalty_weight=1000.0,
+        aggregate_cfg={"default": "mean", "adg": "max"},
+    )
+    assert checks[0]["stat"] == "min"
+    assert checks[0]["metric_key"] == "adg_min"

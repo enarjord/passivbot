@@ -1008,9 +1008,16 @@ mod core {
         cfg: &ForagerSelectionConfig,
         out: &mut Vec<ForagerCandidate>,
     ) -> Result<(), OrchestratorError> {
-        let volume_required = cfg.volume_drop_pct > 0.0 || cfg.weights.volume != 0.0;
-        let volatility_required = cfg.weights.volatility != 0.0;
-        let ema_readiness_required = cfg.weights.ema_readiness != 0.0;
+        let normalized_weights =
+            cfg.weights
+                .canonicalize()
+                .map_err(|_| OrchestratorError::NonFiniteInput {
+                    field: "forager_score_weights",
+                    symbol_idx: None,
+                })?;
+        let volume_required = cfg.volume_drop_pct > 0.0 || normalized_weights.volume != 0.0;
+        let volatility_required = normalized_weights.volatility != 0.0;
+        let ema_readiness_required = normalized_weights.ema_readiness != 0.0;
         out.clear();
         out.reserve(symbols.len());
         for s in symbols {
@@ -3405,6 +3412,52 @@ mod core {
                 .map(|o| o.symbol_idx)
                 .collect();
             assert_eq!(long_entry_symbol_idxs, vec![1]);
+        }
+
+        #[test]
+        fn zero_forager_weights_fall_back_to_ema_readiness_ranking() {
+            let sym0 = make_basic_symbol(0);
+            let mut sym1 = make_basic_symbol(1);
+
+            sym1.emas.m1.close = vec![(10.0, 90.0), (14.142135623730951, 90.0), (20.0, 90.0)];
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 1.0;
+            global_bp.long.n_positions = 1;
+            global_bp.long.forager_volume_drop_pct = 0.0;
+            global_bp.long.forager_score_weights.volume = 0.0;
+            global_bp.long.forager_score_weights.ema_readiness = 0.0;
+            global_bp.long.forager_score_weights.volatility = 0.0;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                },
+                symbols: vec![sym0, sym1],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            let long_entry_symbol_idxs: Vec<usize> = out
+                .orders
+                .iter()
+                .filter(|o| o.pside == PositionSide::Long && !is_close_order_type(o.order_type))
+                .map(|o| o.symbol_idx)
+                .collect();
+            assert_eq!(long_entry_symbol_idxs, vec![0]);
         }
 
         #[test]

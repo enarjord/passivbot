@@ -404,6 +404,45 @@ def test_prepare_config_warns_when_entry_grid_inflation_enabled(caplog):
     )
 
 
+def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(caplog):
+    source = get_template_config()
+    for key in [
+        "entry_trailing_retracement_volatility_weight",
+        "entry_trailing_retracement_we_weight",
+        "entry_trailing_threshold_volatility_weight",
+        "entry_trailing_threshold_we_weight",
+        "entry_volatility_ema_span_hours",
+        "risk_twel_enforcer_threshold",
+        "risk_we_excess_allowance_pct",
+        "risk_wel_enforcer_threshold",
+    ]:
+        source["bot"]["long"].pop(key)
+
+    with caplog.at_level(logging.INFO):
+        prepared = prepare_config(source, verbose=True, target="canonical", runtime=None)
+
+    long_cfg = prepared["bot"]["long"]
+    assert long_cfg["entry_trailing_retracement_volatility_weight"] == 0.0
+    assert long_cfg["entry_trailing_retracement_we_weight"] == 0.0
+    assert long_cfg["entry_trailing_threshold_volatility_weight"] == 0.0
+    assert long_cfg["entry_trailing_threshold_we_weight"] == 0.0
+    assert long_cfg["entry_volatility_ema_span_hours"] == 0.0
+    assert long_cfg["risk_twel_enforcer_threshold"] == 0.0
+    assert long_cfg["risk_we_excess_allowance_pct"] == 0.0
+    assert long_cfg["risk_wel_enforcer_threshold"] == 0.0
+    assert any(
+        "hydrating omitted bot.long.risk_wel_enforcer_threshold" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
+    prepared = load_prepared_config("configs/fake_live_hsl_btc.hjson", verbose=False, target="live")
+
+    assert prepared["bot"]["short"]["total_wallet_exposure_limit"] == 0.0
+    assert prepared["bot"]["short"]["entry_trailing_double_down_factor"] == pytest.approx(1.0)
+
+
 def test_prepare_config_skips_entry_grid_inflation_warning_when_disabled(caplog):
     source = get_template_config()
     source["bot"]["long"]["entry_grid_inflation_enabled"] = False
@@ -444,3 +483,25 @@ def test_prepare_config_warns_when_coin_override_enables_entry_grid_inflation(ca
         and "scheduled for deprecation" in rec.message
         for rec in caplog.records
     )
+
+
+def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readiness_only():
+    source = get_template_config()
+    source["bot"]["long"]["forager_score_weights"] = {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
+    source["bot"]["long"]["forager_volume_ema_span"] = 0.0
+    source["bot"]["long"]["forager_volatility_ema_span"] = 0.0
+    source["bot"]["long"]["forager_volume_drop_pct"] = 0.0
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["forager_score_weights"] == {
+        "volume": 0.0,
+        "ema_readiness": 1.0,
+        "volatility": 0.0,
+    }
+    assert prepared["bot"]["long"]["forager_volume_ema_span"] == 0.0
+    assert prepared["bot"]["long"]["forager_volatility_ema_span"] == 0.0
