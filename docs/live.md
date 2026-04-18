@@ -20,6 +20,21 @@ Disable file persistence only if you explicitly want console-only live logging:
 }
 ```
 
+## Concurrent Passivbot Protection
+
+The live bot now watches for newer open orders that look like Passivbot-managed orders but were not
+emitted by the current runtime. Manual/non-Passivbot orders are ignored, and older inherited orders
+are ignored as well.
+
+If this detection fires repeatedly within its rolling window, the bot stops itself to avoid two
+Passivbot instances silently competing on the same account.
+
+If you see this stop condition, first check for:
+
+- another Passivbot process on the same machine (`tmux`, `screen`, background shell, `systemd`, etc.)
+- another host or VPS using the same exchange user / API key
+- an old bot instance that was restarted elsewhere and is still running
+
 ## Custom Exchange Endpoints
 
 Some integrations require routing REST traffic through an intermediate service

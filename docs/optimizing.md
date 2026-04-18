@@ -343,6 +343,8 @@ mode is enabled) instead of the older `analyses_combined` / per-exchange analysi
 - Avoids duplicates through hash tracking and perturbation
 - Logs starting-config dedup statistics at startup, including how many raw configs collapsed after quantization and how many extra TWEL-scaled variants survived
 
+Per-coin warmup inside an optimizer run is sized from `optimize.bounds`, not from the `bot.*` template values. The optimizer treats each optimized field as if it were at its upper bound when computing how much history each coin needs, so every individual evaluated in the same run trades on an identical window. Standalone `passivbot backtest <config.json>` is unaffected and still sizes warmup from whatever bot values the config you hand it contains.
+
 ## Output Structure
 
 Each optimization run creates a directory:

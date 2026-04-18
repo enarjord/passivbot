@@ -1,4 +1,5 @@
 # tests/exchanges/test_ccxt_bot.py
+import logging
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -431,6 +432,33 @@ class TestCCXTBotUpdateExchangeConfigBySymbols:
 
         with pytest.raises(Exception, match="Margin API error"):
             await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
+
+
+class TestCCXTBotExecuteCancellation:
+    """Tests for execute_cancellation."""
+
+    @pytest.mark.asyncio
+    async def test_treats_bybit_order_not_exists_as_benign(self, caplog):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "bybit"
+        bot.cca = MagicMock()
+        bot.cca.cancel_order = AsyncMock(
+            side_effect=Exception(
+                '{"retCode":110001,"retMsg":"order not exists or too late to cancel"}'
+            )
+        )
+
+        with caplog.at_level(logging.INFO):
+            result = await bot.execute_cancellation(
+                {"id": "abc123def456", "symbol": "SUI/USDT:USDT"}
+            )
+
+        assert result == {}
+        assert "cancel skipped" in caplog.text
+        assert "order likely already filled or cancelled" in caplog.text
+        assert not any(record.levelname == "ERROR" for record in caplog.records)
 
     def test_cross_only_blocks_isolated_only_symbol_for_entries(self, caplog):
         from exchanges.ccxt_bot import CCXTBot

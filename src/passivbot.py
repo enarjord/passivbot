@@ -39,7 +39,7 @@ from fill_events_manager import (
     compute_psize_pprice,
 )
 from monitor_publisher import MonitorPublisher
-from passivbot_exceptions import RestartBotException
+from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
@@ -122,6 +122,11 @@ RequestTimeout = getattr(ccxt_errors, "RequestTimeout", NetworkError)
 # Orchestrator-only: ideal orders are computed via Rust orchestrator (JSON API).
 # Legacy Python order calculation paths are removed in this branch.
 
+FOREIGN_PASSIVBOT_LOOKBACK_MS = 24 * 60 * 60 * 1000
+FOREIGN_PASSIVBOT_GRACE_MS = 15_000
+FOREIGN_PASSIVBOT_WINDOW_MS = 60 * 60 * 1000
+FOREIGN_PASSIVBOT_MAX_UNIQUE_PER_WINDOW = 3
+
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
     configure_custom_endpoint_loader,
@@ -200,6 +205,14 @@ def try_decode_type_id_from_custom_id(custom_id: str) -> int | None:
         return int(m.group(1), 16)
 
     return None
+
+
+def custom_id_has_explicit_passivbot_marker(custom_id) -> bool:
+    """Return True only when the custom id contains the explicit 0xABCD Passivbot marker."""
+    try:
+        return bool(_TYPE_MARKER_RE.search(str(custom_id)))
+    except Exception:
+        return False
 
 
 def order_type_id_to_hex4(type_id: int) -> str:
@@ -567,6 +580,10 @@ class Passivbot:
         self._last_plan_detail: dict[str, tuple[int, int, int]] = {}
         self._last_action_summary: dict[tuple[str, str], str] = {}
         self.start_time_ms = utc_ms()
+        self.bot_start_exchange_ts = int(self.get_exchange_time())
+        self.orders_emitted_to_exchange: dict[str, int] = {}
+        self.foreign_passivbot_seen: dict[str, int] = {}
+        self._foreign_passivbot_stop_requested = False
         self._bot_ready = False
         self._monitor_last_equity = float(self.balance_raw)
         self._monitor_stop_emitted = False
@@ -1762,6 +1779,8 @@ class Passivbot:
                     await self.execute_to_exchange()
                 except RestartBotException as e:
                     logging.error("[risk] RED supervisor ignored restart request: %s", e)
+                except FatalBotException:
+                    raise
                 except Exception as e:
                     logging.error("[risk] RED supervisor execute_to_exchange failed: %s", e)
                     traceback.print_exc()
@@ -2212,6 +2231,8 @@ class Passivbot:
         self.markets_dict = await load_markets(
             self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote
         )
+        if hasattr(self, "refresh_and_log_user_abstraction_state"):
+            await self.refresh_and_log_user_abstraction_state()
         # ineligible symbols cannot open new positions
         eligible, _, reasons = filter_markets(
             self.markets_dict, self.exchange, quote=self.quote, verbose=verbose
@@ -2226,6 +2247,7 @@ class Passivbot:
         self.init_coin_overrides()
         # await self.update_tickers()
         self.refresh_approved_ignored_coins_lists()
+        self._assert_supported_live_state()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
         await self.update_positions_and_balance()
@@ -3101,6 +3123,8 @@ class Passivbot:
                         await self.restart_bot_on_too_many_errors()
                     continue
                 failed_update_pos_oos_pnls_ohlcvs_count = 0
+                if self.stop_signal_received:
+                    break
                 if self._equity_hard_stop_enabled():
                     await self._equity_hard_stop_check()
                     if any(
@@ -3111,10 +3135,14 @@ class Passivbot:
                     ):
                         await self._equity_hard_stop_run_red_supervisor()
                         continue
+                if self.stop_signal_received:
+                    break
                 self._set_log_silence_watchdog_context(phase="runtime", stage="execute_to_exchange")
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
                     return res
+                if self.stop_signal_received:
+                    break
                 # Track loop duration for health reporting
                 self._last_loop_duration_ms = utc_ms() - loop_start_ms
                 # Periodic health summary
@@ -3127,11 +3155,13 @@ class Passivbot:
                 sleep_duration = 30
                 self._set_log_silence_watchdog_context(phase="runtime", stage="scheduled_wait")
                 for i in range(sleep_duration * 10):
-                    if self.execution_scheduled:
+                    if self.execution_scheduled or self.stop_signal_received:
                         break
                     await asyncio.sleep(0.1)
             except RestartBotException:
                 raise  # Propagate restart without incrementing error count
+            except FatalBotException:
+                raise
             except RateLimitExceeded as e:
                 self._health_errors += 1
                 self._health_rate_limits += 1
@@ -3165,26 +3195,40 @@ class Passivbot:
         stop_ts = utc_ms()
         self._monitor_emit_stop("shutdown_gracefully", ts=stop_ts)
         logging.info("[shutdown] shutdown requested; closing background tasks and sessions")
+        maintainer_tasks = []
         try:
             self.stop_data_maintainers(verbose=False)
+            for task_map_name in ("maintainers", "WS_ohlcvs_1m_tasks"):
+                task_map = getattr(self, task_map_name, None)
+                if not task_map:
+                    continue
+                for task in task_map.values():
+                    if task is not None:
+                        maintainer_tasks.append(task)
         except Exception as e:
             logging.error("[shutdown] error stopping maintainers: %s", e)
+        if maintainer_tasks:
+            try:
+                await asyncio.gather(*maintainer_tasks, return_exceptions=True)
+            except Exception as e:
+                logging.error("[shutdown] error awaiting maintainer cancellation: %s", e)
         await asyncio.sleep(0)
         try:
             if getattr(self, "ccp", None) is not None:
                 await self.ccp.close()
+                self.ccp = None
         except Exception as e:
             logging.error("[shutdown] error closing private ccxt session: %s", e)
         try:
             if getattr(self, "cca", None) is not None:
                 await self.cca.close()
+                self.cca = None
         except Exception as e:
             logging.error("[shutdown] error closing public ccxt session: %s", e)
         await self._monitor_flush_snapshot(force=True, ts=utc_ms())
         publisher = getattr(self, "monitor_publisher", None)
         if publisher is not None:
             publisher.close()
-        logging.info("[shutdown] cleanup complete")
 
     async def update_pos_oos_pnls_ohlcvs(self) -> bool:
         """Refresh positions, open orders, realised PnL, and 1m candles."""
@@ -3237,6 +3281,140 @@ class Passivbot:
         if matching := order_has_match(order, self.recent_order_executions):
             return max(0.0, (matching["execution_timestamp"] + max_age_ms) - utc_ms())
         return 0.0
+
+    def _extract_order_custom_id(self, order: dict) -> str:
+        """Return the first normalized client/custom order id from unified or raw fields."""
+        if not isinstance(order, dict):
+            return ""
+        candidates = (
+            "custom_id",
+            "customId",
+            "client_order_id",
+            "clientOrderId",
+            "client_oid",
+            "clientOid",
+            "order_link_id",
+            "orderLinkId",
+            "clOrdId",
+            "text",
+        )
+        for source in (order, order.get("info", {})):
+            if not isinstance(source, dict):
+                continue
+            for key in candidates:
+                value = source.get(key)
+                if value not in (None, ""):
+                    return str(value)
+        return ""
+
+    def _prune_emitted_order_custom_ids(self, now_ts: int) -> None:
+        """Drop emitted custom ids outside the foreign-writer lookback window."""
+        cutoff_ts = int(now_ts) - FOREIGN_PASSIVBOT_LOOKBACK_MS
+        self.orders_emitted_to_exchange = {
+            cid: ts
+            for cid, ts in getattr(self, "orders_emitted_to_exchange", {}).items()
+            if int(ts) >= cutoff_ts
+        }
+
+    def _prune_foreign_passivbot_seen(self, now_ts: int) -> None:
+        """Drop old foreign Passivbot detections outside the rolling stop window."""
+        cutoff_ts = int(now_ts) - FOREIGN_PASSIVBOT_WINDOW_MS
+        self.foreign_passivbot_seen = {
+            cid: ts
+            for cid, ts in getattr(self, "foreign_passivbot_seen", {}).items()
+            if int(ts) >= cutoff_ts
+        }
+
+    def _record_emitted_order_custom_id(self, order: dict, emitted_ts: Optional[int] = None) -> None:
+        """Remember a successfully acknowledged create so later refreshes can adopt it."""
+        custom_id = Passivbot._extract_order_custom_id(self, order)
+        if not custom_id:
+            return
+        if emitted_ts is None:
+            emitted_ts = (
+                int(self.get_exchange_time()) if hasattr(self, "get_exchange_time") else utc_ms()
+            )
+        if not hasattr(self, "orders_emitted_to_exchange"):
+            self.orders_emitted_to_exchange = {}
+        self.orders_emitted_to_exchange[custom_id] = int(emitted_ts)
+
+    async def _stop_for_foreign_passivbot_orders(
+        self, detections: list[tuple[dict, str, str, int]], unique_count: int
+    ) -> None:
+        """Stop the bot after repeated evidence of a competing Passivbot writer."""
+        if getattr(self, "_foreign_passivbot_stop_requested", False):
+            return
+        self._foreign_passivbot_stop_requested = True
+        orders_summary = ", ".join(
+            f"{symbol_to_coin(order.get('symbol'), verbose=False) or order.get('symbol')}"
+            f":{pb_type}:{shorten_custom_id(custom_id)}"
+            for order, pb_type, custom_id, _ in detections
+        )
+        logging.critical(
+            "[safety] detected %s unique foreign Passivbot orders in the last %.1f minutes; "
+            "stopping bot to avoid competing writers | latest=%s",
+            unique_count,
+            FOREIGN_PASSIVBOT_WINDOW_MS / (60 * 1000),
+            orders_summary,
+        )
+        self.stop_signal_received = True
+        if hasattr(self, "stop_data_maintainers"):
+            try:
+                self.stop_data_maintainers(verbose=False)
+            except Exception as exc:
+                logging.error("[safety] failed to stop data maintainers: %s", exc)
+        raise Exception("foreign Passivbot writer detected; stopping bot")
+
+    async def _detect_foreign_passivbot_orders(self, open_orders: list[dict]) -> None:
+        """Detect newer Passivbot-managed open orders not emitted by this running bot instance."""
+        now_ts = int(self.get_exchange_time())
+        bot_start_ts = int(getattr(self, "bot_start_exchange_ts", now_ts))
+        self._prune_emitted_order_custom_ids(now_ts)
+        self._prune_foreign_passivbot_seen(now_ts)
+        if not open_orders:
+            return
+        cutoff_ts = max(
+            bot_start_ts + FOREIGN_PASSIVBOT_GRACE_MS,
+            now_ts - FOREIGN_PASSIVBOT_LOOKBACK_MS,
+        )
+        new_detections: list[tuple[dict, str, str, int]] = []
+        for order in open_orders:
+            ts_raw = order.get("timestamp")
+            if ts_raw is None:
+                continue
+            try:
+                order_ts = int(float(ts_raw))
+            except Exception:
+                continue
+            if order_ts < cutoff_ts:
+                continue
+            custom_id = self._extract_order_custom_id(order)
+            if not custom_id:
+                continue
+            if not custom_id_has_explicit_passivbot_marker(custom_id):
+                continue
+            pb_type = custom_id_to_snake(custom_id)
+            if not pb_type or pb_type == "unknown":
+                continue
+            if custom_id in self.orders_emitted_to_exchange or custom_id in self.foreign_passivbot_seen:
+                continue
+            self.foreign_passivbot_seen[custom_id] = order_ts
+            new_detections.append((order, pb_type, custom_id, order_ts))
+        if not new_detections:
+            return
+        for order, pb_type, custom_id, order_ts in new_detections:
+            logging.error(
+                "[safety] detected foreign Passivbot order candidate | symbol=%s type=%s "
+                "custom_id=%s ts=%s",
+                order.get("symbol"),
+                pb_type,
+                shorten_custom_id(custom_id),
+                ts_to_date(order_ts),
+            )
+        if len(self.foreign_passivbot_seen) >= FOREIGN_PASSIVBOT_MAX_UNIQUE_PER_WINDOW:
+            await self._stop_for_foreign_passivbot_orders(
+                new_detections, unique_count=len(self.foreign_passivbot_seen)
+            )
 
     async def execute_to_exchange(self):
         """Run one execution cycle including config sync and order placement/cancellation."""
@@ -3319,6 +3497,7 @@ class Passivbot:
         """Submit a batch of orders after throttling and bookkeeping."""
         orders = orders[: int(self.live_value("max_n_creations_per_batch"))]
         grouped_orders: dict[str, list[dict]] = defaultdict(list)
+        emitted_ts = int(self.get_exchange_time()) if hasattr(self, "get_exchange_time") else utc_ms()
         for order in orders:
             self.add_to_recent_order_executions(order)
             self.log_order_action(
@@ -3355,6 +3534,7 @@ class Passivbot:
                     ex[key] = order[key]
             if debug_prints and self.debug_mode:
                 print("debug create_orders", debug_prints)
+            Passivbot._record_emitted_order_custom_id(self, ex, emitted_ts=emitted_ts)
             to_return.append(ex)
         if to_return:
             for elm in to_return:
@@ -4583,7 +4763,7 @@ class Passivbot:
             return
 
         try:
-            logging.info("[fills] initializing FillEventsManager")
+            logging.debug("[fills] initializing FillEventsManager")
 
             # Extract symbol pool from config
             symbol_pool = _extract_symbol_pool(self.config, None)
@@ -4627,7 +4807,7 @@ class Passivbot:
                 )
 
             cached_count = len(self._pnls_manager._events)
-            logging.info("[fills] initialized: %d cached events loaded", cached_count)
+            logging.info("[fills] cache ready: %d cached events loaded", cached_count)
 
             self._pnls_initialized = True
 
@@ -5513,6 +5693,7 @@ class Passivbot:
                 if elm["symbol"] not in self.open_orders:
                     self.open_orders[elm["symbol"]] = []
                 self.open_orders[elm["symbol"]].append(elm)
+            await self._detect_foreign_passivbot_orders(open_orders)
             balance_reconciled = self._reconcile_balance_after_open_orders_refresh()
             if balance_reconciled:
                 await self.handle_balance_update(source="REST+open_orders")
@@ -6629,54 +6810,16 @@ class Passivbot:
         if not symbols:
             return ({}, None) if return_snapshot else {}
         mode_overrides = self._build_orchestrator_mode_overrides(symbols)
-
-        # Get latest prices: prefer bulk allMids (1 API call for all symbols)
-        # over per-symbol get_current_close (N API calls). Falls back to CM if unavailable.
-        last_prices = {}
-        try:
-            if (
-                hasattr(self, "cca")
-                and self.cca is not None
-                and self.exchange
-                and self.exchange.lower() == "hyperliquid"
-            ):
-                # Call allMids directly – much cheaper than fetch_tickers which tries
-                # to map ALL coins (including unmapped HIP-3 @NNN IDs → warning spam).
-                fetched = await self.cca.fetch(
-                    self._hl_info_url(),
-                    method="POST",
-                    headers={"Content-Type": "application/json"},
-                    body=json.dumps({"type": "allMids"}),
-                )
-                # Build reverse map: coin_name → symbol (e.g. "BTC" → "BTC/USDC:USDC")
-                coin_to_sym = {v: k for k, v in self.symbol_ids.items()} if self.symbol_ids else {}
-                for coin, mid_str in fetched.items():
-                    sym = coin_to_sym.get(coin)
-                    if sym and sym in symbols:
-                        try:
-                            last_prices[sym] = float(mid_str)
-                        except (ValueError, TypeError):
-                            pass
-            elif hasattr(self, "fetch_tickers"):
-                tickers = await self.fetch_tickers()
-                for sym in symbols:
-                    tick = tickers.get(sym)
-                    if tick and tick.get("last") is not None:
-                        last_prices[sym] = float(tick["last"])
-            # Feed prices into CM cache so downstream EMA/close lookups hit cache
-            if last_prices:
-                now_ms = int(utc_ms())
-                for sym, price in last_prices.items():
-                    self.cm.set_current_close(sym, price, now_ms)
-        except Exception as e:
-            logging.debug("bulk price fetch failed, falling back to CM: %s", e)
-            last_prices = {}
-        # Fill any symbols still missing via CandlestickManager (individual fetches)
-        missing = [s for s in symbols if s not in last_prices or last_prices[s] <= 0.0]
-        if missing:
-            cm_prices = await self.cm.get_last_prices(missing, max_age_ms=10_000)
-            last_prices.update(cm_prices)
-        Passivbot._monitor_record_price_ticks(self, last_prices, ts=utc_ms(), source="orchestrator_live")
+        last_prices = await self._get_orchestrator_last_prices(symbols)
+        refresh_mode = str(
+            ((self.config.get("live") or {}).get("authoritative_refresh_mode")) or "legacy"
+        )
+        monitor_source = (
+            "orchestrator_live_cm_staged"
+            if refresh_mode == "staged"
+            else "orchestrator_live"
+        )
+        Passivbot._monitor_record_price_ticks(self, last_prices, ts=utc_ms(), source=monitor_source)
 
         # Ensure effective min cost is up to date.
         if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:
@@ -6908,6 +7051,93 @@ class Passivbot:
             }
             return ideal_orders_f, snapshot
         return ideal_orders_f
+
+    async def _get_orchestrator_last_prices(self, symbols: list[str]) -> dict[str, float]:
+        """Return latest prices for orchestrator planning.
+
+        In staged mode, market-price reads go through CandlestickManager only so CM owns
+        caching, TTL, and remote-fetch economy. Legacy mode retains the existing direct
+        bulk-ticker path and falls back to CM for any missing symbols.
+        """
+        ttl_ms = 10_000
+        refresh_mode = str(
+            ((self.config.get("live") or {}).get("authoritative_refresh_mode")) or "legacy"
+        )
+        if refresh_mode == "staged":
+            logging.debug(
+                "[state] staged orchestrator requesting cm last prices | symbols=%s | ttl=%sms",
+                len(symbols),
+                ttl_ms,
+            )
+            last_prices = await self.cm.get_last_prices(symbols, max_age_ms=ttl_ms)
+            invalid = []
+            normalized = {}
+            for symbol in symbols:
+                raw = last_prices.get(symbol, 0.0)
+                try:
+                    price = float(raw)
+                except (TypeError, ValueError):
+                    price = 0.0
+                normalized[symbol] = price
+                if not math.isfinite(price) or price <= 0.0:
+                    invalid.append(symbol)
+            if invalid:
+                logging.debug(
+                    "[state] staged orchestrator cm last prices ready | symbols=%s | ok=%s | invalid=%s | invalid_symbols=%s",
+                    len(symbols),
+                    len(symbols) - len(invalid),
+                    len(invalid),
+                    ",".join(invalid[:12]),
+                )
+            else:
+                logging.debug(
+                    "[state] staged orchestrator cm last prices ready | symbols=%s | ok=%s | invalid=0",
+                    len(symbols),
+                    len(symbols),
+                )
+            return normalized
+
+        # Legacy mode: prefer direct bulk exchange prices, then fill holes via CM.
+        last_prices = {}
+        try:
+            if (
+                hasattr(self, "cca")
+                and self.cca is not None
+                and self.exchange
+                and self.exchange.lower() == "hyperliquid"
+            ):
+                fetched = await self.cca.fetch(
+                    self._hl_info_url(),
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                    body=json.dumps({"type": "allMids"}),
+                )
+                coin_to_sym = {v: k for k, v in self.symbol_ids.items()} if self.symbol_ids else {}
+                for coin, mid_str in fetched.items():
+                    sym = coin_to_sym.get(coin)
+                    if sym and sym in symbols:
+                        try:
+                            last_prices[sym] = float(mid_str)
+                        except (ValueError, TypeError):
+                            pass
+            elif hasattr(self, "fetch_tickers"):
+                tickers = await self.fetch_tickers()
+                for sym in symbols:
+                    tick = tickers.get(sym)
+                    if tick and tick.get("last") is not None:
+                        last_prices[sym] = float(tick["last"])
+            if last_prices:
+                now_ms = int(utc_ms())
+                for sym, price in last_prices.items():
+                    self.cm.set_current_close(sym, price, now_ms)
+        except Exception as e:
+            logging.debug("bulk price fetch failed, falling back to CM: %s", e)
+            last_prices = {}
+        missing = [s for s in symbols if s not in last_prices or last_prices[s] <= 0.0]
+        if missing:
+            cm_prices = await self.cm.get_last_prices(missing, max_age_ms=ttl_ms)
+            last_prices.update(cm_prices)
+        return last_prices
 
     def _to_executable_orders(
         self, ideal_orders: dict, last_prices: Dict[str, float]
@@ -8297,7 +8527,7 @@ class Passivbot:
                             }
                         )
                         logging.warning(
-                            "Stock perps detected in approved_coins (%s). HIP-3 isolated margin is currently unsupported; isolated-only symbols will be skipped and existing isolated live state will fail loudly.",
+                            "Stock perps detected in approved_coins (%s). On Hyperliquid, HIP-3/non-standard perps require unifiedAccount mode; non-unified accounts will fail loudly.",
                             ",".join(coins),
                         )
                         self._stock_perps_warning_logged = True
@@ -8355,8 +8585,11 @@ class Passivbot:
             # Detect "order already filled/cancelled" errors - not harmful, just a race condition
             already_gone_indicators = [
                 "100004",  # KuCoin: "The order cannot be canceled"
+                "110001",  # Bybit: "order not exists or too late to cancel"
+                "order not exists",
                 "order does not exist",
                 "order not found",
+                "too late to cancel",
                 "already filled",
                 "already cancelled",
                 "already canceled",
@@ -8619,30 +8852,53 @@ async def main():
     while True:
 
         bot = setup_bot(config)
+        globals()["bot"] = bot
+        fatal_error = None
         try:
             await bot.start_bot()
+        except FatalBotException as e:
+            fatal_error = e
+            logging.error(f"passivbot fatal error {e}")
         except Exception as e:
             logging.error(f"passivbot error {e}")
             traceback.print_exc()
         finally:
             try:
-                bot.stop_data_maintainers()
+                if bot.stop_signal_received or getattr(bot, "_shutdown_in_progress", False):
+                    shutdown_task = getattr(bot, "_shutdown_task", None)
+                    if shutdown_task is not None:
+                        await shutdown_task
+                    else:
+                        await bot.shutdown_gracefully()
+                else:
+                    bot.stop_data_maintainers()
                 if bot.ccp is not None:
                     await bot.ccp.close()
+                    bot.ccp = None
                 if bot.cca is not None:
                     await bot.cca.close()
+                    bot.cca = None
             except:
                 pass
+            if bot is not None and getattr(bot, "_shutdown_in_progress", False):
+                logging.info("[%s] [shutdown] cleanup complete", getattr(bot, "exchange", "?"))
         if bot.stop_signal_received:
             logging.info("Bot stopped via signal; exiting main loop.")
+            break
+        if fatal_error is not None:
             break
 
         logging.info(f"restarting bot...")
         print()
         for z in range(cooldown_secs, -1, -1):
+            if bot is not None and getattr(bot, "stop_signal_received", False):
+                break
             print(f"\rcountdown {z}...  ")
             await asyncio.sleep(1)
         print()
+        if bot is not None and getattr(bot, "stop_signal_received", False):
+            logging.info("Bot stopped via signal during restart cooldown; exiting main loop.")
+            break
 
         restarts.append(utc_ms())
         restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]

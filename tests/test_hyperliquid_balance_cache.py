@@ -3,6 +3,7 @@ import sys
 import types
 
 import pytest
+from passivbot_exceptions import FatalBotException
 
 
 @pytest.fixture
@@ -113,6 +114,47 @@ async def test_hyperliquid_combined_fetch_reused(stubbed_modules):
     assert dummy.calls == 2
 
 
+@pytest.mark.asyncio
+async def test_hyperliquid_snapshot_helpers_return_raw_bundle_on_cold_capture(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot._hl_cache_generation = 0
+    bot._last_hl_balance = None
+    bot._hl_balance_consumed = True
+    bot.fetched_positions = []
+    bot.fetched_balance = {}
+
+    raw_snapshot = {
+        "balance": {"info": {"marginSummary": {"accountValue": 200.0}}},
+        "positions": {
+            "core": [{"position": {"coin": "BTC", "szi": "1.0"}}],
+            "hip3": [{"fetch_spec": {"params": {"dex": "xyz"}}, "response": [{"symbol": "XYZ-SP500"}]}],
+        },
+    }
+    normalized_positions = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "position_side": "long",
+            "size": 1.0,
+            "price": 100.0,
+        }
+    ]
+
+    async def fake_cached(my_gen=0):
+        return raw_snapshot, normalized_positions, 190.0
+
+    bot._get_positions_and_balance_cached = fake_cached
+
+    raw_positions, normalized = await bot.capture_positions_snapshot()
+    raw_balance, balance = await bot.capture_balance_snapshot()
+
+    assert raw_positions == raw_snapshot["positions"]
+    assert normalized == normalized_positions
+    assert raw_balance == raw_snapshot["balance"]
+    assert balance == 190.0
+
+
 def _make_probe_bot(HyperliquidBot):
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.quote = "USDC"
@@ -140,7 +182,76 @@ def _pb_order_id(type_hex: str = "0000") -> str:
     return f"pb-0x{type_hex}-test"
 
 
-def test_hyperliquid_reconcile_adds_back_cross_hip3_order_margin(stubbed_modules):
+def test_hyperliquid_non_unified_approved_hip3_requires_unified(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    bot = _make_probe_bot(HyperliquidBot)
+    bot._hl_user_abstraction = "dexAbstraction"
+    bot._hl_unified_enabled = False
+    bot.approved_coins_minus_ignored_coins = {
+        "long": {"XYZ-SP500/USDC:USDC"},
+        "short": set(),
+    }
+    bot.positions = {}
+    bot.markets_dict = {
+        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+    }
+
+    with pytest.raises(FatalBotException, match="require unifiedAccount mode"):
+        bot._assert_supported_live_state()
+
+
+def test_hyperliquid_non_unified_live_hip3_state_requires_unified(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    bot = _make_probe_bot(HyperliquidBot)
+    bot._hl_user_abstraction = "dexAbstraction"
+    bot._hl_unified_enabled = False
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.positions = {
+        "XYZ-SP500/USDC:USDC": {
+            "long": {"size": 0.002, "price": 6953.4},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.open_orders = {}
+    bot.markets_dict = {
+        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+    }
+
+    with pytest.raises(FatalBotException, match="Unsupported HIP-3 state detected"):
+        bot._assert_supported_live_state()
+
+
+def test_hyperliquid_unified_allows_hip3_symbols(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    bot = _make_probe_bot(HyperliquidBot)
+    bot._hl_user_abstraction = "unifiedAccount"
+    bot._hl_unified_enabled = True
+    bot.approved_coins_minus_ignored_coins = {
+        "long": {"XYZ-SP500/USDC:USDC"},
+        "short": set(),
+    }
+    bot.positions = {
+        "XYZ-SP500/USDC:USDC": {
+            "long": {"size": 0.002, "price": 6953.4},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.open_orders = {
+        "XYZ-SP500/USDC:USDC": [
+            {"id": "1", "symbol": "XYZ-SP500/USDC:USDC", "qty": 0.002}
+        ]
+    }
+    bot.markets_dict = {
+        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+    }
+
+    bot._assert_supported_live_state()
+
+
+def test_hyperliquid_reconcile_skips_cross_hip3_resting_order_margin(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
     bot.open_orders = {
@@ -158,13 +269,12 @@ def test_hyperliquid_reconcile_adds_back_cross_hip3_order_margin(stubbed_modules
 
     changed = bot._reconcile_balance_after_open_orders_refresh()
 
-    expected_reserve = 0.003 * 5088.8 / 20.0 * 1.01
-    assert changed is True
-    assert bot.balance_raw == pytest.approx(51.194323 + expected_reserve)
-    assert bot.balance == pytest.approx(51.194323 + expected_reserve)
+    assert changed is False
+    assert bot.balance_raw == pytest.approx(51.194323)
+    assert bot.balance == pytest.approx(51.194323)
 
 
-def test_hyperliquid_reconcile_adds_back_flat_standard_perp_entry_reserve(stubbed_modules):
+def test_hyperliquid_reconcile_skips_flat_standard_perp_entry_reserve(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
     bot.open_orders = {
@@ -182,10 +292,9 @@ def test_hyperliquid_reconcile_adds_back_flat_standard_perp_entry_reserve(stubbe
 
     changed = bot._reconcile_balance_after_open_orders_refresh()
 
-    expected_reserve = 0.00022 * 54161.0 / 20.0 * 1.01
-    assert changed is True
-    assert bot.balance_raw == pytest.approx(51.194323 + expected_reserve)
-    assert bot.balance == pytest.approx(51.194323 + expected_reserve)
+    assert changed is False
+    assert bot.balance_raw == pytest.approx(51.194323)
+    assert bot.balance == pytest.approx(51.194323)
 
 
 def test_hyperliquid_reconcile_skips_standard_perp_entry_reserve_when_position_exists(
@@ -242,7 +351,9 @@ def test_hyperliquid_reconcile_adds_back_hip3_position_margin(stubbed_modules):
     assert bot.balance == pytest.approx(51.194323 + 0.68139)
 
 
-def test_hyperliquid_reconcile_adds_back_hip3_position_and_entry_order_margin(stubbed_modules):
+def test_hyperliquid_reconcile_restores_only_hip3_position_margin_on_open_orders_refresh(
+    stubbed_modules,
+):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
     bot.fetched_positions = [
@@ -269,7 +380,7 @@ def test_hyperliquid_reconcile_adds_back_hip3_position_and_entry_order_margin(st
 
     changed = bot._reconcile_balance_after_open_orders_refresh()
 
-    expected = 51.194323 + 0.68144 + (0.002 * 5110.7 / 20.0 * 1.01)
+    expected = 51.194323 + 0.68144
     assert changed is True
     assert bot.balance_raw == pytest.approx(expected)
     assert bot.balance == pytest.approx(expected)
@@ -303,7 +414,7 @@ def test_hyperliquid_reconcile_skips_balance_override(stubbed_modules):
 
 
 @pytest.mark.asyncio
-async def test_update_open_orders_applies_hyperliquid_balance_reconciliation(stubbed_modules):
+async def test_update_open_orders_does_not_republish_resting_order_reserve(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
     seen_sources = []
@@ -332,10 +443,9 @@ async def test_update_open_orders_applies_hyperliquid_balance_reconciliation(stu
 
     ok = await bot.update_open_orders()
 
-    expected_reserve = 0.003 * 5088.8 / 20.0 * 1.01
     assert ok is True
-    assert seen_sources == ["REST+open_orders"]
-    assert bot.balance_raw == pytest.approx(51.194323 + expected_reserve)
+    assert seen_sources == []
+    assert bot.balance_raw == pytest.approx(51.194323)
     assert bot.open_orders["XYZ-SP500/USDC:USDC"][0]["id"] == "1"
 
 

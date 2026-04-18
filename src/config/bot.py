@@ -20,6 +20,26 @@ from .schema import get_template_config
 from .access import require_config_dict
 from .tree_ops import add_missing_keys_recursively
 
+DEFAULT_FORAGER_SCORE_WEIGHTS = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
+DEFAULT_HSL_TIER_RATIOS = {"yellow": 0.5, "orange": 0.75}
+REQUIRED_BOT_KEYS = (
+    "close_grid_markup_start",
+    "close_grid_markup_end",
+    "close_grid_qty_pct",
+    "ema_span_0",
+    "ema_span_1",
+    "entry_grid_double_down_factor",
+    "entry_grid_spacing_pct",
+    "entry_initial_ema_dist",
+    "entry_initial_qty_pct",
+)
+CLIFF_EDGE_THRESHOLD_KEYS = (
+    "risk_wel_enforcer_threshold",
+    "risk_twel_enforcer_threshold",
+    "unstuck_threshold",
+)
+CLIFF_EDGE_DUST_EPS = 1e-9
+CLIFF_EDGE_WARNING_THRESHOLD = 0.1
 FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
     "forager_volatility_ema_span": "filter_volatility_ema_span",
     "forager_volume_ema_span": "filter_volume_ema_span",
@@ -62,6 +82,259 @@ def validate_bot_config(result: dict) -> None:
             path=f"bot.{pside}.unstuck_ema_dist",
             pside=pside,
         )
+
+
+def _bot_path(pside: str, key: str) -> str:
+    return f"bot.{pside}.{key}"
+
+
+def _bot_nested_path(pside: str, key: str, child: str) -> str:
+    return f"bot.{pside}.{key}.{child}"
+
+
+def _format_hydration_log_value(value):
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, float):
+        return round(value, 10) if math.isfinite(value) else value
+    if isinstance(value, list):
+        return [_format_hydration_log_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_format_hydration_log_value(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _format_hydration_log_value(item) for key, item in value.items()}
+    return value
+
+
+def _set_hydrated_bot_value(
+    result: dict,
+    *,
+    pside: str,
+    key: str,
+    value,
+    reason: str,
+    verbose: bool,
+    tracker: Optional[object],
+    level: int = logging.INFO,
+) -> None:
+    result["bot"][pside][key] = deepcopy(value)
+    log_config_message(
+        verbose,
+        level,
+        "hydrating omitted %s via %s: %s",
+        _bot_path(pside, key),
+        reason,
+        _format_hydration_log_value(value),
+    )
+    if tracker is not None:
+        tracker.add(["bot", pside, key], value)
+
+
+def _set_hydrated_bot_nested_value(
+    result: dict,
+    *,
+    pside: str,
+    key: str,
+    child: str,
+    value,
+    reason: str,
+    verbose: bool,
+    tracker: Optional[object],
+) -> None:
+    result["bot"][pside][key][child] = deepcopy(value)
+    log_config_message(
+        verbose,
+        logging.INFO,
+        "hydrating omitted %s via %s: %s",
+        _bot_nested_path(pside, key, child),
+        reason,
+        _format_hydration_log_value(value),
+    )
+    if tracker is not None:
+        tracker.add(["bot", pside, key, child], value)
+
+
+def _read_legacy_alias(bot_cfg: dict, *keys: str):
+    for key in keys:
+        if key in bot_cfg and bot_cfg[key] is not None:
+            return bot_cfg[key]
+    return None
+
+
+def _derive_close_grid_qty_pct(bot_cfg: dict, *, path: str) -> Optional[float]:
+    raw_n_closes = _read_legacy_alias(bot_cfg, "n_closes", "n_close_orders")
+    if raw_n_closes is None:
+        return None
+    try:
+        n_closes = int(round(float(raw_n_closes)))
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{path} legacy n_closes must be numeric") from exc
+    if n_closes <= 0:
+        raise ValueError(f"{path} legacy n_closes must round to a positive integer")
+    return 1.0 / n_closes
+
+
+def _bot_side_enabled(bot_cfg: dict, *, pside: str) -> bool:
+    path = _bot_path(pside, "total_wallet_exposure_limit")
+    try:
+        total_wallet_exposure_limit = float(bot_cfg["total_wallet_exposure_limit"])
+    except KeyError:
+        return False
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{path} must be numeric") from exc
+    if not math.isfinite(total_wallet_exposure_limit):
+        raise ValueError(f"{path} must be finite")
+    return total_wallet_exposure_limit > 0.0
+
+
+def _hydrate_hsl_tier_ratios(
+    result: dict,
+    *,
+    pside: str,
+    verbose: bool,
+    tracker: Optional[object],
+) -> None:
+    bot_cfg = result["bot"][pside]
+    if "hsl_tier_ratios" not in bot_cfg or bot_cfg["hsl_tier_ratios"] is None:
+        _set_hydrated_bot_value(
+            result,
+            pside=pside,
+            key="hsl_tier_ratios",
+            value=DEFAULT_HSL_TIER_RATIOS,
+            reason="disabled HSL compatibility default",
+            verbose=verbose,
+            tracker=tracker,
+        )
+        return
+    if not isinstance(bot_cfg["hsl_tier_ratios"], dict):
+        return
+    for child, default_value in DEFAULT_HSL_TIER_RATIOS.items():
+        if child not in bot_cfg["hsl_tier_ratios"]:
+            _set_hydrated_bot_nested_value(
+                result,
+                pside=pside,
+                key="hsl_tier_ratios",
+                child=child,
+                value=default_value,
+                reason="disabled HSL compatibility default",
+                verbose=verbose,
+                tracker=tracker,
+            )
+
+
+def _hydrate_forager_score_weights(
+    result: dict,
+    *,
+    pside: str,
+    verbose: bool,
+    tracker: Optional[object],
+) -> None:
+    bot_cfg = result["bot"][pside]
+    if "forager_score_weights" not in bot_cfg or bot_cfg["forager_score_weights"] is None:
+        _set_hydrated_bot_value(
+            result,
+            pside=pside,
+            key="forager_score_weights",
+            value=DEFAULT_FORAGER_SCORE_WEIGHTS,
+            reason="legacy forager scoring default",
+            verbose=verbose,
+            tracker=tracker,
+        )
+        return
+    if not isinstance(bot_cfg["forager_score_weights"], dict):
+        return
+    for child, default_value in DEFAULT_FORAGER_SCORE_WEIGHTS.items():
+        if child not in bot_cfg["forager_score_weights"]:
+            _set_hydrated_bot_nested_value(
+                result,
+                pside=pside,
+                key="forager_score_weights",
+                child=child,
+                value=default_value,
+                reason="legacy forager scoring compatibility default",
+                verbose=verbose,
+                tracker=tracker,
+            )
+
+
+def _normalize_cliff_edge_threshold(
+    value,
+    *,
+    path: str,
+    verbose: bool,
+) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{path} must be numeric") from exc
+    if not math.isfinite(numeric):
+        raise ValueError(f"{path} must be finite")
+    if abs(numeric) < CLIFF_EDGE_DUST_EPS:
+        if numeric != 0.0:
+            log_config_message(
+                verbose,
+                logging.WARNING,
+                "%s=%s is within dust tolerance %.1e; snapping to 0.0",
+                path,
+                numeric,
+                CLIFF_EDGE_DUST_EPS,
+            )
+        return 0.0
+    if 0.0 < numeric < CLIFF_EDGE_WARNING_THRESHOLD:
+        log_config_message(
+            verbose,
+            logging.WARNING,
+            "%s=%s is a very small positive threshold; behavior may be extremely aggressive",
+            path,
+            numeric,
+        )
+    return numeric
+
+
+def normalize_cliff_edge_thresholds(
+    result: dict,
+    *,
+    verbose: bool = True,
+    tracker: Optional[object] = None,
+) -> None:
+    for pside in BOT_POSITION_SIDES:
+        risk_cfg = get_bot_group(result["bot"][pside], "risk")
+        for key in CLIFF_EDGE_THRESHOLD_KEYS:
+            raw_value = get_grouped_bot_value(result["bot"][pside], key)
+            normalized = _normalize_cliff_edge_threshold(
+                raw_value,
+                path=_bot_path(pside, key),
+                verbose=verbose,
+            )
+            if tracker is not None and raw_value != normalized:
+                tracker.update(["bot", pside, key], raw_value, normalized)
+            if risk_cfg:
+                risk_cfg[key.removeprefix("risk_")] = normalized
+            else:
+                result["bot"][pside][key] = normalized
+
+
+def ensure_required_bot_params_present(result: dict) -> None:
+    template = get_template_config()["bot"]
+    for pside in BOT_POSITION_SIDES:
+        bot_cfg = result["bot"][pside]
+        flat_bot_cfg = flatten_shared_bot_side(bot_cfg)
+        flat_template_cfg = flatten_shared_bot_side(template[pside])
+        if _bot_side_enabled(bot_cfg, pside=pside):
+            missing = [
+                key
+                for key in REQUIRED_BOT_KEYS
+                if get_grouped_bot_value(bot_cfg, key, default=None) is None
+            ]
+            if get_grouped_bot_value(bot_cfg, "n_positions", default=None) is None:
+                missing.append("n_positions")
+            if missing:
+                joined = ", ".join(_bot_path(pside, key) for key in missing)
+                raise ValueError(f"Missing required bot config parameter(s): {joined}")
+        unhandled = sorted(set(flat_template_cfg) - set(flat_bot_cfg))
+        if unhandled:
+            joined = ", ".join(_bot_path(pside, key) for key in unhandled)
+            raise ValueError(f"Missing explicit hydration policy for bot parameter(s): {joined}")
 
 def ensure_bot_defaults(
     result: dict, *, verbose: bool = True, tracker: Optional[object] = None
@@ -129,7 +402,7 @@ def normalize_forager_score_weights(weights: dict, *, path: str) -> dict:
         total += value
 
     if total <= 0.0:
-        return {"volume": 1.0, "ema_readiness": 0.0, "volatility": 0.0}
+        return {"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0}
 
     return {key: normalized[key] / total for key in ("volume", "ema_readiness", "volatility")}
 
@@ -184,7 +457,8 @@ def normalize_bot_forager_config(
                 log_config_message(
                     verbose,
                     logging.INFO,
-                    "normalizing bot.%s.forager.score_weights all-zero vector to volume-only",
+                    "normalizing bot.%s.forager_score_weights all-zero vector to default"
+                    " ema-readiness-only ranking",
                     pside,
                 )
             else:
@@ -212,7 +486,10 @@ def normalize_position_counts(result: dict, *, tracker: Optional[object] = None)
         current = risk_cfg.get("n_positions")
         if current is None:
             continue
-        rounded = int(round(current))
+        try:
+            rounded = int(round(float(current)))
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"bot.{pside}.n_positions must be numeric") from exc
         if tracker is not None and current != rounded:
             tracker.update(["bot", pside, "risk", "n_positions"], current, rounded)
         risk_cfg["n_positions"] = rounded
@@ -394,6 +671,7 @@ def format_bot_config(
     for pside in BOT_POSITION_SIDES:
         if pside not in result["bot"]:
             seeded = deepcopy(template["bot"][pside])
+            seeded["total_wallet_exposure_limit"] = 0.0
             result["bot"][pside] = seeded
             if tracker is not None:
                 tracker.add(["bot", pside], seeded)
@@ -401,18 +679,15 @@ def format_bot_config(
         require_config_dict(result, path)
     apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
     ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
-    add_missing_keys_recursively(
-        template["bot"],
-        result["bot"],
-        parent=["bot"],
-        verbose=verbose,
-        tracker=tracker,
-    )
+    ensure_required_bot_params_present(result)
+    normalize_cliff_edge_thresholds(result, verbose=verbose, tracker=tracker)
     normalize_bot_forager_config(result, verbose=verbose, tracker=tracker)
     normalize_position_counts(result, tracker=tracker)
     normalize_entry_grid_inflation_flags(result, tracker=tracker)
     if warn_deprecations:
         warn_on_deprecated_entry_grid_inflation(result, verbose=verbose)
+    for pside in BOT_POSITION_SIDES:
+        inject_flattened_shared_bot_side(result["bot"][pside])
     return sort_dict_keys(result["bot"])
 
 

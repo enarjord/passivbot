@@ -3,6 +3,7 @@ import json
 import random
 import re
 import traceback
+from copy import deepcopy
 
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
@@ -11,6 +12,7 @@ from ccxt.base.errors import RateLimitExceeded
 
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
+from passivbot_exceptions import FatalBotException
 from utils import ts_to_date, utc_ms
 from config.access import require_live_value
 from pure_funcs import calc_hash
@@ -50,12 +52,58 @@ class HyperliquidBot(CCXTBot):
         self.custom_id_max_length = 34
         self._hl_fetch_lock = asyncio.Lock()
         self._hl_cache_generation = 0
+        self._hl_user_abstraction = "unknown"
+        self._hl_unified_enabled = False
 
     def _hl_info_url(self) -> str:
         """Derive the Hyperliquid /info endpoint from the CCXT session URL config."""
         base = self.cca.urls.get("api", {}).get("public", "https://api.hyperliquid.xyz")
         hostname = getattr(self.cca, "hostname", "hyperliquid.xyz")
         return base.replace("{hostname}", hostname).rstrip("/") + "/info"
+
+    def _normalize_hl_user_abstraction(self, raw) -> str:
+        """Normalize Hyperliquid userAbstraction response into a stable string."""
+        if raw is None:
+            return "unknown"
+        text = str(raw).strip()
+        if len(text) >= 2 and text[0] == text[-1] == '"':
+            text = text[1:-1]
+        return text or "unknown"
+
+    async def fetch_user_abstraction_state(self) -> str:
+        """Fetch and cache the Hyperliquid account abstraction mode."""
+        wallet_address = str(self.user_info.get("wallet_address") or "")
+        if not wallet_address:
+            raise ValueError(f"user {self.user!r} missing wallet_address for Hyperliquid abstraction")
+        raw = await self.cca.publicPostInfo({"type": "userAbstraction", "user": wallet_address})
+        abstraction = self._normalize_hl_user_abstraction(raw)
+        self._hl_user_abstraction = abstraction
+        self._hl_unified_enabled = abstraction == "unifiedAccount"
+        if getattr(self, "cca", None) is not None:
+            self.cca.options["enableUnifiedMargin"] = bool(self._hl_unified_enabled)
+        if getattr(self, "ccp", None) is not None:
+            self.ccp.options["enableUnifiedMargin"] = bool(self._hl_unified_enabled)
+        return abstraction
+
+    async def refresh_and_log_user_abstraction_state(self) -> str:
+        """Refresh Hyperliquid account abstraction mode and log first sighting or changes."""
+        abstraction = await self.fetch_user_abstraction_state()
+        previous = getattr(self, "_hl_last_logged_user_abstraction", None)
+        if previous is None:
+            logging.info(
+                "[account] Hyperliquid abstraction=%s | unified=%s",
+                abstraction,
+                "yes" if abstraction == "unifiedAccount" else "no",
+            )
+        elif previous != abstraction:
+            logging.warning(
+                "[account] Hyperliquid abstraction changed %s -> %s | unified=%s",
+                previous,
+                abstraction,
+                "yes" if abstraction == "unifiedAccount" else "no",
+            )
+        self._hl_last_logged_user_abstraction = abstraction
+        return abstraction
 
     def create_ccxt_sessions(self):
         creds = {
@@ -120,7 +168,7 @@ class HyperliquidBot(CCXTBot):
         self.n_decimal_places = 6
         self.n_significant_figures = 5
         if isolated_count:
-            logging.info(
+            logging.debug(
                 f"Detected {isolated_count} isolated-margin-only symbols (HIP-3/stock perps)"
             )
 
@@ -229,12 +277,15 @@ class HyperliquidBot(CCXTBot):
             ),
         }
 
-    async def _fetch_hip3_positions(self) -> list[dict]:
+    async def _fetch_hip3_positions(self, *, include_raw: bool = False):
         """Fetch HIP-3 positions via dex-scoped CCXT routes."""
         positions_by_key = {}
+        raw_payloads = []
         fetch_specs = [{"params": {"dex": dex_name}} for dex_name in self._get_hl_hip3_dex_names()]
         for fetch_spec in fetch_specs:
             fetched = await self.cca.fetch_positions(**fetch_spec)
+            if include_raw:
+                raw_payloads.append({"fetch_spec": deepcopy(fetch_spec), "response": deepcopy(fetched)})
             for position in fetched:
                 normalized = self._normalize_ccxt_position(position)
                 if not self._get_hl_dex_for_symbol(normalized["symbol"]):
@@ -244,33 +295,34 @@ class HyperliquidBot(CCXTBot):
                 )
                 key = (normalized["symbol"], normalized["position_side"])
                 positions_by_key[key] = normalized
-        return list(positions_by_key.values())
+        normalized_positions = list(positions_by_key.values())
+        if include_raw:
+            return raw_payloads, normalized_positions
+        return normalized_positions
 
     def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
-        kept = set()
-        if not hasattr(self, "_unsupported_hip3_symbols_warned"):
-            self._unsupported_hip3_symbols_warned = set()
-        for symbol in symbols:
-            if self._requires_isolated_margin(symbol):
-                warn_key = (pside, symbol)
-                if warn_key not in self._unsupported_hip3_symbols_warned:
-                    self._unsupported_hip3_symbols_warned.add(warn_key)
-                    logging.warning(
-                        "[margin] disabling %s %s for new entries: HIP-3 isolated margin is "
-                        "currently unsupported in Passivbot. The symbol is isolated-only by "
-                        "exchange metadata and will be ignored for now.",
-                        pside,
-                        symbol,
-                    )
-                continue
-            kept.add(symbol)
-        return kept
+        del pside
+        return symbols
+
+    def _hl_supports_hip3_live_trading(self) -> bool:
+        return bool(getattr(self, "_hl_unified_enabled", False))
 
     def _assert_supported_live_state(self) -> None:
-        if self.HIP3_ISOLATED_SUPPORTED:
+        if self.HIP3_ISOLATED_SUPPORTED or self._hl_supports_hip3_live_trading():
             return
         unsupported = []
-        for symbol in sorted(set(getattr(self, "positions", {})) | set(getattr(self, "open_orders", {}))):
+        approved = set()
+        for syms in getattr(self, "approved_coins_minus_ignored_coins", {}).values():
+            approved.update(syms)
+        approved_hip3 = sorted(symbol for symbol in approved if self._get_hl_dex_for_symbol(symbol))
+        if approved_hip3:
+            unsupported.append(
+                "approved_coins="
+                + ",".join(sorted({symbol.split("/")[0] if "/" in symbol else symbol for symbol in approved_hip3}))
+            )
+        for symbol in sorted(
+            set(getattr(self, "positions", {})) | set(getattr(self, "open_orders", {}))
+        ):
             if not self._get_hl_dex_for_symbol(symbol):
                 continue
             has_pos = False
@@ -282,15 +334,15 @@ class HyperliquidBot(CCXTBot):
             has_orders = bool(getattr(self, "open_orders", {}).get(symbol))
             if not (has_pos or has_orders):
                 continue
-            isolated_live_mode = self._hl_live_margin_modes.get(symbol) == "isolated"
+            isolated_live_mode = getattr(self, "_hl_live_margin_modes", {}).get(symbol) == "isolated"
             isolated_only = self._requires_isolated_margin(symbol)
-            if not (isolated_live_mode or isolated_only):
-                continue
             reasons = []
             if isolated_only:
                 reasons.append("isolated-only market")
             if isolated_live_mode:
                 reasons.append("live isolated margin state")
+            if not reasons:
+                reasons.append("hip3 live state")
             state_bits = []
             if has_pos:
                 state_bits.append("position")
@@ -298,10 +350,12 @@ class HyperliquidBot(CCXTBot):
                 state_bits.append("open_orders")
             unsupported.append(f"{symbol} ({'/'.join(state_bits)}; {', '.join(reasons)})")
         if unsupported:
-            raise NotImplementedError(
-                "Hyperliquid HIP-3 isolated margin is currently unsupported in Passivbot. "
-                f"Unsupported live state detected: {'; '.join(unsupported)}. "
-                "Close/cancel the isolated state before running the bot."
+            raise FatalBotException(
+                "Hyperliquid HIP-3/non-standard perps require unifiedAccount mode in Passivbot. "
+                f"Current abstraction={getattr(self, '_hl_user_abstraction', 'unknown')}. "
+                f"Unsupported HIP-3 state detected: {'; '.join(unsupported)}. "
+                "Upgrade the Hyperliquid account to unifiedAccount or remove all HIP-3 "
+                "symbols, positions, and open orders before running the bot."
             )
 
     async def watch_orders(self):
@@ -365,7 +419,7 @@ class HyperliquidBot(CCXTBot):
         """Hook: Derive position_side from order data for Hyperliquid (one-way mode)."""
         return self.determine_pos_side(order)
 
-    async def fetch_open_orders(self, symbol: str = None):
+    async def _do_fetch_open_orders(self, symbol: str = None):
         fetched = []
         seen_ids = set()
         query_symbols = [symbol] if symbol is not None else []
@@ -397,11 +451,17 @@ class HyperliquidBot(CCXTBot):
                     continue
                 seen_ids.add(order["id"])
                 fetched.append(order)
+        return fetched
 
+    def _normalize_open_orders(self, fetched: list) -> list:
         for elm in fetched:
             elm["position_side"] = self.determine_pos_side(elm)
             elm["qty"] = elm["amount"]
         return sorted(fetched, key=lambda x: x["timestamp"])
+
+    async def fetch_open_orders(self, symbol: str = None):
+        fetched = await self._do_fetch_open_orders(symbol=symbol)
+        return self._normalize_open_orders(fetched)
 
     async def _fetch_positions_and_balance(self):
         info = await self.cca.fetch_balance()
@@ -425,12 +485,20 @@ class HyperliquidBot(CCXTBot):
                 "margin_used": float(x["position"].get("marginUsed") or 0.0),
             }
             positions[(elm["symbol"], elm["position_side"])] = elm
-        for position in await self._fetch_hip3_positions():
+        hip3_raw, hip3_positions = await self._fetch_hip3_positions(include_raw=True)
+        for position in hip3_positions:
             positions[(position["symbol"], position["position_side"])] = position
         balance = float(info["info"]["marginSummary"]["accountValue"]) - sum(
             [float(x["position"]["unrealizedPnl"]) for x in info["info"]["assetPositions"]]
         )
-        return list(positions.values()), balance
+        raw_snapshot = {
+            "balance": deepcopy(info),
+            "positions": {
+                "core": deepcopy(info["info"].get("assetPositions", [])),
+                "hip3": hip3_raw,
+            },
+        }
+        return raw_snapshot, list(positions.values()), balance
 
     async def _get_positions_and_balance_cached(self, my_gen: int = 0):
         """Fetch positions+balance with dedup: concurrent callers share one API call.
@@ -459,10 +527,17 @@ class HyperliquidBot(CCXTBot):
     async def fetch_positions(self):
         # Snapshot generation *before* lock so each caller tracks its own view.
         my_gen = self._hl_cache_generation
-        positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        _, positions, balance = await self._get_positions_and_balance_cached(my_gen)
         self._last_hl_balance = balance
         self._hl_balance_consumed = False
         return positions
+
+    async def capture_positions_snapshot(self) -> tuple[list, list]:
+        my_gen = self._hl_cache_generation
+        raw_snapshot, positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        self._last_hl_balance = balance
+        self._hl_balance_consumed = False
+        return deepcopy(raw_snapshot["positions"]), deepcopy(positions)
 
     async def fetch_balance(self):
         # Check if fetch_positions already got us a fresh balance
@@ -473,8 +548,13 @@ class HyperliquidBot(CCXTBot):
             return self._last_hl_balance
         # Snapshot generation *before* lock so each caller tracks its own view.
         my_gen = self._hl_cache_generation
-        positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        _, positions, balance = await self._get_positions_and_balance_cached(my_gen)
         return balance
+
+    async def capture_balance_snapshot(self) -> tuple[dict, float]:
+        my_gen = self._hl_cache_generation
+        raw_snapshot, positions, balance = await self._get_positions_and_balance_cached(my_gen)
+        return deepcopy(raw_snapshot["balance"]), float(balance)
 
     def _symbol_is_cross_hip3(self, symbol: str) -> bool:
         if not symbol or not self._get_hl_dex_for_symbol(symbol):
@@ -550,9 +630,10 @@ class HyperliquidBot(CCXTBot):
         )
         reserve = self._position_margin_to_restore()
         if include_open_orders:
-            for orders in getattr(self, "open_orders", {}).values():
-                for order in orders:
-                    reserve += self._reserved_margin_for_resting_order(order)
+            # Do not feed bot-managed resting-order reserve back into published balance.
+            # That reserve changes as the bot cancels/recreates entries and can create
+            # self-referential REST/REST+open_orders balance churn.
+            pass
         corrected_raw = exchange_reported + reserve
         current_raw = self.get_raw_balance()
         if abs(corrected_raw - current_raw) <= 1e-12:
@@ -847,7 +928,7 @@ class HyperliquidBot(CCXTBot):
             except Exception as e:
                 logging.error(f"{symbol}: error setting margin mode and leverage {e}")
             if to_print:
-                logging.info(f"{symbol}: {to_print}")
+                logging.debug(f"{symbol}: {to_print}")
             # Small delay between margin-mode API calls to avoid rate-limit bursts
             await asyncio.sleep(0.2)
 

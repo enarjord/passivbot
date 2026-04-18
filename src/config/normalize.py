@@ -16,7 +16,12 @@ from .hydrate import (
     sync_with_template,
 )
 from .coerce import normalize_validation_fields
-from .migrations import apply_migrations, build_base_config_from_flavor, detect_flavor
+from .migrations import (
+    apply_backward_compatibility_renames,
+    apply_migrations,
+    build_base_config_from_flavor,
+    detect_flavor,
+)
 from .optimize_bounds import prune_inactive_optimize_strategy_bounds
 from .scoring import normalize_scoring_config
 from .schema import get_template_config
@@ -72,6 +77,16 @@ def normalize_config(
     seed_missing_compatibility_sections(template, result, tracker=tracker)
     for path in ("bot.long", "bot.short", "optimize.bounds"):
         require_config_dict(result, path)
+    apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
+    if isinstance(raw_optimize_snapshot, dict):
+        raw_optimize_compat = {
+            "bot": {"long": {}, "short": {}},
+            "live": {},
+            "logging": {},
+            "optimize": deepcopy(raw_optimize_snapshot),
+        }
+        apply_backward_compatibility_renames(raw_optimize_compat, verbose=False, tracker=None)
+        raw_optimize_snapshot = raw_optimize_compat["optimize"]
 
     result["bot"] = format_bot_config(
         result["bot"],

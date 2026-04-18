@@ -36,7 +36,9 @@ from optimize import (
     apply_fine_tune_bounds,
     extract_configs,
     get_starting_configs,
+    iter_starting_configs,
     configs_to_individuals,
+    configs_to_individuals_streaming,
     ConstraintAwareFitness,
     ResultRecorder,
 )
@@ -430,6 +432,46 @@ def test_optimize_parser_accepts_nested_bound_flags_alongside_limit_alias():
 
     assert args.limit_entries == ["adg_strategy_pnl_rebased>0.0"]
     assert getattr(args, "optimize.bounds.long.risk.total_wallet_exposure_limit") == [0.0]
+
+
+def test_optimize_parser_candle_interval_short_flag_parses_as_int():
+    parser = optimize.build_command_parser(
+        prog="passivbot optimize",
+        description="run optimizer",
+        usage="%(prog)s [config_path] [options]",
+        epilog="",
+    )
+    template_config = optimize.get_template_config()
+    del template_config["bot"]
+    keep_live_keys = {"approved_coins", "minimum_coin_age_days"}
+    for key in sorted(template_config["live"]):
+        if key not in keep_live_keys:
+            del template_config["live"][key]
+    group_map = {
+        "Coin Selection": parser.add_argument_group("Coin Selection"),
+        "Date Range": parser.add_argument_group("Date Range"),
+        "Optimizer": parser.add_argument_group("Optimizer"),
+        "Suite": parser.add_argument_group("Suite"),
+        "Logging": parser.add_argument_group("Logging"),
+        "Backtest Runtime": parser.add_argument_group("Backtest Runtime"),
+        "Optimize Common": parser.add_argument_group("Optimize Common"),
+        "Optimize Bounds": parser.add_argument_group("Optimize Bounds"),
+        "Optimize DEAP": parser.add_argument_group("Optimize DEAP"),
+        "Optimize Pymoo": parser.add_argument_group("Optimize Pymoo"),
+        "Advanced Overrides": parser.add_argument_group("Advanced Overrides"),
+    }
+    optimize.add_config_arguments(
+        parser,
+        template_config,
+        command="optimize",
+        help_all=False,
+        group_map=group_map,
+    )
+
+    args = parser.parse_args(["-cim", "2"])
+
+    assert getattr(args, "backtest.candle_interval_minutes") == 2
+    assert isinstance(getattr(args, "backtest.candle_interval_minutes"), int)
 
 
 class TestFormatObjectives:
@@ -1345,6 +1387,20 @@ class TestGetStartingConfigs:
             result = get_starting_configs(tmpdir)
             assert len(result) == 2
 
+    def test_iter_directory(self):
+        from config_utils import get_template_config
+        import json
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            template = get_template_config()
+            with open(os.path.join(tmpdir, "config1.json"), "w") as f:
+                f.write(json.dumps(template))
+            with open(os.path.join(tmpdir, "config2.json"), "w") as f:
+                f.write(json.dumps(template))
+
+            result = list(iter_starting_configs(tmpdir))
+            assert len(result) == 2
+
 
 class TestConfigsToIndividuals:
     """Test configs_to_individuals function."""
@@ -1367,6 +1423,18 @@ class TestConfigsToIndividuals:
         # Should return 2 individuals: original + one with lowered TWE
         assert len(result) >= 1
         assert len(result[0]) == len(bounds)
+
+    def test_streaming_matches_eager(self):
+        from config_utils import get_template_config
+
+        config = get_template_config()
+        bounds = extract_bounds_tuple_list_from_config(config)
+
+        eager = configs_to_individuals([config, config], bounds, 6)
+        streamed, raw_count = configs_to_individuals_streaming(iter([config, config]), bounds, 6)
+
+        assert raw_count == 2
+        assert sorted(map(tuple, streamed)) == sorted(map(tuple, eager))
 
     def test_bot_only_config(self):
         from config_utils import get_template_config
@@ -1831,6 +1899,74 @@ class TestEvaluator:
         # Check that metric key is created (could be max, mean, etc.)
         assert "drawdown_worst_usd" in evaluator.limit_checks[0]["metric_key"]
 
+    def test_build_limit_checks_uses_suite_aggregate_defaults(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = [
+            {
+                "metric": "adg_strategy_pnl_rebased",
+                "penalize_if": "less_than_or_equal",
+                "value": 0.0,
+            },
+            {
+                "metric": "peak_recovery_hours_hsl",
+                "penalize_if": "greater_than_or_equal",
+                "value": 5000,
+            },
+        ]
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+
+        assert [check["metric_key"] for check in base.limit_checks] == [
+            "adg_strategy_pnl_rebased_mean",
+            "peak_recovery_hours_hsl_mean",
+        ]
+
+        _suite = SuiteEvaluator(base, [], {"default": "mean", "peak_recovery_hours_hsl": "mean"})
+        assert [check["metric_key"] for check in base.limit_checks] == [
+            "adg_strategy_pnl_rebased_mean",
+            "peak_recovery_hours_hsl_mean",
+        ]
+
+    def test_suite_limit_checks_keep_explicit_stat_override(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = [
+            {
+                "metric": "adg_strategy_pnl_rebased",
+                "penalize_if": "less_than_or_equal",
+                "value": 0.0,
+                "stat": "min",
+            },
+            {
+                "metric": "drawdown_worst_hsl",
+                "penalize_if": "greater_than",
+                "value": 0.8,
+            },
+        ]
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+        _suite = SuiteEvaluator(base, [], {"default": "mean", "drawdown_worst_hsl": "max"})
+
+        assert [check["metric_key"] for check in base.limit_checks] == [
+            "adg_strategy_pnl_rebased_min",
+            "drawdown_worst_hsl_max",
+        ]
+
     def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
         from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
         from config_utils import get_template_config
@@ -1859,7 +1995,7 @@ class TestEvaluator:
             config_to_individual(mock_config, evaluator.bounds, evaluator.sig_digits)
         )
 
-        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+        with patch("optimize.build_backtest_payload", return_value=object()) as build_payload, patch(
             "optimize.execute_backtest",
             side_effect=PanicException(
                 "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
@@ -1872,6 +2008,7 @@ class TestEvaluator:
         assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
         assert "PanicException" in metrics["error"]
         assert metrics["stats"] == {}
+        assert build_payload.call_args.kwargs["metrics_only"] is True
 
     def test_suite_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
         from optimize import Evaluator, SuiteEvaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
@@ -1911,7 +2048,7 @@ class TestEvaluator:
         evaluator = SuiteEvaluator(base, [ctx], {})
         individual = DummyIndividual(config_to_individual(mock_config, base.bounds, base.sig_digits))
 
-        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+        with patch("optimize.build_backtest_payload", return_value=object()) as build_payload, patch(
             "optimize.execute_backtest",
             side_effect=PanicException(
                 "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
@@ -1924,3 +2061,94 @@ class TestEvaluator:
         assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
         assert "PanicException" in metrics["error"]
         assert metrics["suite_metrics"] == {}
+        assert build_payload.call_args.kwargs["metrics_only"] is True
+
+
+def _remove_nested_path(mapping, path):
+    target = mapping
+    for part in path[:-1]:
+        target = target[part]
+    target.pop(path[-1], None)
+
+
+def test_config_to_individual_accepts_precomputed_optimization_shape():
+    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    shape = build_optimization_shape(config)
+
+    result = config_to_individual(config, shape.bounds, optimization_shape=shape)
+
+    assert len(result) == len(shape.bounds)
+
+
+def test_old_starting_seed_inherits_current_template_shape_and_defaults():
+    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    shape = build_optimization_shape(config)
+    stale_seed = deepcopy(config)
+
+    bound_key, path = shape.key_paths[0]
+    stale_seed["optimize"]["bounds"].pop(bound_key, None)
+    _remove_nested_path(stale_seed, path)
+
+    result = configs_to_individuals(
+        [stale_seed],
+        shape.bounds,
+        shape.sig_digits,
+        optimization_shape=shape,
+    )
+
+    assert len(result) == 1
+    assert len(result[0]) == len(shape.bounds)
+
+
+def test_build_pymoo_record_entry_strips_metadata():
+    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    template["_config_path"] = "artifact.json"
+    bounds = extract_bounds_tuple_list_from_config(template)
+    vector = config_to_individual(template, bounds, sig_digits=6)
+
+    entry = build_pymoo_record_entry(
+        vector=vector,
+        metrics={"suite_metrics": {"aggregate": {"stats": {}}}},
+        template=template,
+        build_config_fn=individual_to_config,
+        overrides_fn=optimize.optimizer_overrides,
+        overrides_list=[],
+    )
+
+    assert "_config_path" not in entry
+    assert "suite_metrics" in entry
+
+
+def test_result_recorder_preserves_unquantized_saved_param_values():
+    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    bounds = extract_bounds_tuple_list_from_config(template)
+    entry = deepcopy(template)
+
+    _bound_key, path = get_optimization_key_paths(entry)[0]
+    target = entry
+    for part in path[:-1]:
+        target = target[part]
+    original = float(target[path[-1]])
+    target[path[-1]] = original + 0.000321
+    entry["metrics"] = {"adg": 0.1}
+    entry["optimize"]["scoring"] = ["adg"]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        recorder = ResultRecorder(
+            results_dir=tmpdir,
+            sig_digits=6,
+            flush_interval=60,
+            scoring_keys=["adg"],
+            compress=False,
+            write_all_results=False,
+            bounds=bounds,
+        )
+        recorder.record(entry)
+
+        pareto_files = list((Path(tmpdir) / "pareto").glob("*.json"))
+        assert len(pareto_files) == 1
+        saved = json.loads(pareto_files[0].read_text())
+        saved_target = saved
+        for part in path[:-1]:
+            saved_target = saved_target[part]
+        assert saved_target[path[-1]] == pytest.approx(original + 0.000321)

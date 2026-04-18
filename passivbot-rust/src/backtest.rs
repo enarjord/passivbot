@@ -357,14 +357,14 @@ pub struct BacktestOrder {
 struct RollingPnlEvent {
     k: usize,
     pnl: f64,
-    cumulative_after: f64,
+    abs_cumulative_after: f64,
     seq: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct RollingPnlPeakCandidate {
     seq: usize,
-    cumulative_after: f64,
+    abs_cumulative_after: f64,
 }
 
 #[derive(Default, Debug)]
@@ -618,7 +618,6 @@ pub struct Backtest<'a> {
     pnl_lookback_bars: usize,
     pnl_events: VecDeque<RollingPnlEvent>,
     pnl_event_seq: usize,
-    rolling_pnl_cumsum: f64,
     rolling_pnl_peak_candidates: VecDeque<RollingPnlPeakCandidate>,
     fills: Vec<Fill>,
     trading_enabled: TradingEnabled,
@@ -2052,7 +2051,6 @@ impl<'a> Backtest<'a> {
             },
             pnl_events: VecDeque::new(),
             pnl_event_seq: 0,
-            rolling_pnl_cumsum: 0.0,
             rolling_pnl_peak_candidates: VecDeque::new(),
             fills: Vec::new(),
             trading_enabled: TradingEnabled {
@@ -2581,7 +2579,6 @@ impl<'a> Backtest<'a> {
         while let Some(event) = self.pnl_events.front().copied() {
             if k.saturating_sub(event.k) > self.pnl_lookback_bars {
                 self.pnl_events.pop_front();
-                self.rolling_pnl_cumsum -= event.pnl;
                 if self
                     .rolling_pnl_peak_candidates
                     .front()
@@ -2597,22 +2594,21 @@ impl<'a> Backtest<'a> {
     }
 
     fn record_rolling_pnl(&mut self, k: usize, pnl: f64) {
-        if self.pnl_lookback_bars == 0 {
+        if self.pnl_lookback_bars == 0 || self.pnl_lookback_bars == usize::MAX {
             return;
         }
         self.prune_rolling_pnl_window(k);
-        self.rolling_pnl_cumsum += pnl;
-        let cumulative_after = self.rolling_pnl_cumsum;
+        let abs_cumulative_after = self.pnl_cumsum_running;
         let seq = self.pnl_event_seq;
         self.pnl_event_seq = self.pnl_event_seq.saturating_add(1);
         self.pnl_events.push_back(RollingPnlEvent {
             k,
             pnl,
-            cumulative_after,
+            abs_cumulative_after,
             seq,
         });
         while let Some(candidate) = self.rolling_pnl_peak_candidates.back().copied() {
-            if candidate.cumulative_after <= cumulative_after {
+            if candidate.abs_cumulative_after <= abs_cumulative_after {
                 self.rolling_pnl_peak_candidates.pop_back();
             } else {
                 break;
@@ -2621,28 +2617,36 @@ impl<'a> Backtest<'a> {
         self.rolling_pnl_peak_candidates
             .push_back(RollingPnlPeakCandidate {
                 seq,
-                cumulative_after,
+                abs_cumulative_after,
             });
     }
 
     #[inline]
     fn effective_pnl_cumsum(&mut self, k: usize) -> (f64, f64) {
+        if self.pnl_lookback_bars == usize::MAX {
+            return (self.pnl_cumsum_max, self.pnl_cumsum_running);
+        }
         if self.pnl_lookback_bars > 0 {
             self.prune_rolling_pnl_window(k);
             if self.pnl_events.is_empty() {
                 return (0.0, 0.0);
             }
-            let base_cumsum = self
+            // Match the live contract exactly: filter fills inside the active lookback window,
+            // then compute cumsum.max() / cumsum[-1] over just that filtered sequence.
+            // We keep the state incrementally for speed, but derive both values from the same
+            // absolute cumulative basis so the rolling peak can never fall below the current sum.
+            let base_abs_cumsum = self
                 .pnl_events
                 .front()
-                .map(|event| event.cumulative_after - event.pnl)
+                .map(|event| event.abs_cumulative_after - event.pnl)
                 .unwrap_or(0.0);
             let rolling_peak = self
                 .rolling_pnl_peak_candidates
                 .front()
-                .map(|candidate| candidate.cumulative_after - base_cumsum)
+                .map(|candidate| candidate.abs_cumulative_after - base_abs_cumsum)
                 .unwrap_or(0.0);
-            return (rolling_peak, self.rolling_pnl_cumsum);
+            let rolling_current = self.pnl_cumsum_running - base_abs_cumsum;
+            return (rolling_peak, rolling_current);
         }
         (self.pnl_cumsum_max, self.pnl_cumsum_running)
     }
@@ -7097,8 +7101,8 @@ mod tests {
             &backtest_params,
         );
 
-        bt.record_rolling_pnl(0, 100.0);
-        bt.record_rolling_pnl(1, -90.0);
+        record_realized_pnl_for_test(&mut bt, 0, 100.0);
+        record_realized_pnl_for_test(&mut bt, 1, -90.0);
 
         let (peak1, current1) = bt.effective_pnl_cumsum(1);
         assert!((peak1 - 100.0).abs() < 1e-12);
@@ -7173,8 +7177,8 @@ mod tests {
         bt.balance.usd_total_balance = 1000.0;
         bt.balance.usd_total_balance_rounded = 1000.0;
 
-        bt.record_rolling_pnl(0, 100.0);
-        bt.record_rolling_pnl(1, -90.0);
+        record_realized_pnl_for_test(&mut bt, 0, 100.0);
+        record_realized_pnl_for_test(&mut bt, 1, -90.0);
 
         let input1 = bt.get_orchestrator_input_cached(1, None);
         assert!(
@@ -7195,6 +7199,275 @@ mod tests {
             (input2.global.unstuck_allowance_long - 20.0).abs() < 1e-12,
             "expected allowance to recover once the stale peak ages out"
         );
+    }
+
+    fn naive_live_style_effective_pnl_cumsum(
+        events: &[(usize, f64)],
+        k: usize,
+        lookback_bars: usize,
+    ) -> (f64, f64) {
+        let active: Vec<f64> = events
+            .iter()
+            .filter(|(event_k, _)| {
+                lookback_bars == usize::MAX || k.saturating_sub(*event_k) <= lookback_bars
+            })
+            .map(|(_, pnl)| *pnl)
+            .collect();
+        if active.is_empty() {
+            return (0.0, 0.0);
+        }
+        let mut cumsum = 0.0;
+        let mut peak = f64::NEG_INFINITY;
+        for pnl in active {
+            cumsum += pnl;
+            peak = peak.max(cumsum);
+        }
+        (peak, cumsum)
+    }
+
+    fn record_realized_pnl_for_test(bt: &mut Backtest, k: usize, pnl: f64) {
+        bt.pnl_cumsum_running += pnl;
+        bt.pnl_cumsum_max = bt.pnl_cumsum_max.max(bt.pnl_cumsum_running);
+        bt.record_rolling_pnl(k, pnl);
+    }
+
+    #[test]
+    fn rolling_effective_pnl_cumsum_keeps_peak_at_or_above_current_after_window_slide() {
+        let hlcvs = Array3::from_shape_vec((4, 1, 4), vec![1.0; 4 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![3],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 2.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            candle_interval_minutes: 24 * 60,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        // True in-window sequence at k=3 with a 2-bar lookback:
+        // k=1: +50
+        // k=2: -120
+        // k=3: +190
+        // current rolling pnl = 120, and the in-window peak should also be 120.
+        record_realized_pnl_for_test(&mut bt, 0, 100.0);
+        record_realized_pnl_for_test(&mut bt, 1, 50.0);
+        record_realized_pnl_for_test(&mut bt, 2, -120.0);
+        record_realized_pnl_for_test(&mut bt, 3, 190.0);
+
+        let (peak, current) = bt.effective_pnl_cumsum(3);
+
+        assert!(
+            peak >= current - 1e-12,
+            "rolling peak must never fall below current rolling pnl: peak={}, current={}",
+            peak,
+            current
+        );
+        assert!(
+            (peak - 120.0).abs() < 1e-12,
+            "expected in-window rolling peak to track the later high after the old base expired"
+        );
+        assert!(
+            (current - 120.0).abs() < 1e-12,
+            "expected in-window rolling current pnl to equal the surviving 3-event sum"
+        );
+    }
+
+    #[test]
+    fn rolling_pnl_rebase_bug_does_not_inflate_unstuck_allowance() {
+        let hlcvs = Array3::from_shape_vec((4, 1, 4), vec![1.0; 4 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.unstuck_loss_allowance_pct = 0.01;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![3],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 2.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            candle_interval_minutes: 24 * 60,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.balance.usd_total_balance = 1000.0;
+        bt.balance.usd_total_balance_rounded = 1000.0;
+
+        record_realized_pnl_for_test(&mut bt, 0, 100.0);
+        record_realized_pnl_for_test(&mut bt, 1, 50.0);
+        record_realized_pnl_for_test(&mut bt, 2, -120.0);
+        record_realized_pnl_for_test(&mut bt, 3, 190.0);
+
+        let input = bt.get_orchestrator_input_cached(3, None);
+
+        assert!(
+            input.global.realized_pnl_cumsum_max >= input.global.realized_pnl_cumsum_last - 1e-12,
+            "realized pnl peak must not be below current: peak={}, current={}",
+            input.global.realized_pnl_cumsum_max,
+            input.global.realized_pnl_cumsum_last
+        );
+        assert!(
+            (input.global.realized_pnl_cumsum_max - 120.0).abs() < 1e-12,
+            "expected current window peak to equal the current rolling pnl at the new high"
+        );
+        assert!(
+            (input.global.realized_pnl_cumsum_last - 120.0).abs() < 1e-12,
+            "expected current rolling pnl to equal the surviving 3-event sum"
+        );
+        assert!(
+            (input.global.unstuck_allowance_long - 10.0).abs() < 1e-12,
+            "expected allowance to remain anchored to balance when current rolling pnl is at the window peak"
+        );
+    }
+
+    #[test]
+    fn rolling_effective_pnl_cumsum_matches_naive_live_style_reference() {
+        let hlcvs = Array3::from_shape_vec((7, 1, 4), vec![1.0; 7 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 7]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.unstuck_loss_allowance_pct = 0.01;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![6],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 2.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            candle_interval_minutes: 24 * 60,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        let events = [
+            (0usize, 100.0),
+            (1, 50.0),
+            (2, -120.0),
+            (3, 190.0),
+            (5, -30.0),
+        ];
+        let mut next_event_idx = 0usize;
+
+        for k in 0..=6 {
+            while next_event_idx < events.len() && events[next_event_idx].0 == k {
+                let pnl = events[next_event_idx].1;
+                record_realized_pnl_for_test(&mut bt, k, pnl);
+                next_event_idx += 1;
+            }
+            let expected = naive_live_style_effective_pnl_cumsum(&events[..next_event_idx], k, 2);
+            let actual = bt.effective_pnl_cumsum(k);
+            assert!(
+                (actual.0 - expected.0).abs() < 1e-12 && (actual.1 - expected.1).abs() < 1e-12,
+                "expected live-style rolling pnl stats at k={} to be {:?}, got {:?}",
+                k,
+                expected,
+                actual
+            );
+            let input = bt.get_orchestrator_input_cached(k, None);
+            let expected_allowance =
+                calc_auto_unstuck_allowance(1000.0, 0.01, expected.0, expected.1);
+            assert!(
+                (input.global.unstuck_allowance_long - expected_allowance).abs() < 1e-12,
+                "expected unstuck allowance at k={} to match live-style reference",
+                k
+            );
+        }
     }
 
     #[test]

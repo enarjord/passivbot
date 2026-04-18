@@ -1,4 +1,5 @@
 import copy
+import logging
 import pytest
 
 from config_utils import (
@@ -317,6 +318,114 @@ def test_format_config_preserves_nested_strategy_bounds_before_hydration():
         0.004,
         0.016,
     ]
+
+
+def test_format_config_legacy_omissions_disable_newer_bot_features():
+    current = copy.deepcopy(_template())
+    omitted_long = current["bot"]["long"]
+    for key in [
+        "close_trailing_grid_ratio",
+        "close_trailing_qty_pct",
+        "close_trailing_retracement_pct",
+        "close_trailing_threshold_pct",
+        "entry_trailing_grid_ratio",
+        "entry_trailing_retracement_pct",
+        "entry_trailing_retracement_volatility_weight",
+        "entry_trailing_retracement_we_weight",
+        "entry_trailing_threshold_pct",
+        "entry_trailing_threshold_volatility_weight",
+        "entry_trailing_threshold_we_weight",
+        "entry_volatility_ema_span_hours",
+        "forager_volatility_ema_span",
+        "forager_volume_ema_span",
+        "hsl_panic_close_order_type",
+        "risk_twel_enforcer_threshold",
+        "risk_we_excess_allowance_pct",
+        "risk_wel_enforcer_threshold",
+        "unstuck_close_pct",
+        "unstuck_ema_dist",
+        "unstuck_loss_allowance_pct",
+        "unstuck_threshold",
+    ]:
+        omitted_long.pop(key)
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    long_cfg = out["bot"]["long"]
+    assert long_cfg["close_trailing_grid_ratio"] == 0.0
+    assert long_cfg["close_trailing_qty_pct"] == 1.0
+    assert long_cfg["close_trailing_retracement_pct"] == pytest.approx(0.002)
+    assert long_cfg["close_trailing_threshold_pct"] == pytest.approx(0.005)
+    assert long_cfg["entry_trailing_grid_ratio"] == 0.0
+    assert long_cfg["entry_trailing_retracement_pct"] == pytest.approx(0.002)
+    assert long_cfg["entry_trailing_retracement_volatility_weight"] == 0.0
+    assert long_cfg["entry_trailing_retracement_we_weight"] == 0.0
+    assert long_cfg["entry_trailing_threshold_pct"] == pytest.approx(0.005)
+    assert long_cfg["entry_trailing_threshold_volatility_weight"] == 0.0
+    assert long_cfg["entry_trailing_threshold_we_weight"] == 0.0
+    assert long_cfg["entry_volatility_ema_span_hours"] == 0.0
+    assert long_cfg["forager_volatility_ema_span"] == pytest.approx(240.0)
+    assert long_cfg["forager_volume_ema_span"] == pytest.approx(240.0)
+    assert long_cfg["hsl_panic_close_order_type"] == "market"
+    assert long_cfg["risk_twel_enforcer_threshold"] == 0.0
+    assert long_cfg["risk_we_excess_allowance_pct"] == 0.0
+    assert long_cfg["risk_wel_enforcer_threshold"] == 0.0
+    assert long_cfg["unstuck_close_pct"] == pytest.approx(0.01)
+    assert long_cfg["unstuck_ema_dist"] == 0.0
+    assert long_cfg["unstuck_loss_allowance_pct"] == 0.0
+    assert long_cfg["unstuck_threshold"] == 0.0
+
+
+def test_format_config_derives_close_grid_qty_pct_from_legacy_n_closes():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"].pop("close_grid_qty_pct")
+    current["bot"]["long"]["n_closes"] = 4
+
+    out = format_config(current, verbose=False, live_only=True)
+
+    assert out["bot"]["long"]["close_grid_qty_pct"] == pytest.approx(0.25)
+
+
+def test_format_config_requires_enabled_side_core_params():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"].pop("entry_grid_spacing_pct")
+
+    with pytest.raises(ValueError, match="bot.long.entry_grid_spacing_pct"):
+        format_config(current, verbose=False, live_only=True)
+
+
+def test_format_config_warns_and_snaps_cliff_edge_thresholds(caplog):
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["risk_wel_enforcer_threshold"] = 5e-10
+    current["bot"]["long"]["risk_twel_enforcer_threshold"] = 0.05
+    current["bot"]["long"]["unstuck_threshold"] = 5e-10
+
+    with caplog.at_level(logging.WARNING):
+        out = format_config(current, verbose=True, live_only=True)
+
+    assert out["bot"]["long"]["risk_wel_enforcer_threshold"] == 0.0
+    assert out["bot"]["long"]["risk_twel_enforcer_threshold"] == pytest.approx(0.05)
+    assert out["bot"]["long"]["unstuck_threshold"] == 0.0
+    assert any("bot.long.risk_wel_enforcer_threshold" in rec.message and "snapping to 0.0" in rec.message for rec in caplog.records)
+    assert any("bot.long.risk_twel_enforcer_threshold=0.05" in rec.message for rec in caplog.records)
+    assert any("bot.long.unstuck_threshold" in rec.message and "snapping to 0.0" in rec.message for rec in caplog.records)
+
+
+def test_format_config_hydration_logs_round_float_noise(caplog):
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["close_grid_min_markup"] = 0.0072835
+    current["bot"]["long"]["close_grid_markup_range"] = 0.003
+    current["bot"]["long"].pop("close_grid_markup_start", None)
+
+    with caplog.at_level(logging.INFO):
+        out = format_config(current, verbose=True, live_only=True)
+
+    assert out["bot"]["long"]["close_grid_markup_start"] == pytest.approx(0.0102835)
+    assert any(
+        "hydrating omitted bot.long.close_grid_markup_start via legacy close_grid_min_markup + close_grid_markup_range: 0.0102835"
+        in rec.message
+        for rec in caplog.records
+    )
 
 
 def test_format_config_is_idempotent_for_lean_live_config():
