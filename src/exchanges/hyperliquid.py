@@ -51,6 +51,8 @@ class HyperliquidBot(CCXTBot):
         self.custom_id_max_length = 34
         self._hl_fetch_lock = asyncio.Lock()
         self._hl_cache_generation = 0
+        self._hl_user_abstraction = "unknown"
+        self._hl_unified_enabled = False
 
     def _hl_state_fetch_concurrency(self) -> int:
         """Bound internal Hyperliquid account-state fanout to avoid rate-limit spikes."""
@@ -112,7 +114,7 @@ class HyperliquidBot(CCXTBot):
             text = text[1:-1]
         return text or "unknown"
 
-    async def fetch_user_abstraction_state(self, *, refresh: bool = True) -> str:
+    async def fetch_user_abstraction_state(self) -> str:
         """Fetch and cache the Hyperliquid account abstraction mode."""
         wallet_address = str(self.user_info.get("wallet_address") or "")
         if not wallet_address:
@@ -129,7 +131,7 @@ class HyperliquidBot(CCXTBot):
 
     async def refresh_and_log_user_abstraction_state(self) -> str:
         """Refresh Hyperliquid account abstraction mode and log first sighting or changes."""
-        abstraction = await self.fetch_user_abstraction_state(refresh=True)
+        abstraction = await self.fetch_user_abstraction_state()
         previous = getattr(self, "_hl_last_logged_user_abstraction", None)
         if previous is None:
             logging.info(
@@ -458,9 +460,7 @@ class HyperliquidBot(CCXTBot):
             has_orders = bool(getattr(self, "open_orders", {}).get(symbol))
             if not (has_pos or has_orders):
                 continue
-            isolated_live_mode = (
-                getattr(self, "_hl_live_margin_modes", {}).get(symbol) == "isolated"
-            )
+            isolated_live_mode = getattr(self, "_hl_live_margin_modes", {}).get(symbol) == "isolated"
             isolated_only = self._requires_isolated_margin(symbol)
             reasons = []
             if isolated_only:

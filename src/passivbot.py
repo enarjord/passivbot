@@ -9644,12 +9644,13 @@ async def main():
     while True:
 
         bot = setup_bot(config)
+        globals()["bot"] = bot
+        fatal_error = None
         try:
             await bot.start_bot()
         except FatalBotException as e:
+            fatal_error = e
             logging.error(f"passivbot fatal error {e}")
-            traceback.print_exc()
-            break
         except Exception as e:
             logging.error(f"passivbot error {e}")
             traceback.print_exc()
@@ -9675,6 +9676,8 @@ async def main():
                 logging.info("[%s] [shutdown] cleanup complete", getattr(bot, "exchange", "?"))
         if bot.stop_signal_received:
             logging.info("Bot stopped via signal; exiting main loop.")
+            break
+        if fatal_error is not None:
             break
 
         logging.info(f"restarting bot...")

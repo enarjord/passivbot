@@ -1,5 +1,6 @@
 import math
 import random
+import json
 
 import pytest
 
@@ -70,3 +71,36 @@ def test_pareto_front_retains_per_metric_extremes(sig_digits):
                 found = True
                 break
         assert found, f"Front missing extreme for {metric}: expected {min_val}"
+
+
+def test_pareto_store_persists_candidate_without_extra_rounding(tmp_path):
+    entry = {
+        "bot": {
+            "long": {
+                "entry_trailing_threshold_we_weight": 1.384,
+            },
+            "short": {},
+        },
+        "metrics": {
+            "objectives": {"metric1": 0.5},
+            "constraint_violation": 0.0,
+        },
+        "optimize": {
+            "scoring": ["metric1"],
+            "round_to_n_significant_digits": 3,
+        },
+    }
+
+    store = ParetoStore(
+        directory=str(tmp_path),
+        sig_digits=3,
+        flush_interval=10_000,
+        max_size=50,
+    )
+    assert store.add_entry(entry)
+
+    saved_files = list((tmp_path / "pareto").glob("*.json"))
+    assert len(saved_files) == 1
+    saved = json.loads(saved_files[0].read_text())
+
+    assert saved["bot"]["long"]["entry_trailing_threshold_we_weight"] == 1.384

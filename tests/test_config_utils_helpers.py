@@ -784,6 +784,19 @@ def test_backtest_cli_start_date_override_creates_missing_backtest_section(start
     assert "backtest.start_date" in source_config["_transform_log"][-1]["details"]["keys"]
 
 
+def test_backtest_cli_candle_interval_short_flag_parses_as_int():
+    args, _allowed_config_keys = _parse_backtest_args(
+        [
+            "configs/hype.json",
+            "-cim",
+            "2",
+        ]
+    )
+
+    assert getattr(args, "backtest.candle_interval_minutes") == 2
+    assert isinstance(getattr(args, "backtest.candle_interval_minutes"), int)
+
+
 def test_update_config_with_args_ignores_non_config_parser_args():
     config = {}
     args = SimpleNamespace(config_path="configs/hype.json", log_level="info", suite=True)

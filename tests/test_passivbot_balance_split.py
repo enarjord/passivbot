@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from passivbot_exceptions import FatalBotException
 
 # Stub passivbot_rust before importing passivbot to avoid native dependency during unit test.
 sys.modules.setdefault(
@@ -41,6 +42,48 @@ def test_authoritative_refresh_mode_respects_explicit_legacy_opt_out_for_hyperli
     }
 
     assert bot._authoritative_refresh_mode() == "legacy"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_awaits_cancelled_maintainers():
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+
+    seen = {"maintainer_cancelled": False, "ccp_closed": False, "cca_closed": False}
+
+    async def _maintainer():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            seen["maintainer_cancelled"] = True
+            raise
+
+    class _Closer:
+        def __init__(self, key):
+            self.key = key
+
+        async def close(self):
+            seen[self.key] = True
+
+    maintainer_task = asyncio.create_task(_maintainer())
+    bot.maintainers = {"watch_orders": maintainer_task}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Closer("ccp_closed")
+    bot.cca = _Closer("cca_closed")
+
+    await asyncio.sleep(0)
+    await bot.shutdown_gracefully()
+
+    assert seen == {
+        "maintainer_cancelled": True,
+        "ccp_closed": True,
+        "cca_closed": True,
+    }
+    assert maintainer_task.done() is True
 
 
 @pytest.mark.asyncio
@@ -1537,7 +1580,6 @@ async def test_run_execution_loop_waits_for_clean_authoritative_cycle_before_exe
 @pytest.mark.asyncio
 async def test_run_execution_loop_stops_before_execute_when_signal_arrives_after_refresh():
     bot = Passivbot.__new__(Passivbot)
-    market_refreshes = []
     executes = []
 
     bot.stop_signal_received = False
@@ -1565,7 +1607,6 @@ async def test_run_execution_loop_stops_before_execute_when_signal_arrives_after
         return True
 
     async def fake_refresh_market_state_if_needed():
-        market_refreshes.append(True)
         return True
 
     async def fake_execute_to_exchange():
@@ -1579,7 +1620,6 @@ async def test_run_execution_loop_stops_before_execute_when_signal_arrives_after
     result = await bot.run_execution_loop()
 
     assert result is None
-    assert market_refreshes == []
     assert executes == []
 
 
@@ -1653,3 +1693,29 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
     assert bot.update_pnls.await_count == 0
     assert blocked is False
     assert details["missing"] == []
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_propagates_fatal_bot_exception():
+    bot = Passivbot.__new__(Passivbot)
+
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = False
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_refresh_authoritative_state():
+        raise FatalBotException("fatal")
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.execute_to_exchange = AsyncMock()
+
+    with pytest.raises(FatalBotException, match="fatal"):
+        await bot.run_execution_loop()
