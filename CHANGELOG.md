@@ -15,6 +15,7 @@ All notable user-facing changes will be documented in this file.
 - Staged live bots now route orchestrator latest-price reads through `CandlestickManager`, and `CandlestickManager.get_last_prices()` now uses cheap cache hits plus one bulk ticker snapshot when safe before any per-symbol fallback. This materially reduces staged live market-data call bursts on exchanges like Bybit.
 - Live runtime shutdown is now cleaner: Ctrl-C and stop-signal paths stop execution sooner, await cancelled maintainer tasks during shutdown, exit restart cooldowns promptly, and classify Bybit `110001 / order not exists or too late to cancel` as the expected benign cancel race instead of logging a noisy error traceback.
 - Fixed CLI `live.approved_coins` / `live.ignored_coins` file overrides so live reload keeps the original file path in `_coins_sources` instead of freezing the first parsed snapshot. Mid-run edits to `-s path/to/file` coin lists now take effect correctly.
+- Fixed `passivbot optimize/backtest -cim/--candle-interval-minutes` type handling so integral values stay integers through the Python/Rust backtest boundary. This fixes crashes like `TypeError: 'float' object cannot be interpreted as an integer` when using `-cim 2`.
 
 ## v7.9.1 - 2026-04-13
 - Removed the legacy `python src/downloader.py ...` entrypoint. Use `passivbot download ...` for OHLCV cache warming.

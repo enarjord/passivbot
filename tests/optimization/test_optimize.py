@@ -424,6 +424,46 @@ def test_optimize_parser_preserves_legacy_multi_char_short_flags_alongside_limit
     assert getattr(args, "optimize.bounds.long_total_wallet_exposure_limit") == [0.0]
 
 
+def test_optimize_parser_candle_interval_short_flag_parses_as_int():
+    parser = optimize.build_command_parser(
+        prog="passivbot optimize",
+        description="run optimizer",
+        usage="%(prog)s [config_path] [options]",
+        epilog="",
+    )
+    template_config = optimize.get_template_config()
+    del template_config["bot"]
+    keep_live_keys = {"approved_coins", "minimum_coin_age_days"}
+    for key in sorted(template_config["live"]):
+        if key not in keep_live_keys:
+            del template_config["live"][key]
+    group_map = {
+        "Coin Selection": parser.add_argument_group("Coin Selection"),
+        "Date Range": parser.add_argument_group("Date Range"),
+        "Optimizer": parser.add_argument_group("Optimizer"),
+        "Suite": parser.add_argument_group("Suite"),
+        "Logging": parser.add_argument_group("Logging"),
+        "Backtest Runtime": parser.add_argument_group("Backtest Runtime"),
+        "Optimize Common": parser.add_argument_group("Optimize Common"),
+        "Optimize Bounds": parser.add_argument_group("Optimize Bounds"),
+        "Optimize DEAP": parser.add_argument_group("Optimize DEAP"),
+        "Optimize Pymoo": parser.add_argument_group("Optimize Pymoo"),
+        "Advanced Overrides": parser.add_argument_group("Advanced Overrides"),
+    }
+    optimize.add_config_arguments(
+        parser,
+        template_config,
+        command="optimize",
+        help_all=False,
+        group_map=group_map,
+    )
+
+    args = parser.parse_args(["-cim", "2"])
+
+    assert getattr(args, "backtest.candle_interval_minutes") == 2
+    assert isinstance(getattr(args, "backtest.candle_interval_minutes"), int)
+
+
 class TestFormatObjectives:
     """Test _format_objectives function."""
 
