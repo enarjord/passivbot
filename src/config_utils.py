@@ -941,8 +941,8 @@ RESERVED_CLI_ARGS = {
             "--backtest.candle_interval_minutes",
             "--backtest_candle_interval_minutes",
         ],
-        "type": float,
-        "metavar": "FLOAT",
+        "type": int,
+        "metavar": "INT",
         "commands": {"backtest", "optimize"},
         "group": {
             "backtest": "Backtest Runtime",

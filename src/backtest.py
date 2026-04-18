@@ -450,6 +450,19 @@ def build_backtest_payload(
 
     # Read candle interval from config (default to 1m)
     candle_interval = config.get("backtest", {}).get("candle_interval_minutes", 1)
+    if isinstance(candle_interval, numbers.Real):
+        candle_interval_float = float(candle_interval)
+        if not candle_interval_float.is_integer():
+            raise ValueError(
+                "candle_interval_minutes must be an integer number of minutes, "
+                f"got {candle_interval!r}"
+            )
+        candle_interval = int(candle_interval_float)
+    else:
+        raise TypeError(
+            "candle_interval_minutes must be an integer number of minutes, "
+            f"got {type(candle_interval).__name__}"
+        )
     if candle_interval < 1:
         raise ValueError(f"candle_interval_minutes must be >= 1, got {candle_interval}")
     backtest_params["candle_interval_minutes"] = candle_interval
