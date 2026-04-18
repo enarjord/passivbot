@@ -87,4 +87,3 @@ def plan_local_symbol_range(
         legacy_inspection=legacy_inspection,
         persistent_gaps=persistent_gaps,
     )
-

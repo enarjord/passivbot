@@ -8,6 +8,7 @@ import numpy as np
 
 from legacy_data_migrator import _sanitize_symbol
 from ohlcv_store import OhlcvStore
+from ohlcv_utils import load_ohlcv_data
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,44 @@ def resolve_legacy_symbol_dir(
     return Path(legacy_root) / str(exchange) / str(timeframe) / _sanitize_symbol(symbol)
 
 
+def _resolve_legacy_day_path(symbol_dir: Path, day: str) -> Path | None:
+    for suffix in (".npy", ".npz"):
+        fpath = symbol_dir / f"{day}{suffix}"
+        if fpath.exists():
+            return fpath
+    return None
+
+
+def _load_legacy_day_file(fpath: Path) -> tuple[np.ndarray, np.ndarray]:
+    if fpath.suffix.lower() == ".npz":
+        df = load_ohlcv_data(str(fpath))
+        ts = df["timestamp"].to_numpy(dtype=np.int64, copy=False)
+        values = df.loc[:, ["high", "low", "close", "volume"]].to_numpy(dtype=np.float32)
+        return ts, values
+
+    arr = np.load(fpath, allow_pickle=False)
+    if isinstance(arr, np.ndarray) and arr.dtype.names is not None:
+        required = ("ts", "h", "l", "c", "bv")
+        missing = [name for name in required if name not in arr.dtype.names]
+        if missing:
+            raise ValueError(f"{fpath} missing required fields {missing}")
+        ts = arr["ts"].astype(np.int64, copy=False)
+        values = np.column_stack(
+            [
+                arr["h"].astype(np.float32, copy=False),
+                arr["l"].astype(np.float32, copy=False),
+                arr["c"].astype(np.float32, copy=False),
+                arr["bv"].astype(np.float32, copy=False),
+            ]
+        )
+        return ts, values
+
+    df = load_ohlcv_data(str(fpath))
+    ts = df["timestamp"].to_numpy(dtype=np.int64, copy=False)
+    values = df.loc[:, ["high", "low", "close", "volume"]].to_numpy(dtype=np.float32)
+    return ts, values
+
+
 def inspect_legacy_range(
     *,
     legacy_root: str | Path,
@@ -58,7 +97,7 @@ def inspect_legacy_range(
     present_days: list[str] = []
     missing_days: list[str] = []
     for day in _iter_utc_days(start_ts, end_ts):
-        if (symbol_dir / f"{day}.npy").exists():
+        if _resolve_legacy_day_path(symbol_dir, day) is not None:
             present_days.append(day)
         else:
             missing_days.append(day)
@@ -91,28 +130,13 @@ def import_legacy_range_into_store(
 
     imported_rows = 0
     for day in _iter_utc_days(start_ts, end_ts):
-        fpath = symbol_dir / f"{day}.npy"
-        if not fpath.exists():
+        fpath = _resolve_legacy_day_path(symbol_dir, day)
+        if fpath is None:
             continue
-        arr = np.load(fpath, allow_pickle=False)
-        if not isinstance(arr, np.ndarray) or arr.dtype.names is None:
-            raise ValueError(f"expected structured OHLCV array in {fpath}")
-        required = ("ts", "h", "l", "c", "bv")
-        missing = [name for name in required if name not in arr.dtype.names]
-        if missing:
-            raise ValueError(f"{fpath} missing required fields {missing}")
-        ts = arr["ts"].astype(np.int64, copy=False)
+        ts, values = _load_legacy_day_file(fpath)
         mask = (ts >= int(start_ts)) & (ts <= int(end_ts))
         if not mask.any():
             continue
-        values = np.column_stack(
-            [
-                arr["h"][mask].astype(np.float32, copy=False),
-                arr["l"][mask].astype(np.float32, copy=False),
-                arr["c"][mask].astype(np.float32, copy=False),
-                arr["bv"][mask].astype(np.float32, copy=False),
-            ]
-        )
-        store.write_rows(exchange, timeframe, symbol, ts[mask], values)
+        store.write_rows(exchange, timeframe, symbol, ts[mask], values[mask])
         imported_rows += int(mask.sum())
     return imported_rows
