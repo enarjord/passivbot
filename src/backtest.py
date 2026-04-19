@@ -387,15 +387,6 @@ def _build_hlcvs_bundle(
         timestamps_arr = np.arange(hlcvs_arr.shape[0], dtype=np.int64)
     else:
         timestamps_arr = _as_c_contiguous_native_array(timestamps, np.int64)
-    meta_overrides = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
-    warmup_requested = int(
-        meta_overrides.get("warmup_minutes_requested", compute_backtest_warmup_minutes(config))
-    )
-    warmup_provided = int(meta_overrides.get("warmup_minutes_provided", warmup_requested))
-    requested_ts = int(meta_overrides.get("requested_start_ts", requested_start_ts))
-    effective_start_ts = int(
-        meta_overrides.get("effective_start_ts", int(timestamps_arr[0]) if len(timestamps_arr) else 0)
-    )
     coin_meta_entries = _build_coin_metadata_entries(
         coins_order,
         exchange,

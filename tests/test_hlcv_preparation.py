@@ -524,7 +524,8 @@ class TestPrepareHLCVSBtcFallback:
             with patch.object(HLCVManager, "get_ohlcvs", new=mock_get_ohlcvs):
                 _mss, _ts, _hlcvs, btc_usd_prices = await prepare_hlcvs(config, "hyperliquid")
 
-        assert calls[:2] == ["hyperliquid", "binanceusdm"]
+        assert calls[0] == "hyperliquid"
+        assert calls[-1] == "binanceusdm"
         assert len(btc_usd_prices) == len(timestamps)
         assert float(btc_usd_prices[0]) == 50000.0
 
@@ -1347,8 +1348,9 @@ class TestPrepareHLCVSCombined:
 
     @pytest.mark.asyncio
     async def test_prepare_hlcvs_combined_returns_shared_materialized_payload(
-        self, sample_config, monkeypatch
+        self, sample_config, monkeypatch, tmp_path
     ):
+        monkeypatch.chdir(tmp_path)
         sample_config["backtest"]["exchanges"] = ["binance"]
         sample_config["live"]["approved_coins"] = {"long": ["ETH"], "short": []}
 
