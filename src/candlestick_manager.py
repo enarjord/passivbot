@@ -1316,15 +1316,20 @@ class CandlestickManager:
             meta.setdefault("inception_ts_probe_end_ts", 0)
             migrated_pre_inception = False
             if legacy_history_bounds and meta.get("authoritative_start_ts") is None:
-                original_gaps = list(meta.get("known_gaps", []))
-                retained_gaps = []
-                for gap in original_gaps:
-                    if isinstance(gap, dict) and str(gap.get("reason", "")) == "pre_inception":
-                        migrated_pre_inception = True
-                        continue
-                    retained_gaps.append(gap)
-                if migrated_pre_inception:
-                    meta["known_gaps"] = retained_gaps
+                legacy_authoritative_start = self._infer_legacy_authoritative_start_ts(meta)
+                if legacy_authoritative_start is not None:
+                    meta["authoritative_start_ts"] = int(legacy_authoritative_start)
+                    meta["authoritative_start_source"] = "legacy_pre_inception_gap"
+                else:
+                    original_gaps = list(meta.get("known_gaps", []))
+                    retained_gaps = []
+                    for gap in original_gaps:
+                        if isinstance(gap, dict) and str(gap.get("reason", "")) == "pre_inception":
+                            migrated_pre_inception = True
+                            continue
+                        retained_gaps.append(gap)
+                    if migrated_pre_inception:
+                        meta["known_gaps"] = retained_gaps
 
             # Keep index consistent if shard files were deleted.
             removed = self._prune_missing_shards_from_index(idx)
@@ -1367,15 +1372,20 @@ class CandlestickManager:
         meta.setdefault("authoritative_start_ts", None)
         meta.setdefault("authoritative_start_source", None)
         if legacy_history_bounds and meta.get("authoritative_start_ts") is None:
-            original_gaps = list(meta.get("known_gaps", []))
-            retained_gaps = []
-            for gap in original_gaps:
-                if isinstance(gap, dict) and str(gap.get("reason", "")) == "pre_inception":
-                    migrated_pre_inception = True
-                    continue
-                retained_gaps.append(gap)
-            if migrated_pre_inception:
-                meta["known_gaps"] = retained_gaps
+            legacy_authoritative_start = self._infer_legacy_authoritative_start_ts(meta)
+            if legacy_authoritative_start is not None:
+                meta["authoritative_start_ts"] = int(legacy_authoritative_start)
+                meta["authoritative_start_source"] = "legacy_pre_inception_gap"
+            else:
+                original_gaps = list(meta.get("known_gaps", []))
+                retained_gaps = []
+                for gap in original_gaps:
+                    if isinstance(gap, dict) and str(gap.get("reason", "")) == "pre_inception":
+                        migrated_pre_inception = True
+                        continue
+                    retained_gaps.append(gap)
+                if migrated_pre_inception:
+                    meta["known_gaps"] = retained_gaps
 
         # Keep cached index consistent if shard files were deleted while running.
         removed = self._prune_missing_shards_from_index(idx)
@@ -2909,6 +2919,38 @@ class CandlestickManager:
         self._save_index(symbol)
 
     # ----- Coverage / history-bound tracking -----
+
+    def _infer_legacy_authoritative_start_ts(self, meta: Dict[str, Any]) -> Optional[int]:
+        """Infer authoritative lower bound from legacy inception/pre_inception metadata.
+
+        Old caches used `inception_ts` both as earliest observed candle and as an implicit
+        lower bound when paired with persistent `pre_inception` gaps immediately preceding it.
+        Preserve that learned boundary during migration instead of dropping it.
+        """
+        try:
+            observed_start = meta.get("observed_start_ts", meta.get("inception_ts"))
+            if observed_start is None:
+                return None
+            observed_start = int(observed_start)
+            cutoff_end = observed_start - ONE_MIN_MS
+            for gap in meta.get("known_gaps", []):
+                if not isinstance(gap, dict):
+                    continue
+                if str(gap.get("reason", "")) != "pre_inception":
+                    continue
+                try:
+                    gap_end = int(gap.get("end_ts"))
+                    gap_start = int(gap.get("start_ts"))
+                    retry_count = int(gap.get("retry_count", 0))
+                except Exception:
+                    continue
+                if retry_count < _GAP_MAX_RETRIES:
+                    continue
+                if gap_start < observed_start and gap_end >= cutoff_end:
+                    return observed_start
+        except Exception:
+            return None
+        return None
 
     def _get_inception_ts(self, symbol: str) -> Optional[int]:
         """Return earliest observed candle timestamp for this symbol, or None.

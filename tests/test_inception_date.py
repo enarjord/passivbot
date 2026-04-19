@@ -168,8 +168,10 @@ class TestInceptionDateTracking:
         # This gap should not be retried
         assert not cm._should_retry_gap(gaps[0])
 
-    def test_legacy_inception_is_migrated_to_observed_start_only(self, tmp_cache_dir):
-        """Legacy inception_ts should not become authoritative lower-bound metadata."""
+    def test_legacy_inception_with_matching_pre_inception_gap_preserves_authoritative_bound(
+        self, tmp_cache_dir
+    ):
+        """Legacy caches that had already learned a pre-inception boundary must preserve it."""
         cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
         symbol = "BTC/USDT:USDT"
         legacy_ts = 1609459200000
@@ -186,6 +188,45 @@ class TestInceptionDateTracking:
                             {
                                 "start_ts": legacy_ts - 10 * ONE_MIN_MS,
                                 "end_ts": legacy_ts - ONE_MIN_MS,
+                                "retry_count": 3,
+                                "reason": "pre_inception",
+                                "added_at": legacy_ts,
+                            }
+                        ],
+                    },
+                },
+                f,
+            )
+
+        cm2 = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
+        idx = cm2._ensure_symbol_index(symbol, tf="1m")
+
+        assert cm2._get_inception_ts(symbol) == legacy_ts
+        assert idx["meta"]["observed_start_ts"] == legacy_ts
+        assert idx["meta"]["authoritative_start_ts"] == legacy_ts
+        assert idx["meta"]["authoritative_start_source"] == "legacy_pre_inception_gap"
+        assert len(idx["meta"]["known_gaps"]) == 1
+
+    def test_stale_legacy_pre_inception_gap_is_dropped_without_authoritative_bound(
+        self, tmp_cache_dir
+    ):
+        """Non-matching legacy pre_inception gaps should not survive migration."""
+        cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
+        symbol = "BTC/USDT:USDT"
+        legacy_ts = 1609459200000
+
+        idx_path = cm._index_path(symbol, tf="1m")
+        os.makedirs(os.path.dirname(idx_path), exist_ok=True)
+        with open(idx_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "shards": {},
+                    "meta": {
+                        "inception_ts": legacy_ts,
+                        "known_gaps": [
+                            {
+                                "start_ts": legacy_ts - 20 * ONE_MIN_MS,
+                                "end_ts": legacy_ts - 11 * ONE_MIN_MS,
                                 "retry_count": 3,
                                 "reason": "pre_inception",
                                 "added_at": legacy_ts,
