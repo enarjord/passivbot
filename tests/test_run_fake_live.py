@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hjson
 import json
 import shutil
 from pathlib import Path
@@ -595,7 +596,11 @@ async def test_hsl_replay_scenarios_run_end_to_end(
     )
     assert await _async_main(args) == 0
 
-    output_dirs = sorted(path for path in tmp_path.iterdir() if path.is_dir())
+    output_dirs = sorted(
+        path
+        for path in tmp_path.iterdir()
+        if path.is_dir() and (path / "remote_calls.json").exists()
+    )
     assert len(output_dirs) == 1
     run_dir = output_dirs[0]
 
@@ -734,7 +739,11 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
     )
     assert await _async_main(args) == 0
 
-    output_dirs = sorted(path for path in tmp_path.iterdir() if path.is_dir())
+    output_dirs = sorted(
+        path
+        for path in tmp_path.iterdir()
+        if path.is_dir() and (path / "remote_calls.json").exists()
+    )
     assert len(output_dirs) == 1
     run_dir = output_dirs[0]
 
@@ -752,3 +761,60 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
     assert positions == []
     assert fills == []
     assert "[order]   post SOL" not in log_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
+async def test_fake_live_writes_remote_call_artifacts(tmp_path, monkeypatch):
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    monkeypatch.chdir(tmp_path)
+    scenario = hjson.loads(
+        (REPO_ROOT / "scenarios" / "fake_live" / "hsl_long_red_restart.hjson").read_text(
+            encoding="utf-8"
+        )
+    )
+    scenario.pop("assertions", None)
+    scenario_path = tmp_path / "fake_remote_call_trace.hjson"
+    scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
+    config_path = REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"
+
+    args = argparse.Namespace(
+        config=str(config_path),
+        scenario=str(scenario_path),
+        user="fake_remote_call_trace",
+        max_steps=1,
+        output_dir=str(tmp_path),
+        log_level=1,
+        snapshot_each_step=False,
+    )
+    assert await _async_main(args) == 0
+
+    output_dirs = sorted(
+        path
+        for path in tmp_path.iterdir()
+        if path.is_dir() and (path / "remote_calls.json").exists()
+    )
+    assert len(output_dirs) == 1
+    run_dir = output_dirs[0]
+
+    remote_calls = json.loads((run_dir / "remote_calls.json").read_text(encoding="utf-8"))
+    remote_summary = json.loads((run_dir / "remote_call_summary.json").read_text(encoding="utf-8"))
+    candle_fetches = json.loads((run_dir / "candle_remote_fetches.json").read_text(encoding="utf-8"))
+
+    methods = {entry["method"] for entry in remote_calls}
+    assert "fetch_balance" in methods
+    assert "fetch_positions" in methods
+    assert "fetch_open_orders" in methods
+    assert "fetch_ohlcv" in methods
+
+    assert remote_summary["total_calls"] == len(remote_calls)
+    assert remote_summary["by_method"]["fetch_balance"] >= 1
+    assert remote_summary["by_method"]["fetch_positions"] >= 1
+    assert remote_summary["by_method"]["fetch_open_orders"] >= 1
+    assert remote_summary["by_method"]["fetch_ohlcv"] >= 1
+
+    assert any(entry["kind"] == "ccxt_fetch_ohlcv" for entry in candle_fetches)
