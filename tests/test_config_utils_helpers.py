@@ -934,8 +934,6 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     assert "--hedge-mode Y/N, -hm Y/N" in help_text
     assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
     assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
-    assert "--bot.long.entry_grid_inflation_enabled Y/N" in help_text
-    assert "--bot.short.entry_grid_inflation_enabled Y/N" in help_text
     assert "--bot.long.hsl_enabled Y/N" in help_text
     assert "--bot.short.hsl_enabled Y/N" in help_text
     assert "--bot.long.hsl_orange_tier_mode VALUE" in help_text
@@ -1045,8 +1043,6 @@ def test_optimize_fixed_bot_runtime_overrides_parse():
 
     parsed = parser.parse_args(
         [
-            "--bot.long.entry_grid_inflation_enabled",
-            "n",
             "--bot.short.hsl_enabled",
             "y",
             "--bot.long.hsl_orange_tier_mode",
@@ -1056,7 +1052,6 @@ def test_optimize_fixed_bot_runtime_overrides_parse():
         ]
     )
 
-    assert getattr(parsed, "bot.long.entry_grid_inflation_enabled") is False
     assert getattr(parsed, "bot.short.hsl_enabled") is True
     assert getattr(parsed, "bot.long.hsl_orange_tier_mode") == "tp_only"
     assert getattr(parsed, "bot.short.hsl_panic_close_order_type") == "market"
