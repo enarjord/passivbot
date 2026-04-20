@@ -164,6 +164,7 @@ class FakeCCXTClient:
 
         self.open_orders: Dict[str, Dict[str, Any]] = {}
         self.fills: List[Dict[str, Any]] = []
+        self.request_log: List[Dict[str, Any]] = []
         self._next_order_id = 1
         self._next_trade_id = 1
 
@@ -172,6 +173,22 @@ class FakeCCXTClient:
         for order in account.get("open_orders") or []:
             self._load_boot_order(order)
         self._process_resting_orders_for_current_step()
+
+    def _record_request(self, method: str, **payload: Any) -> None:
+        entry: Dict[str, Any] = {
+            "timestamp": int(self.now_ms),
+            "datetime": ts_to_date(self.now_ms),
+            "step_index": int(self.current_index),
+            "method": str(method),
+        }
+        for key, value in payload.items():
+            if value is None:
+                continue
+            if key == "params" and isinstance(value, dict):
+                entry[key] = copy.deepcopy(value)
+            else:
+                entry[key] = value
+        self.request_log.append(entry)
 
     @classmethod
     def from_config(cls, config: dict, user_info: dict) -> "FakeCCXTClient":
@@ -576,9 +593,11 @@ class FakeCCXTClient:
         return self.current_index < len(self.timeline) - 1
 
     async def load_markets(self, reload: bool = True) -> Dict[str, dict]:
+        self._record_request("load_markets", reload=bool(reload), rows=len(self.markets))
         return copy.deepcopy(self.markets)
 
     async def fetch_balance(self) -> dict:
+        self._record_request("fetch_balance")
         return {
             "timestamp": self.now_ms,
             "datetime": ts_to_date(self.now_ms),
@@ -603,6 +622,7 @@ class FakeCCXTClient:
                     "info": {"positionSide": str(state["position_side"]).upper()},
                 }
             )
+        self._record_request("fetch_positions", rows=len(positions))
         return positions
 
     async def fetch_open_orders(self, symbol: str = None) -> List[dict]:
@@ -611,16 +631,19 @@ class FakeCCXTClient:
             if symbol is not None and order["symbol"] != symbol:
                 continue
             orders.append(_copy_order(order))
+        self._record_request("fetch_open_orders", symbol=symbol, rows=len(orders))
         return sorted(orders, key=lambda item: (item["timestamp"], item["id"]))
 
     async def fetch_tickers(self) -> Dict[str, dict]:
         prices = self.get_current_step()["prices"]
+        self._record_request("fetch_tickers", rows=len(prices))
         return {symbol: self._ticker(symbol, prices[symbol]) for symbol in self.symbols}
 
     async def fetch_ticker(self, symbol: str) -> dict:
         prices = self.get_current_step()["prices"]
         if symbol not in prices:
             raise KeyError(f"Fake ticker price missing for {symbol}")
+        self._record_request("fetch_ticker", symbol=symbol, rows=1)
         return self._ticker(symbol, prices[symbol])
 
     def _ticker(self, symbol: str, last_price: float) -> dict:
@@ -657,6 +680,15 @@ class FakeCCXTClient:
             rows = [row for row in rows if int(row[0]) <= int(until_ms)]
         if limit is not None:
             rows = rows[-int(limit) :]
+        self._record_request(
+            "fetch_ohlcv",
+            symbol=symbol,
+            timeframe=str(timeframe),
+            since=int(since) if since is not None else None,
+            until=int(until_ms) if until_ms is not None else None,
+            limit=int(limit) if limit is not None else None,
+            rows=len(rows),
+        )
         return rows
 
     async def fetch_my_trades(
@@ -683,6 +715,15 @@ class FakeCCXTClient:
         trades.sort(key=lambda item: (item["timestamp"], item["id"]))
         if limit is not None:
             trades = trades[-int(limit) :]
+        self._record_request(
+            "fetch_my_trades",
+            symbol=symbol,
+            since=int(since_ms) if since_ms is not None else None,
+            until=int(until_ms) if until_ms is not None else None,
+            limit=int(limit) if limit is not None else None,
+            params=params,
+            rows=len(trades),
+        )
         return trades
 
     async def create_order(
@@ -762,20 +803,34 @@ class FakeCCXTClient:
         return _copy_order(order)
 
     async def fetch_time(self) -> int:
+        self._record_request("fetch_time")
         return int(self.now_ms)
 
     async def set_position_mode(self, hedge_mode: bool, **kwargs) -> dict:
         self.position_mode = bool(hedge_mode)
+        self._record_request("set_position_mode", hedge_mode=bool(hedge_mode), params=kwargs)
         return {"hedgeMode": self.position_mode}
 
     async def set_leverage(self, leverage: int, symbol: str = None, **kwargs) -> dict:
         if symbol is not None:
             self.leverage_by_symbol[symbol] = int(leverage)
+        self._record_request(
+            "set_leverage",
+            leverage=int(leverage),
+            symbol=symbol,
+            params=kwargs,
+        )
         return {"symbol": symbol, "leverage": int(leverage)}
 
     async def set_margin_mode(self, margin_mode: str, symbol: str = None, **kwargs) -> dict:
         if symbol is not None:
             self.margin_mode_by_symbol[symbol] = str(margin_mode)
+        self._record_request(
+            "set_margin_mode",
+            margin_mode=str(margin_mode),
+            symbol=symbol,
+            params=kwargs,
+        )
         return {"symbol": symbol, "marginMode": str(margin_mode)}
 
     async def close(self) -> None:
@@ -892,6 +947,9 @@ class FakeCCXTClient:
             "fills": [copy.deepcopy(fill) for fill in self.fills],
             "prices": dict(self.get_current_step()["prices"]),
         }
+
+    def export_request_log(self) -> List[dict]:
+        return [copy.deepcopy(entry) for entry in self.request_log]
 
     def export_positions(self) -> List[dict]:
         result = []

@@ -41,6 +41,53 @@ def _dump_json(path: Path, data: Any) -> None:
         handle.write("\n")
 
 
+def _summarize_remote_calls(call_log: List[dict]) -> dict:
+    by_method: Dict[str, int] = {}
+    by_step: Dict[str, Dict[str, int]] = {}
+    ohlcv_calls: List[dict] = []
+    for entry in call_log:
+        method = str(entry.get("method") or "unknown")
+        step_key = str(entry.get("step_index") if entry.get("step_index") is not None else "unknown")
+        by_method[method] = by_method.get(method, 0) + 1
+        step_bucket = by_step.setdefault(step_key, {})
+        step_bucket[method] = step_bucket.get(method, 0) + 1
+        if method == "fetch_ohlcv":
+            ohlcv_calls.append(
+                {
+                    "step_index": entry.get("step_index"),
+                    "symbol": entry.get("symbol"),
+                    "timeframe": entry.get("timeframe"),
+                    "since": entry.get("since"),
+                    "until": entry.get("until"),
+                    "limit": entry.get("limit"),
+                    "rows": entry.get("rows"),
+                }
+            )
+    return {
+        "total_calls": len(call_log),
+        "by_method": dict(sorted(by_method.items())),
+        "by_step": {key: dict(sorted(value.items())) for key, value in sorted(by_step.items())},
+        "ohlcv_calls": ohlcv_calls,
+    }
+
+
+def _install_candle_remote_fetch_trace(bot) -> tuple[List[dict], callable]:
+    if not hasattr(bot, "cm"):
+        return [], lambda: None
+    existing_cb = getattr(bot.cm, "_remote_fetch_callback", None)
+    events: List[dict] = []
+
+    def traced(payload: Dict[str, Any]) -> None:
+        item = dict(payload)
+        item["event_index"] = len(events)
+        events.append(item)
+        if existing_cb is not None:
+            existing_cb(payload)
+
+    bot.cm._remote_fetch_callback = traced
+    return events, lambda: setattr(bot.cm, "_remote_fetch_callback", existing_cb)
+
+
 def _attach_file_logging(path: Path) -> logging.Handler:
     ensure_parent_directory(path)
     root = logging.getLogger()
@@ -416,6 +463,7 @@ async def _async_main(args: argparse.Namespace) -> int:
     log_handler = _attach_file_logging(log_path)
     _, restore_user_override = _install_fake_user_override(config, args.scenario, args.user)
     bot = None
+    restore_candle_trace = lambda: None
 
     try:
         bot = setup_bot(config)
@@ -426,6 +474,7 @@ async def _async_main(args: argparse.Namespace) -> int:
         bot.debug_mode = True
         if not isinstance(bot.cca, FakeCCXTClient):
             raise TypeError("Fake harness expected bot.cca to be FakeCCXTClient")
+        candle_remote_fetches, restore_candle_trace = _install_candle_remote_fetch_trace(bot)
         _prime_fake_fill_cache(bot, bot.cca)
         _prime_fake_candles(bot, bot.cca)
         _install_runtime_overrides(bot, scenario)
@@ -455,6 +504,10 @@ async def _async_main(args: argparse.Namespace) -> int:
         _dump_json(output_dir / "fills.json", bot.cca.fills)
         _dump_json(output_dir / "positions.json", bot.cca.export_positions())
         _dump_json(output_dir / "hsl_trace.json", _extract_hsl_trace(bot))
+        remote_calls = bot.cca.export_request_log()
+        _dump_json(output_dir / "remote_calls.json", remote_calls)
+        _dump_json(output_dir / "remote_call_summary.json", _summarize_remote_calls(remote_calls))
+        _dump_json(output_dir / "candle_remote_fetches.json", candle_remote_fetches)
         print(str(output_dir))
         return 0
     finally:
@@ -462,6 +515,10 @@ async def _async_main(args: argparse.Namespace) -> int:
             if bot is not None:
                 await shutdown_bot(bot)
         finally:
+            try:
+                restore_candle_trace()
+            except Exception:
+                pass
             restore_user_override()
             logging.getLogger().removeHandler(log_handler)
             log_handler.close()
