@@ -215,6 +215,16 @@ Per-side aliases should follow the same pattern:
 - `peak_recovery_hours_hsl_long` -> `peak_recovery_hours_strategy_eq_long`
 - `peak_recovery_hours_hsl_short` -> `peak_recovery_hours_strategy_eq_short`
 
+If EMA drawdown metrics remain public, their per-side aliases must be accepted and tested too:
+
+- `drawdown_worst_ema_hsl_long` -> `drawdown_worst_ema_strategy_eq_long`
+- `drawdown_worst_ema_hsl_short` -> `drawdown_worst_ema_strategy_eq_short`
+- `drawdown_worst_mean_1pct_ema_hsl_long` -> `drawdown_worst_mean_1pct_ema_strategy_eq_long`
+- `drawdown_worst_mean_1pct_ema_hsl_short` -> `drawdown_worst_mean_1pct_ema_strategy_eq_short`
+
+If EMA drawdown metrics become internal HSL-only state, then old public per-side EMA names should
+not be accepted as aliases. That decision must be explicit in the implementation PR.
+
 ## Alias Architecture
 
 Aliases must be centralized. Do not scatter ad hoc replacements through optimizer, pareto, suite runner, or docs tooling.
@@ -227,6 +237,7 @@ Required API shape:
 canonical_metric_name(name: str) -> str
 canonicalize_metric_mapping(mapping: dict) -> dict
 canonicalize_metric_list(values: list[str]) -> list[str]
+split_metric_stat_suffix(name: str) -> tuple[str, str | None]
 metric_aliases(name: str) -> tuple[str, ...]
 resolve_metric_value(metrics: Mapping[str, Any], requested_name: str) -> Any | None
 ```
@@ -240,6 +251,17 @@ results need value resolution that tries:
 3. deprecated stored aliases for the canonical metric
 
 This resolver should be used anywhere historical result dictionaries are queried directly.
+
+The resolver must be suffix-aware for flattened suite/scenario stats. A request for a canonical
+base metric plus stat suffix must also try deprecated stored aliases with the same suffix:
+
+- request `adg_strategy_eq_mean` should try `adg_strategy_pnl_rebased_mean`
+- request `drawdown_worst_strategy_eq_max` should try `drawdown_worst_hsl_max`
+- request `peak_recovery_hours_strategy_eq_std` should try `peak_recovery_hours_hsl_std`
+
+This matters because several readers build flattened keys such as `f"{metric}_mean"` or
+`f"{metric}_max"` after parsing the metric name. Alias handling must therefore work both before and
+after stat suffix expansion.
 
 The alias layer should be used by:
 
