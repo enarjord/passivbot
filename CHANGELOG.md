@@ -4,6 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Renamed collateral-agnostic strategy-equity analysis metrics to canonical `*_strategy_eq` names and deprecated the old `*_strategy_pnl_rebased` / `*_hsl` metric names as input aliases. New `analysis.json` output uses canonical names, while optimizer, Pareto, limits, aggregate config, and visibility filters still resolve old stored result keys. `peak_recovery_hours_pnl` now uses net realized PnL (`pnl + fee_paid`) and includes the open tail from the last realized-PnL peak to the end of the backtest.
 - Fixed suite-mode limit semantics so `passivbot optimize` and `passivbot tool pareto` now resolve omitted `stat=` the same way: explicit `stat=` still wins, otherwise both defer to `backtest.aggregate.<metric>`, then `backtest.aggregate.default`, then `mean`. This removes the old optimizer-only behavior where `>` silently implied `min` and `<` silently implied `max`.
 - Reduced optimizer startup memory pressure when warming from large starting-config sets. Starting configs now stream into quantization instead of being fully materialized up front, and pymoo worker evaluations now reuse per-worker evaluator state plus metrics-only backtests instead of serializing full evaluator payloads and full backtest histories for every candidate.
 - Upgraded the pinned `ccxt` dependency from `4.5.22` to `4.5.48` and added a dedicated CCXT upgrade validation workflow with live snapshot capture/diff tooling plus offline contract fixtures for upgrade drift.

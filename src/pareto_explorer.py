@@ -17,6 +17,7 @@ from config.limits import (
     resolve_aggregate_mode,
     resolve_limit_stat,
 )
+from config.metrics import resolve_metric_value
 from config.scoring import (
     ObjectiveSpec,
     default_objective_goal,
@@ -298,12 +299,14 @@ def _parse_key_value_pairs(raw_pairs: Iterable[str], *, value_name: str) -> Dict
 
 
 def _resolve_candidate_metric_value(candidate: ParetoCandidate, metric: str) -> Optional[float]:
-    if metric in candidate.objectives:
-        return float(candidate.objectives[metric])
-    if metric in candidate.aggregated_values:
-        return float(candidate.aggregated_values[metric])
+    value = resolve_metric_value(candidate.objectives, metric)
+    if value is not None:
+        return float(value)
+    value = resolve_metric_value(candidate.aggregated_values, metric)
+    if value is not None:
+        return float(value)
     mean_key = f"{metric}_mean"
-    value = candidate.stats_flat.get(mean_key)
+    value = resolve_metric_value(candidate.stats_flat, mean_key)
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         return float(value)
     return None
@@ -331,9 +334,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  lexicographic Strict priority order (--priority metric_a,metric_b,...).\n"
             "  outranking   Simplified PROMETHEE-style net flow selector.\n\n"
             "Limits are applied before selection. Repeat -l/--limit for multiple keep-conditions:\n"
-            "  -l 'adg_strategy_pnl_rebased>0.0'\n"
-            "  -l 'drawdown_worst_hsl<=0.35'\n"
-            "  --limits '[{\"metric\":\"drawdown_worst_hsl\",\"penalize_if\":\">\",\"value\":0.35}]'\n"
+            "  -l 'adg_strategy_eq>0.0'\n"
+            "  -l 'drawdown_worst_strategy_eq<=0.35'\n"
+            "  --limits '[{\"metric\":\"drawdown_worst_strategy_eq\",\"penalize_if\":\">\",\"value\":0.35}]'\n"
         ),
     )
     parser.add_argument(
@@ -471,10 +474,8 @@ def _extract_objectives(entry: Mapping[str, Any]) -> Dict[str, float]:
 
     if isinstance(objective_payload, Mapping):
         for idx, spec in enumerate(scoring_specs):
-            value = None
-            if spec.metric in objective_payload:
-                value = objective_payload.get(spec.metric)
-            else:
+            value = resolve_metric_value(objective_payload, spec.metric)
+            if value is None:
                 legacy_key = f"w_{idx}"
                 if legacy_key in objective_payload:
                     value = from_engine_value(spec, float(objective_payload[legacy_key]))
@@ -494,11 +495,12 @@ def _extract_objectives(entry: Mapping[str, Any]) -> Dict[str, float]:
     for spec in scoring_specs:
         if spec.metric in objectives:
             continue
-        if spec.metric in aggregated_values:
-            objectives[spec.metric] = aggregated_values[spec.metric]
+        value = resolve_metric_value(aggregated_values, spec.metric)
+        if value is not None:
+            objectives[spec.metric] = float(value)
             continue
         metric_key = f"{spec.metric}_mean"
-        value = stats_flat.get(metric_key)
+        value = resolve_metric_value(stats_flat, metric_key)
         if isinstance(value, (int, float)) and math.isfinite(float(value)):
             objectives[spec.metric] = float(value)
     return objectives
@@ -729,12 +731,16 @@ def _resolve_limit_value(
     metric = str(entry.get("metric", "")).strip()
     if not metric:
         return None
-    stat = resolve_limit_stat(dict(entry), aggregate_cfg=dict(aggregate_cfg) if aggregate_cfg else None)
-    if "stat" not in entry and metric in candidate.aggregated_values:
-        value = candidate.aggregated_values.get(metric)
-        return float(value) if isinstance(value, (int, float)) and math.isfinite(float(value)) else None
+    stat = resolve_limit_stat(
+        dict(entry),
+        aggregate_cfg=dict(aggregate_cfg) if aggregate_cfg else None,
+    )
+    if "stat" not in entry:
+        value = resolve_metric_value(candidate.aggregated_values, metric)
+        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+            return float(value)
     key = f"{metric}_{stat}"
-    value = candidate.stats_flat.get(key)
+    value = resolve_metric_value(candidate.stats_flat, key)
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         return float(value)
     if "stat" not in entry:

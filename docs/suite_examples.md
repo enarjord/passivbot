@@ -172,9 +172,9 @@ Good defaults:
 {
   "aggregate": {
     "default": "mean",
-    "drawdown_worst_hsl": "max",
-    "drawdown_worst_mean_1pct_hsl": "max",
-    "peak_recovery_hours_hsl": "max",
+    "drawdown_worst_strategy_eq": "max",
+    "drawdown_worst_mean_1pct_strategy_eq": "max",
+    "peak_recovery_hours_strategy_eq": "max",
     "position_held_hours_max": "max"
   }
 }

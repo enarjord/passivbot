@@ -420,7 +420,7 @@ def test_load_config_disabled_sparse_optimize_limits_are_normalized(caplog, tmp_
 
     loaded = load_config(str(path), verbose=False)
 
-    assert loaded["optimize"]["limits"][1]["metric"] == "peak_recovery_hours_hsl"
+    assert loaded["optimize"]["limits"][1]["metric"] == "peak_recovery_hours_strategy_eq"
     assert loaded["optimize"]["limits"][1]["enabled"] is False
     assert loaded["optimize"]["limits"][2]["enabled"] is False
     assert not any("optimize.limits malformed or unsupported" in rec.message for rec in caplog.records)
@@ -460,12 +460,12 @@ def test_parse_limit_cli_entry_supports_extended_scalar_operators():
     equal_to = config_utils.parse_limit_cli_entry("adg_strategy_pnl_rebased == 0.0")
 
     assert greater_equal == {
-        "metric": "adg_strategy_pnl_rebased",
+        "metric": "adg_strategy_eq",
         "penalize_if": "less_than",
         "value": 0.001,
     }
     assert equal_to == {
-        "metric": "adg_strategy_pnl_rebased",
+        "metric": "adg_strategy_eq",
         "penalize_if": "not_equal",
         "value": 0,
     }

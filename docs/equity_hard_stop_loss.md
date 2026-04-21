@@ -197,33 +197,33 @@ Important backtest details:
    - panic exits use simulated taker execution on the next bar
    - slippage is controlled by `backtest.market_order_slippage_pct`
 3. Backtests export both:
-   - global account-level HSL metrics under `*_hsl`
-   - side-specific HSL metrics under `*_hsl_long` / `*_hsl_short`
+   - operational HSL telemetry under `hard_stop_*`
+   - collateral-agnostic strategy-equity risk metrics under `*_strategy_eq`
 
-Main optimizer-facing global HSL metrics:
+Main optimizer-facing strategy-equity risk metrics:
 
-1. `drawdown_worst_hsl`
-2. `drawdown_worst_ema_hsl`
-3. `drawdown_worst_mean_1pct_hsl`
-4. `drawdown_worst_mean_1pct_ema_hsl`
-5. `peak_recovery_hours_hsl`
+1. `drawdown_worst_strategy_eq`
+2. `drawdown_worst_ema_strategy_eq`
+3. `drawdown_worst_mean_1pct_strategy_eq`
+4. `drawdown_worst_mean_1pct_ema_strategy_eq`
+5. `peak_recovery_hours_strategy_eq`
 
 For the shared EMA-smoothed metrics, long and short each use their own configured
 `hsl_ema_span_minutes`. The shared values are reported conservatively as `max(long, short)`
 rather than trying to invent one combined EMA span.
 
-Useful side-specific HSL metrics:
+Useful side-specific strategy-equity metrics:
 
-1. `drawdown_worst_hsl_long`
-2. `drawdown_worst_hsl_short`
-3. `drawdown_worst_ema_hsl_long`
-4. `drawdown_worst_ema_hsl_short`
-5. `drawdown_worst_mean_1pct_hsl_long`
-6. `drawdown_worst_mean_1pct_hsl_short`
-7. `drawdown_worst_mean_1pct_ema_hsl_long`
-8. `drawdown_worst_mean_1pct_ema_hsl_short`
-9. `peak_recovery_hours_hsl_long`
-10. `peak_recovery_hours_hsl_short`
+1. `drawdown_worst_strategy_eq_long`
+2. `drawdown_worst_strategy_eq_short`
+3. `drawdown_worst_ema_strategy_eq_long`
+4. `drawdown_worst_ema_strategy_eq_short`
+5. `drawdown_worst_mean_1pct_strategy_eq_long`
+6. `drawdown_worst_mean_1pct_strategy_eq_short`
+7. `drawdown_worst_mean_1pct_ema_strategy_eq_long`
+8. `drawdown_worst_mean_1pct_ema_strategy_eq_short`
+9. `peak_recovery_hours_strategy_eq_long`
+10. `peak_recovery_hours_strategy_eq_short`
 11. `hard_stop_triggers_long`
 12. `hard_stop_triggers_short`
 13. `hard_stop_restarts_long`

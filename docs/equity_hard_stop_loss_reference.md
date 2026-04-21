@@ -131,9 +131,9 @@ Recommended HSL-focused optimizer study:
    - `short_hsl_ema_span_minutes`
    - `short_hsl_cooldown_minutes_after_red`
 4. Constrain:
-   - `drawdown_worst_hsl`
-   - `drawdown_worst_mean_1pct_hsl`
-   - `peak_recovery_hours_hsl`
+   - `drawdown_worst_strategy_eq`
+   - `drawdown_worst_mean_1pct_strategy_eq`
+   - `peak_recovery_hours_strategy_eq`
    - `backtest_completion_ratio`
 
 ## Candidate Starting Defaults To Validate

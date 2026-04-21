@@ -1468,14 +1468,14 @@ class TestEvaluator:
         )
 
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_strategy_pnl_rebased_mean",
-            "peak_recovery_hours_hsl_mean",
+            "adg_strategy_eq_mean",
+            "peak_recovery_hours_strategy_eq_mean",
         ]
 
         _suite = SuiteEvaluator(base, [], {"default": "mean", "peak_recovery_hours_hsl": "mean"})
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_strategy_pnl_rebased_mean",
-            "peak_recovery_hours_hsl_mean",
+            "adg_strategy_eq_mean",
+            "peak_recovery_hours_strategy_eq_mean",
         ]
 
     def test_suite_limit_checks_keep_explicit_stat_override(self):
@@ -1506,8 +1506,8 @@ class TestEvaluator:
         _suite = SuiteEvaluator(base, [], {"default": "mean", "drawdown_worst_hsl": "max"})
 
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_strategy_pnl_rebased_min",
-            "drawdown_worst_hsl_max",
+            "adg_strategy_eq_min",
+            "drawdown_worst_strategy_eq_max",
         ]
 
     def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
