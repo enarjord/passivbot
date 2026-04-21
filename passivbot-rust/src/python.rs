@@ -1002,6 +1002,12 @@ fn run_backtest_core<'py>(
             strategy.long.peak_recovery_hours_strategy_eq;
         analysis_usd.peak_recovery_hours_strategy_eq_short =
             strategy.short.peak_recovery_hours_strategy_eq;
+        analysis_usd.peak_recovery_days_strategy_eq =
+            strategy.overall.peak_recovery_days_strategy_eq;
+        analysis_usd.peak_recovery_days_strategy_eq_long =
+            strategy.long.peak_recovery_days_strategy_eq;
+        analysis_usd.peak_recovery_days_strategy_eq_short =
+            strategy.short.peak_recovery_days_strategy_eq;
         analysis_usd.gain_strategy_eq = strategy.overall.gain_strategy_eq;
         analysis_usd.adg_strategy_eq = strategy.overall.adg_strategy_eq;
         analysis_usd.mdg_strategy_eq = strategy.overall.mdg_strategy_eq;
@@ -1071,6 +1077,12 @@ fn run_backtest_core<'py>(
             strategy.long.peak_recovery_hours_strategy_eq;
         analysis_btc.peak_recovery_hours_strategy_eq_short =
             strategy.short.peak_recovery_hours_strategy_eq;
+        analysis_btc.peak_recovery_days_strategy_eq =
+            strategy.overall.peak_recovery_days_strategy_eq;
+        analysis_btc.peak_recovery_days_strategy_eq_long =
+            strategy.long.peak_recovery_days_strategy_eq;
+        analysis_btc.peak_recovery_days_strategy_eq_short =
+            strategy.short.peak_recovery_days_strategy_eq;
         analysis_btc.gain_strategy_eq = strategy.overall.gain_strategy_eq;
         analysis_btc.adg_strategy_eq = strategy.overall.adg_strategy_eq;
         analysis_btc.mdg_strategy_eq = strategy.overall.mdg_strategy_eq;
@@ -1169,11 +1181,16 @@ fn run_backtest_core<'py>(
             py_fills[(i, 18)] = fill.twe_net.into_py(py);
         }
 
+        let strategy_equity_series = backtest.strategy_equity_series_for_artifacts();
         let equities_array =
-            Array2::from_shape_fn((equities.timestamps_ms.len(), 3), |(i, j)| match j {
+            Array2::from_shape_fn((equities.timestamps_ms.len(), 4), |(i, j)| match j {
                 0 => equities.timestamps_ms[i] as f64,
                 1 => equities.usd_total_equity[i],
                 2 => equities.btc_total_equity[i],
+                3 => strategy_equity_series
+                    .get(i)
+                    .copied()
+                    .unwrap_or(equities.usd_total_equity[i]),
                 _ => 0.0,
             })
             .into_pyarray_bound(py)

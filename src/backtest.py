@@ -874,11 +874,20 @@ def process_forager_fills(
         index=equities_index,
         name="btc_total_equity",
     )
+    if equities_array.shape[1] > 3:
+        strategy_eq_series = pd.Series(
+            equities_array[:, 3],
+            index=equities_index,
+            name="strategy_equity",
+        )
+    else:
+        strategy_eq_series = pd.Series(dtype=float, name="strategy_equity", index=equities_index)
     bal_eq = pd.concat(
         [
             usd_cash_series,
             usd_total_balance_series,
             edf,
+            strategy_eq_series,
             btc_cash_series,
             btc_total_balance_series,
             ebdf,
@@ -892,6 +901,7 @@ def process_forager_fills(
                 "usd_cash_wallet",
                 "usd_total_balance",
                 "usd_total_equity",
+                "strategy_equity",
                 "btc_cash_wallet",
                 "btc_total_balance",
                 "btc_total_equity",
@@ -906,6 +916,7 @@ def process_forager_fills(
                     "usd_cash_wallet",
                     "usd_total_balance",
                     "usd_total_equity",
+                    "strategy_equity",
                     "btc_cash_wallet",
                     "btc_total_balance",
                     "btc_total_equity",

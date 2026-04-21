@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added day-denominated backtest analysis metrics mirroring the existing duration metrics: high exposure, peak recovery, position held, and position unchanged outputs now keep their `*_hours*` fields and also expose equivalent `*_days*` fields.
+- Backtest BTC collateral is now initialized at the first active trading step instead of at the beginning of EMA warmup data, so warmup-period BTC price movement no longer changes starting account equity.
+- Added `strategy_equity` to backtest `balance_and_equity.csv.gz` artifacts so the collateral-agnostic strategy-equity curve is available alongside balance and USD/BTC equity.
 - Added `passivbot tool inspect-ohlcvs` for diagnosing the v2 OHLCV store under `caches/ohlcvs/`. The tool can summarize catalog counts and symbols, or inspect one symbol's bounds, chunk validity, persistent gaps, and recent fetch attempts.
 - Renamed collateral-agnostic strategy-equity analysis metrics to canonical `*_strategy_eq` names and deprecated the old `*_strategy_pnl_rebased` / `*_hsl` metric names as input aliases. New `analysis.json` output uses canonical names, while optimizer, Pareto, limits, aggregate config, and visibility filters still resolve old stored result keys. `peak_recovery_hours_pnl` now uses net realized PnL (`pnl + fee_paid`) and includes the open tail from the last realized-PnL peak to the end of the backtest.
 - Fixed suite-mode limit semantics so `passivbot optimize` and `passivbot tool pareto` now resolve omitted `stat=` the same way: explicit `stat=` still wins, otherwise both defer to `backtest.aggregate.<metric>`, then `backtest.aggregate.default`, then `mean`. This removes the old optimizer-only behavior where `>` silently implied `min` and `<` silently implied `max`.

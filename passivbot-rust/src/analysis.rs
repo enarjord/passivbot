@@ -586,6 +586,10 @@ fn analyze_backtest_basic(
     } else {
         0.0
     };
+    let position_held_days_mean = position_held_hours_mean / 24.0;
+    let position_held_days_max = position_held_hours_max / 24.0;
+    let position_held_days_median = position_held_hours_median / 24.0;
+    let position_unchanged_days_max = position_unchanged_hours_max / 24.0;
     let (win_rate, trade_loss_max, trade_loss_mean, trade_loss_median) =
         if completed_trades.is_empty() {
             (0.0, 0.0, 0.0, 0.0)
@@ -638,6 +642,8 @@ fn analyze_backtest_basic(
         equities.len().checked_sub(1).map(fallback_timestamp_ms)
     };
     let peak_recovery_hours_pnl = calc_peak_recovery_hours_pnl(fills, final_timestamp_ms);
+    let peak_recovery_days_equity = peak_recovery_hours_equity / 24.0;
+    let peak_recovery_days_pnl = peak_recovery_hours_pnl / 24.0;
 
     let mut analysis = Analysis::default();
     analysis.adg = adg;
@@ -672,6 +678,10 @@ fn analyze_backtest_basic(
     analysis.position_held_hours_max = position_held_hours_max;
     analysis.position_held_hours_median = position_held_hours_median;
     analysis.position_unchanged_hours_max = position_unchanged_hours_max;
+    analysis.position_held_days_mean = position_held_days_mean;
+    analysis.position_held_days_max = position_held_days_max;
+    analysis.position_held_days_median = position_held_days_median;
+    analysis.position_unchanged_days_max = position_unchanged_days_max;
     analysis.win_rate = win_rate;
     analysis.trade_loss_max = trade_loss_max;
     analysis.trade_loss_mean = trade_loss_mean;
@@ -682,6 +692,8 @@ fn analyze_backtest_basic(
     analysis.volume_pct_per_day_avg = volume_pct_per_day_avg;
     analysis.peak_recovery_hours_equity = peak_recovery_hours_equity;
     analysis.peak_recovery_hours_pnl = peak_recovery_hours_pnl;
+    analysis.peak_recovery_days_equity = peak_recovery_days_equity;
+    analysis.peak_recovery_days_pnl = peak_recovery_days_pnl;
     analysis.total_wallet_exposure_max = twe_max;
     analysis.total_wallet_exposure_mean = twe_mean;
     analysis.total_wallet_exposure_median = twe_median;
@@ -916,10 +928,14 @@ pub fn analyze_backtest(
                     "long" => {
                         analysis.high_exposure_hours_mean_long = hrs_mean;
                         analysis.high_exposure_hours_max_long = hrs_max;
+                        analysis.high_exposure_days_mean_long = hrs_mean / 24.0;
+                        analysis.high_exposure_days_max_long = hrs_max / 24.0;
                     }
                     "short" => {
                         analysis.high_exposure_hours_mean_short = hrs_mean;
                         analysis.high_exposure_hours_max_short = hrs_max;
+                        analysis.high_exposure_days_mean_short = hrs_mean / 24.0;
+                        analysis.high_exposure_days_max_short = hrs_max / 24.0;
                     }
                     _ => {}
                 }
@@ -1504,6 +1520,11 @@ mod tests {
             (analysis.peak_recovery_hours_pnl - 3.0).abs() < 1e-9,
             "Expected net pnl open-tail recovery of 3.0h, got {}",
             analysis.peak_recovery_hours_pnl
+        );
+        assert!(
+            (analysis.peak_recovery_days_pnl - 0.125).abs() < 1e-9,
+            "Expected net pnl open-tail recovery of 0.125d, got {}",
+            analysis.peak_recovery_days_pnl
         );
     }
 

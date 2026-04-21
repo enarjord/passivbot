@@ -136,7 +136,7 @@ def test_backtest_with_candle_interval():
     assert np.all(np.diff(aggregated_timestamps) == 5 * 60_000)
 
     fills, equities_array, analysis = execute_backtest(payload, config)
-    assert equities_array.shape[1] == 3
+    assert equities_array.shape[1] == 4
     assert equities_array.shape[0] <= n_minutes // 5
     assert np.isfinite(analysis["positions_held_per_day"])
     assert analysis["liquidated"] is False
@@ -150,6 +150,12 @@ def test_backtest_with_candle_interval():
         "paper_loss_mean_ratio_usd",
         "exposure_ratio_usd",
         "exposure_mean_ratio_usd",
+        "peak_recovery_days_pnl",
+        "peak_recovery_days_equity_usd",
+        "position_held_days_max",
+        "position_unchanged_days_max",
+        "high_exposure_days_max_long",
+        "peak_recovery_days_strategy_eq",
     ]:
         assert key in analysis
         assert np.isfinite(analysis[key])

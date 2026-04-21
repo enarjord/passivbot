@@ -559,14 +559,14 @@ over all exchanges before scoring.
 | Metric | Description |
 |--------|-------------|
 | `positions_held_per_day` | Average number of unique positions opened per day |
-| `position_held_hours_{mean,median,max}` | Holding-time statistics in hours |
-| `position_unchanged_hours_max` | Longest span without modifying an existing position |
+| `position_held_hours_{mean,median,max}`, `position_held_days_{mean,median,max}` | Holding-time statistics in hours and equivalent days |
+| `position_unchanged_hours_max`, `position_unchanged_days_max` | Longest span without modifying an existing position, in hours and equivalent days |
 | `volume_pct_per_day_avg`, `volume_pct_per_day_avg_w` | Average traded volume as % of account per day, with recency bias |
-| `peak_recovery_hours_equity_usd`, `_btc` | Longest time (in hours) the equity curve stayed below its prior peak before recovering, per denomination. Available for scoring and limit checks (e.g. `{"metric": "peak_recovery_hours_equity_usd", "penalize_if": ">", "value": 168}`). |
-| `peak_recovery_hours_pnl` | Longest recovery time (hours) of cumulative realised PnL (USD). Useful for monitoring realised drawdown recovery latency. |
-| `peak_recovery_hours_strategy_eq` | Longest time below the strategy-equity peak before recovery, including the open tail to backtest end. Intended for optimizer risk limits. |
-| `high_exposure_hours_{mean,max}_long` | Mean / maximum duration (hours) of continuous periods where total long wallet exposure exceeded the daily-resampled average long TWE |
-| `high_exposure_hours_{mean,max}_short` | Mean / maximum duration (hours) of continuous periods where total short wallet exposure exceeded the daily-resampled average short TWE |
+| `peak_recovery_hours_equity_usd`, `_btc`; `peak_recovery_days_equity_usd`, `_btc` | Longest time the equity curve stayed below its prior peak before recovering, per denomination, in hours and equivalent days. Available for scoring and limit checks (e.g. `{"metric": "peak_recovery_days_equity_usd", "penalize_if": ">", "value": 7}`). |
+| `peak_recovery_hours_pnl`, `peak_recovery_days_pnl` | Longest recovery time of cumulative realised PnL (USD), in hours and equivalent days. Useful for monitoring realised drawdown recovery latency. |
+| `peak_recovery_hours_strategy_eq`, `peak_recovery_days_strategy_eq` | Longest time below the strategy-equity peak before recovery, including the open tail to backtest end, in hours and equivalent days. Intended for optimizer risk limits. |
+| `high_exposure_hours_{mean,max}_long`, `high_exposure_days_{mean,max}_long` | Mean / maximum duration of continuous periods where total long wallet exposure exceeded the daily-resampled average long TWE, in hours and equivalent days |
+| `high_exposure_hours_{mean,max}_short`, `high_exposure_days_{mean,max}_short` | Mean / maximum duration of continuous periods where total short wallet exposure exceeded the daily-resampled average short TWE, in hours and equivalent days |
 
 ### Equity Curve Quality
 | Metric | Description |

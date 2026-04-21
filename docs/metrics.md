@@ -60,9 +60,13 @@ Weighted `_w` variants use the same trailing-slice averaging as the rest of the 
 - `volume_pct_per_day_avg`: Average daily traded notional as a percentage of balance at fill time.
 - `positions_held_per_day`: Average number of positions opened per day.
 - `position_held_hours_mean/median/max`: Holding-time stats for closed (or still-open) positions.
+- `position_held_days_mean/median/max`: Same holding-time stats converted to days.
 - `position_unchanged_hours_max`: Longest span with no fills on an open position.
+- `position_unchanged_days_max`: Same unchanged-position span converted to days.
 - `peak_recovery_hours_equity`: Longest time to make a new high on the equity curve.
+- `peak_recovery_days_equity`: Same equity recovery duration converted to days.
 - `peak_recovery_hours_pnl`: Same calculation on cumulative realized PnL.
+- `peak_recovery_days_pnl`: Same realized-PnL recovery duration converted to days.
 
 ## Trade-level metrics
 - `win_rate`: Fraction of completed trades with positive net realized PnL.

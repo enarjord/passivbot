@@ -374,6 +374,7 @@ pub struct StrategyEquityMetrics {
     pub drawdown_worst_mean_1pct_strategy_eq: f64,
     pub drawdown_worst_mean_1pct_ema_strategy_eq: f64,
     pub peak_recovery_hours_strategy_eq: f64,
+    pub peak_recovery_days_strategy_eq: f64,
     pub adg_strategy_eq_w: f64,
     pub mdg_strategy_eq_w: f64,
     pub sharpe_ratio_strategy_eq_w: f64,
@@ -466,6 +467,7 @@ pub struct Backtest<'a> {
     hard_stop_pside: [HardStopPsideRuntime; 2],
     hard_stop_state: Option<ehsl::HardStopState>,
     hard_stop_tier: ehsl::HardStopTier,
+    btc_collateral_initialized: bool,
     hard_stop_rolling_peak_strategy_pnl: VecDeque<(u64, f64)>,
     strategy_equity_rolling_peak_pnl: VecDeque<(u64, f64)>,
     hard_stop_halted: bool,
@@ -1478,14 +1480,8 @@ impl<'a> Backtest<'a> {
         let starting_balance = backtest_params.starting_balance;
         let initial_btc_price = btc_usd_prices[0].max(f64::EPSILON);
 
-        if balance.use_btc_collateral {
-            let btc_value = balance.btc_collateral_cap * starting_balance;
-            balance.btc_cash_wallet = btc_value / initial_btc_price;
-            balance.usd_cash_wallet = starting_balance - btc_value;
-        } else {
-            balance.usd_cash_wallet = starting_balance;
-            balance.btc_cash_wallet = 0.0;
-        }
+        balance.usd_cash_wallet = starting_balance;
+        balance.btc_cash_wallet = 0.0;
         balance.usd_total_balance =
             (balance.btc_cash_wallet * initial_btc_price) + balance.usd_cash_wallet;
         balance.btc_total_balance = if initial_btc_price > 0.0 {
@@ -1690,6 +1686,7 @@ impl<'a> Backtest<'a> {
             .collect();
         let any_trailing_long = trailing_enabled.iter().any(|te| te.long);
         let any_trailing_short = trailing_enabled.iter().any(|te| te.short);
+        let btc_collateral_initialized = !balance.use_btc_collateral;
 
         Backtest {
             hlcvs,
@@ -1810,6 +1807,7 @@ impl<'a> Backtest<'a> {
             ],
             hard_stop_state: None,
             hard_stop_tier: ehsl::HardStopTier::Green,
+            btc_collateral_initialized,
             hard_stop_rolling_peak_strategy_pnl: VecDeque::new(),
             strategy_equity_rolling_peak_pnl: VecDeque::new(),
             hard_stop_halted: false,
@@ -1917,6 +1915,7 @@ impl<'a> Backtest<'a> {
                 if self.update_n_positions_and_wallet_exposure_limits(k) {
                     self.equity_tracking_active = true;
                 }
+                self.initialize_btc_collateral_if_needed(k);
                 self.update_open_orders_all(k);
             }
             if self.equity_tracking_active {
@@ -2071,6 +2070,23 @@ impl<'a> Backtest<'a> {
                 0.02,
             );
         }
+    }
+
+    fn initialize_btc_collateral_if_needed(&mut self, k: usize) {
+        if self.btc_collateral_initialized || !self.balance.use_btc_collateral {
+            return;
+        }
+
+        let btc_price = self.btc_usd_prices[k].max(f64::EPSILON);
+        let total_balance = self.balance.usd_total_balance;
+        let btc_value = self.balance.btc_collateral_cap * total_balance;
+        self.balance.btc_cash_wallet = btc_value / btc_price;
+        self.balance.usd_cash_wallet = total_balance - btc_value;
+        self.balance.usd_total_balance =
+            (self.balance.btc_cash_wallet * btc_price) + self.balance.usd_cash_wallet;
+        self.balance.btc_total_balance = self.balance.usd_total_balance / btc_price;
+        self.balance.usd_total_balance_rounded = self.balance.usd_total_balance;
+        self.btc_collateral_initialized = true;
     }
 
     #[inline(always)]
@@ -4166,10 +4182,12 @@ impl<'a> Backtest<'a> {
         let full = compute_metrics(series, timestamps, &drawdowns, drawdown_emas);
         let peak_recovery_hours_strategy_eq =
             calc_peak_recovery_hours_from_series(series, timestamps);
+        let peak_recovery_days_strategy_eq = peak_recovery_hours_strategy_eq / 24.0;
         let n = sample_count;
         let mut subset_metrics = Vec::with_capacity(10);
         subset_metrics.push(StrategyEquityMetrics {
             peak_recovery_hours_strategy_eq,
+            peak_recovery_days_strategy_eq,
             ..full
         });
         for i in 1..10 {
@@ -4190,11 +4208,14 @@ impl<'a> Backtest<'a> {
             );
             subset_metric.peak_recovery_hours_strategy_eq =
                 calc_peak_recovery_hours_from_series(subset_series, subset_timestamps);
+            subset_metric.peak_recovery_days_strategy_eq =
+                subset_metric.peak_recovery_hours_strategy_eq / 24.0;
             subset_metrics.push(subset_metric);
         }
 
         StrategyEquityMetrics {
             peak_recovery_hours_strategy_eq: subset_metrics[0].peak_recovery_hours_strategy_eq,
+            peak_recovery_days_strategy_eq: subset_metrics[0].peak_recovery_days_strategy_eq,
             adg_strategy_eq_w: subset_metrics
                 .iter()
                 .map(|m| m.adg_strategy_eq)
@@ -4265,6 +4286,10 @@ impl<'a> Backtest<'a> {
                 StrategyEquityMetrics::default()
             },
         }
+    }
+
+    pub fn strategy_equity_series_for_artifacts(&self) -> &[f64] {
+        &self.strategy_equity_series
     }
 
     pub fn hard_stop_metrics(&self) -> HardStopMetrics {
@@ -4539,6 +4564,70 @@ mod tests {
         let price = 88.165;
         let effective_min_cost = calc_effective_min_cost(price, &exchange);
         assert!((effective_min_cost - price).abs() < 1e-12);
+    }
+
+    #[test]
+    fn btc_collateral_initializes_at_trade_start_price() {
+        let hlcvs = Array3::from_shape_vec((3, 1, 4), vec![1.0; 3 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![100.0, 200.0, 300.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.ema_span_0 = 1.0;
+        bp_pair.long.ema_span_1 = 1.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 60_000,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![2],
+            warmup_minutes: vec![1],
+            trade_start_indices: vec![1],
+            global_warmup_bars: 1,
+            btc_collateral_cap: 0.9,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        assert!(bt.balance.use_btc_collateral);
+        assert!(!bt.btc_collateral_initialized);
+        assert_eq!(bt.balance.usd_cash_wallet, 1000.0);
+        assert_eq!(bt.balance.btc_cash_wallet, 0.0);
+        assert_eq!(bt.balance.usd_total_balance, 1000.0);
+
+        bt.initialize_btc_collateral_if_needed(1);
+        assert!(bt.btc_collateral_initialized);
+        assert!((bt.balance.btc_cash_wallet - 4.5).abs() < 1e-12);
+        assert!((bt.balance.usd_cash_wallet - 100.0).abs() < 1e-12);
+        assert!((bt.balance.usd_total_balance - 1000.0).abs() < 1e-12);
+
+        bt.initialize_btc_collateral_if_needed(2);
+        assert!((bt.balance.btc_cash_wallet - 4.5).abs() < 1e-12);
+        assert!((bt.balance.usd_cash_wallet - 100.0).abs() < 1e-12);
     }
 
     #[test]
