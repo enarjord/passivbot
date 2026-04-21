@@ -21,9 +21,9 @@ See also:
 4. Live and backtest use the same reconstructed strategy-drawdown concept for each `pside`.
 5. RED can halt permanently or restart after cooldown, per `pside`.
 6. Live startup behavior is reconstructed from exchange-derived history rather than depending on a local latch file.
-7. Backtests retain:
-   - global account-level HSL metrics under `*_hsl`
-   - side-specific HSL metrics under `*_hsl_long` / `*_hsl_short`
+7. Backtests export:
+   - global account-level strategy-equity metrics under `*_strategy_eq`
+   - side-specific strategy-equity metrics under `*_strategy_eq_long` / `*_strategy_eq_short`
 
 ## Restart / Statelessness Edge Cases
 
@@ -104,9 +104,10 @@ These are the main parity surfaces that should be reviewed together:
 2. Stateless restart coverage is still incomplete
    - Startup reconstruction from exchange-derived history is implemented in live
    - But the edge-case matrix still needs broader regression coverage
-3. Global HSL metrics are aggregate diagnostics, not a runtime controller
+3. Global strategy-equity metrics are aggregate diagnostics, not a runtime controller
    - Runtime decisions are made per `pside`
-   - Global `*_hsl` metrics are retained for risk inspection and optimizer use
+   - Global `*_strategy_eq` metrics are canonical for risk inspection and optimizer use
+   - Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results
 
 ### Missing or Weak Test Coverage
 

@@ -4442,7 +4442,7 @@ fn calc_strategy_equity_drawdowns(values: &[f64]) -> Vec<f64> {
     for &v in values {
         running = running.max(v);
         let denom = running.abs().max(1e-12);
-        drawdowns.push((v - running) / denom);
+        drawdowns.push((running - v) / denom);
     }
     drawdowns
 }
@@ -5775,6 +5775,20 @@ mod tests {
 
         assert_eq!(bt.hard_stop_flat_confirmations, 1);
         assert!(bt.hard_stop_pending_stop.is_some());
+    }
+
+    #[test]
+    fn strategy_equity_drawdowns_are_positive_severity_samples() {
+        let mut series = vec![100.0; 198];
+        series.push(1.0);
+        series.push(50.0);
+
+        let drawdowns = calc_strategy_equity_drawdowns(&series);
+
+        assert!(drawdowns.iter().all(|x| *x >= 0.0));
+        assert!((drawdowns[198] - 0.99).abs() < 1e-12);
+        assert!((drawdowns[199] - 0.5).abs() < 1e-12);
+        assert!((mean_worst_1pct_abs(&drawdowns) - 0.745).abs() < 1e-12);
     }
 
     #[test]

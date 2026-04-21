@@ -23,7 +23,7 @@ Signal construction is selected globally with `live.hsl_signal_mode`:
 1. long HSL reacts to long deterioration
 2. short HSL reacts to short deterioration
 3. one profitable `pside` cannot hide a weak one
-4. side-specific `*_hsl_long` and `*_hsl_short` metrics are easier to interpret
+4. side-specific `*_strategy_eq_long` and `*_strategy_eq_short` metrics are easier to interpret
 
 Use `pside` when:
 
@@ -321,12 +321,12 @@ Optimizer runs instead disable terminal no-restart by default through:
 1. `optimize.fixed_runtime_overrides["bot.long.hsl_no_restart_drawdown_threshold"] = 1.0`
 2. `optimize.fixed_runtime_overrides["bot.short.hsl_no_restart_drawdown_threshold"] = 1.0`
 
-The optimizer should constrain risk through `*_hsl` metrics rather than by terminating candidates early with terminal no-restart.
+The optimizer should constrain risk through canonical `*_strategy_eq` metrics rather than by terminating candidates early with terminal no-restart.
 
 ## Notes
 
 1. Runtime HSL behavior is side-specific by `pside`.
-2. Global `*_hsl` metrics are retained because they remain useful for optimizer scoring and whole-account risk inspection.
+2. Global `*_strategy_eq` metrics are the canonical optimizer and whole-account risk-inspection metrics; deprecated `*_hsl` metric names remain accepted as aliases for older configs/results.
 3. HSL is intended as a supervisory backstop, not as a replacement for sane wallet-exposure settings.
 
 ## Stateless Restart Behavior

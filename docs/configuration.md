@@ -526,7 +526,7 @@ HSL bounds now use side-specific prefixes:
 1. `optimize.fixed_runtime_overrides["bot.long.hsl_no_restart_drawdown_threshold"] = 1.0`
 2. `optimize.fixed_runtime_overrides["bot.short.hsl_no_restart_drawdown_threshold"] = 1.0`
 
-Risk should be constrained through `*_hsl` metrics instead.
+Risk should be constrained through canonical `*_strategy_eq` metrics instead. Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results.
 
 **Validation:**
 
