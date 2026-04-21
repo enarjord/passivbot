@@ -1,3 +1,7 @@
+from collections.abc import Mapping
+from typing import Any
+
+
 CURRENCY_METRICS = {
     "adg",
     "adg_per_exposure_long",
@@ -77,27 +81,27 @@ SHARED_METRICS = {
     "sharpe_ratio_pnl_w",
     "sortino_ratio_pnl",
     "sortino_ratio_pnl_w",
-    "gain_strategy_pnl_rebased",
-    "adg_strategy_pnl_rebased",
-    "mdg_strategy_pnl_rebased",
-    "sharpe_ratio_strategy_pnl_rebased",
-    "sortino_ratio_strategy_pnl_rebased",
-    "omega_ratio_strategy_pnl_rebased",
-    "expected_shortfall_1pct_strategy_pnl_rebased",
-    "calmar_ratio_strategy_pnl_rebased",
-    "sterling_ratio_strategy_pnl_rebased",
-    "adg_strategy_pnl_rebased_w",
-    "mdg_strategy_pnl_rebased_w",
-    "sharpe_ratio_strategy_pnl_rebased_w",
-    "sortino_ratio_strategy_pnl_rebased_w",
-    "omega_ratio_strategy_pnl_rebased_w",
-    "calmar_ratio_strategy_pnl_rebased_w",
-    "sterling_ratio_strategy_pnl_rebased_w",
-    "drawdown_worst_hsl",
-    "drawdown_worst_ema_hsl",
-    "drawdown_worst_mean_1pct_hsl",
-    "drawdown_worst_mean_1pct_ema_hsl",
-    "peak_recovery_hours_hsl",
+    "gain_strategy_eq",
+    "adg_strategy_eq",
+    "mdg_strategy_eq",
+    "sharpe_ratio_strategy_eq",
+    "sortino_ratio_strategy_eq",
+    "omega_ratio_strategy_eq",
+    "expected_shortfall_1pct_strategy_eq",
+    "calmar_ratio_strategy_eq",
+    "sterling_ratio_strategy_eq",
+    "adg_strategy_eq_w",
+    "mdg_strategy_eq_w",
+    "sharpe_ratio_strategy_eq_w",
+    "sortino_ratio_strategy_eq_w",
+    "omega_ratio_strategy_eq_w",
+    "calmar_ratio_strategy_eq_w",
+    "sterling_ratio_strategy_eq_w",
+    "drawdown_worst_strategy_eq",
+    "drawdown_worst_ema_strategy_eq",
+    "drawdown_worst_mean_1pct_strategy_eq",
+    "drawdown_worst_mean_1pct_ema_strategy_eq",
+    "peak_recovery_hours_strategy_eq",
     "hard_stop_triggers_per_year",
     "hard_stop_restarts_per_year",
     "hard_stop_restarts_per_year_long",
@@ -126,30 +130,108 @@ ANALYSIS_SHARED_KEYS = SHARED_METRICS | {
     "total_wallet_exposure_median",
     "entry_initial_balance_pct_long",
     "entry_initial_balance_pct_short",
-    "drawdown_worst_hsl_long",
-    "drawdown_worst_hsl_short",
-    "drawdown_worst_ema_hsl_long",
-    "drawdown_worst_ema_hsl_short",
-    "drawdown_worst_mean_1pct_hsl_long",
-    "drawdown_worst_mean_1pct_hsl_short",
-    "drawdown_worst_mean_1pct_ema_hsl_long",
-    "drawdown_worst_mean_1pct_ema_hsl_short",
-    "peak_recovery_hours_hsl_long",
-    "peak_recovery_hours_hsl_short",
+    "drawdown_worst_strategy_eq_long",
+    "drawdown_worst_strategy_eq_short",
+    "drawdown_worst_ema_strategy_eq_long",
+    "drawdown_worst_ema_strategy_eq_short",
+    "drawdown_worst_mean_1pct_strategy_eq_long",
+    "drawdown_worst_mean_1pct_strategy_eq_short",
+    "drawdown_worst_mean_1pct_ema_strategy_eq_long",
+    "drawdown_worst_mean_1pct_ema_strategy_eq_short",
+    "peak_recovery_hours_strategy_eq_long",
+    "peak_recovery_hours_strategy_eq_short",
     "hard_stop_triggers_long",
     "hard_stop_triggers_short",
     "hard_stop_restarts_long",
     "hard_stop_restarts_short",
 }
 
+STAT_SUFFIXES = ("min", "max", "mean", "std", "median")
+
+METRIC_ALIASES = {
+    "gain_strategy_pnl_rebased": "gain_strategy_eq",
+    "adg_strategy_pnl_rebased": "adg_strategy_eq",
+    "mdg_strategy_pnl_rebased": "mdg_strategy_eq",
+    "sharpe_ratio_strategy_pnl_rebased": "sharpe_ratio_strategy_eq",
+    "sortino_ratio_strategy_pnl_rebased": "sortino_ratio_strategy_eq",
+    "omega_ratio_strategy_pnl_rebased": "omega_ratio_strategy_eq",
+    "expected_shortfall_1pct_strategy_pnl_rebased": "expected_shortfall_1pct_strategy_eq",
+    "calmar_ratio_strategy_pnl_rebased": "calmar_ratio_strategy_eq",
+    "sterling_ratio_strategy_pnl_rebased": "sterling_ratio_strategy_eq",
+    "adg_strategy_pnl_rebased_w": "adg_strategy_eq_w",
+    "mdg_strategy_pnl_rebased_w": "mdg_strategy_eq_w",
+    "sharpe_ratio_strategy_pnl_rebased_w": "sharpe_ratio_strategy_eq_w",
+    "sortino_ratio_strategy_pnl_rebased_w": "sortino_ratio_strategy_eq_w",
+    "omega_ratio_strategy_pnl_rebased_w": "omega_ratio_strategy_eq_w",
+    "calmar_ratio_strategy_pnl_rebased_w": "calmar_ratio_strategy_eq_w",
+    "sterling_ratio_strategy_pnl_rebased_w": "sterling_ratio_strategy_eq_w",
+    "drawdown_worst_hsl": "drawdown_worst_strategy_eq",
+    "drawdown_worst_hsl_long": "drawdown_worst_strategy_eq_long",
+    "drawdown_worst_hsl_short": "drawdown_worst_strategy_eq_short",
+    "drawdown_worst_ema_hsl": "drawdown_worst_ema_strategy_eq",
+    "drawdown_worst_ema_hsl_long": "drawdown_worst_ema_strategy_eq_long",
+    "drawdown_worst_ema_hsl_short": "drawdown_worst_ema_strategy_eq_short",
+    "drawdown_worst_mean_1pct_hsl": "drawdown_worst_mean_1pct_strategy_eq",
+    "drawdown_worst_mean_1pct_hsl_long": "drawdown_worst_mean_1pct_strategy_eq_long",
+    "drawdown_worst_mean_1pct_hsl_short": "drawdown_worst_mean_1pct_strategy_eq_short",
+    "drawdown_worst_mean_1pct_ema_hsl": "drawdown_worst_mean_1pct_ema_strategy_eq",
+    "drawdown_worst_mean_1pct_ema_hsl_long": "drawdown_worst_mean_1pct_ema_strategy_eq_long",
+    "drawdown_worst_mean_1pct_ema_hsl_short": "drawdown_worst_mean_1pct_ema_strategy_eq_short",
+    "peak_recovery_hours_hsl": "peak_recovery_hours_strategy_eq",
+    "peak_recovery_hours_hsl_long": "peak_recovery_hours_strategy_eq_long",
+    "peak_recovery_hours_hsl_short": "peak_recovery_hours_strategy_eq_short",
+}
+
+CANONICAL_TO_ALIASES: dict[str, tuple[str, ...]] = {}
+for _old, _new in METRIC_ALIASES.items():
+    CANONICAL_TO_ALIASES.setdefault(_new, tuple())
+    CANONICAL_TO_ALIASES[_new] = CANONICAL_TO_ALIASES[_new] + (_old,)
+
+
+def split_metric_stat_suffix(name: str) -> tuple[str, str | None]:
+    metric = str(name).strip()
+    for suffix in STAT_SUFFIXES:
+        marker = f"_{suffix}"
+        if metric.endswith(marker) and len(metric) > len(marker):
+            return metric[: -len(marker)], suffix
+    return metric, None
+
+
+def _with_stat_suffix(metric: str, stat: str | None) -> str:
+    return f"{metric}_{stat}" if stat else metric
+
+
+def canonical_metric_name(metric: str) -> str:
+    base, stat = split_metric_stat_suffix(metric)
+    return _with_stat_suffix(METRIC_ALIASES.get(base, base), stat)
+
+
+def metric_aliases(metric: str) -> tuple[str, ...]:
+    base, stat = split_metric_stat_suffix(metric)
+    canonical_base = METRIC_ALIASES.get(base, base)
+    candidates = [_with_stat_suffix(base, stat), _with_stat_suffix(canonical_base, stat)]
+    candidates.extend(
+        _with_stat_suffix(alias, stat)
+        for alias in CANONICAL_TO_ALIASES.get(canonical_base, ())
+    )
+    return tuple(dict.fromkeys(candidates))
+
+
+def resolve_metric_value(metrics: Mapping[str, Any], requested_name: str) -> Any | None:
+    for candidate in metric_aliases(requested_name):
+        if candidate in metrics:
+            return metrics[candidate]
+    return None
+
 
 def canonicalize_metric_name(metric: str) -> str:
+    metric = canonical_metric_name(metric)
     if metric.endswith("_usd") or metric.endswith("_btc"):
         return metric
 
     for prefix, suffix in (("usd_", "usd"), ("btc_", "btc")):
         if metric.startswith(prefix):
-            core = metric[len(prefix) :]
+            core = canonical_metric_name(metric[len(prefix) :])
             if core in SHARED_METRICS:
                 return core
             return f"{core}_{suffix}"

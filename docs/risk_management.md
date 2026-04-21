@@ -185,7 +185,7 @@ Operational notes:
 2. `live.hsl_signal_mode` chooses whether each `pside` controller uses its own `pside` strategy signal or a shared `unified` account-level signal.
 3. RED can auto-restart after `hsl_cooldown_minutes_after_red`. Terminal no-restart uses persistent cross-restart HSL drawdown.
 4. In backtests, simulated market panic closes use `backtest.market_order_slippage_pct`.
-5. Backtests still export global `*_hsl` metrics in addition to side-specific `*_hsl_long` / `*_hsl_short` metrics.
+5. Backtests export canonical strategy-equity metrics under `*_strategy_eq`, including side-specific `*_strategy_eq_long` / `*_strategy_eq_short` metrics. Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results.
 
 See the dedicated guide:
 

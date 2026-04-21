@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import passivbot_rust as pbr
 from config.limits import resolve_aggregate_mode
+from config.metrics import canonicalize_metric_name, resolve_metric_value
 from config.scoring import extract_objective_specs
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
@@ -54,8 +55,8 @@ def _split_metric_field(raw_key: str) -> tuple[str, str]:
 
 def _resolve_metric_name(metric: str, metric_map: Dict[str, str]) -> str:
     if metric.startswith("w_"):
-        return metric_map.get(metric, metric)
-    return metric
+        return canonicalize_metric_name(metric_map.get(metric, metric))
+    return canonicalize_metric_name(metric)
 
 
 def _resolve_limit_value(
@@ -66,18 +67,22 @@ def _resolve_limit_value(
     metric_map: Dict[str, str],
 ) -> Optional[float]:
     metric = spec.metric
-    if metric in objectives:
-        return objectives.get(metric)
+    value = resolve_metric_value(objectives, metric)
+    if value is not None:
+        return value
     resolved_metric = _resolve_metric_name(metric, metric_map)
-    if resolved_metric in objectives:
-        return objectives.get(resolved_metric)
+    value = resolve_metric_value(objectives, resolved_metric)
+    if value is not None:
+        return value
     field = spec.field
     if field == "auto":
-        if aggregated_values and resolved_metric in aggregated_values:
-            return aggregated_values.get(resolved_metric)
+        if aggregated_values:
+            value = resolve_metric_value(aggregated_values, resolved_metric)
+            if value is not None:
+                return value
         field = "mean"
     key = f"{resolved_metric.replace('.', '_')}_{field}"
-    return stats_flat.get(key)
+    return resolve_metric_value(stats_flat, key)
 
 
 def _suite_metrics_to_stats(
@@ -641,7 +646,10 @@ def main():
                 metric_name_map or {},
             ):
                 continue
-            values = [objectives.get(_resolve_metric_name(k, metric_name_map or {})) for k in objective_keys]
+            values = [
+                resolve_metric_value(objectives, _resolve_metric_name(k, metric_name_map or {}))
+                for k in objective_keys
+            ]
             if all(v is not None for v in values):
                 points.append((*values, h))
                 filenames[h] = os.path.split(entry_path)[-1]

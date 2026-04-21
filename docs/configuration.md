@@ -175,18 +175,18 @@ Backtest-specific note:
 Key HSL analysis metrics:
 
 1. Global account metrics:
-   - `drawdown_worst_hsl`
-   - `drawdown_worst_mean_1pct_hsl`
-   - `peak_recovery_hours_hsl`
+   - `drawdown_worst_strategy_eq`
+   - `drawdown_worst_mean_1pct_strategy_eq`
+   - `peak_recovery_hours_strategy_eq`
    - `hard_stop_triggers`
    - `hard_stop_restarts`
 2. Side-specific metrics:
-   - `drawdown_worst_hsl_long`
-   - `drawdown_worst_hsl_short`
-   - `drawdown_worst_mean_1pct_hsl_long`
-   - `drawdown_worst_mean_1pct_hsl_short`
-   - `peak_recovery_hours_hsl_long`
-   - `peak_recovery_hours_hsl_short`
+   - `drawdown_worst_strategy_eq_long`
+   - `drawdown_worst_strategy_eq_short`
+   - `drawdown_worst_mean_1pct_strategy_eq_long`
+   - `drawdown_worst_mean_1pct_strategy_eq_short`
+   - `peak_recovery_hours_strategy_eq_long`
+   - `peak_recovery_hours_strategy_eq_short`
    - `hard_stop_triggers_long`
    - `hard_stop_triggers_short`
    - `hard_stop_restarts_long`
@@ -526,7 +526,7 @@ HSL bounds now use side-specific prefixes:
 1. `optimize.fixed_runtime_overrides["bot.long.hsl_no_restart_drawdown_threshold"] = 1.0`
 2. `optimize.fixed_runtime_overrides["bot.short.hsl_no_restart_drawdown_threshold"] = 1.0`
 
-Risk should be constrained through `*_hsl` metrics instead.
+Risk should be constrained through canonical `*_strategy_eq` metrics instead. Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results.
 
 **Validation:**
 
@@ -557,14 +557,14 @@ Risk should be constrained through `*_hsl` metrics instead.
 - **scoring**:
   - The optimizer minimizes the configured objective list and keeps the Pareto front.
   - The current default profile uses:
-    - `adg_strategy_pnl_rebased`
-    - `adg_strategy_pnl_rebased_w`
-    - `mdg_strategy_pnl_rebased`
-    - `mdg_strategy_pnl_rebased_w`
-    - `peak_recovery_hours_hsl`
+    - `adg_strategy_eq`
+    - `adg_strategy_eq_w`
+    - `mdg_strategy_eq`
+    - `mdg_strategy_eq_w`
+    - `peak_recovery_hours_strategy_eq`
     - `position_held_hours_max`
-    - `drawdown_worst_hsl`
-    - `drawdown_worst_mean_1pct_hsl`
+    - `drawdown_worst_strategy_eq`
+    - `drawdown_worst_mean_1pct_strategy_eq`
   - With the default `pymoo` backend, Passivbot uses `nsga2` for `3` or fewer objectives and `nsga3` for `4+` objectives unless explicitly overridden.
   - Full list of options: `[adg, adg_w, calmar_ratio, calmar_ratio_w, drawdown_worst, drawdown_worst_mean_1pct, equity_balance_diff_neg_max, equity_balance_diff_neg_mean, equity_balance_diff_pos_max, equity_balance_diff_pos_mean, expected_shortfall_1pct, gain, hard_stop_duration_minutes_max, hard_stop_duration_minutes_mean, hard_stop_flatten_time_minutes_mean, hard_stop_halt_to_restart_equity_loss_pct, hard_stop_panic_close_loss_max, hard_stop_panic_close_loss_sum, hard_stop_post_restart_retrigger_pct, hard_stop_time_in_orange_pct, hard_stop_time_in_red_pct, hard_stop_time_in_yellow_pct, hard_stop_trigger_drawdown_mean, loss_profit_ratio, loss_profit_ratio_w, mdg, mdg_w, omega_ratio, omega_ratio_w, peak_recovery_hours_equity, peak_recovery_hours_pnl, position_held_hours_max, position_held_hours_mean, position_held_hours_median, position_unchanged_hours_max, positions_held_per_day, sharpe_ratio, sharpe_ratio_w, sortino_ratio, sortino_ratio_w, sterling_ratio, sterling_ratio_w]`
   - Suffix `_w` indicates mean across 10 temporal subsets (whole, last_half, last_third, ..., last_tenth) to weigh recent data more heavily.

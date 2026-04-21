@@ -42,6 +42,7 @@ if str(SRC_ROOT) not in sys.path:
 from backtest import prepare_hlcvs_mss, run_backtest  # noqa: E402
 from config.access import get_optional_config_value, require_config_value  # noqa: E402
 from config.limits import normalize_limit_entries  # noqa: E402
+from config.metrics import resolve_metric_value as resolve_stored_metric_value  # noqa: E402
 from config.overrides import parse_overrides  # noqa: E402
 from config.schema import get_template_config  # noqa: E402
 from config_utils import (  # noqa: E402
@@ -352,7 +353,7 @@ def calc_score_vector(
     per_objective_modifier = [0.0] * len(objective_specs)
     modifier = 0.0
     for check in limit_checks:
-        val = ensure_float(combined.get(check["metric_key"]))
+        val = ensure_float(resolve_stored_metric_value(combined, check["metric_key"]))
         penalty = compute_limit_violation(check, val)
         if not penalty:
             continue

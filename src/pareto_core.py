@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 from config.scoring import ObjectiveSpec, dominates_objectives, extract_objective_specs, from_engine_value
+from config.metrics import resolve_metric_value
 
 
 @dataclass(frozen=True)
@@ -31,9 +32,8 @@ def extract_objectives(
         values: list[float] = []
         keys: list[str] = []
         for idx, spec in enumerate(specs):
-            if spec.metric in objectives_map:
-                value = objectives_map.get(spec.metric)
-            else:
+            value = resolve_metric_value(objectives_map, spec.metric)
+            if value is None:
                 value = objectives_map.get(f"w_{idx}")
                 if value is not None:
                     value = from_engine_value(spec, float(value))

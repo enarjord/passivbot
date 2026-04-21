@@ -2,9 +2,9 @@
     "backtest": {
         "aggregate": {
             "default": "mean",
-            "drawdown_worst_hsl": "max",
-            "drawdown_worst_mean_1pct_hsl": "max",
-            "peak_recovery_hours_hsl": "max",
+            "drawdown_worst_strategy_eq": "max",
+            "drawdown_worst_mean_1pct_strategy_eq": "max",
+            "peak_recovery_hours_strategy_eq": "max",
             "position_held_hours_max": "max"
         },
         "balance_sample_divider": 60,
@@ -323,14 +323,14 @@
         },
         "iters": 500000,
         "limits": [
-            {"enabled": false, "metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.8},
-            {"enabled": false, "metric": "drawdown_worst_mean_1pct_hsl", "penalize_if": "greater_than", "value": 0.6},
+            {"enabled": false, "metric": "drawdown_worst_strategy_eq", "penalize_if": "greater_than", "value": 0.8},
+            {"enabled": false, "metric": "drawdown_worst_mean_1pct_strategy_eq", "penalize_if": "greater_than", "value": 0.6},
             {"enabled": false, "metric": "loss_profit_ratio", "penalize_if": "greater_than", "value": 0.85},
             {"enabled": true, "metric": "backtest_completion_ratio", "penalize_if": "less_than", "value": 0.99},
-            {"enabled": false, "metric": "adg_strategy_pnl_rebased", "penalize_if": "less_than", "value": 0.0},
+            {"enabled": false, "metric": "adg_strategy_eq", "penalize_if": "less_than", "value": 0.0},
             {"enabled": false, "metric": "high_exposure_hours_max_long", "penalize_if": "greater_than", "value": 2160},
             {"enabled": false, "metric": "position_held_hours_max", "penalize_if": "greater_than", "value": 2160},
-            {"enabled": false, "metric": "peak_recovery_hours_hsl", "penalize_if": "greater_than", "value": 2160},
+            {"enabled": false, "metric": "peak_recovery_hours_strategy_eq", "penalize_if": "greater_than", "value": 2160},
             {"enabled": true, "metric": "hard_stop_restarts_per_year", "penalize_if": "less_than", "value": 0.1}
         ],
         "mutation_eta": 20,
@@ -361,14 +361,14 @@
         },
         "round_to_n_significant_digits": 3,
         "scoring": [
-            {"metric": "adg_strategy_pnl_rebased", "goal": "max"},
-            {"metric": "adg_strategy_pnl_rebased_w", "goal": "max"},
-            {"metric": "mdg_strategy_pnl_rebased", "goal": "max"},
-            {"metric": "mdg_strategy_pnl_rebased_w", "goal": "max"},
-            {"metric": "peak_recovery_hours_hsl", "goal": "min"},
+            {"metric": "adg_strategy_eq", "goal": "max"},
+            {"metric": "adg_strategy_eq_w", "goal": "max"},
+            {"metric": "mdg_strategy_eq", "goal": "max"},
+            {"metric": "mdg_strategy_eq_w", "goal": "max"},
+            {"metric": "peak_recovery_hours_strategy_eq", "goal": "min"},
             {"metric": "position_held_hours_max", "goal": "min"},
-            {"metric": "drawdown_worst_hsl", "goal": "min"},
-            {"metric": "drawdown_worst_mean_1pct_hsl", "goal": "min"}
+            {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+            {"metric": "drawdown_worst_mean_1pct_strategy_eq", "goal": "min"}
         ],
         "write_all_results": true
     }

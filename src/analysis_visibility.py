@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
-from config.metrics import ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, SHARED_METRICS
+from config.metrics import (
+    ANALYSIS_SHARED_KEYS,
+    CURRENCY_METRICS,
+    SHARED_METRICS,
+    canonical_metric_name,
+    metric_aliases,
+)
 from config.scoring import extract_objective_specs
 from utils import trim_analysis_aliases
 
@@ -25,7 +31,7 @@ def collect_visible_metric_requests(config: dict) -> tuple[list[str], list[str],
             metric = metric.rsplit("_", 1)[0]
         derived.append(metric)
     derived.extend(
-        limit["metric"]
+        canonical_metric_name(limit["metric"])
         for limit in (optimize_cfg.get("limits", []) or [])
         if isinstance(limit, dict) and limit.get("metric")
     )
@@ -106,20 +112,29 @@ def _normalize_visible_metrics_config(value) -> list[str]:
     for item in value:
         if not isinstance(item, str) or not item.strip():
             raise ValueError("backtest.visible_metrics entries must be non-empty strings")
-        normalized.append(item.strip())
+        normalized.append(canonical_metric_name(item.strip()))
     return normalized
 
 
 def _expand_metric_name(metric: str, ordered_keys: Sequence[str], key_set: set[str]) -> list[str]:
+    metric = canonical_metric_name(metric)
     if metric in key_set:
         return [metric]
+    for alias in metric_aliases(metric):
+        if alias in key_set:
+            return [alias]
     if metric in SHARED_METRICS:
         return [metric] if metric in key_set else []
     if metric in CURRENCY_METRICS:
         matches = [key for key in ordered_keys if key in {f"{metric}_usd", f"{metric}_btc"}]
         if matches:
             return matches
-    prefixed = [key for key in ordered_keys if key.startswith(f"{metric}_")]
+    prefixes = metric_aliases(metric)
+    prefixed = [
+        key
+        for key in ordered_keys
+        if any(key.startswith(f"{prefix}_") for prefix in prefixes)
+    ]
     if prefixed:
         return prefixed
     return []
@@ -136,6 +151,7 @@ def _known_visible_metric_names() -> set[str]:
 
 
 def _metric_name_is_known(metric: str, known_metrics: set[str]) -> bool:
+    metric = canonical_metric_name(metric)
     if metric in known_metrics:
         return True
     if metric.endswith(("_usd", "_btc")) and metric.rsplit("_", 1)[0] in CURRENCY_METRICS:

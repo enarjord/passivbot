@@ -356,62 +356,38 @@ pub struct HardStopMetrics {
     pub panic_close_loss_max: f64,
     pub flatten_time_minutes_mean: f64,
     pub post_restart_retrigger_pct: f64,
-    pub drawdown_worst_hsl: f64,
-    pub drawdown_worst_hsl_long: f64,
-    pub drawdown_worst_hsl_short: f64,
-    pub drawdown_worst_ema_hsl: f64,
-    pub drawdown_worst_ema_hsl_long: f64,
-    pub drawdown_worst_ema_hsl_short: f64,
-    pub drawdown_worst_mean_1pct_hsl: f64,
-    pub drawdown_worst_mean_1pct_hsl_long: f64,
-    pub drawdown_worst_mean_1pct_hsl_short: f64,
-    pub drawdown_worst_mean_1pct_ema_hsl: f64,
-    pub drawdown_worst_mean_1pct_ema_hsl_long: f64,
-    pub drawdown_worst_mean_1pct_ema_hsl_short: f64,
-    pub peak_recovery_hours_hsl: f64,
-    pub peak_recovery_hours_hsl_long: f64,
-    pub peak_recovery_hours_hsl_short: f64,
-    pub gain_strategy_pnl_rebased: f64,
-    pub adg_strategy_pnl_rebased: f64,
-    pub mdg_strategy_pnl_rebased: f64,
-    pub sharpe_ratio_strategy_pnl_rebased: f64,
-    pub sortino_ratio_strategy_pnl_rebased: f64,
-    pub omega_ratio_strategy_pnl_rebased: f64,
-    pub expected_shortfall_1pct_strategy_pnl_rebased: f64,
-    pub calmar_ratio_strategy_pnl_rebased: f64,
-    pub sterling_ratio_strategy_pnl_rebased: f64,
-    pub adg_strategy_pnl_rebased_w: f64,
-    pub mdg_strategy_pnl_rebased_w: f64,
-    pub sharpe_ratio_strategy_pnl_rebased_w: f64,
-    pub sortino_ratio_strategy_pnl_rebased_w: f64,
-    pub omega_ratio_strategy_pnl_rebased_w: f64,
-    pub calmar_ratio_strategy_pnl_rebased_w: f64,
-    pub sterling_ratio_strategy_pnl_rebased_w: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-struct StrategyEquityMetrics {
-    gain_strategy_pnl_rebased: f64,
-    adg_strategy_pnl_rebased: f64,
-    mdg_strategy_pnl_rebased: f64,
-    sharpe_ratio_strategy_pnl_rebased: f64,
-    sortino_ratio_strategy_pnl_rebased: f64,
-    omega_ratio_strategy_pnl_rebased: f64,
-    expected_shortfall_1pct_strategy_pnl_rebased: f64,
-    calmar_ratio_strategy_pnl_rebased: f64,
-    sterling_ratio_strategy_pnl_rebased: f64,
-    drawdown_worst_hsl: f64,
-    drawdown_worst_ema_hsl: f64,
-    drawdown_worst_mean_1pct_hsl: f64,
-    drawdown_worst_mean_1pct_ema_hsl: f64,
-    peak_recovery_hours_hsl: f64,
-    adg_strategy_pnl_rebased_w: f64,
-    mdg_strategy_pnl_rebased_w: f64,
-    sharpe_ratio_strategy_pnl_rebased_w: f64,
-    sortino_ratio_strategy_pnl_rebased_w: f64,
-    omega_ratio_strategy_pnl_rebased_w: f64,
-    calmar_ratio_strategy_pnl_rebased_w: f64,
-    sterling_ratio_strategy_pnl_rebased_w: f64,
+pub struct StrategyEquityMetrics {
+    pub gain_strategy_eq: f64,
+    pub adg_strategy_eq: f64,
+    pub mdg_strategy_eq: f64,
+    pub sharpe_ratio_strategy_eq: f64,
+    pub sortino_ratio_strategy_eq: f64,
+    pub omega_ratio_strategy_eq: f64,
+    pub expected_shortfall_1pct_strategy_eq: f64,
+    pub calmar_ratio_strategy_eq: f64,
+    pub sterling_ratio_strategy_eq: f64,
+    pub drawdown_worst_strategy_eq: f64,
+    pub drawdown_worst_ema_strategy_eq: f64,
+    pub drawdown_worst_mean_1pct_strategy_eq: f64,
+    pub drawdown_worst_mean_1pct_ema_strategy_eq: f64,
+    pub peak_recovery_hours_strategy_eq: f64,
+    pub adg_strategy_eq_w: f64,
+    pub mdg_strategy_eq_w: f64,
+    pub sharpe_ratio_strategy_eq_w: f64,
+    pub sortino_ratio_strategy_eq_w: f64,
+    pub omega_ratio_strategy_eq_w: f64,
+    pub calmar_ratio_strategy_eq_w: f64,
+    pub sterling_ratio_strategy_eq_w: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StrategyEquityMetricsBundle {
+    pub overall: StrategyEquityMetrics,
+    pub long: StrategyEquityMetrics,
+    pub short: StrategyEquityMetrics,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -536,6 +512,7 @@ pub struct Backtest<'a> {
     hard_stop_no_restart_peak_strategy_equity: f64,
     liquidated: bool,
     final_hard_stop_metrics: Option<HardStopMetrics>,
+    final_strategy_equity_metrics: Option<StrategyEquityMetricsBundle>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1879,6 +1856,7 @@ impl<'a> Backtest<'a> {
             hard_stop_no_restart_peak_strategy_equity: 0.0,
             liquidated: false,
             final_hard_stop_metrics: None,
+            final_strategy_equity_metrics: None,
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -1975,6 +1953,7 @@ impl<'a> Backtest<'a> {
             profile.write_to_file();
         }
         self.final_hard_stop_metrics = Some(self.hard_stop_metrics());
+        self.final_strategy_equity_metrics = Some(self.strategy_equity_metrics_for_analysis());
         let fills = std::mem::take(&mut self.fills);
         let equities = std::mem::take(&mut self.equities);
         Ok((fills, equities))
@@ -4130,16 +4109,10 @@ impl<'a> Backtest<'a> {
     fn strategy_equity_metrics_from_series(
         &self,
         strategy_equity_series: &[f64],
-        drawdown_samples: &[f64],
         drawdown_ema_samples: Option<&[f64]>,
-        peak_strategy_equity_series: &[f64],
-        recovery_equity_series: &[f64],
     ) -> StrategyEquityMetrics {
         let sample_count = strategy_equity_series
             .len()
-            .min(drawdown_samples.len())
-            .min(peak_strategy_equity_series.len())
-            .min(recovery_equity_series.len())
             .min(self.equities.timestamps_ms.len());
         if sample_count < 2 {
             return StrategyEquityMetrics::default();
@@ -4147,15 +4120,11 @@ impl<'a> Backtest<'a> {
         let timestamps_offset = self.equities.timestamps_ms.len() - sample_count;
         let series = &strategy_equity_series[strategy_equity_series.len() - sample_count..];
         let timestamps = &self.equities.timestamps_ms[timestamps_offset..];
-        let drawdowns = &drawdown_samples[drawdown_samples.len() - sample_count..];
+        let drawdowns = calc_strategy_equity_drawdowns(series);
         let drawdown_emas = drawdown_ema_samples.map(|samples| {
             let ema_sample_count = sample_count.min(samples.len());
             &samples[samples.len() - ema_sample_count..]
         });
-        let peak_series =
-            &peak_strategy_equity_series[peak_strategy_equity_series.len() - sample_count..];
-        let recovery_series =
-            &recovery_equity_series[recovery_equity_series.len() - sample_count..];
 
         let compute_metrics = |series: &[f64],
                                timestamps_ms: &[u64],
@@ -4166,46 +4135,41 @@ impl<'a> Backtest<'a> {
                 .iter()
                 .fold(0.0_f64, |max_dd, &x| max_dd.max(x.abs()));
             let drawdown_worst_mean_1pct = mean_worst_1pct_abs(drawdowns);
-            let drawdown_worst_ema_hsl = drawdown_emas
+            let drawdown_worst_ema_strategy_eq = drawdown_emas
                 .map(|values| {
                     values
                         .iter()
                         .fold(0.0_f64, |max_dd, &x| max_dd.max(x.abs()))
                 })
                 .unwrap_or(0.0);
-            let drawdown_worst_mean_1pct_ema_hsl =
+            let drawdown_worst_mean_1pct_ema_strategy_eq =
                 drawdown_emas.map(mean_worst_1pct_abs).unwrap_or(0.0);
             StrategyEquityMetrics {
-                gain_strategy_pnl_rebased: equity_metrics.gain,
-                adg_strategy_pnl_rebased: equity_metrics.adg,
-                mdg_strategy_pnl_rebased: equity_metrics.mdg,
-                sharpe_ratio_strategy_pnl_rebased: equity_metrics.sharpe_ratio,
-                sortino_ratio_strategy_pnl_rebased: equity_metrics.sortino_ratio,
-                omega_ratio_strategy_pnl_rebased: equity_metrics.omega_ratio,
-                expected_shortfall_1pct_strategy_pnl_rebased: equity_metrics
-                    .expected_shortfall_1pct,
-                calmar_ratio_strategy_pnl_rebased: equity_metrics.adg / drawdown_worst.max(1e-12),
-                sterling_ratio_strategy_pnl_rebased: equity_metrics.adg
+                gain_strategy_eq: equity_metrics.gain,
+                adg_strategy_eq: equity_metrics.adg,
+                mdg_strategy_eq: equity_metrics.mdg,
+                sharpe_ratio_strategy_eq: equity_metrics.sharpe_ratio,
+                sortino_ratio_strategy_eq: equity_metrics.sortino_ratio,
+                omega_ratio_strategy_eq: equity_metrics.omega_ratio,
+                expected_shortfall_1pct_strategy_eq: equity_metrics.expected_shortfall_1pct,
+                calmar_ratio_strategy_eq: equity_metrics.adg / drawdown_worst.max(1e-12),
+                sterling_ratio_strategy_eq: equity_metrics.adg
                     / drawdown_worst_mean_1pct.max(1e-12),
-                drawdown_worst_hsl: drawdown_worst,
-                drawdown_worst_ema_hsl,
-                drawdown_worst_mean_1pct_hsl: drawdown_worst_mean_1pct,
-                drawdown_worst_mean_1pct_ema_hsl,
+                drawdown_worst_strategy_eq: drawdown_worst,
+                drawdown_worst_ema_strategy_eq,
+                drawdown_worst_mean_1pct_strategy_eq: drawdown_worst_mean_1pct,
+                drawdown_worst_mean_1pct_ema_strategy_eq,
                 ..StrategyEquityMetrics::default()
             }
         };
 
-        let full = compute_metrics(series, timestamps, drawdowns, drawdown_emas);
-        let all_time_peak_series = cumulative_max(peak_series);
-        let peak_recovery_hours_hsl = calc_peak_recovery_hours_against_peak(
-            recovery_series,
-            &all_time_peak_series,
-            timestamps,
-        );
+        let full = compute_metrics(series, timestamps, &drawdowns, drawdown_emas);
+        let peak_recovery_hours_strategy_eq =
+            calc_peak_recovery_hours_from_series(series, timestamps);
         let n = sample_count;
         let mut subset_metrics = Vec::with_capacity(10);
         subset_metrics.push(StrategyEquityMetrics {
-            peak_recovery_hours_hsl,
+            peak_recovery_hours_strategy_eq,
             ..full
         });
         for i in 1..10 {
@@ -4218,58 +4182,52 @@ impl<'a> Backtest<'a> {
             let subset_timestamps = &timestamps[start_idx..];
             let subset_drawdowns = &drawdowns[start_idx..];
             let subset_drawdown_emas = drawdown_emas.map(|values| &values[start_idx..]);
-            let subset_peaks = &peak_series[start_idx..];
-            let subset_recovery_series = &recovery_series[start_idx..];
             let mut subset_metric = compute_metrics(
                 subset_series,
                 subset_timestamps,
                 subset_drawdowns,
                 subset_drawdown_emas,
             );
-            let subset_all_time_peaks = cumulative_max(subset_peaks);
-            subset_metric.peak_recovery_hours_hsl = calc_peak_recovery_hours_against_peak(
-                subset_recovery_series,
-                &subset_all_time_peaks,
-                subset_timestamps,
-            );
+            subset_metric.peak_recovery_hours_strategy_eq =
+                calc_peak_recovery_hours_from_series(subset_series, subset_timestamps);
             subset_metrics.push(subset_metric);
         }
 
         StrategyEquityMetrics {
-            peak_recovery_hours_hsl: subset_metrics[0].peak_recovery_hours_hsl,
-            adg_strategy_pnl_rebased_w: subset_metrics
+            peak_recovery_hours_strategy_eq: subset_metrics[0].peak_recovery_hours_strategy_eq,
+            adg_strategy_eq_w: subset_metrics
                 .iter()
-                .map(|m| m.adg_strategy_pnl_rebased)
+                .map(|m| m.adg_strategy_eq)
                 .sum::<f64>()
                 / 10.0,
-            mdg_strategy_pnl_rebased_w: subset_metrics
+            mdg_strategy_eq_w: subset_metrics
                 .iter()
-                .map(|m| m.mdg_strategy_pnl_rebased)
+                .map(|m| m.mdg_strategy_eq)
                 .sum::<f64>()
                 / 10.0,
-            sharpe_ratio_strategy_pnl_rebased_w: subset_metrics
+            sharpe_ratio_strategy_eq_w: subset_metrics
                 .iter()
-                .map(|m| m.sharpe_ratio_strategy_pnl_rebased)
+                .map(|m| m.sharpe_ratio_strategy_eq)
                 .sum::<f64>()
                 / 10.0,
-            sortino_ratio_strategy_pnl_rebased_w: subset_metrics
+            sortino_ratio_strategy_eq_w: subset_metrics
                 .iter()
-                .map(|m| m.sortino_ratio_strategy_pnl_rebased)
+                .map(|m| m.sortino_ratio_strategy_eq)
                 .sum::<f64>()
                 / 10.0,
-            omega_ratio_strategy_pnl_rebased_w: subset_metrics
+            omega_ratio_strategy_eq_w: subset_metrics
                 .iter()
-                .map(|m| m.omega_ratio_strategy_pnl_rebased)
+                .map(|m| m.omega_ratio_strategy_eq)
                 .sum::<f64>()
                 / 10.0,
-            calmar_ratio_strategy_pnl_rebased_w: subset_metrics
+            calmar_ratio_strategy_eq_w: subset_metrics
                 .iter()
-                .map(|m| m.calmar_ratio_strategy_pnl_rebased)
+                .map(|m| m.calmar_ratio_strategy_eq)
                 .sum::<f64>()
                 / 10.0,
-            sterling_ratio_strategy_pnl_rebased_w: subset_metrics
+            sterling_ratio_strategy_eq_w: subset_metrics
                 .iter()
-                .map(|m| m.sterling_ratio_strategy_pnl_rebased)
+                .map(|m| m.sterling_ratio_strategy_eq)
                 .sum::<f64>()
                 / 10.0,
             ..full
@@ -4277,13 +4235,36 @@ impl<'a> Backtest<'a> {
     }
 
     fn strategy_equity_metrics(&self) -> StrategyEquityMetrics {
-        self.strategy_equity_metrics_from_series(
-            &self.strategy_equity_series,
-            &self.hard_stop_drawdown_samples,
-            None,
-            &self.peak_strategy_equity_series,
-            &self.equities.usd_total_equity,
-        )
+        self.strategy_equity_metrics_from_series(&self.strategy_equity_series, None)
+    }
+
+    pub fn strategy_equity_metrics_for_analysis(&self) -> StrategyEquityMetricsBundle {
+        if self.equities.timestamps_ms.is_empty() {
+            if let Some(metrics) = self.final_strategy_equity_metrics {
+                return metrics;
+            }
+        }
+        let long_enabled = self.hard_stop_reporting_enabled_pside(LONG);
+        let short_enabled = self.hard_stop_reporting_enabled_pside(SHORT);
+        StrategyEquityMetricsBundle {
+            overall: self.strategy_equity_metrics(),
+            long: if long_enabled {
+                self.strategy_equity_metrics_from_series(
+                    &self.strategy_equity_series_pside[LONG],
+                    Some(&self.hard_stop_drawdown_ema_samples_pside[LONG]),
+                )
+            } else {
+                StrategyEquityMetrics::default()
+            },
+            short: if short_enabled {
+                self.strategy_equity_metrics_from_series(
+                    &self.strategy_equity_series_pside[SHORT],
+                    Some(&self.hard_stop_drawdown_ema_samples_pside[SHORT]),
+                )
+            } else {
+                StrategyEquityMetrics::default()
+            },
+        }
     }
 
     pub fn hard_stop_metrics(&self) -> HardStopMetrics {
@@ -4341,29 +4322,6 @@ impl<'a> Backtest<'a> {
         let per_year_scale = if n_days > 0.0 { 365.25 / n_days } else { 0.0 };
         let long_enabled = self.hard_stop_reporting_enabled_pside(LONG);
         let short_enabled = self.hard_stop_reporting_enabled_pside(SHORT);
-        let strategy_metrics = self.strategy_equity_metrics();
-        let strategy_metrics_long = if long_enabled {
-            self.strategy_equity_metrics_from_series(
-                &self.strategy_equity_series_pside[LONG],
-                &self.hard_stop_drawdown_samples_pside[LONG],
-                Some(&self.hard_stop_drawdown_ema_samples_pside[LONG]),
-                &self.peak_strategy_equity_series_pside[LONG],
-                &self.strategy_equity_series_pside[LONG],
-            )
-        } else {
-            StrategyEquityMetrics::default()
-        };
-        let strategy_metrics_short = if short_enabled {
-            self.strategy_equity_metrics_from_series(
-                &self.strategy_equity_series_pside[SHORT],
-                &self.hard_stop_drawdown_samples_pside[SHORT],
-                Some(&self.hard_stop_drawdown_ema_samples_pside[SHORT]),
-                &self.peak_strategy_equity_series_pside[SHORT],
-                &self.strategy_equity_series_pside[SHORT],
-            )
-        } else {
-            StrategyEquityMetrics::default()
-        };
         let triggers_long = if long_enabled {
             self.hard_stop_n_triggers_pside[LONG]
         } else {
@@ -4408,49 +4366,6 @@ impl<'a> Backtest<'a> {
             panic_close_loss_max: self.hard_stop_panic_close_loss_max,
             flatten_time_minutes_mean,
             post_restart_retrigger_pct,
-            drawdown_worst_hsl: strategy_metrics.drawdown_worst_hsl,
-            drawdown_worst_hsl_long: strategy_metrics_long.drawdown_worst_hsl,
-            drawdown_worst_hsl_short: strategy_metrics_short.drawdown_worst_hsl,
-            drawdown_worst_ema_hsl: strategy_metrics_long
-                .drawdown_worst_ema_hsl
-                .max(strategy_metrics_short.drawdown_worst_ema_hsl),
-            drawdown_worst_ema_hsl_long: strategy_metrics_long.drawdown_worst_ema_hsl,
-            drawdown_worst_ema_hsl_short: strategy_metrics_short.drawdown_worst_ema_hsl,
-            drawdown_worst_mean_1pct_hsl: strategy_metrics.drawdown_worst_mean_1pct_hsl,
-            drawdown_worst_mean_1pct_hsl_long: strategy_metrics_long.drawdown_worst_mean_1pct_hsl,
-            drawdown_worst_mean_1pct_hsl_short: strategy_metrics_short.drawdown_worst_mean_1pct_hsl,
-            drawdown_worst_mean_1pct_ema_hsl: strategy_metrics_long
-                .drawdown_worst_mean_1pct_ema_hsl
-                .max(strategy_metrics_short.drawdown_worst_mean_1pct_ema_hsl),
-            drawdown_worst_mean_1pct_ema_hsl_long: strategy_metrics_long
-                .drawdown_worst_mean_1pct_ema_hsl,
-            drawdown_worst_mean_1pct_ema_hsl_short: strategy_metrics_short
-                .drawdown_worst_mean_1pct_ema_hsl,
-            peak_recovery_hours_hsl: strategy_metrics.peak_recovery_hours_hsl,
-            peak_recovery_hours_hsl_long: strategy_metrics_long.peak_recovery_hours_hsl,
-            peak_recovery_hours_hsl_short: strategy_metrics_short.peak_recovery_hours_hsl,
-            gain_strategy_pnl_rebased: strategy_metrics.gain_strategy_pnl_rebased,
-            adg_strategy_pnl_rebased: strategy_metrics.adg_strategy_pnl_rebased,
-            mdg_strategy_pnl_rebased: strategy_metrics.mdg_strategy_pnl_rebased,
-            sharpe_ratio_strategy_pnl_rebased: strategy_metrics.sharpe_ratio_strategy_pnl_rebased,
-            sortino_ratio_strategy_pnl_rebased: strategy_metrics.sortino_ratio_strategy_pnl_rebased,
-            omega_ratio_strategy_pnl_rebased: strategy_metrics.omega_ratio_strategy_pnl_rebased,
-            expected_shortfall_1pct_strategy_pnl_rebased: strategy_metrics
-                .expected_shortfall_1pct_strategy_pnl_rebased,
-            calmar_ratio_strategy_pnl_rebased: strategy_metrics.calmar_ratio_strategy_pnl_rebased,
-            sterling_ratio_strategy_pnl_rebased: strategy_metrics
-                .sterling_ratio_strategy_pnl_rebased,
-            adg_strategy_pnl_rebased_w: strategy_metrics.adg_strategy_pnl_rebased_w,
-            mdg_strategy_pnl_rebased_w: strategy_metrics.mdg_strategy_pnl_rebased_w,
-            sharpe_ratio_strategy_pnl_rebased_w: strategy_metrics
-                .sharpe_ratio_strategy_pnl_rebased_w,
-            sortino_ratio_strategy_pnl_rebased_w: strategy_metrics
-                .sortino_ratio_strategy_pnl_rebased_w,
-            omega_ratio_strategy_pnl_rebased_w: strategy_metrics.omega_ratio_strategy_pnl_rebased_w,
-            calmar_ratio_strategy_pnl_rebased_w: strategy_metrics
-                .calmar_ratio_strategy_pnl_rebased_w,
-            sterling_ratio_strategy_pnl_rebased_w: strategy_metrics
-                .sterling_ratio_strategy_pnl_rebased_w,
         }
     }
 
@@ -4497,46 +4412,39 @@ fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
         / worst_n as f64
 }
 
-fn calc_peak_recovery_hours_against_peak(
-    equities: &[f64],
-    peaks: &[f64],
-    timestamps_ms: &[u64],
-) -> f64 {
-    if equities.is_empty() || peaks.is_empty() || timestamps_ms.is_empty() {
+fn calc_peak_recovery_hours_from_series(series: &[f64], timestamps_ms: &[u64]) -> f64 {
+    if series.is_empty() || timestamps_ms.is_empty() {
         return 0.0;
     }
-    let n = equities.len().min(peaks.len()).min(timestamps_ms.len());
+    let n = series.len().min(timestamps_ms.len());
     if n < 2 {
         return 0.0;
     }
-
-    let mut recovery_start: Option<u64> = None;
-    let mut max_recovery_ms = 0_u64;
+    let mut peak = f64::NEG_INFINITY;
+    let mut peak_ts = timestamps_ms[0];
+    let mut max_duration_ms = 0_u64;
     for i in 0..n {
         let ts = timestamps_ms[i];
-        let under_peak = equities[i] + f64::EPSILON < peaks[i];
-        if under_peak {
-            if recovery_start.is_none() {
-                recovery_start = Some(ts);
-            }
-        } else if let Some(start) = recovery_start.take() {
-            max_recovery_ms = max_recovery_ms.max(ts.saturating_sub(start));
+        let value = series[i];
+        if value > peak {
+            max_duration_ms = max_duration_ms.max(ts.saturating_sub(peak_ts));
+            peak = value;
+            peak_ts = ts;
         }
     }
-    if let Some(start) = recovery_start {
-        max_recovery_ms = max_recovery_ms.max(timestamps_ms[n - 1].saturating_sub(start));
-    }
-    max_recovery_ms as f64 / 3_600_000.0
+    max_duration_ms = max_duration_ms.max(timestamps_ms[n - 1].saturating_sub(peak_ts));
+    max_duration_ms as f64 / 3_600_000.0
 }
 
-fn cumulative_max(values: &[f64]) -> Vec<f64> {
-    let mut out = Vec::with_capacity(values.len());
+fn calc_strategy_equity_drawdowns(values: &[f64]) -> Vec<f64> {
+    let mut drawdowns = Vec::with_capacity(values.len());
     let mut running = f64::NEG_INFINITY;
     for &v in values {
         running = running.max(v);
-        out.push(running);
+        let denom = running.abs().max(1e-12);
+        drawdowns.push((running - v) / denom);
     }
-    out
+    drawdowns
 }
 
 fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas {
@@ -5870,7 +5778,21 @@ mod tests {
     }
 
     #[test]
-    fn hard_stop_metrics_export_hsl_and_strategy_pnl_rebased_metrics() {
+    fn strategy_equity_drawdowns_are_positive_severity_samples() {
+        let mut series = vec![100.0; 198];
+        series.push(1.0);
+        series.push(50.0);
+
+        let drawdowns = calc_strategy_equity_drawdowns(&series);
+
+        assert!(drawdowns.iter().all(|x| *x >= 0.0));
+        assert!((drawdowns[198] - 0.99).abs() < 1e-12);
+        assert!((drawdowns[199] - 0.5).abs() < 1e-12);
+        assert!((mean_worst_1pct_abs(&drawdowns) - 0.745).abs() < 1e-12);
+    }
+
+    #[test]
+    fn hard_stop_metrics_export_hard_stop_and_strategy_eq_metrics() {
         let hlcvs = Array3::from_shape_vec((3, 1, 4), vec![1.0; 3 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0, 20_000.0]);
 
@@ -5945,12 +5867,41 @@ mod tests {
         bt.hard_stop_n_restarts_pside[SHORT] = 1;
 
         let hs_metrics = bt.hard_stop_metrics();
-        assert!((hs_metrics.drawdown_worst_hsl - 0.25).abs() < 1e-12);
-        assert!((hs_metrics.drawdown_worst_ema_hsl - 0.25).abs() < 1e-12);
-        assert!((hs_metrics.drawdown_worst_mean_1pct_hsl - 0.25).abs() < 1e-12);
-        assert!((hs_metrics.drawdown_worst_mean_1pct_ema_hsl - 0.25).abs() < 1e-12);
+        let strategy_metrics = bt.strategy_equity_metrics_for_analysis();
+        assert!((strategy_metrics.overall.drawdown_worst_strategy_eq - 0.25).abs() < 1e-12);
         assert!(
-            (hs_metrics.gain_strategy_pnl_rebased - ((100.0 + 90.0 + 75.0) / 3.0 / 100.0)).abs()
+            (strategy_metrics
+                .long
+                .drawdown_worst_ema_strategy_eq
+                .max(strategy_metrics.short.drawdown_worst_ema_strategy_eq)
+                - 0.25)
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            (strategy_metrics
+                .overall
+                .drawdown_worst_mean_1pct_strategy_eq
+                - 0.25)
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            (strategy_metrics
+                .long
+                .drawdown_worst_mean_1pct_ema_strategy_eq
+                .max(
+                    strategy_metrics
+                        .short
+                        .drawdown_worst_mean_1pct_ema_strategy_eq
+                )
+                - 0.25)
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            (strategy_metrics.overall.gain_strategy_eq - ((100.0 + 90.0 + 75.0) / 3.0 / 100.0))
+                .abs()
                 < 1e-12
         );
         assert!((hs_metrics.triggers_per_year - 547.875).abs() < 1e-12);
@@ -6025,14 +5976,24 @@ mod tests {
         bt.update_hard_stop_state(1).unwrap();
 
         let expected = bt.hard_stop_metrics();
+        let expected_strategy = bt.strategy_equity_metrics_for_analysis();
         bt.final_hard_stop_metrics = Some(expected);
+        bt.final_strategy_equity_metrics = Some(expected_strategy);
         bt.equities = Equities::default();
 
         let cached = bt.hard_stop_metrics();
-        assert!((cached.drawdown_worst_hsl - expected.drawdown_worst_hsl).abs() < 1e-12);
-        assert!((cached.drawdown_worst_ema_hsl - expected.drawdown_worst_ema_hsl).abs() < 1e-12);
+        let cached_strategy = bt.strategy_equity_metrics_for_analysis();
+        assert_eq!(cached.triggers, expected.triggers);
         assert!(
-            (cached.adg_strategy_pnl_rebased - expected.adg_strategy_pnl_rebased).abs() < 1e-12
+            (cached_strategy.overall.drawdown_worst_strategy_eq
+                - expected_strategy.overall.drawdown_worst_strategy_eq)
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            (cached_strategy.overall.adg_strategy_eq - expected_strategy.overall.adg_strategy_eq)
+                .abs()
+                < 1e-12
         );
     }
 
@@ -6103,16 +6064,25 @@ mod tests {
         bt.update_hard_stop_state(1).unwrap();
 
         let hs_metrics = bt.hard_stop_metrics();
+        let strategy_metrics = bt.strategy_equity_metrics_for_analysis();
         assert_eq!(hs_metrics.triggers_short, 0);
         assert_eq!(hs_metrics.triggers, 0);
         assert_eq!(hs_metrics.restarts_short, 0);
         assert_eq!(hs_metrics.restarts, 0);
         assert_eq!(hs_metrics.restarts_per_year_short, 0.0);
         assert_eq!(hs_metrics.restarts_per_year, 0.0);
-        assert_eq!(hs_metrics.drawdown_worst_hsl_short, 0.0);
-        assert_eq!(hs_metrics.drawdown_worst_ema_hsl_short, 0.0);
-        assert_eq!(hs_metrics.drawdown_worst_mean_1pct_hsl_short, 0.0);
-        assert_eq!(hs_metrics.drawdown_worst_mean_1pct_ema_hsl_short, 0.0);
+        assert_eq!(strategy_metrics.short.drawdown_worst_strategy_eq, 0.0);
+        assert_eq!(strategy_metrics.short.drawdown_worst_ema_strategy_eq, 0.0);
+        assert_eq!(
+            strategy_metrics.short.drawdown_worst_mean_1pct_strategy_eq,
+            0.0
+        );
+        assert_eq!(
+            strategy_metrics
+                .short
+                .drawdown_worst_mean_1pct_ema_strategy_eq,
+            0.0
+        );
     }
 
     #[test]
@@ -6189,23 +6159,29 @@ mod tests {
         bt.hard_stop_drawdown_samples_pside[SHORT] = vec![0.0, 0.10, 0.0, 0.10];
         bt.hard_stop_drawdown_ema_samples_pside[SHORT] = vec![0.0, 0.01, 0.005, 0.02];
 
-        let hs_metrics = bt.hard_stop_metrics();
-        assert!((hs_metrics.drawdown_worst_ema_hsl_long - 0.10).abs() < 1e-12);
-        assert!((hs_metrics.drawdown_worst_ema_hsl_short - 0.02).abs() < 1e-12);
+        let strategy_metrics = bt.strategy_equity_metrics_for_analysis();
+        assert!((strategy_metrics.long.drawdown_worst_ema_strategy_eq - 0.10).abs() < 1e-12);
+        assert!((strategy_metrics.short.drawdown_worst_ema_strategy_eq - 0.02).abs() < 1e-12);
         assert!(
-            (hs_metrics.drawdown_worst_ema_hsl
-                - hs_metrics
-                    .drawdown_worst_ema_hsl_long
-                    .max(hs_metrics.drawdown_worst_ema_hsl_short))
-            .abs()
+            (strategy_metrics
+                .long
+                .drawdown_worst_ema_strategy_eq
+                .max(strategy_metrics.short.drawdown_worst_ema_strategy_eq)
+                - 0.10)
+                .abs()
                 < 1e-12
         );
         assert!(
-            (hs_metrics.drawdown_worst_mean_1pct_ema_hsl
-                - hs_metrics
-                    .drawdown_worst_mean_1pct_ema_hsl_long
-                    .max(hs_metrics.drawdown_worst_mean_1pct_ema_hsl_short))
-            .abs()
+            (strategy_metrics
+                .long
+                .drawdown_worst_mean_1pct_ema_strategy_eq
+                .max(
+                    strategy_metrics
+                        .short
+                        .drawdown_worst_mean_1pct_ema_strategy_eq
+                )
+                - 0.10)
+                .abs()
                 < 1e-12
         );
     }
@@ -6485,9 +6461,9 @@ mod tests {
         assert!(bt.check_and_apply_liquidation(1));
         bt.record_strategy_equity_sample();
 
-        let hs_metrics = bt.hard_stop_metrics();
+        let strategy_metrics = bt.strategy_equity_metrics_for_analysis();
         assert!((bt.equities.usd_total_equity[1] - 50.0).abs() < 1e-12);
-        assert!((hs_metrics.drawdown_worst_hsl - 0.95).abs() < 1e-12);
+        assert!((strategy_metrics.overall.drawdown_worst_strategy_eq - 0.95).abs() < 1e-12);
     }
 
     #[test]

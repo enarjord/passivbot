@@ -28,16 +28,16 @@ directory, it resolves that automatically.
 passivbot tool pareto optimize_results/.../pareto
 passivbot tool pareto
 passivbot tool pareto optimize_results/.../pareto -m reference \
-  --target adg_strategy_pnl_rebased=0.001 \
-  --target drawdown_worst_hsl=0.25
+  --target adg_strategy_eq=0.001 \
+  --target drawdown_worst_strategy_eq=0.25
 passivbot tool pareto optimize_results/.../pareto \
-  -l 'drawdown_worst_hsl<=0.35' \
-  -l 'adg_strategy_pnl_rebased>0.0'
-passivbot tool pareto -o sharpe_ratio_strategy_pnl_rebased,adg_strategy_pnl_rebased,peak_recovery_hours_hsl \
+  -l 'drawdown_worst_strategy_eq<=0.35' \
+  -l 'adg_strategy_eq>0.0'
+passivbot tool pareto -o sharpe_ratio_strategy_eq,adg_strategy_eq,peak_recovery_hours_strategy_eq \
   -m ideal
 passivbot tool pareto optimize_results/... -m utility \
-  --weight adg_strategy_pnl_rebased=4 \
-  --weight drawdown_worst_hsl=2 \
+  --weight adg_strategy_eq=4 \
+  --weight drawdown_worst_strategy_eq=2 \
   --show-top 5
 passivbot tool pareto --json
 ```
@@ -62,7 +62,7 @@ The output also shows the retained front's ideal point: the best observed value 
 objective after any `--limit` filters are applied.
 
 `-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
-other stored metrics such as `sharpe_ratio_strategy_pnl_rebased` as long as the Pareto JSON
+other stored metrics such as `sharpe_ratio_strategy_eq` as long as the Pareto JSON
 members contain that metric and Passivbot knows whether higher or lower is better.
 
 ## Pareto transformations / static plots
