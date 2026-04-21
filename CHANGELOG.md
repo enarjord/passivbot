@@ -5,6 +5,7 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Added day-denominated backtest analysis metrics mirroring the existing duration metrics: high exposure, peak recovery, position held, and position unchanged outputs now keep their `*_hours*` fields and also expose equivalent `*_days*` fields.
+- Backtest `drawdown_worst_mean_1pct` and `drawdown_worst_mean_1pct_strategy_eq` now compute drawdowns from the full-resolution equity curve first, then average the worst 1% of daily worst drawdowns. This better distinguishes isolated max-drawdown spikes from sustained drawdown regimes.
 - Backtest BTC collateral is now initialized at the first active trading step instead of at the beginning of EMA warmup data, so warmup-period BTC price movement no longer changes starting account equity.
 - Added `strategy_equity` to backtest `balance_and_equity.csv.gz` artifacts so the collateral-agnostic strategy-equity curve is available alongside balance and USD/BTC equity.
 - Added `passivbot tool inspect-ohlcvs` for diagnosing the v2 OHLCV store under `caches/ohlcvs/`. The tool can summarize catalog counts and symbols, or inspect one symbol's bounds, chunk validity, persistent gaps, and recent fetch attempts.

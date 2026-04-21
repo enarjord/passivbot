@@ -536,10 +536,10 @@ over all exchanges before scoring.
 | Metric | Description |
 |--------|-------------|
 | `drawdown_worst` | Maximum peak-to-trough drawdown |
-| `drawdown_worst_mean_1pct` | Mean of worst 1% drawdowns (daily) |
+| `drawdown_worst_mean_1pct` | Mean of worst 1% daily worst drawdowns, computed from full-resolution drawdowns before daily reduction |
 | `drawdown_worst_strategy_eq` | Worst drawdown on collateral-agnostic strategy equity |
 | `drawdown_worst_ema_strategy_eq` | Worst EMA-smoothed strategy-equity drawdown, shared as `max(long, short)` |
-| `drawdown_worst_mean_1pct_strategy_eq` | Mean of worst 1% strategy-equity drawdown samples |
+| `drawdown_worst_mean_1pct_strategy_eq` | Mean of worst 1% daily worst strategy-equity drawdowns, computed from full-resolution strategy-equity drawdowns before daily reduction |
 | `drawdown_worst_mean_1pct_ema_strategy_eq` | Mean of worst 1% EMA-smoothed strategy-equity drawdown samples, shared as `max(long, short)` |
 | `expected_shortfall_1pct` | Mean of worst 1% daily losses (CVaR) |
 | `equity_balance_diff_neg_max` / `pos_max` | Largest divergence between equity and account balance (negative side tracks only drawdowns below balance; positive side tracks only run-ups above balance) |

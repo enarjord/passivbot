@@ -292,36 +292,10 @@ fn analyze_backtest_basic(
             / worst_n as f64
     };
 
-    // Calculate drawdowns
-    let drawdowns_daily = calc_drawdowns(&daily_eqs_mins);
-    let drawdown_worst_mean_1pct = if drawdowns_daily.is_empty() {
-        0.0
-    } else {
-        let mut sorted_drawdowns = drawdowns_daily.clone();
-        sorted_drawdowns.sort_by(|a, b| {
-            a.partial_cmp(b).unwrap_or_else(|| {
-                if a.is_nan() && b.is_nan() {
-                    Ordering::Equal
-                } else if a.is_nan() {
-                    Ordering::Greater
-                } else {
-                    Ordering::Less
-                }
-            })
-        });
-        let cutoff_index = std::cmp::max(1, (sorted_drawdowns.len() as f64 * 0.01) as usize);
-        let worst_n = std::cmp::min(cutoff_index, sorted_drawdowns.len());
-        if worst_n == 0 {
-            0.0
-        } else {
-            sorted_drawdowns[..worst_n]
-                .iter()
-                .map(|x| x.abs())
-                .sum::<f64>()
-                / worst_n as f64
-        }
-    };
     let drawdowns_full = calc_drawdowns(equities);
+    let daily_worst_drawdowns =
+        daily_worst_signed_drawdowns(&drawdowns_full, timestamps_ms, equities.len());
+    let drawdown_worst_mean_1pct = mean_worst_1pct_abs(&daily_worst_drawdowns);
     let drawdown_worst = if drawdowns_full.is_empty() {
         0.0
     } else {
@@ -1115,6 +1089,41 @@ fn calc_drawdowns(equity_series: &[f64]) -> Vec<f64> {
     drawdowns
 }
 
+fn daily_worst_signed_drawdowns(
+    drawdowns: &[f64],
+    timestamps_ms: &[u64],
+    expected_len: usize,
+) -> Vec<f64> {
+    if drawdowns.is_empty() {
+        return Vec::new();
+    }
+
+    let use_timestamps = !timestamps_ms.is_empty() && timestamps_ms.len() == expected_len;
+    let mut daily_worst = Vec::new();
+    let mut current_day = if use_timestamps {
+        (timestamps_ms[0] / MS_PER_DAY) as usize
+    } else {
+        0
+    };
+    let mut current_worst = drawdowns[0];
+    for (i, &drawdown) in drawdowns.iter().enumerate() {
+        let day = if use_timestamps {
+            (timestamps_ms[i] / MS_PER_DAY) as usize
+        } else {
+            i / 1440
+        };
+        if day > current_day {
+            daily_worst.push(current_worst);
+            current_day = day;
+            current_worst = drawdown;
+        } else {
+            current_worst = current_worst.min(drawdown);
+        }
+    }
+    daily_worst.push(current_worst);
+    daily_worst
+}
+
 /// Calculates the normalized total variation (sum of absolute first differences divided by net equity gain)
 pub fn calc_equity_choppiness(equity: &[f64]) -> f64 {
     if equity.len() < 2 {
@@ -1526,6 +1535,19 @@ mod tests {
             "Expected net pnl open-tail recovery of 0.125d, got {}",
             analysis.peak_recovery_days_pnl
         );
+    }
+
+    #[test]
+    fn test_drawdown_worst_mean_1pct_uses_full_curve_daily_worst() {
+        let fills = vec![make_fill(0, -0.1), make_fill(1, -0.1)];
+        let equities = vec![100.0, 50.0, 110.0, 109.0];
+        let timestamps = vec![0, MS_PER_HOUR, MS_PER_DAY, MS_PER_DAY + MS_PER_HOUR];
+        let exposures_series: Vec<f64> = vec![];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures_series);
+
+        assert!((analysis.drawdown_worst - 0.5).abs() < 1e-12);
+        assert!((analysis.drawdown_worst_mean_1pct - 0.5).abs() < 1e-12);
     }
 
     #[test]

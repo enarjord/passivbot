@@ -45,7 +45,7 @@ Weighted `_w` variants use the same trailing-slice averaging as the rest of the 
 
 ## Drawdown and tail metrics
 - `drawdown_worst`: Maximum absolute drawdown over the equity curve.
-- `drawdown_worst_mean_1pct`: Mean of the worst 1% daily drawdowns.
+- `drawdown_worst_mean_1pct`: Mean of the worst 1% daily worst drawdowns, where drawdown is computed from the full-resolution equity curve before reducing each day to its worst underwater point.
 - `expected_shortfall_1pct`: Average loss of the worst 1% daily min-equity returns.
 
 ## HSL metrics

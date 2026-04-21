@@ -4150,7 +4150,9 @@ impl<'a> Backtest<'a> {
             let drawdown_worst = drawdowns
                 .iter()
                 .fold(0.0_f64, |max_dd, &x| max_dd.max(x.abs()));
-            let drawdown_worst_mean_1pct = mean_worst_1pct_abs(drawdowns);
+            let daily_worst_drawdowns =
+                daily_worst_positive_drawdowns(drawdowns, timestamps_ms, series.len());
+            let drawdown_worst_mean_1pct = mean_worst_1pct_abs(&daily_worst_drawdowns);
             let drawdown_worst_ema_strategy_eq = drawdown_emas
                 .map(|values| {
                     values
@@ -4470,6 +4472,41 @@ fn calc_strategy_equity_drawdowns(values: &[f64]) -> Vec<f64> {
         drawdowns.push((running - v) / denom);
     }
     drawdowns
+}
+
+fn daily_worst_positive_drawdowns(
+    drawdowns: &[f64],
+    timestamps_ms: &[u64],
+    expected_len: usize,
+) -> Vec<f64> {
+    if drawdowns.is_empty() {
+        return Vec::new();
+    }
+
+    let use_timestamps = !timestamps_ms.is_empty() && timestamps_ms.len() == expected_len;
+    let mut daily_worst = Vec::new();
+    let mut current_day = if use_timestamps {
+        (timestamps_ms[0] / 86_400_000) as usize
+    } else {
+        0
+    };
+    let mut current_worst = drawdowns[0];
+    for (i, &drawdown) in drawdowns.iter().enumerate() {
+        let day = if use_timestamps {
+            (timestamps_ms[i] / 86_400_000) as usize
+        } else {
+            i / 1440
+        };
+        if day > current_day {
+            daily_worst.push(current_worst);
+            current_day = day;
+            current_worst = drawdown;
+        } else {
+            current_worst = current_worst.max(drawdown);
+        }
+    }
+    daily_worst.push(current_worst);
+    daily_worst
 }
 
 fn calc_ema_alphas(bot_params_pair: &BotParamsPair, interval: u64) -> EmaAlphas {
@@ -5878,6 +5915,19 @@ mod tests {
         assert!((drawdowns[198] - 0.99).abs() < 1e-12);
         assert!((drawdowns[199] - 0.5).abs() < 1e-12);
         assert!((mean_worst_1pct_abs(&drawdowns) - 0.745).abs() < 1e-12);
+    }
+
+    #[test]
+    fn daily_worst_positive_drawdowns_preserve_intraday_strategy_eq_stress() {
+        let series = vec![100.0, 50.0, 110.0, 109.0];
+        let timestamps = vec![0, 3_600_000, 86_400_000, 90_000_000];
+        let drawdowns = calc_strategy_equity_drawdowns(&series);
+        let daily_worst = daily_worst_positive_drawdowns(&drawdowns, &timestamps, series.len());
+
+        assert_eq!(daily_worst.len(), 2);
+        assert!((daily_worst[0] - 0.5).abs() < 1e-12);
+        assert!((daily_worst[1] - (1.0 / 110.0)).abs() < 1e-12);
+        assert!((mean_worst_1pct_abs(&daily_worst) - 0.5).abs() < 1e-12);
     }
 
     #[test]
