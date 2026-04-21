@@ -115,9 +115,12 @@ Canonical series:
 ```text
 net_realized_pnl_cumsum = cumsum(fill.pnl + fill.fee_paid)
 upnl_series = long_upnl + short_upnl
-strategy_pnl = net_realized_pnl_cumsum.reindex(upnl_series.index).ffill() + upnl_series
+strategy_pnl = net_realized_pnl_cumsum.reindex(upnl_series.index).ffill().fillna(0.0) + upnl_series
 strategy_eq = starting_balance + strategy_pnl
 ```
+
+Before the first fill, `net_realized_pnl_cumsum` is seeded as `0.0`, so early strategy-equity
+samples are `starting_balance + upnl` rather than missing.
 
 Canonical metric names:
 
@@ -224,7 +227,19 @@ Required API shape:
 canonical_metric_name(name: str) -> str
 canonicalize_metric_mapping(mapping: dict) -> dict
 canonicalize_metric_list(values: list[str]) -> list[str]
+metric_aliases(name: str) -> tuple[str, ...]
+resolve_metric_value(metrics: Mapping[str, Any], requested_name: str) -> Any | None
 ```
+
+Name canonicalization alone is not enough. Older Pareto/result directories may contain only old
+stored keys such as `drawdown_worst_hsl` or `adg_strategy_pnl_rebased`. Tools that read historical
+results need value resolution that tries:
+
+1. the requested name as stored
+2. the canonical name
+3. deprecated stored aliases for the canonical metric
+
+This resolver should be used anywhere historical result dictionaries are queried directly.
 
 The alias layer should be used by:
 
@@ -244,7 +259,8 @@ Behavior:
 - old names are accepted as input aliases
 - warning/deprecation logging can be added, but should be coalesced and not noisy
 - output JSON should include canonical names
-- old alias fields may optionally be emitted for one release, but canonical fields must be authoritative
+- old alias fields should not be emitted in new output unless a compatibility review explicitly requires it
+- old stored output remains readable through `resolve_metric_value(...)`
 
 Review question:
 
@@ -275,6 +291,12 @@ fn calc_peak_recovery_hours_pnl(fills: &[Fill], final_timestamp_ms: Option<u64>)
 ```
 
 Use `timestamps_ms.last()` from the full backtest equity series when available.
+
+This is a user-visible semantic change to an existing metric name. It must be called out in
+`CHANGELOG.md` and in the release notes:
+
+- old behavior: gross realized PnL cumsum, completed peak-to-peak intervals only
+- new behavior: net realized PnL cumsum, completed intervals plus open tail to final backtest timestamp
 
 ### 2. Canonical strategy equity series
 
@@ -315,47 +337,38 @@ peak_recovery_hours_strategy_eq = longest peak-to-next-exceeded-peak duration on
 
 This should use the same conceptual recovery helper as USD/BTC equity and PnL, but with explicit open-tail handling.
 
-### 5. HSL runtime drawdown
+### 5. HSL runtime behavior
 
-For hard-stop tiering, use the same collateral-agnostic strategy-equity concept.
+Do not change HSL tiering, stop/restart, cooldown, no-restart, or rolling-window trigger semantics
+as part of this cleanup.
 
-For rolling `pnls_max_lookback_days` behavior, the runtime should be equivalent to:
+HSL runtime behavior is trading/risk behavior. Any change there must be handled in a separate
+Rust-first implementation plan with dedicated regression coverage for:
 
-```python
-cutoff = now - pnls_max_lookback_days
-rolling_net_pnls = fills_after_cutoff.pnl_plus_fee
-rolling_upnls = upnl_samples_after_cutoff
-rolling_pnl_cumsum = rolling_net_pnls.cumsum().reindex(rolling_upnls.index).ffill()
-rolling_strategy_pnl = rolling_pnl_cumsum + rolling_upnls
-rolling_strategy_eq = baseline + rolling_strategy_pnl
-rolling_drawdown = 1 - rolling_strategy_eq / rolling_strategy_eq.cummax()
-```
+- live/backtest parity
+- rolling-window behavior
+- restart replay/statelessness
+- red-tier cooldown behavior
+- no-restart latch behavior
 
-Implementation can remain incremental in Rust:
-
-- maintain rolling net realized PnL samples
-- sample UPNL each timestep
-- derive current rolling strategy equity
-- maintain rolling peak for HSL tier logic
-- compute HSL drawdown from strategy equity against that rolling peak
-
-Important:
-
-- HSL operational decisions may keep rolling-window semantics
-- canonical `*_strategy_eq` analysis metrics should be full-series unless explicitly named rolling
+This metric cleanup may rename exported analysis fields and may separate strategy-equity analysis
+from hard-stop telemetry, but it should not alter whether or when HSL triggers.
 
 ### 6. Rust structs and PyO3 export
 
 Update Rust structs:
 
 - `Analysis`
-- `HardStopMetrics`
 - `StrategyEquityMetrics`
 - Python export in `python.rs`
 
 Add canonical fields:
 
 - `*_strategy_eq`
+
+Keep `HardStopMetrics` operational. Do not add canonical strategy-equity fields to
+`HardStopMetrics`. Strategy-equity analysis should be exported through a separate
+`StrategyEquityMetrics` path and then copied into `Analysis`.
 
 Preserve old internal fields only as needed during transition.
 
@@ -399,6 +412,9 @@ Preferred behavior:
 
 If compatibility requires old fields in output for one release, add them only in the Python expansion layer with a clear TODO/removal note.
 
+Current recommendation is not to emit old fields. Historical compatibility should be provided by
+the metric-value resolver when reading old files.
+
 ## Documentation Plan
 
 Update:
@@ -430,7 +446,7 @@ Add or update tests for:
 3. `strategy_eq = starting_balance + net_realized_pnl_cumsum + upnl`.
 4. `drawdown_worst_strategy_eq` is computed from strategy-equity cummax.
 5. `peak_recovery_hours_strategy_eq` includes open tail.
-6. Old `*_hsl` aliases, if still exported, match canonical `*_strategy_eq` values.
+6. Strategy-equity metrics are exported independently from hard-stop operational telemetry.
 
 ### Python tests
 
@@ -443,6 +459,8 @@ Add or update tests for:
 5. Metric aliases in analysis visibility.
 6. Prepared configs store canonical names.
 7. Existing old configs using `*_hsl` and `*_strategy_pnl_rebased` still load.
+8. Historical result dictionaries containing only old metric keys still satisfy lookups through
+   `resolve_metric_value(...)`.
 
 ### End-to-end smoke
 
@@ -469,8 +487,10 @@ Phase 1:
 
 - add canonical fields
 - add aliases
+- add metric-value resolver for old stored result files
 - update config defaults and docs
 - keep old names accepted
+- keep HSL runtime semantics unchanged
 
 Phase 2:
 
@@ -480,7 +500,7 @@ Phase 2:
 Phase 3:
 
 - decide whether to keep aliases indefinitely or warn more aggressively
-- remove old output fields if they were emitted temporarily
+- remove old output fields only if a compatibility exception caused them to be emitted temporarily
 
 ## Open Review Points
 
@@ -495,4 +515,3 @@ Phase 3:
 
 4. Should `peak_recovery_hours_equity_usd/btc` also include open tail?
    - recommendation: yes, for consistency, but handle as a separate explicit change if current behavior differs and users rely on it
-
