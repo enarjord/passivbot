@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 
-CONFIG_SCHEMA_VERSION = "v7.9.0"
+CONFIG_SCHEMA_VERSION = "v7.10.0"
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_grid_long_npos7.json"
 
 

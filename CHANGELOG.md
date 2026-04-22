@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+## v7.10.0 - 2026-04-22
+
 - Updated the hardcoded schema defaults and mirrored example config to a new trailing-grid `n_positions = 7` profile from `tmp/candidate.json`; the canonical example file is now `configs/examples/default_trailing_grid_long_npos7.json`. Default approved coins, suite scenarios, optimizer bounds, and optimizer scoring/limit templates were refreshed with canonical `*_strategy_eq` metric names and day-based duration metrics while keeping backtest defaults at `candle_interval_minutes = 1`, `end_date = "now"`, and `suite_enabled = false`.
 - Removed inflated grid re-entry behavior from current live/backtest/runtime paths. Grid re-entries are now always normal-or-cropped, config loading strips deprecated `bot.{long,short}.entry_grid_inflation_enabled` flags after warning when they were set `true`, and legacy inflated order-type ids remain decodable for historical fills and live restart compatibility.
 - Added day-denominated backtest analysis metrics mirroring the existing duration metrics: high exposure, peak recovery, position held, and position unchanged outputs now keep their `*_hours*` fields and also expose equivalent `*_days*` fields.
