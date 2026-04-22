@@ -4,6 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Updated the hardcoded schema defaults and mirrored example config to a new trailing-grid `n_positions = 7` profile from `tmp/candidate.json`; the canonical example file is now `configs/examples/default_trailing_grid_long_npos7.json`. Default approved coins, suite scenarios, optimizer bounds, and optimizer scoring/limit templates were refreshed with canonical `*_strategy_eq` metric names and day-based duration metrics while keeping backtest defaults at `candle_interval_minutes = 1`, `end_date = "now"`, and `suite_enabled = false`.
 - Added day-denominated backtest analysis metrics mirroring the existing duration metrics: high exposure, peak recovery, position held, and position unchanged outputs now keep their `*_hours*` fields and also expose equivalent `*_days*` fields.
 - Backtest `drawdown_worst_mean_1pct` and `drawdown_worst_mean_1pct_strategy_eq` now compute drawdowns from the full-resolution equity curve first, then average the worst 1% of daily worst drawdowns. This better distinguishes isolated max-drawdown spikes from sustained drawdown regimes.
 - Backtest BTC collateral is now initialized at the first active trading step instead of at the beginning of EMA warmup data, so warmup-period BTC price movement no longer changes starting account equity.
@@ -59,7 +60,7 @@ All notable user-facing changes will be documented in this file.
 ### Upgrade Notes
 - Reinstall after pulling this release. `passivbot` now validates the active environment and the loaded Rust extension more aggressively, so stale editable installs or stale shell shims are more likely to fail loudly instead of continuing silently. Use `python3 -m pip install -e .` for live-only setups or `python3 -m pip install -e ".[full]"` for backtest/optimize setups, and rebuild with `maturin develop --release` if needed.
 - `optimize.backend` now defaults to `pymoo`, so optimization users need the full install profile with the new `pymoo` dependency.
-- `configs/template.json` is no longer the canonical starting point. Use `configs/examples/default_trailing_grid_long_npos10.json` or omit the config path to start from the in-code defaults in `src/config/schema.py`.
+- `configs/template.json` is no longer the canonical starting point. Use `configs/examples/default_trailing_grid_long_npos7.json` or omit the config path to start from the in-code defaults in `src/config/schema.py`.
 - The local monitor publisher now ships enabled by default in the canonical schema. Set `monitor.enabled = false` if you do not want snapshot/event files written under `monitor/`.
 - `live.max_realized_loss_pct` now defaults to `1.0`, which effectively disables the realized-loss gate unless you set a tighter value explicitly.
 
@@ -79,7 +80,7 @@ All notable user-facing changes will be documented in this file.
 
 ### Changed
 - **Optimizer scoring now has explicit min/max goals** - `optimize.scoring` is normalized to `{metric, goal}` entries, optimizer engines receive minimization-space values internally, and user-facing logging/Pareto tools now show raw metric values with named objectives instead of signed `w_i` fields. Legacy string-list scoring configs and legacy Pareto result files remain readable.
-- **Config loading now uses a canonical staged pipeline** - Defaults now come only from in-code schema, omitted CLI configs instantiate schema defaults directly, `load_config()` / `format_config()` normalize to canonical user-facing keys without leaking runtime `filter_*` aliases, runtime aliasing moved into explicit compilation helpers, and the named example profile now lives at `configs/examples/default_trailing_grid_long_npos10.json`.
+- **Config loading now uses a canonical staged pipeline** - Defaults now come only from in-code schema, omitted CLI configs instantiate schema defaults directly, `load_config()` / `format_config()` normalize to canonical user-facing keys without leaking runtime `filter_*` aliases, runtime aliasing moved into explicit compilation helpers, and the named example profile now lives at `configs/examples/default_trailing_grid_long_npos7.json`.
 - **Realized-loss gate now ships disabled by default** - `live.max_realized_loss_pct` now defaults to `1.0`, so the gate is opt-in unless the operator explicitly chooses a tighter peak-relative realized-loss floor.
 - **Executable min-cost filtering now matches actual order sizing** - `filter_by_min_effective_cost` now uses the executable minimum entry qty after `qty_step` rounding instead of raw `min_qty/min_cost` metadata, and CCXT markets reporting nonpositive `min_qty` now clamp it to `qty_step`. This fixes GateIO symbols such as `SOL/USDT:USDT` being admitted when the smallest executable order would exceed the intended initial entry size.
 - **BTC-denominated backtest metrics now always use BTC equity** - `*_btc` metrics are now computed from BTC-denominated balance/equity even when `backtest.btc_collateral_cap = 0`, instead of mirroring the USD analysis. This makes metrics like `adg_btc` and `gain_btc` informative as BTC-relative performance measures for cash-collateral runs as well.

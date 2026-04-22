@@ -392,6 +392,8 @@ def test_prepare_config_removes_empty_means_all_approved_from_canonical_shape():
 
 def test_prepare_config_warns_when_entry_grid_inflation_enabled(caplog):
     source = get_template_config()
+    source["bot"]["long"]["entry_grid_inflation_enabled"] = True
+    source["bot"]["short"]["entry_grid_inflation_enabled"] = True
 
     with caplog.at_level(logging.WARNING):
         prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)

@@ -3,7 +3,7 @@
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
 The canonical defaults live in `src/config/schema.py`. The example config
-`configs/examples/default_trailing_grid_long_npos10.json` mirrors those defaults exactly. For the
+`configs/examples/default_trailing_grid_long_npos7.json` mirrors those defaults exactly. For the
 recommended config workflow, see [Config Workflow](config_workflow.md).
 
 Optimization requires the full install profile:
@@ -28,7 +28,7 @@ single-scenario by default unless you explicitly enable suite mode.
 
 Example:
 ```bash
-passivbot optimize configs/examples/default_trailing_grid_long_npos10.json --start configs/starting_pool/
+passivbot optimize configs/examples/default_trailing_grid_long_npos7.json --start configs/starting_pool/
 ```
 
 Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
@@ -234,7 +234,7 @@ keys to keep tunable; all other bounds are locked to their current config values
 the run starts.
 
 ```bash
-passivbot optimize configs/examples/default_trailing_grid_long_npos10.json \
+passivbot optimize configs/examples/default_trailing_grid_long_npos7.json \
   --fine_tune_params long_entry_grid_spacing_pct,long_entry_initial_qty_pct
 ```
 
@@ -263,7 +263,7 @@ operator-risk settings such as:
 That default override disables terminal no-restart during optimizer evaluations so candidates can
 be constrained through `drawdown_worst_strategy_eq`, `drawdown_worst_ema_strategy_eq`,
 `drawdown_worst_mean_1pct_strategy_eq`, `drawdown_worst_mean_1pct_ema_strategy_eq`, and
-`peak_recovery_hours_strategy_eq` instead of being prematurely truncated.
+`peak_recovery_days_strategy_eq` instead of being prematurely truncated.
 
 When you provide many starting configs, optimizer now also bounds how many seed evaluations may be
 in flight at once:
@@ -413,7 +413,7 @@ Example:
 
 ```bash
 passivbot tool pareto \
-  -o sharpe_ratio_strategy_eq,adg_strategy_eq,peak_recovery_hours_strategy_eq \
+  -o sharpe_ratio_strategy_eq,adg_strategy_eq,peak_recovery_days_strategy_eq \
   -m ideal
 ```
 
@@ -481,7 +481,7 @@ appends one more canonical entry:
 ```bash
 passivbot optimize \
   --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]' \
-  --limit 'peak_recovery_hours_strategy_eq <= 500'
+  --limit 'peak_recovery_days_strategy_eq <= 21'
 ```
 
 Semantics:

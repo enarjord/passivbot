@@ -206,7 +206,7 @@ Main optimizer-facing strategy-equity risk metrics:
 2. `drawdown_worst_ema_strategy_eq`
 3. `drawdown_worst_mean_1pct_strategy_eq`
 4. `drawdown_worst_mean_1pct_ema_strategy_eq`
-5. `peak_recovery_hours_strategy_eq`
+5. `peak_recovery_days_strategy_eq`
 
 For the shared EMA-smoothed metrics, long and short each use their own configured
 `hsl_ema_span_minutes`. The shared values are reported conservatively as `max(long, short)`
@@ -222,8 +222,8 @@ Useful side-specific strategy-equity metrics:
 6. `drawdown_worst_mean_1pct_strategy_eq_short`
 7. `drawdown_worst_mean_1pct_ema_strategy_eq_long`
 8. `drawdown_worst_mean_1pct_ema_strategy_eq_short`
-9. `peak_recovery_hours_strategy_eq_long`
-10. `peak_recovery_hours_strategy_eq_short`
+9. `peak_recovery_days_strategy_eq_long`
+10. `peak_recovery_days_strategy_eq_short`
 11. `hard_stop_triggers_long`
 12. `hard_stop_triggers_short`
 13. `hard_stop_restarts_long`

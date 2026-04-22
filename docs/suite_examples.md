@@ -5,7 +5,7 @@ This page shows practical examples of Passivbot's flattened suite configuration 
 Suite mode is **off by default** in both:
 
 - `src/config/schema.py`
-- `configs/examples/default_trailing_grid_long_npos10.json`
+- `configs/examples/default_trailing_grid_long_npos7.json`
 
 That is intentional. A fresh user should start with a single backtest or optimize run, then enable
 suite mode when they specifically want multi-scenario evaluation.
@@ -174,8 +174,8 @@ Good defaults:
     "default": "mean",
     "drawdown_worst_strategy_eq": "max",
     "drawdown_worst_mean_1pct_strategy_eq": "max",
-    "peak_recovery_hours_strategy_eq": "max",
-    "position_held_hours_max": "max"
+    "peak_recovery_days_strategy_eq": "max",
+    "position_held_days_max": "max"
   }
 }
 ```

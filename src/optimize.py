@@ -1661,7 +1661,7 @@ async def main():
         usage="%(prog)s [config_path] [options]",
         epilog=(
             "Examples:\n"
-            "  passivbot optimize configs/examples/default_trailing_grid_long_npos10.json -s XMR -sd 2025 -c 4 --suite n\n"
+            "  passivbot optimize configs/examples/default_trailing_grid_long_npos7.json -s XMR -sd 2025 -c 4 --suite n\n"
             "  passivbot optimize -e bybit -s BTC,ETH -i 10000 -ps 200\n"
             "\n"
             "Use --help-all to show every config override flag, including optimize bounds."

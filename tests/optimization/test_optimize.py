@@ -1024,7 +1024,10 @@ class TestExtractConfigs:
             result = extract_configs(path)
             assert len(result) == 1
             assert "bot" in result[0]
-            assert result[0]["bot"]["long"]["forager_score_weights"]["volatility"] == 1.0
+            assert (
+                result[0]["bot"]["long"]["forager_score_weights"]["volatility"]
+                == template["bot"]["long"]["forager_score_weights"]["volatility"]
+            )
         finally:
             os.unlink(path)
 
@@ -1615,7 +1618,7 @@ def _remove_nested_path(mapping, path):
 
 
 def test_config_to_individual_accepts_precomputed_optimization_shape():
-    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     shape = build_optimization_shape(config)
 
     result = config_to_individual(config, shape.bounds, optimization_shape=shape)
@@ -1624,7 +1627,7 @@ def test_config_to_individual_accepts_precomputed_optimization_shape():
 
 
 def test_old_starting_seed_inherits_current_template_shape_and_defaults():
-    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     shape = build_optimization_shape(config)
     stale_seed = deepcopy(config)
 
@@ -1644,7 +1647,7 @@ def test_old_starting_seed_inherits_current_template_shape_and_defaults():
 
 
 def test_build_pymoo_record_entry_strips_metadata():
-    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     template["_config_path"] = "artifact.json"
     bounds = extract_bounds_tuple_list_from_config(template)
     vector = config_to_individual(template, bounds, sig_digits=6)
@@ -1663,7 +1666,7 @@ def test_build_pymoo_record_entry_strips_metadata():
 
 
 def test_result_recorder_preserves_unquantized_saved_param_values():
-    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     bounds = extract_bounds_tuple_list_from_config(template)
     entry = deepcopy(template)
 

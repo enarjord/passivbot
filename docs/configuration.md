@@ -3,7 +3,7 @@
 This document explains the canonical config schema used by Passivbot.
 
 - The source of truth for defaults is `src/config/schema.py`.
-- The example config `configs/examples/default_trailing_grid_long_npos10.json` mirrors those hardcoded defaults exactly.
+- The example config `configs/examples/default_trailing_grid_long_npos7.json` mirrors those hardcoded defaults exactly.
 - If you omit `config_path`, Passivbot loads those in-code defaults.
 
 For the recommended user workflow, examples, and best practices, see [Config Workflow](config_workflow.md).
@@ -178,7 +178,7 @@ Key HSL analysis metrics:
 1. Global account metrics:
    - `drawdown_worst_strategy_eq`
    - `drawdown_worst_mean_1pct_strategy_eq`
-   - `peak_recovery_hours_strategy_eq`
+   - `peak_recovery_days_strategy_eq`
    - `hard_stop_triggers`
    - `hard_stop_restarts`
 2. Side-specific metrics:
@@ -186,8 +186,8 @@ Key HSL analysis metrics:
    - `drawdown_worst_strategy_eq_short`
    - `drawdown_worst_mean_1pct_strategy_eq_long`
    - `drawdown_worst_mean_1pct_strategy_eq_short`
-   - `peak_recovery_hours_strategy_eq_long`
-   - `peak_recovery_hours_strategy_eq_short`
+   - `peak_recovery_days_strategy_eq_long`
+   - `peak_recovery_days_strategy_eq_short`
    - `hard_stop_triggers_long`
    - `hard_stop_triggers_short`
    - `hard_stop_restarts_long`
@@ -562,8 +562,8 @@ Risk should be constrained through canonical `*_strategy_eq` metrics instead. De
     - `adg_strategy_eq_w`
     - `mdg_strategy_eq`
     - `mdg_strategy_eq_w`
-    - `peak_recovery_hours_strategy_eq`
-    - `position_held_hours_max`
+    - `peak_recovery_days_strategy_eq`
+    - `position_held_days_max`
     - `drawdown_worst_strategy_eq`
     - `drawdown_worst_mean_1pct_strategy_eq`
   - With the default `pymoo` backend, Passivbot uses `nsga2` for `3` or fewer objectives and `nsga3` for `4+` objectives unless explicitly overridden.

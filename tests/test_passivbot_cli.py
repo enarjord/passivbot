@@ -57,12 +57,12 @@ def test_download_dispatch_forwards_new_module_and_prog(monkeypatch):
     monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
     monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
-    assert cli_main.main(["download", "configs/examples/default_trailing_grid_long_npos10.json"]) == 0
+    assert cli_main.main(["download", "configs/examples/default_trailing_grid_long_npos7.json"]) == 0
 
     assert captured["module_name"] == "ohlcv_download"
     assert captured["argv"] == [
         "passivbot download",
-        "configs/examples/default_trailing_grid_long_npos10.json",
+        "configs/examples/default_trailing_grid_long_npos7.json",
     ]
     assert captured["prog_env"] == "passivbot download"
     assert sys.argv == original_argv

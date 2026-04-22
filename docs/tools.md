@@ -33,7 +33,7 @@ passivbot tool pareto optimize_results/.../pareto -m reference \
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_worst_strategy_eq<=0.35' \
   -l 'adg_strategy_eq>0.0'
-passivbot tool pareto -o sharpe_ratio_strategy_eq,adg_strategy_eq,peak_recovery_hours_strategy_eq \
+passivbot tool pareto -o sharpe_ratio_strategy_eq,adg_strategy_eq,peak_recovery_days_strategy_eq \
   -m ideal
 passivbot tool pareto optimize_results/... -m utility \
   --weight adg_strategy_eq=4 \
@@ -88,7 +88,7 @@ passivbot tool iterative-history-plot backtests/.../fills.csv
 - `passivbot download` – Pre-warm OHLCV caches using the same config/date/exchange selection as backtesting.
 - `passivbot tool pad-historical-daily` – Ensures daily OHLCV shards are present for the downloader when new coins are added.
 - `passivbot tool verify-hlcvs-data` – Validates cached OHLCV data (gaps, duplicates) before long optimizations/backtests.
-- `passivbot tool streamline-json` – Normalizes/compacts JSON configs (`passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos10.json`).
+- `passivbot tool streamline-json` – Normalizes/compacts JSON configs (`passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos7.json`).
 - `passivbot tool candle-doctor` – Audits `caches/ohlcv/...` shards for corruption, stale index entries, and legacy-format issues; add `--fix` to apply automatic repairs.
 - `passivbot tool migrate-historical-data` – Converts legacy `historical_data/ohlcvs_<exchange>/...` shards into the current `caches/ohlcv/...` layout.
 

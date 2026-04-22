@@ -33,7 +33,7 @@ Or
 passivbot backtest path/to/config.json
 ```
 If no config is specified, backtesting starts from the in-code schema defaults in `src/config/schema.py`.
-The example config `configs/examples/default_trailing_grid_long_npos10.json` mirrors those defaults exactly.
+The example config `configs/examples/default_trailing_grid_long_npos7.json` mirrors those defaults exactly.
 See [Config Workflow](config_workflow.md) for the recommended way to copy and customize configs.
 
 ## Backtest Results
@@ -62,7 +62,7 @@ run. It uses the same `backtest.start_date`, `backtest.end_date`, `backtest.exch
 approved-coin selection flow as the backtester, but stops after preparing cache data.
 
 ```shell
-passivbot download configs/examples/default_trailing_grid_long_npos10.json
+passivbot download configs/examples/default_trailing_grid_long_npos7.json
 passivbot download --start-date 2025-01-01 --end-date 2025-02-01 --exchanges binance,bybit
 ```
 
@@ -81,7 +81,7 @@ Suite mode evaluates multiple scenario slices in one invocation. Configuration u
 ```
 
 Suite mode is off by default in the hardcoded schema and in
-`configs/examples/default_trailing_grid_long_npos10.json`. Enable it only when you deliberately
+`configs/examples/default_trailing_grid_long_npos7.json`. Enable it only when you deliberately
 want multi-scenario evaluation.
 
 Each scenario may override:
