@@ -10,6 +10,7 @@ from backtest_artifacts import (
     candles_for_coin,
     load_backtest_artifact,
     load_backtest_artifact_workspace,
+    plot_fills_for_coin,
 )
 
 
@@ -68,9 +69,14 @@ def _write_artifact(tmp_path: Path) -> Path:
     (artifact_dir / "analysis.json").write_text(json.dumps({"adg_usd": 0.01}), encoding="utf-8")
     pd.DataFrame(
         {
-            "timestamp": ["2026-01-01 00:01:00"],
-            "coin": ["BTC"],
-            "pnl": [1.0],
+            "timestamp": ["2026-01-01 00:01:00", "2026-01-01 00:02:00"],
+            "coin": ["BTC", "BTC"],
+            "type": ["entry_grid_normal_long", "close_grid_long"],
+            "qty": [1.0, -1.0],
+            "price": [101.0, 102.0],
+            "psize": [1.0, 0.0],
+            "pprice": [101.0, 0.0],
+            "pnl": [0.0, 1.0],
         }
     ).to_csv(artifact_dir / "fills.csv")
     pd.DataFrame(
@@ -134,10 +140,46 @@ def test_load_backtest_artifact_workspace_is_jupyter_friendly(tmp_path):
             "coin_index",
             "market_settings",
             "candles_for_coin",
+            "plot_fills_for_coin",
         ]
     ).issubset(workspace)
     candles = candles_for_coin(workspace, "BTC")
     assert candles.loc[1, "close"] == pytest.approx(101.0)
+
+
+def test_plot_fills_for_coin_returns_figure_for_loaded_artifact(tmp_path):
+    artifact = load_backtest_artifact(_write_artifact(tmp_path))
+
+    fig = plot_fills_for_coin(
+        artifact,
+        "BTC",
+        start_date="2026-01-01T00:00:00",
+        end_date="2026-01-01T00:02:00",
+    )
+
+    try:
+        assert fig.axes
+        ax = fig.axes[0]
+        assert ax.get_title() == "Fills BTC"
+        assert len(ax.lines) >= 2
+        assert len(ax.collections) >= 2
+    finally:
+        from plotting import plt
+
+        plt.close(fig)
+
+
+def test_workspace_plot_fills_for_coin_uses_loaded_artifact(tmp_path):
+    workspace = load_backtest_artifact_workspace(_write_artifact(tmp_path))
+
+    fig = workspace["plot_fills_for_coin"]("BTC", include_high_low=False)
+
+    try:
+        assert fig.axes[0].get_title() == "Fills BTC"
+    finally:
+        from plotting import plt
+
+        plt.close(fig)
 
 
 def test_load_backtest_artifact_fails_loudly_on_missing_cache_file(tmp_path):

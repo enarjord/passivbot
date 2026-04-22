@@ -2,7 +2,7 @@ import gzip
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -121,6 +121,9 @@ class BacktestArtifact:
             "coin_index": self.coin_index,
             "market_settings": self.market_settings,
             "candles_for_coin": self.candles_for_coin,
+            "plot_fills_for_coin": lambda coin, **kwargs: plot_fills_for_coin(
+                self, coin=coin, **kwargs
+            ),
         }
 
 
@@ -186,9 +189,193 @@ def load_backtest_artifact_workspace(artifact_dir: str | Path) -> dict[str, Any]
 
 
 def candles_for_coin(artifact: BacktestArtifact | dict[str, Any], coin: str) -> pd.DataFrame:
+    artifact = _coerce_artifact(artifact)
+    return artifact.candles_for_coin(coin)
+
+
+def _coerce_artifact(artifact: BacktestArtifact | dict[str, Any]) -> BacktestArtifact:
     if isinstance(artifact, BacktestArtifact):
-        return artifact.candles_for_coin(coin)
-    helper: Callable[[str], pd.DataFrame] | None = artifact.get("candles_for_coin")
-    if helper is not None:
-        return helper(coin)
-    raise TypeError("artifact must be BacktestArtifact or workspace dict from load_backtest_artifact_workspace")
+        return artifact
+    if isinstance(artifact, dict):
+        loaded = artifact.get("artifact")
+        if isinstance(loaded, BacktestArtifact):
+            return loaded
+    raise TypeError(
+        "artifact must be BacktestArtifact or workspace dict from load_backtest_artifact_workspace"
+    )
+
+
+def _parse_optional_date(value: str | pd.Timestamp | None, *, name: str) -> pd.Timestamp | None:
+    if value in (None, ""):
+        return None
+    try:
+        return pd.to_datetime(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be parseable as a datetime; got {value!r}") from exc
+
+
+def _filter_time_window(
+    df: pd.DataFrame,
+    *,
+    start_date: str | pd.Timestamp | None,
+    end_date: str | pd.Timestamp | None,
+) -> pd.DataFrame:
+    start = _parse_optional_date(start_date, name="start_date")
+    end = _parse_optional_date(end_date, name="end_date")
+    if start is not None and end is not None and start > end:
+        raise ValueError(f"start_date must be <= end_date; got {start} > {end}")
+    out = df
+    if start is not None:
+        out = out[out["timestamp"] >= start]
+    if end is not None:
+        out = out[out["timestamp"] <= end]
+    return out
+
+
+def _select_coin_fills(
+    fills: pd.DataFrame,
+    coin: str,
+    *,
+    start_date: str | pd.Timestamp | None,
+    end_date: str | pd.Timestamp | None,
+) -> pd.DataFrame:
+    if fills.empty:
+        return fills.copy()
+    if "timestamp" not in fills.columns:
+        raise KeyError("fills missing required column 'timestamp'")
+    if "coin" not in fills.columns:
+        raise KeyError("fills missing required column 'coin'")
+    out = fills[fills["coin"] == coin].copy()
+    out = _filter_time_window(out, start_date=start_date, end_date=end_date)
+    return out.sort_values("timestamp").reset_index(drop=True)
+
+
+def _plot_fill_markers(ax, fills: pd.DataFrame) -> None:
+    if fills.empty:
+        return
+    required = {"timestamp", "type", "price"}
+    missing = required.difference(fills.columns)
+    if missing:
+        raise KeyError(f"fills missing required columns: {sorted(missing)}")
+    fills = fills.copy()
+    fills["price"] = pd.to_numeric(fills["price"], errors="raise")
+    type_series = fills["type"].astype(str)
+
+    marker_specs = [
+        (
+            "long_entry",
+            type_series.str.contains("long", regex=False)
+            & type_series.str.contains("entry", regex=False),
+            "b",
+            ".",
+            "long entries",
+        ),
+        (
+            "long_close",
+            type_series.str.contains("long", regex=False)
+            & type_series.str.contains("close", regex=False),
+            "r",
+            ".",
+            "long closes",
+        ),
+        (
+            "short_entry",
+            type_series.str.contains("short", regex=False)
+            & type_series.str.contains("entry", regex=False),
+            "m",
+            "x",
+            "short entries",
+        ),
+        (
+            "short_close",
+            type_series.str.contains("short", regex=False)
+            & type_series.str.contains("close", regex=False),
+            "c",
+            "x",
+            "short closes",
+        ),
+    ]
+    for _name, mask, color, marker, label in marker_specs:
+        rows = fills[mask]
+        if not rows.empty:
+            ax.scatter(
+                rows["timestamp"],
+                rows["price"],
+                c=color,
+                marker=marker,
+                label=label,
+                zorder=3.0,
+            )
+
+
+def _plot_position_prices(ax, candles: pd.DataFrame, fills: pd.DataFrame) -> None:
+    if fills.empty or not {"timestamp", "type", "pprice", "psize"}.issubset(fills.columns):
+        return
+    candle_index = pd.DatetimeIndex(candles["timestamp"])
+    type_series = fills["type"].astype(str)
+    for side, color in (("long", "b"), ("short", "r")):
+        side_fills = fills[type_series.str.contains(side, regex=False)].copy()
+        if side_fills.empty:
+            continue
+        side_fills["pprice"] = pd.to_numeric(side_fills["pprice"], errors="coerce")
+        side_fills["psize"] = pd.to_numeric(side_fills["psize"], errors="coerce")
+        state = side_fills.groupby("timestamp", sort=True)[["pprice", "psize"]].last()
+        aligned = state.reindex(candle_index).ffill()
+        pprices = aligned.loc[aligned["psize"].abs() > 0.0, "pprice"]
+        if not pprices.empty:
+            ax.plot(
+                pprices.index,
+                pprices.to_numpy(dtype=float),
+                color=color,
+                linestyle="--",
+                alpha=0.65,
+                label=f"{side} pprice",
+            )
+
+
+def plot_fills_for_coin(
+    artifact: BacktestArtifact | dict[str, Any],
+    coin: str,
+    *,
+    start_date: str | pd.Timestamp | None = None,
+    end_date: str | pd.Timestamp | None = None,
+    figsize: tuple[float, float] = (21, 13),
+    include_high_low: bool = True,
+):
+    """
+    Plot cached candles and fill markers for one coin from a loaded backtest artifact.
+
+    `artifact` should be a `BacktestArtifact` or workspace dict returned by
+    `load_backtest_artifact_workspace()`. This avoids reloading large HLCV arrays for repeated
+    notebook plots.
+    """
+    try:
+        from plotting import plt
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError("matplotlib/plotting helpers are required for plot_fills_for_coin") from exc
+
+    artifact = _coerce_artifact(artifact)
+    candles = artifact.candles_for_coin(coin)
+    candles = _filter_time_window(candles, start_date=start_date, end_date=end_date)
+    if candles.empty:
+        raise ValueError(f"no candle rows for {coin!r} in requested time window")
+    fills = _select_coin_fills(
+        artifact.fills,
+        coin,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(candles["timestamp"], candles["close"], "y-", label="close", zorder=1.0)
+    if include_high_low:
+        ax.plot(candles["timestamp"], candles["low"], "g--", alpha=0.75, label="low", zorder=0.9)
+        ax.plot(candles["timestamp"], candles["high"], "g-.", alpha=0.55, label="high", zorder=0.8)
+    _plot_fill_markers(ax, fills)
+    _plot_position_prices(ax, candles, fills)
+    ax.set_title(f"Fills {coin}")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Price")
+    ax.legend()
+    fig.tight_layout()
+    return fig

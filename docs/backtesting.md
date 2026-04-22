@@ -50,10 +50,12 @@ workspace = load_backtest_artifact_workspace("backtests/combined/2026-04-21T19_3
 globals().update(workspace)
 
 btc_candles = candles_for_coin("BTC")
+fig = plot_fills_for_coin("BTC", start_date="2026-04-01T00:00:00")
 ```
 
 The workspace includes `config`, `analysis`, `fills`, `balance_and_equity`, `hlcvs`,
-`timestamps`, `btc_usd_prices`, `coins`, `market_settings`, and `candles_for_coin`.
+`timestamps`, `btc_usd_prices`, `coins`, `market_settings`, `candles_for_coin`, and
+`plot_fills_for_coin`.
 
 ## Backtest CLI args
 
