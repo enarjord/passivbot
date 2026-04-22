@@ -40,6 +40,21 @@ See [Config Workflow](config_workflow.md) for the recommended way to copy and cu
 
 Standalone runs write metrics and plots to `backtests/{exchange}/timestamp/`. Suite runs collect everything under `backtests/suite_runs/<timestamp>/<scenario_label>/` and add a top-level `suite_summary.json`.
 
+Each run also writes `dataset.json`, which points to the exact HLCV cache files used for that
+run. In notebooks or ad-hoc Python analysis you can load the full artifact bundle like this:
+
+```python
+from backtest_artifacts import load_backtest_artifact_workspace
+
+workspace = load_backtest_artifact_workspace("backtests/combined/2026-04-21T19_35_10")
+globals().update(workspace)
+
+btc_candles = candles_for_coin("BTC")
+```
+
+The workspace includes `config`, `analysis`, `fills`, `balance_and_equity`, `hlcvs`,
+`timestamps`, `btc_usd_prices`, `coins`, `market_settings`, and `candles_for_coin`.
+
 ## Backtest CLI args
 
 - `-dp` to disable individual coin plotting.
