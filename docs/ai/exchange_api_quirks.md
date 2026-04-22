@@ -43,6 +43,18 @@ Handling:
 1. Overlap boundaries by 1 candle.
 2. Back up initial `since` by one candle on pagination start.
 
+## GateIO Futures
+
+### Public 1m OHLCV recent-window limit
+
+Problem: GateIO rejects old 1m OHLCV requests with `Candlestick too long ago. Maximum 10000 points recently are allowed`.
+
+Handling:
+
+1. Do not pass CCXT `until`; page forward by `since + limit`.
+2. Clip 1m historical fetches to the recent-window bound and mark older spans as `no_archive`.
+3. Require external OHLCV source data or another candle source for older GateIO backtests.
+
 ## General Guidance
 
 1. Check raw exchange payloads when CCXT abstraction is insufficient.
