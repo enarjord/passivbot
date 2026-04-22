@@ -43,10 +43,9 @@ passivbot live configs/live/my_config.json
 The default profile mirrored by `configs/examples/default_trailing_grid_long_npos7.json` is:
 
 - trailing-grid style configuration
-- long and short enabled with `bot.{long,short}.n_positions = 7`
+- long enabled by default with `bot.long.n_positions = 7`
+- short parameters are present, but shorts are disabled by default with `bot.short.total_wallet_exposure_limit = 0.0`
 - `bot.long.total_wallet_exposure_limit = 1.5`
-- `bot.short.total_wallet_exposure_limit = 0.527`
-- inflated grid re-entries disabled with `entry_grid_inflation_enabled = false`
 - HSL present in config but disabled with `hsl_enabled = false`
 - approved-coin universe seeded to the current default large-cap list
 - optimizer backend defaulting to `pymoo`

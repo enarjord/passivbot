@@ -238,7 +238,6 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "close_trailing_qty_pct": 0.0,
                 "close_trailing_threshold_pct": 0.001,
                 "entry_grid_double_down_factor": 1.0,
-                "entry_grid_inflation_enabled": True,
                 "entry_grid_spacing_volatility_weight": 0.0,
                 "entry_grid_spacing_we_weight": 0.0,
                 "entry_grid_spacing_pct": 0.01,
@@ -300,7 +299,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     assert out["hsl_tier_ratio_orange"] == pytest.approx(0.75)
     assert out["hsl_orange_tier_mode"] == "tp_only_with_active_entry_cancellation"
     assert out["hsl_panic_close_order_type"] == "market"
-    assert out["entry_grid_inflation_enabled"] is True
+    assert "entry_grid_inflation_enabled" not in out
     assert out["forager_score_weights"] == {
         "volume": pytest.approx(1.0),
         "ema_readiness": pytest.approx(0.0),
@@ -308,7 +307,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     }
 
 
-def test_bot_params_to_rust_dict_respects_coin_override_entry_grid_inflation_flag():
+def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
     from passivbot import Passivbot
 
     class _Stub:
@@ -324,7 +323,6 @@ def test_bot_params_to_rust_dict_respects_coin_override_entry_grid_inflation_fla
                         "close_trailing_qty_pct": 0.0,
                         "close_trailing_threshold_pct": 0.001,
                         "entry_grid_double_down_factor": 1.0,
-                        "entry_grid_inflation_enabled": True,
                         "entry_grid_spacing_volatility_weight": 0.0,
                         "entry_grid_spacing_we_weight": 0.0,
                         "entry_grid_spacing_pct": 0.01,
@@ -393,7 +391,7 @@ def test_bot_params_to_rust_dict_respects_coin_override_entry_grid_inflation_fla
 
     out = Passivbot._bot_params_to_rust_dict(_Stub(), "long", "BTC/USDT:USDT")
 
-    assert out["entry_grid_inflation_enabled"] is False
+    assert "entry_grid_inflation_enabled" not in out
 
 
 def test_install_runtime_overrides_sets_exchange_time_override():

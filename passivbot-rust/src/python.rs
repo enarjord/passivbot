@@ -1374,7 +1374,6 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     let n_positions_float: f64 = extract_value(dict, "n_positions")?;
     let n_positions = n_positions_float.round() as usize;
     let hsl_enabled: bool = extract_value(dict, "hsl_enabled")?;
-    let entry_grid_inflation_enabled: bool = extract_value(dict, "entry_grid_inflation_enabled")?;
     let hsl_red_threshold: f64 = extract_value(dict, "hsl_red_threshold")?;
     let hsl_ema_span_minutes: f64 = extract_value(dict, "hsl_ema_span_minutes")?;
     let hsl_cooldown_minutes_after_red: f64 =
@@ -1409,7 +1408,6 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         close_trailing_qty_pct: extract_value(dict, "close_trailing_qty_pct")?,
         close_trailing_threshold_pct: extract_value(dict, "close_trailing_threshold_pct")?,
         entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
-        entry_grid_inflation_enabled,
         entry_grid_spacing_volatility_weight: extract_value(
             dict,
             "entry_grid_spacing_volatility_weight",
@@ -1568,7 +1566,6 @@ pub fn calc_next_entry_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_inflation_enabled: bool,
     entry_grid_spacing_volatility_weight: f64,
     entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
@@ -1618,7 +1615,6 @@ pub fn calc_next_entry_long_py(
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_inflation_enabled,
         entry_grid_spacing_volatility_weight,
         entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
@@ -1748,7 +1744,6 @@ pub fn calc_next_entry_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_inflation_enabled: bool,
     entry_grid_spacing_volatility_weight: f64,
     entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
@@ -1798,7 +1793,6 @@ pub fn calc_next_entry_short_py(
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_inflation_enabled,
         entry_grid_spacing_volatility_weight,
         entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
@@ -1928,7 +1922,6 @@ pub fn calc_entries_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_inflation_enabled: bool,
     entry_grid_spacing_volatility_weight: f64,
     entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
@@ -1980,7 +1973,6 @@ pub fn calc_entries_long_py(
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_inflation_enabled,
         entry_grid_spacing_volatility_weight,
         entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
@@ -2032,7 +2024,6 @@ pub fn calc_entries_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_inflation_enabled: bool,
     entry_grid_spacing_volatility_weight: f64,
     entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
@@ -2084,7 +2075,6 @@ pub fn calc_entries_short_py(
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_inflation_enabled,
         entry_grid_spacing_volatility_weight,
         entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,

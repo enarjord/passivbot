@@ -185,7 +185,6 @@
             "ema_span_0": 385.0,
             "ema_span_1": 620.0,
             "entry_grid_double_down_factor": 1.39,
-            "entry_grid_inflation_enabled": false,
             "entry_grid_spacing_pct": 0.02312,
             "entry_grid_spacing_volatility_weight": 17.8,
             "entry_grid_spacing_we_weight": 0.6766,
@@ -240,7 +239,6 @@
             "ema_span_0": 415.0,
             "ema_span_1": 265.0,
             "entry_grid_double_down_factor": 0.57,
-            "entry_grid_inflation_enabled": false,
             "entry_grid_spacing_pct": 0.03575,
             "entry_grid_spacing_volatility_weight": 10.4,
             "entry_grid_spacing_we_weight": 4.2641,
@@ -278,7 +276,7 @@
             "risk_twel_enforcer_threshold": 0.999,
             "risk_we_excess_allowance_pct": 0.1,
             "risk_wel_enforcer_threshold": 1.004,
-            "total_wallet_exposure_limit": 0.527,
+            "total_wallet_exposure_limit": 0.0,
             "unstuck_close_pct": 0.076,
             "unstuck_ema_dist": -0.0286,
             "unstuck_loss_allowance_pct": 0.00201,
@@ -818,9 +816,8 @@
                 0.001
             ],
             "short_total_wallet_exposure_limit": [
-                0.001,
-                1,
-                0.001
+                0.0,
+                0.0
             ],
             "short_unstuck_close_pct": [
                 0.005,

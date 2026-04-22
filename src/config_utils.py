@@ -213,22 +213,6 @@ FIELD_RUNTIME_RULES = {
 }
 
 OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
-    "bot.long.entry_grid_inflation_enabled": {
-        "visible": ["--bot.long.entry_grid_inflation_enabled"],
-        "hidden": ["--bot_long_entry_grid_inflation_enabled"],
-        "type": str2bool,
-        "metavar": "Y/N",
-        "commands": {"optimize"},
-        "help": "Override bot.long.entry_grid_inflation_enabled for this optimize run.",
-    },
-    "bot.short.entry_grid_inflation_enabled": {
-        "visible": ["--bot.short.entry_grid_inflation_enabled"],
-        "hidden": ["--bot_short_entry_grid_inflation_enabled"],
-        "type": str2bool,
-        "metavar": "Y/N",
-        "commands": {"optimize"},
-        "help": "Override bot.short.entry_grid_inflation_enabled for this optimize run.",
-    },
     "bot.long.hsl_enabled": {
         "visible": ["--bot.long.hsl_enabled"],
         "hidden": ["--bot_long_hsl_enabled"],

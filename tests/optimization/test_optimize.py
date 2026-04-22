@@ -676,26 +676,6 @@ class TestIndividualToConfig:
         assert result["bot"]["short"]["a_param"] == 30.0
         assert result["bot"]["short"]["z_param"] == 40.0
 
-    def test_preserves_fixed_entry_grid_inflation_flag_across_candidates(self):
-        template = get_template_config()
-        template["bot"]["long"]["entry_grid_inflation_enabled"] = False
-        template["bot"]["short"]["entry_grid_inflation_enabled"] = False
-        key_paths = get_optimization_key_paths(template)
-        bounds = extract_bounds_tuple_list_from_config(template)
-        individual = config_to_individual(template, bounds, sig_digits=6, key_paths=key_paths)
-
-        result = individual_to_config(
-            individual,
-            lambda x, y, z: y,
-            [],
-            template,
-            key_paths=key_paths,
-        )
-
-        assert ("long_entry_grid_inflation_enabled", ("bot", "long", "entry_grid_inflation_enabled")) not in key_paths
-        assert result["bot"]["long"]["entry_grid_inflation_enabled"] is False
-        assert result["bot"]["short"]["entry_grid_inflation_enabled"] is False
-
 class TestConfigToIndividual:
     """Test config_to_individual function."""
 
