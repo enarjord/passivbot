@@ -36,9 +36,10 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 - **visible_metrics**: Controls which metrics are printed to the terminal after a standalone backtest. `null` shows the metrics implied by `optimize.scoring` and `optimize.limits`, `[]` shows all metrics, and an explicit list adds extra named metrics to the default view. This affects CLI visibility only; the full metric set is still computed and persisted.
 - **config_version**: Top-level schema version string for the config file. Canonical `v7.9` configs use `v7.9.0`. Older configs without this field are treated as legacy and migrated during load.
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
-  `balance_and_equity.csv` and related plots. `1` keeps full per-minute resolution; higher values
-  thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes.
-- **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` targets fully-BTC collateral; values `>1` allow leveraged BTC collateral, accepting negative USD balances.
+  `balance_and_equity.csv.gz` and related plots. `1` keeps full per-minute resolution; higher values
+  thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes. The CSV
+  includes account balance/equity in USD and BTC plus collateral-agnostic `strategy_equity`.
+- **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` targets fully-BTC collateral; values `>1` allow leveraged BTC collateral, accepting negative USD balances. Backtests initialize the BTC collateral position at the first active trading step, not during EMA warmup.
 - **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
 ### Suite Scenarios
 
@@ -586,7 +587,7 @@ Use `--suite-config path/to/file.json` to layer additional scenario definitions 
 
 The optimizer penalizes backtests whose metric values exceed or fall short of specified thresholds. Penalties are added to the fitness score to discourage undesirable configurations but do not disqualify the config.
 
-Any metric listed above (and its `btc_` prefixed counterpart when `backtest.use_btc_collateral=True`) can be used when defining limits. This includes the shared HSL metrics such as `hard_stop_time_in_red_pct`, `hard_stop_post_restart_retrigger_pct`, and `hard_stop_halt_to_restart_equity_loss_pct`, plus `backtest_completion_ratio` for rejecting truncated runs. HSL metrics are account-level shared metrics and therefore remain single-valued rather than being split into `_usd` and `_btc`. Each limit entry is a dictionary with:
+Any metric listed above can be used when defining limits. Currency-specific metrics use `_usd` and `_btc` suffixes where both denominations are available; BTC-denominated metrics are available even when `backtest.btc_collateral_cap = 0`. This includes the shared HSL metrics such as `hard_stop_time_in_red_pct`, `hard_stop_post_restart_retrigger_pct`, and `hard_stop_halt_to_restart_equity_loss_pct`, plus `backtest_completion_ratio` for rejecting truncated runs. HSL metrics are account-level shared metrics and therefore remain single-valued rather than being split into `_usd` and `_btc`. Each limit entry is a dictionary with:
 
 - `metric`: canonical metric name (`drawdown_worst_btc`, `loss_profit_ratio`, `peak_recovery_hours_pnl`, etc.).
 - `penalize_if`: one of `<`, `<=`, `>`, `>=`, `==`, `outside_range`, or `inside_range` (aliases like `less_than`, `greater_than`, `auto`, etc. are also accepted). Use `outside_range` to keep a metric within `[low, high]`, and `inside_range` to forbid a specific band.
