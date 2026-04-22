@@ -15,7 +15,7 @@ def _make_config(limits, scoring=None):
 
 def test_evaluator_applies_limit_penalties():
     limits = [
-        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4},
+        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4, "stat": "max"},
         {"metric": "adg", "penalize_if": "less_than", "value": 0.001, "stat": "min"},
         {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.2, 0.5]},
         {"metric": "omega_ratio", "penalize_if": "inside_range", "range": [1.0, 1.5]},
@@ -40,7 +40,7 @@ def test_evaluator_applies_limit_penalties():
 
 def test_evaluator_returns_weighted_metric_when_within_limits():
     limits = [
-        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4},
+        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4, "stat": "max"},
         {"metric": "adg", "penalize_if": "less_than", "value": 0.001},
         {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.2, 0.5]},
         {"metric": "omega_ratio", "penalize_if": "inside_range", "range": [1.0, 1.5]},
@@ -84,7 +84,7 @@ def test_limit_penalty_applies_only_to_matching_objective():
 
 def test_limit_penalty_remains_global_for_non_scoring_metric():
     limits = [
-        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4},
+        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4, "stat": "max"},
     ]
     cfg = _make_config(limits, scoring=["adg", "loss_profit_ratio"])
     evaluator = Evaluator({}, {}, {}, cfg)
