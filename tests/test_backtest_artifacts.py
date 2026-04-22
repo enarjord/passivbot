@@ -28,7 +28,7 @@ def _write_artifact(tmp_path: Path) -> Path:
     timestamps = np.array(
         [
             int(ts.value // 1_000_000)
-            for ts in pd.date_range("2026-01-01 00:00:00", periods=3, freq="1min")
+            for ts in pd.date_range("2026-01-01 00:00:00", periods=5, freq="1min")
         ],
         dtype=np.int64,
     )
@@ -37,12 +37,14 @@ def _write_artifact(tmp_path: Path) -> Path:
             [[101.0, 99.0, 100.0, 10.0], [201.0, 199.0, 200.0, 20.0]],
             [[102.0, 100.0, 101.0, 11.0], [202.0, 200.0, 201.0, 21.0]],
             [[103.0, 101.0, 102.0, 12.0], [203.0, 201.0, 202.0, 22.0]],
+            [[104.0, 102.0, 103.0, 13.0], [204.0, 202.0, 203.0, 23.0]],
+            [[105.0, 103.0, 104.0, 14.0], [205.0, 203.0, 204.0, 24.0]],
         ],
         dtype=np.float64,
     )
     _save_npy_gz(cache_dir / "hlcvs.npy.gz", hlcvs)
     _save_npy_gz(cache_dir / "timestamps.npy.gz", timestamps)
-    np.save(cache_dir / "btc_usd_prices.npy", np.array([100.0, 101.0, 102.0]))
+    np.save(cache_dir / "btc_usd_prices.npy", np.array([100.0, 101.0, 102.0, 103.0, 104.0]))
     (cache_dir / "market_specific_settings.json").write_text(
         json.dumps({"BTC": {"price_step": 0.1}, "ETH": {"price_step": 0.01}}),
         encoding="utf-8",
@@ -69,14 +71,18 @@ def _write_artifact(tmp_path: Path) -> Path:
     (artifact_dir / "analysis.json").write_text(json.dumps({"adg_usd": 0.01}), encoding="utf-8")
     pd.DataFrame(
         {
-            "timestamp": ["2026-01-01 00:01:00", "2026-01-01 00:02:00"],
-            "coin": ["BTC", "BTC"],
-            "type": ["entry_grid_normal_long", "close_grid_long"],
-            "qty": [1.0, -1.0],
-            "price": [101.0, 102.0],
-            "psize": [1.0, 0.0],
-            "pprice": [101.0, 0.0],
-            "pnl": [0.0, 1.0],
+            "timestamp": [
+                "2026-01-01 00:01:00",
+                "2026-01-01 00:03:00",
+                "2026-01-01 00:04:00",
+            ],
+            "coin": ["BTC", "BTC", "BTC"],
+            "type": ["entry_grid_normal_long", "entry_grid_normal_long", "close_grid_long"],
+            "qty": [1.0, 1.0, -2.0],
+            "price": [101.0, 103.0, 104.0],
+            "psize": [1.0, 2.0, 0.0],
+            "pprice": [101.0, 102.0, 0.0],
+            "pnl": [0.0, 0.0, 2.0],
         }
     ).to_csv(artifact_dir / "fills.csv")
     pd.DataFrame(
@@ -98,12 +104,12 @@ def test_load_backtest_artifact_loads_cache_arrays_and_tables(tmp_path):
     assert artifact.config["config_version"] == "test"
     assert artifact.analysis["adg_usd"] == pytest.approx(0.01)
     assert artifact.coins == ["BTC", "ETH"]
-    assert artifact.hlcvs.shape == (3, 2, 4)
+    assert artifact.hlcvs.shape == (5, 2, 4)
     assert artifact.timestamps.tolist() == [
         int(ts.value // 1_000_000)
-        for ts in pd.date_range("2026-01-01 00:00:00", periods=3, freq="1min")
+        for ts in pd.date_range("2026-01-01 00:00:00", periods=5, freq="1min")
     ]
-    assert artifact.btc_usd_prices.tolist() == [100.0, 101.0, 102.0]
+    assert artifact.btc_usd_prices.tolist() == [100.0, 101.0, 102.0, 103.0, 104.0]
     assert artifact.fills.loc[0, "timestamp"] == pd.Timestamp("2026-01-01 00:01:00")
     assert "Unnamed: 0" not in artifact.fills.columns
     assert artifact.balance_and_equity.loc[0, "strategy_equity"] == pytest.approx(1002.0)
@@ -154,7 +160,7 @@ def test_plot_fills_for_coin_returns_figure_for_loaded_artifact(tmp_path):
         artifact,
         "BTC",
         start_date="2026-01-01T00:00:00",
-        end_date="2026-01-01T00:02:00",
+        end_date="2026-01-01T00:04:00",
     )
 
     try:
@@ -163,6 +169,14 @@ def test_plot_fills_for_coin_returns_figure_for_loaded_artifact(tmp_path):
         assert ax.get_title() == "Fills BTC"
         assert len(ax.lines) >= 2
         assert len(ax.collections) >= 2
+        pprice_lines = [line for line in ax.lines if line.get_label() == "long pprice"]
+        assert len(pprice_lines) == 1
+        pprice_y = pprice_lines[0].get_ydata()
+        assert np.isnan(pprice_y).any()
+        assert pprice_y[np.isfinite(pprice_y)].tolist() == [101.0, 101.0]
+        from plotting import plt
+
+        assert not plt.fignum_exists(fig.number)
     finally:
         from plotting import plt
 

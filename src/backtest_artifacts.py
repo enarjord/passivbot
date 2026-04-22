@@ -321,6 +321,8 @@ def _plot_position_prices(ax, candles: pd.DataFrame, fills: pd.DataFrame) -> Non
         side_fills["psize"] = pd.to_numeric(side_fills["psize"], errors="coerce")
         state = side_fills.groupby("timestamp", sort=True)[["pprice", "psize"]].last()
         aligned = state.reindex(candle_index).ffill()
+        pprice_change = aligned["pprice"].pct_change().fillna(0.0)
+        aligned.loc[pprice_change != 0.0, "pprice"] = np.nan
         pprices = aligned.loc[aligned["psize"].abs() > 0.0, "pprice"]
         if not pprices.empty:
             ax.plot(
@@ -378,4 +380,5 @@ def plot_fills_for_coin(
     ax.set_ylabel("Price")
     ax.legend()
     fig.tight_layout()
+    plt.close(fig)
     return fig
