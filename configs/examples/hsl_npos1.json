@@ -4,8 +4,8 @@
             "default": "mean",
             "drawdown_worst_strategy_eq": "max",
             "drawdown_worst_mean_1pct_strategy_eq": "max",
-            "peak_recovery_hours_strategy_eq": "max",
-            "position_held_hours_max": "max"
+            "peak_recovery_days_strategy_eq": "max",
+            "position_held_days_max": "max"
         },
         "balance_sample_divider": 60,
         "base_dir": "backtests",
@@ -26,34 +26,198 @@
         "ohlcv_source_dir": null,
         "market_order_slippage_pct": 0.0005,
         "scenarios": [
-            {"label": "base"},
             {
-                "coins": ["BTC", "ETH", "XRP", "BNB", "SOL", "TRX", "DOGE", "ADA", "BCH", "HYPE", "LINK"],
-                "label": "subset_1_top"
+                "label": "base"
             },
             {
-                "coins": ["XMR", "XLM", "CC", "LTC", "AVAX", "HBAR", "ZEC", "SUI", "SHIB", "CRO", "TON", "M"],
-                "label": "subset_2_mid"
+                "label": "subset_1_top",
+                "coins": [
+                    "BTC",
+                    "ETH",
+                    "XRP",
+                    "BNB",
+                    "SOL",
+                    "TRX",
+                    "DOGE"
+                ]
             },
             {
-                "coins": ["TAO", "XAUT", "DOT", "WLFI", "MNT", "PAXG", "UNI", "OKB", "NEAR", "AAVE", "ASTER"],
-                "label": "subset_3_bottom"
+                "label": "subset_2_mid",
+                "coins": [
+                    "HYPE",
+                    "ADA",
+                    "BCH",
+                    "LINK",
+                    "XMR",
+                    "XLM"
+                ]
             },
             {
-                "coins": ["BTC", "BNB", "DOGE", "HYPE", "XLM", "AVAX", "SUI", "TON", "XAUT", "MNT", "OKB", "ASTER"],
-                "label": "subset_4_mix"
+                "label": "subset_3_bottom",
+                "coins": [
+                    "ZEC",
+                    "LTC",
+                    "AVAX",
+                    "HBAR",
+                    "SUI",
+                    "SHIB",
+                    "TON"
+                ]
             },
             {
-                "coins": ["ETH", "SOL", "ADA", "LINK", "CC", "HBAR", "SHIB", "M", "DOT", "PAXG", "NEAR"],
-                "label": "subset_5_mix"
+                "label": "subset_4_mix",
+                "coins": [
+                    "BTC",
+                    "BNB",
+                    "DOGE",
+                    "BCH",
+                    "XLM",
+                    "AVAX",
+                    "SHIB"
+                ]
             },
             {
-                "coins": ["XRP", "TRX", "BCH", "XMR", "LTC", "ZEC", "CRO", "TAO", "WLFI", "UNI", "AAVE"],
-                "label": "subset_6_mix"
+                "label": "subset_5_mix",
+                "coins": [
+                    "ETH",
+                    "SOL",
+                    "HYPE",
+                    "LINK",
+                    "ZEC",
+                    "HBAR",
+                    "TON"
+                ]
             },
             {
-                "label": "btc_collateral_cap=0.5",
-                "overrides": {"backtest.btc_collateral_cap": 0.5}
+                "label": "subset_6_mix",
+                "coins": [
+                    "XRP",
+                    "TRX",
+                    "ADA",
+                    "XMR",
+                    "LTC",
+                    "SUI"
+                ]
+            },
+            {
+                "label": "single_coin_BTC",
+                "coins": [
+                    "BTC"
+                ]
+            },
+            {
+                "label": "single_coin_ETH",
+                "coins": [
+                    "ETH"
+                ]
+            },
+            {
+                "label": "single_coin_XRP",
+                "coins": [
+                    "XRP"
+                ]
+            },
+            {
+                "label": "single_coin_BNB",
+                "coins": [
+                    "BNB"
+                ]
+            },
+            {
+                "label": "single_coin_SOL",
+                "coins": [
+                    "SOL"
+                ]
+            },
+            {
+                "label": "single_coin_TRX",
+                "coins": [
+                    "TRX"
+                ]
+            },
+            {
+                "label": "single_coin_DOGE",
+                "coins": [
+                    "DOGE"
+                ]
+            },
+            {
+                "label": "single_coin_HYPE",
+                "coins": [
+                    "HYPE"
+                ]
+            },
+            {
+                "label": "single_coin_ADA",
+                "coins": [
+                    "ADA"
+                ]
+            },
+            {
+                "label": "single_coin_BCH",
+                "coins": [
+                    "BCH"
+                ]
+            },
+            {
+                "label": "single_coin_LINK",
+                "coins": [
+                    "LINK"
+                ]
+            },
+            {
+                "label": "single_coin_XMR",
+                "coins": [
+                    "XMR"
+                ]
+            },
+            {
+                "label": "single_coin_XLM",
+                "coins": [
+                    "XLM"
+                ]
+            },
+            {
+                "label": "single_coin_ZEC",
+                "coins": [
+                    "ZEC"
+                ]
+            },
+            {
+                "label": "single_coin_LTC",
+                "coins": [
+                    "LTC"
+                ]
+            },
+            {
+                "label": "single_coin_AVAX",
+                "coins": [
+                    "AVAX"
+                ]
+            },
+            {
+                "label": "single_coin_HBAR",
+                "coins": [
+                    "HBAR"
+                ]
+            },
+            {
+                "label": "single_coin_SUI",
+                "coins": [
+                    "SUI"
+                ]
+            },
+            {
+                "label": "single_coin_SHIB",
+                "coins": [
+                    "SHIB"
+                ]
+            },
+            {
+                "label": "single_coin_TON",
+                "coins": [
+                    "TON"
+                ]
             }
         ],
         "start_date": "2021-01-01",
@@ -161,8 +325,8 @@
     "coin_overrides": {},
     "live": {
         "approved_coins": {
-            "long": ["BTC", "ETH", "XRP", "BNB", "SOL", "TRX", "BCH", "ADA", "HYPE", "LINK", "XMR", "XLM", "HBAR", "LTC", "AVAX", "SUI", "TON", "XAUT", "UNI", "DOT"],
-            "short": ["BTC", "ETH", "XRP", "BNB", "SOL", "TRX", "BCH", "ADA", "HYPE", "LINK", "XMR", "XLM", "HBAR", "LTC", "AVAX", "SUI", "TON", "XAUT", "UNI", "DOT"]
+            "long": ["BTC", "ETH", "XRP", "BNB", "SOL", "TRX", "DOGE", "HYPE", "ADA", "BCH", "LINK", "XMR", "XLM", "ZEC", "LTC", "AVAX", "HBAR", "SUI", "SHIB", "TON"],
+            "short": ["BTC", "ETH", "XRP", "BNB", "SOL", "TRX", "DOGE", "HYPE", "ADA", "BCH", "LINK", "XMR", "XLM", "ZEC", "LTC", "AVAX", "HBAR", "SUI", "SHIB", "TON"]
         },
         "auto_gs": true,
         "balance_hysteresis_snap_pct": 0.01,
@@ -258,16 +422,16 @@
             "long_forager_volume_drop_pct": [0.0, 1.0, 0.01],
             "long_forager_volume_ema_span": [360.0, 2880.0, 10.0],
             "long_hsl_cooldown_minutes_after_red": [1.0, 2880.0, 1.0],
-            "long_hsl_ema_span_minutes": [1.0, 2880.0, 1.0],
+            "long_hsl_ema_span_minutes": [1.0, 240.0, 1.0],
             "long_hsl_red_threshold": [0.01, 0.2, 0.001],
             "long_n_positions": [1.0, 1.0, 1.0],
-            "long_risk_twel_enforcer_threshold": [0.95, 1.01, 0.001],
+            "long_risk_twel_enforcer_threshold": [10.0, 10.0, 0.001],
             "long_risk_we_excess_allowance_pct": [0.0, 0.0, 0.01],
-            "long_risk_wel_enforcer_threshold": [0.95, 1.01, 0.001],
-            "long_total_wallet_exposure_limit": [0.01, 3.0, 0.01],
+            "long_risk_wel_enforcer_threshold": [10.0, 10.0, 0.001],
+            "long_total_wallet_exposure_limit": [1.0, 3.0, 0.01],
             "long_unstuck_close_pct": [0.01, 0.12, 0.001],
             "long_unstuck_ema_dist": [-0.1, 0.01, 0.0001],
-            "long_unstuck_loss_allowance_pct": [0.0001, 0.05, 0.0001],
+            "long_unstuck_loss_allowance_pct": [0.0, 0.0, 0.0001],
             "long_unstuck_threshold": [0.2, 1.1, 0.001],
             "short_close_grid_markup_end": [-0.1, 0.02, 1e-05],
             "short_close_grid_markup_start": [0.001, 0.02, 1e-05],
@@ -306,7 +470,7 @@
             "short_risk_twel_enforcer_threshold": [0.95, 1.01, 0.001],
             "short_risk_we_excess_allowance_pct": [0.0, 0.0, 0.01],
             "short_risk_wel_enforcer_threshold": [0.95, 1.01, 0.001],
-            "short_total_wallet_exposure_limit": [0.01, 3.0, 0.01],
+            "short_total_wallet_exposure_limit": [0.0, 0.0, 0.01],
             "short_unstuck_close_pct": [0.01, 0.12, 0.001],
             "short_unstuck_ema_dist": [-0.1, 0.01, 0.0001],
             "short_unstuck_loss_allowance_pct": [0.0001, 0.05, 0.0001],
@@ -328,9 +492,9 @@
             {"enabled": false, "metric": "loss_profit_ratio", "penalize_if": "greater_than", "value": 0.85},
             {"enabled": true, "metric": "backtest_completion_ratio", "penalize_if": "less_than", "value": 0.99},
             {"enabled": false, "metric": "adg_strategy_eq", "penalize_if": "less_than", "value": 0.0},
-            {"enabled": false, "metric": "high_exposure_hours_max_long", "penalize_if": "greater_than", "value": 2160},
-            {"enabled": false, "metric": "position_held_hours_max", "penalize_if": "greater_than", "value": 2160},
-            {"enabled": false, "metric": "peak_recovery_hours_strategy_eq", "penalize_if": "greater_than", "value": 2160},
+            {"enabled": false, "metric": "high_exposure_days_max_long", "penalize_if": "greater_than", "value": 90},
+            {"enabled": false, "metric": "position_held_days_max", "penalize_if": "greater_than", "value": 90},
+            {"enabled": false, "metric": "peak_recovery_days_strategy_eq", "penalize_if": "greater_than", "value": 90},
             {"enabled": true, "metric": "hard_stop_restarts_per_year", "penalize_if": "less_than", "value": 0.1}
         ],
         "mutation_eta": 20,
@@ -365,8 +529,8 @@
             {"metric": "adg_strategy_eq_w", "goal": "max"},
             {"metric": "mdg_strategy_eq", "goal": "max"},
             {"metric": "mdg_strategy_eq_w", "goal": "max"},
-            {"metric": "peak_recovery_hours_strategy_eq", "goal": "min"},
-            {"metric": "position_held_hours_max", "goal": "min"},
+            {"metric": "peak_recovery_days_strategy_eq", "goal": "min"},
+            {"metric": "position_held_days_max", "goal": "min"},
             {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
             {"metric": "drawdown_worst_mean_1pct_strategy_eq", "goal": "min"}
         ],
