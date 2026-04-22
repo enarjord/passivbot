@@ -35,13 +35,14 @@ These notes describe the user-facing changes from `v7.9.0` to `v7.9.1`.
 - Dotted CLI overrides now create missing intermediate config sections instead of silently failing when a raw config omits them.
 - `live.approved_coins` / `live.ignored_coins` now use a canonical shape with explicit per-side support for `"all"`, and legacy `empty_means_all_approved` inputs migrate with warnings instead of remaining part of canonical config.
 - `passivbot live -u/--user` and `-pmld/--pnls-max-lookback-days` are restored as curated default-help shorthands.
-- `passivbot optimize --help-all` now exposes selected fixed per-side HSL runtime overrides without turning them into optimizer dimensions.
+- `passivbot optimize --help-all` now exposes fixed per-side bot runtime overrides such as `entry_grid_inflation_enabled` and selected HSL runtime flags without turning them into optimizer dimensions.
 - Invalid `unstuck_ema_dist` values that would silently disable unstuck now fail loudly in config loading and in optimize-bounds validation.
 
 ### Backtest, Optimize, and Metrics
 - Backtests now obey the live-owned `pnls_max_lookback_days` setting correctly, and market-order behavior is treated as a correctness fix instead of preserving legacy bug-compatibility.
 - Backtest rolling realized-PnL state now actually expires by time for `pnls_max_lookback_days > 0`, so auto-unstuck and realized-loss gating use the true in-window peak/current pair instead of a stale all-time maximum of the rolling series.
 - `backtest.visible_metrics` filtering is restored for standalone terminal output: `null` shows optimize-derived metrics, `[]` shows all, and explicit lists add extras without affecting saved `analysis.json`.
+- Added a short-term `entry_grid_inflation_enabled` compatibility flag for inflated grid re-entries, with warnings that cropped-only behavior is the forward path.
 - Zero-fill backtests no longer crash during analysis/plotting when balance/equity samples exist but no fills were produced.
 - Added trade-level metrics such as `win_rate`, `win_rate_w`, and `trade_loss_{max,mean,median}` plus optimizer-facing ratio metrics like `paper_loss_ratio`, `exposure_ratio`, and weighted variants.
 - Liquidation reporting now uses an explicit Rust-provided liquidation flag instead of inferring liquidation from drawdown metrics.

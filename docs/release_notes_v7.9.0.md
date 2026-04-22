@@ -18,7 +18,7 @@ These notes describe the user-facing changes from `master` to `v7.9.0`.
 - If Rust looks stale or the wrong binary is being used, run:
   `maturin develop --release`
 - `optimize.backend` now defaults to `pymoo`, so optimize users need the full install profile with the new dependency set.
-- `configs/template.json` is no longer the canonical starting point. Use `configs/examples/default_trailing_grid_long_npos7.json` or omit the config path to start from schema defaults.
+- `configs/template.json` is no longer the canonical starting point. Use `configs/examples/default_trailing_grid_long_npos10.json` or omit the config path to start from schema defaults.
 - The canonical schema enables the local monitor by default. Set `monitor.enabled = false` if you do not want snapshot and event files written locally.
 - `live.max_realized_loss_pct` now defaults to `1.0`, so the realized-loss gate is opt-in unless you set a tighter value explicitly.
 
@@ -41,7 +41,7 @@ These notes describe the user-facing changes from `master` to `v7.9.0`.
 ### Configs, CLI, and Install Flow
 - Moved canonical defaults to `src/config/schema.py` and made schema defaults the no-config-path behavior for `live`, `backtest`, and `optimize`.
 - Added staged config normalization, runtime compilation helpers, migration logging, and backward-compatibility renames for older config keys.
-- Replaced the old implicit template workflow with `configs/examples/default_trailing_grid_long_npos7.json`.
+- Replaced the old implicit template workflow with `configs/examples/default_trailing_grid_long_npos10.json`.
 - Added the unified `passivbot` CLI, curated default help, `--help-all`, and install-profile guidance for `live`, `full`, and `dev`.
 - Restored `passivbot live --user` / `-u` as the curated shorthand for `live.user`, and added a curated shorthand for `live.pnls_max_lookback_days` as `--pnls-max-lookback-days` / `-pmld` in the default live help.
 - Added environment mismatch detection so stale shell shims and wrong-entrypoint installs fail loudly or re-exec into the active environment.
@@ -82,7 +82,7 @@ Main changes in v7.9.0:
 - Optimization now supports `pymoo` as a first-class backend and uses it by default. NSGA-II / NSGA-III settings under `optimize.pymoo.*` are now actually honored, and NSGA-III population sizing can be auto-derived from reference directions.
 - Optimizer scoring is now explicit via `{metric, goal}` entries instead of implicit signed weights. Legacy scoring configs still load.
 - A new `passivbot tool pareto` explorer can filter local Pareto candidates with optimizer-style limit expressions and select a single config using knee, reference-point, ideal-point, weighted utility, lexicographic, or outranking methods.
-- Config loading now uses a canonical staged pipeline with in-code schema defaults, compatibility migrations for older keys, and a new canonical example config at `configs/examples/default_trailing_grid_long_npos7.json`.
+- Config loading now uses a canonical staged pipeline with in-code schema defaults, compatibility migrations for older keys, and a new canonical example config at `configs/examples/default_trailing_grid_long_npos10.json`.
 - Passivbot now has a unified `passivbot` CLI with cleaner default help, `--help-all`, install-profile separation, restored `passivbot live -u`, and much stronger environment / stale-extension detection.
 - A new local monitoring stack is included: publisher, relay, browser dashboard, TUI, `monitor-web`, and `monitor-dev`.
 - Rust and Python execution behavior are better aligned across live and backtest, especially for market-vs-limit order intent, HSL panic behavior, and market-fill fee modeling.
