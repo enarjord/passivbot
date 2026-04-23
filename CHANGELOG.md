@@ -4,6 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed TWEL auto-reduce quantity rounding so exact step-sized reductions are not clipped by floating-point noise, allowing the enforcer to reach the configured TWEL target in one cycle when possible.
 - Fixed suite-mode limit semantics so `passivbot optimize` and `passivbot tool pareto` now resolve omitted `stat=` the same way: explicit `stat=` still wins, otherwise both defer to `backtest.aggregate.<metric>`, then `backtest.aggregate.default`, then `mean`. This removes the old optimizer-only behavior where `>` silently implied `min` and `<` silently implied `max`.
 - Reduced optimizer startup memory pressure when warming from large starting-config sets. Starting configs now stream into quantization instead of being fully materialized up front, and pymoo worker evaluations now reuse per-worker evaluator state plus metrics-only backtests instead of serializing full evaluator payloads and full backtest histories for every candidate.
 - Upgraded the pinned `ccxt` dependency from `4.5.22` to `4.5.48` and added a dedicated CCXT upgrade validation workflow with live snapshot capture/diff tooling plus offline contract fixtures for upgrade drift.

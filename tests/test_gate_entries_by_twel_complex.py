@@ -146,6 +146,58 @@ def test_blocks_when_current_twe_at_or_above_limit():
     pbr is None or pbr_is_stub,
     reason="passivbot_rust extension not available; build and install in venv first",
 )
+def test_twel_enforcer_keeps_exact_step_reductions():
+    balance = 1000.0
+    twel = 1.0
+    n_positions = 10
+    wel = twel / n_positions
+    effective_wel = wel * 1.2
+    position_price = 100.0
+    position_size = effective_wel * balance / position_price
+    positions = [
+        {
+            "idx": idx,
+            "position_size": position_size,
+            "position_price": position_price,
+            "market_price": position_price,
+            "base_wallet_exposure_limit": wel,
+            "c_mult": 1.0,
+            "qty_step": 0.01,
+            "price_step": 0.01,
+            "min_qty": 0.0,
+            "min_cost": 0.0,
+        }
+        for idx in range(9)
+    ]
+
+    actions = pbr.calc_twel_enforcer_orders_py(
+        "long", 1.0, twel, n_positions, balance, positions, None
+    )
+
+    assert len(actions) == 4
+    assert all(abs(qty) == pytest.approx(0.2) for _idx, qty, _price, _order_type in actions)
+
+    reductions_by_idx = {idx: abs(qty) for idx, qty, _price, _order_type in actions}
+    twe_after = 0.0
+    for position in positions:
+        if position["idx"] in reductions_by_idx:
+            reduction = reductions_by_idx[position["idx"]]
+        else:
+            reduction = 0.0
+        remaining_size = position["position_size"] - reduction
+        twe_after += pbr.calc_wallet_exposure(
+            position["c_mult"],
+            balance,
+            remaining_size,
+            position["position_price"],
+        )
+    assert twe_after <= twel + 1e-12
+
+
+@pytest.mark.skipif(
+    pbr is None or pbr_is_stub,
+    reason="passivbot_rust extension not available; build and install in venv first",
+)
 def test_prunes_multiple_entries_until_exposure_safe():
     side = "long"
     balance = 1000.0

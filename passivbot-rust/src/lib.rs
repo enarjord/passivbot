@@ -26,7 +26,9 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EquityHardStopRuntimePy>()?;
     m.add_function(wrap_pyfunction!(round_, m)?)?;
     m.add_function(wrap_pyfunction!(round_up, m)?)?;
+    m.add_function(wrap_pyfunction!(round_up_tolerant, m)?)?;
     m.add_function(wrap_pyfunction!(round_dn, m)?)?;
+    m.add_function(wrap_pyfunction!(round_dn_tolerant, m)?)?;
     m.add_function(wrap_pyfunction!(round_dynamic, m)?)?;
     m.add_function(wrap_pyfunction!(round_dynamic_up, m)?)?;
     m.add_function(wrap_pyfunction!(round_dynamic_dn, m)?)?;

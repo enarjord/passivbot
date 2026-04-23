@@ -4,7 +4,7 @@ use crate::types::{ExchangeParams, Order, OrderType};
 use crate::utils::{
     calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_pprice_diff_int,
     calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty,
-    round_dn, round_up, RoundingMode,
+    round_dn, round_dn_tolerant, round_up, round_up_tolerant, RoundingMode,
 };
 use std::collections::HashMap;
 
@@ -749,7 +749,7 @@ pub fn calc_twel_enforcer_actions(
             candidate.floor_exposure = f64::INFINITY;
             continue;
         }
-        qty_reduce = round_up(qty_reduce, candidate.qty_step);
+        qty_reduce = round_up_tolerant(qty_reduce, candidate.qty_step);
         if qty_reduce > candidate.abs_psize {
             qty_reduce = candidate.abs_psize;
         }
@@ -762,7 +762,7 @@ pub fn calc_twel_enforcer_actions(
         if prospective_psize + qty_tolerance < candidate.floor_psize {
             let target_psize = candidate.floor_psize.min(candidate.abs_psize);
             let mut adjusted_qty = (candidate.abs_psize - target_psize).max(0.0);
-            adjusted_qty = round_dn(adjusted_qty, candidate.qty_step);
+            adjusted_qty = round_dn_tolerant(adjusted_qty, candidate.qty_step);
             if adjusted_qty <= qty_tolerance {
                 candidate.floor_exposure = f64::INFINITY;
                 continue;
@@ -782,7 +782,7 @@ pub fn calc_twel_enforcer_actions(
                 close_qty = candidate.min_qty;
             }
         }
-        close_qty = round_dn(close_qty, candidate.qty_step);
+        close_qty = round_dn_tolerant(close_qty, candidate.qty_step);
         if close_qty <= qty_tolerance {
             candidate.floor_exposure = f64::INFINITY;
             continue;
@@ -837,7 +837,7 @@ pub fn calc_twel_enforcer_actions(
                 qty_to_close = candidate.min_qty;
             }
         }
-        qty_to_close = round_dn(qty_to_close, candidate.qty_step);
+        qty_to_close = round_dn_tolerant(qty_to_close, candidate.qty_step);
         if qty_to_close <= qty_tolerance {
             continue;
         }
@@ -1034,6 +1034,54 @@ mod tests {
             twe,
             twel
         );
+    }
+
+    #[test]
+    fn test_twel_reducer_keeps_exact_step_reductions() {
+        let balance = 1000.0;
+        let twel = 1.0;
+        let n_positions = 10;
+        let wel = twel / n_positions as f64;
+        let effective_wel = wel * 1.2;
+        let position_price = 100.0;
+        let position_size = effective_wel * balance / position_price;
+        let positions: Vec<TwelEnforcerInputPosition> = (0..9)
+            .map(|idx| {
+                pos(
+                    idx,
+                    position_size,
+                    position_price,
+                    position_price,
+                    wel,
+                    1.0,
+                    0.01,
+                    0.01,
+                    0.0,
+                    0.0,
+                )
+            })
+            .collect();
+
+        let actions =
+            calc_twel_enforcer_actions(LONG, 1.0, twel, n_positions, balance, &positions, None);
+        assert_eq!(actions.len(), 4);
+        assert!(
+            actions
+                .iter()
+                .all(|(_, order)| (order.qty.abs() - 0.2).abs() < 1e-12),
+            "expected exact 0.20 reductions; got {:?}",
+            actions
+        );
+
+        let mut psize = vec![position_size; positions.len()];
+        for (idx, order) in actions {
+            psize[idx] = (psize[idx] - order.qty.abs()).max(0.0);
+        }
+        let twe: f64 = psize
+            .into_iter()
+            .map(|size| calc_wallet_exposure(1.0, balance, size, position_price))
+            .sum();
+        assert!(twe <= twel + 1e-12, "TWE {} exceeds {}", twe, twel);
     }
 
     #[test]

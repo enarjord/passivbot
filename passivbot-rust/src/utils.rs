@@ -16,6 +16,15 @@ pub fn round_up(n: f64, step: f64) -> f64 {
     round_to_decimal_places(result, 10)
 }
 
+/// Rounds up to the nearest step while ignoring tiny floating-point noise.
+#[pyfunction]
+pub fn round_up_tolerant(n: f64, step: f64) -> f64 {
+    if step <= 0.0 || !n.is_finite() {
+        return n;
+    }
+    round_up(n - step * 1e-9, step)
+}
+
 /// Rounds a number to the nearest multiple of the given step.
 #[pyfunction]
 pub fn round_(n: f64, step: f64) -> f64 {
@@ -28,6 +37,15 @@ pub fn round_(n: f64, step: f64) -> f64 {
 pub fn round_dn(n: f64, step: f64) -> f64 {
     let result = (n / step).floor() * step;
     round_to_decimal_places(result, 10)
+}
+
+/// Rounds down to the nearest step while ignoring tiny floating-point noise.
+#[pyfunction]
+pub fn round_dn_tolerant(n: f64, step: f64) -> f64 {
+    if step <= 0.0 || !n.is_finite() {
+        return n;
+    }
+    round_dn(n + step * 1e-9, step)
 }
 
 #[derive(Clone, Copy, Debug)]

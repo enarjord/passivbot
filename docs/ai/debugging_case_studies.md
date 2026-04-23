@@ -43,6 +43,38 @@ Fix pattern:
 4. make the optimized backtest path observationally identical to that naive reference
 5. add parity tests so future optimizations cannot drift silently
 
+## Case: Missing Grid Nodes Near TWEL (2026-04)
+
+Signal:
+
+- live users saw Bybit/Hyperliquid bots with fewer entry grid orders than expected
+- reports included positions already near effective WEL and accounts restarted with inherited
+  positions from older configs
+
+Contract:
+
+- reason from `entry_grid_inflation_enabled = false`; inflated entries are legacy behavior scheduled
+  for removal
+- `risk_we_excess_allowance_pct` expands per-symbol effective WEL only
+- it does not expand `total_wallet_exposure_limit`
+- Rust entry gating simulates filling all candidate normal/cropped entries and prunes
+  farthest-from-market entries until projected TWE stays below TWEL
+- coin overrides may prevent WEL auto-reduce on inherited oversized positions, but those positions
+  still consume side-level TWE capacity
+
+Conclusion:
+
+- missing far-away grid nodes are usually intended TWEL entry gating, not missing order generation
+- do not explain missing nodes by relying on inflated grid entries; the forward contract is
+  cropped-only
+- do not "fix" this by gating entries against `TWEL * (1 + excess_allowance)`
+- investigate by computing current TWE, effective WEL per active position, inherited/overridden
+  positions, and projected TWE if all proposed entries filled
+
+User-facing reference:
+
+- `docs/risk_management.md`, section "Case Study: Missing Grid Nodes Near TWEL"
+
 ## Reusable Investigation Loop
 
 1. Confirm symptom with concrete examples.

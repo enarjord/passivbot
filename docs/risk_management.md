@@ -129,6 +129,120 @@ In practice, the bot rarely fills all positions simultaneously. Therefore, the b
     * If a 7th position also fills to 0.15, total exposure would become `1.05`.
     * Since `1.05 > 1.0` (the TWEL), the bot will gate any new orders for that 7th position that would cause the total wallet exposure to breach the TWEL, effectively blocking the "excess" allowance for the last few positions.
 
+#### Case Study: Missing Grid Nodes Near TWEL
+
+This case study assumes `entry_grid_inflation_enabled = false`, which is the forward path as
+inflated grid entries are scheduled for removal. In this mode, grid re-entries are normal or cropped
+only; the bot does not pull future size forward by inflating a tiny terminal grid order.
+
+Users sometimes expect every configured grid node to appear on the exchange, then notice that the
+last or furthest cropped grid entries are missing. This is usually intended behavior, not an exchange
+error or an entry-grid bug.
+
+The contract is:
+
+1. Per-symbol WEL may be expanded by `risk_we_excess_allowance_pct`.
+2. Side-level TWEL is not expanded by `risk_we_excess_allowance_pct`.
+3. With `entry_grid_inflation_enabled = false`, entry order construction may propose normal or
+   cropped grid orders up to the per-symbol effective WEL.
+4. Before orders are emitted, the Rust risk gate simulates filling all candidate entries for that
+   side. If the projected total wallet exposure would exceed TWEL, it removes the farthest entries
+   from market first until projected TWE is back under TWEL. The final removed order may be trimmed
+   and re-added if a smaller quantity can fit.
+
+Formulas:
+
+```text
+WE_i          = abs(position_size_i) * position_price_i * c_mult_i / balance
+TWE           = sum(WE_i for all positions on the same side)
+WEL           = total_wallet_exposure_limit / n_positions
+effective_WEL = WEL * (1 + max(0, risk_we_excess_allowance_pct))
+TWEL          = total_wallet_exposure_limit
+```
+
+`risk_we_excess_allowance_pct` is therefore a per-coin borrowing allowance. It lets active coins use
+capacity that idle coins are not using, but it does not turn `TWEL = 1.0` and `excess = 0.2` into a
+portfolio cap of `1.2`.
+
+Example 1, excess allowance consumes the remaining slots:
+
+```text
+n_positions = 10
+TWEL        = 1.0
+excess      = 0.2
+
+WEL           = 1.0 / 10 = 0.10
+effective_WEL = 0.10 * 1.2 = 0.12
+
+8 positions at effective_WEL:
+TWE = 8 * 0.12 = 0.96
+```
+
+Only `0.04` TWE remains before the side reaches TWEL. The two remaining slots do not each still have
+`0.12` available. Together, their new entries can only add about `0.04` before the entry gate starts
+pruning. If their full proposed grids would add `0.08`, `0.12`, or more, the furthest grid entries
+are intentionally blocked. The visible result is a partial grid with missing far-away nodes.
+
+Example 2, a cropped-only grid proposal is further cropped by TWEL:
+
+```text
+entry_grid_inflation_enabled = false
+current TWE = 0.96
+TWEL        = 1.0
+candidate ETH entries, if all filled:
+  node 1 adds 0.015 WE
+  node 2 adds 0.015 WE
+  node 3 adds 0.015 WE
+  node 4 adds 0.015 WE
+
+projected TWE with all nodes = 1.02
+```
+
+The gate sorts entries by distance from market and removes the farthest nodes until projected TWE is
+below `1.0`. Depending on quantity steps and min order constraints, this may leave only the nearer
+nodes, or it may trim one boundary node to the largest quantity that still fits. Because inflated
+entries are disabled, no inflated terminal order is created to preserve the visual shape of the grid.
+A missing "last cropped entry" is expected when that cropped entry cannot fit under TWEL.
+
+Example 3, no excess allowance but inherited oversized positions:
+
+```text
+Config A:
+TWEL   = 1.0
+n_pos  = 10
+excess = 0.2
+effective_WEL = 0.12
+
+A coin fills to WE = 0.12.
+
+Config B after restart:
+TWEL   = 1.0
+n_pos  = 10
+excess = 0.0
+WEL    = 0.10
+```
+
+If Config B adds a `coin_overrides` entry such as a higher
+`bot.long.risk_wel_enforcer_threshold`, the bot may intentionally avoid slashing that inherited
+`0.12` position while it is underwater. That position still counts as `0.12` toward TWE, even though
+the new base WEL is `0.10`. The override only changes when the per-symbol WEL enforcer trims that
+coin; it does not make the side-level TWEL larger. Other coins may therefore show missing grid nodes
+because the inherited position is consuming `0.02` more TWEL capacity than the new config would have
+allocated to it.
+
+Operational diagnostic:
+
+1. Compute current TWE for the side from exchange positions and current config balance reference.
+2. Compare `TWE` to `total_wallet_exposure_limit`.
+3. Check whether any active positions are above the new base WEL because they were inherited from an
+   older config, balance changed, or a coin override raised `risk_wel_enforcer_threshold`.
+4. Confirm `entry_grid_inflation_enabled = false` before reasoning about the forward cropped-only
+   path.
+5. Sum the WE that all proposed normal/cropped entry orders would add if filled. If
+   `current TWE + proposed entry WE` exceeds TWEL, missing far-away grid nodes are expected.
+6. Remember that `risk_twel_enforcer_threshold` controls forced portfolio reduction. Entry gating
+   still protects the configured TWEL and does not grant `TWEL * (1 + excess_allowance)` capacity.
+
 #### TWEL Enforcer (`risk_twel_enforcer_threshold`)
 This controls **total portfolio** trimming. It monitors the sum of all long (or short) exposures. If the total exceeds:
 `total_wallet_exposure_limit * risk_twel_enforcer_threshold`
