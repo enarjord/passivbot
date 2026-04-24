@@ -132,6 +132,7 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "hyperliquid-order-margin-probe" in out
     assert "hyperliquid-position-probe" in out
     assert "inspect-ohlcvs" in out
+    assert "merge-paretos" in out
     assert "monitor-dev" in out
     assert "monitor-relay" in out
     assert "monitor-web" in out
@@ -286,6 +287,30 @@ def test_pareto_tool_dispatch_forwards_module_and_prog(monkeypatch):
         "knee",
     ]
     assert captured["prog_env"] == "passivbot tool pareto"
+
+
+def test_merge_paretos_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "merge-paretos", "long_run", "short_run", "merged"]) == 0
+
+    assert captured["module_name"] == "tools.merge_paretos"
+    assert captured["argv"] == [
+        "passivbot tool merge-paretos",
+        "long_run",
+        "short_run",
+        "merged",
+    ]
+    assert captured["prog_env"] == "passivbot tool merge-paretos"
 
 
 def test_monitor_relay_tool_dispatch_forwards_module_and_prog(monkeypatch):

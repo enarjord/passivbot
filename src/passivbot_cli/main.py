@@ -94,6 +94,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "migrate historical data layout (requires full install)",
         requires_full=True,
     ),
+    "merge-paretos": CommandSpec(
+        "tools.merge_paretos",
+        "merge Pareto fronts into starting configs (requires full install)",
+        requires_full=True,
+    ),
     "monitor-relay": CommandSpec(
         "tools.monitor_relay",
         "serve monitor snapshots and live streams (requires full install)",
