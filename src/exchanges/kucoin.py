@@ -28,6 +28,26 @@ calc_order_price_diff = pbr.calc_order_price_diff
 # exchange classes when broker codes are defined.
 
 
+def _add_kucoin_broker_name_header(signed: dict, options: dict) -> dict:
+    partner_root = options.get("partner")
+    if not isinstance(partner_root, dict):
+        raise TypeError("KuCoin broker partner config must be a mapping")
+    partner_cfg = partner_root.get("future")
+    if not isinstance(partner_cfg, dict):
+        raise KeyError("KuCoin futures broker partner config missing 'future' section")
+    broker_name = partner_cfg.get("name")
+    if not isinstance(broker_name, str) or not broker_name:
+        raise ValueError("KuCoin futures broker-name must be a non-empty string")
+
+    headers = signed.get("headers")
+    if not isinstance(headers, dict):
+        raise TypeError("KuCoin signed request missing headers mapping")
+    headers = dict(headers)
+    headers["KC-BROKER-NAME"] = broker_name
+    signed["headers"] = headers
+    return signed
+
+
 class AsyncKucoinBrokerFutures(ccxt_async.kucoinfutures):
     """Asynchronous KuCoin futures exchange with broker tagging support."""
 
@@ -41,19 +61,8 @@ class AsyncKucoinBrokerFutures(ccxt_async.kucoinfutures):
 
     def sign(self, path, api="public", method="GET", params=None, headers=None, body=None):
         signed = super().sign(path, api, method, params or {}, headers, body)
-        try:
-            if api in {"private", "futuresPrivate", "broker"}:
-                partner_root = getattr(self, "options", {}).get("partner") or {}
-                partner_cfg = (
-                    partner_root.get("future", partner_root) if isinstance(partner_root, dict) else {}
-                )
-                broker_name = partner_cfg.get("name") if isinstance(partner_cfg, dict) else None
-                if broker_name:
-                    hdrs = dict(signed.get("headers") or {})
-                    hdrs["KC-BROKER-NAME"] = broker_name
-                    signed["headers"] = hdrs
-        except Exception:
-            pass
+        if api in {"private", "futuresPrivate", "broker"}:
+            return _add_kucoin_broker_name_header(signed, self.options)
         return signed
 
 
@@ -70,19 +79,8 @@ class ProKucoinBrokerFutures(ccxt_pro.kucoinfutures):
 
     def sign(self, path, api="public", method="GET", params=None, headers=None, body=None):
         signed = super().sign(path, api, method, params or {}, headers, body)
-        try:
-            if api in {"private", "futuresPrivate", "broker"}:
-                partner_root = getattr(self, "options", {}).get("partner") or {}
-                partner_cfg = (
-                    partner_root.get("future", partner_root) if isinstance(partner_root, dict) else {}
-                )
-                broker_name = partner_cfg.get("name") if isinstance(partner_cfg, dict) else None
-                if broker_name:
-                    hdrs = dict(signed.get("headers") or {})
-                    hdrs["KC-BROKER-NAME"] = broker_name
-                    signed["headers"] = hdrs
-        except Exception:
-            pass
+        if api in {"private", "futuresPrivate", "broker"}:
+            return _add_kucoin_broker_name_header(signed, self.options)
         return signed
 
 
@@ -104,47 +102,47 @@ class KucoinBot(CCXTBot):
         return base64.b64encode(digest).decode()
 
     def create_ccxt_sessions(self) -> None:
-        """Initialise CCXT sessions for KuCoin futures with optional broker support.
+        """Initialise CCXT sessions for KuCoin futures with broker support.
 
         If broker codes are defined under ``self.broker_code['futures']``, these
         values are used to configure partner signing so that private/futures
-        requests include the correct broker metadata.  Otherwise the bot
-        instantiates the standard CCXT classes.
+        requests include the correct broker metadata.
         """
-        broker_cfg = self.broker_code.get("futures", {}) if isinstance(self.broker_code, dict) else {}
-        partner_id = broker_cfg.get("partner")
-        partner_secret = broker_cfg.get("broker-key")
-        broker_name = broker_cfg.get("broker-name")
-        options = {}
-        if partner_id and partner_secret:
-            options = {
-                "partner": {
-                    "future": {
-                        "id": partner_id,
-                        "secret": partner_secret,
-                        "name": broker_name,
-                    }
+        if not isinstance(self.broker_code, dict):
+            raise TypeError("KuCoin broker code must be an object with a futures section")
+        if "futures" not in self.broker_code:
+            raise KeyError("KuCoin broker code missing 'futures' section")
+        broker_cfg = self.broker_code["futures"]
+        if not isinstance(broker_cfg, dict):
+            raise TypeError("KuCoin futures broker code must be an object")
+        required = {
+            "partner": broker_cfg.get("partner"),
+            "broker-key": broker_cfg.get("broker-key"),
+            "broker-name": broker_cfg.get("broker-name"),
+        }
+        missing = [key for key, value in required.items() if not isinstance(value, str) or not value]
+        if missing:
+            raise ValueError(f"KuCoin futures broker code missing required fields: {missing}")
+
+        options = {
+            "partner": {
+                "future": {
+                    "id": required["partner"],
+                    "secret": required["broker-key"],
+                    "name": required["broker-name"],
                 }
             }
+        }
         base_kwargs = {
             "apiKey": self.user_info["key"],
             "secret": self.user_info["secret"],
             "password": self.user_info["passphrase"],
             "enableRateLimit": True,
         }
-        if options:
-            base_kwargs["options"] = options
+        base_kwargs["options"] = options
 
-        async_cls = (
-            AsyncKucoinBrokerFutures
-            if partner_id and partner_secret and broker_name
-            else ccxt_async.kucoinfutures
-        )
-        pro_cls = (
-            ProKucoinBrokerFutures
-            if partner_id and partner_secret and broker_name
-            else ccxt_pro.kucoinfutures
-        )
+        async_cls = AsyncKucoinBrokerFutures
+        pro_cls = ProKucoinBrokerFutures
 
         self.cca = async_cls(dict(base_kwargs))
         self.cca.options.update(self._build_ccxt_options())

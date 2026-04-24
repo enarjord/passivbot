@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from exchanges.kucoin import KucoinBot
+from exchanges.kucoin import AsyncKucoinBrokerFutures, KucoinBot
 
 
 class DummyTask:
@@ -40,6 +40,63 @@ def make_bot():
     bot.hedge_mode = True
     bot.max_leverage = {}
     return bot
+
+
+def test_broker_futures_sign_adds_partner_and_broker_name_headers():
+    client = AsyncKucoinBrokerFutures(
+        {
+            "apiKey": "api_key",
+            "secret": "api_secret",
+            "password": "api_passphrase",
+            "options": {
+                "partner": {
+                    "future": {
+                        "id": "passivbotFutures",
+                        "secret": "broker_secret",
+                        "name": "passivbotFutures",
+                    }
+                }
+            },
+        }
+    )
+
+    signed = client.sign("orders", "futuresPrivate", "GET", {})
+    headers = signed["headers"]
+
+    assert headers["KC-API-PARTNER"] == "passivbotFutures"
+    assert headers["KC-API-PARTNER-VERIFY"] == "true"
+    assert headers["KC-API-PARTNER-SIGN"]
+    assert headers["KC-BROKER-NAME"] == "passivbotFutures"
+
+
+def test_broker_futures_sign_fails_loudly_without_broker_name():
+    client = AsyncKucoinBrokerFutures(
+        {
+            "apiKey": "api_key",
+            "secret": "api_secret",
+            "password": "api_passphrase",
+            "options": {
+                "partner": {
+                    "future": {
+                        "id": "passivbotFutures",
+                        "secret": "broker_secret",
+                    }
+                }
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="broker-name"):
+        client.sign("orders", "futuresPrivate", "GET", {})
+
+
+def test_create_ccxt_sessions_requires_complete_futures_broker_config():
+    bot = KucoinBot.__new__(KucoinBot)
+    bot.user_info = {"key": "api_key", "secret": "api_secret", "passphrase": "api_passphrase"}
+    bot.broker_code = {"futures": {"partner": "passivbotFutures", "broker-key": "broker_secret"}}
+
+    with pytest.raises(ValueError, match="broker-name"):
+        bot.create_ccxt_sessions()
 
 
 @pytest.mark.asyncio
