@@ -59,7 +59,11 @@ def plan_local_symbol_range(
         catalog.get_persistent_gaps(exchange, timeframe, symbol, start_ts, end_ts)
     )
     legacy_inspection = None
-    if not store_complete and legacy_root is not None and Path(legacy_root).exists():
+    if (
+        (not store_complete or persistent_gaps)
+        and legacy_root is not None
+        and Path(legacy_root).exists()
+    ):
         legacy_inspection = inspect_legacy_range(
             legacy_root=legacy_root,
             exchange=exchange,
