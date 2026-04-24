@@ -18,4 +18,11 @@
 		}
 	}
 	gateio: "passivbot"
+
+	// Supported exchanges without a broker-code payload in Passivbot.
+	// Keep these explicit so typos in exchange names fail loudly.
+	hyperliquid: null
+	defx: null
+	paradex: null
+	fake: null
 }

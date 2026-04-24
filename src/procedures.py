@@ -2,7 +2,6 @@ import glob
 import json
 import logging
 import os
-import traceback
 import asyncio
 from datetime import datetime, timezone
 from time import time
@@ -203,13 +202,55 @@ def load_exchange_key_secret_passphrase(
         raise Exception("API KeyFile Missing!")
 
 
-def load_broker_code(exchange: str) -> str:
+def _broker_codes_path() -> Path:
+    env_path = os.environ.get("PASSIVBOT_BROKER_CODES_PATH")
+    if env_path:
+        return Path(env_path).expanduser()
+
+    repo_path = Path(__file__).resolve().parents[1] / "broker_codes.hjson"
+    if repo_path.exists():
+        return repo_path
+
+    # Packaged/container deployments may keep broker_codes.hjson beside the
+    # process working directory instead of beside the source checkout.
+    return Path.cwd() / "broker_codes.hjson"
+
+
+def load_broker_codes() -> dict[str, Any]:
+    path = _broker_codes_path()
     try:
-        return hjson.load(open("broker_codes.hjson")).get(exchange, "")
-    except Exception as e:
-        print(f"failed to load broker code", e)
-        traceback.print_exc()
+        with path.open() as f:
+            codes = hjson.load(f)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"broker code registry not found at {path}. "
+            "Run from the Passivbot checkout, include broker_codes.hjson in the deployment, "
+            "or set PASSIVBOT_BROKER_CODES_PATH."
+        ) from e
+    except (OSError, ValueError) as e:
+        raise RuntimeError(f"failed to load broker code registry from {path}: {e}") from e
+
+    if not isinstance(codes, dict):
+        raise TypeError(f"broker code registry {path} must contain a top-level object")
+    return codes
+
+
+def load_broker_code(exchange: str) -> Any:
+    codes = load_broker_codes()
+    if exchange not in codes:
+        raise KeyError(
+            f"broker code registry has no entry for exchange {exchange!r}. "
+            "Add a broker code, or add an explicit null entry for supported exchanges "
+            f"without broker-code attribution. Known entries: {sorted(codes)}"
+        )
+    code = codes[exchange]
+    if code is None:
         return ""
+    if not isinstance(code, (str, dict)):
+        raise TypeError(
+            f"broker code registry entry for {exchange!r} must be a string, object, or null"
+        )
+    return code
 
 
 def print_(args, r=False, n=False):
