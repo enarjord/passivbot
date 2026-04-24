@@ -1292,6 +1292,52 @@ def ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map=None):
         meta["trade_start_index"] = trade_start_idx
 
 
+def warn_hlcv_valid_range_coverage(config, coins, mss, timestamps):
+    if timestamps is None or len(timestamps) == 0:
+        return
+    requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
+    requested_end_ts = int(
+        date_to_ts(format_end_date(require_config_value(config, "backtest.end_date")))
+    )
+    if requested_end_ts < requested_start_ts:
+        return
+    last_ts_index = len(timestamps) - 1
+    for coin in coins:
+        meta = mss.get(coin, {})
+        first_idx = int(meta.get("first_valid_index", len(timestamps)))
+        last_idx = int(meta.get("last_valid_index", -1))
+        if first_idx > last_idx or first_idx > last_ts_index or last_idx < 0:
+            logging.warning(
+                "[hlcvs] %s has no valid local data for requested range %s -> %s",
+                coin,
+                ts_to_date(requested_start_ts),
+                ts_to_date(requested_end_ts),
+            )
+            continue
+        first_idx = max(0, min(first_idx, last_ts_index))
+        last_idx = max(0, min(last_idx, last_ts_index))
+        valid_start_ts = int(timestamps[first_idx])
+        valid_end_ts = int(timestamps[last_idx])
+        if valid_end_ts < requested_start_ts or valid_start_ts > requested_end_ts:
+            logging.warning(
+                "[hlcvs] %s valid data range %s -> %s is entirely outside requested range %s -> %s",
+                coin,
+                ts_to_date(valid_start_ts),
+                ts_to_date(valid_end_ts),
+                ts_to_date(requested_start_ts),
+                ts_to_date(requested_end_ts),
+            )
+        elif valid_end_ts < requested_end_ts:
+            missing_minutes = int((requested_end_ts - valid_end_ts) // 60_000)
+            logging.warning(
+                "[hlcvs] %s valid data ends before requested end: valid_end=%s requested_end=%s missing_minutes=%d",
+                coin,
+                ts_to_date(valid_end_ts),
+                ts_to_date(requested_end_ts),
+                missing_minutes,
+            )
+
+
 async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = False):
     base_dir = require_config_value(config, "backtest.base_dir")
     results_path = oj(base_dir, exchange, "")
@@ -1306,6 +1352,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = result
             logging.info(f"Successfully loaded hlcvs data from cache")
             ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
+            warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
             # Pass through cached timestamps if they were stored; fall back to None otherwise
             return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
     except Exception as e:
@@ -1338,6 +1385,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
         )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
+    warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
         cache_dir = save_coins_hlcvs_to_cache(

@@ -1225,6 +1225,59 @@ async def _resolve_v2_store_range(
         start_ts=start_ts,
         end_ts=end_ts,
     ):
+        # The legacy candlestick manager may populate daily legacy shards during
+        # the failed fetch path. Re-check once so those newly written shards can
+        # still repair the v2 store without waiting for a later run.
+        post_fetch_plan = plan_local_symbol_range(
+            catalog=catalog,
+            legacy_root=legacy_root,
+            exchange=exchange,
+            timeframe="1m",
+            symbol=symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+        if post_fetch_plan.should_try_legacy_import:
+            imported_rows = import_legacy_range_into_store(
+                store=store,
+                legacy_root=legacy_root,
+                exchange=exchange,
+                timeframe="1m",
+                symbol=symbol,
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+            logging.info(
+                "[%s] imported %d post-fetch legacy 1m rows into v2 store for %s (%s -> %s)",
+                exchange,
+                imported_rows,
+                coin,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
+            rng = store.read_range(exchange, "1m", symbol, start_ts, end_ts)
+            if rng.valid.all():
+                logging.info(
+                    "[%s] %s for %s after post-fetch legacy import (%s -> %s)",
+                    exchange,
+                    local_hit_log_label,
+                    coin,
+                    ts_to_date(start_ts),
+                    ts_to_date(end_ts),
+                )
+                return rng
+            if allow_partial_window:
+                partial_rng = _extract_single_valid_window(rng)
+                if partial_rng is not None:
+                    logging.info(
+                        "[%s] using partial v2 local window for %s after post-fetch legacy "
+                        "import (%s -> %s)",
+                        exchange,
+                        coin,
+                        ts_to_date(int(partial_rng.timestamps[0])),
+                        ts_to_date(int(partial_rng.timestamps[-1])),
+                    )
+                    return partial_rng
         return None
     rng = store.read_range(exchange, "1m", symbol, start_ts, end_ts)
     if not rng.valid.all():
