@@ -55,6 +55,9 @@ def plan_local_symbol_range(
         and int(bounds[0]) <= int(start_ts)
         and int(bounds[1]) >= int(end_ts)
     )
+    persistent_gaps = tuple(
+        catalog.get_persistent_gaps(exchange, timeframe, symbol, start_ts, end_ts)
+    )
     legacy_inspection = None
     if not store_complete and legacy_root is not None and Path(legacy_root).exists():
         legacy_inspection = inspect_legacy_range(
@@ -65,15 +68,14 @@ def plan_local_symbol_range(
             start_ts=start_ts,
             end_ts=end_ts,
         )
-    persistent_gaps = tuple(
-        catalog.get_persistent_gaps(exchange, timeframe, symbol, start_ts, end_ts)
-    )
-    if store_complete:
-        status = "store_complete"
+    if persistent_gaps and not (
+        legacy_inspection is not None and legacy_inspection.all_days_present
+    ):
+        status = "blocked_by_persistent_gap"
     elif legacy_inspection is not None and legacy_inspection.all_days_present:
         status = "legacy_importable"
-    elif persistent_gaps:
-        status = "blocked_by_persistent_gap"
+    elif store_complete:
+        status = "store_complete"
     else:
         status = "missing_local"
     return SymbolRangePlan(

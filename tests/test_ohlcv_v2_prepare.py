@@ -169,10 +169,79 @@ async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatc
     monkeypatch.setattr(backtest, "prepare_hlcvs", fail_prepare)
     monkeypatch.setattr(backtest, "save_coins_hlcvs_to_cache", lambda *args, **kwargs: None)
 
+    coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = (
+        await backtest.prepare_hlcvs_mss(config, "binance")
+    )
+
+    assert coins == ["ETH"]
+    assert cache_dir is None
+    assert results_path.endswith("/binance/")
+    np.testing.assert_allclose(hlcvs, prepared[2])
+    np.testing.assert_allclose(btc_usd_prices, prepared[3])
+    np.testing.assert_array_equal(timestamps, prepared[1])
+    assert mss["ETH"]["first_valid_index"] == 0
+    assert mss["ETH"]["last_valid_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_skips_inner_v2_after_outer_v2_miss(monkeypatch, tmp_path):
+    import rust_utils
+
+    prepared = (
+        {
+            "ETH": {"first_valid_index": 0, "last_valid_index": 0},
+            "__meta__": {"btc_source_exchange": "binance"},
+        },
+        np.array([month_start_ts(2026, 4)], dtype=np.int64),
+        np.array([[[101.0, 99.0, 100.0, 10.0]]], dtype=np.float64),
+        np.array([50_000.0], dtype=np.float64),
+    )
+
+    config = {
+        "backtest": {
+            "base_dir": str(tmp_path / "results"),
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-01",
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+        },
+        "live": {
+            "approved_coins": {"long": ["ETH"], "short": []},
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": {"long": {}, "short": {}},
+    }
+
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    sys.modules.pop("backtest", None)
+    backtest = importlib.import_module("backtest")
+
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
+    calls = {"outer_v2": 0, "legacy_prepare": 0}
+
+    async def fake_try_prepare(*args, **kwargs):
+        calls["outer_v2"] += 1
+        return None
+
+    async def fake_prepare_hlcvs(*args, **kwargs):
+        calls["legacy_prepare"] += 1
+        assert kwargs.get("skip_v2_local") is True
+        return prepared
+
+    monkeypatch.setattr(backtest, "try_prepare_hlcvs_v2_local", fake_try_prepare)
+    monkeypatch.setattr(backtest, "prepare_hlcvs", fake_prepare_hlcvs)
+    monkeypatch.setattr(backtest, "save_coins_hlcvs_to_cache", lambda *args, **kwargs: None)
+
     coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = await backtest.prepare_hlcvs_mss(
         config, "binance"
     )
 
+    assert calls == {"outer_v2": 1, "legacy_prepare": 1}
     assert coins == ["ETH"]
     assert cache_dir is None
     assert results_path.endswith("/binance/")

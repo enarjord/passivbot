@@ -1331,7 +1331,10 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
         )
     elif local_v2 is None:
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(
-            config, exchange, force_refetch_gaps=force_refetch_gaps
+            config,
+            exchange,
+            force_refetch_gaps=force_refetch_gaps,
+            skip_v2_local=True,
         )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)

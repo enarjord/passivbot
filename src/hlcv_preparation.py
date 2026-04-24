@@ -776,16 +776,23 @@ class HLCVManager:
         return df.reset_index(drop=True)
 
 
-async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool = False):
-    try:
-        local_v2 = await try_prepare_hlcvs_v2_local(
-            config, exchange, force_refetch_gaps=force_refetch_gaps
-        )
-    except Exception as e:
-        logging.info(f"Unable to prepare hlcvs from local v2 store: {e}. Falling back.")
-        local_v2 = None
-    if local_v2 is not None:
-        return local_v2
+async def prepare_hlcvs(
+    config: dict,
+    exchange: str,
+    *,
+    force_refetch_gaps: bool = False,
+    skip_v2_local: bool = False,
+):
+    if not skip_v2_local:
+        try:
+            local_v2 = await try_prepare_hlcvs_v2_local(
+                config, exchange, force_refetch_gaps=force_refetch_gaps
+            )
+        except Exception as e:
+            logging.info(f"Unable to prepare hlcvs from local v2 store: {e}. Falling back.")
+            local_v2 = None
+        if local_v2 is not None:
+            return local_v2
 
     approved = require_live_value(config, "approved_coins")
     coins = sorted(
@@ -1177,7 +1184,7 @@ async def _resolve_v2_store_range(
             ts_to_date(end_ts),
         )
         return rng
-    if plan.blocked_by_persistent_gap:
+    if plan.persistent_gaps:
         partial_rng = _extract_single_valid_window(rng) if allow_partial_window else None
         if partial_rng is not None:
             logging.info(
