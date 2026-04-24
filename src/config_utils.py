@@ -549,15 +549,20 @@ def _clean_with_template(template_node, source_node, path: Path = ()):
     if isinstance(template_node, dict):
         source_dict = source_node if isinstance(source_node, dict) else {}
         if path in PARTIALLY_OPEN_CONFIG_PATHS:
+            if not isinstance(source_node, dict):
+                return _clean_with_template(template_node, None, ())
             cleaned = {}
             for key, value in source_dict.items():
                 if key in template_node:
                     cleaned[key] = _clean_with_template(template_node[key], value, path + (key,))
                 else:
                     cleaned[key] = _clean_dynamic_node(value)
-            for key, tmpl_value in template_node.items():
-                if key not in cleaned:
-                    cleaned[key] = _clean_with_template(tmpl_value, None, path + (key,))
+            if path == ("backtest", "aggregate") and "default" not in cleaned:
+                cleaned["default"] = _clean_with_template(
+                    template_node["default"],
+                    None,
+                    path + ("default",),
+                )
             return cleaned
         if not template_node:
             return _clean_dynamic_node(source_dict)

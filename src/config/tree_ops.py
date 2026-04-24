@@ -11,27 +11,21 @@ def add_missing_keys_recursively(
     verbose=True,
     tracker=None,
     preserve: Optional[Iterable[Iterable[str]]] = None,
+    _preserve_set: Optional[set[tuple[str, ...]]] = None,
 ):
     if parent is None:
         parent = []
-        if preserve is None:
-            preserve_set = set()
-        else:
-            preserve_set = {tuple(p) for p in preserve}
-    else:
-        preserve_set = getattr(add_missing_keys_recursively, "_preserve_set", set())
+    if _preserve_set is None:
+        _preserve_set = set() if preserve is None else {tuple(p) for p in preserve}
 
     def _path_is_preserved(path: Iterable[str]) -> bool:
-        if not preserve_set:
+        if not _preserve_set:
             return False
         path_tuple = tuple(path)
-        for preserved in preserve_set:
+        for preserved in _preserve_set:
             if path_tuple[: len(preserved)] == preserved:
                 return True
         return False
-
-    if parent == []:
-        add_missing_keys_recursively._preserve_set = preserve_set
 
     if _path_is_preserved(parent):
         return
@@ -43,7 +37,12 @@ def add_missing_keys_recursively(
                 tracker.add(parent + [key], src[key])
         elif isinstance(src[key], dict) and isinstance(dst.get(key), dict):
             add_missing_keys_recursively(
-                src[key], dst[key], parent + [key], verbose, tracker=tracker
+                src[key],
+                dst[key],
+                parent + [key],
+                verbose,
+                tracker=tracker,
+                _preserve_set=_preserve_set,
             )
         elif isinstance(src[key], dict):
             log_config_message(
@@ -66,9 +65,6 @@ def add_missing_keys_recursively(
                 dst[key] = src[key]
                 if tracker is not None:
                     tracker.add(parent + [key], src[key])
-
-    if parent == [] and hasattr(add_missing_keys_recursively, "_preserve_set"):
-        delattr(add_missing_keys_recursively, "_preserve_set")
 
 
 def remove_unused_keys_recursively(
