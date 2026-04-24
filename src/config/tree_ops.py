@@ -4,9 +4,37 @@ from typing import Iterable, Optional
 from .log_output import log_config_message
 
 
-def add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=None):
+def add_missing_keys_recursively(
+    src,
+    dst,
+    parent=None,
+    verbose=True,
+    tracker=None,
+    preserve: Optional[Iterable[Iterable[str]]] = None,
+):
     if parent is None:
         parent = []
+        if preserve is None:
+            preserve_set = set()
+        else:
+            preserve_set = {tuple(p) for p in preserve}
+    else:
+        preserve_set = getattr(add_missing_keys_recursively, "_preserve_set", set())
+
+    def _path_is_preserved(path: Iterable[str]) -> bool:
+        if not preserve_set:
+            return False
+        path_tuple = tuple(path)
+        for preserved in preserve_set:
+            if path_tuple[: len(preserved)] == preserved:
+                return True
+        return False
+
+    if parent == []:
+        add_missing_keys_recursively._preserve_set = preserve_set
+
+    if _path_is_preserved(parent):
+        return
     for key in src:
         if key not in dst:
             log_config_message(verbose, logging.INFO, "Added missing %s to config.", ".".join(parent + [key]))
@@ -14,7 +42,9 @@ def add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=No
             if tracker is not None:
                 tracker.add(parent + [key], src[key])
         elif isinstance(src[key], dict) and isinstance(dst.get(key), dict):
-            add_missing_keys_recursively(src[key], dst[key], parent + [key], verbose, tracker=tracker)
+            add_missing_keys_recursively(
+                src[key], dst[key], parent + [key], verbose, tracker=tracker
+            )
         elif isinstance(src[key], dict):
             log_config_message(
                 verbose,
@@ -36,6 +66,9 @@ def add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=No
                 dst[key] = src[key]
                 if tracker is not None:
                     tracker.add(parent + [key], src[key])
+
+    if parent == [] and hasattr(add_missing_keys_recursively, "_preserve_set"):
+        delattr(add_missing_keys_recursively, "_preserve_set")
 
 
 def remove_unused_keys_recursively(
