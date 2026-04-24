@@ -58,6 +58,16 @@ Handling:
 2. Keep broker attribution in the `X-Gate-Channel-Id` header.
 3. Keep the Passivbot order-type marker inside the custom id; decoding accepts the marker inside Gate.io's `t-...` text.
 
+### Public 1m OHLCV recent-window limit
+
+Problem: Gate.io rejects old 1m OHLCV requests with `Candlestick too long ago. Maximum 10000 points recently are allowed`.
+
+Handling:
+
+1. Do not pass CCXT `until`; page forward by `since + limit`.
+2. Clip 1m historical fetches to the recent-window bound and mark older spans as `no_archive`.
+3. Require external OHLCV source data or another candle source for older Gate.io backtests.
+
 ## General Guidance
 
 1. Check raw exchange payloads when CCXT abstraction is insufficient.

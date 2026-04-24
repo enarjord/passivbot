@@ -10,6 +10,8 @@ python3 -m pip install -e ".[full]"
 
 > **GateIO cache note:** If you have existing GateIO OHLCV data in `caches/ohlcv/gateio`, delete the folder after upgrading to the new data strategy so fresh data (normalized to base volume) is fetched.
 
+> **GateIO history note:** GateIO's public 1m OHLCV endpoint only serves a recent window of roughly 10,000 candles. Older GateIO backtests need `backtest.ohlcv_source_dir` data or candles sourced from another exchange; Passivbot marks older GateIO 1m spans unavailable instead of repeatedly retrying rejected requests.
+
 ### External OHLCV source dir
 
 You can point `backtest.ohlcv_source_dir` to a pre-populated OHLCV tree. The loader looks under:
