@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed Gate.io live order creation with current CCXT/Gate.io by passing Passivbot custom ids as `clientOrderId`, letting CCXT emit Gate.io's required `t-`-prefixed order `text` while preserving the embedded Passivbot order-type marker.
+- Fixed live foreign-writer detection so a bot's own freshly acknowledged orders can be recognized by exchange order id, canonical Passivbot custom id, or a strict recent order fingerprint instead of relying only on raw client-id string equality.
+
 ## v7.10.0 - 2026-04-22
 
 - Updated the hardcoded schema defaults and mirrored example config to a new trailing-grid `n_positions = 7` profile from `tmp/candidate.json`; the canonical example file is now `configs/examples/default_trailing_grid_long_npos7.json`. Default approved coins, suite scenarios, optimizer bounds, and optimizer scoring/limit templates were refreshed with canonical `*_strategy_eq` metric names and day-based duration metrics while keeping backtest defaults at `candle_interval_minutes = 1`, `end_date = "now"`, and `suite_enabled = false`.

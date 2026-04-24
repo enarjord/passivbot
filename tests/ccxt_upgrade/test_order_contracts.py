@@ -10,6 +10,7 @@ from exchanges.defx import DefxBot
 from exchanges.gateio import GateIOBot
 from exchanges.kucoin import KucoinBot
 from exchanges.okx import OKXBot
+from passivbot import custom_id_has_explicit_passivbot_marker, custom_id_to_snake
 from pure_funcs import determine_pos_side_ccxt
 
 
@@ -69,6 +70,27 @@ def test_gateio_order_side_contract_depends_on_reduce_only_flag():
     assert bot.determine_pos_side({"side": "buy", "reduceOnly": True}) == "short"
     assert bot.determine_pos_side({"side": "sell", "reduceOnly": False}) == "short"
     assert bot.determine_pos_side({"side": "sell", "reduceOnly": True}) == "long"
+
+
+def test_gateio_order_params_use_client_order_id_for_ccxt_text_prefix():
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.config = {"live": {"time_in_force": "post_only"}}
+    params = bot._build_order_params(
+        {
+            "type": "limit",
+            "reduce_only": False,
+            "custom_id": "0x0004abcdef",
+        }
+    )
+
+    assert params["clientOrderId"] == "0x0004abcdef"
+    assert "text" not in params
+    assert params["reduce_only"] is False
+    assert params["timeInForce"] == "poc"
+
+    gateio_text = "t-" + params["clientOrderId"]
+    assert custom_id_has_explicit_passivbot_marker(gateio_text)
+    assert custom_id_to_snake(gateio_text) == "entry_grid_normal_long"
 
 
 def test_okx_order_side_uses_info_pos_side():

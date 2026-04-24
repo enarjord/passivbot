@@ -43,6 +43,21 @@ Handling:
 1. Overlap boundaries by 1 candle.
 2. Back up initial `since` by one candle on pagination start.
 
+## Gate.io Futures
+
+### Contract order text must start with `t-`
+
+Problem:
+
+1. Gate.io contract order `text` rejects values that do not start with `t-`.
+2. CCXT prefixes `clientOrderId` into `text=t-...`, but raw `params["text"]` can overwrite that transformed value.
+
+Handling:
+
+1. Pass Passivbot custom order ids as `clientOrderId`, not raw `text`.
+2. Keep broker attribution in the `X-Gate-Channel-Id` header.
+3. Keep the Passivbot order-type marker inside the custom id; decoding accepts the marker inside Gate.io's `t-...` text.
+
 ## General Guidance
 
 1. Check raw exchange payloads when CCXT abstraction is insufficient.
