@@ -1,6 +1,8 @@
 from copy import deepcopy
 
+from config import load_prepared_config
 from config_utils import format_config, get_template_config
+from suite_runner import extract_suite_config
 
 
 def test_optimize_suite_is_ignored_and_removed(caplog):
@@ -31,6 +33,14 @@ def test_suite_aggregate_default_preserved():
     base["backtest"]["aggregate"]["default"] = "median"
     formatted = format_config(deepcopy(base), verbose=False)
     assert formatted["backtest"]["aggregate"]["default"] == "median"
+
+
+def test_optimizer_preserves_explicit_hsl_aggregate_config():
+    """Optimizer must not inherit template metric-specific aggregate overrides."""
+    cfg = load_prepared_config("configs/examples/hsl_npos1.json", verbose=False)
+    suite_cfg = extract_suite_config(cfg, suite_override=None)
+
+    assert suite_cfg["aggregate"] == {"default": "mean"}
 
 
 def test_legacy_suite_migration():

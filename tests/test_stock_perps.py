@@ -16,6 +16,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from passivbot_exceptions import FatalBotException
+
 
 @pytest.fixture
 def stubbed_modules(monkeypatch):
@@ -512,22 +514,25 @@ class TestHyperliquidBotHIP3:
         ]
         bot.cca.fetch_positions.assert_awaited_once_with(params={"dex": "xyz"})
 
-    def test_isolated_only_hip3_is_ignored_for_new_entries(self, bot_class, caplog):
+    def test_isolated_only_hip3_approved_symbol_hard_fails_non_unified_account(self, bot_class):
         bot = object.__new__(bot_class)
         bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
         bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot._hl_unified_enabled = False
+        bot._hl_user_abstraction = "unknown"
+        bot.approved_coins_minus_ignored_coins = {"long": {"xyz:TSLA/USDC:USDC"}, "short": set()}
+        bot.positions = {}
+        bot.open_orders = {}
         bot.markets_dict = {
             "xyz:TSLA/USDC:USDC": {
+                "baseName": "xyz:TSLA",
                 "info": {"onlyIsolated": True},
                 "marginModes": {"cross": False, "isolated": True},
             }
         }
 
-        with caplog.at_level("WARNING"):
-            filtered = bot._filter_approved_symbols("long", {"xyz:TSLA/USDC:USDC"})
-
-        assert filtered == set()
-        assert "isolated margin is currently unsupported" in caplog.text
+        with pytest.raises(FatalBotException, match="require unifiedAccount mode"):
+            bot._assert_supported_live_state()
 
     def test_isolated_only_hip3_open_orders_hard_fail(self, bot_class):
         bot = object.__new__(bot_class)
@@ -548,8 +553,11 @@ class TestHyperliquidBotHIP3:
         }
         bot.open_orders = {"xyz:SP500/USDC:USDC": [{"id": "1"}]}
         bot._hl_live_margin_modes = {}
+        bot._hl_unified_enabled = False
+        bot._hl_user_abstraction = "unknown"
+        bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
 
-        with pytest.raises(NotImplementedError, match="Unsupported live state detected"):
+        with pytest.raises(FatalBotException, match="Unsupported HIP-3 state detected"):
             bot._assert_supported_live_state()
 
     @pytest.mark.asyncio

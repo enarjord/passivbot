@@ -949,6 +949,7 @@ fn run_backtest_core<'py>(
         analysis_btc.entry_initial_balance_pct_short = entry_pct_short;
 
         let hs = backtest.hard_stop_metrics();
+        let strategy = backtest.strategy_equity_metrics_for_analysis();
         analysis_usd.hard_stop_triggers = hs.triggers;
         analysis_usd.hard_stop_triggers_per_year = hs.triggers_per_year;
         analysis_usd.hard_stop_triggers_long = hs.triggers_long;
@@ -970,41 +971,60 @@ fn run_backtest_core<'py>(
         analysis_usd.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
         analysis_usd.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
         analysis_usd.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
-        analysis_usd.drawdown_worst_hsl = hs.drawdown_worst_hsl;
-        analysis_usd.drawdown_worst_hsl_long = hs.drawdown_worst_hsl_long;
-        analysis_usd.drawdown_worst_hsl_short = hs.drawdown_worst_hsl_short;
-        analysis_usd.drawdown_worst_ema_hsl = hs.drawdown_worst_ema_hsl;
-        analysis_usd.drawdown_worst_ema_hsl_long = hs.drawdown_worst_ema_hsl_long;
-        analysis_usd.drawdown_worst_ema_hsl_short = hs.drawdown_worst_ema_hsl_short;
-        analysis_usd.drawdown_worst_mean_1pct_hsl = hs.drawdown_worst_mean_1pct_hsl;
-        analysis_usd.drawdown_worst_mean_1pct_hsl_long = hs.drawdown_worst_mean_1pct_hsl_long;
-        analysis_usd.drawdown_worst_mean_1pct_hsl_short = hs.drawdown_worst_mean_1pct_hsl_short;
-        analysis_usd.drawdown_worst_mean_1pct_ema_hsl = hs.drawdown_worst_mean_1pct_ema_hsl;
-        analysis_usd.drawdown_worst_mean_1pct_ema_hsl_long =
-            hs.drawdown_worst_mean_1pct_ema_hsl_long;
-        analysis_usd.drawdown_worst_mean_1pct_ema_hsl_short =
-            hs.drawdown_worst_mean_1pct_ema_hsl_short;
-        analysis_usd.peak_recovery_hours_hsl = hs.peak_recovery_hours_hsl;
-        analysis_usd.peak_recovery_hours_hsl_long = hs.peak_recovery_hours_hsl_long;
-        analysis_usd.peak_recovery_hours_hsl_short = hs.peak_recovery_hours_hsl_short;
-        analysis_usd.gain_strategy_pnl_rebased = hs.gain_strategy_pnl_rebased;
-        analysis_usd.adg_strategy_pnl_rebased = hs.adg_strategy_pnl_rebased;
-        analysis_usd.mdg_strategy_pnl_rebased = hs.mdg_strategy_pnl_rebased;
-        analysis_usd.sharpe_ratio_strategy_pnl_rebased = hs.sharpe_ratio_strategy_pnl_rebased;
-        analysis_usd.sortino_ratio_strategy_pnl_rebased = hs.sortino_ratio_strategy_pnl_rebased;
-        analysis_usd.omega_ratio_strategy_pnl_rebased = hs.omega_ratio_strategy_pnl_rebased;
-        analysis_usd.expected_shortfall_1pct_strategy_pnl_rebased =
-            hs.expected_shortfall_1pct_strategy_pnl_rebased;
-        analysis_usd.calmar_ratio_strategy_pnl_rebased = hs.calmar_ratio_strategy_pnl_rebased;
-        analysis_usd.sterling_ratio_strategy_pnl_rebased = hs.sterling_ratio_strategy_pnl_rebased;
-        analysis_usd.adg_strategy_pnl_rebased_w = hs.adg_strategy_pnl_rebased_w;
-        analysis_usd.mdg_strategy_pnl_rebased_w = hs.mdg_strategy_pnl_rebased_w;
-        analysis_usd.sharpe_ratio_strategy_pnl_rebased_w = hs.sharpe_ratio_strategy_pnl_rebased_w;
-        analysis_usd.sortino_ratio_strategy_pnl_rebased_w = hs.sortino_ratio_strategy_pnl_rebased_w;
-        analysis_usd.omega_ratio_strategy_pnl_rebased_w = hs.omega_ratio_strategy_pnl_rebased_w;
-        analysis_usd.calmar_ratio_strategy_pnl_rebased_w = hs.calmar_ratio_strategy_pnl_rebased_w;
-        analysis_usd.sterling_ratio_strategy_pnl_rebased_w =
-            hs.sterling_ratio_strategy_pnl_rebased_w;
+        analysis_usd.drawdown_worst_strategy_eq = strategy.overall.drawdown_worst_strategy_eq;
+        analysis_usd.drawdown_worst_strategy_eq_long = strategy.long.drawdown_worst_strategy_eq;
+        analysis_usd.drawdown_worst_strategy_eq_short = strategy.short.drawdown_worst_strategy_eq;
+        analysis_usd.drawdown_worst_ema_strategy_eq = strategy
+            .long
+            .drawdown_worst_ema_strategy_eq
+            .max(strategy.short.drawdown_worst_ema_strategy_eq);
+        analysis_usd.drawdown_worst_ema_strategy_eq_long =
+            strategy.long.drawdown_worst_ema_strategy_eq;
+        analysis_usd.drawdown_worst_ema_strategy_eq_short =
+            strategy.short.drawdown_worst_ema_strategy_eq;
+        analysis_usd.drawdown_worst_mean_1pct_strategy_eq =
+            strategy.overall.drawdown_worst_mean_1pct_strategy_eq;
+        analysis_usd.drawdown_worst_mean_1pct_strategy_eq_long =
+            strategy.long.drawdown_worst_mean_1pct_strategy_eq;
+        analysis_usd.drawdown_worst_mean_1pct_strategy_eq_short =
+            strategy.short.drawdown_worst_mean_1pct_strategy_eq;
+        analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq = strategy
+            .long
+            .drawdown_worst_mean_1pct_ema_strategy_eq
+            .max(strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq);
+        analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq_long =
+            strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq_short =
+            strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_usd.peak_recovery_hours_strategy_eq =
+            strategy.overall.peak_recovery_hours_strategy_eq;
+        analysis_usd.peak_recovery_hours_strategy_eq_long =
+            strategy.long.peak_recovery_hours_strategy_eq;
+        analysis_usd.peak_recovery_hours_strategy_eq_short =
+            strategy.short.peak_recovery_hours_strategy_eq;
+        analysis_usd.peak_recovery_days_strategy_eq =
+            strategy.overall.peak_recovery_days_strategy_eq;
+        analysis_usd.peak_recovery_days_strategy_eq_long =
+            strategy.long.peak_recovery_days_strategy_eq;
+        analysis_usd.peak_recovery_days_strategy_eq_short =
+            strategy.short.peak_recovery_days_strategy_eq;
+        analysis_usd.gain_strategy_eq = strategy.overall.gain_strategy_eq;
+        analysis_usd.adg_strategy_eq = strategy.overall.adg_strategy_eq;
+        analysis_usd.mdg_strategy_eq = strategy.overall.mdg_strategy_eq;
+        analysis_usd.sharpe_ratio_strategy_eq = strategy.overall.sharpe_ratio_strategy_eq;
+        analysis_usd.sortino_ratio_strategy_eq = strategy.overall.sortino_ratio_strategy_eq;
+        analysis_usd.omega_ratio_strategy_eq = strategy.overall.omega_ratio_strategy_eq;
+        analysis_usd.expected_shortfall_1pct_strategy_eq =
+            strategy.overall.expected_shortfall_1pct_strategy_eq;
+        analysis_usd.calmar_ratio_strategy_eq = strategy.overall.calmar_ratio_strategy_eq;
+        analysis_usd.sterling_ratio_strategy_eq = strategy.overall.sterling_ratio_strategy_eq;
+        analysis_usd.adg_strategy_eq_w = strategy.overall.adg_strategy_eq_w;
+        analysis_usd.mdg_strategy_eq_w = strategy.overall.mdg_strategy_eq_w;
+        analysis_usd.sharpe_ratio_strategy_eq_w = strategy.overall.sharpe_ratio_strategy_eq_w;
+        analysis_usd.sortino_ratio_strategy_eq_w = strategy.overall.sortino_ratio_strategy_eq_w;
+        analysis_usd.omega_ratio_strategy_eq_w = strategy.overall.omega_ratio_strategy_eq_w;
+        analysis_usd.calmar_ratio_strategy_eq_w = strategy.overall.calmar_ratio_strategy_eq_w;
+        analysis_usd.sterling_ratio_strategy_eq_w = strategy.overall.sterling_ratio_strategy_eq_w;
         analysis_btc.hard_stop_triggers = hs.triggers;
         analysis_btc.hard_stop_triggers_per_year = hs.triggers_per_year;
         analysis_btc.hard_stop_triggers_long = hs.triggers_long;
@@ -1026,41 +1046,60 @@ fn run_backtest_core<'py>(
         analysis_btc.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
         analysis_btc.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
         analysis_btc.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
-        analysis_btc.drawdown_worst_hsl = hs.drawdown_worst_hsl;
-        analysis_btc.drawdown_worst_hsl_long = hs.drawdown_worst_hsl_long;
-        analysis_btc.drawdown_worst_hsl_short = hs.drawdown_worst_hsl_short;
-        analysis_btc.drawdown_worst_ema_hsl = hs.drawdown_worst_ema_hsl;
-        analysis_btc.drawdown_worst_ema_hsl_long = hs.drawdown_worst_ema_hsl_long;
-        analysis_btc.drawdown_worst_ema_hsl_short = hs.drawdown_worst_ema_hsl_short;
-        analysis_btc.drawdown_worst_mean_1pct_hsl = hs.drawdown_worst_mean_1pct_hsl;
-        analysis_btc.drawdown_worst_mean_1pct_hsl_long = hs.drawdown_worst_mean_1pct_hsl_long;
-        analysis_btc.drawdown_worst_mean_1pct_hsl_short = hs.drawdown_worst_mean_1pct_hsl_short;
-        analysis_btc.drawdown_worst_mean_1pct_ema_hsl = hs.drawdown_worst_mean_1pct_ema_hsl;
-        analysis_btc.drawdown_worst_mean_1pct_ema_hsl_long =
-            hs.drawdown_worst_mean_1pct_ema_hsl_long;
-        analysis_btc.drawdown_worst_mean_1pct_ema_hsl_short =
-            hs.drawdown_worst_mean_1pct_ema_hsl_short;
-        analysis_btc.peak_recovery_hours_hsl = hs.peak_recovery_hours_hsl;
-        analysis_btc.peak_recovery_hours_hsl_long = hs.peak_recovery_hours_hsl_long;
-        analysis_btc.peak_recovery_hours_hsl_short = hs.peak_recovery_hours_hsl_short;
-        analysis_btc.gain_strategy_pnl_rebased = hs.gain_strategy_pnl_rebased;
-        analysis_btc.adg_strategy_pnl_rebased = hs.adg_strategy_pnl_rebased;
-        analysis_btc.mdg_strategy_pnl_rebased = hs.mdg_strategy_pnl_rebased;
-        analysis_btc.sharpe_ratio_strategy_pnl_rebased = hs.sharpe_ratio_strategy_pnl_rebased;
-        analysis_btc.sortino_ratio_strategy_pnl_rebased = hs.sortino_ratio_strategy_pnl_rebased;
-        analysis_btc.omega_ratio_strategy_pnl_rebased = hs.omega_ratio_strategy_pnl_rebased;
-        analysis_btc.expected_shortfall_1pct_strategy_pnl_rebased =
-            hs.expected_shortfall_1pct_strategy_pnl_rebased;
-        analysis_btc.calmar_ratio_strategy_pnl_rebased = hs.calmar_ratio_strategy_pnl_rebased;
-        analysis_btc.sterling_ratio_strategy_pnl_rebased = hs.sterling_ratio_strategy_pnl_rebased;
-        analysis_btc.adg_strategy_pnl_rebased_w = hs.adg_strategy_pnl_rebased_w;
-        analysis_btc.mdg_strategy_pnl_rebased_w = hs.mdg_strategy_pnl_rebased_w;
-        analysis_btc.sharpe_ratio_strategy_pnl_rebased_w = hs.sharpe_ratio_strategy_pnl_rebased_w;
-        analysis_btc.sortino_ratio_strategy_pnl_rebased_w = hs.sortino_ratio_strategy_pnl_rebased_w;
-        analysis_btc.omega_ratio_strategy_pnl_rebased_w = hs.omega_ratio_strategy_pnl_rebased_w;
-        analysis_btc.calmar_ratio_strategy_pnl_rebased_w = hs.calmar_ratio_strategy_pnl_rebased_w;
-        analysis_btc.sterling_ratio_strategy_pnl_rebased_w =
-            hs.sterling_ratio_strategy_pnl_rebased_w;
+        analysis_btc.drawdown_worst_strategy_eq = strategy.overall.drawdown_worst_strategy_eq;
+        analysis_btc.drawdown_worst_strategy_eq_long = strategy.long.drawdown_worst_strategy_eq;
+        analysis_btc.drawdown_worst_strategy_eq_short = strategy.short.drawdown_worst_strategy_eq;
+        analysis_btc.drawdown_worst_ema_strategy_eq = strategy
+            .long
+            .drawdown_worst_ema_strategy_eq
+            .max(strategy.short.drawdown_worst_ema_strategy_eq);
+        analysis_btc.drawdown_worst_ema_strategy_eq_long =
+            strategy.long.drawdown_worst_ema_strategy_eq;
+        analysis_btc.drawdown_worst_ema_strategy_eq_short =
+            strategy.short.drawdown_worst_ema_strategy_eq;
+        analysis_btc.drawdown_worst_mean_1pct_strategy_eq =
+            strategy.overall.drawdown_worst_mean_1pct_strategy_eq;
+        analysis_btc.drawdown_worst_mean_1pct_strategy_eq_long =
+            strategy.long.drawdown_worst_mean_1pct_strategy_eq;
+        analysis_btc.drawdown_worst_mean_1pct_strategy_eq_short =
+            strategy.short.drawdown_worst_mean_1pct_strategy_eq;
+        analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq = strategy
+            .long
+            .drawdown_worst_mean_1pct_ema_strategy_eq
+            .max(strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq);
+        analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq_long =
+            strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq_short =
+            strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_btc.peak_recovery_hours_strategy_eq =
+            strategy.overall.peak_recovery_hours_strategy_eq;
+        analysis_btc.peak_recovery_hours_strategy_eq_long =
+            strategy.long.peak_recovery_hours_strategy_eq;
+        analysis_btc.peak_recovery_hours_strategy_eq_short =
+            strategy.short.peak_recovery_hours_strategy_eq;
+        analysis_btc.peak_recovery_days_strategy_eq =
+            strategy.overall.peak_recovery_days_strategy_eq;
+        analysis_btc.peak_recovery_days_strategy_eq_long =
+            strategy.long.peak_recovery_days_strategy_eq;
+        analysis_btc.peak_recovery_days_strategy_eq_short =
+            strategy.short.peak_recovery_days_strategy_eq;
+        analysis_btc.gain_strategy_eq = strategy.overall.gain_strategy_eq;
+        analysis_btc.adg_strategy_eq = strategy.overall.adg_strategy_eq;
+        analysis_btc.mdg_strategy_eq = strategy.overall.mdg_strategy_eq;
+        analysis_btc.sharpe_ratio_strategy_eq = strategy.overall.sharpe_ratio_strategy_eq;
+        analysis_btc.sortino_ratio_strategy_eq = strategy.overall.sortino_ratio_strategy_eq;
+        analysis_btc.omega_ratio_strategy_eq = strategy.overall.omega_ratio_strategy_eq;
+        analysis_btc.expected_shortfall_1pct_strategy_eq =
+            strategy.overall.expected_shortfall_1pct_strategy_eq;
+        analysis_btc.calmar_ratio_strategy_eq = strategy.overall.calmar_ratio_strategy_eq;
+        analysis_btc.sterling_ratio_strategy_eq = strategy.overall.sterling_ratio_strategy_eq;
+        analysis_btc.adg_strategy_eq_w = strategy.overall.adg_strategy_eq_w;
+        analysis_btc.mdg_strategy_eq_w = strategy.overall.mdg_strategy_eq_w;
+        analysis_btc.sharpe_ratio_strategy_eq_w = strategy.overall.sharpe_ratio_strategy_eq_w;
+        analysis_btc.sortino_ratio_strategy_eq_w = strategy.overall.sortino_ratio_strategy_eq_w;
+        analysis_btc.omega_ratio_strategy_eq_w = strategy.overall.omega_ratio_strategy_eq_w;
+        analysis_btc.calmar_ratio_strategy_eq_w = strategy.overall.calmar_ratio_strategy_eq_w;
+        analysis_btc.sterling_ratio_strategy_eq_w = strategy.overall.sterling_ratio_strategy_eq_w;
 
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
@@ -1142,11 +1181,16 @@ fn run_backtest_core<'py>(
             py_fills[(i, 18)] = fill.twe_net.into_py(py);
         }
 
+        let strategy_equity_series = backtest.strategy_equity_series_for_artifacts();
         let equities_array =
-            Array2::from_shape_fn((equities.timestamps_ms.len(), 3), |(i, j)| match j {
+            Array2::from_shape_fn((equities.timestamps_ms.len(), 4), |(i, j)| match j {
                 0 => equities.timestamps_ms[i] as f64,
                 1 => equities.usd_total_equity[i],
                 2 => equities.btc_total_equity[i],
+                3 => strategy_equity_series
+                    .get(i)
+                    .copied()
+                    .unwrap_or(equities.usd_total_equity[i]),
                 _ => 0.0,
             })
             .into_pyarray_bound(py)
@@ -1330,7 +1374,6 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     let n_positions_float: f64 = extract_value(dict, "n_positions")?;
     let n_positions = n_positions_float.round() as usize;
     let hsl_enabled: bool = extract_value(dict, "hsl_enabled")?;
-    let entry_grid_inflation_enabled: bool = extract_value(dict, "entry_grid_inflation_enabled")?;
     let hsl_red_threshold: f64 = extract_value(dict, "hsl_red_threshold")?;
     let hsl_ema_span_minutes: f64 = extract_value(dict, "hsl_ema_span_minutes")?;
     let hsl_cooldown_minutes_after_red: f64 =
@@ -1365,7 +1408,6 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         close_trailing_qty_pct: extract_value(dict, "close_trailing_qty_pct")?,
         close_trailing_threshold_pct: extract_value(dict, "close_trailing_threshold_pct")?,
         entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
-        entry_grid_inflation_enabled,
         entry_grid_spacing_volatility_weight: extract_value(
             dict,
             "entry_grid_spacing_volatility_weight",
@@ -1524,7 +1566,6 @@ pub fn calc_next_entry_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_inflation_enabled: bool,
     entry_grid_spacing_volatility_weight: f64,
     entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
@@ -1574,7 +1615,6 @@ pub fn calc_next_entry_long_py(
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_inflation_enabled,
         entry_grid_spacing_volatility_weight,
         entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
@@ -1704,7 +1744,6 @@ pub fn calc_next_entry_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_inflation_enabled: bool,
     entry_grid_spacing_volatility_weight: f64,
     entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
@@ -1754,7 +1793,6 @@ pub fn calc_next_entry_short_py(
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_inflation_enabled,
         entry_grid_spacing_volatility_weight,
         entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
@@ -1884,7 +1922,6 @@ pub fn calc_entries_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_inflation_enabled: bool,
     entry_grid_spacing_volatility_weight: f64,
     entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
@@ -1936,7 +1973,6 @@ pub fn calc_entries_long_py(
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_inflation_enabled,
         entry_grid_spacing_volatility_weight,
         entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
@@ -1988,7 +2024,6 @@ pub fn calc_entries_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_inflation_enabled: bool,
     entry_grid_spacing_volatility_weight: f64,
     entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
@@ -2040,7 +2075,6 @@ pub fn calc_entries_short_py(
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_inflation_enabled,
         entry_grid_spacing_volatility_weight,
         entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,

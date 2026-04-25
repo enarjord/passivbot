@@ -80,6 +80,7 @@ _LOCK_TIMEOUT_SECONDS = 10.0
 _LOCK_STALE_SECONDS = 180.0
 _LOCK_BACKOFF_INITIAL = 0.1
 _LOCK_BACKOFF_MAX = 2.0
+_GATEIO_RECENT_1M_LIMIT_CANDLES = 9_990
 
 # See: https://github.com/enarjord/passivbot/issues/547
 # True if running on Windows (used for file/path compatible names)
@@ -743,6 +744,7 @@ class CandlestickManager:
         self._record_payload_gaps_as_known = False
         self._ccxt_since_exclusive = False
         self._ccxt_limit_probe_done = False
+        self._gateio_recent_window_clip_warned: set[str] = set()
         if isinstance(self._ex_id, str) and "bitget" in self._ex_id.lower():
             # Bitget often serves 1m klines with 200 limit per page
             self._ccxt_limit_default = 200
@@ -3258,6 +3260,7 @@ class CandlestickManager:
                         and "okx" not in exid
                         and "bybit" not in exid
                         and "kucoin" not in exid
+                        and "gateio" not in exid
                     ):
                         params["until"] = int(end_exclusive_ms) - 1
 
@@ -5269,6 +5272,31 @@ class CandlestickManager:
                         gap_end = min(end_ts, earliest - ONE_MIN_MS)
                         if adj_start_ts <= gap_end:
                             self._add_known_gap(symbol, int(adj_start_ts), int(gap_end))
+                        adj_start_ts = max(adj_start_ts, earliest)
+                if "gateio" in exid:
+                    earliest = int(
+                        end_finalized - ONE_MIN_MS * (_GATEIO_RECENT_1M_LIMIT_CANDLES - 1)
+                    )
+                    if adj_start_ts < earliest:
+                        gap_end = min(end_ts, earliest - ONE_MIN_MS)
+                        if adj_start_ts <= gap_end:
+                            self._record_verified_gap(
+                                symbol,
+                                int(adj_start_ts),
+                                int(gap_end),
+                                reason=GAP_REASON_NO_ARCHIVE,
+                            )
+                        if symbol not in self._gateio_recent_window_clip_warned:
+                            self._log(
+                                "warning",
+                                "gateio_ohlcv_recent_window_clipped",
+                                symbol=symbol,
+                                requested_start_ts=int(start_ts),
+                                requested_end_ts=int(end_ts),
+                                earliest_fetchable_ts=int(earliest),
+                                reason="gateio_public_1m_ohlcv_recent_window",
+                            )
+                            self._gateio_recent_window_clip_warned.add(symbol)
                         adj_start_ts = max(adj_start_ts, earliest)
 
                 # Skip fetch if all missing spans are already known persistent gaps

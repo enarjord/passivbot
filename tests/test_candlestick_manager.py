@@ -11,7 +11,10 @@ from pathlib import Path
 from candlestick_manager import (
     CandlestickManager,
     CANDLE_DTYPE,
+    GAP_REASON_NO_ARCHIVE,
     ONE_MIN_MS,
+    _GAP_MAX_RETRIES,
+    _GATEIO_RECENT_1M_LIMIT_CANDLES,
     _floor_minute,
 )
 
@@ -535,6 +538,88 @@ async def test_get_candles_1m_avoids_refetch_after_sharding(monkeypatch, tmp_pat
     arr2 = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_final, strict=True)
     assert arr2.size > 0
     assert calls["fetch"] == 1
+
+
+@pytest.mark.asyncio
+async def test_gateio_old_1m_window_is_marked_without_remote_fetch(monkeypatch, tmp_path):
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "gateio"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="gateio", cache_dir=str(tmp_path / "caches")
+    )
+    symbol = "ADA/USDT:USDT"
+    calls = {"fetch": 0}
+
+    async def fake_fetch(symbol_, since_ms, end_exclusive_ms, *, timeframe=None, on_batch=None):
+        calls["fetch"] += 1
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+
+    end_finalized = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    start_ts = end_finalized - ONE_MIN_MS * 20_000
+    end_ts = end_finalized - ONE_MIN_MS * 15_000
+
+    out = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, strict=True)
+
+    assert out.size == 0
+    assert calls["fetch"] == 0
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert len(gaps) == 1
+    assert gaps[0]["start_ts"] == start_ts
+    assert gaps[0]["end_ts"] == end_ts
+    assert gaps[0]["retry_count"] == _GAP_MAX_RETRIES
+    assert gaps[0]["reason"] == GAP_REASON_NO_ARCHIVE
+
+
+@pytest.mark.asyncio
+async def test_gateio_partial_1m_window_clips_fetch_to_recent_limit(monkeypatch, tmp_path):
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "gateio"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="gateio", cache_dir=str(tmp_path / "caches")
+    )
+    symbol = "SOL/USDT:USDT"
+    calls = []
+
+    async def fake_fetch(symbol_, since_ms, end_exclusive_ms, *, timeframe=None, on_batch=None):
+        calls.append((int(since_ms), int(end_exclusive_ms)))
+        ts = list(range(int(since_ms), int(end_exclusive_ms), ONE_MIN_MS))
+        arr = np.zeros(len(ts), dtype=CANDLE_DTYPE)
+        if ts:
+            arr["ts"] = np.asarray(ts, dtype=np.int64)
+            arr["o"] = 1.0
+            arr["h"] = 1.0
+            arr["l"] = 1.0
+            arr["c"] = 1.0
+            arr["bv"] = 1.0
+        return arr
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+
+    end_finalized = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    earliest = end_finalized - ONE_MIN_MS * (_GATEIO_RECENT_1M_LIMIT_CANDLES - 1)
+    start_ts = earliest - 20 * ONE_MIN_MS
+    end_ts = earliest + 20 * ONE_MIN_MS
+
+    await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, strict=True)
+
+    assert calls
+    assert calls[0][0] >= earliest
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert len(gaps) == 1
+    assert gaps[0]["start_ts"] == start_ts
+    assert gaps[0]["end_ts"] == earliest - ONE_MIN_MS
+    assert gaps[0]["retry_count"] == _GAP_MAX_RETRIES
+    assert gaps[0]["reason"] == GAP_REASON_NO_ARCHIVE
 
 
 @pytest.mark.asyncio

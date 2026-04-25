@@ -137,7 +137,9 @@ class GateIOBot(CCXTBot):
         order_type = order["type"] if "type" in order else "limit"
         params = {
             "reduce_only": order["reduce_only"],
-            "text": order["custom_id"],
+            # Gate.io requires contract order text to start with "t-". CCXT maps
+            # clientOrderId to that exchange text field while preserving our marker.
+            "clientOrderId": order["custom_id"],
         }
         if order_type == "limit":
             params["timeInForce"] = (
