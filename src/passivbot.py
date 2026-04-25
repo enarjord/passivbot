@@ -3594,7 +3594,17 @@ class Passivbot:
             return
         sum_ms = int(sum(int(v) for v in timings_ms.values()))
         pending_confirmations = bool(getattr(self, "_authoritative_pending_confirmations", {}) or {})
-        interesting = wall_ms >= 8_000 or (pending_confirmations and wall_ms >= 2_000)
+        full_plan = {"balance", "fills", "open_orders", "positions"}
+        plan_set = set(plan)
+        unusual_plan = plan_set != full_plan
+        epoch_changed = set(getattr(self, "_authoritative_refresh_epoch_changed", set()) or set())
+        meaningful_change = bool(epoch_changed - {"balance"})
+        interesting = (
+            pending_confirmations
+            or meaningful_change
+            or (unusual_plan and wall_ms >= 1_000)
+            or wall_ms >= 10_000
+        )
         if not interesting:
             if wall_ms < 1_000 and not (len(plan) > 1 and wall_ms >= 500):
                 return

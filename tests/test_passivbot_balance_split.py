@@ -248,6 +248,7 @@ def test_handle_order_update_fill_hint_requests_full_confirmation(caplog, monkey
 def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot._authoritative_pending_confirmations = {}
+    bot._authoritative_refresh_epoch_changed = set()
 
     with caplog.at_level(logging.DEBUG):
         bot._log_staged_refresh_timings({"open_orders"}, {"open_orders": 250}, 250)
@@ -261,6 +262,18 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
             {"balance": 2500, "positions": 3000, "open_orders": 2000, "fills": 4000},
             8500,
         )
+        bot._authoritative_refresh_epoch_changed = {"positions"}
+        bot._log_staged_refresh_timings(
+            {"balance", "positions", "open_orders", "fills"},
+            {"balance": 1200, "positions": 1700, "open_orders": 900, "fills": 1300},
+            4100,
+        )
+        bot._authoritative_refresh_epoch_changed = set()
+        bot._log_staged_refresh_timings(
+            {"balance", "positions", "open_orders", "fills"},
+            {"balance": 2500, "positions": 3000, "open_orders": 2000, "fills": 4000},
+            10500,
+        )
 
     state_logs = [
         (record.levelname, record.message) for record in caplog.records if "[state]" in record.message
@@ -271,8 +284,16 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
             "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=650ms | sum=1150ms | balance=250ms fills=400ms open_orders=200ms positions=300ms",
         ),
         (
-            "INFO",
+            "DEBUG",
             "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=8500ms | sum=11500ms | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms",
+        ),
+        (
+            "INFO",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=4100ms | sum=5100ms | balance=1200ms fills=1300ms open_orders=900ms positions=1700ms",
+        ),
+        (
+            "INFO",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=10500ms | sum=11500ms | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms",
         ),
     ]
 
