@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from config.limits import resolve_limit_stat
+from config.metrics import canonical_metric_name
 
 _BOUNDARY_VIOLATION_EPSILON = 1e-12
 
@@ -30,6 +31,7 @@ def expand_limit_checks(
         metric = entry.get("metric")
         if not metric:
             continue
+        metric = canonical_metric_name(str(metric))
         mode = entry.get("penalize_if") or "greater_than"
         if mode == "auto":
             weight = weights.get(metric)

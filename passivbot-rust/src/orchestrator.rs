@@ -3709,6 +3709,7 @@ mod core {
             global_bp.long.forager_score_weights.volatility = 0.0;
 
             let input = OrchestratorInput {
+                timestamp_ms: 0,
                 balance: 1000.0,
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
@@ -3724,6 +3725,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingGrid,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,

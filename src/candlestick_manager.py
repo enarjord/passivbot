@@ -80,6 +80,7 @@ _LOCK_TIMEOUT_SECONDS = 10.0
 _LOCK_STALE_SECONDS = 180.0
 _LOCK_BACKOFF_INITIAL = 0.1
 _LOCK_BACKOFF_MAX = 2.0
+_GATEIO_RECENT_1M_LIMIT_CANDLES = 9_990
 
 # See: https://github.com/enarjord/passivbot/issues/547
 # True if running on Windows (used for file/path compatible names)
@@ -116,6 +117,11 @@ GAP_REASON_NO_ARCHIVE = "no_archive"
 GAP_REASON_FETCH_FAILED = "fetch_failed"
 GAP_REASON_MANUAL = "manual"
 GAP_REASON_NO_TRADES = "no_trades"
+
+
+_FIRST_OHLCV_EXCHANGE_CACHE_ALIASES = {
+    "binance": "binanceusdm",
+}
 
 
 CANDLE_DTYPE = np.dtype(
@@ -738,6 +744,7 @@ class CandlestickManager:
         self._record_payload_gaps_as_known = False
         self._ccxt_since_exclusive = False
         self._ccxt_limit_probe_done = False
+        self._gateio_recent_window_clip_warned: set[str] = set()
         if isinstance(self._ex_id, str) and "bitget" in self._ex_id.lower():
             # Bitget often serves 1m klines with 200 limit per page
             self._ccxt_limit_default = 200
@@ -1235,7 +1242,7 @@ class CandlestickManager:
             meta = idx.setdefault("meta", {})
             try:
                 last_ts = 0
-                inception_ts: Optional[int] = None
+                observed_start_ts: Optional[int] = None
                 for shard_meta in shards.values():
                     if not isinstance(shard_meta, dict):
                         continue
@@ -1244,11 +1251,17 @@ class CandlestickManager:
                         last_ts = max(last_ts, int(mt))
                     mi = shard_meta.get("min_ts")
                     if mi is not None:
-                        inception_ts = int(mi) if inception_ts is None else min(inception_ts, int(mi))
+                        observed_start_ts = (
+                            int(mi)
+                            if observed_start_ts is None
+                            else min(observed_start_ts, int(mi))
+                        )
                 meta["last_final_ts"] = int(last_ts)
-                meta["inception_ts"] = inception_ts
+                meta["observed_start_ts"] = observed_start_ts
+                meta["inception_ts"] = observed_start_ts
             except Exception:
                 meta["last_final_ts"] = 0
+                meta["observed_start_ts"] = None
                 meta["inception_ts"] = None
             return int(removed)
         except Exception:
@@ -1290,12 +1303,35 @@ class CandlestickManager:
                 idx = {"shards": {}, "meta": {}}
             idx.setdefault("shards", {})
             meta = idx.setdefault("meta", {})
+            legacy_history_bounds = (
+                "observed_start_ts" not in meta and "authoritative_start_ts" not in meta
+            )
             meta.setdefault("known_gaps", [])  # list of [start_ts, end_ts]
             meta.setdefault("last_refresh_ms", 0)
             meta.setdefault("last_final_ts", 0)
-            meta.setdefault("inception_ts", None)  # first known candle timestamp
+            observed_start_ts = meta.get("observed_start_ts", meta.get("inception_ts"))
+            meta["observed_start_ts"] = int(observed_start_ts) if observed_start_ts is not None else None
+            meta["inception_ts"] = meta["observed_start_ts"]  # legacy alias for earliest observed candle
+            meta.setdefault("authoritative_start_ts", None)
+            meta.setdefault("authoritative_start_source", None)
             meta.setdefault("inception_ts_probe_ms", 0)
             meta.setdefault("inception_ts_probe_end_ts", 0)
+            migrated_pre_inception = False
+            if legacy_history_bounds and meta.get("authoritative_start_ts") is None:
+                legacy_authoritative_start = self._infer_legacy_authoritative_start_ts(meta)
+                if legacy_authoritative_start is not None:
+                    meta["authoritative_start_ts"] = int(legacy_authoritative_start)
+                    meta["authoritative_start_source"] = "legacy_pre_inception_gap"
+                else:
+                    original_gaps = list(meta.get("known_gaps", []))
+                    retained_gaps = []
+                    for gap in original_gaps:
+                        if isinstance(gap, dict) and str(gap.get("reason", "")) == "pre_inception":
+                            migrated_pre_inception = True
+                            continue
+                        retained_gaps.append(gap)
+                    if migrated_pre_inception:
+                        meta["known_gaps"] = retained_gaps
 
             # Keep index consistent if shard files were deleted.
             removed = self._prune_missing_shards_from_index(idx)
@@ -1309,6 +1345,8 @@ class CandlestickManager:
                 )
             self._index[key] = idx
             self._index_mtime[key] = current_mtime
+            if migrated_pre_inception:
+                self._save_index(symbol, tf=tf_norm)
             self._log(
                 "debug",
                 "index_reload",
@@ -1323,10 +1361,33 @@ class CandlestickManager:
         # Ensure meta keys even for cached entries (in case earlier versions lacked them)
         idx.setdefault("shards", {})
         meta = idx.setdefault("meta", {})
+        legacy_history_bounds = (
+            "observed_start_ts" not in meta and "authoritative_start_ts" not in meta
+        )
         meta.setdefault("known_gaps", [])
         meta.setdefault("last_refresh_ms", 0)
         meta.setdefault("last_final_ts", 0)
-        meta.setdefault("inception_ts", None)  # first known candle timestamp
+        observed_start_ts = meta.get("observed_start_ts", meta.get("inception_ts"))
+        migrated_pre_inception = False
+        meta["observed_start_ts"] = int(observed_start_ts) if observed_start_ts is not None else None
+        meta["inception_ts"] = meta["observed_start_ts"]
+        meta.setdefault("authoritative_start_ts", None)
+        meta.setdefault("authoritative_start_source", None)
+        if legacy_history_bounds and meta.get("authoritative_start_ts") is None:
+            legacy_authoritative_start = self._infer_legacy_authoritative_start_ts(meta)
+            if legacy_authoritative_start is not None:
+                meta["authoritative_start_ts"] = int(legacy_authoritative_start)
+                meta["authoritative_start_source"] = "legacy_pre_inception_gap"
+            else:
+                original_gaps = list(meta.get("known_gaps", []))
+                retained_gaps = []
+                for gap in original_gaps:
+                    if isinstance(gap, dict) and str(gap.get("reason", "")) == "pre_inception":
+                        migrated_pre_inception = True
+                        continue
+                    retained_gaps.append(gap)
+                if migrated_pre_inception:
+                    meta["known_gaps"] = retained_gaps
 
         # Keep cached index consistent if shard files were deleted while running.
         removed = self._prune_missing_shards_from_index(idx)
@@ -1340,6 +1401,8 @@ class CandlestickManager:
             )
         self._index[key] = idx
         self._index_mtime[key] = current_mtime
+        if migrated_pre_inception:
+            self._save_index(symbol, tf=tf_norm)
         if current_mtime is not None:
             self._log("debug", "index_cached", symbol=symbol, timeframe=tf_norm, mtime=current_mtime)
         return idx
@@ -2857,33 +2920,162 @@ class CandlestickManager:
         self._index[symbol] = idx
         self._save_index(symbol)
 
-    # ----- Inception tracking -----
+    # ----- Coverage / history-bound tracking -----
+
+    def _infer_legacy_authoritative_start_ts(self, meta: Dict[str, Any]) -> Optional[int]:
+        """Infer authoritative lower bound from legacy inception/pre_inception metadata.
+
+        Old caches used `inception_ts` both as earliest observed candle and as an implicit
+        lower bound when paired with persistent `pre_inception` gaps immediately preceding it.
+        Preserve that learned boundary during migration instead of dropping it.
+        """
+        try:
+            observed_start = meta.get("observed_start_ts", meta.get("inception_ts"))
+            if observed_start is None:
+                return None
+            observed_start = int(observed_start)
+            cutoff_end = observed_start - ONE_MIN_MS
+            for gap in meta.get("known_gaps", []):
+                if not isinstance(gap, dict):
+                    continue
+                if str(gap.get("reason", "")) != "pre_inception":
+                    continue
+                try:
+                    gap_end = int(gap.get("end_ts"))
+                    gap_start = int(gap.get("start_ts"))
+                    retry_count = int(gap.get("retry_count", 0))
+                except Exception:
+                    continue
+                if retry_count < _GAP_MAX_RETRIES:
+                    continue
+                if gap_start < observed_start and gap_end >= cutoff_end:
+                    return observed_start
+        except Exception:
+            return None
+        return None
 
     def _get_inception_ts(self, symbol: str) -> Optional[int]:
-        """Return the known inception timestamp (first candle) for this symbol, or None."""
+        """Return earliest observed candle timestamp for this symbol, or None.
+
+        Historically this field was also used as an authoritative exchange-history lower bound.
+        It now tracks only local observed coverage, while authoritative clipping uses
+        ``authoritative_start_ts``.
+        """
         idx = self._ensure_symbol_index(symbol)
         try:
-            val = idx.get("meta", {}).get("inception_ts")
+            meta = idx.get("meta", {})
+            val = meta.get("observed_start_ts", meta.get("inception_ts"))
             return int(val) if val is not None else None
         except Exception:
             return None
 
     def _set_inception_ts(self, symbol: str, ts: int, *, save: bool = True) -> None:
-        """Set the inception timestamp for this symbol (only if earlier than current or unset)."""
+        """Set earliest observed candle timestamp for this symbol."""
         idx = self._ensure_symbol_index(symbol)
         meta = idx.setdefault("meta", {})
-        current = meta.get("inception_ts")
+        current = meta.get("observed_start_ts", meta.get("inception_ts"))
         # Only update if unset or if new ts is earlier
         if current is None or int(ts) < int(current):
-            meta["inception_ts"] = int(ts)
+            observed_ts = int(ts)
+            meta["observed_start_ts"] = observed_ts
+            meta["inception_ts"] = observed_ts  # legacy alias
+            auth_current = meta.get("authoritative_start_ts")
+            auth_updated = False
+            if auth_current is not None and observed_ts < int(auth_current):
+                meta["authoritative_start_ts"] = observed_ts
+                meta["authoritative_start_source"] = "observed_data"
+                auth_updated = True
             self._index[f"{symbol}::1m"] = idx
             if save:
                 self._save_index(symbol)
-            # If we previously marked ranges as "pre_inception" (persistent), but we now
-            # discovered earlier real data, that metadata becomes stale and can block
-            # future repair/refetch. Trim/remove it best-effort.
+            if auth_updated:
+                # If we previously marked ranges as pre-inception but later observed earlier
+                # real data, that authoritative lower bound became stale.
+                try:
+                    self._prune_pre_inception_gaps(symbol, observed_ts, save=save)
+                except Exception as exc:
+                    self._log(
+                        "warning",
+                        "prune_pre_inception_gaps_failed",
+                        symbol=symbol,
+                        error=str(exc),
+                    )
+            self._log(
+                "debug",
+                "inception_ts_updated",
+                symbol=symbol,
+                old_ts=current,
+                new_ts=observed_ts,
+            )
+
+    def _first_ohlcv_cache_path(self) -> Path:
+        return Path(self.cache_dir) / "first_ohlcv_timestamps_unified_exchange_specific.json"
+
+    def _first_ohlcv_cache_exchange_name(self) -> str:
+        exchange_name = str(self.exchange_name or self._ex_id or "").lower()
+        return _FIRST_OHLCV_EXCHANGE_CACHE_ALIASES.get(exchange_name, exchange_name)
+
+    def _lookup_cached_authoritative_start_ts(self, symbol: str) -> Optional[int]:
+        cache_path = self._first_ohlcv_cache_path()
+        if not cache_path.exists():
+            return None
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return None
+            coin = symbol.split("/")[0].strip()
+            exchange_name = self._first_ohlcv_cache_exchange_name()
+            value = data.get(coin, {}).get(exchange_name)
+            return int(value) if value is not None and float(value) > 0.0 else None
+        except Exception:
+            return None
+
+    def _get_authoritative_start_ts(self, symbol: str) -> Optional[int]:
+        """Return authoritative exchange-history lower bound, if known."""
+        idx = self._ensure_symbol_index(symbol)
+        meta = idx.setdefault("meta", {})
+        try:
+            value = meta.get("authoritative_start_ts")
+            if value is not None:
+                return int(value)
+        except Exception:
+            pass
+
+        cached = self._lookup_cached_authoritative_start_ts(symbol)
+        if cached is not None:
+            self._set_authoritative_start_ts(
+                symbol,
+                cached,
+                source="exchange_specific_cache",
+                save=True,
+            )
+            idx = self._ensure_symbol_index(symbol)
+            value = idx.get("meta", {}).get("authoritative_start_ts")
+            return int(value) if value is not None else None
+        return None
+
+    def _set_authoritative_start_ts(
+        self, symbol: str, ts: int, *, source: str, save: bool = True
+    ) -> None:
+        """Persist authoritative exchange-history lower bound for this symbol."""
+        idx = self._ensure_symbol_index(symbol)
+        meta = idx.setdefault("meta", {})
+        observed_start = self._get_inception_ts(symbol)
+        authoritative_ts = int(ts)
+        authoritative_source = str(source)
+        if observed_start is not None and observed_start < authoritative_ts:
+            authoritative_ts = int(observed_start)
+            authoritative_source = "observed_data"
+        current = meta.get("authoritative_start_ts")
+        if current is None or authoritative_ts < int(current):
+            meta["authoritative_start_ts"] = authoritative_ts
+            meta["authoritative_start_source"] = authoritative_source
+            self._index[f"{symbol}::1m"] = idx
+            if save:
+                self._save_index(symbol)
             try:
-                self._prune_pre_inception_gaps(symbol, int(ts), save=save)
+                self._prune_pre_inception_gaps(symbol, authoritative_ts, save=save)
             except Exception as exc:
                 self._log(
                     "warning",
@@ -2891,13 +3083,6 @@ class CandlestickManager:
                     symbol=symbol,
                     error=str(exc),
                 )
-            self._log(
-                "debug",
-                "inception_ts_updated",
-                symbol=symbol,
-                old_ts=current,
-                new_ts=int(ts),
-            )
 
     def _prune_pre_inception_gaps(self, symbol: str, inception_ts: int, *, save: bool = True) -> None:
         """Trim/remove known gaps with reason='pre_inception' now covered by real data."""
@@ -3075,6 +3260,7 @@ class CandlestickManager:
                         and "okx" not in exid
                         and "bybit" not in exid
                         and "kucoin" not in exid
+                        and "gateio" not in exid
                     ):
                         params["until"] = int(end_exclusive_ms) - 1
 
@@ -4285,137 +4471,59 @@ class CandlestickManager:
         except Exception:
             allow_pre_inception_for_stock_perp = False
 
-        # Skip fetches before known inception date - but don't trust inception_ts blindly.
-        # If inception_ts would skip the entire requested range, attempt a light probe
-        # before treating it as authoritative.
-        inception_ts = self._get_inception_ts(symbol)
+        # Clip/skip only when we know an authoritative lower bound for exchange-available
+        # history. Earliest cached shard is observed local coverage, not proof of
+        # exchange inception, so it must not suppress earlier backfills.
+        authoritative_start_ts = self._get_authoritative_start_ts(symbol)
         if (
-            inception_ts is not None
-            and start_ts < inception_ts
+            authoritative_start_ts is not None
+            and start_ts < authoritative_start_ts
             and not allow_pre_inception_for_stock_perp
         ):
-            if inception_ts > end_ts:
-                updated = False
-                shard_min = self._get_min_shard_ts(symbol)
-                if shard_min is not None and shard_min < inception_ts:
-                    self._log(
-                        "info",
-                        "inception_ts_updated_from_shards",
-                        symbol=symbol,
-                        cached_inception_ts=inception_ts,
-                        shard_min_ts=shard_min,
-                    )
-                    self._set_inception_ts(symbol, shard_min, save=True)
-                    inception_ts = self._get_inception_ts(symbol)
-                    updated = True
-
-                # If no shard evidence, do a soft archive probe (throttled) for end_ts day.
-                probed = False
-                probe_hit = False
-                if not updated and self._archive_supported():
-                    now = _utc_now_ms()
-                    last_probe_ms, last_probe_end_ts = self._get_inception_probe_meta(symbol)
-                    probe_cooldown_ms = 6 * 60 * 60 * 1000  # 6 hours
-                    if (now - last_probe_ms) > probe_cooldown_ms or int(end_ts) > int(
-                        last_probe_end_ts
-                    ):
-                        day_key = self._date_key(end_ts)
-                        _, day_end = self._date_range_of_key(day_key)
-                        archive_freshness_hours = 72
-                        archive_cutoff_ms = _utc_now_ms() - (archive_freshness_hours * 3600 * 1000)
-                        if day_end <= archive_cutoff_ms:
-                            probed = True
-                            try:
-                                self._log(
-                                    "debug",
-                                    "inception_ts_probe_start",
-                                    symbol=symbol,
-                                    day=day_key,
-                                )
-                                arr = await self._archive_fetch_day(symbol, day_key)
-                            except Exception as exc:
-                                arr = None
-                                self._log(
-                                    "warning",
-                                    "inception_ts_probe_failed",
-                                    symbol=symbol,
-                                    day=day_key,
-                                    error=str(exc),
-                                )
-                            if isinstance(arr, np.ndarray) and arr.size:
-                                probe_hit = True
-                                try:
-                                    self._persist_batch(
-                                        symbol,
-                                        arr,
-                                        timeframe="1m",
-                                        merge_cache=True,
-                                        last_refresh_ms=now,
-                                        defer_index=True,
-                                        skip_memory_retention=True,
-                                    )
-                                    self.flush_deferred_index(symbol, tf="1m")
-                                except Exception as exc:
-                                    self._log(
-                                        "warning",
-                                        "inception_ts_probe_persist_failed",
-                                        symbol=symbol,
-                                        day=day_key,
-                                        error=str(exc),
-                                    )
-                                inception_ts = self._get_inception_ts(symbol)
-                                updated = inception_ts is not None
-                            # Record probe attempt regardless of outcome
-                            self._set_inception_probe_meta(symbol, now, int(end_ts), save=True)
-                # If inception_ts still excludes the whole range, mark pre_inception gaps and return
-                if inception_ts is not None and inception_ts > end_ts:
-                    pre_inception_end = min(inception_ts - ONE_MIN_MS, end_ts)
-                    if start_ts <= pre_inception_end:
-                        retry_count = (
-                            _GAP_MAX_RETRIES
-                            if probed and not probe_hit
-                            else max(0, _GAP_MAX_RETRIES - 1)
-                        )
-                        self._add_known_gap(
-                            symbol,
-                            start_ts,
-                            pre_inception_end,
-                            reason="pre_inception",
-                            retry_count=retry_count,
-                        )
-                        self._log(
-                            "debug",
-                            "skip_pre_inception_fetch",
-                            symbol=symbol,
-                            original_start=start_ts,
-                            inception_ts=inception_ts,
-                            clipped_start=inception_ts,
-                        )
-                    return  # Nothing left to fetch
-
-            if inception_ts is not None and start_ts < inception_ts:
-                # inception_ts is within the requested range - trust it and clip
-                pre_inception_end = min(inception_ts - ONE_MIN_MS, end_ts)
+            if authoritative_start_ts > end_ts:
+                pre_inception_end = min(authoritative_start_ts - ONE_MIN_MS, end_ts)
                 if start_ts <= pre_inception_end:
                     self._add_known_gap(
                         symbol,
                         start_ts,
                         pre_inception_end,
                         reason="pre_inception",
-                        retry_count=_GAP_MAX_RETRIES,  # Mark as persistent immediately
+                        retry_count=_GAP_MAX_RETRIES,
                     )
                     self._log(
-                        "debug",
+                        "warning",
                         "skip_pre_inception_fetch",
                         symbol=symbol,
                         original_start=start_ts,
-                        inception_ts=inception_ts,
-                        clipped_start=inception_ts,
+                        original_end=end_ts,
+                        authoritative_start_ts=authoritative_start_ts,
+                        uncovered_start=start_ts,
+                        uncovered_end=pre_inception_end,
                     )
-                # Clip to inception date
-                start_ts = inception_ts
-                if start_ts > end_ts:
-                    return  # Nothing left to fetch
+                return
+
+            pre_inception_end = min(authoritative_start_ts - ONE_MIN_MS, end_ts)
+            if start_ts <= pre_inception_end:
+                self._add_known_gap(
+                    symbol,
+                    start_ts,
+                    pre_inception_end,
+                    reason="pre_inception",
+                    retry_count=_GAP_MAX_RETRIES,
+                )
+                self._log(
+                    "warning",
+                    "skip_pre_inception_fetch",
+                    symbol=symbol,
+                    original_start=start_ts,
+                    original_end=end_ts,
+                    authoritative_start_ts=authoritative_start_ts,
+                    uncovered_start=start_ts,
+                    uncovered_end=pre_inception_end,
+                )
+            start_ts = authoritative_start_ts
+            if start_ts > end_ts:
+                return  # Nothing left to fetch
 
         day_map = self._date_keys_between(start_ts, end_ts)
         shard_paths = self._iter_shard_paths(symbol, tf="1m")
@@ -5165,6 +5273,31 @@ class CandlestickManager:
                         if adj_start_ts <= gap_end:
                             self._add_known_gap(symbol, int(adj_start_ts), int(gap_end))
                         adj_start_ts = max(adj_start_ts, earliest)
+                if "gateio" in exid:
+                    earliest = int(
+                        end_finalized - ONE_MIN_MS * (_GATEIO_RECENT_1M_LIMIT_CANDLES - 1)
+                    )
+                    if adj_start_ts < earliest:
+                        gap_end = min(end_ts, earliest - ONE_MIN_MS)
+                        if adj_start_ts <= gap_end:
+                            self._record_verified_gap(
+                                symbol,
+                                int(adj_start_ts),
+                                int(gap_end),
+                                reason=GAP_REASON_NO_ARCHIVE,
+                            )
+                        if symbol not in self._gateio_recent_window_clip_warned:
+                            self._log(
+                                "warning",
+                                "gateio_ohlcv_recent_window_clipped",
+                                symbol=symbol,
+                                requested_start_ts=int(start_ts),
+                                requested_end_ts=int(end_ts),
+                                earliest_fetchable_ts=int(earliest),
+                                reason="gateio_public_1m_ohlcv_recent_window",
+                            )
+                            self._gateio_recent_window_clip_warned.add(symbol)
+                        adj_start_ts = max(adj_start_ts, earliest)
 
                 # Skip fetch if all missing spans are already known persistent gaps
                 missing_before = self._missing_spans(sub, start_ts, end_ts)
@@ -5372,13 +5505,16 @@ class CandlestickManager:
                             )
                             sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                             still_missing = self._missing_spans(sub, start_ts, end_ts)
-                            # Re-fetch inception_ts after archive prefetch (may have been discovered)
-                            inception_ts = self._get_inception_ts(symbol)
+                            # Re-fetch authoritative lower bound after archive prefetch.
+                            authoritative_start_ts = self._get_authoritative_start_ts(symbol)
                             for s, e in still_missing:
                                 if not span_in_persistent_gap(s, e):
-                                    # If gap is before known inception, mark as pre_inception
-                                    # immediately (no retries, no warning)
-                                    if inception_ts is not None and e < inception_ts:
+                                    # Only mark pre_inception when we know a real authoritative
+                                    # lower bound for exchange-available history.
+                                    if (
+                                        authoritative_start_ts is not None
+                                        and e < authoritative_start_ts
+                                    ):
                                         self._add_known_gap(
                                             symbol,
                                             s,

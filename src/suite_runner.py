@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 from config import load_prepared_config
 from config.access import require_config_value, require_live_value
+from config.metrics import canonicalize_metric_name
 from config.overrides import parse_overrides
 from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
@@ -1308,6 +1309,7 @@ def aggregate_metrics(
 
     stats: Dict[str, Dict[str, float]] = {}
     aggregates: Dict[str, float] = {}
+    aggregate_cfg = {canonicalize_metric_name(str(k)): v for k, v in aggregate_cfg.items()}
     default_mode = str(aggregate_cfg.get("default", "mean")).lower()
 
     for metric, values in metrics_values.items():

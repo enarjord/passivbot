@@ -55,7 +55,7 @@ cd passivbot-rust && cargo check --tests && cd ..
 passivbot tool pareto optimize_results/.../pareto
 passivbot tool pareto-dash --data-root optimize_results
 passivbot tool verify-hlcvs-data
-passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos10.json
+passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos7.json
 ```
 
 ## High-Signal Gotcha

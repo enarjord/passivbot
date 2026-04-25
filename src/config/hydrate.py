@@ -50,7 +50,13 @@ def hydrate_missing_template_fields(
     verbose: bool = True,
     tracker=None,
 ) -> None:
-    add_missing_keys_recursively(template, result, verbose=verbose, tracker=tracker)
+    add_missing_keys_recursively(
+        template,
+        result,
+        verbose=verbose,
+        tracker=tracker,
+        preserve=PARTIALLY_OPEN_CONFIG_PATHS,
+    )
 
 
 def seed_missing_compatibility_sections(template: dict, result: dict, *, tracker=None) -> None:

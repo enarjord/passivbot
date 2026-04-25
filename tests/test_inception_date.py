@@ -31,6 +31,11 @@ def make_candles(timestamps: list[int]) -> np.ndarray:
     return arr
 
 
+def make_full_day(day_start_ts: int) -> np.ndarray:
+    """Create a full UTC day of 1m candles starting at day_start_ts."""
+    return make_candles([day_start_ts + i * ONE_MIN_MS for i in range(1440)])
+
+
 class TestInceptionDateTracking:
     """Tests for inception date tracking."""
 
@@ -162,3 +167,152 @@ class TestInceptionDateTracking:
 
         # This gap should not be retried
         assert not cm._should_retry_gap(gaps[0])
+
+    def test_legacy_inception_with_matching_pre_inception_gap_preserves_authoritative_bound(
+        self, tmp_cache_dir
+    ):
+        """Legacy caches that had already learned a pre-inception boundary must preserve it."""
+        cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
+        symbol = "BTC/USDT:USDT"
+        legacy_ts = 1609459200000
+
+        idx_path = cm._index_path(symbol, tf="1m")
+        os.makedirs(os.path.dirname(idx_path), exist_ok=True)
+        with open(idx_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "shards": {},
+                    "meta": {
+                        "inception_ts": legacy_ts,
+                        "known_gaps": [
+                            {
+                                "start_ts": legacy_ts - 10 * ONE_MIN_MS,
+                                "end_ts": legacy_ts - ONE_MIN_MS,
+                                "retry_count": 3,
+                                "reason": "pre_inception",
+                                "added_at": legacy_ts,
+                            }
+                        ],
+                    },
+                },
+                f,
+            )
+
+        cm2 = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
+        idx = cm2._ensure_symbol_index(symbol, tf="1m")
+
+        assert cm2._get_inception_ts(symbol) == legacy_ts
+        assert idx["meta"]["observed_start_ts"] == legacy_ts
+        assert idx["meta"]["authoritative_start_ts"] == legacy_ts
+        assert idx["meta"]["authoritative_start_source"] == "legacy_pre_inception_gap"
+        assert len(idx["meta"]["known_gaps"]) == 1
+
+    def test_stale_legacy_pre_inception_gap_is_dropped_without_authoritative_bound(
+        self, tmp_cache_dir
+    ):
+        """Non-matching legacy pre_inception gaps should not survive migration."""
+        cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
+        symbol = "BTC/USDT:USDT"
+        legacy_ts = 1609459200000
+
+        idx_path = cm._index_path(symbol, tf="1m")
+        os.makedirs(os.path.dirname(idx_path), exist_ok=True)
+        with open(idx_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "shards": {},
+                    "meta": {
+                        "inception_ts": legacy_ts,
+                        "known_gaps": [
+                            {
+                                "start_ts": legacy_ts - 20 * ONE_MIN_MS,
+                                "end_ts": legacy_ts - 11 * ONE_MIN_MS,
+                                "retry_count": 3,
+                                "reason": "pre_inception",
+                                "added_at": legacy_ts,
+                            }
+                        ],
+                    },
+                },
+                f,
+            )
+
+        cm2 = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
+        idx = cm2._ensure_symbol_index(symbol, tf="1m")
+
+        assert cm2._get_inception_ts(symbol) == legacy_ts
+        assert idx["meta"]["observed_start_ts"] == legacy_ts
+        assert idx["meta"]["authoritative_start_ts"] is None
+        assert idx["meta"]["known_gaps"] == []
+
+    @pytest.mark.asyncio
+    async def test_prefetch_backfills_earlier_days_when_only_observed_start_is_known(
+        self, tmp_cache_dir
+    ):
+        """Earlier backfills must not be blocked just because later shards already exist."""
+        cm = CandlestickManager(exchange=None, exchange_name="binance", cache_dir=tmp_cache_dir)
+        symbol = "ETH/USDT:USDT"
+        day1 = 1672531200000  # 2023-01-01
+        day2 = day1 + 24 * 60 * 60 * 1000
+        day3 = day2 + 24 * 60 * 60 * 1000
+        day2_end = day2 + 1439 * ONE_MIN_MS
+
+        cm._persist_batch(symbol, make_full_day(day3), timeframe="1m")
+        assert cm._get_inception_ts(symbol) == day3
+        assert cm._get_authoritative_start_ts(symbol) is None
+
+        calls = []
+
+        async def fake_archive_fetch_day(_symbol: str, day_key: str):
+            calls.append(day_key)
+            start_ts, _ = cm._date_range_of_key(day_key)
+            return make_full_day(start_ts)
+
+        cm._archive_supported = lambda: True
+        cm._archive_fetch_day = fake_archive_fetch_day
+
+        await cm._prefetch_archives_for_range(symbol, day1, day2_end, parallel_days=2)
+
+        shard_days = sorted(cm._ensure_symbol_index(symbol, tf="1m")["shards"].keys())
+        assert calls == ["2023-01-01", "2023-01-02"]
+        assert shard_days[:3] == ["2023-01-01", "2023-01-02", "2023-01-03"]
+        assert cm._get_inception_ts(symbol) == day1
+        assert cm._get_authoritative_start_ts(symbol) is None
+
+    @pytest.mark.asyncio
+    async def test_prefetch_uses_exchange_specific_cache_as_authoritative_lower_bound(
+        self, tmp_cache_dir
+    ):
+        """Exchange-specific first-timestamp cache may clip earlier ranges authoritatively."""
+        cm = CandlestickManager(exchange=None, exchange_name="binance", cache_dir=tmp_cache_dir)
+        symbol = "ETH/USDT:USDT"
+        authoritative_ts = 1672617600000  # 2023-01-02
+        day1 = 1672531200000  # 2023-01-01
+        day2 = authoritative_ts
+        day2_end = day2 + 1439 * ONE_MIN_MS
+
+        cache_path = os.path.join(tmp_cache_dir, "first_ohlcv_timestamps_unified_exchange_specific.json")
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({"ETH": {"binanceusdm": authoritative_ts}}, f)
+
+        calls = []
+
+        async def fake_archive_fetch_day(_symbol: str, day_key: str):
+            calls.append(day_key)
+            start_ts, _ = cm._date_range_of_key(day_key)
+            return make_full_day(start_ts)
+
+        cm._archive_supported = lambda: True
+        cm._archive_fetch_day = fake_archive_fetch_day
+
+        await cm._prefetch_archives_for_range(symbol, day1, day2_end, parallel_days=2)
+
+        idx = cm._ensure_symbol_index(symbol, tf="1m")
+        gaps = cm._get_known_gaps_enhanced(symbol)
+        assert calls == ["2023-01-02"]
+        assert idx["meta"]["authoritative_start_ts"] == authoritative_ts
+        assert idx["meta"]["authoritative_start_source"] == "exchange_specific_cache"
+        assert any(
+            g["start_ts"] == day1 and g["end_ts"] == day2 - ONE_MIN_MS and g["reason"] == "pre_inception"
+            for g in gaps
+        )

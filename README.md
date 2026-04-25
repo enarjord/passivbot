@@ -136,7 +136,7 @@ To start the bot with the default settings, run:
 passivbot live -u {account_name_from_api-keys.json}
 ```
 
-or make a new configuration file, using `configs/examples/default_trailing_grid_long_npos10.json` as a starting point, and start the bot with:
+or make a new configuration file, using `configs/examples/default_trailing_grid_long_npos7.json` as a starting point, and start the bot with:
 
 
 ```sh
@@ -147,7 +147,7 @@ Legacy direct-script entrypoints such as `python3 src/main.py ...`, `python3 src
 and `python3 src/optimize.py ...` still work unchanged for backwards compatibility.
 
 The canonical hardcoded defaults live in `src/config/schema.py`. The example config
-`configs/examples/default_trailing_grid_long_npos10.json` mirrors that default profile exactly, so
+`configs/examples/default_trailing_grid_long_npos7.json` mirrors that default profile exactly, so
 copying it is the recommended starting point for new configs.
 
 ### Logging

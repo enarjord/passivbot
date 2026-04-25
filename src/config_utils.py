@@ -215,22 +215,6 @@ FIELD_RUNTIME_RULES = {
 }
 
 OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
-    "bot.long.entry_grid_inflation_enabled": {
-        "visible": ["--bot.long.entry_grid_inflation_enabled"],
-        "hidden": ["--bot_long_entry_grid_inflation_enabled"],
-        "type": str2bool,
-        "metavar": "Y/N",
-        "commands": {"optimize"},
-        "help": "Override bot.long.entry_grid_inflation_enabled for this optimize run.",
-    },
-    "bot.short.entry_grid_inflation_enabled": {
-        "visible": ["--bot.short.entry_grid_inflation_enabled"],
-        "hidden": ["--bot_short_entry_grid_inflation_enabled"],
-        "type": str2bool,
-        "metavar": "Y/N",
-        "commands": {"optimize"},
-        "help": "Override bot.short.entry_grid_inflation_enabled for this optimize run.",
-    },
     "bot.long.hsl_enabled": {
         "visible": ["--bot.long.hsl_enabled"],
         "hidden": ["--bot_long_hsl_enabled"],
@@ -569,15 +553,20 @@ def _clean_with_template(template_node, source_node, path: Path = ()):
     if isinstance(template_node, dict):
         source_dict = source_node if isinstance(source_node, dict) else {}
         if path in PARTIALLY_OPEN_CONFIG_PATHS:
+            if not isinstance(source_node, dict):
+                return _clean_with_template(template_node, None, ())
             cleaned = {}
             for key, value in source_dict.items():
                 if key in template_node:
                     cleaned[key] = _clean_with_template(template_node[key], value, path + (key,))
                 else:
                     cleaned[key] = _clean_dynamic_node(value)
-            for key, tmpl_value in template_node.items():
-                if key not in cleaned:
-                    cleaned[key] = _clean_with_template(tmpl_value, None, path + (key,))
+            if path == ("backtest", "aggregate") and "default" not in cleaned:
+                cleaned["default"] = _clean_with_template(
+                    template_node["default"],
+                    None,
+                    path + ("default",),
+                )
             return cleaned
         if not template_node:
             return _clean_dynamic_node(source_dict)

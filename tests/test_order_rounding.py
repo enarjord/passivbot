@@ -40,7 +40,6 @@ def test_calc_entries_long_py_quantizes_results():
         min_cost=0.0,
         c_mult=1.0,
         entry_grid_double_down_factor=1.0,
-        entry_grid_inflation_enabled=True,
         entry_grid_spacing_volatility_weight=0.0,
         entry_grid_spacing_we_weight=0.0,
         entry_grid_spacing_pct=0.0,

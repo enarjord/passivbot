@@ -9,13 +9,11 @@ pbr_is_stub = bool(getattr(pbr, "__is_stub__", False)) if pbr is not None else F
 
 
 def _calc_next_entry_long(**kwargs):
-    kwargs.setdefault("entry_grid_inflation_enabled", True)
     qty, price, order_type = pbr.calc_next_entry_long_py(**kwargs)
     return qty, price, order_type
 
 
 def _calc_next_entry_short(**kwargs):
-    kwargs.setdefault("entry_grid_inflation_enabled", True)
     qty, price, order_type = pbr.calc_next_entry_short_py(**kwargs)
     return qty, price, order_type
 
@@ -257,7 +255,7 @@ def test_reentry_short_is_cropped_to_cap():
 
 
 @pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
-def test_reentry_long_inflation_can_be_disabled():
+def test_reentry_long_near_cap_stays_normal():
     params = dict(
         qty_step=0.1,
         price_step=0.1,
@@ -265,7 +263,6 @@ def test_reentry_long_inflation_can_be_disabled():
         min_cost=0.0,
         c_mult=1.0,
         entry_grid_double_down_factor=0.5,
-        entry_grid_inflation_enabled=True,
         entry_grid_spacing_volatility_weight=0.0,
         entry_grid_spacing_we_weight=0.0,
         entry_grid_spacing_pct=0.05,
@@ -293,12 +290,8 @@ def test_reentry_long_inflation_can_be_disabled():
         order_book_bid=95.0,
     )
 
-    qty_enabled, price_enabled, order_type_enabled = _calc_next_entry_long(**params)
-    assert order_type_enabled == "entry_grid_inflated_long"
+    qty, price, order_type = _calc_next_entry_long(**params)
 
-    params["entry_grid_inflation_enabled"] = False
-    qty_disabled, price_disabled, order_type_disabled = _calc_next_entry_long(**params)
-
-    assert order_type_disabled == "entry_grid_normal_long"
-    assert price_disabled == pytest.approx(price_enabled)
-    assert qty_disabled < qty_enabled
+    assert order_type == "entry_grid_normal_long"
+    assert qty > 0.0
+    assert price > 0.0

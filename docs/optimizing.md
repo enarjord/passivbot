@@ -3,7 +3,7 @@
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
 The canonical defaults live in `src/config/schema.py`. The example config
-`configs/examples/default_trailing_grid_long_npos10.json` mirrors those defaults exactly. For the
+`configs/examples/default_trailing_grid_long_npos7.json` mirrors those defaults exactly. For the
 recommended config workflow, see [Config Workflow](config_workflow.md).
 
 Optimization requires the full install profile:
@@ -28,7 +28,7 @@ single-scenario by default unless you explicitly enable suite mode.
 
 Example:
 ```bash
-passivbot optimize configs/examples/default_trailing_grid_long_npos10.json --start configs/starting_pool/
+passivbot optimize configs/examples/default_trailing_grid_long_npos7.json --start configs/starting_pool/
 ```
 
 Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
@@ -234,7 +234,7 @@ keys to keep tunable; all other bounds are locked to their current config values
 the run starts.
 
 ```bash
-passivbot optimize configs/examples/default_trailing_grid_long_npos10.json \
+passivbot optimize configs/examples/default_trailing_grid_long_npos7.json \
   --fine_tune_params long_entry_grid_spacing_pct,long_entry_initial_qty_pct
 ```
 
@@ -261,9 +261,9 @@ operator-risk settings such as:
 ```
 
 That default override disables terminal no-restart during optimizer evaluations so candidates can
-be constrained through `drawdown_worst_hsl`, `drawdown_worst_ema_hsl`,
-`drawdown_worst_mean_1pct_hsl`, `drawdown_worst_mean_1pct_ema_hsl`, and
-`peak_recovery_hours_hsl` instead of being prematurely truncated.
+be constrained through `drawdown_worst_strategy_eq`, `drawdown_worst_ema_strategy_eq`,
+`drawdown_worst_mean_1pct_strategy_eq`, `drawdown_worst_mean_1pct_ema_strategy_eq`, and
+`peak_recovery_days_strategy_eq` instead of being prematurely truncated.
 
 When you provide many starting configs, optimizer now also bounds how many seed evaluations may be
 in flight at once:
@@ -406,14 +406,14 @@ formal MCDM implementations. For most real runs, `knee`, `reference`, and `utili
 useful methods.
 
 `-o` / `--objectives` can also reference stored metrics outside the original `optimize.scoring`
-list, for example `sharpe_ratio_strategy_pnl_rebased`, as long as that metric is present in the
+list, for example `sharpe_ratio_strategy_eq`, as long as that metric is present in the
 saved Pareto JSON and Passivbot has a known default min/max direction for it.
 
 Example:
 
 ```bash
 passivbot tool pareto \
-  -o sharpe_ratio_strategy_pnl_rebased,adg_strategy_pnl_rebased,peak_recovery_hours_hsl \
+  -o sharpe_ratio_strategy_eq,adg_strategy_eq,peak_recovery_days_strategy_eq \
   -m ideal
 ```
 
@@ -481,7 +481,7 @@ appends one more canonical entry:
 ```bash
 passivbot optimize \
   --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]' \
-  --limit 'peak_recovery_hours_hsl <= 500'
+  --limit 'peak_recovery_days_strategy_eq <= 21'
 ```
 
 Semantics:
@@ -528,19 +528,19 @@ over all exchanges before scoring.
 | `adg`, `adg_w` | Average Daily Gain (smoothed geometric) and its recency-biased counterpart |
 | `mdg`, `mdg_w` | Median Daily Gain and its recency-biased counterpart |
 | `gain` | Final balance gain (end/start ratio) |
-| `adg_strategy_pnl_rebased`, `adg_strategy_pnl_rebased_w` | Collateral-agnostic geometric growth on the strategy-PnL rebased equity curve |
-| `mdg_strategy_pnl_rebased`, `mdg_strategy_pnl_rebased_w` | Median-day version of the same rebased growth family |
+| `adg_strategy_eq`, `adg_strategy_eq_w` | Collateral-agnostic geometric growth on the synthetic strategy-equity curve |
+| `mdg_strategy_eq`, `mdg_strategy_eq_w` | Median-day version of the same strategy-equity growth family |
 | `*_per_exposure_{long,short}` | Above metrics divided by the configured exposure limit per side |
 
 ### Risk Metrics
 | Metric | Description |
 |--------|-------------|
 | `drawdown_worst` | Maximum peak-to-trough drawdown |
-| `drawdown_worst_mean_1pct` | Mean of worst 1% drawdowns (daily) |
-| `drawdown_worst_hsl` | Worst account-level HSL drawdown |
-| `drawdown_worst_ema_hsl` | Worst EMA-smoothed HSL drawdown, shared as `max(long, short)` |
-| `drawdown_worst_mean_1pct_hsl` | Mean of worst 1% HSL drawdown samples |
-| `drawdown_worst_mean_1pct_ema_hsl` | Mean of worst 1% EMA-smoothed HSL drawdown samples, shared as `max(long, short)` |
+| `drawdown_worst_mean_1pct` | Mean of worst 1% daily worst drawdowns, computed from full-resolution drawdowns before daily reduction |
+| `drawdown_worst_strategy_eq` | Worst drawdown on collateral-agnostic strategy equity |
+| `drawdown_worst_ema_strategy_eq` | Worst EMA-smoothed strategy-equity drawdown, shared as `max(long, short)` |
+| `drawdown_worst_mean_1pct_strategy_eq` | Mean of worst 1% daily worst strategy-equity drawdowns, computed from full-resolution strategy-equity drawdowns before daily reduction |
+| `drawdown_worst_mean_1pct_ema_strategy_eq` | Mean of worst 1% EMA-smoothed strategy-equity drawdown samples, shared as `max(long, short)` |
 | `expected_shortfall_1pct` | Mean of worst 1% daily losses (CVaR) |
 | `equity_balance_diff_neg_max` / `pos_max` | Largest divergence between equity and account balance (negative side tracks only drawdowns below balance; positive side tracks only run-ups above balance) |
 | `equity_balance_diff_neg_mean` / `pos_mean` | Average divergence between equity and balance (split by sign as above) |
@@ -553,20 +553,20 @@ over all exchanges before scoring.
 | `calmar_ratio`, `calmar_ratio_w` | Return divided by maximum drawdown |
 | `sterling_ratio`, `sterling_ratio_w` | Return divided by the average of the worst 1% drawdowns |
 | `omega_ratio`, `omega_ratio_w` | Sum of positive returns / sum of absolute negative returns |
-| `*_strategy_pnl_rebased`, `*_strategy_pnl_rebased_w` ratios | Collateral-agnostic ratio family using the strategy-PnL rebased equity curve |
+| `*_strategy_eq`, `*_strategy_eq_w` ratios | Collateral-agnostic ratio family using the strategy-equity curve |
 
 ### Position & Execution Metrics
 | Metric | Description |
 |--------|-------------|
 | `positions_held_per_day` | Average number of unique positions opened per day |
-| `position_held_hours_{mean,median,max}` | Holding-time statistics in hours |
-| `position_unchanged_hours_max` | Longest span without modifying an existing position |
+| `position_held_hours_{mean,median,max}`, `position_held_days_{mean,median,max}` | Holding-time statistics in hours and equivalent days |
+| `position_unchanged_hours_max`, `position_unchanged_days_max` | Longest span without modifying an existing position, in hours and equivalent days |
 | `volume_pct_per_day_avg`, `volume_pct_per_day_avg_w` | Average traded volume as % of account per day, with recency bias |
-| `peak_recovery_hours_equity_usd`, `_btc` | Longest time (in hours) the equity curve stayed below its prior peak before recovering, per denomination. Available for scoring and limit checks (e.g. `{"metric": "peak_recovery_hours_equity_usd", "penalize_if": ">", "value": 168}`). |
-| `peak_recovery_hours_pnl` | Longest recovery time (hours) of cumulative realised PnL (USD). Useful for monitoring realised drawdown recovery latency. |
-| `peak_recovery_hours_hsl` | Longest time below the all-time rebased HSL peak before recovery. Intended for optimizer risk limits. |
-| `high_exposure_hours_{mean,max}_long` | Mean / maximum duration (hours) of continuous periods where total long wallet exposure exceeded the daily-resampled average long TWE |
-| `high_exposure_hours_{mean,max}_short` | Mean / maximum duration (hours) of continuous periods where total short wallet exposure exceeded the daily-resampled average short TWE |
+| `peak_recovery_hours_equity_usd`, `_btc`; `peak_recovery_days_equity_usd`, `_btc` | Longest time the equity curve stayed below its prior peak before recovering, per denomination, in hours and equivalent days. Available for scoring and limit checks (e.g. `{"metric": "peak_recovery_days_equity_usd", "penalize_if": ">", "value": 7}`). |
+| `peak_recovery_hours_pnl`, `peak_recovery_days_pnl` | Longest recovery time of cumulative realised PnL (USD), in hours and equivalent days. Useful for monitoring realised drawdown recovery latency. |
+| `peak_recovery_hours_strategy_eq`, `peak_recovery_days_strategy_eq` | Longest time below the strategy-equity peak before recovery, including the open tail to backtest end, in hours and equivalent days. Intended for optimizer risk limits. |
+| `high_exposure_hours_{mean,max}_long`, `high_exposure_days_{mean,max}_long` | Mean / maximum duration of continuous periods where total long wallet exposure exceeded the daily-resampled average long TWE, in hours and equivalent days |
+| `high_exposure_hours_{mean,max}_short`, `high_exposure_days_{mean,max}_short` | Mean / maximum duration of continuous periods where total short wallet exposure exceeded the daily-resampled average short TWE, in hours and equivalent days |
 
 ### Equity Curve Quality
 | Metric | Description |

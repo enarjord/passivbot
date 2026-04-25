@@ -28,16 +28,16 @@ directory, it resolves that automatically.
 passivbot tool pareto optimize_results/.../pareto
 passivbot tool pareto
 passivbot tool pareto optimize_results/.../pareto -m reference \
-  --target adg_strategy_pnl_rebased=0.001 \
-  --target drawdown_worst_hsl=0.25
+  --target adg_strategy_eq=0.001 \
+  --target drawdown_worst_strategy_eq=0.25
 passivbot tool pareto optimize_results/.../pareto \
-  -l 'drawdown_worst_hsl<=0.35' \
-  -l 'adg_strategy_pnl_rebased>0.0'
-passivbot tool pareto -o sharpe_ratio_strategy_pnl_rebased,adg_strategy_pnl_rebased,peak_recovery_hours_hsl \
+  -l 'drawdown_worst_strategy_eq<=0.35' \
+  -l 'adg_strategy_eq>0.0'
+passivbot tool pareto -o sharpe_ratio_strategy_eq,adg_strategy_eq,peak_recovery_days_strategy_eq \
   -m ideal
 passivbot tool pareto optimize_results/... -m utility \
-  --weight adg_strategy_pnl_rebased=4 \
-  --weight drawdown_worst_hsl=2 \
+  --weight adg_strategy_eq=4 \
+  --weight drawdown_worst_strategy_eq=2 \
   --show-top 5
 passivbot tool pareto --json
 ```
@@ -62,7 +62,7 @@ The output also shows the retained front's ideal point: the best observed value 
 objective after any `--limit` filters are applied.
 
 `-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
-other stored metrics such as `sharpe_ratio_strategy_pnl_rebased` as long as the Pareto JSON
+other stored metrics such as `sharpe_ratio_strategy_eq` as long as the Pareto JSON
 members contain that metric and Passivbot knows whether higher or lower is better.
 
 ## Pareto transformations / static plots
@@ -92,7 +92,7 @@ passivbot tool iterative-history-plot backtests/.../fills.csv
 - `passivbot download` – Pre-warm OHLCV caches using the same config/date/exchange selection as backtesting.
 - `passivbot tool pad-historical-daily` – Ensures daily OHLCV shards are present for the downloader when new coins are added.
 - `passivbot tool verify-hlcvs-data` – Validates cached OHLCV data (gaps, duplicates) before long optimizations/backtests.
-- `passivbot tool streamline-json` – Normalizes/compacts JSON configs (`passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos10.json`).
+- `passivbot tool streamline-json` – Normalizes/compacts JSON configs (`passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos7.json`).
 - `passivbot tool candle-doctor` – Audits `caches/ohlcv/...` shards for corruption, stale index entries, and legacy-format issues; add `--fix` to apply automatic repairs.
 - `passivbot tool migrate-historical-data` – Converts legacy `historical_data/ohlcvs_<exchange>/...` shards into the current `caches/ohlcv/...` layout.
 

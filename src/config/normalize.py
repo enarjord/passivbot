@@ -4,8 +4,7 @@ from copy import deepcopy
 from .bot import (
     ensure_optimize_bounds_for_bot,
     format_bot_config,
-    normalize_coin_override_entry_grid_inflation_flags,
-    warn_on_deprecated_coin_override_entry_grid_inflation,
+    strip_deprecated_coin_override_entry_grid_inflation_flags,
 )
 from .hydrate import (
     apply_non_live_adjustments,
@@ -95,8 +94,11 @@ def normalize_config(
         tracker=tracker,
     )
     sync_canonical_strategy_config(result, tracker=tracker)
-    normalize_coin_override_entry_grid_inflation_flags(result)
-    warn_on_deprecated_coin_override_entry_grid_inflation(result, verbose=verbose)
+    strip_deprecated_coin_override_entry_grid_inflation_flags(
+        result,
+        verbose=verbose,
+        tracker=tracker,
+    )
     ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
     hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
     reject_backtest_inherited_live_fields(result)

@@ -22,6 +22,13 @@ passivbot_agent_principles:
     - Entries must observe effective min qty.
     - Closes should observe effective min cost; exception: if pos size is below effective min qty, close qty may equal pos size.
 
+  broker_attribution:
+    - Broker codes and broker-agreement attribution are exchange-critical behavior.
+    - Do not remove, bypass, rename, or weaken broker-code handling without explicit user approval.
+    - Broker-code loaders must fail loudly on missing registries, invalid registry data, and unknown exchange names.
+    - Exchange integrations with broker agreements must set the exchange-required broker payload/header/order field on every relevant order request.
+    - Broker-attribution changes require targeted tests that verify the actual CCXT/raw signed request path, not only local config values.
+
   config_hierarchy:
     rule: Parameters shared by live + backtest belong in config.live.
     sections:

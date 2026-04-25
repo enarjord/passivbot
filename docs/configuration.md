@@ -3,7 +3,7 @@
 This document explains the canonical config schema used by Passivbot.
 
 - The source of truth for defaults is `src/config/schema.py`.
-- The example config `configs/examples/default_trailing_grid_long_npos10.json` mirrors those hardcoded defaults exactly.
+- The example config `configs/examples/default_trailing_grid_long_npos7.json` mirrors those hardcoded defaults exactly.
 - If you omit `config_path`, Passivbot loads those in-code defaults.
 
 For the recommended user workflow, examples, and best practices, see [Config Workflow](config_workflow.md).
@@ -15,6 +15,7 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 - **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
 - **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. Supported exchanges include `binance`, `bybit`, `gateio`, and `bitget`. The current default profile uses `['binance', 'bybit']`.
   **GateIO note:** If you already have `caches/ohlcv/gateio` data on disk, delete it before a fresh run so Passivbot rebuilds the cache with base-volume-normalized data.
+  GateIO's public 1m OHLCV endpoint only serves a recent window of roughly 10,000 candles; use `backtest.ohlcv_source_dir` or another candle source for older GateIO backtests.
 - **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic exchange selection when multiple exchanges are configured. Scenarios may add more overrides; conflicting assignments raise an error.
 - **market_settings_sources**: Optional mapping of `coin -> exchange` used specifically for exchange metadata such as `price_step`, `qty_step`, fees, and min-size rules. This is separate from `coin_sources`: you may source candles from one exchange while borrowing market settings from another.
 - **ohlcv_source_dir**: Optional path to a pre-populated OHLCV directory to use before hitting exchange archives. Expected structure: `<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz` or `.npy`. Coin keys are normalized to base coins, but CCXT-style symbol folder names are accepted (e.g., `ETH_USDC:USDC`).
@@ -34,11 +35,12 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 - **taker_fee_override**: Optional taker fee override (part-per-one; use `0.00055` for 0.055%). Leave `null` to use the exchange-derived taker fees.
 - **market_order_slippage_pct**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl_panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `live.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps).
 - **visible_metrics**: Controls which metrics are printed to the terminal after a standalone backtest. `null` shows the metrics implied by `optimize.scoring` and `optimize.limits`, `[]` shows all metrics, and an explicit list adds extra named metrics to the default view. This affects CLI visibility only; the full metric set is still computed and persisted.
-- **config_version**: Top-level schema version string for the config file. Canonical `v7.9` configs use `v7.9.0`. Older configs without this field are treated as legacy and migrated during load.
+- **config_version**: Top-level schema version string for the config file. Canonical `v7.10` configs use `v7.10.0`. Older configs without this field are treated as legacy and migrated during load.
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
-  `balance_and_equity.csv` and related plots. `1` keeps full per-minute resolution; higher values
-  thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes.
-- **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` targets fully-BTC collateral; values `>1` allow leveraged BTC collateral, accepting negative USD balances.
+  `balance_and_equity.csv.gz` and related plots. `1` keeps full per-minute resolution; higher values
+  thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes. The CSV
+  includes account balance/equity in USD and BTC plus collateral-agnostic `strategy_equity`.
+- **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` targets fully-BTC collateral; values `>1` allow leveraged BTC collateral, accepting negative USD balances. Backtests initialize the BTC collateral position at the first active trading step, not during EMA warmup.
 - **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
 ### Suite Scenarios
 
@@ -175,18 +177,18 @@ Backtest-specific note:
 Key HSL analysis metrics:
 
 1. Global account metrics:
-   - `drawdown_worst_hsl`
-   - `drawdown_worst_mean_1pct_hsl`
-   - `peak_recovery_hours_hsl`
+   - `drawdown_worst_strategy_eq`
+   - `drawdown_worst_mean_1pct_strategy_eq`
+   - `peak_recovery_days_strategy_eq`
    - `hard_stop_triggers`
    - `hard_stop_restarts`
 2. Side-specific metrics:
-   - `drawdown_worst_hsl_long`
-   - `drawdown_worst_hsl_short`
-   - `drawdown_worst_mean_1pct_hsl_long`
-   - `drawdown_worst_mean_1pct_hsl_short`
-   - `peak_recovery_hours_hsl_long`
-   - `peak_recovery_hours_hsl_short`
+   - `drawdown_worst_strategy_eq_long`
+   - `drawdown_worst_strategy_eq_short`
+   - `drawdown_worst_mean_1pct_strategy_eq_long`
+   - `drawdown_worst_mean_1pct_strategy_eq_short`
+   - `peak_recovery_days_strategy_eq_long`
+   - `peak_recovery_days_strategy_eq_short`
    - `hard_stop_triggers_long`
    - `hard_stop_triggers_short`
    - `hard_stop_restarts_long`
@@ -218,10 +220,6 @@ Passivbot can be configured to create a grid of entry orders, with prices and qu
   - Quantity of the next grid entry is position size times the double down factor.
   - Example: If position size is `1.4` and `double_down_factor` is `0.9`, then the next entry quantity is `1.4 * 0.9 = 1.26`.
   - Also applies to trailing entries.
-- **entry_grid_inflation_enabled**:
-  - When `true`, grid-mode re-entries may inflate the current order near the effective wallet exposure cap if the next grid step would otherwise become tiny.
-  - When `false`, grid re-entries are only normal or cropped so the bot observes effective WEL without pulling future size forward.
-  - `false` is the canonical setting going forward. The current default remains `true` for backwards compatibility, and config parsing warns that the inflated path is scheduled for deprecation.
 - **entry_grid_spacing_pct**, **entry_grid_spacing_we_weight**:
   - Grid re-entry prices are determined as follows:
     - `next_reentry_price_long = pos_price * (1 - entry_grid_spacing_pct * multiplier)`
@@ -526,7 +524,7 @@ HSL bounds now use side-specific prefixes:
 1. `optimize.fixed_runtime_overrides["bot.long.hsl_no_restart_drawdown_threshold"] = 1.0`
 2. `optimize.fixed_runtime_overrides["bot.short.hsl_no_restart_drawdown_threshold"] = 1.0`
 
-Risk should be constrained through `*_hsl` metrics instead.
+Risk should be constrained through canonical `*_strategy_eq` metrics instead. Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results.
 
 **Validation:**
 
@@ -558,16 +556,16 @@ Risk should be constrained through `*_hsl` metrics instead.
 - **scoring**:
   - The optimizer minimizes the configured objective list and keeps the Pareto front.
   - The current default profile uses:
-    - `adg_strategy_pnl_rebased`
-    - `adg_strategy_pnl_rebased_w`
-    - `mdg_strategy_pnl_rebased`
-    - `mdg_strategy_pnl_rebased_w`
-    - `peak_recovery_hours_hsl`
-    - `position_held_hours_max`
-    - `drawdown_worst_hsl`
-    - `drawdown_worst_mean_1pct_hsl`
+    - `adg_strategy_eq`
+    - `adg_strategy_eq_w`
+    - `mdg_strategy_eq`
+    - `mdg_strategy_eq_w`
+    - `peak_recovery_days_strategy_eq`
+    - `position_held_days_max`
+    - `drawdown_worst_strategy_eq`
+    - `drawdown_worst_mean_1pct_strategy_eq`
   - With the default `pymoo` backend, Passivbot uses `nsga2` for `3` or fewer objectives and `nsga3` for `4+` objectives unless explicitly overridden.
-  - Full list of options: `[adg, adg_w, calmar_ratio, calmar_ratio_w, drawdown_worst, drawdown_worst_mean_1pct, equity_balance_diff_neg_max, equity_balance_diff_neg_mean, equity_balance_diff_pos_max, equity_balance_diff_pos_mean, expected_shortfall_1pct, gain, hard_stop_duration_minutes_max, hard_stop_duration_minutes_mean, hard_stop_flatten_time_minutes_mean, hard_stop_halt_to_restart_equity_loss_pct, hard_stop_panic_close_loss_max, hard_stop_panic_close_loss_sum, hard_stop_post_restart_retrigger_pct, hard_stop_time_in_orange_pct, hard_stop_time_in_red_pct, hard_stop_time_in_yellow_pct, hard_stop_trigger_drawdown_mean, loss_profit_ratio, loss_profit_ratio_w, mdg, mdg_w, omega_ratio, omega_ratio_w, peak_recovery_hours_equity, peak_recovery_hours_pnl, position_held_hours_max, position_held_hours_mean, position_held_hours_median, position_unchanged_hours_max, positions_held_per_day, sharpe_ratio, sharpe_ratio_w, sortino_ratio, sortino_ratio_w, sterling_ratio, sterling_ratio_w]`
+  - Full list of options: `[adg, adg_w, calmar_ratio, calmar_ratio_w, drawdown_worst, drawdown_worst_mean_1pct, equity_balance_diff_neg_max, equity_balance_diff_neg_mean, equity_balance_diff_pos_max, equity_balance_diff_pos_mean, expected_shortfall_1pct, gain, hard_stop_duration_minutes_max, hard_stop_duration_minutes_mean, hard_stop_flatten_time_minutes_mean, hard_stop_halt_to_restart_equity_loss_pct, hard_stop_panic_close_loss_max, hard_stop_panic_close_loss_sum, hard_stop_post_restart_retrigger_pct, hard_stop_time_in_orange_pct, hard_stop_time_in_red_pct, hard_stop_time_in_yellow_pct, hard_stop_trigger_drawdown_mean, high_exposure_days_max_long, high_exposure_days_max_short, high_exposure_hours_max_long, high_exposure_hours_max_short, loss_profit_ratio, loss_profit_ratio_w, mdg, mdg_w, omega_ratio, omega_ratio_w, peak_recovery_days_equity, peak_recovery_days_pnl, peak_recovery_days_strategy_eq, peak_recovery_hours_equity, peak_recovery_hours_pnl, peak_recovery_hours_strategy_eq, position_held_days_max, position_held_days_mean, position_held_days_median, position_held_hours_max, position_held_hours_mean, position_held_hours_median, position_unchanged_days_max, position_unchanged_hours_max, positions_held_per_day, sharpe_ratio, sharpe_ratio_w, sortino_ratio, sortino_ratio_w, sterling_ratio, sterling_ratio_w]`
   - Suffix `_w` indicates mean across 10 temporal subsets (whole, last_half, last_third, ..., last_tenth) to weigh recent data more heavily.
   - Examples: `["mdg", "sharpe_ratio", "loss_profit_ratio"]`, `["adg", "sortino_ratio", "drawdown_worst"]`, `["sortino_ratio", "omega_ratio", "adg_w", "position_unchanged_hours_max"]`, `["adg_pnl_w", "hard_stop_time_in_red_pct", "hard_stop_panic_close_loss_sum"]`
     - Note: metrics may be suffixed with `_usd` or `_btc` to select denomination. If `config.backtest.btc_collateral_cap` is `0`, BTC values still represent the USD equity translated into BTC terms.
@@ -587,7 +585,7 @@ Use `--suite-config path/to/file.json` to layer additional scenario definitions 
 
 The optimizer penalizes backtests whose metric values exceed or fall short of specified thresholds. Penalties are added to the fitness score to discourage undesirable configurations but do not disqualify the config.
 
-Any metric listed above (and its `btc_` prefixed counterpart when `backtest.use_btc_collateral=True`) can be used when defining limits. This includes the shared HSL metrics such as `hard_stop_time_in_red_pct`, `hard_stop_post_restart_retrigger_pct`, and `hard_stop_halt_to_restart_equity_loss_pct`, plus `backtest_completion_ratio` for rejecting truncated runs. HSL metrics are account-level shared metrics and therefore remain single-valued rather than being split into `_usd` and `_btc`. Each limit entry is a dictionary with:
+Any metric listed above can be used when defining limits. Currency-specific metrics use `_usd` and `_btc` suffixes where both denominations are available; BTC-denominated metrics are available even when `backtest.btc_collateral_cap = 0`. This includes the shared HSL metrics such as `hard_stop_time_in_red_pct`, `hard_stop_post_restart_retrigger_pct`, and `hard_stop_halt_to_restart_equity_loss_pct`, plus `backtest_completion_ratio` for rejecting truncated runs. HSL metrics are account-level shared metrics and therefore remain single-valued rather than being split into `_usd` and `_btc`. Each limit entry is a dictionary with:
 
 - `metric`: canonical metric name (`drawdown_worst_btc`, `loss_profit_ratio`, `peak_recovery_hours_pnl`, etc.).
 - `penalize_if`: one of `<`, `<=`, `>`, `>=`, `==`, `outside_range`, or `inside_range` (aliases like `less_than`, `greater_than`, `auto`, etc. are also accepted). Use `outside_range` to keep a metric within `[low, high]`, and `inside_range` to forbid a specific band.

@@ -23,7 +23,7 @@ Signal construction is selected globally with `live.hsl_signal_mode`:
 1. long HSL reacts to long deterioration
 2. short HSL reacts to short deterioration
 3. one profitable `pside` cannot hide a weak one
-4. side-specific `*_hsl_long` and `*_hsl_short` metrics are easier to interpret
+4. side-specific `*_strategy_eq_long` and `*_strategy_eq_short` metrics are easier to interpret
 
 Use `pside` when:
 
@@ -197,33 +197,33 @@ Important backtest details:
    - panic exits use simulated taker execution on the next bar
    - slippage is controlled by `backtest.market_order_slippage_pct`
 3. Backtests export both:
-   - global account-level HSL metrics under `*_hsl`
-   - side-specific HSL metrics under `*_hsl_long` / `*_hsl_short`
+   - operational HSL telemetry under `hard_stop_*`
+   - collateral-agnostic strategy-equity risk metrics under `*_strategy_eq`
 
-Main optimizer-facing global HSL metrics:
+Main optimizer-facing strategy-equity risk metrics:
 
-1. `drawdown_worst_hsl`
-2. `drawdown_worst_ema_hsl`
-3. `drawdown_worst_mean_1pct_hsl`
-4. `drawdown_worst_mean_1pct_ema_hsl`
-5. `peak_recovery_hours_hsl`
+1. `drawdown_worst_strategy_eq`
+2. `drawdown_worst_ema_strategy_eq`
+3. `drawdown_worst_mean_1pct_strategy_eq`
+4. `drawdown_worst_mean_1pct_ema_strategy_eq`
+5. `peak_recovery_days_strategy_eq`
 
 For the shared EMA-smoothed metrics, long and short each use their own configured
 `hsl_ema_span_minutes`. The shared values are reported conservatively as `max(long, short)`
 rather than trying to invent one combined EMA span.
 
-Useful side-specific HSL metrics:
+Useful side-specific strategy-equity metrics:
 
-1. `drawdown_worst_hsl_long`
-2. `drawdown_worst_hsl_short`
-3. `drawdown_worst_ema_hsl_long`
-4. `drawdown_worst_ema_hsl_short`
-5. `drawdown_worst_mean_1pct_hsl_long`
-6. `drawdown_worst_mean_1pct_hsl_short`
-7. `drawdown_worst_mean_1pct_ema_hsl_long`
-8. `drawdown_worst_mean_1pct_ema_hsl_short`
-9. `peak_recovery_hours_hsl_long`
-10. `peak_recovery_hours_hsl_short`
+1. `drawdown_worst_strategy_eq_long`
+2. `drawdown_worst_strategy_eq_short`
+3. `drawdown_worst_ema_strategy_eq_long`
+4. `drawdown_worst_ema_strategy_eq_short`
+5. `drawdown_worst_mean_1pct_strategy_eq_long`
+6. `drawdown_worst_mean_1pct_strategy_eq_short`
+7. `drawdown_worst_mean_1pct_ema_strategy_eq_long`
+8. `drawdown_worst_mean_1pct_ema_strategy_eq_short`
+9. `peak_recovery_days_strategy_eq_long`
+10. `peak_recovery_days_strategy_eq_short`
 11. `hard_stop_triggers_long`
 12. `hard_stop_triggers_short`
 13. `hard_stop_restarts_long`
@@ -321,12 +321,12 @@ Optimizer runs instead disable terminal no-restart by default through:
 1. `optimize.fixed_runtime_overrides["bot.long.hsl_no_restart_drawdown_threshold"] = 1.0`
 2. `optimize.fixed_runtime_overrides["bot.short.hsl_no_restart_drawdown_threshold"] = 1.0`
 
-The optimizer should constrain risk through `*_hsl` metrics rather than by terminating candidates early with terminal no-restart.
+The optimizer should constrain risk through canonical `*_strategy_eq` metrics rather than by terminating candidates early with terminal no-restart.
 
 ## Notes
 
 1. Runtime HSL behavior is side-specific by `pside`.
-2. Global `*_hsl` metrics are retained because they remain useful for optimizer scoring and whole-account risk inspection.
+2. Global `*_strategy_eq` metrics are the canonical optimizer and whole-account risk-inspection metrics; deprecated `*_hsl` metric names remain accepted as aliases for older configs/results.
 3. HSL is intended as a supervisory backstop, not as a replacement for sane wallet-exposure settings.
 
 ## Stateless Restart Behavior

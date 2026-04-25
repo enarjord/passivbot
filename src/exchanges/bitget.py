@@ -90,6 +90,15 @@ class BitgetBot(CCXTBot):
         super().__init__(config)
         self.custom_id_max_length = 64
 
+    def create_ccxt_sessions(self):
+        """Bitget: set Passivbot channel code for broker rebate attribution."""
+        super().create_ccxt_sessions()
+        if not isinstance(self.broker_code, str) or not self.broker_code:
+            raise ValueError("Bitget broker code must be a non-empty string")
+        for client in [self.cca, self.ccp]:
+            if client is not None:
+                client.options["broker"] = self.broker_code
+
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
     def _get_position_side_for_order(self, order: dict) -> str:

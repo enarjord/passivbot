@@ -172,6 +172,8 @@ def test_dump_config_clean_preserves_backtest_aggregate_overrides(tmp_path):
 
     assert dumped["backtest"]["aggregate"]["adg_pnl"] == "max"
     assert dumped["backtest"]["aggregate"]["default"] == "mean"
+    assert "drawdown_worst_strategy_eq" not in dumped["backtest"]["aggregate"]
+    assert "position_held_days_max" not in dumped["backtest"]["aggregate"]
 
 
 def test_clean_config_preserves_backtest_aggregate_overrides():
@@ -183,3 +185,13 @@ def test_clean_config_preserves_backtest_aggregate_overrides():
 
     assert cleaned["backtest"]["aggregate"]["adg_pnl"] == "max"
     assert cleaned["backtest"]["aggregate"]["default"] == "mean"
+    assert "drawdown_worst_strategy_eq" not in cleaned["backtest"]["aggregate"]
+    assert "position_held_days_max" not in cleaned["backtest"]["aggregate"]
+
+
+def test_clean_config_preserves_sparse_backtest_aggregate():
+    config = {"backtest": {"aggregate": {"default": "mean"}}}
+
+    cleaned = clean_config(config)
+
+    assert cleaned["backtest"]["aggregate"] == {"default": "mean"}

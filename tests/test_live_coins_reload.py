@@ -197,7 +197,7 @@ def test_load_config_preserves_external_coin_sources(tmp_path: Path):
     ignored_file = tmp_path / "ignored.hjson"
     ignored_file.write_text('["DOGE"]')
 
-    template_path = Path("configs/examples/default_trailing_grid_long_npos10.json")
+    template_path = Path("configs/examples/default_trailing_grid_long_npos7.json")
     data = hjson.loads(template_path.read_text())
     data["live"]["approved_coins"] = str(approved_file)
     data["live"]["ignored_coins"] = str(ignored_file)
@@ -213,7 +213,7 @@ def test_load_config_preserves_external_coin_sources(tmp_path: Path):
 
 
 def test_load_config_preserves_partial_per_side_coin_sources(tmp_path: Path):
-    template_path = Path("configs/examples/default_trailing_grid_long_npos10.json")
+    template_path = Path("configs/examples/default_trailing_grid_long_npos7.json")
     data = hjson.loads(template_path.read_text())
     data["live"]["approved_coins"] = {"long": ["BTC"]}
     data["live"]["ignored_coins"] = {"long": [], "short": []}

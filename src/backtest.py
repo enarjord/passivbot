@@ -99,7 +99,7 @@ from pure_funcs import (
 )
 import pprint
 from copy import deepcopy
-from hlcv_preparation import prepare_hlcvs, prepare_hlcvs_combined
+from hlcv_preparation import prepare_hlcvs, prepare_hlcvs_combined, try_prepare_hlcvs_v2_local
 from ohlcv_utils import aggregate_hlcvs, align_and_aggregate_hlcvs
 from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from pathlib import Path
@@ -372,6 +372,14 @@ def _build_coin_metadata_entries(
     return entries
 
 
+def _as_c_contiguous_native_array(arr, dtype):
+    dtype = np.dtype(dtype)
+    out = np.asarray(arr)
+    if out.dtype == dtype and out.flags.c_contiguous:
+        return out
+    return np.ascontiguousarray(out, dtype=dtype)
+
+
 def _build_hlcvs_bundle(
     hlcvs,
     btc_usd_prices,
@@ -427,12 +435,12 @@ def _build_hlcvs_bundle(
         hlcvs_view = hlcvs[:, subset_positions, :]
         hlcvs_arr = np.ascontiguousarray(hlcvs_view, dtype=np.float64)
     else:
-        hlcvs_arr = np.ascontiguousarray(hlcvs, dtype=np.float64)
-    btc_arr = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+        hlcvs_arr = _as_c_contiguous_native_array(hlcvs, np.float64)
+    btc_arr = _as_c_contiguous_native_array(btc_usd_prices, np.float64)
     if timestamps is None:
         timestamps_arr = np.arange(hlcvs_arr.shape[0], dtype=np.int64)
     else:
-        timestamps_arr = np.ascontiguousarray(timestamps, dtype=np.int64)
+        timestamps_arr = _as_c_contiguous_native_array(timestamps, np.int64)
     coin_meta_entries = _build_coin_metadata_entries(
         coins_order,
         exchange,
@@ -779,8 +787,8 @@ def subset_backtest_payload(
 
     hlcvs_np = np.asarray(payload.bundle.hlcvs)
     subset_hlcvs = np.ascontiguousarray(hlcvs_np[:, selected_positions, :], dtype=np.float64)
-    btc_np = np.ascontiguousarray(np.asarray(payload.bundle.btc_usd), dtype=np.float64)
-    ts_np = np.ascontiguousarray(np.asarray(payload.bundle.timestamps), dtype=np.int64)
+    btc_np = _as_c_contiguous_native_array(payload.bundle.btc_usd, np.float64)
+    ts_np = _as_c_contiguous_native_array(payload.bundle.timestamps, np.int64)
 
     new_meta = deepcopy(bundle_meta)
     new_meta["coins"] = []
@@ -931,11 +939,20 @@ def process_forager_fills(
         index=equities_index,
         name="btc_total_equity",
     )
+    if equities_array.shape[1] > 3:
+        strategy_eq_series = pd.Series(
+            equities_array[:, 3],
+            index=equities_index,
+            name="strategy_equity",
+        )
+    else:
+        strategy_eq_series = pd.Series(dtype=float, name="strategy_equity", index=equities_index)
     bal_eq = pd.concat(
         [
             usd_cash_series,
             usd_total_balance_series,
             edf,
+            strategy_eq_series,
             btc_cash_series,
             btc_total_balance_series,
             ebdf,
@@ -949,6 +966,7 @@ def process_forager_fills(
                 "usd_cash_wallet",
                 "usd_total_balance",
                 "usd_total_equity",
+                "strategy_equity",
                 "btc_cash_wallet",
                 "btc_total_balance",
                 "btc_total_equity",
@@ -963,6 +981,7 @@ def process_forager_fills(
                     "usd_cash_wallet",
                     "usd_total_balance",
                     "usd_total_equity",
+                    "strategy_equity",
                     "btc_cash_wallet",
                     "btc_total_balance",
                     "btc_total_equity",
@@ -1336,6 +1355,52 @@ def ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map=None):
         meta["trade_start_index"] = trade_start_idx
 
 
+def warn_hlcv_valid_range_coverage(config, coins, mss, timestamps):
+    if timestamps is None or len(timestamps) == 0:
+        return
+    requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
+    requested_end_ts = int(
+        date_to_ts(format_end_date(require_config_value(config, "backtest.end_date")))
+    )
+    if requested_end_ts < requested_start_ts:
+        return
+    last_ts_index = len(timestamps) - 1
+    for coin in coins:
+        meta = mss.get(coin, {})
+        first_idx = int(meta.get("first_valid_index", len(timestamps)))
+        last_idx = int(meta.get("last_valid_index", -1))
+        if first_idx > last_idx or first_idx > last_ts_index or last_idx < 0:
+            logging.warning(
+                "[hlcvs] %s has no valid local data for requested range %s -> %s",
+                coin,
+                ts_to_date(requested_start_ts),
+                ts_to_date(requested_end_ts),
+            )
+            continue
+        first_idx = max(0, min(first_idx, last_ts_index))
+        last_idx = max(0, min(last_idx, last_ts_index))
+        valid_start_ts = int(timestamps[first_idx])
+        valid_end_ts = int(timestamps[last_idx])
+        if valid_end_ts < requested_start_ts or valid_start_ts > requested_end_ts:
+            logging.warning(
+                "[hlcvs] %s valid data range %s -> %s is entirely outside requested range %s -> %s",
+                coin,
+                ts_to_date(valid_start_ts),
+                ts_to_date(valid_end_ts),
+                ts_to_date(requested_start_ts),
+                ts_to_date(requested_end_ts),
+            )
+        elif valid_end_ts < requested_end_ts:
+            missing_minutes = int((requested_end_ts - valid_end_ts) // 60_000)
+            logging.warning(
+                "[hlcvs] %s valid data ends before requested end: valid_end=%s requested_end=%s missing_minutes=%d",
+                coin,
+                ts_to_date(valid_end_ts),
+                ts_to_date(requested_end_ts),
+                missing_minutes,
+            )
+
+
 async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = False):
     base_dir = require_config_value(config, "backtest.base_dir")
     results_path = oj(base_dir, exchange, "")
@@ -1350,10 +1415,21 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = result
             logging.info(f"Successfully loaded hlcvs data from cache")
             ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
+            warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
             # Pass through cached timestamps if they were stored; fall back to None otherwise
             return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
     except Exception as e:
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
+    local_v2 = None
+    if exchange != "combined":
+        try:
+            local_v2 = await try_prepare_hlcvs_v2_local(
+                config, exchange, force_refetch_gaps=force_refetch_gaps
+            )
+        except Exception as e:
+            logging.info(f"Unable to prepare hlcvs from local v2 store: {e}. Falling back.")
+    if local_v2 is not None:
+        mss, timestamps, hlcvs, btc_usd_prices = local_v2
     if exchange == "combined":
         forced_sources = config.get("backtest", {}).get("coin_sources")
         market_settings_sources = config.get("backtest", {}).get("market_settings_sources")
@@ -1363,12 +1439,16 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             market_settings_sources=market_settings_sources,
             force_refetch_gaps=force_refetch_gaps,
         )
-    else:
+    elif local_v2 is None:
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(
-            config, exchange, force_refetch_gaps=force_refetch_gaps
+            config,
+            exchange,
+            force_refetch_gaps=force_refetch_gaps,
+            skip_v2_local=True,
         )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
+    warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
         cache_dir = save_coins_hlcvs_to_cache(
@@ -1874,7 +1954,7 @@ async def main():
         usage="%(prog)s [config_path] [options]",
         epilog=(
             "Examples:\n"
-            "  passivbot backtest configs/examples/default_trailing_grid_long_npos10.json -s XMR -sd 2025 --suite n\n"
+            "  passivbot backtest configs/examples/default_trailing_grid_long_npos7.json -s XMR -sd 2025 --suite n\n"
             "  passivbot backtest -e bybit -s BTC,ETH -sd 2024-01 -ed 2024-06\n"
             "\n"
             "Use --help-all to show every config override flag."

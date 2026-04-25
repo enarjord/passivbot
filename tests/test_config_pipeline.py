@@ -71,8 +71,6 @@ def test_prepare_config_canonical_omits_runtime_aliases():
 @pytest.mark.parametrize(
     "bound_key",
     [
-        "long_entry_grid_inflation_enabled",
-        "short_entry_grid_inflation_enabled",
         "long_hsl_enabled",
         "short_hsl_enabled",
         "long_hsl_orange_tier_mode",
@@ -483,16 +481,18 @@ def test_prepare_config_removes_empty_means_all_approved_from_canonical_shape():
     assert prepared["_raw_effective"]["live"]["empty_means_all_approved"] is True
 
 
-def test_prepare_config_warns_when_entry_grid_inflation_enabled(caplog):
+def test_prepare_config_warns_and_removes_entry_grid_inflation_enabled(caplog):
     source = get_template_config()
+    source["bot"]["long"]["entry_grid_inflation_enabled"] = True
+    source["bot"]["short"]["entry_grid_inflation_enabled"] = True
 
     with caplog.at_level(logging.WARNING):
         prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["bot"]["long"]["entry_grid_inflation_enabled"] is True
-    assert prepared["bot"]["short"]["entry_grid_inflation_enabled"] is True
+    assert "entry_grid_inflation_enabled" not in prepared["bot"]["long"]
+    assert "entry_grid_inflation_enabled" not in prepared["bot"]["short"]
     assert any(
-        "entry_grid_inflation_enabled" in rec.message and "scheduled for deprecation" in rec.message
+        "entry_grid_inflation_enabled" in rec.message and "has no effect; removing it" in rec.message
         for rec in caplog.records
     )
 
@@ -536,7 +536,7 @@ def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
     assert prepared["bot"]["short"]["entry_trailing_double_down_factor"] == pytest.approx(1.0)
 
 
-def test_prepare_config_skips_entry_grid_inflation_warning_when_disabled(caplog):
+def test_prepare_config_silently_removes_disabled_entry_grid_inflation_flag(caplog):
     source = get_template_config()
     source["bot"]["long"]["entry_grid_inflation_enabled"] = False
     source["bot"]["short"]["entry_grid_inflation_enabled"] = False
@@ -544,12 +544,12 @@ def test_prepare_config_skips_entry_grid_inflation_warning_when_disabled(caplog)
     with caplog.at_level(logging.WARNING):
         prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["bot"]["long"]["entry_grid_inflation_enabled"] is False
-    assert prepared["bot"]["short"]["entry_grid_inflation_enabled"] is False
+    assert "entry_grid_inflation_enabled" not in prepared["bot"]["long"]
+    assert "entry_grid_inflation_enabled" not in prepared["bot"]["short"]
     assert not any("entry_grid_inflation_enabled" in rec.message for rec in caplog.records)
 
 
-def test_prepare_config_normalizes_entry_grid_inflation_flag_in_coin_overrides():
+def test_prepare_config_removes_entry_grid_inflation_flag_in_coin_overrides():
     source = get_template_config()
     source["coin_overrides"] = {
         "BTC": {"bot": {"long": {"entry_grid_inflation_enabled": "false"}}}
@@ -557,13 +557,11 @@ def test_prepare_config_normalizes_entry_grid_inflation_flag_in_coin_overrides()
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["entry_grid_inflation_enabled"] is False
+    assert "entry_grid_inflation_enabled" not in prepared["coin_overrides"]["BTC"]["bot"]["long"]
 
 
-def test_prepare_config_warns_when_coin_override_enables_entry_grid_inflation(caplog):
+def test_prepare_config_warns_and_removes_coin_override_entry_grid_inflation(caplog):
     source = get_template_config()
-    source["bot"]["long"]["entry_grid_inflation_enabled"] = False
-    source["bot"]["short"]["entry_grid_inflation_enabled"] = False
     source["coin_overrides"] = {
         "BTC": {"bot": {"long": {"entry_grid_inflation_enabled": True}}}
     }
@@ -573,7 +571,7 @@ def test_prepare_config_warns_when_coin_override_enables_entry_grid_inflation(ca
 
     assert any(
         "coin_overrides.BTC.bot.long.entry_grid_inflation_enabled" in rec.message
-        and "scheduled for deprecation" in rec.message
+        and "has no effect; removing it" in rec.message
         for rec in caplog.records
     )
 

@@ -45,12 +45,8 @@ next_grid_qty(last_fill_qty) =
 * `entry_grid_double_down_factor > 0` multiplies each successive re-entry quantity; values
   `< 1` still increase size if the preceding fill was larger than the remaining gap to the
   exposure cap.
-* If `entry_grid_inflation_enabled = true`, grid mode may pull part of a tiny terminal re-entry
-  forward into the current order near the effective exposure cap, emitting
-  `EntryGridInflated{Long,Short}` instead of leaving a dust-like final grid step.
-* If `entry_grid_inflation_enabled = false`, grid re-entries are only normal or cropped. This is
-  the canonical behavior going forward. The current default remains `true` for short-term
-  backwards compatibility, but it is scheduled for deprecation.
+* Grid re-entries are only normal or cropped. Near the effective exposure cap, the bot keeps the
+  current order literal instead of pulling future size forward into an inflated terminal step.
 
 ## Trailing Entries
 
@@ -213,7 +209,7 @@ Positions already earmarked for `CloseAutoReduceWel*` during the same scheduling
 | Parameter                                      | Primary effect                                             | Key equations |
 | ---------------------------------------------- | -----------------------------------------------------------| ------------- |
 | `ema_span_*`                                   | Defines EMA bands used by initial pricing & unstuck levels | `EMA_low`, `EMA_high` |
-| `entry_grid_spacing_*`, `entry_grid_double_down_factor`, `entry_grid_inflation_enabled` | Controls grid spacing, growth of re-entry quantities, and whether near-cap grid orders may be inflated | `next_grid_price`, `next_grid_qty` |
+| `entry_grid_spacing_*`, `entry_grid_double_down_factor` | Controls grid spacing and growth of re-entry quantities | `next_grid_price`, `next_grid_qty` |
 | `entry_trailing_*`                             | Adjust trailing entry triggers via exposure & volatility  | `threshold`, `retracement` |
 | `close_grid_markup_*`, `close_grid_qty_pct`    | Shapes TP ladder                                          | `tp_prices`, `tp_qty` |
 | `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
