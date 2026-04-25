@@ -19,6 +19,15 @@ class BybitBot(CCXTBot):
     def __init__(self, config: dict):
         super().__init__(config)
 
+    def create_ccxt_sessions(self):
+        """Bybit: set Passivbot broker id so CCXT signs POST requests with Referer."""
+        super().create_ccxt_sessions()
+        if not isinstance(self.broker_code, str) or not self.broker_code:
+            raise ValueError("Bybit broker code must be a non-empty string")
+        for client in [self.cca, self.ccp]:
+            if client is not None:
+                client.options["brokerId"] = self.broker_code
+
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
     def _get_position_side_for_order(self, order: dict) -> str:

@@ -4,9 +4,31 @@ from typing import Iterable, Optional
 from .log_output import log_config_message
 
 
-def add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=None):
+def add_missing_keys_recursively(
+    src,
+    dst,
+    parent=None,
+    verbose=True,
+    tracker=None,
+    preserve: Optional[Iterable[Iterable[str]]] = None,
+    _preserve_set: Optional[set[tuple[str, ...]]] = None,
+):
     if parent is None:
         parent = []
+    if _preserve_set is None:
+        _preserve_set = set() if preserve is None else {tuple(p) for p in preserve}
+
+    def _path_is_preserved(path: Iterable[str]) -> bool:
+        if not _preserve_set:
+            return False
+        path_tuple = tuple(path)
+        for preserved in _preserve_set:
+            if path_tuple[: len(preserved)] == preserved:
+                return True
+        return False
+
+    if _path_is_preserved(parent):
+        return
     for key in src:
         if key not in dst:
             log_config_message(verbose, logging.INFO, "Added missing %s to config.", ".".join(parent + [key]))
@@ -14,7 +36,14 @@ def add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=No
             if tracker is not None:
                 tracker.add(parent + [key], src[key])
         elif isinstance(src[key], dict) and isinstance(dst.get(key), dict):
-            add_missing_keys_recursively(src[key], dst[key], parent + [key], verbose, tracker=tracker)
+            add_missing_keys_recursively(
+                src[key],
+                dst[key],
+                parent + [key],
+                verbose,
+                tracker=tracker,
+                _preserve_set=_preserve_set,
+            )
         elif isinstance(src[key], dict):
             log_config_message(
                 verbose,

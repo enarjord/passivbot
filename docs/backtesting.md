@@ -10,6 +10,8 @@ python3 -m pip install -e ".[full]"
 
 > **GateIO cache note:** If you have existing GateIO OHLCV data in `caches/ohlcv/gateio`, delete the folder after upgrading to the new data strategy so fresh data (normalized to base volume) is fetched.
 
+> **GateIO history note:** GateIO's public 1m OHLCV endpoint only serves a recent window of roughly 10,000 candles. Older GateIO backtests need `backtest.ohlcv_source_dir` data or candles sourced from another exchange; Passivbot marks older GateIO 1m spans unavailable instead of repeatedly retrying rejected requests.
+
 ### External OHLCV source dir
 
 You can point `backtest.ohlcv_source_dir` to a pre-populated OHLCV tree. The loader looks under:
@@ -33,12 +35,29 @@ Or
 passivbot backtest path/to/config.json
 ```
 If no config is specified, backtesting starts from the in-code schema defaults in `src/config/schema.py`.
-The example config `configs/examples/default_trailing_grid_long_npos10.json` mirrors those defaults exactly.
+The example config `configs/examples/default_trailing_grid_long_npos7.json` mirrors those defaults exactly.
 See [Config Workflow](config_workflow.md) for the recommended way to copy and customize configs.
 
 ## Backtest Results
 
 Standalone runs write metrics and plots to `backtests/{exchange}/timestamp/`. Suite runs collect everything under `backtests/suite_runs/<timestamp>/<scenario_label>/` and add a top-level `suite_summary.json`.
+
+Each run also writes `dataset.json`, which points to the exact HLCV cache files used for that
+run. In notebooks or ad-hoc Python analysis you can load the full artifact bundle like this:
+
+```python
+from backtest_artifacts import load_backtest_artifact_workspace
+
+workspace = load_backtest_artifact_workspace("backtests/combined/2026-04-21T19_35_10")
+globals().update(workspace)
+
+btc_candles = candles_for_coin("BTC")
+fig = plot_fills_for_coin("BTC", start_date="2026-04-01T00:00:00")
+```
+
+The workspace includes `config`, `analysis`, `fills`, `balance_and_equity`, `hlcvs`,
+`timestamps`, `btc_usd_prices`, `coins`, `market_settings`, `candles_for_coin`, and
+`plot_fills_for_coin`.
 
 ## Backtest CLI args
 
@@ -62,7 +81,7 @@ run. It uses the same `backtest.start_date`, `backtest.end_date`, `backtest.exch
 approved-coin selection flow as the backtester, but stops after preparing cache data.
 
 ```shell
-passivbot download configs/examples/default_trailing_grid_long_npos10.json
+passivbot download configs/examples/default_trailing_grid_long_npos7.json
 passivbot download --start-date 2025-01-01 --end-date 2025-02-01 --exchanges binance,bybit
 ```
 
@@ -81,7 +100,7 @@ Suite mode evaluates multiple scenario slices in one invocation. Configuration u
 ```
 
 Suite mode is off by default in the hardcoded schema and in
-`configs/examples/default_trailing_grid_long_npos10.json`. Enable it only when you deliberately
+`configs/examples/default_trailing_grid_long_npos7.json`. Enable it only when you deliberately
 want multi-scenario evaluation.
 
 Each scenario may override:

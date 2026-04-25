@@ -1,4 +1,5 @@
 from limit_utils import expand_limit_checks, compute_limit_violation
+from config.metrics import resolve_metric_value
 
 
 def _single_violation(entry, value, weights=None, penalty_weight=1000.0):
@@ -98,7 +99,17 @@ def test_omitted_stat_uses_metric_specific_aggregate_override():
         aggregate_cfg={"default": "mean", "drawdown_worst_hsl": "max"},
     )
     assert checks[0]["stat"] == "max"
-    assert checks[0]["metric_key"] == "drawdown_worst_hsl_max"
+    assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_max"
+
+
+def test_metric_value_resolution_accepts_deprecated_stat_suffix_aliases():
+    metrics = {
+        "adg_strategy_pnl_rebased_mean": 0.001,
+        "drawdown_worst_hsl_max": 0.42,
+    }
+
+    assert resolve_metric_value(metrics, "adg_strategy_eq_mean") == 0.001
+    assert resolve_metric_value(metrics, "drawdown_worst_strategy_eq_max") == 0.42
 
 
 def test_explicit_stat_overrides_aggregate_config():

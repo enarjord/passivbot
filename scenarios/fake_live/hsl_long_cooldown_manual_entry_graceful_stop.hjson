@@ -104,7 +104,7 @@
     summary_paths: {
       step_count: 5
       last.step_index: 6
-      last.open_orders: 4
+      last.open_orders: 5
     }
     log_contains: [
       "detected non-flat position during RED cooldown | policy=graceful_stop"

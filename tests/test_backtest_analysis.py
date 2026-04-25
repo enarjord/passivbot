@@ -19,6 +19,10 @@ def _make_analysis_entry(value):
         "position_held_hours_max",
         "position_held_hours_median",
         "position_unchanged_hours_max",
+        "position_held_days_mean",
+        "position_held_days_max",
+        "position_held_days_median",
+        "position_unchanged_days_max",
         "win_rate",
         "win_rate_w",
         "trade_loss_max",
@@ -37,6 +41,7 @@ def _make_analysis_entry(value):
         "volume_pct_per_day_avg",
         "volume_pct_per_day_avg_w",
         "peak_recovery_hours_pnl",
+        "peak_recovery_days_pnl",
         "total_wallet_exposure_max",
         "total_wallet_exposure_mean",
         "total_wallet_exposure_median",
@@ -44,6 +49,10 @@ def _make_analysis_entry(value):
         "high_exposure_hours_max_long",
         "high_exposure_hours_mean_short",
         "high_exposure_hours_max_short",
+        "high_exposure_days_mean_long",
+        "high_exposure_days_max_long",
+        "high_exposure_days_mean_short",
+        "high_exposure_days_max_short",
         "entry_initial_balance_pct_long",
         "entry_initial_balance_pct_short",
     ]
@@ -63,6 +72,7 @@ def _make_analysis_entry(value):
             "equity_balance_diff_pos_max": 0.0,
             "equity_balance_diff_pos_mean": 0.0,
             "peak_recovery_hours_equity": 0.0,
+            "peak_recovery_days_equity": 0.0,
             "equity_choppiness": 0.0,
             "equity_jerkiness": 0.0,
             "exponential_fit_error": 0.0,
@@ -119,6 +129,34 @@ def test_expand_analysis_includes_high_exposure_hours():
         assert f"high_exposure_hours_max_{side}" in result
         assert result[f"high_exposure_hours_mean_{side}"] == 0.5
         assert result[f"high_exposure_hours_max_{side}"] == 0.5
+
+
+def test_expand_analysis_includes_day_duration_metrics():
+    analysis_usd = _make_analysis_entry(2.0)
+    analysis_btc = _make_analysis_entry(4.0)
+    analysis_usd["peak_recovery_days_equity"] = 1.25
+    analysis_btc["peak_recovery_days_equity"] = 2.5
+    config = {
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 1.0},
+        }
+    }
+    result = expand_analysis(
+        analysis_usd,
+        analysis_btc,
+        fills=np.empty((0, 0)),
+        equities_array=np.empty((0, 3)),
+        config=config,
+    )
+
+    assert result["position_held_days_max"] == 2.0
+    assert result["position_unchanged_days_max"] == 2.0
+    assert result["peak_recovery_days_pnl"] == 2.0
+    assert result["high_exposure_days_max_long"] == 2.0
+    assert result["high_exposure_days_max_short"] == 2.0
+    assert result["peak_recovery_days_equity_usd"] == 1.25
+    assert result["peak_recovery_days_equity_btc"] == 2.5
 
 
 def test_expand_analysis_includes_trade_level_metrics():
@@ -298,6 +336,29 @@ def test_process_forager_fills_no_fills_keeps_datetime_index_for_resample():
     assert fdf.empty
     assert isinstance(bal_eq.index, pd.DatetimeIndex)
     assert not bal_eq.empty
+
+
+def test_process_forager_fills_includes_strategy_equity_column():
+    t0 = 1_740_000_000_000
+    equities_array = np.array(
+        [
+            [t0, 1000.0, 0.02, 1000.0],
+            [t0 + 60_000, 990.0, 0.0198, 995.0],
+        ],
+        dtype=np.float64,
+    )
+
+    _fdf, _analysis_appendix, bal_eq = process_forager_fills(
+        fills=[],
+        coins=[],
+        hlcvs=np.empty((0, 0), dtype=np.float64),
+        equities_array=equities_array,
+        balance_sample_divider=1,
+    )
+
+    assert "strategy_equity" in bal_eq.columns
+    assert np.isclose(bal_eq["strategy_equity"].iloc[0], 1000.0)
+    assert np.isclose(bal_eq["strategy_equity"].iloc[-1], 995.0)
 
 
 def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, monkeypatch):

@@ -46,7 +46,7 @@ def test_load_input_config_without_path_uses_schema_defaults():
 
 
 def test_default_example_config_matches_schema_defaults():
-    with open("configs/examples/default_trailing_grid_long_npos10.json", encoding="utf-8") as fh:
+    with open("configs/examples/default_trailing_grid_long_npos7.json", encoding="utf-8") as fh:
         example = json.load(fh)
 
     assert example == get_template_config()
@@ -315,7 +315,7 @@ def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatt
     formatted = format_config(sparse, verbose=False)
     assert formatted["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
 
-    loaded = load_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    loaded = load_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     assert loaded["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
 
 
@@ -420,7 +420,7 @@ def test_load_config_disabled_sparse_optimize_limits_are_normalized(caplog, tmp_
 
     loaded = load_config(str(path), verbose=False)
 
-    assert loaded["optimize"]["limits"][1]["metric"] == "peak_recovery_hours_hsl"
+    assert loaded["optimize"]["limits"][1]["metric"] == "peak_recovery_hours_strategy_eq"
     assert loaded["optimize"]["limits"][1]["enabled"] is False
     assert loaded["optimize"]["limits"][2]["enabled"] is False
     assert not any("optimize.limits malformed or unsupported" in rec.message for rec in caplog.records)
@@ -460,12 +460,12 @@ def test_parse_limit_cli_entry_supports_extended_scalar_operators():
     equal_to = config_utils.parse_limit_cli_entry("adg_strategy_pnl_rebased == 0.0")
 
     assert greater_equal == {
-        "metric": "adg_strategy_pnl_rebased",
+        "metric": "adg_strategy_eq",
         "penalize_if": "less_than",
         "value": 0.001,
     }
     assert equal_to == {
-        "metric": "adg_strategy_pnl_rebased",
+        "metric": "adg_strategy_eq",
         "penalize_if": "not_equal",
         "value": 0,
     }
@@ -612,7 +612,7 @@ def test_format_config_emits_coalesced_summary_without_leaf_noise(caplog):
 
 def test_load_example_config_avoids_leaf_add_remove_log_churn(caplog):
     with caplog.at_level(logging.INFO):
-        load_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=True)
+        load_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=True)
 
     messages = [rec.message for rec in caplog.records]
     assert not any("Removed unused key" in msg for msg in messages)
@@ -934,8 +934,6 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     assert "--hedge-mode Y/N, -hm Y/N" in help_text
     assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
     assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
-    assert "--bot.long.entry_grid_inflation_enabled Y/N" in help_text
-    assert "--bot.short.entry_grid_inflation_enabled Y/N" in help_text
     assert "--bot.long.hsl_enabled Y/N" in help_text
     assert "--bot.short.hsl_enabled Y/N" in help_text
     assert "--bot.long.hsl_orange_tier_mode VALUE" in help_text
@@ -1045,8 +1043,6 @@ def test_optimize_fixed_bot_runtime_overrides_parse():
 
     parsed = parser.parse_args(
         [
-            "--bot.long.entry_grid_inflation_enabled",
-            "n",
             "--bot.short.hsl_enabled",
             "y",
             "--bot.long.hsl_orange_tier_mode",
@@ -1056,7 +1052,6 @@ def test_optimize_fixed_bot_runtime_overrides_parse():
         ]
     )
 
-    assert getattr(parsed, "bot.long.entry_grid_inflation_enabled") is False
     assert getattr(parsed, "bot.short.hsl_enabled") is True
     assert getattr(parsed, "bot.long.hsl_orange_tier_mode") == "tp_only"
     assert getattr(parsed, "bot.short.hsl_panic_close_order_type") == "market"

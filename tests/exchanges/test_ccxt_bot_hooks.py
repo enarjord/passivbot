@@ -218,6 +218,177 @@ class TestCreateCcxtSessionsWebSocketOptional:
         assert bot.ccp is None
 
 
+class TestBybitCreateCcxtSessions:
+    """Test Bybit broker attribution during CCXT session creation."""
+
+    def test_sets_passivbot_broker_id_on_rest_and_ws_clients(self):
+        from exchanges.bybit import BybitBot
+
+        bot = BybitBot.__new__(BybitBot)
+        bot.user_info = {"exchange": "bybit", "apiKey": "test", "options": {"brokerId": "CCXT"}}
+        bot.exchange = "bybit"
+        bot.exchange_ccxt_id = "bybit"
+        bot.ws_enabled = True
+        bot.endpoint_override = None
+        bot.broker_code = "passivbotbybit"
+        bot._build_ccxt_config = MagicMock(return_value={"apiKey": "test"})
+        bot._build_ccxt_options = MagicMock(return_value={})
+        bot._apply_endpoint_override = MagicMock()
+
+        import ccxt.async_support as ccxt_async
+        import ccxt.pro as ccxt_pro
+
+        rest_ctor = MagicMock()
+        rest_ctor.return_value = MagicMock()
+        rest_ctor.return_value.options = {"brokerId": "CCXT"}
+        ws_ctor = MagicMock()
+        ws_ctor.return_value = MagicMock()
+        ws_ctor.return_value.options = {"brokerId": "CCXT"}
+
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(ccxt_async, "bybit", rest_ctor, raising=False)
+            m.setattr(ccxt_pro, "bybit", ws_ctor, raising=False)
+            bot.create_ccxt_sessions()
+
+        assert bot.cca.options["brokerId"] == "passivbotbybit"
+        assert bot.ccp.options["brokerId"] == "passivbotbybit"
+
+    def test_rejects_missing_broker_code(self):
+        from exchanges.bybit import BybitBot
+
+        bot = BybitBot.__new__(BybitBot)
+        bot.user_info = {"exchange": "bybit", "apiKey": "test"}
+        bot.exchange = "bybit"
+        bot.exchange_ccxt_id = "bybit"
+        bot.ws_enabled = False
+        bot.endpoint_override = None
+        bot.broker_code = ""
+        bot._build_ccxt_config = MagicMock(return_value={"apiKey": "test"})
+        bot._build_ccxt_options = MagicMock(return_value={})
+        bot._apply_endpoint_override = MagicMock()
+
+        import ccxt.async_support as ccxt_async
+
+        rest_ctor = MagicMock()
+        rest_ctor.return_value = MagicMock()
+        rest_ctor.return_value.options = {"brokerId": "CCXT"}
+
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(ccxt_async, "bybit", rest_ctor, raising=False)
+            with pytest.raises(ValueError, match="Bybit broker code"):
+                bot.create_ccxt_sessions()
+
+    def test_ccxt_signed_order_request_contains_passivbot_referer(self):
+        import ccxt
+
+        client = ccxt.bybit({"apiKey": "test_key", "secret": "test_secret"})
+        client.options["brokerId"] = "passivbotbybit"
+
+        signed = client.sign(
+            "v5/order/create",
+            "private",
+            "POST",
+            {
+                "category": "linear",
+                "symbol": "BTCUSDT",
+                "side": "Buy",
+                "orderType": "Limit",
+                "qty": "0.001",
+                "price": "10000",
+            },
+        )
+
+        assert signed["headers"]["Referer"] == "passivbotbybit"
+
+
+class TestBitgetCreateCcxtSessions:
+    """Test Bitget broker attribution during CCXT session creation."""
+
+    def test_sets_passivbot_broker_on_rest_and_ws_clients(self):
+        from exchanges.bitget import BitgetBot
+
+        bot = BitgetBot.__new__(BitgetBot)
+        bot.user_info = {"exchange": "bitget", "apiKey": "test", "options": {"broker": "p4sve"}}
+        bot.exchange = "bitget"
+        bot.exchange_ccxt_id = "bitget"
+        bot.ws_enabled = True
+        bot.endpoint_override = None
+        bot.broker_code = "Passivbot"
+        bot._build_ccxt_config = MagicMock(return_value={"apiKey": "test"})
+        bot._build_ccxt_options = MagicMock(return_value={})
+        bot._apply_endpoint_override = MagicMock()
+
+        import ccxt.async_support as ccxt_async
+        import ccxt.pro as ccxt_pro
+
+        rest_ctor = MagicMock()
+        rest_ctor.return_value = MagicMock()
+        rest_ctor.return_value.options = {"broker": "p4sve"}
+        ws_ctor = MagicMock()
+        ws_ctor.return_value = MagicMock()
+        ws_ctor.return_value.options = {"broker": "p4sve"}
+
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(ccxt_async, "bitget", rest_ctor, raising=False)
+            m.setattr(ccxt_pro, "bitget", ws_ctor, raising=False)
+            bot.create_ccxt_sessions()
+
+        assert bot.cca.options["broker"] == "Passivbot"
+        assert bot.ccp.options["broker"] == "Passivbot"
+
+    def test_rejects_missing_broker_code(self):
+        from exchanges.bitget import BitgetBot
+
+        bot = BitgetBot.__new__(BitgetBot)
+        bot.user_info = {"exchange": "bitget", "apiKey": "test"}
+        bot.exchange = "bitget"
+        bot.exchange_ccxt_id = "bitget"
+        bot.ws_enabled = False
+        bot.endpoint_override = None
+        bot.broker_code = ""
+        bot._build_ccxt_config = MagicMock(return_value={"apiKey": "test"})
+        bot._build_ccxt_options = MagicMock(return_value={})
+        bot._apply_endpoint_override = MagicMock()
+
+        import ccxt.async_support as ccxt_async
+
+        rest_ctor = MagicMock()
+        rest_ctor.return_value = MagicMock()
+        rest_ctor.return_value.options = {"broker": "p4sve"}
+
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(ccxt_async, "bitget", rest_ctor, raising=False)
+            with pytest.raises(ValueError, match="Bitget broker code"):
+                bot.create_ccxt_sessions()
+
+    def test_ccxt_signed_order_request_contains_passivbot_channel_code(self):
+        import ccxt
+
+        client = ccxt.bitget(
+            {"apiKey": "test_key", "secret": "test_secret", "password": "test_passphrase"}
+        )
+        client.options["broker"] = "Passivbot"
+
+        signed = client.sign(
+            "v2/mix/order/place-order",
+            ["private", "mix"],
+            "POST",
+            {
+                "symbol": "BTCUSDT",
+                "productType": "USDT-FUTURES",
+                "marginMode": "crossed",
+                "marginCoin": "USDT",
+                "size": "0.001",
+                "price": "10000",
+                "side": "buy",
+                "orderType": "limit",
+                "force": "gtc",
+            },
+        )
+
+        assert signed["headers"]["X-CHANNEL-API-CODE"] == "Passivbot"
+
+
 class TestValidateWebsocketSupport:
     """Test validate_websocket_support() is non-fatal."""
 

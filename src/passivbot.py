@@ -121,6 +121,7 @@ FOREIGN_PASSIVBOT_LOOKBACK_MS = 24 * 60 * 60 * 1000
 FOREIGN_PASSIVBOT_GRACE_MS = 15_000
 FOREIGN_PASSIVBOT_WINDOW_MS = 60 * 60 * 1000
 FOREIGN_PASSIVBOT_MAX_UNIQUE_PER_WINDOW = 3
+FOREIGN_PASSIVBOT_FINGERPRINT_MATCH_MS = 5 * 60 * 1000
 
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
@@ -575,7 +576,7 @@ class Passivbot:
         self._last_action_summary: dict[tuple[str, str], str] = {}
         self.start_time_ms = utc_ms()
         self.bot_start_exchange_ts = int(self.get_exchange_time())
-        self.orders_emitted_to_exchange: dict[str, int] = {}
+        self.orders_emitted_to_exchange: list[dict] = []
         self.foreign_passivbot_seen: dict[str, int] = {}
         self._foreign_passivbot_stop_requested = False
         self._bot_ready = False
@@ -3301,14 +3302,135 @@ class Passivbot:
                     return str(value)
         return ""
 
-    def _prune_emitted_order_custom_ids(self, now_ts: int) -> None:
-        """Drop emitted custom ids outside the foreign-writer lookback window."""
-        cutoff_ts = int(now_ts) - FOREIGN_PASSIVBOT_LOOKBACK_MS
-        self.orders_emitted_to_exchange = {
-            cid: ts
-            for cid, ts in getattr(self, "orders_emitted_to_exchange", {}).items()
-            if int(ts) >= cutoff_ts
+    def _extract_order_exchange_id(self, order: dict) -> str:
+        """Return the exchange-assigned order id from unified or raw fields."""
+        if not isinstance(order, dict):
+            return ""
+        candidates = ("id", "order_id", "orderId", "orderID", "ordId")
+        for source in (order, order.get("info", {})):
+            if not isinstance(source, dict):
+                continue
+            for key in candidates:
+                value = source.get(key)
+                if value not in (None, ""):
+                    return str(value)
+        return ""
+
+    def _canonical_passivbot_custom_id(self, custom_id: str) -> str:
+        """Normalize broker/exchange wrappers around Passivbot custom ids."""
+        if not custom_id:
+            return ""
+        custom_id = str(custom_id)
+        marker = _TYPE_MARKER_RE.search(custom_id)
+        if marker:
+            return custom_id[marker.start() :]
+        return custom_id
+
+    def _extract_order_reduce_only(self, order: dict) -> Optional[bool]:
+        if not isinstance(order, dict):
+            return None
+        for source in (order, order.get("info", {})):
+            if not isinstance(source, dict):
+                continue
+            for key in ("reduce_only", "reduceOnly"):
+                if key not in source:
+                    continue
+                value = source[key]
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    return value.strip().lower() in {"true", "1", "yes", "y"}
+                return bool(value)
+        return None
+
+    def _extract_order_float(self, order: dict, candidates: tuple[str, ...]) -> Optional[float]:
+        if not isinstance(order, dict):
+            return None
+        for source in (order, order.get("info", {})):
+            if not isinstance(source, dict):
+                continue
+            for key in candidates:
+                value = source.get(key)
+                if value in (None, ""):
+                    continue
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    def _order_identity_fingerprint(self, order: dict, pb_type: str) -> Optional[dict]:
+        if not isinstance(order, dict) or not pb_type or pb_type == "unknown":
+            return None
+        reduce_only = Passivbot._extract_order_reduce_only(self, order)
+        qty = Passivbot._extract_order_float(self, order, ("qty", "amount", "size"))
+        price = Passivbot._extract_order_float(self, order, ("price",))
+        symbol = order.get("symbol")
+        side = order.get("side")
+        position_side = order.get("position_side") or order.get("positionSide")
+        if any(x in (None, "") for x in (symbol, side, position_side, reduce_only, qty, price)):
+            return None
+        return {
+            "symbol": str(symbol),
+            "side": str(side).lower(),
+            "position_side": str(position_side).lower(),
+            "reduce_only": bool(reduce_only),
+            "pb_type": str(pb_type),
+            "qty": round(abs(float(qty)), 12),
+            "price": round(float(price), 12),
         }
+
+    def _build_emitted_order_record(self, order: dict, emitted_ts: int) -> Optional[dict]:
+        custom_id = Passivbot._extract_order_custom_id(self, order)
+        pb_type = custom_id_to_snake(custom_id) if custom_id else self._resolve_pb_order_type(order)
+        if not pb_type or pb_type == "unknown":
+            pb_type = self._resolve_pb_order_type(order)
+        record = {
+            "timestamp": int(emitted_ts),
+            "exchange_id": Passivbot._extract_order_exchange_id(self, order),
+            "custom_id": custom_id,
+            "canonical_custom_id": Passivbot._canonical_passivbot_custom_id(self, custom_id),
+            "pb_type": pb_type if pb_type and pb_type != "unknown" else "",
+        }
+        record["fingerprint"] = Passivbot._order_identity_fingerprint(self, order, record["pb_type"])
+        if not (record["exchange_id"] or record["canonical_custom_id"] or record["fingerprint"]):
+            return None
+        return record
+
+    def _emitted_order_records(self) -> list[dict]:
+        """Return recent emitted order records, upgrading legacy custom-id maps if needed."""
+        records = getattr(self, "orders_emitted_to_exchange", [])
+        if isinstance(records, dict):
+            upgraded = []
+            for custom_id, timestamp in records.items():
+                custom_id = str(custom_id)
+                upgraded.append(
+                    {
+                        "timestamp": int(timestamp),
+                        "exchange_id": "",
+                        "custom_id": custom_id,
+                        "canonical_custom_id": Passivbot._canonical_passivbot_custom_id(
+                            self, custom_id
+                        ),
+                        "pb_type": custom_id_to_snake(custom_id),
+                        "fingerprint": None,
+                    }
+                )
+            self.orders_emitted_to_exchange = upgraded
+            return upgraded
+        if not isinstance(records, list):
+            self.orders_emitted_to_exchange = []
+            return []
+        return records
+
+    def _prune_emitted_order_custom_ids(self, now_ts: int) -> None:
+        """Drop emitted order records outside the foreign-writer lookback window."""
+        cutoff_ts = int(now_ts) - FOREIGN_PASSIVBOT_LOOKBACK_MS
+        self.orders_emitted_to_exchange = [
+            record
+            for record in Passivbot._emitted_order_records(self)
+            if int(record.get("timestamp", 0)) >= cutoff_ts
+        ]
 
     def _prune_foreign_passivbot_seen(self, now_ts: int) -> None:
         """Drop old foreign Passivbot detections outside the rolling stop window."""
@@ -3321,16 +3443,66 @@ class Passivbot:
 
     def _record_emitted_order_custom_id(self, order: dict, emitted_ts: Optional[int] = None) -> None:
         """Remember a successfully acknowledged create so later refreshes can adopt it."""
-        custom_id = Passivbot._extract_order_custom_id(self, order)
-        if not custom_id:
-            return
         if emitted_ts is None:
             emitted_ts = (
                 int(self.get_exchange_time()) if hasattr(self, "get_exchange_time") else utc_ms()
             )
+        record = Passivbot._build_emitted_order_record(self, order, emitted_ts)
+        if record is None:
+            return
         if not hasattr(self, "orders_emitted_to_exchange"):
-            self.orders_emitted_to_exchange = {}
-        self.orders_emitted_to_exchange[custom_id] = int(emitted_ts)
+            self.orders_emitted_to_exchange = []
+        Passivbot._emitted_order_records(self).append(record)
+
+    def _foreign_passivbot_detection_key(self, order: dict, custom_id: str, pb_type: str) -> str:
+        exchange_id = Passivbot._extract_order_exchange_id(self, order)
+        if exchange_id:
+            return f"id:{exchange_id}"
+        canonical_custom_id = Passivbot._canonical_passivbot_custom_id(self, custom_id)
+        if canonical_custom_id:
+            return f"cid:{canonical_custom_id}"
+        fingerprint = Passivbot._order_identity_fingerprint(self, order, pb_type)
+        if fingerprint:
+            return "fp:" + json.dumps(fingerprint, sort_keys=True, separators=(",", ":"))
+        return f"unknown:{custom_id}"
+
+    def _order_matches_recent_emitted_record(
+        self,
+        order: dict,
+        custom_id: str,
+        pb_type: str,
+        order_ts: int,
+        consumed_record_indices: set[int],
+    ) -> bool:
+        exchange_id = Passivbot._extract_order_exchange_id(self, order)
+        canonical_custom_id = Passivbot._canonical_passivbot_custom_id(self, custom_id)
+        fingerprint = Passivbot._order_identity_fingerprint(self, order, pb_type)
+        for idx, record in enumerate(Passivbot._emitted_order_records(self)):
+            if idx in consumed_record_indices:
+                continue
+            record_exchange_id = record.get("exchange_id") or ""
+            if exchange_id and record_exchange_id and exchange_id == record_exchange_id:
+                consumed_record_indices.add(idx)
+                return True
+            record_custom_id = record.get("canonical_custom_id") or ""
+            if canonical_custom_id and record_custom_id and canonical_custom_id == record_custom_id:
+                consumed_record_indices.add(idx)
+                return True
+            if exchange_id and record_exchange_id:
+                continue
+            if canonical_custom_id and record_custom_id:
+                continue
+            record_fingerprint = record.get("fingerprint")
+            record_ts = int(record.get("timestamp", 0))
+            if (
+                fingerprint
+                and record_fingerprint
+                and fingerprint == record_fingerprint
+                and abs(int(order_ts) - record_ts) <= FOREIGN_PASSIVBOT_FINGERPRINT_MATCH_MS
+            ):
+                consumed_record_indices.add(idx)
+                return True
+        return False
 
     async def _stop_for_foreign_passivbot_orders(
         self, detections: list[tuple[dict, str, str, int]], unique_count: int
@@ -3372,6 +3544,7 @@ class Passivbot:
             now_ts - FOREIGN_PASSIVBOT_LOOKBACK_MS,
         )
         new_detections: list[tuple[dict, str, str, int]] = []
+        consumed_emitted_records: set[int] = set()
         for order in open_orders:
             ts_raw = order.get("timestamp")
             if ts_raw is None:
@@ -3390,9 +3563,14 @@ class Passivbot:
             pb_type = custom_id_to_snake(custom_id)
             if not pb_type or pb_type == "unknown":
                 continue
-            if custom_id in self.orders_emitted_to_exchange or custom_id in self.foreign_passivbot_seen:
+            if self._order_matches_recent_emitted_record(
+                order, custom_id, pb_type, order_ts, consumed_emitted_records
+            ):
                 continue
-            self.foreign_passivbot_seen[custom_id] = order_ts
+            detection_key = self._foreign_passivbot_detection_key(order, custom_id, pb_type)
+            if detection_key in self.foreign_passivbot_seen:
+                continue
+            self.foreign_passivbot_seen[detection_key] = order_ts
             new_detections.append((order, pb_type, custom_id, order_ts))
         if not new_detections:
             return
@@ -5990,7 +6168,6 @@ class Passivbot:
             "close_trailing_qty_pct",
             "close_trailing_threshold_pct",
             "entry_grid_double_down_factor",
-            "entry_grid_inflation_enabled",
             "entry_grid_spacing_volatility_weight",
             "entry_grid_spacing_we_weight",
             "entry_grid_spacing_pct",
@@ -6045,8 +6222,6 @@ class Passivbot:
                 }
             elif key == "n_positions":
                 out[out_key] = int(round(val or 0.0))
-            elif key == "entry_grid_inflation_enabled":
-                out[out_key] = bool(val)
             else:
                 out[out_key] = float(val or 0.0)
         out.update(

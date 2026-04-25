@@ -5,13 +5,13 @@ This is the recommended way to work with Passivbot configs on the current config
 ## Source Of Truth
 
 - The canonical hardcoded defaults live in `src/config/schema.py`.
-- The example config `configs/examples/default_trailing_grid_long_npos10.json` mirrors those defaults exactly.
+- The example config `configs/examples/default_trailing_grid_long_npos7.json` mirrors those defaults exactly.
 - New schema-authored configs should keep the top-level `config_version` field. Older configs without it are treated as legacy and migrated during load.
 - If you run `passivbot live`, `passivbot backtest`, or `passivbot optimize` without a config path, Passivbot starts from the in-code defaults in `src/config/schema.py`.
 
 ## Recommended Workflow
 
-1. Copy `configs/examples/default_trailing_grid_long_npos10.json` to a new file.
+1. Copy `configs/examples/default_trailing_grid_long_npos7.json` to a new file.
 2. Edit that new file for your account, market universe, and strategy changes.
 3. Use `passivbot backtest` first.
 4. Use `passivbot optimize` if you want to tune parameters or compare alternatives.
@@ -21,7 +21,7 @@ This is the recommended way to work with Passivbot configs on the current config
 Example:
 
 ```bash
-cp configs/examples/default_trailing_grid_long_npos10.json configs/live/my_config.json
+cp configs/examples/default_trailing_grid_long_npos7.json configs/live/my_config.json
 passivbot backtest configs/live/my_config.json -s BTC -sd 2025 --suite n
 passivbot optimize configs/live/my_config.json -s BTC -sd 2025 -c 4 --suite n
 passivbot live configs/live/my_config.json
@@ -40,12 +40,12 @@ passivbot live configs/live/my_config.json
 
 ## What The Default Profile Is
 
-The default profile mirrored by `configs/examples/default_trailing_grid_long_npos10.json` is:
+The default profile mirrored by `configs/examples/default_trailing_grid_long_npos7.json` is:
 
 - trailing-grid style configuration
-- long enabled with `bot.long.n_positions = 10`
-- short disabled with `bot.short.total_wallet_exposure_limit = 0`
-- `bot.long.total_wallet_exposure_limit = 1.25`
+- long enabled by default with `bot.long.n_positions = 7`
+- short parameters are present, but shorts are disabled by default with `bot.short.total_wallet_exposure_limit = 0.0`
+- `bot.long.total_wallet_exposure_limit = 1.5`
 - HSL present in config but disabled with `hsl_enabled = false`
 - approved-coin universe seeded to the current default large-cap list
 - optimizer backend defaulting to `pymoo`

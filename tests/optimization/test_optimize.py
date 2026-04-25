@@ -676,26 +676,6 @@ class TestIndividualToConfig:
         assert result["bot"]["short"]["a_param"] == 30.0
         assert result["bot"]["short"]["z_param"] == 40.0
 
-    def test_preserves_fixed_entry_grid_inflation_flag_across_candidates(self):
-        template = get_template_config()
-        template["bot"]["long"]["entry_grid_inflation_enabled"] = False
-        template["bot"]["short"]["entry_grid_inflation_enabled"] = False
-        key_paths = get_optimization_key_paths(template)
-        bounds = extract_bounds_tuple_list_from_config(template)
-        individual = config_to_individual(template, bounds, sig_digits=6, key_paths=key_paths)
-
-        result = individual_to_config(
-            individual,
-            lambda x, y, z: y,
-            [],
-            template,
-            key_paths=key_paths,
-        )
-
-        assert ("long_entry_grid_inflation_enabled", ("bot", "long", "entry_grid_inflation_enabled")) not in key_paths
-        assert result["bot"]["long"]["entry_grid_inflation_enabled"] is False
-        assert result["bot"]["short"]["entry_grid_inflation_enabled"] is False
-
 class TestConfigToIndividual:
     """Test config_to_individual function."""
 
@@ -1024,7 +1004,10 @@ class TestExtractConfigs:
             result = extract_configs(path)
             assert len(result) == 1
             assert "bot" in result[0]
-            assert result[0]["bot"]["long"]["forager_score_weights"]["volatility"] == 1.0
+            assert (
+                result[0]["bot"]["long"]["forager_score_weights"]["volatility"]
+                == template["bot"]["long"]["forager_score_weights"]["volatility"]
+            )
         finally:
             os.unlink(path)
 
@@ -1468,14 +1451,14 @@ class TestEvaluator:
         )
 
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_strategy_pnl_rebased_mean",
-            "peak_recovery_hours_hsl_mean",
+            "adg_strategy_eq_mean",
+            "peak_recovery_hours_strategy_eq_mean",
         ]
 
         _suite = SuiteEvaluator(base, [], {"default": "mean", "peak_recovery_hours_hsl": "mean"})
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_strategy_pnl_rebased_mean",
-            "peak_recovery_hours_hsl_mean",
+            "adg_strategy_eq_mean",
+            "peak_recovery_hours_strategy_eq_mean",
         ]
 
     def test_suite_limit_checks_keep_explicit_stat_override(self):
@@ -1506,8 +1489,8 @@ class TestEvaluator:
         _suite = SuiteEvaluator(base, [], {"default": "mean", "drawdown_worst_hsl": "max"})
 
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_strategy_pnl_rebased_min",
-            "drawdown_worst_hsl_max",
+            "adg_strategy_eq_min",
+            "drawdown_worst_strategy_eq_max",
         ]
 
     def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
@@ -1615,7 +1598,7 @@ def _remove_nested_path(mapping, path):
 
 
 def test_config_to_individual_accepts_precomputed_optimization_shape():
-    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     shape = build_optimization_shape(config)
 
     result = config_to_individual(config, shape.bounds, optimization_shape=shape)
@@ -1624,7 +1607,7 @@ def test_config_to_individual_accepts_precomputed_optimization_shape():
 
 
 def test_old_starting_seed_inherits_current_template_shape_and_defaults():
-    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     shape = build_optimization_shape(config)
     stale_seed = deepcopy(config)
 
@@ -1644,7 +1627,7 @@ def test_old_starting_seed_inherits_current_template_shape_and_defaults():
 
 
 def test_build_pymoo_record_entry_strips_metadata():
-    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     template["_config_path"] = "artifact.json"
     bounds = extract_bounds_tuple_list_from_config(template)
     vector = config_to_individual(template, bounds, sig_digits=6)
@@ -1663,7 +1646,7 @@ def test_build_pymoo_record_entry_strips_metadata():
 
 
 def test_result_recorder_preserves_unquantized_saved_param_values():
-    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     bounds = extract_bounds_tuple_list_from_config(template)
     entry = deepcopy(template)
 

@@ -74,6 +74,7 @@ from cli_utils import (
 from config import load_input_config, load_prepared_config, prepare_config
 from config.access import get_optional_config_value, require_config_value
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
+from config.metrics import resolve_metric_value
 from config.scoring import (
     ObjectiveSpec,
     default_scoring_weights,
@@ -152,7 +153,6 @@ from limit_utils import expand_limit_checks, compute_limit_violation
 from pareto_store import ParetoStore
 import msgpack
 from typing import Sequence, Tuple, List, Dict, Any, Optional
-from itertools import permutations
 from shared_arrays import SharedArrayManager, attach_shared_array
 from ohlcv_utils import align_and_aggregate_hlcvs
 from optimize_suite import (
@@ -1040,7 +1040,7 @@ class Evaluator:
         per_objective_modifier = [0.0] * len(self.scoring_specs)
         global_modifier = 0.0
         for check in self.limit_checks:
-            val = analyses_combined.get(check["metric_key"])
+            val = resolve_metric_value(analyses_combined, check["metric_key"])
             penalty = compute_limit_violation(check, val)
             if not penalty:
                 continue
@@ -1056,48 +1056,9 @@ class Evaluator:
         engine_scores = []
         raw_objectives: Dict[str, float] = {}
         for idx, spec in enumerate(self.scoring_specs):
-            parts = spec.metric.split("_")
-            candidates = []
-            if len(parts) <= 1:
-                candidates = [spec.metric]
-            else:
-                base, rest = parts[0], parts[1:]
-                base_candidate = "_".join([base, *rest])
-                candidates.append(base_candidate)
-                for perm in permutations(rest):
-                    candidate = "_".join([base, *perm])
-                    candidates.append(candidate)
-            if spec.metric.endswith(("_usd", "_btc")):
-                base_metric = spec.metric.rsplit("_", 1)[0]
-                candidates.append(base_metric)
-
-            extended_candidates = []
-            seen = set()
-            for candidate in candidates:
-                if candidate not in seen:
-                    extended_candidates.append(candidate)
-                    seen.add(candidate)
-                for suffix in ("usd", "btc"):
-                    with_suffix = f"{candidate}_{suffix}"
-                    if with_suffix not in seen:
-                        extended_candidates.append(with_suffix)
-                        seen.add(with_suffix)
-                    parts_candidate = candidate.split("_")
-                    if len(parts_candidate) >= 2:
-                        inserted = "_".join(parts_candidate[:-1] + [suffix, parts_candidate[-1]])
-                        if inserted not in seen:
-                            extended_candidates.append(inserted)
-                            seen.add(inserted)
-
-            val = None
-            selected_metric = None
-            for candidate in extended_candidates:
-                metric_key = f"{candidate}_mean"
-                if val is None and metric_key in analyses_combined:
-                    val = analyses_combined[metric_key]
-                    selected_metric = candidate
-                if val is not None:
-                    break
+            val = resolve_metric_value(analyses_combined, f"{spec.metric}_mean")
+            if val is None and spec.metric.endswith(("_usd", "_btc")):
+                val = resolve_metric_value(analyses_combined, f"{spec.metric.rsplit('_', 1)[0]}_mean")
 
             if val is None:
                 val = 0
@@ -1700,7 +1661,7 @@ async def main():
         usage="%(prog)s [config_path] [options]",
         epilog=(
             "Examples:\n"
-            "  passivbot optimize configs/examples/default_trailing_grid_long_npos10.json -s XMR -sd 2025 -c 4 --suite n\n"
+            "  passivbot optimize configs/examples/default_trailing_grid_long_npos7.json -s XMR -sd 2025 -c 4 --suite n\n"
             "  passivbot optimize -e bybit -s BTC,ETH -i 10000 -ps 200\n"
             "\n"
             "Use --help-all to show every config override flag, including optimize bounds."
