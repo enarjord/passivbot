@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from copy import deepcopy
 from dataclasses import dataclass
@@ -28,8 +27,6 @@ from suite_runner import (
     aggregate_metrics,
     apply_scenario,
     build_scenarios,
-    _compute_effective_coin_exchange,
-    _build_scenario_signature,
     collect_suite_coin_sources,
     filter_coins_by_exchange_assignment,
     prepare_master_datasets,
@@ -159,7 +156,6 @@ async def prepare_suite_contexts(
         set(ds.exchange for ds in datasets.values() if ds.exchange != "combined")
     ) or (datasets["combined"].available_exchanges if has_combined else [])
 
-    seen_signatures: Dict[str, str] = {}
     contexts: List[ScenarioEvalContext] = []
 
     def _build_lazy_mss_slice(
@@ -251,18 +247,6 @@ async def prepare_suite_contexts(
         scenario_config.setdefault("backtest", {})
         scenario_config["backtest"]["coins"] = {}
 
-        coin_exchange = _compute_effective_coin_exchange(
-            scenario, scenario_coins, datasets, dataset_available_exchanges
-        )
-        signature = _build_scenario_signature(scenario_config, coin_exchange)
-        if signature in seen_signatures:
-            logging.info(
-                "Skipping scenario %s (duplicate of %s)",
-                scenario.label,
-                seen_signatures[signature],
-            )
-            continue
-        seen_signatures[signature] = scenario.label
         # Debug visibility to ensure scenario-specific windows/overrides are honored
         logging.debug(
             "Suite scenario %s | start=%s end=%s coins=%s overrides=%s",
