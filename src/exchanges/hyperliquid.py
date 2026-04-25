@@ -963,12 +963,18 @@ class HyperliquidBot(CCXTBot):
             # Sometimes hyperliquid returns an "ok" wrapper with an embedded error; treat as non-fatal.
             if _is_already_gone(res):
                 logging.info("Order already canceled/filled on exchange; treating as success.")
-                return {"status": "success"}
+                return {
+                    "status": "success",
+                    "_passivbot_cancel_requires_full_authoritative_confirmation": True,
+                }
             return res
         except Exception as e:
             if _is_already_gone(e):
                 logging.info("Order already canceled/filled on exchange; treating as success.")
-                return {"status": "success"}
+                return {
+                    "status": "success",
+                    "_passivbot_cancel_requires_full_authoritative_confirmation": True,
+                }
             raise
 
     def did_cancel_order(self, executed, order=None) -> bool:

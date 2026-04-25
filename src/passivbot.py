@@ -4319,6 +4319,11 @@ class Passivbot:
                 self.state_change_detected_by_symbol.add(od["symbol"])
                 print(f"debug did_cancel_order false {ex} {od}")
                 continue
+            ambiguous_terminal_state = self._cancel_result_requires_full_authoritative_confirmation(
+                ex
+            )
+            if ambiguous_terminal_state:
+                self.state_change_detected_by_symbol.add(od["symbol"])
             debug_prints = {}
             for key in od:
                 if key not in ex:
@@ -4341,10 +4346,26 @@ class Passivbot:
                     pside=elm.get("position_side"),
                 )
             self._health_orders_cancelled += len(to_return)
+            confirmation_surfaces = {"open_orders"}
+            ambiguous_symbols = sorted(
+                {
+                    elm.get("symbol")
+                    for elm in to_return
+                    if self._cancel_result_requires_full_authoritative_confirmation(elm)
+                    and elm.get("symbol")
+                }
+            )
+            if ambiguous_symbols:
+                confirmation_surfaces = self._authoritative_full_confirmation_surfaces()
+                logging.info(
+                    "[order] ambiguous cancel terminal state; forcing full account confirmation "
+                    "before next cycle | symbols=%s",
+                    ",".join(ambiguous_symbols),
+                )
             if hasattr(self, "_request_authoritative_confirmation"):
-                self._request_authoritative_confirmation({"open_orders"})
+                self._request_authoritative_confirmation(confirmation_surfaces)
             else:
-                Passivbot._request_authoritative_confirmation(self, {"open_orders"})
+                Passivbot._request_authoritative_confirmation(self, confirmation_surfaces)
         return to_return
 
     def log_order_action(
@@ -5488,6 +5509,20 @@ class Passivbot:
     def _authoritative_required_surfaces(self) -> set[str]:
         pending = set(getattr(self, "_authoritative_pending_confirmations", {}) or {})
         return pending if pending else {"balance", "positions", "open_orders", "fills"}
+
+    def _authoritative_full_confirmation_surfaces(self) -> set[str]:
+        return {"balance", "positions", "open_orders", "fills"}
+
+    def _cancel_result_requires_full_authoritative_confirmation(self, executed) -> bool:
+        if isinstance(executed, list):
+            return any(
+                self._cancel_result_requires_full_authoritative_confirmation(elm)
+                for elm in executed
+            )
+        return bool(
+            isinstance(executed, dict)
+            and executed.get("_passivbot_cancel_requires_full_authoritative_confirmation")
+        )
 
     def _request_authoritative_confirmation(
         self, surfaces: str | list[str] | set[str] | tuple[str, ...], *, min_epoch: int | None = None

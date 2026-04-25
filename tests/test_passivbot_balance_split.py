@@ -1585,6 +1585,52 @@ def test_authoritative_barrier_waits_for_next_epoch_confirmation():
     assert getattr(bot, "_authoritative_pending_confirmations", {}) == {}
 
 
+@pytest.mark.asyncio
+async def test_ambiguous_cancel_forces_full_authoritative_confirmation():
+    bot = Passivbot.__new__(Passivbot)
+    bot.debug_mode = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot._health_orders_cancelled = 0
+    confirmations = []
+
+    order = {
+        "id": "abc123",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.001,
+        "price": 100_000.0,
+        "reduce_only": False,
+    }
+
+    async def fake_execute_cancellations(orders):
+        assert orders == [order]
+        return [
+            {
+                "status": "success",
+                "_passivbot_cancel_requires_full_authoritative_confirmation": True,
+            }
+        ]
+
+    bot.live_value = lambda key: 10 if key == "max_n_cancellations_per_batch" else None
+    bot.add_to_recent_order_cancellations = lambda _order: None
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._log_order_action_summary = lambda *args, **kwargs: None
+    bot.execute_cancellations = fake_execute_cancellations
+    bot.did_cancel_order = lambda executed, _order: executed.get("status") == "success"
+    bot.remove_order = lambda *args, **kwargs: None
+    bot._monitor_order_payload = lambda *args, **kwargs: {}
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._request_authoritative_confirmation = lambda surfaces: confirmations.append(set(surfaces))
+
+    res = await Passivbot.execute_cancellations_parent(bot, [order])
+
+    assert len(res) == 1
+    assert confirmations == [{"balance", "positions", "open_orders", "fills"}]
+    assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
+
+
 def test_positions_signature_ignores_margin_used_and_margin_mode_noise():
     bot = Passivbot.__new__(Passivbot)
     positions_a = [
