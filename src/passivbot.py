@@ -3271,6 +3271,10 @@ class Passivbot:
 
     async def run_execution_loop(self):
         """Main execution loop coordinating order generation and exchange interaction."""
+        current_task = asyncio.current_task()
+        execution_loop_stopped = asyncio.Event()
+        self._execution_loop_task = current_task
+        self._execution_loop_stopped = execution_loop_stopped
         failed_update_pos_oos_pnls_ohlcvs_count = 0
         max_n_fails = 10
         if self._equity_hard_stop_enabled() and not all(
@@ -3288,6 +3292,8 @@ class Passivbot:
                     phase="runtime", stage="refresh_authoritative_state"
                 )
                 if not await self.refresh_authoritative_state():
+                    if self._shutdown_requested():
+                        break
                     await asyncio.sleep(0.5)
                     failed_update_pos_oos_pnls_ohlcvs_count += 1
                     if failed_update_pos_oos_pnls_ohlcvs_count > max_n_fails:
@@ -3332,6 +3338,10 @@ class Passivbot:
                 self._set_log_silence_watchdog_context(phase="runtime", stage="execute_to_exchange")
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
+                    if getattr(self, "_execution_loop_task", None) is current_task:
+                        self._execution_loop_task = None
+                    if getattr(self, "_execution_loop_stopped", None) is execution_loop_stopped:
+                        execution_loop_stopped.set()
                     return res
                 if self.stop_signal_received:
                     break
@@ -3353,6 +3363,9 @@ class Passivbot:
             except (RestartBotException, FatalBotException):
                 raise  # Propagate restart without incrementing error count
             except RateLimitExceeded as e:
+                if self._shutdown_requested():
+                    logging.debug("[shutdown] execution loop stopped during rate-limit handling: %s", e)
+                    break
                 self._health_errors += 1
                 self._health_rate_limits += 1
                 self._monitor_record_error(
@@ -3365,6 +3378,9 @@ class Passivbot:
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(5.0)
             except Exception as e:
+                if self._shutdown_requested():
+                    logging.debug("[shutdown] execution loop stopped during in-flight refresh: %s", e)
+                    break
                 self._health_errors += 1
                 self._monitor_record_error(
                     "error.bot",
@@ -3376,6 +3392,16 @@ class Passivbot:
                 traceback.print_exc()
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(1.0)
+        if getattr(self, "_execution_loop_task", None) is current_task:
+            self._execution_loop_task = None
+        if getattr(self, "_execution_loop_stopped", None) is execution_loop_stopped:
+            execution_loop_stopped.set()
+
+    def _shutdown_requested(self) -> bool:
+        return bool(
+            getattr(self, "stop_signal_received", False)
+            or getattr(self, "_shutdown_in_progress", False)
+        )
 
     async def shutdown_gracefully(self):
         if getattr(self, "_shutdown_in_progress", False):
@@ -3402,6 +3428,21 @@ class Passivbot:
                 await asyncio.gather(*maintainer_tasks, return_exceptions=True)
             except Exception as e:
                 logging.error("[shutdown] error awaiting maintainer cancellation: %s", e)
+        execution_loop_stopped = getattr(self, "_execution_loop_stopped", None)
+        execution_loop_task = getattr(self, "_execution_loop_task", None)
+        if (
+            execution_loop_stopped is not None
+            and execution_loop_task is not None
+            and not execution_loop_task.done()
+        ):
+            try:
+                await asyncio.wait_for(execution_loop_stopped.wait(), timeout=15.0)
+            except asyncio.TimeoutError:
+                logging.debug(
+                    "[shutdown] timed out waiting for execution loop before closing sessions"
+                )
+            except Exception as e:
+                logging.debug("[shutdown] error waiting for execution loop: %s", e)
         await asyncio.sleep(0)
         try:
             if getattr(self, "ccp", None) is not None:
@@ -5888,6 +5929,9 @@ class Passivbot:
             return True
 
         except RateLimitExceeded:
+            if self._shutdown_requested():
+                logging.debug("[shutdown] fill refresh stopped during rate-limit handling")
+                return False
             self._health_rate_limits += 1
             self._monitor_record_event(
                 "error.exchange",
@@ -5897,6 +5941,9 @@ class Passivbot:
             logging.warning("[rate] hit rate limit while fetching fill events; retrying next cycle")
             return False
         except Exception as e:
+            if self._shutdown_requested():
+                logging.debug("[shutdown] fill refresh stopped during in-flight request: %s", e)
+                return False
             self._monitor_record_error(
                 "error.exchange",
                 e,

@@ -128,6 +128,44 @@ async def test_shutdown_gracefully_awaits_cancelled_maintainers():
     assert maintainer_task.done() is True
 
 
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_waits_for_execution_loop_before_closing_sessions():
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+
+    seen = []
+    execution_loop_stopped = asyncio.Event()
+
+    async def _active_execution_loop():
+        await asyncio.sleep(0.01)
+        seen.append("execution_loop_stopped")
+        execution_loop_stopped.set()
+
+    class _Closer:
+        def __init__(self, key):
+            self.key = key
+
+        async def close(self):
+            seen.append(self.key)
+
+    execution_task = asyncio.create_task(_active_execution_loop())
+    bot._execution_loop_task = execution_task
+    bot._execution_loop_stopped = execution_loop_stopped
+    bot.maintainers = {}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Closer("ccp_closed")
+    bot.cca = _Closer("cca_closed")
+
+    await bot.shutdown_gracefully()
+    await execution_task
+
+    assert seen == ["execution_loop_stopped", "ccp_closed", "cca_closed"]
+
+
 def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
     bot.config = {"live": {"pnls_max_lookback_days": float(lookback_days)}}
     bot.get_exchange_time = lambda: now_ms
@@ -553,6 +591,52 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
 
     with pytest.raises(RuntimeError, match="fill refresh failed"):
         await bot.update_pnls()
+
+
+@pytest.mark.asyncio
+async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    cached_events = [SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])]
+    monitor_errors = []
+
+    class _Manager:
+        def __init__(self, events):
+            self._events = list(events)
+            self.refresh = AsyncMock()
+            self.history_scope = "all"
+
+        async def refresh_latest(self, overlap=20):
+            bot.stop_signal_received = True
+            raise RuntimeError("connector is closed")
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    bot.stop_signal_received = False
+    bot._shutdown_in_progress = False
+    bot._pnls_manager = _Manager(cached_events)
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: monitor_errors.append((args, kwargs))
+    bot.logging_level = 2
+    bot._health_rate_limits = 0
+
+    with caplog.at_level(logging.DEBUG):
+        result = await bot.update_pnls()
+
+    assert result is False
+    assert monitor_errors == []
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert any("fill refresh stopped during in-flight request" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -1642,6 +1726,46 @@ async def test_run_execution_loop_stops_before_execute_when_signal_arrives_after
 
     assert result is None
     assert executes == []
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_suppresses_inflight_shutdown_refresh_error(caplog):
+    bot = Passivbot.__new__(Passivbot)
+
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = False
+    bot._health_errors = 0
+    bot._health_rate_limits = 0
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot._monitor_record_error = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("shutdown errors should not be recorded as runtime errors")
+    )
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_refresh_authoritative_state():
+        bot.stop_signal_received = True
+        raise RuntimeError("connector is closed")
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.execute_to_exchange = AsyncMock()
+
+    with caplog.at_level(logging.DEBUG):
+        result = await bot.run_execution_loop()
+
+    assert result is None
+    assert bot._health_errors == 0
+    assert bot._health_rate_limits == 0
+    bot.restart_bot_on_too_many_errors.assert_not_awaited()
+    bot.execute_to_exchange.assert_not_awaited()
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert any("execution loop stopped during in-flight refresh" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio
