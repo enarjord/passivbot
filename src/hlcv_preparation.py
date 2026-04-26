@@ -1173,6 +1173,27 @@ async def _resolve_v2_store_range(
             ts_to_date(start_ts),
             ts_to_date(end_ts),
         )
+    elif plan.blocked_by_persistent_gap and plan.legacy_inspection is not None:
+        # Even when legacy data doesn't fully cover the persistent gap,
+        # import whatever is available so the valid window starts earlier.
+        imported_rows = import_legacy_range_into_store(
+            store=store,
+            legacy_root=legacy_root,
+            exchange=exchange,
+            timeframe="1m",
+            symbol=symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+        if imported_rows > 0:
+            logging.info(
+                "[%s] imported %d partial-coverage legacy 1m rows into v2 store for %s (%s -> %s)",
+                exchange,
+                imported_rows,
+                coin,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
     rng = store.read_range(exchange, "1m", symbol, start_ts, end_ts)
     if rng.valid.all():
         logging.info(
