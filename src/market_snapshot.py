@@ -31,6 +31,7 @@ class MarketSnapshot:
 
 
 TickerFetcher = Callable[[], Awaitable[dict[str, Any]]]
+SymbolTickerFetcher = Callable[[list[str]], Awaitable[dict[str, Any]]]
 CacheSink = Callable[[str, float, int], None]
 
 
@@ -42,15 +43,22 @@ class MarketSnapshotProvider:
         *,
         exchange_name: str,
         fetch_tickers: Optional[TickerFetcher],
+        fetch_tickers_for_symbols: Optional[SymbolTickerFetcher] = None,
+        ticker_strategy: str = "bulk",
         cache_sink: Optional[CacheSink] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.exchange_name = str(exchange_name or "").lower()
         self._fetch_tickers = fetch_tickers
+        self._fetch_tickers_for_symbols = fetch_tickers_for_symbols
+        self._ticker_strategy = str(ticker_strategy or "bulk").lower()
+        if self._ticker_strategy not in {"bulk", "symbols"}:
+            self._ticker_strategy = "bulk"
         self._cache_sink = cache_sink
         self._log = logger or logging.getLogger("passivbot.market_snapshot")
         self._cache: dict[str, MarketSnapshot] = {}
         self._fetch_task: Optional[asyncio.Task] = None
+        self._symbol_fetch_tasks: dict[tuple[str, ...], asyncio.Task] = {}
 
     def get_cached(self, symbol: str, *, now_ms: int, max_age_ms: int) -> Optional[MarketSnapshot]:
         snap = self._cache.get(symbol)
@@ -75,11 +83,13 @@ class MarketSnapshotProvider:
                 out[symbol] = snap
 
         missing = [s for s in ordered_symbols if s not in out]
-        if not missing or self._fetch_tickers is None:
+        if not missing or (
+            self._fetch_tickers is None and self._fetch_tickers_for_symbols is None
+        ):
             return out
 
         try:
-            fetched = await self._fetch_tickers_shared()
+            fetched, source = await self._fetch_tickers_for_missing(missing)
         except Exception as exc:
             self._log.debug(
                 "[market] ticker snapshot fetch failed | exchange=%s symbols=%s error_type=%s error=%s",
@@ -102,7 +112,7 @@ class MarketSnapshotProvider:
         cached = 0
         for raw_symbol, ticker in fetched.items():
             symbol = str(raw_symbol)
-            snap = self._snapshot_from_ticker(symbol, ticker, fetched_ms=fetched_ms)
+            snap = self._snapshot_from_ticker(symbol, ticker, fetched_ms=fetched_ms, source=source)
             if snap is None:
                 continue
             self._cache[symbol] = snap
@@ -127,14 +137,25 @@ class MarketSnapshotProvider:
             hits += 1
 
         self._log.debug(
-            "[market] ticker snapshots ready | exchange=%s requested=%s hits=%s misses=%s cached=%s source=fetch_tickers",
+            "[market] ticker snapshots ready | exchange=%s requested=%s hits=%s misses=%s cached=%s source=%s",
             self.exchange_name,
             len(ordered_symbols),
             hits,
             max(0, len(missing) - hits),
             cached,
+            source,
         )
         return out
+
+    async def _fetch_tickers_for_missing(self, missing: list[str]) -> tuple[dict[str, Any], str]:
+        if self._ticker_strategy == "symbols" and self._fetch_tickers_for_symbols is not None:
+            fetched = await self._fetch_tickers_for_symbols_shared(missing)
+            return fetched, "fetch_tickers_symbols"
+        if self._fetch_tickers is not None:
+            fetched = await self._fetch_tickers_shared()
+            return fetched, "fetch_tickers"
+        fetched = await self._fetch_tickers_for_symbols_shared(missing)
+        return fetched, "fetch_tickers_symbols"
 
     async def _fetch_tickers_shared(self) -> dict[str, Any]:
         if self._fetch_tickers is None:
@@ -149,6 +170,20 @@ class MarketSnapshotProvider:
             if self._fetch_task is task and task.done():
                 self._fetch_task = None
 
+    async def _fetch_tickers_for_symbols_shared(self, symbols: list[str]) -> dict[str, Any]:
+        if self._fetch_tickers_for_symbols is None:
+            return {}
+        key = tuple(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
+        task = self._symbol_fetch_tasks.get(key)
+        if task is None or task.done():
+            task = asyncio.create_task(self._fetch_tickers_for_symbols(list(key)))
+            self._symbol_fetch_tasks[key] = task
+        try:
+            return await task
+        finally:
+            if self._symbol_fetch_tasks.get(key) is task and task.done():
+                self._symbol_fetch_tasks.pop(key, None)
+
     @staticmethod
     def _coerce_positive(value: Any) -> Optional[float]:
         try:
@@ -160,7 +195,7 @@ class MarketSnapshotProvider:
         return out
 
     def _snapshot_from_ticker(
-        self, symbol: str, ticker: Any, *, fetched_ms: int
+        self, symbol: str, ticker: Any, *, fetched_ms: int, source: str = "fetch_tickers"
     ) -> Optional[MarketSnapshot]:
         if not isinstance(ticker, dict):
             return None
@@ -190,7 +225,7 @@ class MarketSnapshotProvider:
             ask=float(ask),
             last=float(last),
             fetched_ms=int(fetched_ms),
-            source="fetch_tickers",
+            source=str(source),
             exchange_timestamp_ms=exchange_ts,
         )
         return snap if snap.is_valid() else None

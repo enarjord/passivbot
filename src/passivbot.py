@@ -687,6 +687,8 @@ class Passivbot:
         self.market_snapshot_provider = MarketSnapshotProvider(
             exchange_name=self.exchange,
             fetch_tickers=getattr(self, "fetch_tickers", None),
+            fetch_tickers_for_symbols=getattr(self, "fetch_tickers_for_symbols", None),
+            ticker_strategy=self._market_snapshot_ticker_strategy(),
         )
         if self.monitor_publisher is not None:
             self.cm.set_persist_batch_observer(self._monitor_handle_candlestick_persist)
@@ -3883,6 +3885,24 @@ class Passivbot:
             return False
         await self.update_ohlcvs_1m_for_actives()
         return True
+
+    def _market_snapshot_ticker_strategy(self) -> str:
+        """Choose the cheapest safe ticker endpoint shape for market snapshots."""
+        explicit = get_optional_live_value(self.config, "market_snapshot_ticker_strategy", None)
+        if explicit is not None:
+            mode = str(explicit).lower()
+            if mode == "auto":
+                explicit = None
+            elif mode in {"bulk", "symbols"}:
+                return mode
+            else:
+                logging.warning(
+                    "[market] invalid live.market_snapshot_ticker_strategy=%r; using exchange default",
+                    explicit,
+                )
+        if str(getattr(self, "exchange", "") or "").lower() == "bitget":
+            return "symbols"
+        return "bulk"
 
     def _authoritative_refresh_mode(self) -> str:
         config = getattr(self, "config", {}) or {}
@@ -7390,6 +7410,14 @@ class Passivbot:
         table.header = False
         table.padding_width = 0
 
+        changed_symbols = list(dict.fromkeys(symbol for symbol, _pside in changed))
+        last_prices = await self._get_live_last_prices(
+            changed_symbols,
+            max_age_ms=60_000,
+            context="position_change_log",
+            allow_completed_candle_fallback=True,
+        )
+
         for symbol, pside in changed:
             old = psold[(symbol, pside)]
             new = psnew[(symbol, pside)]
@@ -7419,12 +7447,6 @@ class Passivbot:
             WEL_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
             WELe_ratio = wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0
 
-            last_prices = await self._get_live_last_prices(
-                [symbol],
-                max_age_ms=60_000,
-                context="position_change_log",
-                allow_completed_candle_fallback=True,
-            )
             last_price = last_prices[symbol]
             try:
                 pprice_diff = (
@@ -9839,8 +9861,26 @@ class Passivbot:
         span_buffer = 1.0 + max(0.0, warmup_ratio)
 
         fetch_delay_s = self._get_fetch_delay_seconds()
+        refresh_started_ms = utc_ms()
+        last_progress_ms = refresh_started_ms
+        try:
+            last_start_log = int(getattr(self, "_forager_refresh_start_log_last_ms", 0) or 0)
+            if refresh_started_ms - last_start_log >= 60_000:
+                oldest_ms = int(stale[0][0]) if stale else 0
+                logging.info(
+                    "[candle] forager refresh starting slots_open=%s candidates=%d stale=%d refreshing=%d oldest=%ds target=%ds",
+                    "yes" if slots_open_any else "no",
+                    len(all_candidates),
+                    len(stale),
+                    len(to_refresh),
+                    int(oldest_ms / 1000),
+                    int(target_age_ms / 1000),
+                )
+                self._forager_refresh_start_log_last_ms = int(refresh_started_ms)
+        except Exception:
+            pass
 
-        for sym in to_refresh:
+        for idx, sym in enumerate(to_refresh, start=1):
             if Passivbot._shutdown_requested(self):
                 logging.debug("[shutdown] aborting forager candle refresh")
                 return
@@ -9883,6 +9923,17 @@ class Passivbot:
                     await Passivbot._sleep_unless_shutdown(
                         self, fetch_delay_s, stage="forager_candidate_candle_refresh"
                     )
+                now_ms = utc_ms()
+                if len(to_refresh) > 1 and now_ms - last_progress_ms >= 30_000:
+                    elapsed_s = int(max(0, now_ms - refresh_started_ms) / 1000)
+                    logging.info(
+                        "[candle] forager refresh progress %d/%d last=%s elapsed=%ds",
+                        idx,
+                        len(to_refresh),
+                        sym,
+                        elapsed_s,
+                    )
+                    last_progress_ms = now_ms
             except TimeoutError as exc:
                 logging.warning(
                     "Timed out acquiring candle lock for %s; forager refresh will retry (%s)",
@@ -9891,6 +9942,16 @@ class Passivbot:
                 )
             except Exception as exc:
                 logging.error("error refreshing forager candles for %s: %s", sym, exc, exc_info=True)
+        try:
+            elapsed_s = int(max(0, utc_ms() - refresh_started_ms) / 1000)
+            if len(to_refresh) > 1 and elapsed_s >= 30:
+                logging.info(
+                    "[candle] forager refresh complete refreshed=%d elapsed=%ds",
+                    len(to_refresh),
+                    elapsed_s,
+                )
+        except Exception:
+            pass
 
     async def update_ohlcvs_1m_for_actives(self):
         """Ensure active symbols have fresh 1m candles in CandlestickManager (<=60s old).

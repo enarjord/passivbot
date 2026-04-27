@@ -354,6 +354,7 @@ def get_template_config():
                 "inactive_coin_candle_ttl_minutes": 10,
                 "leverage": 10,
                 "margin_mode_preference": "cross",
+                "market_snapshot_ticker_strategy": "auto",
                 "market_order_near_touch_threshold": 0.001,
                 "market_orders_allowed": False,
                 "max_concurrent_api_requests": None,

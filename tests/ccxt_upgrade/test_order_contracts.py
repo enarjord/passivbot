@@ -93,6 +93,59 @@ def test_gateio_order_params_use_client_order_id_for_ccxt_text_prefix():
     assert custom_id_to_snake(gateio_text) == "entry_grid_normal_long"
 
 
+def test_gateio_get_balance_uses_cross_available_for_multi_currency_margin():
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.exchange = "gateio"
+    bot.quote = "USDT"
+    bot.uid = None
+    bot.cca = SimpleNamespace()
+    bot.ccp = SimpleNamespace()
+    bot.log_once = lambda msg: None
+
+    balance = bot._get_balance(
+        {
+            "USDT": {"total": 0.000000000035},
+            "info": [
+                {
+                    "user": "16770081",
+                    "margin_mode_name": "multi_currency",
+                    "cross_available": "724.95615",
+                }
+            ],
+        }
+    )
+
+    assert balance == 724.95615
+    assert bot.uid == "16770081"
+    assert bot.cca.uid == "16770081"
+    assert bot.ccp.uid == "16770081"
+
+
+def test_gateio_get_balance_uses_total_for_classic_margin():
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.exchange = "gateio"
+    bot.quote = "USDT"
+    bot.uid = "existing"
+    bot.cca = SimpleNamespace(uid="existing")
+    bot.ccp = None
+    bot.log_once = lambda msg: None
+
+    balance = bot._get_balance(
+        {
+            "USDT": {"total": 543.21},
+            "info": [
+                {
+                    "user": "16770081",
+                    "margin_mode_name": "classic",
+                    "cross_available": "724.95615",
+                }
+            ],
+        }
+    )
+
+    assert balance == 543.21
+
+
 def test_okx_order_side_uses_info_pos_side():
     bot = OKXBot.__new__(OKXBot)
     assert bot._get_position_side_for_order({"info": {"posSide": "SHORT"}}) == "short"

@@ -77,7 +77,7 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Run and record Bybit probe.
 - [x] Run and record Hyperliquid probe.
 - [ ] Later: run Bitget, Gate.io, OKX, Binance, KuCoin probes.
-- [ ] Store durable exchange quirks/config for cheapest safe ticker strategy after multi-exchange probes.
+- [x] Store durable exchange quirks/config for cheapest safe ticker strategy for tested exchanges.
 
 ### 4. Candlestick Manager Completed-Only Scope
 
@@ -208,6 +208,12 @@ Before order planning/execution, live bot must have coherent state for:
   for all valid returned symbols, not only the symbols requested by the immediate caller.
 - [x] Added market snapshot fetch coalescing so concurrent cache misses share one in-flight
   `fetch_tickers()` request instead of stampeding multiple bulk ticker calls.
+- [x] Added explicit market snapshot ticker strategies: broad `fetch_tickers()` remains the default,
+  Hyperliquid keeps its custom `allMids` bulk path, and Bitget defaults to
+  `fetch_tickers(symbols)` because the first VPS probe showed Bitget's broad CCXT response missed
+  requested USDC perp symbols while the symbol-list endpoint was fast and complete.
+- [x] Batched position-change display price lookups so startup or manual-position transitions fetch
+  one market snapshot cohort instead of one ticker request per changed position.
 
 ## Initial Ticker Probe Findings
 

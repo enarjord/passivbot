@@ -57,6 +57,38 @@ async def test_market_snapshot_provider_caches_all_bulk_ticker_results():
 
 
 @pytest.mark.asyncio
+async def test_market_snapshot_provider_uses_symbol_strategy():
+    calls = {"bulk": 0, "symbols": []}
+
+    async def fetch_tickers():
+        calls["bulk"] += 1
+        return {}
+
+    async def fetch_tickers_for_symbols(symbols):
+        calls["symbols"].append(list(symbols))
+        return {
+            symbol: {"bid": 99.0, "ask": 101.0, "last": 100.0}
+            for symbol in symbols
+        }
+
+    provider = MarketSnapshotProvider(
+        exchange_name="bitget",
+        fetch_tickers=fetch_tickers,
+        fetch_tickers_for_symbols=fetch_tickers_for_symbols,
+        ticker_strategy="symbols",
+    )
+
+    first = await provider.get_snapshots(["BTC/USDC:USDC", "ETH/USDC:USDC"], max_age_ms=60_000)
+    second = await provider.get_snapshots(["BTC/USDC:USDC"], max_age_ms=60_000)
+
+    assert calls["bulk"] == 0
+    assert calls["symbols"] == [["BTC/USDC:USDC", "ETH/USDC:USDC"]]
+    assert first["BTC/USDC:USDC"].source == "fetch_tickers_symbols"
+    assert first["ETH/USDC:USDC"].last == 100.0
+    assert second["BTC/USDC:USDC"].last == 100.0
+
+
+@pytest.mark.asyncio
 async def test_market_snapshot_provider_coalesces_concurrent_bulk_fetches():
     calls = {"fetch": 0}
     release = asyncio.Event()

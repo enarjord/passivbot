@@ -870,6 +870,24 @@ class CCXTBot(Passivbot):
         )
         return result
 
+    async def fetch_tickers_for_symbols(self, symbols: list[str]) -> dict:
+        """Fetch current ticker data for a specific symbol set when supported cheaply."""
+        fetched = await self._do_fetch_tickers_for_symbols(symbols)
+        return self._normalize_tickers(fetched)
+
+    async def _do_fetch_tickers_for_symbols(self, symbols: list[str]) -> dict:
+        """Hook: call CCXT's fetch_tickers(symbols) for exchanges where bulk misses markets."""
+        logging.debug(
+            f"{self.exchange}: fetching tickers via CCXT fetch_tickers(symbols), n={len(symbols)}"
+        )
+        t0 = time.time()
+        result = await self.cca.fetch_tickers(symbols)
+        elapsed_ms = (time.time() - t0) * 1000
+        logging.debug(
+            f"{self.exchange}: fetch_tickers(symbols) completed in {elapsed_ms:.1f}ms, {len(result)} tickers"
+        )
+        return result
+
     def _normalize_tickers(self, fetched: dict) -> dict:
         """Hook: Transform to {symbol: {bid, ask, last}} format.
 

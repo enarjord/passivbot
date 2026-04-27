@@ -3719,7 +3719,18 @@ class KucoinFetcher(BaseFetcher):
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
+        fetch_started = time.time()
+        logger.info(
+            "KucoinFetcher: fetching fill history since=%s until=%s",
+            _format_ms(since_ms),
+            _format_ms(until_ms),
+        )
         trades = await self._fetch_trades(since_ms, until_ms)
+        logger.info(
+            "KucoinFetcher: fetched %d trade events in %.1fs",
+            len(trades),
+            time.time() - fetch_started,
+        )
         if not trades:
             return []
 
@@ -3740,9 +3751,19 @@ class KucoinFetcher(BaseFetcher):
             events[ev["id"]] = ev
 
         if closes:
+            ph_started = time.time()
+            logger.info(
+                "KucoinFetcher: fetching positions history for %d close fills",
+                len(closes),
+            )
             ph = await self._fetch_positions_history(
                 start_ms=closes[0]["timestamp"] - 60_000,
                 end_ms=closes[-1]["timestamp"] + 60_000,
+            )
+            logger.info(
+                "KucoinFetcher: fetched %d positions-history rows in %.1fs",
+                len(ph),
+                time.time() - ph_started,
             )
             self._match_pnls(closes, ph, events)
             self._log_discrepancies(local_pnls, ph)

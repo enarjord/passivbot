@@ -45,6 +45,85 @@ def test_authoritative_refresh_mode_respects_explicit_legacy_opt_out_for_hyperli
     assert bot._authoritative_refresh_mode() == "legacy"
 
 
+def test_market_snapshot_ticker_strategy_defaults_to_symbols_for_bitget():
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "bitget"
+    bot.config = {"live": {}}
+
+    assert bot._market_snapshot_ticker_strategy() == "symbols"
+
+
+def test_market_snapshot_ticker_strategy_keeps_hyperliquid_on_bulk_all_mids():
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "hyperliquid"
+    bot.config = {"live": {}}
+
+    assert bot._market_snapshot_ticker_strategy() == "bulk"
+
+
+def test_market_snapshot_ticker_strategy_respects_explicit_override():
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "bitget"
+    bot.config = {"live": {"market_snapshot_ticker_strategy": "bulk"}}
+
+    assert bot._market_snapshot_ticker_strategy() == "bulk"
+
+
+@pytest.mark.asyncio
+async def test_log_position_changes_batches_market_snapshot_request(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.inverse = False
+    bot.c_mults = {
+        "BTC/USDT:USDT": 1.0,
+        "ETH/USDT:USDT": 1.0,
+    }
+    bot.pside_int_map = {"long": 1, "short": -1}
+    bot.get_raw_balance = lambda: 1_000.0
+    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit" else 0.0
+    bot.bot_value = lambda pside, key: 10.0
+
+    calls = []
+
+    async def _get_live_last_prices(symbols, **kwargs):
+        calls.append((list(symbols), kwargs))
+        return {
+            "BTC/USDT:USDT": 50_000.0,
+            "ETH/USDT:USDT": 3_000.0,
+        }
+
+    bot._get_live_last_prices = _get_live_last_prices
+    monkeypatch.setattr(
+        passivbot_module.pbr,
+        "qty_to_cost",
+        lambda qty, price, c_mult: abs(qty) * price * c_mult,
+    )
+    monkeypatch.setattr(
+        passivbot_module.pbr, "calc_pprice_diff_int", lambda *args: 0.0, raising=False
+    )
+
+    await bot.log_position_changes(
+        [],
+        [
+            {
+                "symbol": "BTC/USDT:USDT",
+                "position_side": "long",
+                "size": 0.01,
+                "price": 49_000.0,
+            },
+            {
+                "symbol": "ETH/USDT:USDT",
+                "position_side": "long",
+                "size": 0.2,
+                "price": 2_900.0,
+            },
+        ],
+    )
+
+    assert len(calls) == 1
+    assert calls[0][0] == ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    assert calls[0][1]["context"] == "position_change_log"
+
+
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_awaits_cancelled_maintainers():
     bot = Passivbot.__new__(Passivbot)
