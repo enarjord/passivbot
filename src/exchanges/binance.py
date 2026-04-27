@@ -1,8 +1,10 @@
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
+from passivbot_exceptions import FatalBotException
 
 import asyncio
 import random
+import re
 from utils import ts_to_date, utc_ms
 from pure_funcs import flatten
 from procedures import load_broker_code
@@ -13,6 +15,8 @@ class BinanceBot(CCXTBot):
     def __init__(self, config: dict):
         super().__init__(config)
         self.custom_id_max_length = 36
+        # Binance fill refresh can take ~15s; wait long enough to avoid closing CCXT mid-request.
+        self._shutdown_execution_grace_seconds = 20.0
 
     def create_ccxt_sessions(self):
         """Binance: Add broker codes after standard setup."""
@@ -87,11 +91,19 @@ class BinanceBot(CCXTBot):
         """Binance: Parse positionrisk response format."""
         positions = []
         for elm in fetched:
-            if float(elm["positionAmt"]) != 0.0:
+            size = float(elm["positionAmt"])
+            if size != 0.0:
+                raw_symbol = str(elm["symbol"])
+                if self._raw_symbol_is_dated_future(raw_symbol):
+                    raise FatalBotException(
+                        "Unsupported dated futures position detected on Binance: "
+                        f"{raw_symbol}. Passivbot live supports perpetual swaps; close this "
+                        "dated futures position before starting the bot."
+                    )
                 normalized = {
-                    "symbol": self.get_symbol_id_inv(elm["symbol"]),
+                    "symbol": self.get_symbol_id_inv(raw_symbol),
                     "position_side": elm["positionSide"].lower(),
-                    "size": float(elm["positionAmt"]),
+                    "size": size,
                     "price": float(elm["entryPrice"]),
                 }
                 margin_mode = self._extract_live_margin_mode(elm)
@@ -100,6 +112,12 @@ class BinanceBot(CCXTBot):
                     self._record_live_margin_mode(normalized["symbol"], margin_mode)
                 positions.append(normalized)
         return positions
+
+    def _raw_symbol_is_dated_future(self, raw_symbol: str) -> bool:
+        for market in (getattr(self, "markets_dict", {}) or {}).values():
+            if str(market.get("id") or "") == raw_symbol:
+                return self._market_has_settlement_date(market)
+        return bool(re.search(r"_\d{6}$", raw_symbol))
 
     def _get_balance(self, fetched: dict) -> float:
         """Binance uses totalCrossWalletBalance in info."""
@@ -151,6 +169,13 @@ class BinanceBot(CCXTBot):
     def _normalize_open_orders(self, fetched: list) -> list:
         open_orders = {}
         for elm in fetched:
+            raw_symbol = str(elm.get("info", {}).get("symbol") or "")
+            if raw_symbol and self._raw_symbol_is_dated_future(raw_symbol):
+                raise FatalBotException(
+                    "Unsupported dated futures open order detected on Binance: "
+                    f"{raw_symbol}. Passivbot live supports perpetual swaps; cancel this "
+                    "dated futures order before starting the bot."
+                )
             elm["position_side"] = elm["info"]["positionSide"].lower()
             elm["qty"] = elm["amount"]
             self._record_live_margin_mode_from_payload(elm)

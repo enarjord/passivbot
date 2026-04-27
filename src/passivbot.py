@@ -1912,7 +1912,66 @@ class Passivbot:
 
     def _assert_supported_live_state(self) -> None:
         """Hook: exchange-specific startup/runtime validation for unsupported live state."""
+        dated_symbols = sorted(self._unsupported_dated_futures_symbols_in_live_state())
+        if dated_symbols:
+            raise FatalBotException(
+                "Unsupported dated futures contracts detected in live state: "
+                f"{', '.join(dated_symbols)}. Passivbot live supports perpetual swaps; "
+                "close/cancel dated futures contracts and remove them from approved coins or "
+                "coin overrides before starting the bot."
+            )
         return None
+
+    def _market_has_settlement_date(self, market: dict) -> bool:
+        if not isinstance(market, dict):
+            return False
+        if bool(market.get("swap")):
+            return False
+        if bool(market.get("future")):
+            return True
+        if str(market.get("type") or "").lower() == "future":
+            return True
+        for key in ("expiry", "expiryDatetime", "deliveryDate", "settlementDate"):
+            if market.get(key) not in (None, "", 0):
+                return True
+        info = market.get("info")
+        if isinstance(info, dict):
+            for key in (
+                "expiry",
+                "expiryDate",
+                "expiryTime",
+                "deliveryDate",
+                "deliveryTime",
+                "settlementDate",
+            ):
+                if info.get(key) not in (None, "", 0):
+                    return True
+        return False
+
+    def _unsupported_dated_futures_symbols_in_live_state(self) -> set[str]:
+        markets = getattr(self, "markets_dict", {}) or {}
+        symbols: set[str] = set()
+        symbols.update(getattr(self, "active_symbols", []) or [])
+        symbols.update(getattr(self, "coin_overrides", {}) or {})
+        for side_symbols in getattr(self, "approved_coins_minus_ignored_coins", {}).values():
+            symbols.update(side_symbols or [])
+        for symbol, sides in (getattr(self, "positions", {}) or {}).items():
+            if not isinstance(sides, dict):
+                continue
+            for pside in ("long", "short"):
+                try:
+                    if float(sides.get(pside, {}).get("size", 0.0) or 0.0) != 0.0:
+                        symbols.add(symbol)
+                except Exception:
+                    continue
+        for symbol, orders in (getattr(self, "open_orders", {}) or {}).items():
+            if orders:
+                symbols.add(symbol)
+        return {
+            symbol
+            for symbol in symbols
+            if symbol in markets and self._market_has_settlement_date(markets[symbol])
+        }
 
     def _build_ccxt_options(self, overrides: Optional[dict] = None) -> dict:
         options = {"adjustForTimeDifference": True}

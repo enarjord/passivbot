@@ -1434,6 +1434,7 @@ class BinanceFetcher(BaseFetcher):
         now_func: Optional[Callable[[], int]] = None,
         positions_provider: Optional[Callable[[], Iterable[str]]] = None,
         open_orders_provider: Optional[Callable[[], Iterable[str]]] = None,
+        stop_requested: Optional[Callable[[], bool]] = None,
         income_limit: int = 1000,
         trade_limit: int = 1000,
     ) -> None:
@@ -1443,6 +1444,7 @@ class BinanceFetcher(BaseFetcher):
         self._symbol_resolver = symbol_resolver
         self._positions_provider = positions_provider or (lambda: ())
         self._open_orders_provider = open_orders_provider or (lambda: ())
+        self._stop_requested = stop_requested or (lambda: False)
         self.income_limit = min(1000, max(1, income_limit))  # cap to max 1000
         self._now_func = now_func or (lambda: int(datetime.now(tz=timezone.utc).timestamp() * 1000))
         self.trade_limit = max(1, trade_limit)
@@ -1489,7 +1491,11 @@ class BinanceFetcher(BaseFetcher):
             _format_ms(since_ms),
             _format_ms(until_ms),
         )
+        if self._stop_requested():
+            raise asyncio.CancelledError("shutdown requested before Binance fill refresh")
         income_events = await self._fetch_income(since_ms, until_ms)
+        if self._stop_requested():
+            raise asyncio.CancelledError("shutdown requested during Binance income refresh")
         symbol_pool = set(self._collect_symbols(self._positions_provider))
         symbol_pool.update(self._collect_symbols(self._open_orders_provider))
         symbol_pool.update(ev["symbol"] for ev in income_events if ev.get("symbol"))
@@ -1512,6 +1518,12 @@ class BinanceFetcher(BaseFetcher):
                 self._fetch_symbol_trades(symbol, since_ms, until_ms)
             )
         for symbol, task in trade_tasks.items():
+            if self._stop_requested():
+                for pending in trade_tasks.values():
+                    if not pending.done():
+                        pending.cancel()
+                await asyncio.gather(*trade_tasks.values(), return_exceptions=True)
+                raise asyncio.CancelledError("shutdown requested during Binance trade refresh")
             try:
                 trades = await task
             except RateLimitExceeded as exc:  # pragma: no cover - depends on live API
@@ -1645,6 +1657,14 @@ class BinanceFetcher(BaseFetcher):
                 )
             completed = 0
             for task in asyncio.as_completed(enrichment_tasks):
+                if self._stop_requested():
+                    for pending in enrichment_tasks:
+                        if not pending.done():
+                            pending.cancel()
+                    await asyncio.gather(*enrichment_tasks, return_exceptions=True)
+                    raise asyncio.CancelledError(
+                        "shutdown requested during Binance fill enrichment"
+                    )
                 completed += 1
                 try:
                     event, event_id, res = await task
@@ -1744,6 +1764,8 @@ class BinanceFetcher(BaseFetcher):
         previous_key: Optional[Tuple[Tuple[str, object], ...]] = None
         fetch_count = 0
         while True:
+            if self._stop_requested():
+                raise asyncio.CancelledError("shutdown requested during Binance income fetch")
             key = _check_pagination_progress(
                 previous_key,
                 params,
@@ -1801,6 +1823,10 @@ class BinanceFetcher(BaseFetcher):
 
             cursor = int(start_bound)
             while cursor <= end_bound:
+                if self._stop_requested():
+                    raise asyncio.CancelledError(
+                        f"shutdown requested during Binance trade fetch for {ccxt_symbol}"
+                    )
                 window_end = int(min(end_bound, cursor + week_span))
                 params["startTime"] = cursor
                 params["endTime"] = window_end
@@ -1858,6 +1884,13 @@ class BinanceFetcher(BaseFetcher):
             )
             return ordered
         except Exception as exc:  # pragma: no cover - depends on live API
+            if self._stop_requested():
+                logger.debug(
+                    "BinanceFetcher._fetch_symbol_trades: stopped during shutdown for %s (%s)",
+                    ccxt_symbol,
+                    exc,
+                )
+                return []
             msg = str(exc).lower() if exc else ""
             if "does not have market symbol" in msg or "market symbol" in msg:
                 self._note_unsupported_symbol(ccxt_symbol)
@@ -4788,13 +4821,30 @@ def _symbol_resolver(bot) -> Callable[[Optional[str]], str]:
 def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
     exchange = getattr(bot, "exchange", "").lower()
     resolver = _symbol_resolver(bot)
-    static_provider = lambda: symbols  # noqa: E731
     if exchange == "binance":
+        def binance_live_symbol_provider() -> Iterable[str]:
+            live_symbols: set[str] = set()
+            positions = getattr(bot, "positions", {}) or {}
+            for symbol, sides in positions.items():
+                if not isinstance(sides, dict):
+                    continue
+                for pside in ("long", "short"):
+                    try:
+                        if float(sides.get(pside, {}).get("size", 0.0) or 0.0) != 0.0:
+                            live_symbols.add(symbol)
+                    except Exception:
+                        continue
+            open_orders = getattr(bot, "open_orders", {}) or {}
+            live_symbols.update(symbol for symbol, orders in open_orders.items() if orders)
+            live_symbols.update(getattr(bot, "active_symbols", []) or [])
+            return sorted(live_symbols) if live_symbols else symbols
+
         return BinanceFetcher(
             api=bot.cca,
             symbol_resolver=resolver,
-            positions_provider=static_provider,
-            open_orders_provider=static_provider,
+            positions_provider=binance_live_symbol_provider,
+            open_orders_provider=binance_live_symbol_provider,
+            stop_requested=getattr(bot, "_shutdown_requested", None),
         )
     if exchange == "bitget":
         return BitgetFetcher(

@@ -11,6 +11,7 @@ from exchanges.gateio import GateIOBot
 from exchanges.kucoin import KucoinBot
 from exchanges.okx import OKXBot
 from passivbot import custom_id_has_explicit_passivbot_marker, custom_id_to_snake
+from passivbot_exceptions import FatalBotException
 from pure_funcs import determine_pos_side_ccxt
 
 
@@ -61,6 +62,30 @@ def test_binance_open_order_symbol_selection_can_seed_from_approved_when_empty()
         "ADA/USDT:USDT",
         "SOL/USDT:USDT",
     }
+
+
+def test_binance_normalize_positions_blocks_dated_futures_position():
+    bot = BinanceBot.__new__(BinanceBot)
+    bot.markets_dict = {
+        "BTC_260327/USDT:USDT": {
+            "id": "BTCUSDT_260327",
+            "future": True,
+            "swap": False,
+            "expiry": 1774579200000,
+        }
+    }
+
+    with pytest.raises(FatalBotException, match="Unsupported dated futures position"):
+        bot._normalize_positions(
+            [
+                {
+                    "symbol": "BTCUSDT_260327",
+                    "positionAmt": "0.01",
+                    "positionSide": "LONG",
+                    "entryPrice": "50000",
+                }
+            ]
+        )
 
 
 @pytest.mark.asyncio
