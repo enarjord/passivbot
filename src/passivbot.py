@@ -4563,9 +4563,6 @@ class Passivbot:
         """Run one execution cycle including config sync and order placement/cancellation."""
         await self.execution_cycle()
         # await self.update_EMAs()
-        await self.update_exchange_configs()
-        if self._shutdown_requested():
-            return None
         to_cancel, to_create = await self.calc_orders_to_cancel_and_create()
 
         # debug duplicates
@@ -4623,6 +4620,20 @@ class Passivbot:
                     for x in to_create_mod
                     if x["symbol"] not in self.state_change_detected_by_symbol
                 ]
+            if to_create_mod:
+                creation_symbols = sorted({order["symbol"] for order in to_create_mod})
+                configured_symbols = await self.update_exchange_configs(creation_symbols)
+                if self._shutdown_requested():
+                    return None
+                pending_config = sorted(set(creation_symbols) - set(configured_symbols or set()))
+                if pending_config:
+                    logging.warning(
+                        "[config] skipping order creation for symbols pending exchange config: %s",
+                        ",".join(pending_config),
+                    )
+                    to_create_mod = [
+                        order for order in to_create_mod if order["symbol"] not in pending_config
+                    ]
             res = None
             try:
                 res = await self.execute_orders_parent(to_create_mod)
@@ -5263,7 +5274,7 @@ class Passivbot:
             return False
         return True
 
-    async def update_exchange_configs(self):
+    async def update_exchange_configs(self, symbols=None):
         """Ensure exchange-specific settings are initialised for all active symbols."""
         if not hasattr(self, "already_updated_exchange_config_symbols"):
             self.already_updated_exchange_config_symbols = set()
@@ -5271,19 +5282,27 @@ class Passivbot:
             self._exchange_config_retry_attempts = {}
         if not hasattr(self, "_exchange_config_retry_after_ms"):
             self._exchange_config_retry_after_ms = {}
+        if symbols is None:
+            symbols = self.active_symbols
+        symbols = list(dict.fromkeys(symbols or []))
+        configured_symbols = set()
         symbols_not_done = [
-            x for x in self.active_symbols if x not in self.already_updated_exchange_config_symbols
+            x for x in symbols if x not in self.already_updated_exchange_config_symbols
         ]
+        configured_symbols.update(
+            x for x in symbols if x in self.already_updated_exchange_config_symbols
+        )
         if symbols_not_done:
             for symbol in symbols_not_done:
                 if self._shutdown_requested():
-                    break
+                    return configured_symbols
                 retry_after_ms = int(self._exchange_config_retry_after_ms.get(symbol, 0) or 0)
                 if retry_after_ms > utc_ms():
                     continue
                 try:
                     await self.update_exchange_config_by_symbols([symbol])
                     self.already_updated_exchange_config_symbols.add(symbol)
+                    configured_symbols.add(symbol)
                     self._exchange_config_retry_attempts.pop(symbol, None)
                     self._exchange_config_retry_after_ms.pop(symbol, None)
                 except RestartBotException:
@@ -5311,10 +5330,11 @@ class Passivbot:
                     )
                 else:
                     if self._shutdown_requested():
-                        break
+                        return configured_symbols
                     pause_s = self._exchange_config_success_pause_seconds()
                     if pause_s > 0.0:
                         await asyncio.sleep(pause_s)
+        return configured_symbols
 
     def _is_rate_limit_like_exception(self, exc: Exception) -> bool:
         if isinstance(exc, RateLimitExceeded):
