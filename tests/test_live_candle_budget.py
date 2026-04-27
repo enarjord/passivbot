@@ -370,7 +370,7 @@ async def test_orchestrator_ema_bundle_budgets_forager_only_symbols(monkeypatch)
 
     assert all(max_age <= 600_000 for _kind, _tf, max_age in by_symbol["POS/USDT:USDT"])
     assert all(max_age <= 600_000 for _kind, _tf, max_age in by_symbol["A/USDT:USDT"])
-    assert all(max_age > 300_000_000 for _kind, _tf, max_age in by_symbol["B/USDT:USDT"])
+    assert "B/USDT:USDT" not in by_symbol
 
 
 @pytest.mark.asyncio

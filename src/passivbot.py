@@ -8476,6 +8476,7 @@ class Passivbot:
             self._orchestrator_close_ema_fallback_counts = {}
         m1_max_age_by_symbol = {s: 60_000 for s in symbols}
         h1_max_age_by_symbol = {s: 600_000 for s in symbols}
+        cache_only_symbols: set[str] = set()
         if self.is_forager_mode():
             priority_symbols = []
             secondary_symbols = []
@@ -8513,6 +8514,8 @@ class Passivbot:
                 cache_only_ttl = 365 * 24 * 3600 * 1000
                 for sym, ttl in secondary_ttls.items():
                     ttl_int = int(ttl)
+                    if ttl_int >= cache_only_ttl:
+                        cache_only_symbols.add(sym)
                     m1_max_age_by_symbol[sym] = ttl_int
                     h1_max_age_by_symbol[sym] = (
                         ttl_int if ttl_int >= cache_only_ttl else max(600_000, ttl_int)
@@ -8686,9 +8689,9 @@ class Passivbot:
 
         async def load_symbol_bundle(sym: str):
             Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-            if sym in cache_only_never_fetched:
+            if sym in cache_only_symbols or sym in cache_only_never_fetched:
                 logging.debug(
-                    "[candle] skipping orchestrator EMA fetch for cache-only never-fetched symbol %s",
+                    "[candle] skipping orchestrator EMA fetch for cache-only symbol %s",
                     sym,
                 )
                 return {}, {}, {}, {}
