@@ -978,7 +978,11 @@ def check_keys(dict0, dict1):
 
 def get_cache_hash(config, exchange):
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
-    approved_coins = require_live_value(config, "approved_coins")
+    approved_coins_raw = require_live_value(config, "approved_coins")
+    approved_coins = {
+        "long": sorted(approved_coins_raw.get("long", [])),
+        "short": sorted(approved_coins_raw.get("short", [])),
+    }
     minimum_coin_age = require_live_value(config, "minimum_coin_age_days")
     backtest_cfg = config.get("backtest", {}) or {}
     coin_sources = backtest_cfg.get("coin_sources") or {}
