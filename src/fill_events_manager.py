@@ -1596,7 +1596,22 @@ class BinanceFetcher(BaseFetcher):
                     event["pb_order_type"] = pb_type
 
         enrichment_tasks: List[asyncio.Task[Optional[Tuple[str, str]]]] = []
-        enrichment_events: List[Tuple[Dict[str, object], str]] = []
+
+        async def _enrich_event_order_details(
+            event: Dict[str, object],
+            event_id: str,
+            order_id: str,
+            symbol: str,
+        ) -> Tuple[Dict[str, object], str, Optional[Tuple[str, str]]]:
+            return (
+                event,
+                event_id,
+                await self._enrich_with_order_details(
+                    str(order_id),
+                    str(symbol),
+                ),
+            )
+
         if merged:
             for event_id, event in merged.items():
                 has_client = bool(event.get("client_order_id"))
@@ -1614,33 +1629,48 @@ class BinanceFetcher(BaseFetcher):
                     symbol = event.get("symbol")
                 if not order_id or not symbol:
                     continue
-                enrichment_events.append((event, event_id))
                 enrichment_tasks.append(
                     asyncio.create_task(
-                        self._enrich_with_order_details(
-                            str(order_id),
-                            str(symbol),
-                        )
+                        _enrich_event_order_details(event, event_id, str(order_id), str(symbol))
                     )
                 )
         if enrichment_tasks:
-            detail_results = await asyncio.gather(*enrichment_tasks, return_exceptions=True)
-            for (event, event_id), res in zip(enrichment_events, detail_results):
-                if isinstance(res, Exception):
+            total_enrichments = len(enrichment_tasks)
+            started = time.time()
+            last_progress_log = started
+            if total_enrichments >= 50:
+                logger.info(
+                    "BinanceFetcher.fetch: enriching %d fills with order details",
+                    total_enrichments,
+                )
+            completed = 0
+            for task in asyncio.as_completed(enrichment_tasks):
+                completed += 1
+                try:
+                    event, event_id, res = await task
+                except Exception as exc:
                     logger.debug(
-                        "BinanceFetcher.fetch: fetch_order failed for %s (%s)",
-                        event.get("id"),
-                        res,
+                        "BinanceFetcher.fetch: order-detail enrichment failed (%s)",
+                        exc,
                     )
                     continue
-                if not res:
-                    continue
-                client_oid, pb_type = res
-                event["client_order_id"] = client_oid
-                if pb_type:
-                    event["pb_order_type"] = pb_type
-                if event_id:
-                    detail_cache[event_id] = (client_oid, pb_type or "")
+                if res:
+                    client_oid, pb_type = res
+                    event["client_order_id"] = client_oid
+                    if pb_type:
+                        event["pb_order_type"] = pb_type
+                    if event_id:
+                        detail_cache[event_id] = (client_oid, pb_type or "")
+                if total_enrichments >= 50:
+                    now = time.time()
+                    if completed == total_enrichments or now - last_progress_log >= 30.0:
+                        last_progress_log = now
+                        logger.info(
+                            "BinanceFetcher.fetch: order-detail enrichment progress %d/%d elapsed=%.0fs",
+                            completed,
+                            total_enrichments,
+                            now - started,
+                        )
 
         for event_id, ev in merged.items():
             client_oid = ev.get("client_order_id")

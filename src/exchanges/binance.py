@@ -115,16 +115,38 @@ class BinanceBot(CCXTBot):
             fetched = await self.cca.fetch_open_orders()
             self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = True
         else:
-            symbols_ = set()
-            symbols_.update([s for s in self.open_orders if self.open_orders[s]])
-            symbols_.update([s for s in self.get_symbols_with_pos()])
-            if hasattr(self, "active_symbols") and self.active_symbols:
-                symbols_.update(list(self.active_symbols))
-            results = await asyncio.gather(
-                *[self.cca.fetch_open_orders(symbol=s) for s in sorted(symbols_)]
-            )
-            fetched = [x for sublist in results for x in sublist]
+            symbols_ = {symbol} if symbol is not None else self._select_open_order_symbols()
+            fetched = await self._do_fetch_open_orders_for_symbols(symbols_)
         return fetched
+
+    def _select_open_order_symbols(
+        self,
+        extra_symbols: set[str] | list[str] | tuple[str, ...] | None = None,
+        *,
+        include_approved_if_unseeded: bool = False,
+    ) -> set[str]:
+        symbols_ = set()
+        symbols_.update([s for s in self.open_orders if self.open_orders[s]])
+        symbols_.update([s for s in self.get_symbols_with_pos()])
+        if hasattr(self, "active_symbols") and self.active_symbols:
+            symbols_.update(list(self.active_symbols))
+        if extra_symbols:
+            symbols_.update(extra_symbols)
+        if include_approved_if_unseeded and not symbols_:
+            for side_symbols in getattr(self, "approved_coins_minus_ignored_coins", {}).values():
+                symbols_.update(side_symbols)
+        markets = getattr(self, "markets_dict", {}) or {}
+        if markets:
+            symbols_ = {s for s in symbols_ if s in markets}
+        return symbols_
+
+    async def _do_fetch_open_orders_for_symbols(self, symbols: set[str]) -> list:
+        if not symbols:
+            return []
+        results = await asyncio.gather(
+            *[self.cca.fetch_open_orders(symbol=s) for s in sorted(symbols)]
+        )
+        return [x for sublist in results for x in sublist]
 
     def _normalize_open_orders(self, fetched: list) -> list:
         open_orders = {}
@@ -137,6 +159,65 @@ class BinanceBot(CCXTBot):
 
     async def fetch_open_orders(self, symbol: str = None, all=False) -> list:
         fetched = await self._do_fetch_open_orders(symbol=symbol, all=all)
+        return self._normalize_open_orders(fetched)
+
+    async def capture_authoritative_state_staged_snapshot(
+        self, plan: set[str], timings_ms: dict[str, int]
+    ) -> dict | None:
+        """Fetch Binance positions before open orders so symbol-scoped order fetches are seeded.
+
+        Binance open-order fetching intentionally avoids the expensive all-symbols endpoint.
+        The generic staged path fetches positions and open orders concurrently, which means
+        Binance's symbol selection can see stale local positions during startup. Sequence this
+        exchange-specific surface pair while keeping independent balance/fill fetches parallel.
+        """
+        if "open_orders" not in plan or "positions" not in plan:
+            return None
+
+        out = {"plan": set(plan), "pnls_ok": True}
+        tasks = {}
+        if "balance" in plan:
+            tasks["balance"] = asyncio.create_task(
+                self._timed_authoritative_fetch(
+                    "balance", self.capture_balance_snapshot(), timings_ms
+                )
+            )
+        tasks["positions"] = asyncio.create_task(
+            self._timed_authoritative_fetch(
+                "positions", self.capture_positions_snapshot(), timings_ms
+            )
+        )
+        if "fills" in plan:
+            tasks["fills"] = asyncio.create_task(
+                self._timed_authoritative_fetch("fills", self.update_pnls(), timings_ms)
+            )
+        try:
+            _raw_positions, positions = await tasks["positions"]
+            out["positions"] = positions
+            symbols = self._select_open_order_symbols(
+                [position["symbol"] for position in positions],
+                include_approved_if_unseeded=True,
+            )
+            out["open_orders"] = await self._timed_authoritative_fetch(
+                "open_orders",
+                self._fetch_open_orders_for_staged_symbols(symbols),
+                timings_ms,
+            )
+            if "balance" in tasks:
+                _raw_balance, balance = await tasks["balance"]
+                out["balance"] = balance
+            if "fills" in tasks:
+                out["pnls_ok"] = await tasks["fills"]
+            return out
+        except Exception:
+            for task in tasks.values():
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks.values(), return_exceptions=True)
+            raise
+
+    async def _fetch_open_orders_for_staged_symbols(self, symbols: set[str]) -> list:
+        fetched = await self._do_fetch_open_orders_for_symbols(symbols)
         return self._normalize_open_orders(fetched)
 
     async def fetch_tickers(self) -> dict:

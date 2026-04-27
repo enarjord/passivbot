@@ -46,6 +46,80 @@ def test_binance_position_side_uses_raw_info_ps_field():
     assert bot._get_position_side_for_order({"info": {"ps": "SHORT"}}) == "short"
 
 
+def test_binance_open_order_symbol_selection_can_seed_from_approved_when_empty():
+    bot = BinanceBot.__new__(BinanceBot)
+    bot.open_orders = {}
+    bot.positions = {}
+    bot.active_symbols = []
+    bot.approved_coins_minus_ignored_coins = {
+        "long": {"ADA/USDT:USDT"},
+        "short": {"SOL/USDT:USDT"},
+    }
+    bot.markets_dict = {"ADA/USDT:USDT": {}, "SOL/USDT:USDT": {}}
+
+    assert bot._select_open_order_symbols(include_approved_if_unseeded=True) == {
+        "ADA/USDT:USDT",
+        "SOL/USDT:USDT",
+    }
+
+
+@pytest.mark.asyncio
+async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbols():
+    bot = BinanceBot.__new__(BinanceBot)
+    bot.exchange = "binance"
+    bot.open_orders = {}
+    bot.positions = {}
+    bot.active_symbols = []
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.markets_dict = {"SOL/USDT:USDT": {}}
+    bot._record_live_margin_mode_from_payload = lambda payload: None
+
+    async def capture_balance_snapshot():
+        return {"raw": "balance"}, 100.0
+
+    async def capture_positions_snapshot():
+        return [{"raw": "position"}], [
+            {
+                "symbol": "SOL/USDT:USDT",
+                "position_side": "long",
+                "size": 1.0,
+                "price": 100.0,
+            }
+        ]
+
+    async def update_pnls():
+        return True
+
+    fetched_symbols = []
+
+    async def fetch_open_orders(symbol=None):
+        fetched_symbols.append(symbol)
+        return [
+            {
+                "id": "order-1",
+                "symbol": symbol,
+                "amount": 0.1,
+                "timestamp": 1,
+                "info": {"positionSide": "LONG"},
+            }
+        ]
+
+    bot.capture_balance_snapshot = capture_balance_snapshot
+    bot.capture_positions_snapshot = capture_positions_snapshot
+    bot.update_pnls = update_pnls
+    bot.cca = SimpleNamespace(fetch_open_orders=fetch_open_orders)
+
+    snapshot = await bot.capture_authoritative_state_staged_snapshot(
+        {"balance", "positions", "open_orders", "fills"}, {}
+    )
+
+    assert fetched_symbols == ["SOL/USDT:USDT"]
+    assert snapshot["balance"] == 100.0
+    assert snapshot["positions"][0]["symbol"] == "SOL/USDT:USDT"
+    assert snapshot["open_orders"][0]["symbol"] == "SOL/USDT:USDT"
+    assert snapshot["open_orders"][0]["position_side"] == "long"
+
+
 def test_bybit_position_side_uses_determine_pos_side_ccxt_contract():
     bot = BybitBot.__new__(BybitBot)
     assert bot._get_position_side_for_order({"info": {"positionIdx": 2}}) == "short"
