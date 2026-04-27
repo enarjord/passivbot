@@ -1163,6 +1163,20 @@ class CandlestickManager:
             )
             if self.debug_level == 1 and not is_network:
                 return
+            # Storage/cache hot paths are useful only when explicitly running TRACE-level
+            # candle diagnostics. At normal DEBUG they can dominate live logs.
+            high_volume_events = {
+                "disk_load_done",
+                "disk_load_plan",
+                "disk_load_progress",
+                "get_candles_check_refresh",
+                "get_candles_present_decision",
+                "index_cached",
+                "load_from_disk",
+                "ttl_bypass_missing_coverage",
+            }
+            if self.debug_level < 3 and event in high_volume_events:
+                return
             self.log.debug(msg)
         elif level == "info":
             self.log.info(msg)
@@ -4155,8 +4169,8 @@ class CandlestickManager:
                     # synthetic runs are expected. Other exchanges keep WARNING for large gaps.
                     sparse_expected = self._sparse_ohlcv_gaps_are_expected()
                     log_fn = (
-                        self.log.info
-                        if sparse_expected and synthesized_count > 1000
+                        self.log.debug
+                        if sparse_expected
                         else self.log.warning
                         if synthesized_count > 1000
                         else self.log.debug

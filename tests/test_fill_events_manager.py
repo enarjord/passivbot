@@ -3027,12 +3027,17 @@ def test_kucoin_pnl_discrepancy_logs_symbol_diagnostics(caplog):
     )
 
     messages = [rec.getMessage() for rec in caplog.records]
-    assert any("local sum 25.00 differs from positions_history 1.00" in msg for msg in messages)
+    assert not any(rec.levelno >= logging.WARNING for rec in caplog.records)
+    assert any(
+        "diagnostic trade-derived local sum 25.00 differs from authoritative positions_history 1.00"
+        in msg
+        for msg in messages
+    )
     assert any("top=TAO/USDT:USDT:local=25.00,history=1.25" in msg for msg in messages)
     assert any(
         "KucoinFetcher reconciliation detail symbol=TAO/USDT:USDT" in msg
         and "close_fills=1" in msg
-        and "probable_causes=" in msg
+        and "KuCoin contract multiplier/PnL model mismatch" in msg
         for msg in messages
     )
 

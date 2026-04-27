@@ -4070,9 +4070,9 @@ class KucoinFetcher(BaseFetcher):
                     f"history={float(row['remote']):.2f},delta={float(row['delta']):.2f}"
                     for row in symbol_rows[:3]
                 )
-                logger.warning(
-                    "[pnl] KucoinFetcher: local sum %.2f differs from positions_history %.2f "
-                    "(delta=%.2f) top=%s",
+                logger.debug(
+                    "[pnl] KucoinFetcher: diagnostic trade-derived local sum %.2f differs from "
+                    "authoritative positions_history %.2f (delta=%.2f) top=%s",
                     local_total,
                     remote_total,
                     current_delta,
@@ -4093,8 +4093,8 @@ class KucoinFetcher(BaseFetcher):
                         int(row["remote_positions"]),
                         _format_ms(int(row["remote_first_ts"]) or None),
                         _format_ms(int(row["remote_last_ts"]) or None),
-                        "timestamp-window mismatch, unmatched close fills, KuCoin side/reduceOnly "
-                        "classification, or positions_history pagination/symbol mismatch",
+                        "KuCoin contract multiplier/PnL model mismatch, partial historical "
+                        "trade window, unmatched close fills, or positions_history symbol mismatch",
                     )
 
     @staticmethod
