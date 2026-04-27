@@ -38,7 +38,9 @@ from fill_events_manager import (
     _extract_symbol_pool,
     compute_psize_pprice,
 )
+from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from monitor_publisher import MonitorPublisher
+from market_snapshot import MarketSnapshot, MarketSnapshotProvider
 from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
 import passivbot_monitor as pb_monitor
@@ -579,6 +581,7 @@ class Passivbot:
         self._authoritative_pending_confirmations = {}
         self._authoritative_barrier_last_log_key = None
         self._authoritative_barrier_last_log_ms = 0
+        self.freshness_ledger = FreshnessLedger(now_ms=utc_ms())
         self._disabled_psides_logged = set()
         self._last_coin_symbol_warning_counts = {
             "symbol_to_coin_fallbacks": 0,
@@ -654,6 +657,12 @@ class Passivbot:
                     "Unable to parse live.max_concurrent_api_requests=%r; ignoring",
                     max_concurrent,
                 )
+        try:
+            remote_fetch_min_interval_ms = float(self._get_fetch_delay_seconds() * 1000.0)
+        except Exception:
+            remote_fetch_min_interval_ms = 0.0
+        if remote_fetch_min_interval_ms > 0.0:
+            cm_kwargs["remote_fetch_min_interval_ms"] = remote_fetch_min_interval_ms
         raw_page_debug = get_optional_config_value(config, "logging.candle_page_debug_symbols", None)
         page_debug_symbols = []
         if raw_page_debug not in (None, "", []):
@@ -674,6 +683,11 @@ class Passivbot:
         archive_enabled = get_optional_live_value(config, "enable_archive_candle_fetch", False)
         cm_kwargs["archive_enabled"] = bool(archive_enabled)
         self.cm = CandlestickManager(**cm_kwargs)
+        self.cm.set_stop_requested_callback(self._shutdown_requested)
+        self.market_snapshot_provider = MarketSnapshotProvider(
+            exchange_name=self.exchange,
+            fetch_tickers=getattr(self, "fetch_tickers", None),
+        )
         if self.monitor_publisher is not None:
             self.cm.set_persist_batch_observer(self._monitor_handle_candlestick_persist)
         # TTL (minutes) for EMA candles on non-traded symbols
@@ -1003,7 +1017,9 @@ class Passivbot:
         if not self.fetched_positions:
             return 0.0
         symbols = {x["symbol"] for x in self.fetched_positions}
-        last_prices = await self.cm.get_last_prices(symbols, max_age_ms=60_000)
+        last_prices = await self._get_live_last_prices(
+            symbols, max_age_ms=60_000, context="hard_stop_upnl"
+        )
         upnl_sum = 0.0
         for elm in self.fetched_positions:
             symbol = elm["symbol"]
@@ -2049,6 +2065,7 @@ class Passivbot:
             self._health_rate_limits,
             f" | {mem_str}" if mem_str else "",
         )
+        self._maybe_log_candle_health_summary()
 
     def _calc_unstuck_allowance_for_logging(self, pside: str) -> dict:
         """Calculate raw unstuck allowance values for logging (including negative)."""
@@ -2232,7 +2249,7 @@ class Passivbot:
                     delay,
                     boot_stagger,
                 )
-                await asyncio.sleep(delay)
+                await self._sleep_unless_shutdown(delay, stage="boot_stagger")
                 if self.stop_signal_received:
                     self._monitor_emit_stop(
                         "startup_aborted",
@@ -2262,12 +2279,12 @@ class Passivbot:
                     payload={"stage": boot_stage, "stop_signal_received": True},
                 )
                 return
-            # Staggered warmup of candles for approved symbols (large sets handled gracefully)
-            boot_stage = "warmup_candles_staggered"
+            # Minimal trading-ready warmup first; broad approved-coin catch-up runs in background.
+            boot_stage = "warmup_trading_ready_candles"
             try:
-                await self.warmup_candles_staggered()
+                await self.warmup_trading_ready_candles()
             except Exception as e:
-                logging.info("[boot] warmup skipped due to: %s", e)
+                logging.info("[boot] trading-ready candle warmup skipped due to: %s", e)
             if self.stop_signal_received:
                 self._monitor_emit_stop(
                     "startup_aborted",
@@ -2286,7 +2303,7 @@ class Passivbot:
                     )
                     return
             boot_stage = "post_init_sleep"
-            await asyncio.sleep(1)
+            await self._sleep_unless_shutdown(1, stage="post_init_sleep")
             if self.stop_signal_received:
                 self._monitor_emit_stop(
                     "startup_aborted",
@@ -2298,6 +2315,8 @@ class Passivbot:
             logging.info("[boot] starting data maintainers...")
             boot_stage = "start_data_maintainers"
             await self.start_data_maintainers()
+            boot_stage = "start_background_candle_warmup"
+            await self.start_background_candle_warmup()
 
             logging.info("[boot] starting execution loop...")
             logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
@@ -2314,6 +2333,21 @@ class Passivbot:
             await self._monitor_flush_snapshot(force=True, ts=ready_ts)
             if not self.debug_mode:
                 await self.run_execution_loop()
+        except asyncio.CancelledError:
+            if self._shutdown_requested():
+                stop_ts = utc_ms()
+                logging.debug("[shutdown] startup/runtime task cancelled during %s", boot_stage)
+                self._monitor_emit_stop(
+                    "startup_aborted",
+                    ts=stop_ts,
+                    payload={"stage": boot_stage, "stop_signal_received": True},
+                )
+                try:
+                    await self._monitor_flush_snapshot(force=True, ts=stop_ts)
+                except Exception:
+                    pass
+                return
+            raise
         except Exception as exc:
             error_ts = utc_ms()
             self._monitor_record_error(
@@ -2376,11 +2410,7 @@ class Passivbot:
         self._assert_supported_live_state()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
-        if self._authoritative_refresh_mode() == "staged" and str(self.exchange).lower() in {
-            "fake",
-            "hyperliquid",
-            "bybit",
-        }:
+        if self._authoritative_refresh_mode() == "staged":
             await self.refresh_authoritative_state()
         else:
             await self.update_positions_and_balance()
@@ -2770,12 +2800,16 @@ class Passivbot:
         concurrency: int | None = None,
         window_candles: int | None = None,
         ttl_ms: int = 300_000,
+        symbols_override: Optional[Iterable[str]] = None,
+        skip_jitter: bool = False,
+        context: str = "warmup",
     ) -> None:
         """Warm up recent candles for all approved symbols in a staggered way.
 
         - concurrency: max in-flight symbols; if None, uses config or exchange-specific default
         - window_candles: number of 1m candles to warm; defaults to CandlestickManager.default_window_candles
         - ttl_ms: skip refresh if data newer than this TTL exists
+        - symbols_override: optional exact symbol set for minimal active-symbol warmup
 
         Logs a minimal countdown when warming >20 symbols.
         """
@@ -2788,24 +2822,43 @@ class Passivbot:
         slots_open_by_side: Dict[str, bool] = {}
         pos_counts: Dict[str, int] = {}
         max_counts: Dict[str, int] = {}
-        for pside in ("long", "short"):
-            try:
-                max_n = int(self.get_max_n_positions(pside))
-            except Exception:
-                max_n = 0
-            try:
-                current_n = int(self.get_current_n_positions(pside))
-            except Exception:
-                current_n = len(self.get_symbols_with_pos(pside))
-            max_counts[pside] = max_n
-            pos_counts[pside] = current_n
-            slots_open = max_n > current_n
-            slots_open_by_side[pside] = bool(slots_open)
-            forager_needed[pside] = bool(self.is_forager_mode(pside) and slots_open)
-            if slots_open:
-                symbols_by_side[pside] = set(self.get_symbols_approved_or_has_pos(pside))
-            else:
-                symbols_by_side[pside] = set(self.get_symbols_with_pos(pside))
+        override_symbols = (
+            {str(symbol) for symbol in symbols_override if symbol}
+            if symbols_override is not None
+            else None
+        )
+        if override_symbols is not None:
+            for pside in ("long", "short"):
+                try:
+                    max_counts[pside] = int(self.get_max_n_positions(pside))
+                except Exception:
+                    max_counts[pside] = 0
+                try:
+                    pos_counts[pside] = int(self.get_current_n_positions(pside))
+                except Exception:
+                    pos_counts[pside] = len(self.get_symbols_with_pos(pside))
+                slots_open_by_side[pside] = False
+                forager_needed[pside] = False
+                symbols_by_side[pside] = set(override_symbols)
+        else:
+            for pside in ("long", "short"):
+                try:
+                    max_n = int(self.get_max_n_positions(pside))
+                except Exception:
+                    max_n = 0
+                try:
+                    current_n = int(self.get_current_n_positions(pside))
+                except Exception:
+                    current_n = len(self.get_symbols_with_pos(pside))
+                max_counts[pside] = max_n
+                pos_counts[pside] = current_n
+                slots_open = max_n > current_n
+                slots_open_by_side[pside] = bool(slots_open)
+                forager_needed[pside] = bool(self.is_forager_mode(pside) and slots_open)
+                if slots_open:
+                    symbols_by_side[pside] = set(self.get_symbols_approved_or_has_pos(pside))
+                else:
+                    symbols_by_side[pside] = set(self.get_symbols_with_pos(pside))
         symbols = sorted(set().union(*symbols_by_side.values()))
         if not symbols:
             return
@@ -2834,7 +2887,7 @@ class Passivbot:
             max_jitter = float(max_jitter)
         except Exception:
             max_jitter = 30.0
-        if max_jitter > 0:
+        if max_jitter > 0 and not skip_jitter:
             jitter = random.uniform(0, max_jitter)
             if jitter > 5:
                 logging.info(
@@ -2846,13 +2899,13 @@ class Passivbot:
                 waited = 0.0
                 while waited < jitter:
                     sleep_chunk = min(10.0, jitter - waited)
-                    await asyncio.sleep(sleep_chunk)
+                    await self._sleep_unless_shutdown(sleep_chunk, stage="warmup_jitter")
                     waited += sleep_chunk
                     if waited < jitter:
                         logging.info("[boot] warmup jitter: %.0fs remaining...", jitter - waited)
             else:
                 logging.info("[boot] warmup jitter: sleeping %.1fs (max=%.0fs)", jitter, max_jitter)
-                await asyncio.sleep(jitter)
+                await self._sleep_unless_shutdown(jitter, stage="warmup_jitter")
 
         n = len(symbols)
         now = utc_ms()
@@ -2903,7 +2956,7 @@ class Passivbot:
             wmins = [per_symbol_win[s] for s in symbols]
             wmin, wmax = (min(wmins), max(wmins)) if wmins else (default_win, default_win)
             logging.info(
-                f"[warmup] starting: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
+                f"[warmup] {context}: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
             )
             try:
                 longest_span = int(math.ceil(wmax / max(1.0, (1.0 + warmup_ratio))))
@@ -2976,7 +3029,7 @@ class Passivbot:
                     pass
                 finally:
                     if fetch_delay_s > 0:
-                        await asyncio.sleep(fetch_delay_s)
+                        await self._sleep_unless_shutdown(fetch_delay_s, stage="warmup_candles")
                     completed += 1
                     # Time-based throttle: log every ~2s or on completion
                     if n > 20:
@@ -3018,7 +3071,7 @@ class Passivbot:
                     pass
                 finally:
                     if fetch_delay_s > 0:
-                        await asyncio.sleep(fetch_delay_s)
+                        await self._sleep_unless_shutdown(fetch_delay_s, stage="warmup_hour_candles")
 
         await asyncio.gather(*(warm_hour(s) for s in symbols))
 
@@ -3026,6 +3079,71 @@ class Passivbot:
         self.cm.flush_synth_candle_batch()
         # Flush batched candle replacement logs
         self.cm.flush_candle_replace_batch()
+
+    def _startup_active_candle_symbols(self) -> list[str]:
+        """Return symbols that need completed candles before first execution cycle."""
+        symbols: set[str] = set(getattr(self, "active_symbols", []) or [])
+        for symbol, pos_data in getattr(self, "positions", {}).items():
+            if not isinstance(pos_data, dict):
+                continue
+            for pside in ("long", "short"):
+                try:
+                    if abs(float((pos_data.get(pside, {}) or {}).get("size", 0.0) or 0.0)) > 0.0:
+                        symbols.add(symbol)
+                        break
+                except Exception:
+                    continue
+        for symbol, orders in getattr(self, "open_orders", {}).items():
+            if orders:
+                symbols.add(symbol)
+        return sorted(symbols)
+
+    async def warmup_trading_ready_candles(self) -> None:
+        """Synchronously warm only account-active symbols needed for initial safe execution."""
+        symbols = self._startup_active_candle_symbols()
+        if not symbols:
+            logging.info("[boot] trading-ready candle warmup skipped: no positions/open orders")
+            return
+        started = utc_ms()
+        logging.info("[boot] trading-ready candle warmup: %d symbols", len(symbols))
+        await self.warmup_candles_staggered(
+            symbols_override=symbols,
+            skip_jitter=True,
+            context="trading-ready warmup",
+        )
+        logging.info(
+            "[boot] trading-ready candle warmup complete: %d symbols elapsed=%.2fs",
+            len(symbols),
+            max(0.0, (utc_ms() - started) / 1000.0),
+        )
+
+    async def _background_candle_warmup_task(self) -> None:
+        """Broad approved-coin warmup after bot startup; best-effort and cancellable."""
+        try:
+            logging.info("[boot] background candle warmup starting")
+            await self.warmup_candles_staggered(context="background warmup")
+            logging.info("[boot] background candle warmup complete")
+        except asyncio.CancelledError:
+            logging.debug("[shutdown] background candle warmup cancelled")
+            raise
+        except Exception as exc:
+            logging.error("[boot] background candle warmup failed: %s", exc, exc_info=True)
+
+    async def start_background_candle_warmup(self) -> None:
+        """Start broad candle warmup in the background unless config requests legacy blocking."""
+        defer = get_optional_live_value(self.config, "defer_broad_candle_warmup", True)
+        defer = str(defer).lower() not in {"false", "0", "no", "off"}
+        if not defer:
+            await self._background_candle_warmup_task()
+            return
+        if not hasattr(self, "maintainers") or not isinstance(self.maintainers, dict):
+            self.maintainers = {}
+        existing = self.maintainers.get("background_candle_warmup")
+        if existing is not None and not existing.done():
+            return
+        self.maintainers["background_candle_warmup"] = asyncio.create_task(
+            self._background_candle_warmup_task()
+        )
 
     async def rebuild_required_candle_indices(
         self,
@@ -3042,6 +3160,9 @@ class Passivbot:
         symbols = list(symbols or [])
         if not symbols:
             return
+        if self._shutdown_requested():
+            logging.debug("[shutdown] skipping candle index rebuild")
+            return
 
         started = utc_ms()
         logging.info(
@@ -3052,6 +3173,8 @@ class Passivbot:
             updated_total = 0
             removed_total = 0
             for sym in symbols:
+                if self._shutdown_requested():
+                    break
                 win = int(per_symbol_win.get(sym, 0) or 0)
                 if win > 0 and end_final > 0:
                     start_ts = max(0, int(end_final - win * ONE_MIN_MS))
@@ -3218,6 +3341,231 @@ class Passivbot:
                     log_level=log_level,
                 )
 
+    def _required_candle_windows_by_symbol(
+        self, symbols: Optional[Iterable[str]] = None
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """Return completed-candle windows required by live indicators per symbol.
+
+        The returned windows are candle counts per timeframe. The helper is
+        read-only and intentionally includes a one-candle 15m diagnostic window
+        even though live planning primarily uses 1m and 1h candles today.
+        """
+        cm = getattr(self, "cm", None)
+        if cm is None:
+            return {}
+
+        symbol_filter = set(symbols) if symbols is not None else None
+        symbols_by_side: Dict[str, set] = {}
+        forager_enabled: Dict[str, bool] = {}
+        for pside in ("long", "short"):
+            try:
+                max_n = int(self.get_max_n_positions(pside))
+            except Exception as exc:
+                logging.debug(
+                    "[candle] unable to read max positions for health windows | pside=%s error_type=%s error=%s",
+                    pside,
+                    type(exc).__name__,
+                    exc,
+                )
+                max_n = 0
+            try:
+                current_n = int(self.get_current_n_positions(pside))
+            except Exception as exc:
+                logging.debug(
+                    "[candle] unable to read current positions for health windows | pside=%s error_type=%s error=%s",
+                    pside,
+                    type(exc).__name__,
+                    exc,
+                )
+                try:
+                    current_n = len(self.get_symbols_with_pos(pside))
+                except Exception as fallback_exc:
+                    logging.debug(
+                        "[candle] unable to infer current positions for health windows | "
+                        "pside=%s error_type=%s error=%s",
+                        pside,
+                        type(fallback_exc).__name__,
+                        fallback_exc,
+                    )
+                    current_n = 0
+            slots_open = max_n > current_n
+            try:
+                forager_enabled[pside] = bool(self.is_forager_mode(pside) and slots_open)
+            except Exception as exc:
+                logging.debug(
+                    "[candle] unable to read forager mode for health windows | pside=%s error_type=%s error=%s",
+                    pside,
+                    type(exc).__name__,
+                    exc,
+                )
+                forager_enabled[pside] = False
+            try:
+                if slots_open:
+                    syms = set(self.get_symbols_approved_or_has_pos(pside))
+                else:
+                    syms = set(self.get_symbols_with_pos(pside))
+            except Exception as exc:
+                logging.debug(
+                    "[candle] unable to build symbol set for health windows | pside=%s error_type=%s error=%s",
+                    pside,
+                    type(exc).__name__,
+                    exc,
+                )
+                syms = set()
+            if symbol_filter is not None:
+                syms &= symbol_filter
+            symbols_by_side[pside] = syms
+
+        symbol_set = sorted(set().union(*symbols_by_side.values())) if symbols_by_side else []
+        if not symbol_set:
+            return {}
+
+        try:
+            warmup_ratio = float(get_optional_live_value(self.config, "warmup_ratio", 0.0))
+        except Exception:
+            warmup_ratio = 0.0
+        try:
+            max_warmup_minutes = int(
+                get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0
+            )
+        except Exception:
+            max_warmup_minutes = 0
+
+        per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
+            symbols_by_side,
+            lambda pside, key, sym: self.bp(pside, key, sym),
+            forager_enabled=forager_enabled,
+            warmup_ratio=warmup_ratio,
+            max_warmup_minutes=max_warmup_minutes,
+        )
+        windows: Dict[str, Dict[str, int]] = {}
+        for symbol in symbol_set:
+            one_m = max(1, int(per_symbol_win.get(symbol, 1) or 1))
+            raw_one_h = int(per_symbol_h1_hours.get(symbol, 0) or 0)
+            one_h = max(1, raw_one_h)
+            windows[symbol] = {
+                "1m": {"candles": one_m, "required": True},
+                "15m": {"candles": 1, "required": False},
+                "1h": {"candles": one_h, "required": raw_one_h > 0},
+            }
+        return windows
+
+    def build_required_candle_health_report(
+        self, symbols: Optional[Iterable[str]] = None
+    ) -> Dict[str, Any]:
+        """Build completed-candle health diagnostics for required live windows."""
+        windows_by_symbol = self._required_candle_windows_by_symbol(symbols)
+        reports: Dict[str, Any] = {}
+        for symbol, windows in windows_by_symbol.items():
+            reports[symbol] = self.cm.get_completed_candle_health(symbol, windows)
+        unhealthy = {
+            symbol: report for symbol, report in reports.items() if not bool(report.get("ok", False))
+        }
+        return {
+            "ok": not unhealthy,
+            "symbols": reports,
+            "unhealthy_symbols": sorted(unhealthy),
+        }
+
+    def _maybe_log_candle_health_summary(self) -> None:
+        """Log periodic candle health diagnostics without fetching remote data."""
+        try:
+            symbols = set(getattr(self, "active_symbols", []) or [])
+            symbols |= {s for s, orders in getattr(self, "open_orders", {}).items() if orders}
+            for symbol, pos_data in getattr(self, "positions", {}).items():
+                if not isinstance(pos_data, dict):
+                    continue
+                if any(
+                    abs(float((pos_data.get(pside, {}) or {}).get("size", 0.0) or 0.0)) > 0.0
+                    for pside in ("long", "short")
+                ):
+                    symbols.add(symbol)
+            if not symbols:
+                return
+            report = self.build_required_candle_health_report(symbols)
+            symbol_reports = report.get("symbols", {})
+            if not symbol_reports:
+                return
+            worst_missing = 0
+            stale_count = 0
+            synthetic_count = 0
+            unhealthy_details = []
+            try:
+                stale_minutes = float(
+                    get_optional_live_value(self.config, "candle_health_stale_minutes", 10.0)
+                    or 10.0
+                )
+            except Exception:
+                stale_minutes = 10.0
+            stale_threshold_ms = int(60_000 * max(0.0, stale_minutes))
+            for symbol, symbol_report in symbol_reports.items():
+                for tf, tf_report in (symbol_report.get("timeframes", {}) or {}).items():
+                    required = bool(tf_report.get("required", True))
+                    missing = int(tf_report.get("missing_candles", 0) or 0)
+                    if required:
+                        worst_missing = max(worst_missing, missing)
+                    synthetic_count += int(tf_report.get("runtime_synthetic_count", 0) or 0)
+                    end_ts = tf_report.get("end_ts")
+                    last_cached_ts = tf_report.get("last_cached_ts")
+                    if not required:
+                        continue
+                    if last_cached_ts is None and end_ts is not None and int(end_ts) >= 0:
+                        stale_count += 1
+                    elif last_cached_ts is not None:
+                        age_ms = int(max(0, int(end_ts) - int(last_cached_ts)))
+                        if age_ms > stale_threshold_ms:
+                            stale_count += 1
+                    if required and missing > 0:
+                        unhealthy_details.append(f"{symbol} {tf} missing={missing}")
+            detail = "; ".join(unhealthy_details[:5])
+            if len(unhealthy_details) > 5:
+                detail += f"; +{len(unhealthy_details) - 5} more"
+            debug_payload = {
+                symbol: {
+                    tf: {
+                        "ok": bool(tf_report.get("coverage_ok", False)),
+                        "required": bool(tf_report.get("required", True)),
+                        "missing": int(tf_report.get("missing_candles", 0) or 0),
+                        "last_cached_ts": tf_report.get("last_cached_ts"),
+                        "synthetic": int(tf_report.get("runtime_synthetic_count", 0) or 0),
+                    }
+                    for tf, tf_report in (symbol_report.get("timeframes", {}) or {}).items()
+                }
+                for symbol, symbol_report in symbol_reports.items()
+            }
+            logging.debug(
+                "[candle] health diagnostics | symbols=%s details=%s",
+                len(symbol_reports),
+                debug_payload,
+            )
+            interesting = bool(unhealthy_details or stale_count or synthetic_count)
+            last_key = getattr(self, "_candle_health_last_log_key", None)
+            key = (
+                tuple(sorted(unhealthy_details)),
+                int(stale_count),
+                int(synthetic_count),
+                int(worst_missing),
+            )
+            if interesting and key != last_key:
+                self._candle_health_last_log_key = key
+                logging.info(
+                    "[candle] health: symbols=%d unhealthy=%d stale=%d synthetic=%d worst_missing=%d%s",
+                    len(symbol_reports),
+                    len(unhealthy_details),
+                    stale_count,
+                    synthetic_count,
+                    worst_missing,
+                    f" | {detail}" if detail else "",
+                )
+            elif not interesting:
+                logging.debug("[candle] health ok | symbols=%d", len(symbol_reports))
+        except Exception as exc:
+            logging.debug(
+                "[candle] health diagnostics failed | error_type=%s error=%s",
+                type(exc).__name__,
+                exc,
+            )
+
     def get_first_timestamp(self, symbol):
         """Return the cached first tradable timestamp for `symbol`, populating defaults."""
         if symbol not in self.first_timestamps:
@@ -3274,6 +3622,7 @@ class Passivbot:
         current_task = asyncio.current_task()
         execution_loop_stopped = asyncio.Event()
         self._execution_loop_task = current_task
+        self._execution_loop_task_is_inline = True
         self._execution_loop_stopped = execution_loop_stopped
         failed_update_pos_oos_pnls_ohlcvs_count = 0
         max_n_fails = 10
@@ -3291,7 +3640,14 @@ class Passivbot:
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="refresh_authoritative_state"
                 )
-                if not await self.refresh_authoritative_state():
+                try:
+                    authoritative_ok = await self.refresh_authoritative_state()
+                except asyncio.CancelledError:
+                    if self._shutdown_requested():
+                        logging.debug("[shutdown] authoritative refresh cancelled during shutdown")
+                        break
+                    raise
+                if not authoritative_ok:
                     if self._shutdown_requested():
                         break
                     await asyncio.sleep(0.5)
@@ -3330,13 +3686,26 @@ class Passivbot:
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="refresh_market_state_if_needed"
                 )
-                if not await self.refresh_market_state_if_needed():
+                try:
+                    market_ok = await self.refresh_market_state_if_needed()
+                except asyncio.CancelledError:
+                    if self._shutdown_requested():
+                        logging.debug("[shutdown] market refresh cancelled during shutdown")
+                        break
+                    raise
+                if not market_ok:
                     await asyncio.sleep(0.5)
                     continue
                 if self.stop_signal_received:
                     break
                 self._set_log_silence_watchdog_context(phase="runtime", stage="execute_to_exchange")
-                res = await self.execute_to_exchange()
+                try:
+                    res = await self.execute_to_exchange()
+                except asyncio.CancelledError:
+                    if self._shutdown_requested():
+                        logging.debug("[shutdown] execution cancelled during shutdown")
+                        break
+                    raise
                 if self.debug_mode:
                     if getattr(self, "_execution_loop_task", None) is current_task:
                         self._execution_loop_task = None
@@ -3403,6 +3772,20 @@ class Passivbot:
             or getattr(self, "_shutdown_in_progress", False)
         )
 
+    def _raise_if_shutdown_requested(self, stage: str) -> None:
+        if Passivbot._shutdown_requested(self):
+            logging.debug("[shutdown] aborting %s", stage)
+            raise asyncio.CancelledError(f"shutdown requested during {stage}")
+
+    async def _sleep_unless_shutdown(self, seconds: float, *, stage: str) -> None:
+        remaining = max(0.0, float(seconds))
+        while remaining > 0.0:
+            Passivbot._raise_if_shutdown_requested(self, stage)
+            chunk = min(remaining, 0.25)
+            await asyncio.sleep(chunk)
+            remaining -= chunk
+        Passivbot._raise_if_shutdown_requested(self, stage)
+
     async def shutdown_gracefully(self):
         if getattr(self, "_shutdown_in_progress", False):
             return
@@ -3430,19 +3813,42 @@ class Passivbot:
                 logging.error("[shutdown] error awaiting maintainer cancellation: %s", e)
         execution_loop_stopped = getattr(self, "_execution_loop_stopped", None)
         execution_loop_task = getattr(self, "_execution_loop_task", None)
-        if (
-            execution_loop_stopped is not None
-            and execution_loop_task is not None
-            and not execution_loop_task.done()
-        ):
+        if execution_loop_task is not None and not execution_loop_task.done():
             try:
-                await asyncio.wait_for(execution_loop_stopped.wait(), timeout=15.0)
+                grace_seconds = float(getattr(self, "_shutdown_execution_grace_seconds", 5.0))
+            except Exception:
+                grace_seconds = 5.0
+            grace_seconds = max(0.0, grace_seconds)
+            try:
+                if execution_loop_stopped is not None:
+                    await asyncio.wait_for(execution_loop_stopped.wait(), timeout=grace_seconds)
+                else:
+                    await asyncio.wait_for(asyncio.shield(execution_loop_task), timeout=grace_seconds)
             except asyncio.TimeoutError:
                 logging.debug(
-                    "[shutdown] timed out waiting for execution loop before closing sessions"
+                    "[shutdown] execution loop still active after %.1fs",
+                    grace_seconds,
                 )
+                if not bool(getattr(self, "_execution_loop_task_is_inline", False)):
+                    logging.debug("[shutdown] cancelling background execution loop task")
+                    execution_loop_task.cancel()
+                    try:
+                        await asyncio.wait_for(execution_loop_task, timeout=5.0)
+                    except asyncio.CancelledError:
+                        pass
+                    except asyncio.TimeoutError:
+                        logging.debug(
+                            "[shutdown] timed out waiting for cancelled execution loop before closing sessions"
+                        )
+            except asyncio.CancelledError:
+                logging.debug("[shutdown] execution loop cancelled during shutdown")
             except Exception as e:
                 logging.debug("[shutdown] error waiting for execution loop: %s", e)
+            finally:
+                try:
+                    execution_loop_stopped.set()
+                except Exception:
+                    pass
         await asyncio.sleep(0)
         try:
             if getattr(self, "ccp", None) is not None:
@@ -3480,14 +3886,13 @@ class Passivbot:
 
     def _authoritative_refresh_mode(self) -> str:
         config = getattr(self, "config", {}) or {}
-        exchange = str(getattr(self, "exchange", "") or "").lower()
         if "_raw_effective" in config:
             explicit_mode = get_optional_config_value(
                 config, "_raw_effective.live.authoritative_refresh_mode", None
             )
         else:
             explicit_mode = get_optional_live_value(config, "authoritative_refresh_mode", None)
-        default_mode = "staged" if exchange == "hyperliquid" else "legacy"
+        default_mode = "staged"
         mode = str(explicit_mode if explicit_mode is not None else default_mode).lower()
         return mode if mode in {"legacy", "staged"} else default_mode
 
@@ -3498,12 +3903,7 @@ class Passivbot:
         self._begin_authoritative_refresh_epoch()
         mode = self._authoritative_refresh_mode()
         if mode == "staged":
-            exchange = str(getattr(self, "exchange", "") or "").lower()
-            if exchange in {"fake", "hyperliquid", "bybit"}:
-                return await self._refresh_authoritative_state_staged()
-            self.log_once(
-                f"[state] authoritative_refresh_mode=staged not yet supported for {exchange or 'unknown'}; using legacy refresh"
-            )
+            return await self._refresh_authoritative_state_staged()
         return await self._refresh_authoritative_state_legacy()
 
     async def _refresh_authoritative_state_legacy(self) -> bool:
@@ -4144,6 +4544,8 @@ class Passivbot:
         await self.execution_cycle()
         # await self.update_EMAs()
         await self.update_exchange_configs()
+        if self._shutdown_requested():
+            return None
         to_cancel, to_create = await self.calc_orders_to_cancel_and_create()
 
         # debug duplicates
@@ -4582,11 +4984,7 @@ class Passivbot:
             now = utc_ms()
             staleness = []
             for s in syms:
-                try:
-                    last_ref = self.cm.get_last_refresh_ms(s)
-                except Exception:
-                    last_ref = 0
-                staleness.append((s, int(now - last_ref) if last_ref > 0 else now))
+                staleness.append((s, self._candle_staleness_ms(s, now_ms=now)))
             staleness.sort(key=lambda x: x[1], reverse=True)  # most stale first
             fetch_set = set(s for s, _ in staleness[:max_network_fetches])
             for s in syms:
@@ -4606,12 +5004,42 @@ class Passivbot:
 
         return per_sym_ttl, cache_only_never_fetched
 
-    def _get_fetch_delay_seconds(self) -> float:
-        """Return configured per-fetch delay in seconds.
+    def _candle_staleness_ms(self, symbol: str, *, now_ms: Optional[int] = None) -> int:
+        """Return age of latest completed 1m candle, preferring candle timestamp over refresh time."""
+        now = utc_ms() if now_ms is None else int(now_ms)
+        try:
+            last_final = int(self.cm.get_last_final_ts(symbol) or 0)
+        except Exception:
+            last_final = 0
+        if last_final > 0:
+            return max(0, int(now - last_final))
+        try:
+            last_refresh = int(self.cm.get_last_refresh_ms(symbol) or 0)
+        except Exception:
+            last_refresh = 0
+        if last_refresh > 0:
+            return max(0, int(now - last_refresh))
+        return int(now)
 
-        Default 200ms for Bybit and Hyperliquid (strict IP-based rate limits),
-        0ms for all others.
-        Override via live.warmup_fetch_delay_ms in config.
+    def _rank_symbols_by_candle_staleness(
+        self, symbols: Iterable[str], *, now_ms: Optional[int] = None
+    ) -> list[str]:
+        """Return symbols sorted by descending completed-candle staleness."""
+        now = utc_ms() if now_ms is None else int(now_ms)
+        ranked = [
+            (self._candle_staleness_ms(symbol, now_ms=now), str(symbol))
+            for symbol in dict.fromkeys(symbols)
+            if symbol
+        ]
+        ranked.sort(key=lambda item: (-int(item[0]), item[1]))
+        return [symbol for _, symbol in ranked]
+
+    def _get_fetch_delay_seconds(self) -> float:
+        """Return configured candle fetch pacing delay in seconds.
+
+        The value is wired into CandlestickManager as process-local spacing
+        between CCXT OHLCV calls. Existing symbol-level refresh loops also use
+        it as a small post-symbol pause for compatibility.
         """
         fetch_delay_ms = get_optional_live_value(self.config, "warmup_fetch_delay_ms", None)
         try:
@@ -4828,6 +5256,8 @@ class Passivbot:
         ]
         if symbols_not_done:
             for symbol in symbols_not_done:
+                if self._shutdown_requested():
+                    break
                 retry_after_ms = int(self._exchange_config_retry_after_ms.get(symbol, 0) or 0)
                 if retry_after_ms > utc_ms():
                     continue
@@ -4860,6 +5290,8 @@ class Passivbot:
                         e,
                     )
                 else:
+                    if self._shutdown_requested():
+                        break
                     pause_s = self._exchange_config_success_pause_seconds()
                     if pause_s > 0.0:
                         await asyncio.sleep(pause_s)
@@ -5426,6 +5858,11 @@ class Passivbot:
         ) + 1
         self._authoritative_refresh_epoch_fresh = set()
         self._authoritative_refresh_epoch_changed = set()
+        ledger = getattr(self, "freshness_ledger", None)
+        if ledger is None:
+            ledger = FreshnessLedger(now_ms=utc_ms())
+            self.freshness_ledger = ledger
+        ledger.begin_epoch(now_ms=utc_ms())
 
     def _record_authoritative_surface(self, surface: str, signature) -> bool:
         """Record a fresh authoritative surface snapshot and whether it changed."""
@@ -5441,6 +5878,14 @@ class Passivbot:
         changed = prev != signature
         self._authoritative_surface_signatures[surface] = signature
         self._authoritative_refresh_epoch_fresh.add(surface)
+        ledger = getattr(self, "freshness_ledger", None)
+        if ledger is not None:
+            ledger.stamp(
+                surface,
+                signature,
+                now_ms=utc_ms(),
+                epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+            )
         if changed:
             self._authoritative_surface_generations[surface] = (
                 int(self._authoritative_surface_generations.get(surface, 0) or 0) + 1
@@ -5512,6 +5957,13 @@ class Passivbot:
 
     def _authoritative_full_confirmation_surfaces(self) -> set[str]:
         return {"balance", "positions", "open_orders", "fills"}
+
+    def _ensure_freshness_ledger(self) -> FreshnessLedger:
+        ledger = getattr(self, "freshness_ledger", None)
+        if ledger is None:
+            ledger = FreshnessLedger(now_ms=utc_ms())
+            self.freshness_ledger = ledger
+        return ledger
 
     def _cancel_result_requires_full_authoritative_confirmation(self, executed) -> bool:
         if isinstance(executed, list):
@@ -5621,6 +6073,182 @@ class Passivbot:
             self._request_authoritative_confirmation(
                 {"balance", "positions", "open_orders", "fills"}
             )
+
+    def _order_matches_known_self_emission(
+        self, order: dict, max_age_ms=FOREIGN_PASSIVBOT_LOOKBACK_MS
+    ) -> bool:
+        """Return True when an open order is known to have been emitted by this process."""
+        if not isinstance(order, dict):
+            return False
+        if self.order_matches_recent_execution(order, max_age_ms=max_age_ms):
+            return True
+        now_ts = int(self.get_exchange_time()) if hasattr(self, "get_exchange_time") else utc_ms()
+        cutoff = now_ts - int(max_age_ms)
+        exchange_id = Passivbot._extract_order_exchange_id(self, order)
+        custom_id = Passivbot._extract_order_custom_id(self, order)
+        canonical_custom_id = Passivbot._canonical_passivbot_custom_id(self, custom_id)
+        pb_type = custom_id_to_snake(custom_id) if custom_id else self._resolve_pb_order_type(order)
+        fingerprint = Passivbot._order_identity_fingerprint(self, order, pb_type)
+        for record in Passivbot._emitted_order_records(self):
+            record_ts_raw = record.get("timestamp")
+            if record_ts_raw is None:
+                continue
+            try:
+                record_ts = int(record_ts_raw)
+            except (TypeError, ValueError):
+                continue
+            if record_ts < cutoff:
+                continue
+            record_exchange_id = str(record.get("exchange_id") or "")
+            if exchange_id and record_exchange_id and str(exchange_id) == record_exchange_id:
+                return True
+            record_custom_id = str(record.get("canonical_custom_id") or "")
+            if canonical_custom_id and record_custom_id and canonical_custom_id == record_custom_id:
+                return True
+            if (
+                fingerprint
+                and record.get("fingerprint")
+                and record.get("fingerprint") == fingerprint
+            ):
+                return True
+        return False
+
+    def _flag_disappeared_self_order_guardrail(self, order: dict) -> None:
+        """Block creates for a symbol until account surfaces refresh after a self order vanishes."""
+        symbol = str(order.get("symbol") or "")
+        if not symbol:
+            return
+        ledger = self._ensure_freshness_ledger()
+        min_epoch = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0) + 1
+        details = {
+            "order_id": str(order.get("id") or ""),
+            "side": str(order.get("side") or ""),
+            "position_side": str(order.get("position_side") or ""),
+            "price": order.get("price"),
+            "qty": order.get("qty", order.get("amount")),
+        }
+        ledger.flag_symbol_block(
+            symbol,
+            reason="self_order_disappeared_position_may_be_stale",
+            required_surfaces=ACCOUNT_SURFACES,
+            min_epoch=min_epoch,
+            detected_ms=utc_ms(),
+            details=details,
+        )
+        self.execution_scheduled = True
+        if not hasattr(self, "state_change_detected_by_symbol"):
+            self.state_change_detected_by_symbol = set()
+        self.state_change_detected_by_symbol.add(symbol)
+        self._request_authoritative_confirmation(ACCOUNT_SURFACES, min_epoch=min_epoch)
+        logging.debug(
+            "[state] freshness guardrail armed | symbol=%s | reason=self_order_disappeared_position_may_be_stale | required=%s | min_epoch=%s | order_id=%s",
+            symbol,
+            ",".join(sorted(ACCOUNT_SURFACES)),
+            min_epoch,
+            details["order_id"],
+        )
+
+    def _freshness_creation_blocked_symbols(self) -> dict[str, object]:
+        ledger = getattr(self, "freshness_ledger", None)
+        if ledger is None:
+            return {}
+        return ledger.blocked_symbols()
+
+    def _staged_planner_required_surfaces(
+        self, *, include_market_snapshot: bool = True
+    ) -> frozenset[str]:
+        """Return live input surfaces required before staged order planning may proceed."""
+        surfaces = set(LIVE_STATE_SURFACES)
+        if not include_market_snapshot:
+            surfaces.discard("market_snapshot")
+        return frozenset(surfaces)
+
+    def _staged_planner_surface_min_epochs(
+        self, required: set[str] | frozenset[str]
+    ) -> dict[str, int]:
+        """Return minimum acceptable ledger epoch per staged planner input surface."""
+        current_epoch = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0)
+        pending = dict(getattr(self, "_authoritative_pending_confirmations", {}) or {})
+        min_epochs: dict[str, int] = {}
+        for surface in required:
+            if surface in ACCOUNT_SURFACES:
+                min_epochs[surface] = max(1, int(pending.get(surface, 0) or 0))
+            elif surface in {"completed_candles", "market_snapshot"}:
+                min_epochs[surface] = current_epoch
+            else:
+                min_epochs[surface] = current_epoch
+        return min_epochs
+
+    def _staged_planner_precondition_state(
+        self, *, include_market_snapshot: bool = True
+    ) -> tuple[bool, dict]:
+        """Return staged planner input-completeness state for the current planning pass."""
+        if self._authoritative_refresh_mode() != "staged":
+            return True, {"missing": [], "required": [], "epoch": 0}
+        ledger = self._ensure_freshness_ledger()
+        required = self._staged_planner_required_surfaces(
+            include_market_snapshot=include_market_snapshot
+        )
+        min_epochs = self._staged_planner_surface_min_epochs(required)
+        missing = sorted(
+            surface
+            for surface in required
+            if ledger.surface_epoch(surface) < int(min_epochs.get(surface, 0) or 0)
+        )
+        return not missing, {
+            "missing": missing,
+            "required": sorted(required),
+            "epoch": int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+            "min_epochs": min_epochs,
+        }
+
+    def _assert_staged_planner_preconditions(
+        self, *, include_market_snapshot: bool = True, context: str = "planning"
+    ) -> None:
+        """Hard-fail before Rust planning if staged live inputs are incomplete."""
+        ok, details = self._staged_planner_precondition_state(
+            include_market_snapshot=include_market_snapshot
+        )
+        if ok:
+            return
+        missing = ",".join(details["missing"])
+        required = ",".join(details["required"])
+        raise RuntimeError(
+            f"staged planner precondition failed before {context}: "
+            f"missing current-epoch surfaces={missing} epoch={details['epoch']} "
+            f"required={required}"
+        )
+
+    def _apply_freshness_creation_guardrails(self, orders: list[dict]) -> tuple[list[dict], int]:
+        blocked = self._freshness_creation_blocked_symbols()
+        if not blocked:
+            return orders, 0
+        kept = []
+        skipped = 0
+        logged_symbols = set()
+        for order in orders:
+            symbol = str(order.get("symbol") or "")
+            block = blocked.get(symbol)
+            if block is None:
+                kept.append(order)
+                continue
+            skipped += 1
+            if symbol not in logged_symbols:
+                missing = []
+                ledger = getattr(self, "freshness_ledger", None)
+                if ledger is not None:
+                    missing = ledger.surfaces_missing_after(
+                        block.required_surfaces, block.min_epoch
+                    )
+                logging.info(
+                    "[state] freshness guardrail blocking order creation | symbol=%s | reason=%s | missing=%s | min_epoch=%s",
+                    symbol,
+                    block.reason,
+                    ",".join(missing) if missing else "unknown",
+                    block.min_epoch,
+                )
+                logged_symbols.add(symbol)
+        return kept, skipped
 
     def add_new_order(self, order, source="WS"):
         """No-op placeholder; subclasses update open orders through REST synchronisation."""
@@ -5784,8 +6412,10 @@ class Passivbot:
     async def calc_upnl_sum(self):
         """Compute unrealised PnL across fetched positions using latest prices."""
         upnl_sum = 0.0
-        last_prices = await self.cm.get_last_prices(
-            set([x["symbol"] for x in self.fetched_positions]), max_age_ms=60_000
+        last_prices = await self._get_live_last_prices(
+            set([x["symbol"] for x in self.fetched_positions]),
+            max_age_ms=60_000,
+            context="upnl",
         )
         for elm in self.fetched_positions:
             try:
@@ -6789,7 +7419,13 @@ class Passivbot:
             WEL_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
             WELe_ratio = wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0
 
-            last_price = await self.cm.get_current_close(symbol, max_age_ms=60_000)
+            last_prices = await self._get_live_last_prices(
+                [symbol],
+                max_age_ms=60_000,
+                context="position_change_log",
+                allow_completed_candle_fallback=True,
+            )
+            last_price = last_prices[symbol]
             try:
                 pprice_diff = (
                     pbr.calc_pprice_diff_int(self.pside_int_map[pside], new["price"], last_price)
@@ -6947,28 +7583,30 @@ class Passivbot:
         unexpected_removed_symbols = set()
         if len(removed_orders) > 20:
             logging.info(f"removed {len(removed_orders)} orders")
-        else:
-            for order in removed_orders:
-                cancelled_by_bot = False
-                if hasattr(self, "order_matches_bot_cancellation"):
-                    cancelled_by_bot = self.order_matches_bot_cancellation(order)
-                else:
-                    cancelled_by_bot = Passivbot.order_matches_bot_cancellation(self, order)
-                if not cancelled_by_bot and not self.order_was_recently_cancelled(order):
-                    unexpected_open_orders_change = True
-                    schedule_update_positions = True
-                    unexpected_removed_symbols.add(order["symbol"])
+        for order in removed_orders:
+            cancelled_by_bot = False
+            if hasattr(self, "order_matches_bot_cancellation"):
+                cancelled_by_bot = self.order_matches_bot_cancellation(order)
+            else:
+                cancelled_by_bot = Passivbot.order_matches_bot_cancellation(self, order)
+            if not cancelled_by_bot and not self.order_was_recently_cancelled(order):
+                unexpected_open_orders_change = True
+                schedule_update_positions = True
+                unexpected_removed_symbols.add(order["symbol"])
+                if self._order_matches_known_self_emission(order):
+                    self._flag_disappeared_self_order_guardrail(order)
+                if len(removed_orders) <= 20:
                     self.log_order_action(
                         order, "missing order", "fetch_open_orders", level=logging.INFO
                     )
-                else:
-                    self.log_order_action(
-                        order,
-                        "removed order",
-                        "fetch_open_orders",
-                        level=logging.DEBUG,
-                        context="bot_cancel_confirmed" if cancelled_by_bot else None,
-                    )
+            elif len(removed_orders) <= 20:
+                self.log_order_action(
+                    order,
+                    "removed order",
+                    "fetch_open_orders",
+                    level=logging.DEBUG,
+                    context="bot_cancel_confirmed" if cancelled_by_bot else None,
+                )
         if len(added_orders) > 20:
             logging.info(f"[order] added {len(added_orders)} new orders")
         else:
@@ -7125,7 +7763,9 @@ class Passivbot:
             symbols = sorted(self.get_symbols_approved_or_has_pos())
         else:
             symbols = [symbol]
-        last_prices = await self.cm.get_last_prices(symbols, max_age_ms=600_000)
+        last_prices = await self._get_live_last_prices(
+            symbols, max_age_ms=600_000, context="effective_min_cost"
+        )
         for symbol in symbols:
             try:
                 self.effective_min_cost[symbol] = self._calc_effective_min_cost_at_price(
@@ -7647,12 +8287,63 @@ class Passivbot:
             self._orchestrator_prev_close_ema = {}
         if not hasattr(self, "_orchestrator_close_ema_fallback_counts"):
             self._orchestrator_close_ema_fallback_counts = {}
+        m1_max_age_by_symbol = {s: 60_000 for s in symbols}
+        h1_max_age_by_symbol = {s: 600_000 for s in symbols}
+        if self.is_forager_mode():
+            priority_symbols = []
+            secondary_symbols = []
+            for sym in symbols:
+                has_pos = self.has_position(symbol=sym)
+                has_oo = bool(self.open_orders.get(sym)) if hasattr(self, "open_orders") else False
+                if has_pos or has_oo:
+                    priority_symbols.append(sym)
+                else:
+                    secondary_symbols.append(sym)
+            if secondary_symbols:
+                max_calls = get_optional_live_value(self.config, "max_ohlcv_fetches_per_minute", 0)
+                try:
+                    max_calls = int(max_calls) if max_calls is not None else 0
+                except Exception:
+                    max_calls = 0
+                if max_calls > 0:
+                    cycle_cap = max(1, int(math.ceil(float(max_calls) / 4.0)))
+                    budget = self._token_bucket_budget(
+                        "_forager_active_candle_refresh_state",
+                        max_calls,
+                        max_cycle_budget=cycle_cap,
+                        initial_tokens=cycle_cap,
+                    )
+                    secondary_max_age_ms = max(
+                        60_000,
+                        self._forager_target_staleness_ms(len(secondary_symbols), max_calls),
+                    )
+                else:
+                    budget = 0
+                    secondary_max_age_ms = int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
+                secondary_ttls, _cache_only_never_fetched = self._compute_fetch_budget_ttls(
+                    secondary_symbols, secondary_max_age_ms, budget
+                )
+                cache_only_ttl = 365 * 24 * 3600 * 1000
+                for sym, ttl in secondary_ttls.items():
+                    ttl_int = int(ttl)
+                    m1_max_age_by_symbol[sym] = ttl_int
+                    h1_max_age_by_symbol[sym] = (
+                        ttl_int if ttl_int >= cache_only_ttl else max(600_000, ttl_int)
+                    )
+                logging.debug(
+                    "[candle] orchestrator forager EMA budget priority=%d secondary=%d budget=%d target_age=%ds",
+                    len(priority_symbols),
+                    len(secondary_symbols),
+                    int(budget),
+                    int(secondary_max_age_ms / 1000),
+                )
 
         async def fetch_map(symbol: str, spans: list[float], fn, ema_type: str):
             out: dict[float, float] = {}
             if not spans:
                 return out
             for sp in spans:
+                Passivbot._raise_if_shutdown_requested(self, f"ema_{ema_type}")
                 span = float(sp)
                 try:
                     val = float(await fn(symbol, span))
@@ -7684,6 +8375,7 @@ class Passivbot:
                 return out
             missing: list[tuple[float, str]] = []
             for sp in spans:
+                Passivbot._raise_if_shutdown_requested(self, f"required_ema_{ema_type}")
                 span = float(sp)
                 try:
                     val = float(await fn(symbol, span))
@@ -7715,6 +8407,7 @@ class Passivbot:
             prev_by_span = self._orchestrator_prev_close_ema.setdefault(symbol, {})
             missing: list[tuple[float, str]] = []
             for sp in spans:
+                Passivbot._raise_if_shutdown_requested(self, "close_ema")
                 span = float(sp)
                 key = (symbol, span)
                 reason = None
@@ -7773,27 +8466,43 @@ class Passivbot:
 
         async def ema_close(symbol: str, span: float) -> float:
             # 1m candles finalize once/min; 60s TTL avoids redundant network fetches.
-            return float(await self.cm.get_latest_ema_close(symbol, span=span, max_age_ms=60_000))
+            return float(
+                await self.cm.get_latest_ema_close(
+                    symbol, span=span, max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000)
+                )
+            )
 
         async def ema_qv(symbol: str, span: float) -> float:
             return float(
-                await self.cm.get_latest_ema_quote_volume(symbol, span=span, max_age_ms=60_000)
+                await self.cm.get_latest_ema_quote_volume(
+                    symbol, span=span, max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000)
+                )
             )
 
         async def ema_lr_1m(symbol: str, span: float) -> float:
-            return float(await self.cm.get_latest_ema_log_range(symbol, span=span, max_age_ms=60_000))
+            return float(
+                await self.cm.get_latest_ema_log_range(
+                    symbol, span=span, max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000)
+                )
+            )
 
         async def ema_lr_1h(symbol: str, span: float) -> float:
             return float(
-                await self.cm.get_latest_ema_log_range(symbol, span=span, tf="1h", max_age_ms=600_000)
+                await self.cm.get_latest_ema_log_range(
+                    symbol, span=span, tf="1h", max_age_ms=h1_max_age_by_symbol.get(symbol, 600_000)
+                )
             )
 
         async def load_symbol_bundle(sym: str):
+            Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
             close = await fetch_close_map(sym, sorted(need_close_spans[sym]))
+            Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
             h1 = await fetch_required_map(
                 sym, sorted(need_h1_lr_spans[sym]), ema_lr_1h, "h1_log_range"
             )
+            Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
             vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
+            Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
             lr1m = await fetch_map(sym, m1_lr_spans, ema_lr_1m, "m1_log_range")
             return close, vol, lr1m, h1
 
@@ -7817,12 +8526,15 @@ class Passivbot:
             # all symbol TTLs expire at the same hour boundary.
             symbol_results = []
             for sym in ordered_symbols:
+                Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 try:
                     res = await load_symbol_bundle(sym)
                 except Exception as e:
                     res = e
                 symbol_results.append(res)
-                await asyncio.sleep(fetch_delay_s)
+                await Passivbot._sleep_unless_shutdown(
+                    self, fetch_delay_s, stage="orchestrator_ema_bundle"
+                )
         else:
             symbol_tasks = [asyncio.create_task(load_symbol_bundle(sym)) for sym in ordered_symbols]
             symbol_results = await asyncio.gather(*symbol_tasks, return_exceptions=True)
@@ -7870,9 +8582,16 @@ class Passivbot:
         if not symbols:
             return ({}, None) if return_snapshot else {}
         mode_overrides = self._build_orchestrator_mode_overrides(symbols)
-        last_prices = await self._get_orchestrator_last_prices(symbols)
+        self._assert_staged_planner_preconditions(
+            include_market_snapshot=False, context="market snapshot refresh"
+        )
+        market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+        self._assert_staged_planner_preconditions(
+            include_market_snapshot=True, context="rust order calculation"
+        )
+        last_prices = {symbol: snap.last for symbol, snap in market_snapshots.items()}
         monitor_source = (
-            "orchestrator_live_cm_staged"
+            "orchestrator_live_market_snapshot_staged"
             if self._authoritative_refresh_mode() == "staged"
             else "orchestrator_live"
         )
@@ -7938,9 +8657,12 @@ class Passivbot:
 
         for symbol in symbols:
             idx = symbol_to_idx[symbol]
+            snap = market_snapshots.get(symbol)
             mprice = float(last_prices.get(symbol, 0.0))
             if not math.isfinite(mprice) or mprice <= 0.0:
                 raise Exception(f"invalid market price for {symbol}: {mprice}")
+            bid = float(snap.bid) if snap is not None and snap.is_valid() else mprice
+            ask = float(snap.ask) if snap is not None and snap.is_valid() else mprice
 
             active = bool(self.markets_dict.get(symbol, {}).get("active", True))
             effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
@@ -7978,7 +8700,7 @@ class Passivbot:
             input_dict["symbols"].append(
                 {
                     "symbol_idx": int(idx),
-                    "order_book": {"bid": mprice, "ask": mprice},
+                    "order_book": {"bid": bid, "ask": ask},
                     "exchange": {
                         "qty_step": float(self.qty_steps[symbol]),
                         "price_step": float(self.price_steps[symbol]),
@@ -8094,56 +8816,38 @@ class Passivbot:
         return ideal_orders_f
 
     async def _get_orchestrator_last_prices(self, symbols: list[str]) -> dict[str, float]:
-        """Return latest prices for orchestrator planning.
+        snapshots = await self._get_orchestrator_market_snapshots(symbols)
+        return {symbol: snap.last for symbol, snap in snapshots.items()}
 
-        In staged mode, market-price reads go through CandlestickManager only so CM owns
-        caching, TTL, and remote-fetch economy. Legacy mode retains the existing direct
-        bulk-ticker path and falls back to CM for any missing symbols.
+    async def _get_live_market_snapshots(
+        self,
+        symbols: Iterable[str],
+        *,
+        max_age_ms: int = 10_000,
+        context: str = "live",
+        allow_completed_candle_fallback: bool = False,
+    ) -> dict[str, MarketSnapshot]:
+        """Return live market snapshots without using in-progress candles.
+
+        Ticker/market APIs are the source of current bid/ask/last.  Completed
+        candle fallback is explicit and should only be used for non-critical
+        display/sorting paths.
         """
-        ttl_ms = 10_000
-        if self._authoritative_refresh_mode() == "staged":
-            logging.debug(
-                "[state] staged orchestrator requesting cm last prices | symbols=%s | ttl=%sms",
-                len(symbols),
-                ttl_ms,
-            )
-            last_prices = await self.cm.get_last_prices(symbols, max_age_ms=ttl_ms)
-            invalid = []
-            normalized = {}
-            for symbol in symbols:
-                raw = last_prices.get(symbol, 0.0)
-                try:
-                    price = float(raw)
-                except (TypeError, ValueError):
-                    price = 0.0
-                normalized[symbol] = price
-                if not math.isfinite(price) or price <= 0.0:
-                    invalid.append(symbol)
-            if invalid:
-                logging.debug(
-                    "[state] staged orchestrator cm last prices ready | symbols=%s | ok=%s | invalid=%s | invalid_symbols=%s",
-                    len(symbols),
-                    len(symbols) - len(invalid),
-                    len(invalid),
-                    ",".join(invalid[:12]),
-                )
-            else:
-                logging.debug(
-                    "[state] staged orchestrator cm last prices ready | symbols=%s | ok=%s | invalid=0",
-                    len(symbols),
-                    len(symbols),
-                )
-            return normalized
+        ordered_symbols = list(dict.fromkeys(str(s) for s in symbols if s))
+        if not ordered_symbols:
+            return {}
+        provider = getattr(self, "market_snapshot_provider", None)
+        snapshots: dict[str, MarketSnapshot] = {}
+        if provider is not None:
+            snapshots = await provider.get_snapshots(ordered_symbols, max_age_ms=max_age_ms)
 
-        # Legacy mode: prefer direct bulk exchange prices, then fill holes via CM.
-        last_prices = {}
-        try:
-            if (
-                hasattr(self, "cca")
-                and self.cca is not None
-                and self.exchange
-                and self.exchange.lower() == "hyperliquid"
-            ):
+        missing = [
+            symbol
+            for symbol in ordered_symbols
+            if symbol not in snapshots or not snapshots[symbol].is_valid()
+        ]
+        if missing and str(getattr(self, "exchange", "") or "").lower() == "hyperliquid":
+            try:
                 fetched = await self.cca.fetch(
                     self._hl_info_url(),
                     method="POST",
@@ -8151,31 +8855,161 @@ class Passivbot:
                     body=json.dumps({"type": "allMids"}),
                 )
                 coin_to_sym = {v: k for k, v in self.symbol_ids.items()} if self.symbol_ids else {}
+                fetched_ms = utc_ms()
                 for coin, mid_str in fetched.items():
                     sym = coin_to_sym.get(coin)
-                    if sym and sym in symbols:
-                        try:
-                            last_prices[sym] = float(mid_str)
-                        except (ValueError, TypeError):
-                            pass
-            elif hasattr(self, "fetch_tickers"):
-                tickers = await self.fetch_tickers()
-                for sym in symbols:
-                    tick = tickers.get(sym)
-                    if tick and tick.get("last") is not None:
-                        last_prices[sym] = float(tick["last"])
-            if last_prices:
-                now_ms = int(utc_ms())
-                for sym, price in last_prices.items():
-                    self.cm.set_current_close(sym, price, now_ms)
-        except Exception as e:
-            logging.debug("bulk price fetch failed, falling back to CM: %s", e)
-            last_prices = {}
-        missing = [s for s in symbols if s not in last_prices or last_prices[s] <= 0.0]
+                    if sym not in missing:
+                        continue
+                    price = float(mid_str)
+                    snap = MarketSnapshot(
+                        symbol=sym,
+                        bid=price,
+                        ask=price,
+                        last=price,
+                        fetched_ms=fetched_ms,
+                        source="hyperliquid_all_mids",
+                    )
+                    if snap.is_valid():
+                        snapshots[sym] = snap
+            except Exception as exc:
+                logging.debug(
+                    "[market] hyperliquid allMids snapshot failed | context=%s symbols=%s error_type=%s error=%s",
+                    context,
+                    len(missing),
+                    type(exc).__name__,
+                    exc,
+                )
+            missing = [
+                symbol
+                for symbol in ordered_symbols
+                if symbol not in snapshots or not snapshots[symbol].is_valid()
+            ]
+
+        if missing and allow_completed_candle_fallback:
+            completed_prices = await self.cm.get_last_prices(missing, max_age_ms=max_age_ms)
+            now_ms = utc_ms()
+            for symbol in missing:
+                raw = completed_prices.get(symbol)
+                try:
+                    price = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                snap = MarketSnapshot(
+                    symbol=symbol,
+                    bid=price,
+                    ask=price,
+                    last=price,
+                    fetched_ms=now_ms,
+                    source="completed_candle_fallback",
+                )
+                if snap.is_valid():
+                    snapshots[symbol] = snap
+
+        missing = [
+            symbol
+            for symbol in ordered_symbols
+            if symbol not in snapshots or not snapshots[symbol].is_valid()
+        ]
         if missing:
-            cm_prices = await self.cm.get_last_prices(missing, max_age_ms=ttl_ms)
-            last_prices.update(cm_prices)
-        return last_prices
+            raise RuntimeError(
+                f"missing live market snapshots for {context}: {','.join(missing[:12])}"
+            )
+        return {symbol: snapshots[symbol] for symbol in ordered_symbols}
+
+    async def _get_live_last_prices(
+        self,
+        symbols: Iterable[str],
+        *,
+        max_age_ms: int = 10_000,
+        context: str = "live",
+        allow_completed_candle_fallback: bool = False,
+    ) -> dict[str, float]:
+        snapshots = await self._get_live_market_snapshots(
+            symbols,
+            max_age_ms=max_age_ms,
+            context=context,
+            allow_completed_candle_fallback=allow_completed_candle_fallback,
+        )
+        return {symbol: float(snap.last) for symbol, snap in snapshots.items()}
+
+    async def _get_orchestrator_market_snapshots(
+        self, symbols: list[str]
+    ) -> dict[str, MarketSnapshot]:
+        """Return latest prices for orchestrator planning.
+
+        In staged mode, market-price reads go through MarketSnapshotProvider only;
+        missing current snapshots remain invalid so the staged precondition can
+        block planning. Legacy mode keeps an explicit completed-candle fallback.
+        """
+        ttl_ms = 10_000
+        if self._authoritative_refresh_mode() == "staged":
+            provider = getattr(self, "market_snapshot_provider", None)
+            snapshots: dict[str, MarketSnapshot] = {}
+            if provider is not None:
+                logging.debug(
+                    "[state] staged orchestrator requesting market snapshots | symbols=%s | ttl=%sms",
+                    len(symbols),
+                    ttl_ms,
+                )
+                snapshots = await provider.get_snapshots(symbols, max_age_ms=ttl_ms)
+            missing = [
+                symbol
+                for symbol in symbols
+                if symbol not in snapshots or not snapshots[symbol].is_valid()
+            ]
+            if missing:
+                logging.debug(
+                    "[state] staged market snapshots missing | symbols=%s | missing=%s",
+                    len(symbols),
+                    ",".join(missing[:12]),
+                )
+            invalid = [
+                symbol
+                for symbol in symbols
+                if symbol not in snapshots or not snapshots[symbol].is_valid()
+            ]
+            if invalid:
+                logging.debug(
+                    "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=%s | invalid_symbols=%s",
+                    len(symbols),
+                    len(symbols) - len(invalid),
+                    len(invalid),
+                    ",".join(invalid[:12]),
+                )
+            else:
+                sources = Counter(snap.source for snap in snapshots.values())
+                logging.debug(
+                    "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=0 | sources=%s",
+                    len(symbols),
+                    len(symbols),
+                    ",".join(f"{k}:{v}" for k, v in sorted(sources.items())),
+                )
+                self._ensure_freshness_ledger().stamp(
+                    "market_snapshot",
+                    tuple(
+                        sorted(
+                            (
+                                symbol,
+                                round(float(snap.bid), 12),
+                                round(float(snap.ask), 12),
+                                round(float(snap.last), 12),
+                                snap.source,
+                            )
+                            for symbol, snap in snapshots.items()
+                            if symbol in symbols
+                        )
+                    ),
+                    now_ms=utc_ms(),
+                    epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+                )
+            return snapshots
+
+        return await self._get_live_market_snapshots(
+            symbols,
+            max_age_ms=ttl_ms,
+            context="legacy_orchestrator",
+            allow_completed_candle_fallback=True,
+        )
 
     def _to_executable_orders(
         self, ideal_orders: dict, last_prices: Dict[str, float]
@@ -8351,12 +9185,13 @@ class Passivbot:
 
         to_cancel = await self._sort_orders_by_market_diff(to_cancel, "to_cancel")
         to_create = await self._sort_orders_by_market_diff(to_create, "to_create")
+        to_create, freshness_skipped = self._apply_freshness_creation_guardrails(to_create)
         if plan_summaries:
             total_pre_cancel = sum(p[1] for p in plan_summaries)
             total_cancel = sum(p[2] for p in plan_summaries)
             total_pre_create = sum(p[3] for p in plan_summaries)
             total_create = sum(p[4] for p in plan_summaries)
-            total_skipped = sum(p[5] for p in plan_summaries)
+            total_skipped = sum(p[5] for p in plan_summaries) + freshness_skipped
             detail_parts = []
             untouched_cancel = total_pre_cancel - total_cancel
             untouched_create = total_pre_create - total_create
@@ -8653,25 +9488,22 @@ class Passivbot:
         return [order for _, order in entries]
 
     async def _fetch_market_prices(self, symbols: set[str]) -> dict[str, float | None]:
-        """Fetch current close prices for the supplied symbols."""
+        """Fetch current market prices for the supplied symbols."""
         results: dict[str, float | None] = {}
-        tasks: dict[str, asyncio.Task] = {}
+        if not symbols:
+            return results
+        try:
+            prices = await self._get_live_last_prices(
+                symbols,
+                max_age_ms=10_000,
+                context="order_sort",
+                allow_completed_candle_fallback=True,
+            )
+        except Exception as exc:
+            logging.debug("failed fetching market prices for order sorting: %s", exc)
+            prices = {}
         for symbol in symbols:
-            try:
-                fetch_result = self.cm.get_current_close(symbol, max_age_ms=10_000)
-                if inspect.isawaitable(fetch_result):
-                    tasks[symbol] = asyncio.create_task(fetch_result)
-                else:
-                    results[symbol] = fetch_result
-            except Exception as exc:
-                logging.debug("failed fetching mprice for %s: %s", symbol, exc)
-                results[symbol] = None
-        for symbol, task in tasks.items():
-            try:
-                results[symbol] = await task
-            except Exception as exc:
-                logging.debug("failed fetching mprice for %s: %s", symbol, exc)
-                results[symbol] = None
+            results[symbol] = prices.get(symbol)
         return results
 
     async def restart_bot_on_too_many_errors(self):
@@ -8745,6 +9577,21 @@ class Passivbot:
 
     def _forager_refresh_budget(self, max_calls_per_minute: int) -> int:
         """Token bucket budget for forager candle refreshes."""
+        return self._token_bucket_budget(
+            "_forager_refresh_state",
+            max_calls_per_minute,
+            initial_tokens=max_calls_per_minute,
+        )
+
+    def _token_bucket_budget(
+        self,
+        state_attr: str,
+        max_calls_per_minute: int,
+        *,
+        max_cycle_budget: Optional[int] = None,
+        initial_tokens: Optional[float] = None,
+    ) -> int:
+        """Return a bounded token-bucket budget for best-effort candle refreshes."""
         try:
             max_calls = int(max_calls_per_minute)
         except Exception:
@@ -8752,17 +9599,24 @@ class Passivbot:
         if max_calls <= 0:
             return 0
         now = utc_ms()
-        state = getattr(self, "_forager_refresh_state", None)
+        state = getattr(self, state_attr, None)
         if not isinstance(state, dict):
-            state = {"tokens": float(max_calls), "last_ms": now}
+            if initial_tokens is None:
+                initial_tokens = float(max_calls)
+            state = {
+                "tokens": min(float(max_calls), max(0.0, float(initial_tokens))),
+                "last_ms": now,
+            }
         last_ms = int(state.get("last_ms", now) or now)
         tokens = float(state.get("tokens", max_calls))
         elapsed = max(0.0, (now - last_ms) / 60_000.0)
         tokens = min(float(max_calls), tokens + float(max_calls) * elapsed)
         budget = int(tokens)
+        if max_cycle_budget is not None:
+            budget = min(budget, max(0, int(max_cycle_budget)))
         state["tokens"] = float(tokens - budget)
         state["last_ms"] = int(now)
-        self._forager_refresh_state = state
+        setattr(self, state_attr, state)
         return max(0, budget)
 
     def _split_forager_budget_by_side(
@@ -8801,7 +9655,21 @@ class Passivbot:
         if n_syms <= 0 or max_calls <= 0:
             return int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
         minutes = max(1.0, float(n_syms) / float(max_calls))
-        return int(minutes * 60_000)
+        target_ms = int(minutes * 60_000)
+        configured_cap = get_optional_live_value(
+            self.config, "max_forager_candle_staleness_minutes", None
+        )
+        if configured_cap is None:
+            configured_cap = get_optional_live_value(
+                self.config, "forager_candle_staleness_max_minutes", None
+            )
+        try:
+            cap_minutes = float(configured_cap) if configured_cap is not None else 0.0
+        except Exception:
+            cap_minutes = 0.0
+        if cap_minutes > 0.0:
+            target_ms = min(target_ms, int(cap_minutes * 60_000))
+        return max(60_000, int(target_ms))
 
     def _maybe_log_candle_refresh(
         self,
@@ -8918,19 +9786,15 @@ class Passivbot:
         else:
             target_age_ms = self._forager_target_staleness_ms(len(all_candidates), max_calls)
         now = utc_ms()
-        stale: List[Tuple[float, str]] = []
+        stale: List[Tuple[int, str]] = []
         for sym in candidates:
-            try:
-                last_final = self.cm.get_last_final_ts(sym)
-            except Exception:
-                last_final = 0
-            age_ms = now - int(last_final) if last_final else float("inf")
+            age_ms = self._candle_staleness_ms(sym, now_ms=now)
             if age_ms > target_age_ms:
                 stale.append((age_ms, sym))
         if not stale:
             return
 
-        stale.sort(reverse=True)
+        stale.sort(key=lambda item: (-int(item[0]), item[1]))
         to_refresh = [sym for _, sym in stale[:budget]]
         if not to_refresh:
             return
@@ -8977,6 +9841,9 @@ class Passivbot:
         fetch_delay_s = self._get_fetch_delay_seconds()
 
         for sym in to_refresh:
+            if Passivbot._shutdown_requested(self):
+                logging.debug("[shutdown] aborting forager candle refresh")
+                return
             try:
                 max_span = 0.0
                 for pside, syms in candidates_by_side.items():
@@ -9013,7 +9880,9 @@ class Passivbot:
                     max_lookback_candles=win,
                 )
                 if fetch_delay_s > 0:
-                    await asyncio.sleep(fetch_delay_s)
+                    await Passivbot._sleep_unless_shutdown(
+                        self, fetch_delay_s, stage="forager_candidate_candle_refresh"
+                    )
             except TimeoutError as exc:
                 logging.warning(
                     "Timed out acquiring candle lock for %s; forager refresh will retry (%s)",
@@ -9046,13 +9915,54 @@ class Passivbot:
             fetch_delay_s = self._get_fetch_delay_seconds()
 
             symbols = sorted(set(self.active_symbols))
-            # Prioritize symbols with open positions (need fresh candles for
-            # correct order calculation), shuffle the rest to avoid alphabetic
-            # starvation when a 429 forces cache-only for late symbols.
-            symbols_with_pos = [s for s in symbols if self.has_position(symbol=s)]
-            symbols_without_pos = [s for s in symbols if s not in symbols_with_pos]
-            random.shuffle(symbols_without_pos)
-            ordered_symbols = symbols_with_pos + symbols_without_pos
+            priority_symbols = []
+            secondary_symbols = []
+            for sym in symbols:
+                has_pos = self.has_position(symbol=sym)
+                has_oo = bool(self.open_orders.get(sym)) if hasattr(self, "open_orders") else False
+                if has_pos or has_oo:
+                    priority_symbols.append(sym)
+                else:
+                    secondary_symbols.append(sym)
+            secondary_symbols = self._rank_symbols_by_candle_staleness(secondary_symbols, now_ms=now)
+            per_sym_ttl = {sym: max_age_ms for sym in priority_symbols}
+            budget = None
+            cache_only_never_fetched = set()
+            if self.is_forager_mode() and secondary_symbols:
+                max_calls = get_optional_live_value(self.config, "max_ohlcv_fetches_per_minute", 0)
+                try:
+                    max_calls = int(max_calls) if max_calls is not None else 0
+                except Exception:
+                    max_calls = 0
+                if max_calls > 0:
+                    cycle_cap = max(1, int(math.ceil(float(max_calls) / 4.0)))
+                    budget = self._token_bucket_budget(
+                        "_forager_active_candle_refresh_state",
+                        max_calls,
+                        max_cycle_budget=cycle_cap,
+                        initial_tokens=cycle_cap,
+                    )
+                    secondary_max_age_ms = max(
+                        max_age_ms,
+                        self._forager_target_staleness_ms(len(secondary_symbols), max_calls),
+                    )
+                else:
+                    budget = 0
+                    secondary_max_age_ms = int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
+                secondary_ttls, cache_only_never_fetched = self._compute_fetch_budget_ttls(
+                    secondary_symbols, secondary_max_age_ms, budget
+                )
+                per_sym_ttl.update(secondary_ttls)
+                logging.debug(
+                    "[candle] active forager refresh budget priority=%d secondary=%d budget=%d target_age=%ds",
+                    len(priority_symbols),
+                    len(secondary_symbols),
+                    int(budget),
+                    int(secondary_max_age_ms / 1000),
+                )
+            else:
+                per_sym_ttl.update({sym: max_age_ms for sym in secondary_symbols})
+            ordered_symbols = priority_symbols + secondary_symbols
             self._maybe_log_candle_refresh(
                 "active refresh",
                 symbols,
@@ -9061,6 +9971,9 @@ class Passivbot:
                 throttle_ms=60_000,
             )
             for sym in ordered_symbols:
+                if Passivbot._shutdown_requested(self):
+                    logging.debug("[shutdown] aborting active candle refresh")
+                    return
                 # If a 429 triggered a global backoff in the CandlestickManager,
                 # stop the loop early; remaining symbols would all hit the same
                 # backoff.  They will be picked up on the next cycle; the
@@ -9068,17 +9981,21 @@ class Passivbot:
                 if self.cm.is_rate_limited():
                     logging.debug("[candle] active refresh breaking early: rate limit backoff active")
                     break
+                if sym in cache_only_never_fetched:
+                    continue
                 try:
                     await self.cm.get_candles(
                         sym,
                         start_ts=start_ts,
                         end_ts=end_ts,
-                        max_age_ms=max_age_ms,
+                        max_age_ms=per_sym_ttl.get(sym, max_age_ms),
                         strict=False,
                         max_lookback_candles=window,
                     )
                     if fetch_delay_s > 0:
-                        await asyncio.sleep(fetch_delay_s)
+                        await Passivbot._sleep_unless_shutdown(
+                            self, fetch_delay_s, stage="active_candle_refresh"
+                        )
                 except TimeoutError as exc:
                     logging.warning(
                         "Timed out acquiring candle lock for %s; will retry next cycle (%s)",
@@ -9088,8 +10005,23 @@ class Passivbot:
                 except Exception as exc:
                     logging.error("error refreshing candles for %s: %s", sym, exc, exc_info=True)
             # Best-effort refresh for forager candidates (lazy & budgeted)
-            await self._refresh_forager_candidate_candles()
+            if not Passivbot._shutdown_requested(self):
+                await self._refresh_forager_candidate_candles()
+            self._ensure_freshness_ledger().stamp(
+                "completed_candles",
+                tuple(
+                    sorted(
+                        (sym, int(self.cm.get_last_refresh_ms(sym) or 0))
+                        for sym in ordered_symbols
+                    )
+                ),
+                now_ms=utc_ms(),
+                epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+            )
         except Exception as e:
+            if Passivbot._shutdown_requested(self):
+                logging.debug("[shutdown] stopped candle refresh during shutdown: %s", e)
+                return
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()
 

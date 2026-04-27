@@ -49,6 +49,19 @@ def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
 
 
 @pytest.mark.asyncio
+async def test_get_candles_aborts_when_stop_requested(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+        stop_requested_callback=lambda: True,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await cm.get_candles("FOO/USDT")
+
+
+@pytest.mark.asyncio
 async def test_get_candles_range_and_inclusive(tmp_path):
     class _Ex:
         id = "okx"
@@ -623,31 +636,31 @@ async def test_gateio_partial_1m_window_clips_fetch_to_recent_limit(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_get_current_close_uses_ttl(monkeypatch):
+async def test_get_current_close_uses_latest_completed_candle_not_ticker(monkeypatch):
     fixed_now_ms = 1725590400000
     monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
-
-    call_counter = {"ticker": 0}
 
     class _Ex:
         id = "okx"
 
         async def fetch_ticker(self, symbol):
-            call_counter["ticker"] += 1
-            return {"last": 123.45}
+            raise AssertionError("CandlestickManager must not fetch tickers")
 
     cm = CandlestickManager(exchange=_Ex(), exchange_name="okx")
     symbol = "BTC/USDT:USDT"
+    last_final = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [(last_final, 123.45, 123.45, 123.45, 123.45, 1.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._set_last_refresh_meta(symbol, fixed_now_ms, last_final_ts=last_final)
 
-    # First call fetches ticker
     p1 = await cm.get_current_close(symbol, max_age_ms=60_000)
     assert p1 == pytest.approx(123.45)
-    assert call_counter["ticker"] == 1
 
 
 @pytest.mark.asyncio
-async def test_get_current_close_primes_ttl_for_candles(monkeypatch, tmp_path):
-    # Fixed now for deterministic minute boundaries
+async def test_get_current_close_never_persists_current_in_progress_candle(monkeypatch, tmp_path):
     fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
     monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
 
@@ -656,70 +669,95 @@ async def test_get_current_close_primes_ttl_for_candles(monkeypatch, tmp_path):
 
     cm = CandlestickManager(exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches"))
     symbol = "BTC/USDT:USDT"
+    end_current = (fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS
+    end_finalized = end_current - ONE_MIN_MS
 
-    # Track whether network pagination is called by get_candles
+    calls = {"paginated": 0}
+
+    async def fake_paginated(symbol_, since_ms, end_exclusive_ms, *, timeframe=None):
+        calls["paginated"] += 1
+        arr = np.array(
+            [
+                (end_finalized, 1.0, 1.0, 1.0, 1.23, 1.0),
+                (end_current, 2.0, 2.0, 2.0, 2.34, 1.0),
+            ],
+            dtype=CANDLE_DTYPE,
+        )
+        return arr
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_paginated)
+
+    p = await cm.get_current_close(symbol, max_age_ms=60_000)
+    assert p == pytest.approx(1.23)
+    assert calls["paginated"] == 1
+
+    cached = np.sort(cm._cache[symbol], order="ts")
+    assert int(cached[-1]["ts"]) == end_finalized
+    disk = cm._load_from_disk(symbol, end_finalized, end_current, timeframe="1m")
+    assert disk.size
+    assert int(np.sort(disk, order="ts")[-1]["ts"]) == end_finalized
+
+
+@pytest.mark.asyncio
+async def test_get_candles_ttl_skips_single_trailing_present_gap(monkeypatch, tmp_path):
+    fixed_now_ms = 1725590520000  # 2024-09-06 00:02:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "bybit"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="bybit", cache_dir=str(tmp_path / "caches"))
+    symbol = "BTC/USDT:USDT"
+    end_finalized = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    cached_last = end_finalized - ONE_MIN_MS
+    start_ts = cached_last - 3 * ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [(start_ts + i * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0 + i, 1.0) for i in range(4)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._set_last_refresh_meta(symbol, fixed_now_ms, last_final_ts=cached_last)
     calls = {"paginated": 0}
 
     async def fake_paginated(symbol_, since_ms, end_exclusive_ms, *, timeframe=None):
         calls["paginated"] += 1
         return np.empty((0,), dtype=CANDLE_DTYPE)
 
-    # Return a single current-minute candle via low-level OHLCV fetch used by get_current_close
-    async def fake_once(symbol_, since_ms, limit, end_exclusive_ms=None, timeframe=None):
-        end_current = int((fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS)
-        start = end_current - ONE_MIN_MS * 11
-        rows = []
-        for ts in range(start, end_current, ONE_MIN_MS):
-            rows.append([ts, 1.0, 1.0, 1.0, 1.23, 1.0])
-        return rows
-
     monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_paginated)
-    monkeypatch.setattr(cm, "_ccxt_fetch_ohlcv_once", fake_once)
 
-    # 1) Call get_current_close: this should fetch/merge current-minute candle and update last_refresh_ms
-    p = await cm.get_current_close(symbol, max_age_ms=60_000)
-    assert p == pytest.approx(1.23)
-    baseline_calls = calls["paginated"]
+    out = await cm.get_candles(
+        symbol,
+        start_ts=start_ts,
+        end_ts=end_finalized,
+        max_age_ms=365 * 24 * 3600 * 1000,
+        strict=False,
+    )
 
-    # 2) Call get_candles ending at latest finalized minute with TTL: should NOT call _fetch_ohlcv_paginated
-    end_finalized = (fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
-    start_ts = end_finalized - ONE_MIN_MS * 10
-    out = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_finalized, max_age_ms=60_000)
-    assert isinstance(out, np.ndarray)
-    assert calls["paginated"] == baseline_calls
-
-    # No additional network calls expected here; TTL should prevent refresh
+    assert calls["paginated"] == 0
+    assert int(out[-1]["ts"]) == end_finalized
 
 
 @pytest.mark.asyncio
-async def test_get_last_prices_prefers_bulk_tickers_for_multi_symbol(monkeypatch, tmp_path):
+async def test_get_last_prices_uses_completed_candles_not_bulk_tickers(monkeypatch, tmp_path):
+    fixed_now_ms = 1725590400000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
     class _Ex:
         id = "bybit"
 
-        def __init__(self):
-            self.calls = []
-
         async def fetch_tickers(self, symbols=None):
-            self.calls.append(list(symbols) if symbols is not None else None)
-            return {
-                "ADA/USDT:USDT": {"last": 0.75},
-                "SOL/USDT:USDT": {"last": 180.0},
-            }
+            raise AssertionError("CandlestickManager must not fetch tickers")
 
-    ex = _Ex()
-    cm = CandlestickManager(exchange=ex, exchange_name="bybit", cache_dir=str(tmp_path / "caches"))
-    fallback_calls = {"count": 0}
-
-    async def fake_get_current_close(symbol, max_age_ms=None):
-        fallback_calls["count"] += 1
-        raise AssertionError("bulk get_last_prices should not fall back to get_current_close() here")
-
-    monkeypatch.setattr(cm, "get_current_close", fake_get_current_close)
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="bybit", cache_dir=str(tmp_path / "caches"))
+    end_finalized = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    for symbol, price in (("ADA/USDT:USDT", 0.75), ("SOL/USDT:USDT", 180.0)):
+        cm._cache[symbol] = np.array(
+            [(end_finalized, price, price, price, price, 1.0)],
+            dtype=CANDLE_DTYPE,
+        )
+        cm._set_last_refresh_meta(symbol, fixed_now_ms, last_final_ts=end_finalized)
 
     prices = await cm.get_last_prices(["ADA/USDT:USDT", "SOL/USDT:USDT"], max_age_ms=10_000)
 
-    assert ex.calls == [["ADA/USDT:USDT", "SOL/USDT:USDT"]]
-    assert fallback_calls["count"] == 0
     assert prices == {
         "ADA/USDT:USDT": pytest.approx(0.75),
         "SOL/USDT:USDT": pytest.approx(180.0),
@@ -727,7 +765,36 @@ async def test_get_last_prices_prefers_bulk_tickers_for_multi_symbol(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_get_current_close_tail_fetch_merges_and_primes(monkeypatch, tmp_path):
+async def test_remote_ohlcv_fetch_spacing_paces_concurrent_calls(tmp_path):
+    class _Ex:
+        id = "okx"
+
+        def __init__(self):
+            self.call_times = []
+
+        async def fetch_ohlcv(self, symbol, timeframe="1m", since=None, limit=None, params=None):
+            self.call_times.append(time.monotonic())
+            return [[int(since or 0), 1.0, 1.0, 1.0, 1.0, 1.0]]
+
+    ex = _Ex()
+    cm = CandlestickManager(
+        exchange=ex,
+        exchange_name="okx",
+        cache_dir=str(tmp_path / "caches"),
+        remote_fetch_min_interval_ms=40,
+    )
+
+    await asyncio.gather(
+        cm._ccxt_fetch_ohlcv_once("BTC/USDT:USDT", 0, 1, timeframe="1m"),
+        cm._ccxt_fetch_ohlcv_once("ETH/USDT:USDT", 0, 1, timeframe="1m"),
+    )
+
+    assert len(ex.call_times) == 2
+    assert ex.call_times[1] - ex.call_times[0] >= 0.025
+
+
+@pytest.mark.asyncio
+async def test_get_current_close_does_not_tail_fetch_current_minute(monkeypatch, tmp_path):
     fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
     monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
 
@@ -739,54 +806,29 @@ async def test_get_current_close_tail_fetch_merges_and_primes(monkeypatch, tmp_p
         exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches"), overlap_candles=5
     )
     symbol = "ETH/USDT:USDT"
-
-    # Count paginated fetches triggered by get_candles
-    calls = {"paginated": 0}
+    end_current = (fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS
+    end_finalized = end_current - ONE_MIN_MS
 
     async def fake_paginated(symbol_, since_ms, end_exclusive_ms, *, timeframe=None):
-        calls["paginated"] += 1
-        return np.empty((0,), dtype=CANDLE_DTYPE)
-
-    # Capture args and return 5 recent 1m candles including current minute
-    called = {}
+        assert int(end_exclusive_ms) <= end_current
+        return np.array(
+            [(end_finalized, 5.0, 5.0, 5.0, 5.0, 1.0)],
+            dtype=CANDLE_DTYPE,
+        )
 
     async def fake_once(symbol_, since_ms, limit, end_exclusive_ms=None, timeframe=None):
-        called["since_ms"] = int(since_ms)
-        called["limit"] = int(limit)
-        end_current = (fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS
-        # build a sequence from since_ms to end_current inclusive, step 1m
-        ts = list(range(int(since_ms), int(end_current) + ONE_MIN_MS, ONE_MIN_MS))
-        arr = []
-        for i, t in enumerate(ts):
-            # close sequence i + 1.0 to verify values present
-            c = float(i + 1)
-            arr.append([t, c, c, c, c, 1.0])
-        return arr
+        raise AssertionError("CandlestickManager must not tail-fetch current OHLCV")
 
     monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_paginated)
     monkeypatch.setattr(cm, "_ccxt_fetch_ohlcv_once", fake_once)
 
-    # Trigger tail fetch via get_current_close
     p = await cm.get_current_close(symbol, max_age_ms=60_000)
-    assert isinstance(p, float)
-    # Ensure we asked for overlap_candles candles
-    assert called.get("limit") == 5
-    # Ensure since_ms aligns to end_current - 4 minutes
-    end_current = (fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS
-    assert called.get("since_ms") == end_current - ONE_MIN_MS * 4
+    assert p == pytest.approx(5.0)
 
-    # Cache should now contain at least those 5 candles including current minute
     arr = cm._cache.get(symbol)
-    assert arr is not None and arr.size >= 5
+    assert arr is not None and arr.size
     arr = np.sort(arr, order="ts")
-    assert int(arr[-1]["ts"]) == end_current
-
-    # A subsequent get_candles within TTL should not paginate
-    end_finalized = end_current - ONE_MIN_MS
-    start_ts = end_finalized - ONE_MIN_MS * 2
-    out = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_finalized, max_age_ms=60_000)
-    assert out.size > 0
-    assert calls["paginated"] == 0
+    assert int(arr[-1]["ts"]) == end_finalized
 
 
 @pytest.mark.asyncio
@@ -894,6 +936,85 @@ def test_materialize_runtime_synthetic_gap_caps_at_max_synth(tmp_path):
     # All synthetic candles carry the seed close and zero volume
     assert np.allclose(np.asarray(synth_only["c"], dtype=np.float64), seed_close)
     assert np.allclose(np.asarray(synth_only["bv"], dtype=np.float64), 0.0)
+
+
+def test_completed_candle_health_excludes_current_minute_and_reports_gaps(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "HEALTH/USDT:USDT"
+    now_ms = 1725590400000
+    current_minute = _floor_minute(now_ms)
+    last_final = current_minute - ONE_MIN_MS
+    start = last_final - 2 * ONE_MIN_MS
+    candles = np.array(
+        [
+            (start, 10.0, 10.0, 10.0, 10.0, 1.0),
+            (last_final, 12.0, 12.0, 12.0, 12.0, 1.0),
+            (current_minute, 99.0, 99.0, 99.0, 99.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(symbol, candles, timeframe="1m", merge_cache=True, last_refresh_ms=now_ms)
+
+    report = cm.get_completed_candle_health(symbol, {"1m": 3}, now_ms=now_ms)
+
+    one_m = report["timeframes"]["1m"]
+    assert report["ok"] is False
+    assert one_m["current_in_progress_excluded"] is True
+    assert one_m["end_ts"] == last_final
+    assert one_m["missing_candles"] == 1
+    assert one_m["missing_spans"] == [(start + ONE_MIN_MS, start + ONE_MIN_MS)]
+    assert one_m["last_cached_ts"] == last_final
+    assert one_m["loaded_rows"] == 2
+
+
+def test_completed_candle_health_reports_synthetic_and_hour_boundary(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "SYNTH/USDT:USDT"
+    now_ms = 1725590400000
+    last_hour = (now_ms // (60 * ONE_MIN_MS)) * (60 * ONE_MIN_MS) - 60 * ONE_MIN_MS
+    current_hour = last_hour + 60 * ONE_MIN_MS
+    hour_candles = np.array(
+        [
+            (last_hour, 100.0, 101.0, 99.0, 100.5, 50.0),
+            (current_hour, 200.0, 201.0, 199.0, 200.5, 50.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(symbol, hour_candles, timeframe="1h", merge_cache=False)
+
+    last_minute = _floor_minute(now_ms) - ONE_MIN_MS
+    seed = np.array(
+        [(last_minute - ONE_MIN_MS, 11.0, 11.0, 11.0, 11.0, 1.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._cache[symbol] = seed
+    assert cm._materialize_runtime_synthetic_gap(symbol, last_minute) == 1
+    cm._synthetic_timestamps[symbol] = {last_minute}
+
+    report = cm.get_completed_candle_health(symbol, {"1m": 2, "1h": 1}, now_ms=now_ms)
+
+    one_m = report["timeframes"]["1m"]
+    one_h = report["timeframes"]["1h"]
+    assert one_m["coverage_ok"] is True
+    assert one_m["runtime_synthetic_count"] == 1
+    assert one_h["coverage_ok"] is True
+    assert one_h["end_ts"] == last_hour
+    assert one_h["loaded_rows"] == 1
+    assert one_h["last_cached_ts"] == last_hour
+
+
+def test_completed_candle_health_non_required_window_does_not_fail_overall(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    report = cm.get_completed_candle_health(
+        "DIAG/USDT:USDT",
+        {"15m": {"candles": 1, "required": False}},
+        now_ms=1725590400000,
+    )
+
+    assert report["ok"] is True
+    assert report["timeframes"]["15m"]["required"] is False
+    assert report["timeframes"]["15m"]["coverage_ok"] is False
+    assert report["timeframes"]["15m"]["missing_candles"] == 1
 
 
 @pytest.mark.asyncio

@@ -348,7 +348,7 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
         symbols |= set(approved_minus_ignored.get(pside, set()) or set())
         symbols |= set(approved.get(pside, set()) or set())
         symbols |= set(ignored.get(pside, set()) or set())
-    current_close_cache = getattr(getattr(self, "cm", None), "_current_close_cache", {})
+    market_snapshot_cache = getattr(getattr(self, "market_snapshot_provider", None), "_cache", {})
     runtime_hints = getattr(self, "_monitor_runtime_market_hints", {})
     out: dict[str, dict] = {}
     for symbol in sorted(symbols):
@@ -374,13 +374,19 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
             "has_open_orders": bool(getattr(self, "open_orders", {}).get(symbol)),
             "has_position": bool(self.has_position(symbol=symbol)),
         }
-        cached = current_close_cache.get(symbol)
+        cached = market_snapshot_cache.get(symbol)
         if cached is not None:
             try:
-                entry["last_price"] = float(cached[0])
-                entry["last_price_ts_ms"] = int(cached[1])
-            except Exception:
-                pass
+                entry["last_price"] = float(cached.last)
+                entry["last_price_ts_ms"] = int(cached.fetched_ms)
+                entry["last_price_source"] = str(cached.source)
+            except Exception as exc:
+                logging.debug(
+                    "[monitor] invalid cached market snapshot | symbol=%s error_type=%s error=%s",
+                    symbol,
+                    type(exc).__name__,
+                    exc,
+                )
         try:
             entry["last_refresh_ms"] = int(self.cm.get_last_refresh_ms(symbol))
             entry["last_final_candle_ts_ms"] = int(self.cm.get_last_final_ts(symbol))

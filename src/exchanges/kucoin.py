@@ -228,11 +228,17 @@ class KucoinBot(CCXTBot):
     async def calc_ideal_orders(self):
         # KuCoin enforces a 150 open-order cap; keep only the closest price targets.
         ideal_orders = await super().calc_ideal_orders()
+        market_prices = await self._get_live_last_prices(
+            ideal_orders.keys(),
+            max_age_ms=10_000,
+            context="kucoin_order_cap_sort",
+            allow_completed_candle_fallback=True,
+        )
         flattened = []
         for symbol, orders in ideal_orders.items():
             if not orders:
                 continue
-            market_price = await self.cm.get_current_close(symbol, max_age_ms=10_000)
+            market_price = market_prices[symbol]
             for order in orders:
                 price_diff = calc_order_price_diff(order["side"], order["price"], market_price)
                 flattened.append((price_diff, symbol, order))

@@ -566,12 +566,16 @@ class CandlestickManager:
         remote_fetch_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         # Optional global concurrency limiter for remote ccxt calls
         max_concurrent_requests: int | None = None,
+        # Optional minimum spacing between ccxt OHLCV calls from this manager.
+        remote_fetch_min_interval_ms: float | None = None,
         lock_timeout_seconds: float | None = None,
         # Archive fetching: if False, only use ccxt REST API even if archives are available.
         # Useful for live bots where archives may timeout; backtester enables by default.
         archive_enabled: bool = True,
         # Optional list of symbols to log per-page OHLCV ranges (debugging pagination).
         page_debug_symbols: Optional[Iterable[str]] = None,
+        # Optional live shutdown hook. If it returns True, in-flight warmup/fetch loops abort.
+        stop_requested_callback: Optional[Callable[[], bool]] = None,
     ) -> None:
         self.exchange = exchange
         # If no explicit exchange_name provided, infer from ccxt instance id
@@ -613,6 +617,7 @@ class CandlestickManager:
         self._strict_gaps_summary_last_log: float = 0.0
         self._strict_gaps_summary_interval: float = 900.0  # 15 minutes
         self._remote_fetch_callback = remote_fetch_callback
+        self._stop_requested_callback = stop_requested_callback
         # Cache of legacy shard paths per (exchange, symbol, tf)
         self._legacy_shard_paths_cache: Dict[Tuple[str, str, str], Dict[str, str]] = {}
         # Cache for legacy day quality decisions: (symbol, tf, date_key) -> legacy_is_complete
@@ -625,7 +630,8 @@ class CandlestickManager:
         self._index_mtime: Dict[str, Optional[float]] = {}
         # Cache for EMA computations: per symbol -> {(metric, span, tf): (value, end_ts, computed_at_ms)}
         self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
-        # Cache for current (in-progress) minute close per symbol: symbol -> (price, updated_ms)
+        # Compatibility attribute retained for older monitor/tool code.  The
+        # candlestick manager no longer owns current in-progress prices.
         self._current_close_cache: Dict[str, Tuple[float, int]] = {}
         # Cache for fetched higher-timeframe windows to avoid duplicate remote calls (LRU per symbol)
         # Keyed per symbol -> OrderedDict[(tf_str, start_ts, end_ts) -> (array, fetched_at_ms)]
@@ -729,6 +735,17 @@ class CandlestickManager:
         self._rate_limit_until: float = 0.0
         self._rate_limit_lock = asyncio.Lock()
         self._rate_limit_count: int = 0
+        self._remote_fetch_spacing_lock = asyncio.Lock()
+        try:
+            self._remote_fetch_min_interval_ms = max(
+                0.0,
+                float(remote_fetch_min_interval_ms)
+                if remote_fetch_min_interval_ms is not None
+                else 0.0,
+            )
+        except Exception:
+            self._remote_fetch_min_interval_ms = 0.0
+        self._remote_fetch_last_started_ms: int = 0
 
         # Persistent HTTP session for archive fetches (created lazily)
         self._http_session: Optional["aiohttp.ClientSession"] = None
@@ -781,6 +798,33 @@ class CandlestickManager:
                         self._page_debug_symbols.add(sym_str)
             except Exception:
                 self._page_debug_symbols = set()
+
+    def set_stop_requested_callback(self, callback: Optional[Callable[[], bool]]) -> None:
+        """Install a shutdown hook used by live bots to abort non-critical candle work."""
+        self._stop_requested_callback = callback
+
+    def _shutdown_requested(self) -> bool:
+        callback = getattr(self, "_stop_requested_callback", None)
+        if not callable(callback):
+            return False
+        try:
+            return bool(callback())
+        except Exception:
+            return False
+
+    def _raise_if_shutdown_requested(self, stage: str) -> None:
+        if self._shutdown_requested():
+            self._log("debug", "shutdown_abort", stage=stage)
+            raise asyncio.CancelledError(f"candlestick manager shutdown during {stage}")
+
+    async def _sleep_interruptible(self, seconds: float, *, stage: str) -> None:
+        remaining = max(0.0, float(seconds))
+        while remaining > 0.0:
+            self._raise_if_shutdown_requested(stage)
+            chunk = min(remaining, 0.25)
+            await asyncio.sleep(chunk)
+            remaining -= chunk
+        self._raise_if_shutdown_requested(stage)
 
     # ----- Logging -----
 
@@ -2767,6 +2811,195 @@ class CandlestickManager:
             "timeframe": tf_norm,
         }
 
+    def get_completed_candle_health(
+        self,
+        symbol: str,
+        windows: Optional[Dict[str, int]] = None,
+        *,
+        now_ms: Optional[int] = None,
+        max_span_log: int = 3,
+    ) -> Dict[str, Any]:
+        """Return read-only diagnostics for completed-candle coverage.
+
+        This method never fetches remote data and never includes the current
+        in-progress timeframe bucket. It inspects disk cache plus runtime 1m
+        cache and reports whether the requested completed candle windows are
+        covered.
+        """
+        ts_now = _utc_now_ms() if now_ms is None else int(now_ms)
+        requested = windows or {"1m": 1, "15m": 1, "1h": 1}
+        normalized_windows: Dict[str, Dict[str, Any]] = {}
+        for tf_raw, raw_spec in requested.items():
+            tf_norm = self._normalize_timeframe_arg(str(tf_raw), None)
+            required = True
+            count_raw = raw_spec
+            if isinstance(raw_spec, dict):
+                count_raw = raw_spec.get("candles", raw_spec.get("required_candles", 1))
+                required = bool(raw_spec.get("required", True))
+            try:
+                count = int(math.ceil(float(count_raw)))
+            except Exception:
+                count = 1
+            normalized_windows[tf_norm] = {"candles": max(1, count), "required": required}
+
+        tf_reports: Dict[str, Dict[str, Any]] = {}
+        overall_ok = True
+        for tf_norm, spec in sorted(
+            normalized_windows.items(), key=lambda item: _tf_to_ms(item[0])
+        ):
+            required_candles = int(spec["candles"])
+            required = bool(spec["required"])
+            step_ms = _tf_to_ms(tf_norm)
+            if step_ms <= 0:
+                step_ms = ONE_MIN_MS
+            latest_expected = (ts_now // step_ms) * step_ms - step_ms
+            if latest_expected < 0:
+                start_ts = 0
+                end_ts = -1
+            else:
+                end_ts = int(latest_expected)
+                start_ts = int(max(0, end_ts - (required_candles - 1) * step_ms))
+
+            disk_arr = np.empty((0,), dtype=CANDLE_DTYPE)
+            runtime_arr = np.empty((0,), dtype=CANDLE_DTYPE)
+            combined = np.empty((0,), dtype=CANDLE_DTYPE)
+            if end_ts >= start_ts:
+                try:
+                    loaded = self._load_from_disk(symbol, start_ts, end_ts, timeframe=tf_norm)
+                    if loaded is not None and loaded.size:
+                        disk_arr = self._slice_ts_range(_ensure_dtype(loaded), start_ts, end_ts)
+                except Exception as exc:
+                    self._log(
+                        "debug",
+                        "candle_health_disk_load_failed",
+                        symbol=symbol,
+                        timeframe=tf_norm,
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
+                    disk_arr = np.empty((0,), dtype=CANDLE_DTYPE)
+
+                if step_ms == ONE_MIN_MS:
+                    try:
+                        cached = self._cache.get(symbol)
+                        if cached is not None and cached.size:
+                            runtime_arr = self._slice_ts_range(
+                                _ensure_dtype(cached), start_ts, end_ts
+                            )
+                    except Exception as exc:
+                        self._log(
+                            "debug",
+                            "candle_health_runtime_cache_failed",
+                            symbol=symbol,
+                            timeframe=tf_norm,
+                            error_type=type(exc).__name__,
+                            error=str(exc),
+                        )
+                        runtime_arr = np.empty((0,), dtype=CANDLE_DTYPE)
+                combined = self._merge_overwrite(disk_arr, runtime_arr)
+                combined = self._slice_ts_range(combined, start_ts, end_ts, assume_sorted=True)
+
+            missing = (
+                []
+                if end_ts < start_ts
+                else (
+                    self._missing_spans(combined, start_ts, end_ts)
+                    if step_ms == ONE_MIN_MS
+                    else self._missing_spans_step(combined, start_ts, end_ts, step_ms)
+                )
+            )
+            missing_candles = int(sum((e - s) // step_ms + 1 for s, e in missing))
+            last_cached_ts: Optional[int] = None
+            if combined.size:
+                last_cached_ts = int(np.max(combined["ts"].astype(np.int64)))
+            last_disk_ts: Optional[int] = None
+            if disk_arr.size:
+                last_disk_ts = int(np.max(disk_arr["ts"].astype(np.int64)))
+            last_runtime_ts: Optional[int] = None
+            if runtime_arr.size:
+                last_runtime_ts = int(np.max(runtime_arr["ts"].astype(np.int64)))
+
+            synthetic_count = 0
+            if step_ms == ONE_MIN_MS:
+                try:
+                    synthetic_count = int(
+                        sum(
+                            1
+                            for ts in self._synthetic_timestamps.get(symbol, set())
+                            if int(start_ts) <= int(ts) <= int(end_ts)
+                        )
+                    )
+                except Exception:
+                    synthetic_count = 0
+
+            top_spans = [
+                {
+                    "start_ts": int(s),
+                    "end_ts": int(e),
+                    "start": self._fmt_ts(int(s)),
+                    "end": self._fmt_ts(int(e)),
+                    "candles": int((e - s) // step_ms + 1),
+                }
+                for s, e in missing[: max(1, int(max_span_log))]
+            ]
+            last_refresh_ms = self.get_last_refresh_ms(symbol) if step_ms == ONE_MIN_MS else 0
+            gap_summary = (
+                self.get_gap_summary(symbol)
+                if step_ms == ONE_MIN_MS
+                else {
+                    "total_gaps": 0,
+                    "total_minutes": 0,
+                    "persistent_gaps": 0,
+                    "retryable_gaps": 0,
+                    "by_reason": {},
+                    "gaps": [],
+                }
+            )
+            coverage_ok = len(missing) == 0
+            overall_ok = overall_ok and (coverage_ok or not required)
+            tf_reports[tf_norm] = {
+                "timeframe": tf_norm,
+                "required": bool(required),
+                "period_ms": int(step_ms),
+                "required_candles": int(required_candles),
+                "start_ts": int(start_ts),
+                "end_ts": int(end_ts),
+                "latest_expected_ts": int(latest_expected),
+                "current_in_progress_excluded": True,
+                "coverage_ok": bool(coverage_ok),
+                "loaded_rows": int(combined.shape[0]),
+                "disk_loaded_rows": int(disk_arr.shape[0]),
+                "runtime_loaded_rows": int(runtime_arr.shape[0]),
+                "missing_spans": missing,
+                "missing_spans_preview": top_spans,
+                "missing_candles": int(missing_candles),
+                "last_cached_ts": last_cached_ts,
+                "last_cached_age_ms": (
+                    int(max(0, latest_expected - last_cached_ts))
+                    if last_cached_ts is not None and latest_expected >= 0
+                    else None
+                ),
+                "last_disk_ts": last_disk_ts,
+                "last_runtime_ts": last_runtime_ts,
+                "last_refresh_ms": int(last_refresh_ms),
+                "refresh_age_ms": (
+                    int(max(0, ts_now - int(last_refresh_ms))) if int(last_refresh_ms) > 0 else None
+                ),
+                "runtime_synthetic_count": int(synthetic_count),
+                "known_gaps_total": int(gap_summary.get("total_gaps", 0)),
+                "known_gaps_minutes": int(gap_summary.get("total_minutes", 0)),
+                "known_gaps_persistent": int(gap_summary.get("persistent_gaps", 0)),
+                "known_gaps_retryable": int(gap_summary.get("retryable_gaps", 0)),
+                "known_gaps_by_reason": dict(gap_summary.get("by_reason", {}) or {}),
+            }
+
+        return {
+            "symbol": symbol,
+            "generated_ms": int(ts_now),
+            "ok": bool(overall_ok),
+            "timeframes": tf_reports,
+        }
+
     def rebuild_index_for_range(
         self,
         symbol: str,
@@ -3198,12 +3431,37 @@ class CandlestickManager:
         When a rate limit is hit, all concurrent requests should pause to avoid
         the thundering herd problem where they all retry simultaneously.
         """
+        self._raise_if_shutdown_requested("rate_limit_backoff")
         now = time.time()
         if now < self._rate_limit_until:
             wait_time = self._rate_limit_until - now
             if wait_time > 0:
                 self._log("debug", "rate_limit_global_wait", wait_seconds=round(wait_time, 2))
-                await asyncio.sleep(wait_time)
+                await self._sleep_interruptible(wait_time, stage="rate_limit_backoff")
+
+    async def _apply_remote_fetch_spacing(self, *, symbol: str, tf: str) -> None:
+        """Pace ccxt OHLCV calls from this manager to avoid local request bursts."""
+        self._raise_if_shutdown_requested("remote_fetch_spacing")
+        interval_ms = float(getattr(self, "_remote_fetch_min_interval_ms", 0.0) or 0.0)
+        if interval_ms <= 0.0:
+            return
+        async with self._remote_fetch_spacing_lock:
+            self._raise_if_shutdown_requested("remote_fetch_spacing")
+            now_ms = _utc_now_ms()
+            last_started_ms = int(getattr(self, "_remote_fetch_last_started_ms", 0) or 0)
+            wait_ms = int(last_started_ms + interval_ms - now_ms)
+            if wait_ms > 0:
+                self._log(
+                    "debug",
+                    "remote_fetch_spacing_wait",
+                    symbol=symbol,
+                    tf=tf,
+                    wait_ms=wait_ms,
+                    interval_ms=int(interval_ms),
+                )
+                await self._sleep_interruptible(wait_ms / 1000.0, stage="remote_fetch_spacing")
+                now_ms = _utc_now_ms()
+            self._remote_fetch_last_started_ms = int(now_ms)
 
     async def _set_global_rate_limit(self, backoff_seconds: float = 5.0) -> None:
         """Set a global rate limit backoff that affects all concurrent requests."""
@@ -3231,6 +3489,7 @@ class CandlestickManager:
         tf: Optional[str] = None,
     ) -> list:
         """Fetch a single OHLCV page from ccxt, with basic retry/backoff."""
+        self._raise_if_shutdown_requested("ccxt_fetch_ohlcv_once")
         if self.exchange is None:
             return []
         # Determine method to call (exchange instance or module)
@@ -3245,6 +3504,7 @@ class CandlestickManager:
         backoff = 1.0 if is_bybit else 0.5
         backoff_cap = 20.0 if is_bybit else 8.0
         for attempt in range(max_attempts):
+            self._raise_if_shutdown_requested("ccxt_fetch_ohlcv_once")
             # Wait for global rate limit backoff if one is active
             await self._apply_rate_limit_backoff()
             try:
@@ -3270,6 +3530,7 @@ class CandlestickManager:
                     params.setdefault("category", "linear")
 
                 tf_norm = self._normalize_timeframe_arg(timeframe, tf, default=self._ccxt_timeframe)
+                await self._apply_remote_fetch_spacing(symbol=symbol, tf=tf_norm)
                 t0 = time.monotonic()
                 self._emit_remote_fetch(
                     {
@@ -3413,7 +3674,7 @@ class CandlestickManager:
                     )
                 ):
                     sleep_s = max(sleep_s, 2.0)
-                await asyncio.sleep(sleep_s)
+                await self._sleep_interruptible(sleep_s, stage="ccxt_fetch_ohlcv_retry")
                 backoff = min(backoff * 2.0, backoff_cap)
         return []
 
@@ -3492,6 +3753,7 @@ class CandlestickManager:
         """
         if self.exchange is None:
             return np.empty((0,), dtype=CANDLE_DTYPE)
+        self._raise_if_shutdown_requested("fetch_ohlcv_paginated")
         since_start = int(since_ms)
         since = int(since_ms)
         end_excl = int(end_exclusive_ms)
@@ -3508,6 +3770,7 @@ class CandlestickManager:
         prev_last_ts: Optional[int] = None
         total_span = max(1, end_excl - since_start)
         while since < end_excl:
+            self._raise_if_shutdown_requested("fetch_ohlcv_paginated")
             # Bitget auto-probe: try a larger limit once to see if the API supports it.
             probe_limit = None
             if (
@@ -4864,6 +5127,7 @@ class CandlestickManager:
         - If `max_lookback_candles` is set: clamp start_ts so the request spans
           at most that many candles ending at end_ts (per timeframe).
         """
+        self._raise_if_shutdown_requested("get_candles")
         if max_age_ms is not None and max_age_ms < 0:
             raise ValueError("max_age_ms cannot be negative")
 
@@ -5167,22 +5431,41 @@ class CandlestickManager:
         fully_covered = _is_fully_covered(sub, start_ts, end_ts)
         if skip_present_fetch_due_to_ttl and not fully_covered:
             # TTL says data is fresh, but coverage is incomplete for requested range.
-            # Allow present fetch/gap fill to try and repair missing spans.
+            # Allow present fetch/gap fill to repair real older gaps, but do not
+            # defeat TTL for the normal one-candle tail gap seen at minute boundaries.
             allow_fetch_present = True
             try:
                 missing_now = self._missing_spans(sub, start_ts, end_ts)
-                self._log(
-                    "debug",
-                    "ttl_bypass_missing_coverage",
-                    symbol=symbol,
-                    start_ts=start_ts,
-                    end_ts=end_ts,
-                    max_age_ms=max_age_ms,
-                    last_refresh_ms=self._get_last_refresh_ms(symbol),
-                    missing_spans=len(missing_now),
+                trailing_one_candle_gap = (
+                    len(missing_now) == 1
+                    and int(missing_now[0][0]) == int(end_ts)
+                    and int(missing_now[0][1]) == int(end_ts)
+                    and end_ts >= latest_finalized
                 )
+                if trailing_one_candle_gap:
+                    allow_fetch_present = False
+                    self._log(
+                        "debug",
+                        "ttl_skip_trailing_present_gap",
+                        symbol=symbol,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        max_age_ms=max_age_ms,
+                        last_refresh_ms=self._get_last_refresh_ms(symbol),
+                    )
+                else:
+                    self._log(
+                        "debug",
+                        "ttl_bypass_missing_coverage",
+                        symbol=symbol,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        max_age_ms=max_age_ms,
+                        last_refresh_ms=self._get_last_refresh_ms(symbol),
+                        missing_spans=len(missing_now),
+                    )
             except Exception:
-                pass
+                allow_fetch_present = True
 
         # For historical ranges, if we don't have shards for all days yet, fetch
         # exactly the range and persist shards for future calls.
@@ -5582,6 +5865,9 @@ class CandlestickManager:
 
                             def _persist_present_batch(batch: np.ndarray) -> None:
                                 nonlocal persisted_batches
+                                batch = self._slice_ts_range(_ensure_dtype(batch), start_ts, end_ts)
+                                if not batch.size:
+                                    return
                                 persisted_batches = True
                                 self._persist_batch(
                                     symbol,
@@ -5604,6 +5890,7 @@ class CandlestickManager:
                                     fetch_start,
                                     end_excl,
                                 )
+                            fetched = self._slice_ts_range(_ensure_dtype(fetched), start_ts, end_ts)
                             if fetched.size and not persisted_batches:
                                 self._persist_batch(
                                     symbol,
@@ -5658,6 +5945,9 @@ class CandlestickManager:
 
                     def _persist_tail_batch(batch: np.ndarray) -> None:
                         nonlocal persisted_batches
+                        batch = self._slice_ts_range(_ensure_dtype(batch), start_ts, end_ts)
+                        if not batch.size:
+                            return
                         persisted_batches = True
                         self._persist_batch(
                             symbol,
@@ -5680,6 +5970,7 @@ class CandlestickManager:
                             fetch_start,
                             end_excl_range,
                         )
+                    fetched = self._slice_ts_range(_ensure_dtype(fetched), start_ts, end_ts)
                     if fetched.size == 0:
                         break
                     if not persisted_batches:
@@ -5738,6 +6029,9 @@ class CandlestickManager:
 
                         def _persist_gap_batch(batch: np.ndarray) -> None:
                             nonlocal persisted_batches
+                            batch = self._slice_ts_range(_ensure_dtype(batch), start_ts, end_ts)
+                            if not batch.size:
+                                return
                             persisted_batches = True
                             self._persist_batch(
                                 symbol,
@@ -5762,6 +6056,7 @@ class CandlestickManager:
                             )
                         attempts += 1
                         attempted.append((s, e))
+                        fetched = self._slice_ts_range(_ensure_dtype(fetched), start_ts, end_ts)
                         if fetched.size:
                             if not persisted_batches:
                                 self._persist_batch(
@@ -5827,241 +6122,69 @@ class CandlestickManager:
 
         return result
 
-    async def get_current_close(self, symbol: str, max_age_ms: Optional[int] = None) -> float:
-        """Return latest close of the current in-progress minute for `symbol`.
+    async def get_latest_completed_close(
+        self, symbol: str, max_age_ms: Optional[int] = None
+    ) -> float:
+        """Return the close of the latest completed 1m candle for `symbol`.
 
-        Prefers candles over tickers:
-        - Cached current close within TTL
-        - Fresh in-memory current-minute candle
-        - get_candles for the current minute
-        - As last resort: fetch_ticker
-        - Fallback: last finalized cached close
+        CandlestickManager is completed-candle-only.  It does not fetch, cache,
+        merge, or persist current in-progress candles, and it does not use ticker
+        endpoints as live price truth.  Current bid/ask/last belongs in
+        MarketSnapshotProvider.
         """
         if max_age_ms is not None and max_age_ms < 0:
             raise ValueError("max_age_ms cannot be negative")
         now = _utc_now_ms()
-        end_current = _floor_minute(now)
-
-        # 1) TTL cache
-        if max_age_ms is not None and max_age_ms > 0:
-            prev = self._current_close_cache.get(symbol)
-            if prev is not None:
-                price, updated = prev
-                if (now - int(updated)) <= int(max_age_ms):
-                    self._log("debug", "get_current_close_cache_hit", symbol=symbol)
-                    return float(price)
-
-        price: Optional[float] = None
-
-        # 2) In-memory current-minute candle fresh enough
-        try:
-            arr = self._cache.get(symbol)
-            if arr is not None and arr.size:
-                arr_sorted = np.sort(_ensure_dtype(arr), order="ts")
-                last_ts = int(arr_sorted[-1]["ts"])
-                if last_ts == end_current:
-                    fresh_enough = True
-                    if max_age_ms is not None and max_age_ms > 0:
-                        last_refresh = self._get_last_refresh_ms(symbol)
-                        fresh_enough = (now - int(last_refresh)) <= int(max_age_ms)
-                    if fresh_enough:
-                        price = float(arr_sorted[-1]["c"])
-                        self._current_close_cache[symbol] = (price, now)
-                        self._log("debug", "get_current_close_mem_candle", symbol=symbol)
-                        return price
-        except Exception:
-            pass
-
-        # 3) Use candles API to get current minute
-        got = None
-        try:
-            self._log(
-                "debug",
-                "get_current_close_via_candles",
-                symbol=symbol,
-                start_ts=end_current,
-                end_ts=end_current,
-            )
-            got = await self.get_candles(
-                symbol,
-                start_ts=end_current,
-                end_ts=end_current,
-                max_age_ms=max_age_ms,
-                timeframe=None,
-                strict=False,
-            )
-            if got is not None and got.size:
-                got_sorted = np.sort(_ensure_dtype(got), order="ts")
-                price = float(got_sorted[-1]["c"])
-                self._current_close_cache[symbol] = (price, now)
-                self._log("debug", "get_current_close_from_candles", symbol=symbol)
-                return price
-        except Exception:
-            pass
-
-        if got is None or got.size == 0:
-            try:
-                last_ref = self._get_last_refresh_ms(symbol)
-            except Exception:
-                last_ref = 0
-            # If we have a recent refresh (or TTL not enforced), fall back to last finalized candle
-            # to avoid redundant tail fetches. Treat max_age_ms=None as no TTL barrier.
-            ttl_ok = True
-            if max_age_ms is not None and max_age_ms > 0:
-                ttl_ok = (now - int(last_ref)) <= int(max_age_ms)
-            if last_ref and ttl_ok:
-                last_final = int(end_current - ONE_MIN_MS)
-                if last_final >= 0:
-                    try:
-                        got_prev = await self.get_candles(
-                            symbol,
-                            start_ts=last_final,
-                            end_ts=last_final,
-                            max_age_ms=max_age_ms,
-                            timeframe=None,
-                            strict=False,
-                        )
-                        if got_prev is not None and got_prev.size:
-                            got_prev_sorted = np.sort(_ensure_dtype(got_prev), order="ts")
-                            price = float(got_prev_sorted[-1]["c"])
-                            self._current_close_cache[symbol] = (price, now)
-                            self._log(
-                                "debug",
-                                "get_current_close_from_candles_finalized",
-                                symbol=symbol,
-                                ts=int(got_prev_sorted[-1]["ts"]),
-                            )
-                            return price
-                    except Exception:
-                        pass
-
-        # 3b) Directly fetch a small tail window via OHLCV (with cross-process lock) and merge to cache
-        if self.exchange is not None:
-            try:
-                async with self._acquire_fetch_lock(symbol, "1m"):
-                    now_locked = _utc_now_ms()
-                    end_current_locked = _floor_minute(now_locked)
-                    last_final_locked = end_current_locked - ONE_MIN_MS
-
-                    # Refresh cache from disk before deciding to fetch
-                    try:
-                        self._load_from_disk(
-                            symbol, last_final_locked, end_current_locked, timeframe="1m"
-                        )
-                    except Exception:
-                        pass
-
-                    arr_cache = self._cache.get(symbol)
-                    if arr_cache is not None and arr_cache.size:
-                        arr_sorted = np.sort(_ensure_dtype(arr_cache), order="ts")
-                        last_ts = int(arr_sorted[-1]["ts"])
-                        if last_ts >= end_current_locked:
-                            price = float(arr_sorted[-1]["c"])
-                            self._current_close_cache[symbol] = (price, now_locked)
-                            self._set_last_refresh_meta(symbol, last_refresh_ms=now_locked)
-                            self._log(
-                                "debug",
-                                "get_current_close_mem_candle_locked",
-                                symbol=symbol,
-                            )
-                            return price
-                        if last_ts >= last_final_locked:
-                            price = float(arr_sorted[-1]["c"])
-                            self._current_close_cache[symbol] = (price, now_locked)
-                            self._log(
-                                "debug",
-                                "get_current_close_from_candles_finalized_locked",
-                                symbol=symbol,
-                                ts=last_ts,
-                            )
-                            return price
-
-                    n = int(self.overlap_candles) if getattr(self, "overlap_candles", 0) else 1
-                    if n <= 0:
-                        n = 1
-                    try:
-                        n = int(min(max(1, n), int(self._ccxt_limit_default)))
-                    except Exception:
-                        n = max(1, n)
-                    since_tail = max(0, int(end_current_locked) - ONE_MIN_MS * (n - 1))
-                    self._log(
-                        "debug",
-                        "ccxt_fetch_ohlcv_tail_for_current_close",
-                        symbol=symbol,
-                        tf="1m",
-                        since_ts=since_tail,
-                        limit=n,
-                    )
-                    rows = await self._ccxt_fetch_ohlcv_once(
-                        symbol,
-                        since_ms=since_tail,
-                        limit=n,
-                        end_exclusive_ms=None,
-                        timeframe="1m",
-                    )
-                    arr = self._normalize_ccxt_ohlcv(rows)
-                    if arr.size:
-                        price = float(arr[-1]["c"])
-                        merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), arr)
-                        self._cache[symbol] = merged
-                        try:
-                            self._enforce_memory_retention(symbol)
-                            self._save_range(symbol, arr, timeframe="1m")
-                        except Exception:
-                            pass
-                        self._set_last_refresh_meta(symbol, last_refresh_ms=now_locked)
-                        self._current_close_cache[symbol] = (price, now_locked)
-                        self._log(
-                            "debug",
-                            "get_current_close_from_direct_ohlcv",
-                            symbol=symbol,
-                            rows=arr.shape[0],
-                        )
-                        return price
-            except Exception:
-                pass
-
-        # 4) Last resort: ticker
-        if self.exchange is not None:
-            try:
-                if hasattr(self.exchange, "fetch_ticker"):
-                    self._log("debug", "ccxt_fetch_ticker", symbol=symbol)
-                    if getattr(self, "_net_sem", None) is not None:
-                        async with self._net_sem:  # type: ignore[attr-defined]
-                            t = await self.exchange.fetch_ticker(symbol)
-                    else:
-                        t = await self.exchange.fetch_ticker(symbol)
-                    self._log(
-                        "debug",
-                        "ccxt_fetch_ticker_ok",
-                        symbol=symbol,
-                        last=(t.get("last") if isinstance(t, dict) else None),
-                        close=(t.get("close") if isinstance(t, dict) else None),
-                    )
-                    price = float(t.get("last") or t.get("bid") or t.get("ask")) if t else None
-                    if price is not None:
-                        self._current_close_cache[symbol] = (price, now)
-                        return price
-            except Exception:
-                pass
-
-        # 5) Fallback to last cached finalized candle
-        if price is None:
-            arr2 = self._cache.get(symbol)
-            if arr2 is not None and arr2.size:
-                arr2 = np.sort(_ensure_dtype(arr2), order="ts")
-                price = float(arr2[-1]["c"])
-                self._log("debug", "get_current_close_from_cache_finalized", symbol=symbol)
-
-        if price is None:
+        last_final = _floor_minute(now) - ONE_MIN_MS
+        if last_final < 0:
             return float("nan")
+        got = await self.get_candles(
+            symbol,
+            start_ts=last_final,
+            end_ts=last_final,
+            max_age_ms=max_age_ms,
+            timeframe=None,
+            strict=False,
+        )
+        if got is None or got.size == 0:
+            return float("nan")
+        got_sorted = np.sort(_ensure_dtype(got), order="ts")
+        if int(got_sorted[-1]["ts"]) > int(last_final):
+            raise RuntimeError(
+                f"candlestick manager returned in-progress candle for {symbol}: "
+                f"ts={int(got_sorted[-1]['ts'])} last_final={int(last_final)}"
+            )
+        price = float(got_sorted[-1]["c"])
+        self._log(
+            "debug",
+            "get_latest_completed_close",
+            symbol=symbol,
+            ts=int(got_sorted[-1]["ts"]),
+        )
+        return price
 
-        self._current_close_cache[symbol] = (float(price), int(now))
-        return float(price)
+    async def get_current_close(self, symbol: str, max_age_ms: Optional[int] = None) -> float:
+        """Compatibility alias for get_latest_completed_close().
+
+        Live current price truth must use ticker/market snapshots, not
+        CandlestickManager.  This method intentionally returns completed-candle
+        close only despite its legacy name.
+        """
+        return await self.get_latest_completed_close(symbol, max_age_ms=max_age_ms)
 
     def set_current_close(self, symbol: str, price: float, timestamp_ms: int) -> None:
-        """Inject a price into the current-close cache (e.g. from a bulk API call)."""
-        self._current_close_cache[symbol] = (float(price), int(timestamp_ms))
+        """Deprecated no-op.
+
+        Current price cache injection belongs to MarketSnapshotProvider.  The
+        method is retained to avoid breaking older helpers during the staged
+        transition, but CandlestickManager ignores current/in-progress prices.
+        """
+        self._log(
+            "debug",
+            "set_current_close_ignored_completed_only",
+            symbol=symbol,
+            timestamp_ms=int(timestamp_ms),
+        )
 
     def is_rate_limited(self) -> bool:
         """Return True if a global rate-limit backoff is active."""
@@ -6180,166 +6303,34 @@ class CandlestickManager:
         return float(min(vals)), float(max(vals))
 
     async def get_last_prices(self, symbols: List[str], max_age_ms: int = 10_000) -> Dict[str, float]:
-        """Return latest close for current minute per symbol.
+        """Return latest completed-candle close per symbol.
 
-        Uses a cheap cache pass first, then one bulk ticker snapshot when safe,
-        and only falls back to per-symbol get_current_close for any leftovers.
-        Returns 0.0 on failure.
+        This is a completed-candle helper, not live price truth.  Callers that
+        need current bid/ask/last should use MarketSnapshotProvider.
         """
         out: Dict[str, float] = {}
         if not symbols:
             return out
 
         ordered_symbols = list(dict.fromkeys(symbols))
-        now = _utc_now_ms()
-        end_current = _floor_minute(now)
-
-        for symbol in ordered_symbols:
-            cached = self._get_last_price_cached_fast(
-                symbol,
-                now_ms=now,
-                end_current_ms=end_current,
-                max_age_ms=max_age_ms,
-            )
-            if cached is not None:
-                out[symbol] = cached
-
-        remaining = [s for s in ordered_symbols if s not in out]
-        if remaining:
-            bulk_prices = await self._get_last_prices_via_bulk_tickers(
-                remaining,
-                now_ms=now,
-            )
-            for symbol, price in bulk_prices.items():
-                if isinstance(price, (int, float)) and np.isfinite(float(price)) and float(price) > 0.0:
-                    out[symbol] = float(price)
 
         async def one(sym: str) -> float:
             try:
-                val = await self.get_current_close(sym, max_age_ms=max_age_ms)
+                val = await self.get_latest_completed_close(sym, max_age_ms=max_age_ms)
                 return float(val) if isinstance(val, (int, float)) else 0.0
-            except Exception:
+            except Exception as exc:
+                self._log(
+                    "debug",
+                    "get_last_prices_completed_close_failed",
+                    symbol=sym,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
                 return 0.0
 
-        remaining = [s for s in ordered_symbols if s not in out]
-        tasks = {s: asyncio.create_task(one(s)) for s in remaining}
+        tasks = {s: asyncio.create_task(one(s)) for s in ordered_symbols}
         for s, t in tasks.items():
             out[s] = await t
-        return out
-
-    def _get_last_price_cached_fast(
-        self,
-        symbol: str,
-        *,
-        now_ms: int,
-        end_current_ms: int,
-        max_age_ms: Optional[int],
-    ) -> Optional[float]:
-        """Cheap non-fetching latest-price probe for bulk get_last_prices()."""
-        try:
-            if max_age_ms is not None and max_age_ms > 0:
-                prev = self._current_close_cache.get(symbol)
-                if prev is not None:
-                    price, updated = prev
-                    if (int(now_ms) - int(updated)) <= int(max_age_ms):
-                        self._log("debug", "get_last_prices_cache_hit", symbol=symbol)
-                        return float(price)
-        except Exception:
-            pass
-
-        try:
-            arr = self._cache.get(symbol)
-            if arr is None or not arr.size:
-                return None
-            arr_sorted = np.sort(_ensure_dtype(arr), order="ts")
-            last_ts = int(arr_sorted[-1]["ts"])
-            if last_ts == int(end_current_ms):
-                fresh_enough = True
-                if max_age_ms is not None and max_age_ms > 0:
-                    last_refresh = self._get_last_refresh_ms(symbol)
-                    fresh_enough = (int(now_ms) - int(last_refresh)) <= int(max_age_ms)
-                if fresh_enough:
-                    price = float(arr_sorted[-1]["c"])
-                    self._current_close_cache[symbol] = (price, int(now_ms))
-                    self._log("debug", "get_last_prices_mem_candle", symbol=symbol)
-                    return price
-        except Exception:
-            return None
-        return None
-
-    def _bulk_last_price_tickers_allowed(self) -> bool:
-        """Return True when bulk ticker snapshot is a safe latest-price fallback."""
-        ex = str(getattr(self, "exchange_name", "") or getattr(self, "_ex_id", "") or "").lower()
-        # Hyperliquid staged paths intentionally avoid generic fetch_tickers because
-        # CCXT ticker mapping can fan out awkwardly across non-standard markets.
-        return ex not in {"hyperliquid"}
-
-    async def _get_last_prices_via_bulk_tickers(
-        self,
-        symbols: List[str],
-        *,
-        now_ms: int,
-    ) -> Dict[str, float]:
-        """Fetch latest prices for many symbols via one bulk ticker snapshot when safe."""
-        out: Dict[str, float] = {}
-        if (
-            len(symbols) <= 1
-            or self.exchange is None
-            or not hasattr(self.exchange, "fetch_tickers")
-            or not self._bulk_last_price_tickers_allowed()
-        ):
-            return out
-        self._log("debug", "get_last_prices_bulk_tickers_try", symbols=len(symbols))
-        fetched = None
-        try:
-            if getattr(self, "_net_sem", None) is not None:
-                async with self._net_sem:  # type: ignore[attr-defined]
-                    try:
-                        fetched = await self.exchange.fetch_tickers(symbols)
-                    except TypeError:
-                        fetched = await self.exchange.fetch_tickers()
-            else:
-                try:
-                    fetched = await self.exchange.fetch_tickers(symbols)
-                except TypeError:
-                    fetched = await self.exchange.fetch_tickers()
-        except Exception as exc:
-            self._log(
-                "debug",
-                "get_last_prices_bulk_tickers_failed",
-                symbols=len(symbols),
-                error_type=type(exc).__name__,
-                error=str(exc),
-            )
-            return out
-        if not isinstance(fetched, dict):
-            return out
-        hits = 0
-        for symbol in symbols:
-            tick = fetched.get(symbol)
-            if not isinstance(tick, dict):
-                continue
-            raw = tick.get("last")
-            if raw is None:
-                raw = tick.get("close")
-            if raw is None:
-                raw = tick.get("bid") or tick.get("ask")
-            try:
-                price = float(raw)
-            except (TypeError, ValueError):
-                continue
-            if not np.isfinite(price) or price <= 0.0:
-                continue
-            out[symbol] = price
-            self._current_close_cache[symbol] = (price, int(now_ms))
-            hits += 1
-        self._log(
-            "debug",
-            "get_last_prices_bulk_tickers_ok",
-            symbols=len(symbols),
-            hits=hits,
-            misses=max(0, len(symbols) - hits),
-        )
         return out
 
     async def get_ema_bounds_many(
@@ -6825,6 +6816,9 @@ class CandlestickManager:
 
             def _persist_refresh_batch(batch: np.ndarray) -> None:
                 nonlocal persisted_batches
+                batch = self._slice_ts_range(_ensure_dtype(batch), since, end_exclusive - ONE_MIN_MS)
+                if not batch.size:
+                    return
                 persisted_batches = True
                 self._persist_batch(
                     symbol,
@@ -6843,6 +6837,7 @@ class CandlestickManager:
                 )
             except TypeError:
                 new_arr = await self._fetch_ohlcv_paginated(symbol, since, end_exclusive)
+            new_arr = self._slice_ts_range(_ensure_dtype(new_arr), since, end_exclusive - ONE_MIN_MS)
             if new_arr.size == 0:
                 # Keep finalized runtime candles contiguous even if there were no fills.
                 self._materialize_runtime_synthetic_gap(symbol, end_exclusive - ONE_MIN_MS)

@@ -23,11 +23,12 @@ sys.modules.setdefault(
 
 from passivbot import Passivbot
 import passivbot as passivbot_module
+from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 
 
-def test_authoritative_refresh_mode_defaults_to_staged_for_hyperliquid_without_explicit_choice():
+def test_authoritative_refresh_mode_defaults_to_staged_without_explicit_choice():
     bot = Passivbot.__new__(Passivbot)
-    bot.exchange = "hyperliquid"
+    bot.exchange = "binance"
     bot.config = {"live": {"authoritative_refresh_mode": "legacy"}, "_raw_effective": {"live": {}}}
 
     assert bot._authoritative_refresh_mode() == "staged"
@@ -154,6 +155,7 @@ async def test_shutdown_gracefully_waits_for_execution_loop_before_closing_sessi
 
     execution_task = asyncio.create_task(_active_execution_loop())
     bot._execution_loop_task = execution_task
+    bot._execution_loop_task_is_inline = False
     bot._execution_loop_stopped = execution_loop_stopped
     bot.maintainers = {}
     bot.WS_ohlcvs_1m_tasks = {}
@@ -164,6 +166,138 @@ async def test_shutdown_gracefully_waits_for_execution_loop_before_closing_sessi
     await execution_task
 
     assert seen == ["execution_loop_stopped", "ccp_closed", "cca_closed"]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_cancels_stuck_execution_loop_before_closing_sessions():
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._shutdown_execution_grace_seconds = 0.01
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+
+    seen = []
+    execution_loop_stopped = asyncio.Event()
+
+    async def _stuck_execution_loop():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            seen.append("execution_loop_cancelled")
+            raise
+
+    class _Closer:
+        def __init__(self, key):
+            self.key = key
+
+        async def close(self):
+            seen.append(self.key)
+
+    execution_task = asyncio.create_task(_stuck_execution_loop())
+    bot._execution_loop_task = execution_task
+    bot._execution_loop_task_is_inline = False
+    bot._execution_loop_stopped = execution_loop_stopped
+    bot.maintainers = {}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Closer("ccp_closed")
+    bot.cca = _Closer("cca_closed")
+
+    await bot.shutdown_gracefully()
+
+    assert execution_task.cancelled() is True
+    assert execution_loop_stopped.is_set() is True
+    assert seen == ["execution_loop_cancelled", "ccp_closed", "cca_closed"]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_does_not_cancel_inline_execution_task_on_timeout():
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._shutdown_execution_grace_seconds = 0.01
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+
+    seen = []
+    execution_loop_stopped = asyncio.Event()
+
+    async def _inline_like_execution_loop():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            seen.append("unexpected_cancel")
+            raise
+
+    class _Closer:
+        def __init__(self, key):
+            self.key = key
+
+        async def close(self):
+            seen.append(self.key)
+
+    execution_task = asyncio.create_task(_inline_like_execution_loop())
+    bot._execution_loop_task = execution_task
+    bot._execution_loop_task_is_inline = True
+    bot._execution_loop_stopped = execution_loop_stopped
+    bot.maintainers = {}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Closer("ccp_closed")
+    bot.cca = _Closer("cca_closed")
+
+    await bot.shutdown_gracefully()
+
+    assert execution_task.cancelled() is False
+    assert execution_loop_stopped.is_set() is True
+    assert seen == ["ccp_closed", "cca_closed"]
+    execution_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await execution_task
+
+
+@pytest.mark.asyncio
+async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "bybit"
+    bot.user = "test_user"
+    bot.quote = "USDT"
+    bot.start_time_ms = 1_000_000
+    bot.config = {"live": {}}
+    bot.debug_mode = False
+    bot.stop_signal_received = False
+    bot._shutdown_in_progress = False
+    bot._bot_ready = False
+    bot.user_info = {"exchange": "bybit"}
+    bot._log_startup_banner = lambda: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("shutdown cancellation should not be recorded as startup error")
+    )
+    bot._monitor_flush_snapshot = AsyncMock()
+    stop_events = []
+    bot._monitor_emit_stop = lambda *args, **kwargs: stop_events.append((args, kwargs))
+    bot.init_markets = AsyncMock()
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+
+    async def _format(*args, **kwargs):
+        return None
+
+    async def _warmup():
+        bot.stop_signal_received = True
+        raise asyncio.CancelledError("shutdown during warmup")
+
+    monkeypatch.setattr(passivbot_module, "format_approved_ignored_coins", _format)
+    bot.warmup_trading_ready_candles = _warmup
+
+    await bot.start_bot()
+
+    assert bot.stop_signal_received is True
+    assert bot._bot_ready is False
+    assert stop_events
+    assert stop_events[-1][0][0] == "startup_aborted"
+    assert stop_events[-1][1]["payload"]["stage"] == "warmup_trading_ready_candles"
 
 
 def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
@@ -828,7 +962,7 @@ async def test_fetch_authoritative_state_staged_snapshot_uses_exchange_cohort_ho
 
 
 @pytest.mark.asyncio
-async def test_refresh_authoritative_state_staged_falls_back_to_legacy_for_non_fake():
+async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_any_exchange():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
     bot.exchange = "binance"
@@ -838,15 +972,30 @@ async def test_refresh_authoritative_state_staged_falls_back_to_legacy_for_non_f
     bot._authoritative_refresh_epoch_changed = set()
     bot._authoritative_surface_signatures = {}
     bot._authoritative_surface_generations = {}
-    bot._refresh_authoritative_state_legacy = AsyncMock(return_value=True)
-    seen = []
-    bot.log_once = lambda msg: seen.append(msg)
+    bot.fetch_balance = AsyncMock(return_value=100.0)
+    bot.fetch_positions = AsyncMock(return_value=[])
+    bot.fetch_open_orders = AsyncMock(return_value=[])
+    bot.update_pnls = AsyncMock(return_value=True)
+    bot._apply_positions_snapshot = lambda positions: ({}, {})
+    bot._apply_balance_snapshot = lambda balance: True
+    bot._record_authoritative_surface = lambda surface, signature: None
+    bot._staged_defer_balance_publication = lambda: False
+    bot._reconcile_balance_after_positions_and_balance_refresh = lambda: True
+    bot.get_hysteresis_snapped_balance = lambda: 100.0
+    bot.log_position_changes = AsyncMock()
+    bot.handle_balance_update = AsyncMock()
+    bot._apply_open_orders_snapshot = AsyncMock(return_value=True)
+    finalized = []
+    bot._finalize_authoritative_refresh_consistency = lambda plan: finalized.append(set(plan))
 
     result = await bot.refresh_authoritative_state()
 
     assert result is True
-    bot._refresh_authoritative_state_legacy.assert_awaited_once()
-    assert seen
+    bot.fetch_balance.assert_awaited_once()
+    bot.fetch_positions.assert_awaited_once()
+    bot.fetch_open_orders.assert_awaited_once()
+    bot.update_pnls.assert_awaited_once()
+    assert finalized == [{"balance", "positions", "open_orders", "fills"}]
 
 
 def test_get_exchange_time_uses_direct_utc_ms(monkeypatch):
@@ -1109,15 +1258,12 @@ async def test_update_effective_min_cost_uses_executable_min_qty():
     bot.qty_steps = {symbol: 1.0}
     bot.min_costs = {symbol: 0.1}
     bot.c_mults = {symbol: 1.0}
-    bot.cm = types.SimpleNamespace(
-        get_last_prices=lambda symbols, max_age_ms=600_000: {symbol: 88.165}
-    )
     bot.get_symbols_approved_or_has_pos = lambda: [symbol]
 
-    async def fake_get_last_prices(symbols, max_age_ms=600_000):
+    async def fake_get_live_last_prices(symbols, **kwargs):
         return {symbol: 88.165}
 
-    bot.cm.get_last_prices = fake_get_last_prices
+    bot._get_live_last_prices = fake_get_live_last_prices
 
     await bot.update_effective_min_cost()
 
@@ -1561,6 +1707,7 @@ def test_authoritative_barrier_allows_coherent_changed_cycle():
 
 def test_authoritative_barrier_waits_for_next_epoch_confirmation():
     bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
 
     bot._begin_authoritative_refresh_epoch()
     for surface, sig in (
@@ -1583,6 +1730,267 @@ def test_authoritative_barrier_waits_for_next_epoch_confirmation():
     assert blocked is False
     assert details["missing"] == []
     assert getattr(bot, "_authoritative_pending_confirmations", {}) == {}
+    assert bot.freshness_ledger.surface_epoch("open_orders") == 2
+
+
+def test_staged_planner_preconditions_require_current_epoch_surfaces():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+
+    bot._begin_authoritative_refresh_epoch()
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
+    assert ok is False
+    assert details["missing"] == sorted(ACCOUNT_SURFACES | {"completed_candles"})
+
+    for surface in ACCOUNT_SURFACES | {"completed_candles"}:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
+    assert ok is True
+    assert details["missing"] == []
+
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=True)
+    assert ok is False
+    assert details["missing"] == ["market_snapshot"]
+
+    bot._record_authoritative_surface("market_snapshot", ("market", "fresh"))
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=True)
+    assert ok is True
+    assert set(details["required"]) == set(LIVE_STATE_SURFACES)
+
+
+def test_staged_planner_preconditions_allow_open_orders_only_confirmation_epoch():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_pending_confirmations = {}
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES | {"completed_candles"}:
+        bot._record_authoritative_surface(surface, (surface, "baseline"))
+
+    bot._request_authoritative_confirmation({"open_orders"})
+    blocked, details = bot._authoritative_execution_barrier_state()
+    assert blocked is True
+    assert details["missing"] == ["open_orders"]
+
+    bot._begin_authoritative_refresh_epoch()
+    bot._record_authoritative_surface("open_orders", ("open_orders", "confirmed"))
+    bot._record_authoritative_surface("completed_candles", ("completed_candles", "current"))
+
+    blocked, details = bot._authoritative_execution_barrier_state()
+    assert blocked is False
+    assert details["missing"] == []
+
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
+    assert ok is True
+    assert details["missing"] == []
+    assert bot.freshness_ledger.surface_epoch("balance") == 1
+    assert bot.freshness_ledger.surface_epoch("positions") == 1
+    assert bot.freshness_ledger.surface_epoch("fills") == 1
+    assert bot.freshness_ledger.surface_epoch("open_orders") == 2
+
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=True)
+    assert ok is False
+    assert details["missing"] == ["market_snapshot"]
+
+    bot._record_authoritative_surface("market_snapshot", ("market_snapshot", "current"))
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=True)
+    assert ok is True
+    assert details["missing"] == []
+
+
+def test_staged_planner_preconditions_raise_before_rust_planning():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+
+    bot._begin_authoritative_refresh_epoch()
+
+    with pytest.raises(RuntimeError, match="staged planner precondition failed"):
+        bot._assert_staged_planner_preconditions(
+            include_market_snapshot=False, context="market snapshot refresh"
+        )
+
+
+def test_legacy_planner_preconditions_do_not_require_freshness_ledger():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"authoritative_refresh_mode": "legacy"}}
+    bot.exchange = "bybit"
+
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=True)
+
+    assert ok is True
+    assert details["missing"] == []
+
+
+@pytest.mark.asyncio
+async def test_disappeared_self_order_blocks_creations_until_full_freshness():
+    bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_surface_signatures = {}
+    bot._authoritative_surface_generations = {}
+    bot._authoritative_refresh_epoch = 3
+    bot._authoritative_refresh_epoch_fresh = set()
+    bot._authoritative_refresh_epoch_changed = set()
+    bot._authoritative_pending_confirmations = {}
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.recent_order_cancellations = []
+
+    order = {
+        "id": "created-1",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.01,
+        "amount": 0.01,
+        "price": 99_000.0,
+        "reduce_only": False,
+    }
+    bot.open_orders = {"BTC/USDT:USDT": [order]}
+    bot.fetched_open_orders = [order]
+    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
+    bot.order_matches_bot_cancellation = lambda _order: False
+    bot.order_was_recently_cancelled = lambda _order: 0.0
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._reconcile_balance_after_open_orders_refresh = lambda: False
+
+    ok = await Passivbot._apply_open_orders_snapshot(
+        bot,
+        [],
+        allow_followup_positions_refresh=False,
+    )
+
+    assert ok is True
+    assert bot.execution_scheduled is True
+    assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
+    assert set(bot.freshness_ledger.blocked_symbols()) == {"BTC/USDT:USDT"}
+    assert bot.freshness_ledger.blocked_symbols()["BTC/USDT:USDT"].min_epoch == 4
+    assert bot._authoritative_pending_confirmations == {
+        surface: 4 for surface in ACCOUNT_SURFACES
+    }
+
+    to_create, skipped = Passivbot._apply_freshness_creation_guardrails(
+        bot,
+        [
+            {"symbol": "BTC/USDT:USDT", "side": "buy", "position_side": "long"},
+            {"symbol": "ETH/USDT:USDT", "side": "buy", "position_side": "long"},
+        ],
+    )
+
+    assert skipped == 1
+    assert [order["symbol"] for order in to_create] == ["ETH/USDT:USDT"]
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+
+    assert bot.freshness_ledger.blocked_symbols() == {}
+
+
+@pytest.mark.asyncio
+async def test_disappeared_self_order_guardrail_blocks_real_plan_create_until_refresh(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_surface_signatures = {}
+    bot._authoritative_surface_generations = {}
+    bot._authoritative_refresh_epoch = 7
+    bot._authoritative_refresh_epoch_fresh = set()
+    bot._authoritative_refresh_epoch_changed = set()
+    bot._authoritative_pending_confirmations = {}
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.recent_order_cancellations = []
+    bot._last_plan_detail = {}
+    bot._order_plan_summary_is_interesting = lambda **kwargs: False
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot.active_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+
+    class _CM:
+        def get_current_close(self, symbol, max_age_ms=None):
+            return 100.0
+
+    bot.cm = _CM()
+    async def fake_get_live_last_prices(symbols, **kwargs):
+        return {symbol: 100.0 for symbol in symbols}
+
+    bot._get_live_last_prices = fake_get_live_last_prices
+    bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_pct" else 0.0
+
+    disappeared_order = {
+        "id": "created-1",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.01,
+        "amount": 0.01,
+        "price": 99_000.0,
+        "reduce_only": False,
+    }
+    bot.open_orders = {"BTC/USDT:USDT": [disappeared_order], "ETH/USDT:USDT": []}
+    bot.fetched_open_orders = [disappeared_order]
+    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
+    bot.order_matches_bot_cancellation = lambda _order: False
+    bot.order_was_recently_cancelled = lambda _order: 0.0
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._reconcile_balance_after_open_orders_refresh = lambda: False
+
+    await Passivbot._apply_open_orders_snapshot(
+        bot,
+        [],
+        allow_followup_positions_refresh=False,
+    )
+    bot.state_change_detected_by_symbol = set()
+
+    ideal_orders = {
+        "BTC/USDT:USDT": [
+            {
+                "symbol": "BTC/USDT:USDT",
+                "side": "buy",
+                "position_side": "long",
+                "qty": 0.01,
+                "price": 99_000.0,
+                "reduce_only": False,
+            }
+        ],
+        "ETH/USDT:USDT": [
+            {
+                "symbol": "ETH/USDT:USDT",
+                "side": "buy",
+                "position_side": "long",
+                "qty": 0.1,
+                "price": 3_000.0,
+                "reduce_only": False,
+            }
+        ],
+    }
+
+    async def fake_calc_ideal_orders():
+        return ideal_orders
+
+    bot.calc_ideal_orders = fake_calc_ideal_orders
+
+    with caplog.at_level(logging.INFO):
+        _to_cancel, to_create = await Passivbot.calc_orders_to_cancel_and_create(bot)
+
+    assert [order["symbol"] for order in to_create] == ["ETH/USDT:USDT"]
+    assert "freshness guardrail blocking order creation" in caplog.text
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+
+    _to_cancel, to_create = await Passivbot.calc_orders_to_cancel_and_create(bot)
+
+    assert sorted(order["symbol"] for order in to_create) == [
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+    ]
 
 
 @pytest.mark.asyncio

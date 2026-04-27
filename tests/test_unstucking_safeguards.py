@@ -498,6 +498,9 @@ def _make_dummy_bot(config, *, last_price=100.0):
         def live_value(self, key: str):
             return self._live_values.get(key, 0.0)
 
+        async def _get_live_last_prices(self, symbols, **kwargs):
+            return {s: last_price for s in symbols}
+
     return DummyBot(config)
 
 
@@ -766,7 +769,31 @@ async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_staged_orchestrator_uses_cm_last_prices_only(monkeypatch):
+async def test_staged_orchestrator_precondition_blocks_before_market_snapshot():
+    cfg = _dummy_config()
+    cfg["live"]["authoritative_refresh_mode"] = "staged"
+    bot = _make_dummy_bot(cfg)
+    bot.exchange = "bybit"
+    symbol = _set_basic_state(bot)
+    bot.markets_dict = {symbol: {"active": True}}
+
+    snapshot_calls = []
+
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        snapshot_calls.append((list(symbols), max_age_ms))
+        return {}
+
+    bot.market_snapshot_provider = types.SimpleNamespace(get_snapshots=fake_get_snapshots)
+    bot._begin_authoritative_refresh_epoch()
+
+    with pytest.raises(RuntimeError, match="staged planner precondition failed"):
+        await bot.calc_ideal_orders_orchestrator()
+
+    assert snapshot_calls == []
+
+
+@pytest.mark.asyncio
+async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(monkeypatch):
     cfg = _dummy_config()
     cfg["live"]["authoritative_refresh_mode"] = "staged"
     bot = _make_dummy_bot(cfg)
@@ -794,14 +821,28 @@ async def test_staged_orchestrator_uses_cm_last_prices_only(monkeypatch):
         }
     }
 
+    from market_snapshot import MarketSnapshot
+
     cm_calls = []
+    snapshot_calls = []
 
     async def fake_get_last_prices(symbols, max_age_ms=None):
         cm_calls.append((list(symbols), max_age_ms))
         return {s: 101.0 for s in symbols}
 
-    async def forbidden_fetch_tickers():
-        raise AssertionError("staged orchestrator should not call fetch_tickers()")
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        snapshot_calls.append((list(symbols), max_age_ms))
+        return {
+            s: MarketSnapshot(
+                symbol=s,
+                bid=100.5,
+                ask=101.5,
+                last=101.0,
+                fetched_ms=123,
+                source="test",
+            )
+            for s in symbols
+        }
 
     async def fake_load_bundle(self, symbols, modes):
         m1_close = {symbol: {1.0: 100.0, 2.0: 100.0}}
@@ -817,16 +858,46 @@ async def test_staged_orchestrator_uses_cm_last_prices_only(monkeypatch):
         return '{"orders": [], "diagnostics": {"warnings": []}}'
 
     bot.cm.get_last_prices = fake_get_last_prices
-    monkeypatch.setattr(bot, "fetch_tickers", forbidden_fetch_tickers, raising=False)
+    bot.market_snapshot_provider = types.SimpleNamespace(get_snapshots=fake_get_snapshots)
     monkeypatch.setattr(bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot))
     monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
+    from freshness_ledger import ACCOUNT_SURFACES
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES | {"completed_candles"}:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
 
     await bot.calc_ideal_orders_orchestrator()
 
-    assert cm_calls == [([symbol], 10_000)]
+    assert snapshot_calls == [([symbol], 10_000)]
+    assert cm_calls == []
     rust_symbol = captured["input"]["symbols"][0]
-    assert rust_symbol["order_book"]["bid"] == pytest.approx(101.0)
-    assert rust_symbol["order_book"]["ask"] == pytest.approx(101.0)
+    assert rust_symbol["order_book"]["bid"] == pytest.approx(100.5)
+    assert rust_symbol["order_book"]["ask"] == pytest.approx(101.5)
+
+
+@pytest.mark.asyncio
+async def test_staged_market_snapshot_missing_symbols_do_not_use_cm_fallback():
+    cfg = _dummy_config()
+    cfg["live"]["authoritative_refresh_mode"] = "staged"
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    cm_calls = []
+
+    async def fake_get_last_prices(symbols, max_age_ms=None):
+        cm_calls.append((list(symbols), max_age_ms))
+        return {s: 101.0 for s in symbols}
+
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        return {}
+
+    bot.cm.get_last_prices = fake_get_last_prices
+    bot.market_snapshot_provider = types.SimpleNamespace(get_snapshots=fake_get_snapshots)
+
+    snapshots = await bot._get_orchestrator_market_snapshots([symbol])
+
+    assert cm_calls == []
+    assert snapshots == {}
 
 
 def test_hsl_halted_universe_keeps_managed_symbols_and_blocks_flat_candidates():

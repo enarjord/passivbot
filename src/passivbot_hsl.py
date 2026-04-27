@@ -345,7 +345,12 @@ async def _calc_upnl_sum_strict(self, pside: Optional[str] = None) -> float:
     }
     if not symbols:
         return 0.0
-    last_prices = await self.cm.get_last_prices(symbols, max_age_ms=60_000)
+    if hasattr(self, "_get_live_last_prices"):
+        last_prices = await self._get_live_last_prices(
+            symbols, max_age_ms=60_000, context="hard_stop_upnl"
+        )
+    else:
+        last_prices = await self.cm.get_last_prices(symbols, max_age_ms=60_000)
     upnl_sum = 0.0
     for elm in self.fetched_positions:
         if pside is not None and elm["position_side"] != pside:

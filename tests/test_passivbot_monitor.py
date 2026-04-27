@@ -186,6 +186,9 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(monkeypat
         _set_log_silence_watchdog_context = pb_mod.Passivbot._set_log_silence_watchdog_context
         _start_log_silence_watchdog = pb_mod.Passivbot._start_log_silence_watchdog
         _stop_log_silence_watchdog = pb_mod.Passivbot._stop_log_silence_watchdog
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+        _raise_if_shutdown_requested = pb_mod.Passivbot._raise_if_shutdown_requested
+        _sleep_unless_shutdown = pb_mod.Passivbot._sleep_unless_shutdown
 
         def __init__(self):
             self.monitor_publisher = RecorderPublisher()
@@ -211,7 +214,7 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(monkeypat
         async def init_markets(self):
             return None
 
-        async def warmup_candles_staggered(self):
+        async def warmup_trading_ready_candles(self):
             return None
 
         def _equity_hard_stop_enabled(self):
@@ -512,6 +515,15 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 }
             ]
             self.cm = FakeCM()
+            self.market_snapshot_provider = SimpleNamespace(
+                _cache={
+                    "BTC/USDT:USDT": SimpleNamespace(
+                        last=100500.0,
+                        fetched_ms=123450,
+                        source="test_snapshot",
+                    )
+                }
+            )
             self.inverse = False
             self.c_mults = {"BTC/USDT:USDT": 1.0}
             self.pside_int_map = {"long": 0, "short": 1}

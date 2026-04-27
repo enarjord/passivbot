@@ -8,6 +8,20 @@ All notable user-facing changes will be documented in this file.
 - Fixed Gate.io live order creation with current CCXT/Gate.io by passing Passivbot custom ids as `clientOrderId`, letting CCXT emit Gate.io's required `t-`-prefixed order `text` while preserving the embedded Passivbot order-type marker.
 - Fixed live foreign-writer detection so a bot's own freshly acknowledged orders can be recognized by exchange order id, canonical Passivbot custom id, or a strict recent order fingerprint instead of relying only on raw client-id string equality.
 - Fixed OHLCV v2 planning so persistent gaps are not bypassed by sparse store bounds, and single-exchange backtest preparation no longer attempts the same v2 local path twice before falling back.
+- Live candle fetching now applies the configured candle fetch delay inside `CandlestickManager` before each CCXT OHLCV call, reducing paginated startup/refresh bursts across exchanges instead of only sleeping after symbol-level refresh loops.
+- Live forager candle refresh now prioritizes symbols with positions or open orders and budgets forager-only active symbols with `live.max_ohlcv_fetches_per_minute`, reducing broad approved-coin OHLCV refresh bursts.
+- Added `passivbot tool ticker-probe`, a read-only exchange capability probe for `fetch_ticker`, `fetch_tickers(symbols)`, `fetch_tickers()`, and optional top-of-book data to support separating live price truth from candle fetching.
+- Added `passivbot tool ticker-endpoint-probe`, a multi-user read-only CCXT timing probe for ticker variants, bids/asks, order book, 1m OHLCV tail behavior, market metadata, and private account-state endpoints.
+- Staged live order planning now sources bid/ask/last from a dedicated market snapshot provider before falling back to candle-manager last prices, moving current price truth out of incomplete candle paths.
+- Staged authoritative refresh is now the default live refresh mode for all exchanges on the staged-planner branch, with explicit `live.authoritative_refresh_mode=legacy` retained as a temporary opt-out while broader exchange validation continues.
+- Live market snapshots now cache all valid symbols returned by a bulk ticker response and coalesce concurrent cache misses behind one in-flight `fetch_tickers()` request, reducing redundant remote calls during staged planning.
+- Staged live execution now records account, candle, and market-data freshness in an explicit ledger and blocks new order creation for a symbol when a bot-created order disappears before a follow-up account-state refresh can rule out a fill.
+- Staged live order planning now hard-fails before Rust order calculation if the current authoritative epoch is missing required account, completed-candle, or market-snapshot freshness stamps.
+- CandlestickManager now has a completed-candle-only contract: compatibility latest-close helpers no longer fetch tickers, current-minute OHLCV, or persist in-progress candles; live current price reads use market snapshots instead.
+- Live candle health diagnostics now report required completed-candle coverage for active symbols, including 1m/15m/1h freshness, missing spans, known gaps, and runtime synthetic candles, with detailed output at `DEBUG` and `INFO` only when interesting.
+- Live forager candle budgeting now ranks refresh candidates by latest completed-candle staleness, keeps position/open-order symbols outside non-critical budget limits, and supports `live.max_forager_candle_staleness_minutes` to cap acceptable eligible-coin staleness.
+- Live startup now performs only a minimal trading-ready candle warmup for symbols with positions/open orders before entering the main loop, then runs broad approved-coin candle catch-up in a cancellable background task. Set `live.defer_broad_candle_warmup=false` to keep the old blocking broad warmup behavior.
+- Live shutdown now interrupts candle/EMA warmup and cancels a stuck execution loop before closing exchange sessions, reducing Ctrl-C/shutdown hangs during broad market-data refresh.
 
 ## v7.10.0 - 2026-04-22
 

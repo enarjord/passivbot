@@ -100,15 +100,24 @@ class OKXBot(CCXTBot):
                         is_multi_asset_mode = False
 
         if is_multi_asset_mode:
+            conversion_symbols = [
+                self.coin_to_symbol(elm2["ccy"])
+                for elm in fetched_balance["info"]["data"]
+                for elm2 in elm["details"]
+                if elm2["collateralEnabled"] and elm2["ccy"] != self.quote
+            ]
+            conversion_prices = {}
+            if conversion_symbols:
+                conversion_prices = await self._get_live_last_prices(
+                    conversion_symbols,
+                    max_age_ms=10_000,
+                    context="okx_collateral_conversion",
+                )
             for elm in fetched_balance["info"]["data"]:
                 for elm2 in elm["details"]:
                     if elm2["collateralEnabled"]:
                         balance += float(elm2["cashBal"]) * (
-                            (
-                                await self.cm.get_current_close(
-                                    self.coin_to_symbol(elm2["ccy"]), max_age_ms=10_000
-                                )
-                            )
+                            conversion_prices[self.coin_to_symbol(elm2["ccy"])]
                             if elm2["ccy"] != self.quote
                             else 1.0
                         )
@@ -260,6 +269,12 @@ class OKXBot(CCXTBot):
     async def calc_ideal_orders(self):
         # okx has max 100 open orders. Drop orders whose pprice diff is greatest.
         ideal_orders = await super().calc_ideal_orders()
+        market_prices = await self._get_live_last_prices(
+            ideal_orders.keys(),
+            max_age_ms=10_000,
+            context="okx_order_cap_sort",
+            allow_completed_candle_fallback=True,
+        )
         ideal_orders_tmp = []
         for s in ideal_orders:
             for x in ideal_orders[s]:
@@ -268,7 +283,7 @@ class OKXBot(CCXTBot):
                         calc_order_price_diff(
                             x["side"],
                             x["price"],
-                            await self.cm.get_current_close(s, max_age_ms=10_000),
+                            market_prices[s],
                         ),
                         {**x, **{"symbol": s}},
                     )

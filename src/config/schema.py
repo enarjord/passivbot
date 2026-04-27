@@ -340,7 +340,7 @@ def get_template_config():
                 "auto_gs": True,
                 "balance_hysteresis_snap_pct": 0.01,
                 "balance_override": None,
-                "authoritative_refresh_mode": "legacy",
+                "authoritative_refresh_mode": "staged",
                 "candle_lock_timeout_seconds": 10,
                 "enable_archive_candle_fetch": False,
                 "execution_delay_seconds": 2,
