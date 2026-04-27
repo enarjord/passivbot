@@ -3564,7 +3564,10 @@ class Passivbot:
                 for tf, tf_report in (symbol_report.get("timeframes", {}) or {}).items():
                     required = bool(tf_report.get("required", True))
                     missing = int(tf_report.get("missing_candles", 0) or 0)
-                    if required:
+                    actionable_missing = self._candle_health_missing_is_actionable(
+                        str(tf), required, missing, tf_report
+                    )
+                    if required and actionable_missing:
                         worst_missing = max(worst_missing, missing)
                     synthetic_count += int(tf_report.get("runtime_synthetic_count", 0) or 0)
                     end_ts = tf_report.get("end_ts")
@@ -3577,7 +3580,7 @@ class Passivbot:
                         age_ms = int(max(0, int(end_ts) - int(last_cached_ts)))
                         if age_ms > stale_threshold_ms:
                             stale_count += 1
-                    if required and missing > 0:
+                    if actionable_missing:
                         unhealthy_details.append(f"{symbol} {tf} missing={missing}")
             detail = "; ".join(unhealthy_details[:5])
             if len(unhealthy_details) > 5:
@@ -3627,6 +3630,37 @@ class Passivbot:
                 type(exc).__name__,
                 exc,
             )
+
+    def _candle_health_missing_is_actionable(
+        self, timeframe: str, required: bool, missing: int, tf_report: dict
+    ) -> bool:
+        if not required or int(missing) <= 0:
+            return False
+        if str(timeframe) != "1m" or int(missing) > 1:
+            return True
+        try:
+            grace_ms = int(
+                get_optional_live_value(self.config, "candle_health_trailing_grace_ms", ONE_MIN_MS)
+                or ONE_MIN_MS
+            )
+        except Exception:
+            grace_ms = ONE_MIN_MS
+        last_cached_age_ms = tf_report.get("last_cached_age_ms")
+        refresh_age_ms = tf_report.get("refresh_age_ms")
+        if last_cached_age_ms is None:
+            return True
+        try:
+            last_cached_age_ms = int(last_cached_age_ms)
+        except Exception:
+            return True
+        if last_cached_age_ms > ONE_MIN_MS:
+            return True
+        if refresh_age_ms is None:
+            return False
+        try:
+            return int(refresh_age_ms) > max(0, grace_ms)
+        except Exception:
+            return True
 
     def get_first_timestamp(self, symbol):
         """Return the cached first tradable timestamp for `symbol`, populating defaults."""

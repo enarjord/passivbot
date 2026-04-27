@@ -583,6 +583,48 @@ def test_order_plan_summary_is_interesting_only_for_large_or_clipped_waves():
     )
 
 
+def test_candle_health_missing_trailing_1m_gap_is_not_actionable_during_grace():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"candle_health_trailing_grace_ms": 60_000}}
+
+    assert (
+        bot._candle_health_missing_is_actionable(
+            "1m",
+            True,
+            1,
+            {"last_cached_age_ms": 60_000, "refresh_age_ms": 30_000},
+        )
+        is False
+    )
+    assert (
+        bot._candle_health_missing_is_actionable(
+            "1m",
+            True,
+            1,
+            {"last_cached_age_ms": 60_000, "refresh_age_ms": 61_000},
+        )
+        is True
+    )
+    assert (
+        bot._candle_health_missing_is_actionable(
+            "1m",
+            True,
+            2,
+            {"last_cached_age_ms": 120_000, "refresh_age_ms": 30_000},
+        )
+        is True
+    )
+    assert (
+        bot._candle_health_missing_is_actionable(
+            "1h",
+            True,
+            1,
+            {"last_cached_age_ms": 3_600_000, "refresh_age_ms": 30_000},
+        )
+        is True
+    )
+
+
 def test_memory_snapshot_is_interesting_only_initially_or_on_large_change():
     bot = Passivbot.__new__(Passivbot)
 

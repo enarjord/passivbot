@@ -250,7 +250,10 @@ class BinanceBot(CCXTBot):
         fetched = await self.cca.fapipublic_get_ticker_bookticker()
         tickers = {}
         for elm in fetched:
-            symbol = self.get_symbol_id_inv(elm["symbol"])
+            raw_symbol = str(elm["symbol"])
+            if self._raw_symbol_is_dated_future(raw_symbol):
+                continue
+            symbol = self.get_symbol_id_inv(raw_symbol)
             if symbol in self.markets_dict:
                 bid = float(elm["bidPrice"])
                 ask = float(elm["askPrice"])

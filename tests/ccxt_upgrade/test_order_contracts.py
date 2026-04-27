@@ -89,6 +89,34 @@ def test_binance_normalize_positions_blocks_dated_futures_position():
 
 
 @pytest.mark.asyncio
+async def test_binance_fetch_tickers_skips_dated_futures_before_symbol_conversion():
+    bot = BinanceBot.__new__(BinanceBot)
+    bot.markets_dict = {
+        "BTC/USDT:USDT": {"id": "BTCUSDT", "swap": True},
+        "BTC_260327/USDT:USDT": {
+            "id": "BTCUSDT_260327",
+            "future": True,
+            "swap": False,
+            "expiry": 1774579200000,
+        },
+    }
+    bot.symbol_ids_inv = {"BTCUSDT": "BTC/USDT:USDT"}
+
+    class _Api:
+        async def fapipublic_get_ticker_bookticker(self):
+            return [
+                {"symbol": "BTCUSDT_260327", "bidPrice": "1", "askPrice": "2"},
+                {"symbol": "BTCUSDT", "bidPrice": "100", "askPrice": "101"},
+            ]
+
+    bot.cca = _Api()
+
+    tickers = await bot.fetch_tickers()
+
+    assert sorted(tickers) == ["BTC/USDT:USDT"]
+
+
+@pytest.mark.asyncio
 async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbols():
     bot = BinanceBot.__new__(BinanceBot)
     bot.exchange = "binance"
