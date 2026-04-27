@@ -839,6 +839,7 @@ async def run_backtest_scenario(
     base_ignored: Optional[List[str]] = None,
 ) -> ScenarioResult:
     from backtest import (
+        BacktestPlotContext,
         build_backtest_payload,
         execute_backtest,
         post_process,
@@ -903,6 +904,7 @@ async def run_backtest_scenario(
             build_backtest_payload,
             execute_backtest,
             post_process,
+            BacktestPlotContext.from_payload,
         )
     else:
         # Use per-exchange datasets for scenarios with exchange restrictions
@@ -924,6 +926,7 @@ async def run_backtest_scenario(
             build_backtest_payload,
             execute_backtest,
             post_process,
+            BacktestPlotContext.from_payload,
             available_exchanges,
         )
 
@@ -955,6 +958,7 @@ def _run_combined_dataset(
     build_payload_fn,
     execute_backtest_fn,
     post_process_fn,
+    plot_context_factory,
 ) -> Dict[str, Dict[str, Any]]:
     per_exchange: Dict[str, Dict[str, Any]] = {}
 
@@ -1016,6 +1020,7 @@ def _run_combined_dataset(
                 str(output_dir),
                 dataset.exchange,
                 label=scenario.label,
+                plot_context=plot_context_factory(payload),
             )
         except Exception as exc:  # pragma: no cover - defensive logging
             logging.error(
@@ -1038,6 +1043,7 @@ def _run_multi_dataset(
     build_payload_fn,
     execute_backtest_fn,
     post_process_fn,
+    plot_context_factory,
     available_exchanges: List[str],
 ) -> Dict[str, Dict[str, Any]]:
     per_exchange: Dict[str, Dict[str, Any]] = {}
@@ -1093,6 +1099,7 @@ def _run_multi_dataset(
                     str(exchange_dir),
                     dataset.exchange,
                     label=f"{scenario.label}/{dataset.exchange}",
+                    plot_context=plot_context_factory(payload),
                 )
             except Exception as exc:
                 logging.error(
