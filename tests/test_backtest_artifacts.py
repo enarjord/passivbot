@@ -15,6 +15,7 @@ from backtest_artifacts import (
     load_backtest_artifact_workspace,
     plot_fills_for_coin,
 )
+from plotting import create_forager_coin_figures
 
 
 def _save_npy_gz(path: Path, array: np.ndarray) -> None:
@@ -170,6 +171,7 @@ def test_plot_fills_for_coin_returns_figure_for_loaded_artifact(tmp_path):
         assert fig.axes
         ax = fig.axes[0]
         assert ax.get_title() == "Fills BTC"
+        assert ax.get_xlabel() == "datetime"
         assert len(ax.lines) >= 2
         assert len(ax.collections) >= 2
         pprice_lines = [line for line in ax.lines if line.get_label() == "long pprice"]
@@ -193,6 +195,43 @@ def test_workspace_plot_fills_for_coin_uses_loaded_artifact(tmp_path):
 
     try:
         assert fig.axes[0].get_title() == "Fills BTC"
+    finally:
+        from plotting import plt
+
+        plt.close(fig)
+
+
+def test_forager_coin_fill_plot_uses_datetime_axis():
+    timestamps = np.array(
+        [
+            int(ts.value // 1_000_000)
+            for ts in pd.date_range("2026-01-01 00:00:00", periods=5, freq="1min")
+        ],
+        dtype=np.int64,
+    )
+    hlcvs = np.zeros((5, 1, 4), dtype=float)
+    hlcvs[:, 0, 0] = [101.0, 102.0, 103.0, 104.0, 105.0]
+    hlcvs[:, 0, 1] = [99.0, 100.0, 101.0, 102.0, 103.0]
+    hlcvs[:, 0, 2] = [100.0, 101.0, 102.0, 103.0, 104.0]
+    fills = pd.DataFrame(
+        {
+            "coin": ["BTC", "BTC"],
+            "minute": [1, 3],
+            "timestamp": pd.to_datetime(timestamps[[1, 3]], unit="ms"),
+            "type": ["long_entry", "long_close"],
+            "price": [101.0, 103.0],
+            "pprice": [101.0, 0.0],
+            "psize": [1.0, 0.0],
+        }
+    )
+
+    fig = create_forager_coin_figures(["BTC"], fills, hlcvs, timestamps=timestamps)["BTC"]
+
+    try:
+        ax = fig.axes[0]
+        assert ax.get_xlabel() == "datetime"
+        assert np.issubdtype(ax.lines[0].get_xdata().dtype, np.datetime64)
+        assert str(ax.lines[0].get_xdata()[0]).startswith("2026-01-01")
     finally:
         from plotting import plt
 

@@ -583,10 +583,13 @@ def plot_fills_forager(
         plt.clf()
     if len(fdf) == 0:
         return
+    source_cols = ["high", "low", "close"]
+    if "timestamp" in hlcvs_df.columns:
+        source_cols.append("timestamp")
     if whole:
-        hlcc = hlcvs_df[["high", "low", "close"]]
+        hlcc = hlcvs_df[source_cols]
     else:
-        hlcc = hlcvs_df[["high", "low", "close"]].loc[fdf.iloc[0].minute : fdf.iloc[-1].minute]
+        hlcc = hlcvs_df[source_cols].loc[fdf.iloc[0].minute : fdf.iloc[-1].minute]
     fdfc = fdf.set_index(fdf.minute.astype(int))
 
     start_minute = int(hlcc.index[0] + hlcc.index[-1] * start_pct)
@@ -603,9 +606,32 @@ def plot_fills_forager(
     hlcc_low = hlcc["low"].to_numpy()
     hlcc_high = hlcc["high"].to_numpy()
 
-    ax.plot(hlcc.index, hlcc_close, "y--", label="close", zorder=1.0)
-    ax.plot(hlcc.index, hlcc_low, "g--", label="low", zorder=0.9)
-    ax.plot(hlcc.index, hlcc_high, "g-.", alpha=0.6, label="high", zorder=0.8)
+    def _coerce_plot_datetimes(values):
+        arr = np.asarray(values)
+        if np.issubdtype(arr.dtype, np.number):
+            return pd.to_datetime(arr.astype(np.int64), unit="ms", errors="coerce")
+        return pd.to_datetime(values, errors="coerce")
+
+    if "timestamp" in hlcc.columns:
+        candle_x = _coerce_plot_datetimes(hlcc["timestamp"])
+        minute_to_datetime = pd.Series(candle_x.to_numpy(), index=hlcc.index)
+    else:
+        candle_x = hlcc.index
+        minute_to_datetime = None
+
+    def _x_for_candle_minutes(index_values):
+        if minute_to_datetime is None:
+            return np.asarray(index_values)
+        return minute_to_datetime.reindex(index_values).to_numpy()
+
+    def _x_for_fills(fill_df):
+        if "timestamp" in fill_df.columns:
+            return _coerce_plot_datetimes(fill_df["timestamp"]).to_numpy()
+        return fill_df.index.to_numpy()
+
+    ax.plot(candle_x, hlcc_close, "y--", label="close", zorder=1.0)
+    ax.plot(candle_x, hlcc_low, "g--", label="low", zorder=0.9)
+    ax.plot(candle_x, hlcc_high, "g-.", alpha=0.6, label="high", zorder=0.8)
 
     type_series = fdfc["type"].astype(str)
     longs = fdfc[type_series.str.contains("long", regex=False)]
@@ -622,16 +648,15 @@ def plot_fills_forager(
             longs_price = pd.to_numeric(longs_price_series, errors="coerce").to_numpy()
         mask_entry = longs_types.str.contains("entry", regex=False).to_numpy()
         mask_close = longs_types.str.contains("close", regex=False).to_numpy()
-        long_index_vals = longs.index.to_numpy()
         ax.scatter(
-            long_index_vals[mask_entry],
+            _x_for_fills(longs.iloc[np.flatnonzero(mask_entry)]),
             longs_price[mask_entry],
             c="b",
             marker=".",
             zorder=3.0,
         )
         ax.scatter(
-            long_index_vals[mask_close],
+            _x_for_fills(longs.iloc[np.flatnonzero(mask_close)]),
             longs_price[mask_close],
             c="r",
             marker=".",
@@ -650,7 +675,7 @@ def plot_fills_forager(
         pprices_filtered = pprices_long.loc[pprices_long["psize"] != 0.0, "pprice"]
         if not pprices_filtered.empty:
             ax.scatter(
-                pprices_filtered.index.to_numpy(),
+                _x_for_candle_minutes(pprices_filtered.index),
                 pprices_filtered.to_numpy(),
                 c="b",
                 marker="|",
@@ -672,16 +697,15 @@ def plot_fills_forager(
             shorts_price = pd.to_numeric(shorts_price_series, errors="coerce").to_numpy()
         mask_entry = shorts_types.str.contains("entry", regex=False).to_numpy()
         mask_close = shorts_types.str.contains("close", regex=False).to_numpy()
-        short_index_vals = shorts.index.to_numpy()
         ax.scatter(
-            short_index_vals[mask_entry],
+            _x_for_fills(shorts.iloc[np.flatnonzero(mask_entry)]),
             shorts_price[mask_entry],
             c="m",
             marker="x",
             zorder=3.0,
         )
         ax.scatter(
-            short_index_vals[mask_close],
+            _x_for_fills(shorts.iloc[np.flatnonzero(mask_close)]),
             shorts_price[mask_close],
             c="c",
             marker="x",
@@ -700,7 +724,7 @@ def plot_fills_forager(
         pprices_filtered = pprices_short.loc[pprices_short["psize"] != 0.0, "pprice"]
         if not pprices_filtered.empty:
             ax.scatter(
-                pprices_filtered.index.to_numpy(),
+                _x_for_candle_minutes(pprices_filtered.index),
                 pprices_filtered.to_numpy(),
                 c="r",
                 marker="|",
@@ -714,6 +738,7 @@ def plot_fills_forager(
             ]
         )
     ax.legend(legend)
+    ax.set_xlabel("datetime" if minute_to_datetime is not None else "minute")
     return plt
 
 
@@ -1139,6 +1164,7 @@ def create_forager_coin_figures(
     coin=None,
     on_figure: Optional[Callable[[str, Figure], None]] = None,
     close_after_callback: bool = True,
+    timestamps=None,
 ) -> dict:
     figures: Dict[str, Figure] = {}
     if hlcvs is None:
@@ -1150,12 +1176,20 @@ def create_forager_coin_figures(
         if fdfc.empty:
             continue
         hlcvs_df = pd.DataFrame(hlcvs[:, idx, :3], columns=["high", "low", "close"])
+        if timestamps is not None:
+            ts_arr = np.asarray(timestamps, dtype=np.int64)
+            if (
+                len(ts_arr) >= len(hlcvs_df)
+                and len(ts_arr) > 0
+                and int(np.nanmax(ts_arr)) > 946684800000
+            ):
+                hlcvs_df["timestamp"] = ts_arr[: len(hlcvs_df)]
         plt.figure(figsize=figsize)
         plot_fills_forager(fdfc, hlcvs_df, clear=False, start_pct=start_pct, end_pct=end_pct)
         fig = plt.gcf()
         ax = fig.axes[0] if fig.axes else fig.add_subplot(111)
         ax.set_title(f"Fills {coin_}")
-        ax.set_xlabel("Minute")
+        ax.set_xlabel("datetime" if "timestamp" in hlcvs_df.columns else "minute")
         ax.set_ylabel("Price")
         if on_figure is not None:
             on_figure(coin_, fig)

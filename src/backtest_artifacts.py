@@ -376,7 +376,7 @@ def plot_fills_for_coin(
     _plot_fill_markers(ax, fills)
     _plot_position_prices(ax, candles, fills)
     ax.set_title(f"Fills {coin}")
-    ax.set_xlabel("Time")
+    ax.set_xlabel("datetime")
     ax.set_ylabel("Price")
     ax.legend()
     fig.tight_layout()
