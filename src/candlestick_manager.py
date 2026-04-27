@@ -849,6 +849,10 @@ class CandlestickManager:
         self._synth_candle_batch_mode = True
         self._synth_candle_batch.clear()
 
+    def _sparse_ohlcv_gaps_are_expected(self) -> bool:
+        exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
+        return "kucoin" in exid
+
     def flush_synth_candle_batch(self) -> None:
         """Log aggregated zero-candle synthesis summary and exit batch mode."""
         self._synth_candle_batch_mode = False
@@ -856,9 +860,10 @@ class CandlestickManager:
             return
         total_symbols = len(self._synth_candle_batch)
         total_candles = sum(v.get("count", 0) for v in self._synth_candle_batch.values())
-        # Use WARNING only for large amounts of synthesized candles (>1000), otherwise INFO
-        # This is expected behavior on illiquid pairs during warmup
-        log_fn = self.log.warning if total_candles > 1000 else self.log.info
+        # KuCoin futures commonly omits no-trade minutes. Large zero-volume synthesis
+        # batches are expected there and should be visible without looking like data corruption.
+        sparse_expected = self._sparse_ohlcv_gaps_are_expected()
+        log_fn = self.log.info if sparse_expected or total_candles <= 1000 else self.log.warning
 
         def _fmt_range(min_ts: Optional[int], max_ts: Optional[int]) -> str:
             try:
@@ -880,12 +885,19 @@ class CandlestickManager:
             symbol, meta = next(iter(self._synth_candle_batch.items()))
             count = int(meta.get("count", 0))
             rng = _fmt_range(meta.get("min_ts"), meta.get("max_ts"))
+            suffix = (
+                " | expected on sparse KuCoin no-trade minutes"
+                if sparse_expected
+                else ""
+            )
             log_fn(
-                "[candle] synthesized %d zero-candle%s for %s at %s (no data for requested minutes)",
+                "[candle] synthesized %d zero-candle%s for %s at %s "
+                "(no data for requested minutes)%s",
                 count,
                 "s" if count > 1 else "",
                 symbol,
                 rng,
+                suffix,
             )
         else:
             # Log top symbols by synthesized count (limit to keep logs concise)
@@ -904,12 +916,19 @@ class CandlestickManager:
             top_str = ", ".join(top_parts)
             if extra > 0:
                 top_str = f"{top_str} (+{extra} more)"
+            suffix = (
+                " | expected on sparse KuCoin no-trade minutes"
+                if sparse_expected
+                else ""
+            )
             log_fn(
-                "[candle] synthesized %d zero-candle%s across %d symbols (no data for requested minutes) top=%s",
+                "[candle] synthesized %d zero-candle%s across %d symbols "
+                "(no data for requested minutes) top=%s%s",
                 total_candles,
                 "s" if total_candles > 1 else "",
                 total_symbols,
                 top_str,
+                suffix,
             )
         self._synth_candle_batch.clear()
 
@@ -4132,16 +4151,30 @@ class CandlestickManager:
                             "%Y-%m-%dT%H:%M"
                         )
                         ts_info = f"{first_dt} to {last_dt}"
-                    # Use DEBUG for individual gap warnings - the batch summary at startup is enough at WARNING
-                    # Only use WARNING for truly exceptional situations (gaps > 1000 candles during live operation)
-                    log_fn = self.log.warning if synthesized_count > 1000 else self.log.debug
+                    # KuCoin futures returns sparse no-trade minutes, so even large individual
+                    # synthetic runs are expected. Other exchanges keep WARNING for large gaps.
+                    sparse_expected = self._sparse_ohlcv_gaps_are_expected()
+                    log_fn = (
+                        self.log.info
+                        if sparse_expected and synthesized_count > 1000
+                        else self.log.warning
+                        if synthesized_count > 1000
+                        else self.log.debug
+                    )
+                    suffix = (
+                        " | expected on sparse KuCoin no-trade minutes"
+                        if sparse_expected
+                        else ""
+                    )
                     log_fn(
-                        "[candle] %s: synthesized %d zero-candle%s at %s (no data for requested minutes) using prev_close=%.6f",
+                        "[candle] %s: synthesized %d zero-candle%s at %s "
+                        "(no data for requested minutes) using prev_close=%.6f%s",
                         symbol,
                         synthesized_count,
                         "s" if synthesized_count > 1 else "",
                         ts_info,
                         prev_close if prev_close is not None else 0.0,
+                        suffix,
                     )
 
         if not out_rows:

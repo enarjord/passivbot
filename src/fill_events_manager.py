@@ -3766,7 +3766,7 @@ class KucoinFetcher(BaseFetcher):
                 time.time() - ph_started,
             )
             self._match_pnls(closes, ph, events)
-            self._log_discrepancies(local_pnls, ph)
+            self._log_discrepancies(local_pnls, ph, trades)
 
         ordered = sorted(events.values(), key=lambda ev: ev["timestamp"])
         await self._enrich_with_order_details_bulk(ordered, detail_cache)
@@ -3971,26 +3971,82 @@ class KucoinFetcher(BaseFetcher):
                 f"{total_unmatched_pnl:.4f}",
             )
 
+    @staticmethod
+    def _position_history_symbol(position: Dict[str, object]) -> str:
+        sym = position.get("symbol")
+        if sym:
+            return str(sym)
+        info = position.get("info", {})
+        if isinstance(info, dict):
+            sym = info.get("symbol") or info.get("contract")
+            if sym:
+                return str(sym)
+        return ""
+
     def _log_discrepancies(
-        self, local_pnls: Dict[str, float], positions: List[Dict[str, object]]
+        self,
+        local_pnls: Dict[str, float],
+        positions: List[Dict[str, object]],
+        trades: List[Dict[str, object]],
     ) -> None:
         if not positions or not local_pnls:
             return
-        # Aggregate by symbol for a rough reconciliation
-        pos_sum: Dict[str, float] = defaultdict(float)
+        local_sum: Dict[str, float] = defaultdict(float)
+        local_count: Dict[str, int] = defaultdict(int)
+        local_close_count: Dict[str, int] = defaultdict(int)
+        for trade in trades:
+            trade_id = str(trade.get("id") or "")
+            symbol = str(trade.get("symbol") or "")
+            if not trade_id or not symbol or trade_id not in local_pnls:
+                continue
+            local_sum[symbol] += float(local_pnls[trade_id])
+            local_count[symbol] += 1
+            side = str(trade.get("side") or "").lower()
+            position_side = str(trade.get("position_side") or "").lower()
+            if (side == "sell" and position_side == "long") or (
+                side == "buy" and position_side == "short"
+            ):
+                local_close_count[symbol] += 1
+
+        remote_sum: Dict[str, float] = defaultdict(float)
+        remote_count: Dict[str, int] = defaultdict(int)
+        remote_first_ts: Dict[str, int] = {}
+        remote_last_ts: Dict[str, int] = {}
         for p in positions:
-            sym = p.get("symbol") or p.get("info", {}).get("symbol") or ""
+            sym = self._position_history_symbol(p)
             if not sym:
                 continue
-            try:
-                pos_sum[sym] += float(p.get("realizedPnl", 0.0))
-            except Exception:
-                continue
-        if not pos_sum:
+            remote_sum[sym] += float(p.get("realizedPnl") or 0.0)
+            remote_count[sym] += 1
+            ts = int(p.get("lastUpdateTimestamp") or p.get("timestamp") or 0)
+            if ts > 0:
+                remote_first_ts[sym] = min(remote_first_ts.get(sym, ts), ts)
+                remote_last_ts[sym] = max(remote_last_ts.get(sym, ts), ts)
+        if not remote_sum:
             return
-        # Local aggregate by symbol inferred from trade ids is not available here; report global sums
-        local_total = sum(local_pnls.values())
-        remote_total = sum(pos_sum.values())
+
+        local_total = sum(local_sum.values())
+        remote_total = sum(remote_sum.values())
+        all_symbols = sorted(set(local_sum) | set(remote_sum))
+        symbol_rows = []
+        for symbol in all_symbols:
+            local = float(local_sum.get(symbol, 0.0))
+            remote = float(remote_sum.get(symbol, 0.0))
+            symbol_rows.append(
+                {
+                    "symbol": symbol,
+                    "delta": local - remote,
+                    "local": local,
+                    "remote": remote,
+                    "local_trades": int(local_count.get(symbol, 0)),
+                    "local_closes": int(local_close_count.get(symbol, 0)),
+                    "remote_positions": int(remote_count.get(symbol, 0)),
+                    "remote_first_ts": int(remote_first_ts.get(symbol, 0)),
+                    "remote_last_ts": int(remote_last_ts.get(symbol, 0)),
+                }
+            )
+        symbol_rows.sort(key=lambda row: abs(float(row["delta"])), reverse=True)
+
         if abs(local_total - remote_total) > max(1e-8, 0.05 * (abs(remote_total) + 1e-8)):
             # Throttle: log once per hour, or immediately if delta changes significantly
             now = time.time()
@@ -4009,12 +4065,37 @@ class KucoinFetcher(BaseFetcher):
             if should_log:
                 _pnl_discrepancy_last_log[throttle_key] = now
                 _pnl_discrepancy_last_delta[throttle_key] = current_delta
+                top = ", ".join(
+                    f"{row['symbol']}:local={float(row['local']):.2f},"
+                    f"history={float(row['remote']):.2f},delta={float(row['delta']):.2f}"
+                    for row in symbol_rows[:3]
+                )
                 logger.warning(
-                    "[pnl] KucoinFetcher: local sum %.2f differs from positions_history %.2f (delta=%.2f)",
+                    "[pnl] KucoinFetcher: local sum %.2f differs from positions_history %.2f "
+                    "(delta=%.2f) top=%s",
                     local_total,
                     remote_total,
                     current_delta,
+                    top or "-",
                 )
+                for row in symbol_rows[:10]:
+                    logger.debug(
+                        "[pnl] KucoinFetcher reconciliation detail "
+                        "symbol=%s local=%.8f positions_history=%.8f delta=%.8f "
+                        "trade_events=%d close_fills=%d positions_history_rows=%d "
+                        "history_window=%s..%s probable_causes=%s",
+                        row["symbol"],
+                        float(row["local"]),
+                        float(row["remote"]),
+                        float(row["delta"]),
+                        int(row["local_trades"]),
+                        int(row["local_closes"]),
+                        int(row["remote_positions"]),
+                        _format_ms(int(row["remote_first_ts"]) or None),
+                        _format_ms(int(row["remote_last_ts"]) or None),
+                        "timestamp-window mismatch, unmatched close fills, KuCoin side/reduceOnly "
+                        "classification, or positions_history pagination/symbol mismatch",
+                    )
 
     @staticmethod
     def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:

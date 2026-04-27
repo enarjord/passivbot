@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 import math
@@ -46,6 +47,47 @@ def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
     # synthesized middle candle should have bv == 0 and c equal to previous close (102.0)
     assert float(res[1]["bv"]) == 0.0
     assert math.isclose(float(res[1]["c"]), 102.0, rel_tol=1e-6)
+
+
+def test_kucoin_synthetic_batch_summary_is_info_not_warning(tmp_path, caplog):
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="kucoin", cache_dir=str(tmp_path / "caches"))
+    cm.start_synth_candle_batch()
+    cm._synth_candle_batch["ILLQ/USDT:USDT"] = {
+        "count": 5000,
+        "min_ts": 1725590400000,
+        "max_ts": 1725890340000,
+    }
+
+    caplog.set_level(logging.INFO, logger=cm.log.name)
+    cm.flush_synth_candle_batch()
+
+    records = [rec for rec in caplog.records if "synthesized 5000 zero-candles" in rec.getMessage()]
+    assert records
+    assert records[0].levelno == logging.INFO
+    assert "expected on sparse KuCoin no-trade minutes" in records[0].getMessage()
+
+
+def test_non_kucoin_large_synthetic_batch_summary_stays_warning(tmp_path, caplog):
+    class _Ex:
+        id = "okx"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches"))
+    cm.start_synth_candle_batch()
+    cm._synth_candle_batch["ILLQ/USDT:USDT"] = {
+        "count": 5000,
+        "min_ts": 1725590400000,
+        "max_ts": 1725890340000,
+    }
+
+    caplog.set_level(logging.INFO, logger=cm.log.name)
+    cm.flush_synth_candle_batch()
+
+    records = [rec for rec in caplog.records if "synthesized 5000 zero-candles" in rec.getMessage()]
+    assert records
+    assert records[0].levelno == logging.WARNING
 
 
 @pytest.mark.asyncio

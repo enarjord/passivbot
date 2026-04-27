@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import sys
 import types
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,7 @@ if str(ROOT) not in sys.path:
 import pytest
 from ccxt.base.errors import RateLimitExceeded
 
+import src.fill_events_manager as fem
 from src.fill_events_manager import (
     BaseFetcher,
     BinanceFetcher,
@@ -2983,6 +2985,56 @@ def test_kucoin_match_pnls_multiple_positions_multiple_fills():
     assert events["btc-close-2"]["pnl"] == pytest.approx(50.0)
     # Second position: 50 PnL to single fill
     assert events["btc-close-3"]["pnl"] == pytest.approx(50.0)
+
+
+def test_kucoin_pnl_discrepancy_logs_symbol_diagnostics(caplog):
+    fetcher = KucoinFetcher(api=object())
+    fem._pnl_discrepancy_last_log.clear()
+    fem._pnl_discrepancy_last_delta.clear()
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    trades = [
+        {
+            "id": "close-1",
+            "symbol": "TAO/USDT:USDT",
+            "side": "sell",
+            "position_side": "long",
+        },
+        {
+            "id": "open-1",
+            "symbol": "SUI/USDT:USDT",
+            "side": "buy",
+            "position_side": "long",
+        },
+    ]
+    positions = [
+        {
+            "symbol": "TAO/USDT:USDT",
+            "lastUpdateTimestamp": now_ms,
+            "realizedPnl": 1.25,
+        },
+        {
+            "symbol": "SUI/USDT:USDT",
+            "lastUpdateTimestamp": now_ms + 1000,
+            "realizedPnl": -0.25,
+        },
+    ]
+
+    caplog.set_level(logging.DEBUG, logger=fem.logger.name)
+    fetcher._log_discrepancies(
+        {"close-1": 25.0, "open-1": 0.0},
+        positions,
+        trades,
+    )
+
+    messages = [rec.getMessage() for rec in caplog.records]
+    assert any("local sum 25.00 differs from positions_history 1.00" in msg for msg in messages)
+    assert any("top=TAO/USDT:USDT:local=25.00,history=1.25" in msg for msg in messages)
+    assert any(
+        "KucoinFetcher reconciliation detail symbol=TAO/USDT:USDT" in msg
+        and "close_fills=1" in msg
+        and "probable_causes=" in msg
+        for msg in messages
+    )
 
 
 # ---------------------------------------------------------------------------
