@@ -84,45 +84,39 @@ class OKXBot(CCXTBot):
     # ═══════════════════ OKX-SPECIFIC METHODS ═══════════════════
 
     async def fetch_balance(self) -> float:
-        """OKX: Complex multi-asset mode balance calculation.
+        """OKX: return wallet balance in quote terms, including multi-asset collateral."""
+        fetched = await self._do_fetch_balance()
+        return self._get_balance(fetched)
 
-        OKX has a unique balance structure that requires summing collateral
-        across multiple assets, converting each to quote currency.
-        """
-        fetched_balance = await self.cca.fetch_balance()
+    def _get_balance(self, fetched: dict) -> float:
+        """OKX account equity includes UPL; Passivbot raw balance should not."""
+        info = fetched["info"]
+        data = info["data"]
+        if not data:
+            raise KeyError("okx: fetch_balance response missing info.data[0]")
+        account = data[0]
+        details = account.get("details", [])
+        if "totalEq" in account:
+            upl_sum = sum(float(detail.get("upl") or 0.0) for detail in details)
+            return float(account["totalEq"]) - upl_sum
+
         balance = 0.0
-
-        is_multi_asset_mode = True
-        if len(fetched_balance["info"]["data"]) == 1:
-            if len(fetched_balance["info"]["data"][0]["details"]) == 1:
-                if fetched_balance["info"]["data"][0]["details"][0]["ccy"] == self.quote:
-                    if not fetched_balance["info"]["data"][0]["details"][0]["collateralEnabled"]:
-                        is_multi_asset_mode = False
-
-        if is_multi_asset_mode:
-            conversion_symbols = [
-                self.coin_to_symbol(elm2["ccy"])
-                for elm in fetched_balance["info"]["data"]
-                for elm2 in elm["details"]
-                if elm2["collateralEnabled"] and elm2["ccy"] != self.quote
-            ]
-            conversion_prices = {}
-            if conversion_symbols:
-                conversion_prices = await self._get_live_last_prices(
-                    conversion_symbols,
-                    max_age_ms=10_000,
-                    context="okx_collateral_conversion",
-                )
-            for elm in fetched_balance["info"]["data"]:
-                for elm2 in elm["details"]:
-                    if elm2["collateralEnabled"]:
-                        balance += float(elm2["cashBal"]) * (
-                            conversion_prices[self.coin_to_symbol(elm2["ccy"])]
-                            if elm2["ccy"] != self.quote
-                            else 1.0
-                        )
-        else:
-            balance = float(fetched_balance["info"]["data"][0]["details"][0]["cashBal"])
+        for detail in details:
+            collateral_enabled = detail.get("collateralEnabled")
+            if str(collateral_enabled).lower() not in {"true", "1"} and collateral_enabled is not True:
+                continue
+            ccy = detail["ccy"]
+            if ccy == self.quote:
+                balance += float(detail["cashBal"])
+            elif "eqUsd" in detail:
+                balance += float(detail["eqUsd"]) - float(detail.get("upl") or 0.0)
+            else:
+                raise KeyError(f"okx: collateral detail for {ccy} missing eqUsd")
+        if balance == 0.0:
+            total = fetched.get("total")
+            if not isinstance(total, dict) or self.quote not in total:
+                raise KeyError(f"okx: fetch_balance response missing total[{self.quote!r}]")
+            return float(total[self.quote])
         return balance
 
     async def fetch_pnls(self, start_time: int = None, end_time: int = None, limit=None):

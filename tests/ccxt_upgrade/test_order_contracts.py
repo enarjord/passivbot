@@ -151,6 +151,88 @@ def test_okx_order_side_uses_info_pos_side():
     assert bot._get_position_side_for_order({"info": {"posSide": "SHORT"}}) == "short"
 
 
+def test_okx_get_balance_includes_multi_asset_collateral_excluding_upl():
+    bot = OKXBot.__new__(OKXBot)
+    bot.exchange = "okx"
+    bot.quote = "USDT"
+
+    balance = bot._get_balance(
+        {
+            "total": {"BTC": 0.0028398211190601, "USDT": 68.18073094671803},
+            "info": {
+                "data": [
+                    {
+                        "totalEq": "285.6112921470932",
+                        "details": [
+                            {
+                                "ccy": "BTC",
+                                "cashBal": "0.0028398211190601",
+                                "eqUsd": "217.4360156588509",
+                                "upl": "0",
+                                "collateralEnabled": True,
+                            },
+                            {
+                                "ccy": "USDT",
+                                "cashBal": "76.92702623479187",
+                                "eqUsd": "68.17527648824229",
+                                "upl": "-8.746295288073837",
+                                "collateralEnabled": True,
+                            },
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+
+    assert balance == pytest.approx(294.35758743516704)
+
+
+@pytest.mark.asyncio
+async def test_okx_legacy_and_staged_balance_snapshot_use_same_collateral_value():
+    bot = OKXBot.__new__(OKXBot)
+    bot.exchange = "okx"
+    bot.quote = "USDT"
+
+    fetched = {
+        "total": {"BTC": 0.0028398211190601, "USDT": 68.18073094671803},
+        "info": {
+            "data": [
+                {
+                    "totalEq": "285.6112921470932",
+                    "details": [
+                        {
+                            "ccy": "BTC",
+                            "cashBal": "0.0028398211190601",
+                            "eqUsd": "217.4360156588509",
+                            "upl": "0",
+                            "collateralEnabled": True,
+                        },
+                        {
+                            "ccy": "USDT",
+                            "cashBal": "76.92702623479187",
+                            "eqUsd": "68.17527648824229",
+                            "upl": "-8.746295288073837",
+                            "collateralEnabled": True,
+                        },
+                    ],
+                }
+            ]
+        },
+    }
+
+    async def _fetch_balance():
+        return fetched
+
+    bot.cca = SimpleNamespace(fetch_balance=_fetch_balance)
+
+    legacy_balance = await bot.fetch_balance()
+    _raw_snapshot, staged_balance = await bot.capture_balance_snapshot()
+
+    assert legacy_balance == pytest.approx(294.35758743516704)
+    assert staged_balance == pytest.approx(legacy_balance)
+
+
 def test_one_way_exchanges_prefer_existing_position_state_over_side():
     for bot_cls in (DefxBot, KucoinBot):
         bot = bot_cls.__new__(bot_cls)
