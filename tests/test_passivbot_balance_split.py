@@ -1239,6 +1239,28 @@ async def test_update_balance_override_does_not_reset_hysteresis_anchor():
     assert bot.previous_hysteresis_balance == pytest.approx(133.0)
 
 
+def test_apply_balance_snapshot_honors_override_and_retains_exchange_raw(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+    bot.balance = 100.0
+    bot.balance_raw = 100.0
+    bot._exchange_reported_balance_raw = 100.0
+    bot.balance_override = 250.0
+    bot._balance_override_logged = False
+    bot.previous_hysteresis_balance = 133.0
+    bot.balance_hysteresis_snap_pct = 0.02
+
+    with caplog.at_level(logging.INFO):
+        ok = bot._apply_balance_snapshot(123.45)
+
+    assert ok is True
+    assert bot.balance == pytest.approx(250.0)
+    assert bot.balance_raw == pytest.approx(250.0)
+    assert bot._exchange_reported_balance_raw == pytest.approx(123.45)
+    assert bot.previous_hysteresis_balance == pytest.approx(133.0)
+    assert "Using balance override: 250.000000" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_update_balance_nan_keeps_previous_and_logs_warning(caplog):
     bot = Passivbot.__new__(Passivbot)

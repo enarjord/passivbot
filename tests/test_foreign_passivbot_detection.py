@@ -105,6 +105,42 @@ def _make_detection_bot(now_ts: int, start_ts: int):
 
 
 @pytest.mark.asyncio
+async def test_apply_open_orders_snapshot_runs_foreign_writer_detector():
+    import passivbot as pb_mod
+
+    bot = _make_detection_bot(now_ts=2_000_000, start_ts=1_000_000)
+    bot.open_orders = {}
+    bot.fetched_open_orders = []
+    bot.state_change_detected_by_symbol = set()
+    bot._record_authoritative_surface = lambda *_args, **_kwargs: None
+    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: False
+    bot.order_matches_bot_cancellation = lambda _order: False
+    bot.order_was_recently_cancelled = lambda _order: 0.0
+    bot.log_order_action = lambda *_args, **_kwargs: None
+    bot._reconcile_balance_after_open_orders_refresh = lambda: False
+
+    foreign_order = {
+        "id": "foreign-1",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.01,
+        "amount": 0.01,
+        "price": 99_000.0,
+        "reduce_only": False,
+        "timestamp": 1_020_000,
+        "custom_id": _pb_custom_id("entry_grid_normal_long", "foreign"),
+    }
+
+    ok = await pb_mod.Passivbot._apply_open_orders_snapshot(bot, [foreign_order])
+
+    assert ok is True
+    assert len(bot.foreign_passivbot_seen) == 1
+    assert bot.open_orders["BTC/USDT:USDT"] == [foreign_order]
+    assert bot.stop_signal_received is False
+
+
+@pytest.mark.asyncio
 async def test_detect_foreign_passivbot_orders_ignores_manual_and_prestart_orders():
     import passivbot as pb_mod
 

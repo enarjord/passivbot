@@ -4618,6 +4618,12 @@ class Passivbot:
 
     async def _detect_foreign_passivbot_orders(self, open_orders: list[dict]) -> None:
         """Detect newer Passivbot-managed open orders not emitted by this running bot instance."""
+        if not hasattr(self, "orders_emitted_to_exchange"):
+            self.orders_emitted_to_exchange = []
+        if not hasattr(self, "foreign_passivbot_seen"):
+            self.foreign_passivbot_seen = {}
+        if not hasattr(self, "_foreign_passivbot_stop_requested"):
+            self._foreign_passivbot_stop_requested = False
         now_ts = int(self.get_exchange_time())
         bot_start_ts = int(getattr(self, "bot_start_exchange_ts", now_ts))
         self._prune_emitted_order_custom_ids(now_ts)
@@ -7686,21 +7692,44 @@ class Passivbot:
         if not hasattr(self, "_exchange_reported_balance_raw"):
             self._exchange_reported_balance_raw = self.balance_raw
 
-        if balance_raw is None:
-            logging.warning("balance fetch returned None; keeping previous balance")
-            return False
-        try:
-            balance_raw = float(balance_raw)
-        except (TypeError, ValueError):
-            logging.warning("non-numeric balance fetch result; keeping previous balance")
-            return False
-        if not math.isfinite(balance_raw):
-            logging.warning("non-finite balance fetch result; keeping previous balance")
-            return False
+        exchange_balance_raw = None
+        exchange_balance_error = "none" if balance_raw is None else None
+        if balance_raw is not None:
+            try:
+                exchange_balance_raw = float(balance_raw)
+            except (TypeError, ValueError):
+                exchange_balance_error = "non-numeric"
+            else:
+                if not math.isfinite(exchange_balance_raw):
+                    exchange_balance_raw = None
+                    exchange_balance_error = "non-finite"
 
-        self._exchange_reported_balance_raw = balance_raw
-        balance_snapped = balance_raw
-        if self.balance_override is None:
+        if self.balance_override is not None:
+            try:
+                balance_raw = float(self.balance_override)
+            except (TypeError, ValueError):
+                logging.warning("non-numeric balance override; keeping previous balance")
+                return False
+            if not math.isfinite(balance_raw):
+                logging.warning("non-finite balance override; keeping previous balance")
+                return False
+            if not self._balance_override_logged:
+                logging.info("Using balance override: %.6f", balance_raw)
+                self._balance_override_logged = True
+            if exchange_balance_raw is not None:
+                self._exchange_reported_balance_raw = exchange_balance_raw
+            balance_snapped = balance_raw
+        else:
+            if exchange_balance_raw is None:
+                if exchange_balance_error == "none":
+                    logging.warning("balance fetch returned None; keeping previous balance")
+                elif exchange_balance_error == "non-numeric":
+                    logging.warning("non-numeric balance fetch result; keeping previous balance")
+                else:
+                    logging.warning("non-finite balance fetch result; keeping previous balance")
+                return False
+            balance_raw = exchange_balance_raw
+            self._exchange_reported_balance_raw = balance_raw
             if self.previous_hysteresis_balance is None:
                 self.previous_hysteresis_balance = balance_raw
             balance_snapped = pbr.hysteresis(
@@ -7781,6 +7810,7 @@ class Passivbot:
             if elm["symbol"] not in self.open_orders:
                 self.open_orders[elm["symbol"]] = []
             self.open_orders[elm["symbol"]].append(elm)
+        await self._detect_foreign_passivbot_orders(open_orders)
         balance_reconciled = False
         if reconcile_balance:
             balance_reconciled = self._reconcile_balance_after_open_orders_refresh()
@@ -8477,7 +8507,7 @@ class Passivbot:
                 else:
                     budget = 0
                     secondary_max_age_ms = int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
-                secondary_ttls, _cache_only_never_fetched = self._compute_fetch_budget_ttls(
+                secondary_ttls, cache_only_never_fetched = self._compute_fetch_budget_ttls(
                     secondary_symbols, secondary_max_age_ms, budget
                 )
                 cache_only_ttl = 365 * 24 * 3600 * 1000
@@ -8494,6 +8524,10 @@ class Passivbot:
                     int(budget),
                     int(secondary_max_age_ms / 1000),
                 )
+            else:
+                cache_only_never_fetched = set()
+        else:
+            cache_only_never_fetched = set()
 
         async def fetch_map(symbol: str, spans: list[float], fn, ema_type: str):
             out: dict[float, float] = {}
@@ -8652,6 +8686,12 @@ class Passivbot:
 
         async def load_symbol_bundle(sym: str):
             Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
+            if sym in cache_only_never_fetched:
+                logging.debug(
+                    "[candle] skipping orchestrator EMA fetch for cache-only never-fetched symbol %s",
+                    sym,
+                )
+                return {}, {}, {}, {}
             close = await fetch_close_map(sym, sorted(need_close_spans[sym]))
             Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
             h1 = await fetch_required_map(

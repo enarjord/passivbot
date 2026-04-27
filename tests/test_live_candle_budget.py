@@ -373,6 +373,98 @@ async def test_orchestrator_ema_bundle_budgets_forager_only_symbols(monkeypatch)
     assert all(max_age > 300_000_000 for _kind, _tf, max_age in by_symbol["B/USDT:USDT"])
 
 
+@pytest.mark.asyncio
+async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondaries(monkeypatch):
+    import passivbot as pb_mod
+
+    now_ms = 2_000_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    class FakeCM:
+        def __init__(self):
+            self.calls = []
+            self.last_refresh = {
+                "FETCH/USDT:USDT": 0,
+                "SKIP/USDT:USDT": 0,
+            }
+
+        def get_last_refresh_ms(self, symbol):
+            return int(self.last_refresh.get(symbol, 0))
+
+        async def get_latest_ema_close(self, symbol, *, span, max_age_ms=None, **kwargs):
+            self.calls.append(("close", symbol, None, int(max_age_ms)))
+            return 1.0
+
+        async def get_latest_ema_quote_volume(self, symbol, *, span, max_age_ms=None, **kwargs):
+            self.calls.append(("qv", symbol, None, int(max_age_ms)))
+            return 1.0
+
+        async def get_latest_ema_log_range(
+            self, symbol, *, span, tf=None, max_age_ms=None, **kwargs
+        ):
+            self.calls.append(("lr", symbol, tf, int(max_age_ms)))
+            return 1.0
+
+    class FakeBot:
+        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+        open_orders = {}
+        inactive_coin_candle_ttl_ms = 600_000
+        cm = FakeCM()
+
+        def is_forager_mode(self, pside=None):
+            return True
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def bp(self, pside, key, symbol):
+            if key == "ema_span_0":
+                return 10.0
+            if key == "ema_span_1":
+                return 20.0
+            if key == "entry_volatility_ema_span_hours":
+                return 2.0
+            return 0.0
+
+        def bot_value(self, pside, key):
+            if key == "forager_volume_ema_span":
+                return 5.0
+            if key == "forager_volatility_ema_span":
+                return 7.0
+            return 0.0
+
+        has_position = pb_mod.Passivbot.has_position
+        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
+        _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
+        _rank_symbols_by_candle_staleness = pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
+        _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
+
+    bot = FakeBot()
+    (
+        m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        h1_log_range_emas,
+        volumes_long,
+        log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, ["POS/USDT:USDT", "FETCH/USDT:USDT", "SKIP/USDT:USDT"], modes={}
+    )
+
+    called_symbols = {symbol for _kind, symbol, _tf, _max_age_ms in bot.cm.calls}
+    assert "POS/USDT:USDT" in called_symbols
+    assert "FETCH/USDT:USDT" in called_symbols
+    assert "SKIP/USDT:USDT" not in called_symbols
+    assert m1_close_emas["SKIP/USDT:USDT"] == {}
+    assert m1_volume_emas["SKIP/USDT:USDT"] == {}
+    assert m1_log_range_emas["SKIP/USDT:USDT"] == {}
+    assert h1_log_range_emas["SKIP/USDT:USDT"] == {}
+    assert volumes_long["SKIP/USDT:USDT"] == 0.0
+    assert log_ranges_long["SKIP/USDT:USDT"] == 0.0
+
+
 def test_required_candle_health_windows_include_indicator_and_diagnostic_timeframes():
     import passivbot as pb_mod
 
