@@ -9953,6 +9953,28 @@ class Passivbot:
         except Exception:
             pass
 
+    async def _forager_candidate_candle_refresh_task(self) -> None:
+        """Run broad forager candle refresh outside the critical execution path."""
+        try:
+            await self._refresh_forager_candidate_candles()
+        except asyncio.CancelledError:
+            logging.debug("[shutdown] forager candidate candle refresh cancelled")
+            raise
+        except Exception as exc:
+            logging.error("[candle] forager candidate refresh failed: %s", exc, exc_info=True)
+
+    def _schedule_forager_candidate_candle_refresh(self) -> None:
+        """Schedule one broad forager refresh if none is already running."""
+        if Passivbot._shutdown_requested(self) or not self.is_forager_mode():
+            return
+        if not hasattr(self, "maintainers") or not isinstance(self.maintainers, dict):
+            self.maintainers = {}
+        key = "forager_candidate_candle_refresh"
+        existing = self.maintainers.get(key)
+        if existing is not None and not existing.done():
+            return
+        self.maintainers[key] = asyncio.create_task(self._forager_candidate_candle_refresh_task())
+
     async def update_ohlcvs_1m_for_actives(self):
         """Ensure active symbols have fresh 1m candles in CandlestickManager (<=60s old).
 
@@ -10065,9 +10087,6 @@ class Passivbot:
                     )
                 except Exception as exc:
                     logging.error("error refreshing candles for %s: %s", sym, exc, exc_info=True)
-            # Best-effort refresh for forager candidates (lazy & budgeted)
-            if not Passivbot._shutdown_requested(self):
-                await self._refresh_forager_candidate_candles()
             self._ensure_freshness_ledger().stamp(
                 "completed_candles",
                 tuple(
@@ -10079,6 +10098,10 @@ class Passivbot:
                 now_ms=utc_ms(),
                 epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
             )
+            # Best-effort candidate candles are useful for forager readiness, but
+            # must not delay planning/execution once account-active candles are fresh.
+            if not Passivbot._shutdown_requested(self):
+                self._schedule_forager_candidate_candle_refresh()
         except Exception as e:
             if Passivbot._shutdown_requested(self):
                 logging.debug("[shutdown] stopped candle refresh during shutdown: %s", e)

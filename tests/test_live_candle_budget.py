@@ -54,7 +54,7 @@ async def test_active_candle_refresh_budgets_forager_only_symbols(monkeypatch):
         def _maybe_log_candle_refresh(self, *args, **kwargs):
             return None
 
-        async def _refresh_forager_candidate_candles(self):
+        def _schedule_forager_candidate_candle_refresh(self):
             return None
 
         def _ensure_freshness_ledger(self):
@@ -138,7 +138,7 @@ async def test_active_candle_refresh_prioritizes_stalest_forager_secondaries(mon
         def _maybe_log_candle_refresh(self, *args, **kwargs):
             return None
 
-        async def _refresh_forager_candidate_candles(self):
+        def _schedule_forager_candidate_candle_refresh(self):
             return None
 
         def _ensure_freshness_ledger(self):
@@ -163,6 +163,133 @@ async def test_active_candle_refresh_prioritizes_stalest_forager_secondaries(mon
     assert "OLDER/USDT:USDT" in called
     assert called.index("STALE/USDT:USDT") < called.index("OLDER/USDT:USDT")
     assert called.index("OLDER/USDT:USDT") < called.index("FRESH/USDT:USDT")
+
+
+@pytest.mark.asyncio
+async def test_active_candle_refresh_schedules_forager_candidates_without_waiting(monkeypatch):
+    import asyncio
+    import passivbot as pb_mod
+
+    now_ms = 10_000_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    class FakeCM:
+        default_window_candles = 120
+
+        def __init__(self):
+            self.calls = []
+            self.last_refresh = {"POS/USDT:USDT": now_ms - 60_000}
+
+        def is_rate_limited(self):
+            return False
+
+        def get_last_refresh_ms(self, symbol):
+            return int(self.last_refresh.get(symbol, 0))
+
+        async def get_candles(self, symbol, **kwargs):
+            self.calls.append((symbol, kwargs))
+            self.last_refresh[symbol] = now_ms
+            return []
+
+    class FakeBot:
+        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        active_symbols = ["POS/USDT:USDT"]
+        positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+        open_orders = {}
+        inactive_coin_candle_ttl_ms = 600_000
+        stop_signal_received = False
+        cm = FakeCM()
+
+        def __init__(self):
+            self.maintainers = {}
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        def is_forager_mode(self, pside=None):
+            return True
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def _maybe_log_candle_refresh(self, *args, **kwargs):
+            return None
+
+        async def _refresh_forager_candidate_candles(self):
+            self.started.set()
+            await self.release.wait()
+
+        def _ensure_freshness_ledger(self):
+            class Ledger:
+                def stamp(self, *args, **kwargs):
+                    return None
+
+            return Ledger()
+
+        has_position = pb_mod.Passivbot.has_position
+        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
+        _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
+        _rank_symbols_by_candle_staleness = pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
+        _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
+        _forager_candidate_candle_refresh_task = (
+            pb_mod.Passivbot._forager_candidate_candle_refresh_task
+        )
+        _schedule_forager_candidate_candle_refresh = (
+            pb_mod.Passivbot._schedule_forager_candidate_candle_refresh
+        )
+
+    bot = FakeBot()
+    await asyncio.wait_for(pb_mod.Passivbot.update_ohlcvs_1m_for_actives(bot), timeout=0.1)
+
+    task = bot.maintainers.get("forager_candidate_candle_refresh")
+    assert task is not None
+    await asyncio.wait_for(bot.started.wait(), timeout=0.1)
+    assert not task.done()
+    assert [symbol for symbol, _kwargs in bot.cm.calls] == ["POS/USDT:USDT"]
+
+    bot.release.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_forager_candidate_refresh_scheduler_coalesces_running_task():
+    import asyncio
+    import passivbot as pb_mod
+
+    class FakeBot:
+        stop_signal_received = False
+        config = {"live": {}}
+
+        def __init__(self):
+            self.maintainers = {}
+            self.started_count = 0
+            self.release = asyncio.Event()
+
+        def is_forager_mode(self, pside=None):
+            return True
+
+        async def _refresh_forager_candidate_candles(self):
+            self.started_count += 1
+            await self.release.wait()
+
+        _forager_candidate_candle_refresh_task = (
+            pb_mod.Passivbot._forager_candidate_candle_refresh_task
+        )
+        _schedule_forager_candidate_candle_refresh = (
+            pb_mod.Passivbot._schedule_forager_candidate_candle_refresh
+        )
+
+    bot = FakeBot()
+    pb_mod.Passivbot._schedule_forager_candidate_candle_refresh(bot)
+    pb_mod.Passivbot._schedule_forager_candidate_candle_refresh(bot)
+    await asyncio.sleep(0)
+
+    task = bot.maintainers.get("forager_candidate_candle_refresh")
+    assert task is not None
+    assert bot.started_count == 1
+
+    bot.release.set()
+    await task
 
 
 @pytest.mark.asyncio
