@@ -578,6 +578,7 @@ class Passivbot:
         self._authoritative_refresh_epoch = 0
         self._authoritative_refresh_epoch_fresh = set()
         self._authoritative_refresh_epoch_changed = set()
+        self._authoritative_refresh_plan_surfaces = set()
         self._authoritative_pending_confirmations = {}
         self._authoritative_barrier_last_log_key = None
         self._authoritative_barrier_last_log_ms = 0
@@ -3987,6 +3988,7 @@ class Passivbot:
 
     async def _refresh_authoritative_state_legacy(self) -> bool:
         """Current production refresh path: positions+balance, then open orders+fills."""
+        self._authoritative_refresh_plan_surfaces = self._authoritative_full_confirmation_surfaces()
         balance_ok, positions_ok = await self.update_positions_and_balance()
         if not positions_ok:
             return False
@@ -4085,8 +4087,26 @@ class Passivbot:
         """Return the minimal staged authoritative surfaces needed this cycle."""
         pending = set(getattr(self, "_authoritative_pending_confirmations", {}) or {})
         if pending == {"open_orders"}:
-            return {"open_orders"}
-        return {"balance", "positions", "open_orders", "fills"}
+            plan = {"open_orders"}
+            self._authoritative_refresh_plan_surfaces = set(plan)
+            return plan
+        plan = {"balance", "positions", "open_orders", "fills"}
+        if "fills" not in pending and not self._staged_fills_refresh_due():
+            plan.discard("fills")
+            logging.debug("[state] staged fills refresh deferred until next minute boundary")
+        self._authoritative_refresh_plan_surfaces = set(plan)
+        return plan
+
+    def _staged_fills_refresh_due(self) -> bool:
+        """Return whether routine staged refresh must fetch fill events this cycle."""
+        ledger = getattr(self, "freshness_ledger", None)
+        if ledger is None:
+            return True
+        fills_state = getattr(ledger, "surfaces", {}).get("fills")
+        last_updated_ms = int(getattr(fills_state, "updated_ms", 0) or 0)
+        if last_updated_ms <= 0:
+            return True
+        return int(utc_ms()) // 60_000 > last_updated_ms // 60_000
 
     async def capture_authoritative_state_staged_snapshot(
         self, plan: set[str], timings_ms: dict[str, int]
@@ -4115,8 +4135,9 @@ class Passivbot:
         sum_ms = int(sum(int(v) for v in timings_ms.values()))
         pending_confirmations = bool(getattr(self, "_authoritative_pending_confirmations", {}) or {})
         full_plan = {"balance", "fills", "open_orders", "positions"}
+        routine_without_fills = {"balance", "open_orders", "positions"}
         plan_set = set(plan)
-        unusual_plan = plan_set != full_plan
+        unusual_plan = plan_set not in (full_plan, routine_without_fills)
         epoch_changed = set(getattr(self, "_authoritative_refresh_epoch_changed", set()) or set())
         meaningful_change = bool(epoch_changed - {"balance"})
         interesting = (
@@ -6052,7 +6073,10 @@ class Passivbot:
 
     def _authoritative_required_surfaces(self) -> set[str]:
         pending = set(getattr(self, "_authoritative_pending_confirmations", {}) or {})
-        return pending if pending else {"balance", "positions", "open_orders", "fills"}
+        if pending:
+            return pending
+        planned = set(getattr(self, "_authoritative_refresh_plan_surfaces", set()) or set())
+        return planned if planned else {"balance", "positions", "open_orders", "fills"}
 
     def _authoritative_full_confirmation_surfaces(self) -> set[str]:
         return {"balance", "positions", "open_orders", "fills"}
@@ -6164,10 +6188,8 @@ class Passivbot:
             self._request_authoritative_confirmation(
                 {"balance", "positions", "open_orders", "fills"}
             )
-        if (
-            "positions" in changed_all
-            and "fills" in refreshed_surfaces
-            and "fills" not in changed_all
+        if "positions" in changed_all and (
+            "fills" not in refreshed_surfaces or "fills" not in changed_all
         ):
             self._request_authoritative_confirmation(
                 {"balance", "positions", "open_orders", "fills"}

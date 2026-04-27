@@ -509,6 +509,11 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
             650,
         )
         bot._log_staged_refresh_timings(
+            {"balance", "positions", "open_orders"},
+            {"balance": 500, "positions": 600, "open_orders": 700},
+            1700,
+        )
+        bot._log_staged_refresh_timings(
             {"balance", "positions", "open_orders", "fills"},
             {"balance": 2500, "positions": 3000, "open_orders": 2000, "fills": 4000},
             8500,
@@ -533,6 +538,10 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
         (
             "DEBUG",
             "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=650ms | sum=1150ms | balance=250ms fills=400ms open_orders=200ms positions=300ms",
+        ),
+        (
+            "DEBUG",
+            "[state] staged refresh timings | plan=balance,open_orders,positions | wall=1700ms | sum=1800ms | balance=500ms open_orders=700ms positions=600ms",
         ),
         (
             "DEBUG",
@@ -1810,6 +1819,76 @@ def test_authoritative_barrier_waits_for_next_epoch_confirmation():
     assert details["missing"] == []
     assert getattr(bot, "_authoritative_pending_confirmations", {}) == {}
     assert bot.freshness_ledger.surface_epoch("open_orders") == 2
+
+
+def test_staged_refresh_plan_defers_fills_until_next_minute(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_pending_confirmations = {}
+    bot.freshness_ledger.stamp("fills", ("fills", "fresh"), now_ms=120_010, epoch=1)
+
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 120_500)
+    plan = bot._authoritative_staged_refresh_plan()
+
+    assert plan == {"balance", "positions", "open_orders"}
+    assert bot._authoritative_refresh_plan_surfaces == plan
+
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 180_000)
+    plan = bot._authoritative_staged_refresh_plan()
+
+    assert plan == {"balance", "positions", "open_orders", "fills"}
+
+
+def test_staged_refresh_plan_keeps_pending_fills_even_with_recent_fills(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_pending_confirmations = {"fills": 2}
+    bot.freshness_ledger.stamp("fills", ("fills", "fresh"), now_ms=120_010, epoch=1)
+
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 120_500)
+
+    assert bot._authoritative_staged_refresh_plan() == {
+        "balance",
+        "positions",
+        "open_orders",
+        "fills",
+    }
+
+
+def test_authoritative_barrier_uses_current_staged_plan_when_no_pending():
+    bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_pending_confirmations = {}
+
+    bot._begin_authoritative_refresh_epoch()
+    bot._authoritative_refresh_plan_surfaces = {"balance", "positions", "open_orders"}
+    for surface in ("balance", "positions", "open_orders"):
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+
+    blocked, details = bot._authoritative_execution_barrier_state()
+
+    assert blocked is False
+    assert details["required"] == ["balance", "open_orders", "positions"]
+
+
+def test_positions_change_without_fills_requests_full_confirmation():
+    bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_pending_confirmations = {}
+
+    bot._begin_authoritative_refresh_epoch()
+    bot._record_authoritative_surface("balance", ("b", 1))
+    bot._record_authoritative_surface("positions", ("p", 1))
+    bot._record_authoritative_surface("open_orders", ("o", 1))
+
+    bot._finalize_authoritative_refresh_consistency({"balance", "positions", "open_orders"})
+
+    assert bot._authoritative_pending_confirmations == {
+        "balance": 2,
+        "positions": 2,
+        "open_orders": 2,
+        "fills": 2,
+    }
 
 
 def test_staged_planner_preconditions_require_current_epoch_surfaces():
