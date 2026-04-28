@@ -36,7 +36,8 @@ Current health-gate task:
 
 - keep the Rust/Python boundary and config-pipeline tests green after the 2026-04-28
   `origin/master` merge
-- refresh the `refactor_test` baseline once the current branch behavior is explicitly accepted
+- use the post-merge `refactor_test` artifact as the current comparison target; the older frozen
+  artifact remains a legacy pre-v7.10.0 reference only
 
 ## Branch
 
@@ -52,11 +53,11 @@ PATH=/Users/eiriknarjord/repos/passivbot-4/venv/bin:$PATH \
 passivbot backtest configs/refactor_test.json
 ```
 
-Frozen baseline artifact:
+Legacy frozen baseline artifact:
 
 - `backtests/combined/2026-04-03T19_45_50`
 
-Frozen baseline metrics for pure-refactor phases:
+Legacy frozen baseline metrics for pure-refactor phases before the v7.10.0 order-behavior merge:
 
 - `gain_usd = 3.6817791411966043`
 - `adg_usd = 0.001099589010446378`
@@ -71,26 +72,40 @@ Frozen baseline metrics for pure-refactor phases:
 - `total_wallet_exposure_max = 1.7589753109100572`
 - `fills = 30539`
 
-Latest post-merge smoke artifact:
+Current accepted post-merge baseline artifact:
 
 - `backtests/combined/2026-04-28T18_33_35`
 
-Latest post-merge smoke metrics:
+Current accepted post-merge baseline metrics:
 
 - `gain_usd = 1.7003610119451211`
 - `adg_usd = 0.00044768921199223044`
 - `adg_strategy_eq = 0.00044768921199223044`
 - `drawdown_worst_strategy_eq = 0.4606813979729244`
+- `drawdown_worst_mean_1pct_strategy_eq = 0.38208417077733114`
 - `loss_profit_ratio = 0.7972439602460609`
+- `hard_stop_triggers = 66`
 - `hard_stop_restarts = 66`
+- `total_wallet_exposure_max = 1.7006920478587886`
 - `fills.csv rows including header = 39451`
+
+Baseline acceptance note:
+
+- The post-merge artifact is expected to diverge from the legacy frozen artifact because `master`
+  removed inflated grid re-entry behavior for v7.10.0. The first fill-level divergence is fill row
+  `83` at `2023-01-04 20:10:00` for `SOL`: the legacy artifact emits
+  `entry_grid_inflated_long` with `qty = 1628.31`, while the post-merge artifact emits
+  `entry_grid_normal_long` with `qty = 1504.27`. The relevant trailing-grid config parameters are
+  identical across the two artifacts; the difference is the intentional runtime behavior change.
+  Legacy artifacts still decode historical `entry_grid_inflated_*` ids, but current runtime output
+  should be normal-or-cropped.
 
 Comparison rule after every behavior-affecting pass:
 
 1. Run targeted tests for the touched area.
 2. Rebuild the Rust extension if Rust changed.
 3. Re-run `passivbot backtest configs/refactor_test.json`.
-4. Compare `analysis.json` and `fills.csv` to the frozen baseline.
+4. Compare `analysis.json` and `fills.csv` to the current accepted post-merge baseline.
 5. If any discrepancy appears, stop and identify the first behavioral divergence before proceeding.
 6. If the divergence reveals a pre-existing bug, decide explicitly which behavior is correct, fix
    it, and then update the expected comparison target.
