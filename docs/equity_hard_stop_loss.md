@@ -14,7 +14,7 @@ Signal construction is selected globally with `live.hsl_signal_mode`:
    - short HSL uses short realized/unrealized strategy PnL
 2. `unified`
    - long and short keep separate HSL controllers
-   - both controllers are fed from the same unified account-level strategy signal
+   - both controllers are fed from the same combined account-level strategy signal
 
 ### Choosing a Signal Mode
 
@@ -97,7 +97,7 @@ At RED for one `pside`:
 
 1. that `pside` is forced into panic mode
 2. positions on that `pside` are closed using `hsl_panic_close_order_type`
-3. the bot waits until that `pside` is flat
+3. the bot waits until all positions on that `pside` are fully closed
 4. that `pside` halts
 5. optional cooldown-based restart may occur for that `pside`
 
@@ -109,13 +109,14 @@ In both live and backtests, `hsl_no_restart_drawdown_threshold` is evaluated aga
 
 The intended HSL contract after a valid RED panic is:
 
-1. once a `pside` panic-close has finalized and that `pside` is flat, that RED stop is considered complete
+1. once a `pside` panic-close has finalized and all positions on that `pside` are fully closed, that RED stop is considered complete
 2. that `pside`'s HSL equity tracker is then reset from after that panic
 3. any later cooldown, restart, and future RED decisions for that `pside` are measured from the post-panic state, not from pre-panic peaks
 
 This contract applies both to live runtime and to restart-time history replay.
 
-In practical terms, restart replay must treat a historical panic-flatten event as a completed RED stop even if:
+In practical terms, restart replay must treat a historical RED panic close that fully closed all
+positions on that `pside` as a completed RED stop even if:
 
 1. the panic-close was split across multiple fills
 2. re-entry happened later in the same minute
@@ -132,11 +133,11 @@ that is currently halted in RED cooldown.
 
 1. `panic`
    - panic-close that position immediately
-   - once flat, restart the cooldown timer from that new panic-close
+   - once all positions on that `pside` are fully closed, restart the cooldown timer from that new panic-close
    - this is the safest default
 2. `normal`
    - treat the position as an explicit operator override
-   - while that `pside` is still flat, the bot remains halted and will not open fresh initials on its own
+   - while that `pside` still has no open positions, the bot remains halted and will not open fresh initials on its own
    - clear the halt for that `pside`
    - reset HSL drawdown tracking and rolling-peak state from the current live state
 3. `manual`
@@ -182,7 +183,7 @@ Each `pside` has the same HSL parameter set:
 Live-only HSL parameter:
 
 10. `live.hsl_position_during_cooldown_policy`
-    - controls how the live bot responds if a non-flat position appears on a halted `pside` during RED cooldown
+    - controls how the live bot responds if an open position appears on a halted `pside` during RED cooldown
     - supported values are listed in the section above
 
 ## Backtest Behavior
@@ -269,7 +270,7 @@ moment.
    - Fraction of sampled runtime where the worst active HSL tier was RED.
    - This is usually the clearest “how often was the system in emergency mode” metric.
    - In practice, you normally want this close to zero. Even small values can be meaningful because
-     RED includes forced flattening and halted time.
+     RED includes forced position closing and halted time.
 
 ### Trigger and halt metrics
 
@@ -278,12 +279,12 @@ moment.
    - Use this to see whether triggers happen barely above threshold or only after deeper damage.
 2. `hard_stop_duration_minutes_mean`
    - Average elapsed minutes from RED halt start until that halt fully ends.
-   - Includes flattening and, when enabled, cooldown waiting before restart.
+   - Includes position closing and, when enabled, cooldown waiting before restart.
 3. `hard_stop_duration_minutes_max`
    - Longest single halt duration observed during the run.
    - Useful for spotting rare but operationally painful stalls.
 4. `hard_stop_flatten_time_minutes_mean`
-   - Average time from RED trigger to fully flat position state.
+   - Average time from RED trigger until all positions on the triggered `pside` are fully closed.
    - This isolates execution/exit latency from the later cooldown portion of the halt.
 
 ### Restart quality metrics

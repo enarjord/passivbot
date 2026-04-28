@@ -4,6 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Changed the disabled-by-default HSL config default `live.hsl_signal_mode` from `unified` to `pside`, matching the safer side-local HSL recommendation, and clarified that HSL RED waits for all positions on that side to be fully closed rather than waiting for PnL recovery.
 - Added `passivbot tool merge-paretos` for combining two or more Pareto run/front directories into capped long/short starting-config sets.
 - Changed optimizer `fixed_params` and `--fine_tune_params` from exact-only bounds keys to literal bounds-key selectors, with sorted multi-line logs showing each selector expansion and the resulting fixed/tunable bounds.
 - Changed no-path `passivbot tool pareto` discovery to choose the lexicographically latest `optimize_results/<run>/pareto` directory containing at least one `*.json` candidate instead of using directory modified time.

@@ -136,7 +136,7 @@ Each `pside` has the same parameter set:
 - **hsl_cooldown_minutes_after_red**:
   - Minutes to wait before auto-restart after a RED halt on that `pside`.
   - `0.0` means halt without auto-restart.
-  - Restart-time HSL replay treats a historical panic-flatten on that `pside` as a completed RED stop and resets tracking from after that panic before evaluating later cooldown/restart behavior.
+  - Restart-time HSL replay treats a historical RED panic close that fully closed all positions on that `pside` as a completed RED stop and resets tracking from after that panic before evaluating later cooldown/restart behavior.
 - **hsl_no_restart_drawdown_threshold**:
   - Terminal no-restart threshold for that `pside`.
   - Evaluated from persistent cross-restart HSL drawdown.
@@ -160,7 +160,7 @@ Behavior summary:
 
 1. YELLOW: warning tier for that `pside`
 2. ORANGE: reduced-risk mode for that `pside`
-3. RED: panic close, flat confirmation, halt, optional cooldown restart for that `pside`
+3. RED: panic close, wait until all positions on that `pside` are fully closed, halt, optional cooldown restart for that `pside`
 
 Signal mode:
 
@@ -168,7 +168,7 @@ Signal mode:
    - each `pside` controller uses its own realized/unrealized strategy PnL
 2. `live.hsl_signal_mode = "unified"`
    - long and short keep separate HSL controllers
-   - both are fed from the same unified account-level strategy signal
+   - both are fed from the same combined account-level strategy signal
 
 Backtest-specific note:
 
@@ -394,12 +394,12 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
 - **hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
 - **hsl_position_during_cooldown_policy**: Live-only policy for a position that appears on a halted `pside` during HSL RED cooldown.
-  - `panic`: panic-close it again and restart the cooldown from that new flatten.
-  - `normal`: treat it as an explicit operator override once a real non-flat position appears during cooldown; while flat the bot still blocks fresh initials on that `pside`, and only after the position appears does it clear the halt and restart HSL drawdown tracking from the current state.
+  - `panic`: panic-close it again and restart the cooldown after all positions on that `pside` are fully closed.
+  - `normal`: treat it as an explicit operator override once a real open position appears during cooldown; while there are no open positions the bot still blocks fresh initials on that `pside`, and only after the position appears does it clear the halt and restart HSL drawdown tracking from the current state.
   - `manual`: leave that position in `manual` mode while keeping the original cooldown running and blocking fresh initials.
   - `tp_only`: keep the original cooldown running, block new entries, and allow only close management on that `pside`.
   - `graceful_stop`: keep the original cooldown running and manage any existing position with `graceful_stop` semantics while still blocking fresh initials.
-- **hsl_signal_mode**: Selects whether HSL drawdown is tracked per-side (`"pside"`) or from one combined account-level strategy signal (`"unified"`). See [Equity Hard Stop Loss](equity_hard_stop_loss.md).
+- **hsl_signal_mode**: Selects whether HSL drawdown is tracked per-side (`"pside"`, default) or from one combined account-level strategy signal (`"unified"`). See [Equity Hard Stop Loss](equity_hard_stop_loss.md).
 - **max_memory_candles_per_symbol**: Maximum number of 1m candles retained in RAM per symbol. Older entries are trimmed once this cap is exceeded. Default is `200_000`.
 - **max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
 - **candle_lock_timeout_seconds**: Seconds to wait when another process holds the CandlestickManager per-symbol candle fetch lock (default `10`). Increase when running many bots sharing the same cache directory to avoid spurious timeouts during slow API calls.

@@ -362,7 +362,7 @@
         "forced_mode_short": "",
         "hedge_mode": false,
         "hsl_position_during_cooldown_policy": "panic",
-        "hsl_signal_mode": "unified",
+        "hsl_signal_mode": "pside",
         "ignored_coins": {
             "long": [],
             "short": []

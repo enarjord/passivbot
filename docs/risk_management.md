@@ -171,13 +171,13 @@ It exists for cases where:
 
 1. auto-unstuck is too slow
 2. the realized-loss gate is still allowing the bot to operate in a clearly degraded state
-3. you want a final supervisory backstop that can flatten and halt one `pside`
+3. you want a final supervisory backstop that can close all positions on one `pside` and halt that `pside`
 
 Behavior:
 
 1. `yellow`: warning tier
 2. `orange`: reduced-risk mode (`graceful_stop` or `tp_only_with_active_entry_cancellation`) for that `pside`
-3. `red`: force panic exits, wait until that `pside` is flat, and halt that `pside`
+3. `red`: force panic exits, wait until all positions on that `pside` are fully closed, and halt that `pside`
 
 Operational notes:
 

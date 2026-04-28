@@ -348,7 +348,7 @@ def get_template_config():
                 "forced_mode_short": "",
                 "hedge_mode": False,
                 "hsl_position_during_cooldown_policy": "panic",
-                "hsl_signal_mode": "unified",
+                "hsl_signal_mode": "pside",
                 "ignored_coins": {"long": [], "short": []},
                 "inactive_coin_candle_ttl_minutes": 10,
                 "leverage": 10,
