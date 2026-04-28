@@ -694,3 +694,104 @@ def test_create_forager_hard_stop_drawdown_figure_returns_plot_when_enabled(monk
         return_figures=True,
     )
     assert "hard_stop_drawdown" in figs
+
+
+def test_create_forager_hard_stop_drawdown_figure_plots_both_sides(monkeypatch):
+    class _Axis:
+        def __init__(self):
+            self.labels = []
+            self.hlines = []
+            self.titles = []
+
+        def plot(self, *args, **kwargs):
+            self.labels.append(kwargs.get("label"))
+            return None
+
+        def axhline(self, *args, **kwargs):
+            self.hlines.append(args[0] if args else kwargs.get("y"))
+            self.labels.append(kwargs.get("label"))
+            return None
+
+        def set_title(self, *args, **kwargs):
+            if args:
+                self.titles.append(args[0])
+            return None
+
+        def set_ylabel(self, *args, **kwargs):
+            return None
+
+        def set_xlabel(self, *args, **kwargs):
+            return None
+
+        def grid(self, *args, **kwargs):
+            return None
+
+        def legend(self, *args, **kwargs):
+            return None
+
+        def fill_between(self, *args, **kwargs):
+            return None
+
+    class _Figure:
+        def tight_layout(self):
+            return None
+
+    axes = [_Axis(), _Axis(), _Axis(), _Axis()]
+    monkeypatch.setattr(plotting.plt, "subplots", lambda *args, **kwargs: (_Figure(), axes))
+
+    idx = pd.date_range("2021-01-01", periods=3, freq="1h")
+    timestamps_ms = (idx.view("int64") // 10**6).tolist()
+    bal_eq = pd.DataFrame({"usd_total_equity": [1000.0, 990.0, 995.0]}, index=idx)
+    config = {
+        "live": {"pnls_max_lookback_days": 30.0},
+        "bot": {
+            "long": {
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.10,
+                "hsl_ema_span_minutes": 60.0,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+            },
+            "short": {
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.03,
+                "hsl_ema_span_minutes": 120.0,
+                "hsl_tier_ratios": {"yellow": 0.4, "orange": 0.8},
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+            },
+        },
+    }
+    hard_stop_plot_data = {
+        "timestamps_ms_long": timestamps_ms,
+        "drawdown_raw_long": [0.0, 0.08, 0.02],
+        "drawdown_ema_long": [0.0, 0.04, 0.03],
+        "drawdown_score_long": [0.0, 0.04, 0.02],
+        "timestamps_ms_short": timestamps_ms,
+        "drawdown_raw_short": [0.0, 0.02, 0.04],
+        "drawdown_ema_short": [0.0, 0.01, 0.02],
+        "drawdown_score_short": [0.0, 0.01, 0.02],
+    }
+
+    figs = create_forager_hard_stop_drawdown_figure(
+        bal_eq,
+        config,
+        hard_stop_plot_data=hard_stop_plot_data,
+        autoplot=False,
+        return_figures=True,
+    )
+
+    assert "hard_stop_drawdown" in figs
+    assert "Long Equity Hard Stop Drawdown" in axes[0].titles
+    assert "Short Equity Hard Stop Drawdown" in axes[2].titles
+    long_labels = set(axes[0].labels + axes[1].labels)
+    short_labels = set(axes[2].labels + axes[3].labels)
+    assert "Raw Drawdown" in long_labels
+    assert "Raw Drawdown" in short_labels
+    assert "RED Threshold" in long_labels
+    assert "RED Threshold" in short_labels
+    assert "RED Proximity" in long_labels
+    assert "RED Proximity" in short_labels
+    assert 0.10 in axes[0].hlines
+    assert 0.03 in axes[2].hlines

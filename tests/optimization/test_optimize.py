@@ -10,6 +10,7 @@ import math
 import os
 import argparse
 import json
+import logging
 from multiprocessing.reduction import ForkingPickler
 import tempfile
 from copy import deepcopy
@@ -1079,6 +1080,33 @@ class TestApplyFineTuneBounds:
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
         assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
 
+    def test_fine_tune_params_accept_substring_selectors(self):
+        config = {
+            "optimize": {
+                "bounds": {
+                    "long_close_grid_markup_start": [0.0, 1.0],
+                    "long_close_grid_qty_pct": [0.0, 1.0],
+                    "long_entry_grid_spacing_pct": [0.0, 1.0],
+                    "short_close_grid_markup_start": [0.0, 1.0],
+                }
+            },
+            "bot": {
+                "long": {
+                    "close_grid_markup_start": 0.11,
+                    "close_grid_qty_pct": 0.22,
+                    "entry_grid_spacing_pct": 0.33,
+                },
+                "short": {"close_grid_markup_start": 0.44},
+            },
+        }
+
+        apply_fine_tune_bounds(config, ["close_grid"], set())
+
+        assert config["optimize"]["bounds"]["long_close_grid_markup_start"] == [0.0, 1.0]
+        assert config["optimize"]["bounds"]["long_close_grid_qty_pct"] == [0.0, 1.0]
+        assert config["optimize"]["bounds"]["short_close_grid_markup_start"] == [0.0, 1.0]
+        assert config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] == [0.33, 0.33]
+
     def test_cli_override_single_value_becomes_fixed(self):
         config = {
             "optimize": {
@@ -1186,13 +1214,14 @@ class TestApplyFineTuneBounds:
 
     def test_fine_tune_missing_key_logs(self):
         config = {
-            "optimize": {"bounds": {}},
+            "optimize": {"bounds": {"long_param1": [0.0, 1.0]}},
             "bot": {
                 "long": {"param1": 0.5},
             },
         }
-        # Requesting a non-existent key should log warning
         apply_fine_tune_bounds(config, ["long_nonexistent"], set())
+
+        assert config["optimize"]["bounds"]["long_param1"] == [0.5, 0.5]
 
     def test_config_fixed_params_fix_only_listed_bounds(self):
         config = {
@@ -1211,6 +1240,63 @@ class TestApplyFineTuneBounds:
 
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
         assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
+
+    def test_config_fixed_params_accept_substring_selectors(self, caplog):
+        caplog.set_level(logging.INFO)
+        config = {
+            "optimize": {
+                "bounds": {
+                    "long_close_grid_markup_end": [0.0, 1.0],
+                    "long_close_grid_markup_start": [0.0, 1.0],
+                    "long_close_grid_qty_pct": [0.0, 1.0],
+                    "long_unstuck_close_pct": [0.0, 1.0],
+                    "short_close_grid_markup_end": [0.0, 1.0],
+                    "short_close_grid_markup_start": [0.0, 1.0],
+                    "short_close_grid_qty_pct": [0.0, 1.0],
+                },
+                "fixed_params": ["close_grid"],
+            },
+            "bot": {
+                "long": {
+                    "close_grid_markup_end": 0.1,
+                    "close_grid_markup_start": 0.2,
+                    "close_grid_qty_pct": 0.3,
+                    "unstuck_close_pct": 0.4,
+                },
+                "short": {
+                    "close_grid_markup_end": 0.5,
+                    "close_grid_markup_start": 0.6,
+                    "close_grid_qty_pct": 0.7,
+                },
+            },
+        }
+
+        apply_fine_tune_bounds(config, [], set())
+
+        assert config["optimize"]["bounds"]["long_close_grid_markup_end"] == [0.1, 0.1]
+        assert config["optimize"]["bounds"]["long_close_grid_markup_start"] == [0.2, 0.2]
+        assert config["optimize"]["bounds"]["long_close_grid_qty_pct"] == [0.3, 0.3]
+        assert config["optimize"]["bounds"]["short_close_grid_markup_end"] == [0.5, 0.5]
+        assert config["optimize"]["bounds"]["short_close_grid_markup_start"] == [0.6, 0.6]
+        assert config["optimize"]["bounds"]["short_close_grid_qty_pct"] == [0.7, 0.7]
+        assert config["optimize"]["bounds"]["long_unstuck_close_pct"] == [0.0, 1.0]
+        assert "  close_grid ->" in caplog.text
+        assert "    long_close_grid_markup_end" in caplog.text
+        assert "    short_close_grid_qty_pct" in caplog.text
+
+    def test_config_fixed_params_warn_for_unmatched_selectors(self, caplog):
+        config = {
+            "optimize": {
+                "bounds": {"long_param1": [0.0, 1.0]},
+                "fixed_params": ["missing"],
+            },
+            "bot": {"long": {"param1": 0.5}},
+        }
+
+        apply_fine_tune_bounds(config, [], set())
+
+        assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
+        assert "optimize.fixed_params selector matched no optimize bounds: missing" in caplog.text
 
     def test_config_fixed_params_support_pside_hsl_keys(self):
         config = {

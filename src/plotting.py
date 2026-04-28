@@ -584,10 +584,13 @@ def plot_fills_forager(
         plt.clf()
     if len(fdf) == 0:
         return
+    source_cols = ["high", "low", "close"]
+    if "timestamp" in hlcvs_df.columns:
+        source_cols.append("timestamp")
     if whole:
-        hlcc = hlcvs_df[["high", "low", "close"]]
+        hlcc = hlcvs_df[source_cols]
     else:
-        hlcc = hlcvs_df[["high", "low", "close"]].loc[fdf.iloc[0].minute : fdf.iloc[-1].minute]
+        hlcc = hlcvs_df[source_cols].loc[fdf.iloc[0].minute : fdf.iloc[-1].minute]
     fdfc = fdf.set_index(fdf.minute.astype(int))
 
     start_minute = int(hlcc.index[0] + hlcc.index[-1] * start_pct)
@@ -604,9 +607,32 @@ def plot_fills_forager(
     hlcc_low = hlcc["low"].to_numpy()
     hlcc_high = hlcc["high"].to_numpy()
 
-    ax.plot(hlcc.index, hlcc_close, "y--", label="close", zorder=1.0)
-    ax.plot(hlcc.index, hlcc_low, "g--", label="low", zorder=0.9)
-    ax.plot(hlcc.index, hlcc_high, "g-.", alpha=0.6, label="high", zorder=0.8)
+    def _coerce_plot_datetimes(values):
+        arr = np.asarray(values)
+        if np.issubdtype(arr.dtype, np.number):
+            return pd.to_datetime(arr.astype(np.int64), unit="ms", errors="coerce")
+        return pd.to_datetime(values, errors="coerce")
+
+    if "timestamp" in hlcc.columns:
+        candle_x = _coerce_plot_datetimes(hlcc["timestamp"])
+        minute_to_datetime = pd.Series(candle_x.to_numpy(), index=hlcc.index)
+    else:
+        candle_x = hlcc.index
+        minute_to_datetime = None
+
+    def _x_for_candle_minutes(index_values):
+        if minute_to_datetime is None:
+            return np.asarray(index_values)
+        return minute_to_datetime.reindex(index_values).to_numpy()
+
+    def _x_for_fills(fill_df):
+        if "timestamp" in fill_df.columns:
+            return _coerce_plot_datetimes(fill_df["timestamp"]).to_numpy()
+        return fill_df.index.to_numpy()
+
+    ax.plot(candle_x, hlcc_close, "y--", label="close", zorder=1.0)
+    ax.plot(candle_x, hlcc_low, "g--", label="low", zorder=0.9)
+    ax.plot(candle_x, hlcc_high, "g-.", alpha=0.6, label="high", zorder=0.8)
 
     type_series = fdfc["type"].astype(str)
     longs = fdfc[type_series.str.contains("long", regex=False)]
@@ -623,16 +649,15 @@ def plot_fills_forager(
             longs_price = pd.to_numeric(longs_price_series, errors="coerce").to_numpy()
         mask_entry = longs_types.str.contains("entry", regex=False).to_numpy()
         mask_close = longs_types.str.contains("close", regex=False).to_numpy()
-        long_index_vals = longs.index.to_numpy()
         ax.scatter(
-            long_index_vals[mask_entry],
+            _x_for_fills(longs.iloc[np.flatnonzero(mask_entry)]),
             longs_price[mask_entry],
             c="b",
             marker=".",
             zorder=3.0,
         )
         ax.scatter(
-            long_index_vals[mask_close],
+            _x_for_fills(longs.iloc[np.flatnonzero(mask_close)]),
             longs_price[mask_close],
             c="r",
             marker=".",
@@ -651,7 +676,7 @@ def plot_fills_forager(
         pprices_filtered = pprices_long.loc[pprices_long["psize"] != 0.0, "pprice"]
         if not pprices_filtered.empty:
             ax.scatter(
-                pprices_filtered.index.to_numpy(),
+                _x_for_candle_minutes(pprices_filtered.index),
                 pprices_filtered.to_numpy(),
                 c="b",
                 marker="|",
@@ -673,16 +698,15 @@ def plot_fills_forager(
             shorts_price = pd.to_numeric(shorts_price_series, errors="coerce").to_numpy()
         mask_entry = shorts_types.str.contains("entry", regex=False).to_numpy()
         mask_close = shorts_types.str.contains("close", regex=False).to_numpy()
-        short_index_vals = shorts.index.to_numpy()
         ax.scatter(
-            short_index_vals[mask_entry],
+            _x_for_fills(shorts.iloc[np.flatnonzero(mask_entry)]),
             shorts_price[mask_entry],
             c="m",
             marker="x",
             zorder=3.0,
         )
         ax.scatter(
-            short_index_vals[mask_close],
+            _x_for_fills(shorts.iloc[np.flatnonzero(mask_close)]),
             shorts_price[mask_close],
             c="c",
             marker="x",
@@ -701,7 +725,7 @@ def plot_fills_forager(
         pprices_filtered = pprices_short.loc[pprices_short["psize"] != 0.0, "pprice"]
         if not pprices_filtered.empty:
             ax.scatter(
-                pprices_filtered.index.to_numpy(),
+                _x_for_candle_minutes(pprices_filtered.index),
                 pprices_filtered.to_numpy(),
                 c="r",
                 marker="|",
@@ -715,6 +739,7 @@ def plot_fills_forager(
             ]
         )
     ax.legend(legend)
+    ax.set_xlabel("datetime" if minute_to_datetime is not None else "minute")
     return plt
 
 
@@ -993,34 +1018,63 @@ def create_forager_hard_stop_drawdown_figure(
     if return_figures is None:
         return_figures = not autoplot
 
-    hard_stop_cfg = _resolve_pside_cfg("long")
-    if not bool(hard_stop_cfg.get("enabled", False)):
-        return figures
-    red_threshold = float(hard_stop_cfg.get("red_threshold", 0.0) or 0.0)
-    ema_span_minutes = float(hard_stop_cfg.get("ema_span_minutes", 0.0) or 0.0)
-    if red_threshold <= 0.0 or ema_span_minutes <= 0.0:
+    pside_cfgs = {
+        pside: _resolve_pside_cfg(pside)
+        for pside in ("long", "short")
+    }
+    pside_cfgs = {
+        pside: cfg
+        for pside, cfg in pside_cfgs.items()
+        if bool(cfg.get("enabled", False))
+        and float(cfg.get("red_threshold", 0.0) or 0.0) > 0.0
+        and float(cfg.get("ema_span_minutes", 0.0) or 0.0) > 0.0
+    }
+    if not pside_cfgs:
         return figures
 
-    trace_df = pd.DataFrame()
-    if isinstance(hard_stop_plot_data, dict):
-        timestamps_ms = hard_stop_plot_data.get("timestamps_ms", []) or []
-        drawdown_raw = hard_stop_plot_data.get("drawdown_raw", []) or []
-        sample_count = min(len(timestamps_ms), len(drawdown_raw))
-        if sample_count > 0:
-            trace_df = pd.DataFrame(
-                {
-                    "drawdown_raw": pd.to_numeric(
-                        np.asarray(drawdown_raw[:sample_count]), errors="coerce"
-                    )
-                },
-                index=pd.to_datetime(
-                    np.asarray(timestamps_ms[:sample_count], dtype=np.int64), unit="ms"
-                ),
+    def _trace_from_values(timestamps_ms, raw_values, ema_values=None, score_values=None):
+        sample_count = min(len(timestamps_ms), len(raw_values))
+        if sample_count <= 0:
+            return pd.DataFrame()
+        data = {
+            "drawdown_raw": pd.to_numeric(
+                np.asarray(raw_values[:sample_count]), errors="coerce"
             )
-            trace_df = trace_df.dropna()
-            trace_df = trace_df[~trace_df.index.duplicated(keep="first")].sort_index()
+        }
+        if ema_values is not None and len(ema_values) >= sample_count:
+            data["drawdown_ema"] = pd.to_numeric(
+                np.asarray(ema_values[:sample_count]), errors="coerce"
+            )
+        if score_values is not None and len(score_values) >= sample_count:
+            data["drawdown_score"] = pd.to_numeric(
+                np.asarray(score_values[:sample_count]), errors="coerce"
+            )
+        trace = pd.DataFrame(
+            data,
+            index=pd.to_datetime(np.asarray(timestamps_ms[:sample_count], dtype=np.int64), unit="ms"),
+        )
+        return trace.dropna(subset=["drawdown_raw"])[~trace.index.duplicated(keep="first")].sort_index()
 
-    if trace_df.empty:
+    traces: dict[str, pd.DataFrame] = {}
+    if isinstance(hard_stop_plot_data, dict):
+        for pside in ("long", "short"):
+            trace = _trace_from_values(
+                hard_stop_plot_data.get(f"timestamps_ms_{pside}", []) or [],
+                hard_stop_plot_data.get(f"drawdown_raw_{pside}", []) or [],
+                hard_stop_plot_data.get(f"drawdown_ema_{pside}", []) or None,
+                hard_stop_plot_data.get(f"drawdown_score_{pside}", []) or None,
+            )
+            if not trace.empty:
+                traces[pside] = trace
+        if not traces and "long" in pside_cfgs:
+            legacy_trace = _trace_from_values(
+                hard_stop_plot_data.get("timestamps_ms", []) or [],
+                hard_stop_plot_data.get("drawdown_raw", []) or [],
+            )
+            if not legacy_trace.empty:
+                traces["long"] = legacy_trace
+
+    if not traces:
         if bal_eq.empty or "usd_total_equity" not in bal_eq.columns:
             return figures
         df = bal_eq[["usd_total_equity"]].copy()
@@ -1049,7 +1103,7 @@ def create_forager_hard_stop_drawdown_figure(
             peak_strategy_equity = (
                 df["usd_total_equity"].rolling(lookback_window, min_periods=1).max()
             )
-        trace_df = pd.DataFrame(
+        generic_trace = pd.DataFrame(
             {
                 "drawdown_raw": (
                     1.0
@@ -1058,60 +1112,156 @@ def create_forager_hard_stop_drawdown_figure(
             },
             index=df.index,
         )
+        traces = {pside: generic_trace.copy() for pside in pside_cfgs}
 
-    drawdown_raw = trace_df["drawdown_raw"].clip(lower=0.0)
-    drawdown_ema = _minute_quantized_drawdown_ema(trace_df, ema_span_minutes)
-    drawdown_score = pd.concat([drawdown_raw, drawdown_ema], axis=1).min(axis=1)
-    proximity_pct = (drawdown_score / red_threshold) * 100.0
+    series_by_side = {}
+    for pside, trace_df in traces.items():
+        hard_stop_cfg = pside_cfgs.get(pside)
+        if hard_stop_cfg is None or trace_df.empty:
+            continue
+        red_threshold = float(hard_stop_cfg.get("red_threshold", 0.0) or 0.0)
+        ema_span_minutes = float(hard_stop_cfg.get("ema_span_minutes", 0.0) or 0.0)
+        drawdown_raw = trace_df["drawdown_raw"].clip(lower=0.0)
+        if "drawdown_ema" in trace_df:
+            drawdown_ema = trace_df["drawdown_ema"].clip(lower=0.0).astype(float)
+        else:
+            drawdown_ema = _minute_quantized_drawdown_ema(trace_df, ema_span_minutes)
+        if "drawdown_score" in trace_df:
+            drawdown_score = trace_df["drawdown_score"].clip(lower=0.0).astype(float)
+        else:
+            drawdown_score = pd.concat([drawdown_raw, drawdown_ema], axis=1).min(axis=1)
+        tier_ratios = hard_stop_cfg.get("tier_ratios", {}) or {}
+        series_by_side[pside] = {
+            "trace": trace_df,
+            "raw": drawdown_raw,
+            "ema": drawdown_ema,
+            "score": drawdown_score,
+            "proximity_pct": (drawdown_score / red_threshold) * 100.0,
+            "red_threshold": red_threshold,
+            "yellow_threshold": float(tier_ratios.get("yellow", 0.5) or 0.5) * red_threshold,
+            "orange_threshold": float(tier_ratios.get("orange", 0.75) or 0.75) * red_threshold,
+        }
+    if not series_by_side:
+        return figures
 
-    tier_ratios = hard_stop_cfg.get("tier_ratios", {}) or {}
-    yellow_threshold = float(tier_ratios.get("yellow", 0.5) or 0.5) * red_threshold
-    orange_threshold = float(tier_ratios.get("orange", 0.75) or 0.75) * red_threshold
-
+    side_order = [pside for pside in ("long", "short") if pside in series_by_side]
+    height_ratios = []
+    for _ in side_order:
+        height_ratios.extend([3, 1])
+    fig_height = figsize[1] * (len(side_order) if len(side_order) > 1 else 1)
     fig, axes = plt.subplots(
-        2, 1, sharex=True, figsize=figsize, gridspec_kw={"height_ratios": [3, 1]}
+        len(height_ratios),
+        1,
+        sharex=True,
+        figsize=(figsize[0], fig_height),
+        gridspec_kw={"height_ratios": height_ratios},
     )
-    x = trace_df.index.to_numpy()
+    axes = np.atleast_1d(axes).tolist()
+    colors = {
+        "long": {"raw": "#1f77b4", "ema": "#ff7f0e", "score": "#2ca02c", "proximity": "#2a9d8f"},
+        "short": {"raw": "#9467bd", "ema": "#8c564b", "score": "#e377c2", "proximity": "#6a4c93"},
+    }
+    threshold_colors = {"yellow": "#d4a017", "orange": "#d95f02", "red": "#b22222"}
+    multiple_sides = len(side_order) > 1
 
-    axes[0].plot(x, drawdown_raw.to_numpy(), linewidth=1.0, label="Raw Drawdown")
-    axes[0].plot(x, drawdown_ema.to_numpy(), linewidth=1.0, label="EMA Drawdown")
-    axes[0].plot(x, drawdown_score.to_numpy(), linewidth=1.2, linestyle="--", label="Trigger Score")
-    axes[0].axhline(
-        yellow_threshold, color="#d4a017", linestyle=":", linewidth=1.0, label="Yellow Threshold"
-    )
-    axes[0].axhline(
-        orange_threshold, color="#d95f02", linestyle=":", linewidth=1.0, label="Orange Threshold"
-    )
-    axes[0].axhline(
-        red_threshold, color="#b22222", linestyle="--", linewidth=1.2, label="RED Threshold"
-    )
-    axes[0].set_title("Equity Hard Stop Drawdown")
-    axes[0].set_ylabel("Drawdown")
-    axes[0].grid(True, linestyle="--", alpha=0.3)
-    axes[0].legend(loc="upper left", ncol=3)
+    for side_idx, pside in enumerate(side_order):
+        series = series_by_side[pside]
+        x = series["trace"].index.to_numpy()
+        drawdown_ax = axes[side_idx * 2]
+        proximity_ax = axes[side_idx * 2 + 1]
+        drawdown_ax.plot(
+            x,
+            series["raw"].to_numpy(),
+            color=colors[pside]["raw"],
+            linewidth=1.0,
+            alpha=0.45,
+            label="Raw Drawdown",
+        )
+        drawdown_ax.plot(
+            x,
+            series["ema"].to_numpy(),
+            color=colors[pside]["ema"],
+            linewidth=1.0,
+            alpha=0.75,
+            label="EMA Drawdown",
+        )
+        drawdown_ax.plot(
+            x,
+            series["score"].to_numpy(),
+            color=colors[pside]["score"],
+            linewidth=1.5,
+            linestyle="--",
+            label="Trigger Score",
+        )
+        drawdown_ax.axhline(
+            series["yellow_threshold"],
+            color=threshold_colors["yellow"],
+            linestyle=":",
+            linewidth=1.0,
+            alpha=0.75,
+            label="Yellow Threshold",
+        )
+        drawdown_ax.axhline(
+            series["orange_threshold"],
+            color=threshold_colors["orange"],
+            linestyle=":",
+            linewidth=1.0,
+            alpha=0.75,
+            label="Orange Threshold",
+        )
+        drawdown_ax.axhline(
+            series["red_threshold"],
+            color=threshold_colors["red"],
+            linestyle="--",
+            linewidth=1.2,
+            alpha=0.75,
+            label="RED Threshold",
+        )
+        drawdown_ax.set_title(
+            f"{pside.capitalize()} Equity Hard Stop Drawdown"
+            if multiple_sides
+            else "Equity Hard Stop Drawdown"
+        )
+        drawdown_ax.set_ylabel("Drawdown")
+        drawdown_ax.grid(True, linestyle="--", alpha=0.3)
+        drawdown_ax.legend(loc="upper left", ncol=3)
 
-    axes[1].plot(x, proximity_pct.to_numpy(), color="#2a9d8f", linewidth=1.1, label="RED Proximity")
-    axes[1].fill_between(
-        x,
-        0.0,
-        proximity_pct.to_numpy(),
-        where=(proximity_pct.to_numpy() < 100.0),
-        color="#2a9d8f",
-        alpha=0.2,
-    )
-    axes[1].fill_between(
-        x,
-        100.0,
-        proximity_pct.to_numpy(),
-        where=(proximity_pct.to_numpy() >= 100.0),
-        color="#b22222",
-        alpha=0.25,
-    )
-    axes[1].axhline(100.0, color="#b22222", linestyle="--", linewidth=1.2, label="RED Hit")
-    axes[1].set_ylabel("% of RED")
-    axes[1].set_xlabel("Time")
-    axes[1].grid(True, linestyle="--", alpha=0.3)
-    axes[1].legend(loc="upper left")
+        proximity_values = series["proximity_pct"].to_numpy()
+        proximity_ax.plot(
+            x,
+            proximity_values,
+            color=colors[pside]["proximity"],
+            linewidth=1.1,
+            label="RED Proximity",
+        )
+        proximity_ax.fill_between(
+            x,
+            0.0,
+            proximity_values,
+            where=(proximity_values < 100.0),
+            color=colors[pside]["proximity"],
+            alpha=0.14,
+        )
+        proximity_ax.fill_between(
+            x,
+            100.0,
+            proximity_values,
+            where=(proximity_values >= 100.0),
+            color="#b22222",
+            alpha=0.18,
+        )
+        proximity_ax.axhline(
+            100.0,
+            color="#b22222",
+            linestyle="--",
+            linewidth=1.2,
+            label="RED Hit",
+        )
+        proximity_ax.set_ylabel("% of RED")
+        proximity_ax.grid(True, linestyle="--", alpha=0.3)
+        proximity_ax.legend(loc="upper left")
+
+    axes[-1].set_xlabel("Time")
 
     fig.tight_layout()
 
@@ -1140,6 +1290,7 @@ def create_forager_coin_figures(
     coin=None,
     on_figure: Optional[Callable[[str, Figure], None]] = None,
     close_after_callback: bool = True,
+    timestamps=None,
 ) -> dict:
     figures: Dict[str, Figure] = {}
     if hlcvs is None:
@@ -1151,12 +1302,20 @@ def create_forager_coin_figures(
         if fdfc.empty:
             continue
         hlcvs_df = pd.DataFrame(hlcvs[:, idx, :3], columns=["high", "low", "close"])
+        if timestamps is not None:
+            ts_arr = np.asarray(timestamps, dtype=np.int64)
+            if (
+                len(ts_arr) >= len(hlcvs_df)
+                and len(ts_arr) > 0
+                and int(np.nanmax(ts_arr)) > 946684800000
+            ):
+                hlcvs_df["timestamp"] = ts_arr[: len(hlcvs_df)]
         plt.figure(figsize=figsize)
         plot_fills_forager(fdfc, hlcvs_df, clear=False, start_pct=start_pct, end_pct=end_pct)
         fig = plt.gcf()
         ax = fig.axes[0] if fig.axes else fig.add_subplot(111)
         ax.set_title(f"Fills {coin_}")
-        ax.set_xlabel("Minute")
+        ax.set_xlabel("datetime" if "timestamp" in hlcvs_df.columns else "minute")
         ax.set_ylabel("Price")
         if on_figure is not None:
             on_figure(coin_, fig)

@@ -49,6 +49,7 @@ def build_optimizer_vector_config(
         config,
         config.get("optimize", {}).get("fixed_runtime_overrides", {}),
     )
+    config = optimizer_overrides(overrides_list or [], config, None)
     for pside in ("long", "short"):
         pside_cfg = config.get("bot", {}).get(pside, {})
         if not isinstance(pside_cfg, dict):

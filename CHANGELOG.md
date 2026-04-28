@@ -6,6 +6,7 @@ All notable user-facing changes will be documented in this file.
 
 - `refactor/rust-strategy-runtime-plan` is targeting the next major release as `v8.0.0`.
 - Added `passivbot tool merge-paretos` for combining two or more Pareto run/front directories into capped long/short starting-config sets.
+- Changed optimizer `fixed_params` and `--fine_tune_params` from exact-only bounds keys to literal bounds-key selectors, with sorted multi-line logs showing each selector expansion and the resulting fixed/tunable bounds.
 - Fixed Gate.io live order creation with current CCXT/Gate.io by passing Passivbot custom ids as `clientOrderId`, letting CCXT emit Gate.io's required `t-`-prefixed order `text` while preserving the embedded Passivbot order-type marker.
 - Fixed live foreign-writer detection so a bot's own freshly acknowledged orders can be recognized by exchange order id, canonical Passivbot custom id, or a strict recent order fingerprint instead of relying only on raw client-id string equality.
 - Fixed OHLCV v2 planning so persistent gaps are not bypassed by sparse store bounds, and single-exchange backtest preparation no longer attempts the same v2 local path twice before falling back.

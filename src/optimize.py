@@ -1411,7 +1411,7 @@ def add_extra_options(parser, *, help_all: bool):
         default="",
         dest="fine_tune_params",
         help=(
-            "Comma-separated optimize bounds keys to tune; other parameters are fixed to their current config values"
+            "Comma-separated optimize bounds selectors to tune; other parameters are fixed to their current config values"
             if help_all
             else argparse.SUPPRESS
         ),
@@ -1454,6 +1454,33 @@ def apply_fine_tune_bounds(
         else:
             set_flat_optimize_bound(bounds, strategy_kind, bound_key, value)
 
+    def _resolve_bound_selectors(selectors, label: str) -> set[str]:
+        resolved: set[str] = set()
+        selectors_sorted = sorted(
+            {str(selector).strip() for selector in selectors if str(selector).strip()}
+        )
+        if not selectors_sorted:
+            return resolved
+        logging.info("%s selectors:", label)
+        for selector in selectors_sorted:
+            matches = sorted(key for key in flat_bounds if selector in key)
+            if not matches:
+                logging.warning("%s selector matched no optimize bounds: %s", label, selector)
+                continue
+            logging.info("  %s ->", selector)
+            for match in matches:
+                logging.info("    %s", match)
+            resolved.update(matches)
+        return resolved
+
+    def _log_bound_set(header: str, keys: set[str]) -> None:
+        if not keys:
+            logging.info("%s: none", header)
+            return
+        logging.info("%s:", header)
+        for key in sorted(keys):
+            logging.info("  %s", key)
+
     def _resolve_bound_key_path(bound_key: str):
         return resolve_optimization_bound_path(config, bound_key)
 
@@ -1467,11 +1494,24 @@ def apply_fine_tune_bounds(
             for part in path:
                 target = target[part]
         except (KeyError, TypeError):
-            logging.warning(
-                "fine-tune bounds: missing current config value for '%s', leaving bounds unchanged",
-                bound_key,
-            )
-            return False
+            try:
+                pside, key = bound_key.split("_", 1)
+            except ValueError:
+                logging.warning(
+                    "fine-tune bounds: missing current config value for '%s', leaving bounds unchanged",
+                    bound_key,
+                )
+                return False
+            target = config
+            try:
+                for part in ("bot", pside, key):
+                    target = target[part]
+            except (KeyError, TypeError):
+                logging.warning(
+                    "fine-tune bounds: missing current config value for '%s', leaving bounds unchanged",
+                    bound_key,
+                )
+                return False
         try:
             value_float = float(target)
             _set_bound(bound_key, [value_float, value_float])
@@ -1494,15 +1534,22 @@ def apply_fine_tune_bounds(
                 continue
             _set_bound(key, [val, val])
 
-    fine_tune_set = set(fine_tune_params)
-    config_fixed_params = set(config.get("optimize", {}).get("fixed_params", []) or [])
+    fine_tune_set = _resolve_bound_selectors(fine_tune_params, "fine-tune")
+    config_fixed_params = _resolve_bound_selectors(
+        config.get("optimize", {}).get("fixed_params", []) or [],
+        "optimize.fixed_params",
+    )
 
     effective_fixed_params = set(config_fixed_params)
-    if fine_tune_set:
+    if fine_tune_params:
         effective_fixed_params.update(key for key in flat_bounds if key not in fine_tune_set)
 
     if not effective_fixed_params:
         return
+
+    if fine_tune_set:
+        _log_bound_set("fine-tune tunable bounds", fine_tune_set)
+    _log_bound_set("fixed optimize bounds", effective_fixed_params)
 
     for key in sorted(effective_fixed_params):
         if key not in flat_bounds:
@@ -1627,6 +1674,7 @@ def configs_to_individuals(
         cfgs,
         bounds,
         sig_digits=sig_digits,
+        key_paths=key_paths,
         optimization_shape=optimization_shape,
     )
     return inds
@@ -1636,6 +1684,7 @@ def configs_to_individuals_streaming(
     cfgs,
     bounds,
     sig_digits=0,
+    key_paths=None,
     optimization_shape: OptimizationShape | None = None,
 ):
     inds = set()
@@ -1803,11 +1852,6 @@ async def main():
         if key.startswith("optimize.bounds.") and value is not None
     }
     apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
-    if fine_tune_params:
-        logging.info(
-            "Fine-tuning mode active for %s",
-            ", ".join(sorted(fine_tune_params)),
-        )
     suite_override = None
     if args.suite_config:
         logging.info("loading suite config %s", args.suite_config)
