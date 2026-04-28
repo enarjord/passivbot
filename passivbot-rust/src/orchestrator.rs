@@ -1039,7 +1039,7 @@ mod core {
                 PositionSide::Long => s.long.mode,
                 PositionSide::Short => s.short.mode,
             };
-            if mode == Some(TradingMode::Normal) {
+            if s.tradable && mode == Some(TradingMode::Normal) {
                 out.push(s.symbol_idx);
             }
         }
@@ -3259,6 +3259,37 @@ mod core {
                 .filter(|o| o.pside == PositionSide::Long && !is_close_order_type(o.order_type))
                 .count();
             assert!(n_entries_fill > 1);
+        }
+
+        #[test]
+        fn non_tradable_forced_normal_flat_symbol_does_not_require_emas() {
+            let mut sym = make_basic_symbol(0);
+            sym.tradable = false;
+            sym.emas = EmaBundle::default();
+            sym.long.mode = Some(TradingMode::Normal);
+            sym.long.position = Position::default();
+            sym.long.bot_params.n_positions = 1;
+            sym.long.bot_params.total_wallet_exposure_limit = 1.0;
+            sym.long.bot_params.wallet_exposure_limit = 1.0;
+            sym.long.bot_params.entry_initial_qty_pct = 1.0;
+
+            let mut global = make_basic_global();
+            global.global_bot_params.long.n_positions = 1;
+            global.global_bot_params.long.total_wallet_exposure_limit = 1.0;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global,
+                symbols: vec![sym],
+                peek_hints: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            assert!(out.orders.is_empty());
+            assert_eq!(out.diagnostics.symbol_states.len(), 1);
+            assert!(!out.diagnostics.symbol_states[0].long.active);
+            assert!(!out.diagnostics.symbol_states[0].long.allow_initial);
         }
 
         #[test]

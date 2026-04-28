@@ -234,6 +234,29 @@ def test_json_rejects_missing_ema():
         compute(pbr, inp)
 
 
+def test_json_non_tradable_forced_normal_flat_symbol_does_not_require_ema():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                tradable=False,
+                long_mode="normal",
+                emas=ema_bundle(m1_close=[], m1_volume=[], m1_log_range=[]),
+            )
+        ],
+    )
+
+    out = compute(pbr, inp)
+    assert out["orders"] == []
+    assert out["diagnostics"]["symbol_states"][0]["long"]["active"] is False
+    assert out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] is False
+
+
 def test_panic_mode_emits_close_panic_long():
     import passivbot_rust as pbr
 
