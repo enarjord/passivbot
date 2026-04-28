@@ -3160,6 +3160,47 @@ class Passivbot:
                 symbols.add(symbol)
         return sorted(symbols)
 
+    def _urgent_active_candle_symbols(self) -> list[str]:
+        """Return symbols whose completed 1m candles are required before planning.
+
+        In staged mode, ``active_symbols`` is the orchestrator-managed universe and
+        can include graceful-stop/flat symbols. Those should be handled by the
+        forager staleness budget, not by the per-cycle urgent refresh.
+        """
+        symbols: set[str] = set()
+        for symbol, pos_data in getattr(self, "positions", {}).items():
+            if not isinstance(pos_data, dict):
+                continue
+            for pside in ("long", "short"):
+                try:
+                    if abs(float((pos_data.get(pside, {}) or {}).get("size", 0.0) or 0.0)) > 0.0:
+                        symbols.add(symbol)
+                        break
+                except Exception:
+                    continue
+        for symbol, orders in getattr(self, "open_orders", {}).items():
+            if orders:
+                symbols.add(symbol)
+
+        pb_modes = getattr(self, "PB_modes", {})
+        has_pb_modes = False
+        if isinstance(pb_modes, dict):
+            has_pb_modes = any(bool(v) for v in pb_modes.values())
+            for pside in ("long", "short"):
+                pside_modes = pb_modes.get(pside, {})
+                if not isinstance(pside_modes, dict):
+                    continue
+                for symbol, mode in pside_modes.items():
+                    if str(mode or "").strip().lower() == "normal":
+                        symbols.add(symbol)
+
+        if not symbols and not has_pb_modes:
+            # Minimal test/legacy fallback: callers that have not populated
+            # PB_modes historically used active_symbols as the urgent universe.
+            symbols.update(getattr(self, "active_symbols", []) or [])
+
+        return sorted(symbols)
+
     async def warmup_trading_ready_candles(self) -> None:
         """Synchronously warm only account-active symbols needed for initial safe execution."""
         symbols = self._startup_active_candle_symbols()
@@ -4766,6 +4807,8 @@ class Passivbot:
                 await self.restart_bot_on_too_many_errors()
         if to_cancel or to_create:
             self.execution_scheduled = True
+        if not Passivbot._shutdown_requested(self):
+            await self._refresh_forager_candidate_candles()
         if self.debug_mode:
             return to_cancel, to_create
 
@@ -5156,14 +5199,15 @@ class Passivbot:
         return per_sym_ttl, cache_only_never_fetched
 
     def _candle_staleness_ms(self, symbol: str, *, now_ms: Optional[int] = None) -> int:
-        """Return age of latest completed 1m candle, preferring candle timestamp over refresh time."""
+        """Return completed-1m candle lag versus the latest finalized minute."""
         now = utc_ms() if now_ms is None else int(now_ms)
+        latest_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
         try:
             last_final = int(self.cm.get_last_final_ts(symbol) or 0)
         except Exception:
             last_final = 0
         if last_final > 0:
-            return max(0, int(now - last_final))
+            return max(0, int(latest_final - last_final))
         try:
             last_refresh = int(self.cm.get_last_refresh_ms(symbol) or 0)
         except Exception:
@@ -8498,7 +8542,22 @@ class Passivbot:
                     max_calls = int(max_calls) if max_calls is not None else 0
                 except Exception:
                     max_calls = 0
-                if max_calls > 0:
+                slots_open_any = False
+                for pside in ("long", "short"):
+                    if not is_forager_mode(pside):
+                        continue
+                    try:
+                        max_n = int(self.get_max_n_positions(pside))
+                    except Exception:
+                        max_n = 0
+                    try:
+                        current_n = int(self.get_current_n_positions(pside))
+                    except Exception:
+                        current_n = len(self.get_symbols_with_pos(pside))
+                    if max_n > current_n:
+                        slots_open_any = True
+                        break
+                if max_calls > 0 and slots_open_any:
                     cycle_cap = max(1, int(math.ceil(float(max_calls) / 4.0)))
                     budget = self._token_bucket_budget(
                         "_forager_active_candle_refresh_state",
@@ -8526,9 +8585,10 @@ class Passivbot:
                         ttl_int if ttl_int >= cache_only_ttl else max(600_000, ttl_int)
                     )
                 logging.debug(
-                    "[candle] orchestrator forager EMA budget priority=%d secondary=%d budget=%d target_age=%ds",
+                    "[candle] orchestrator forager EMA budget priority=%d secondary=%d slots_open=%s budget=%d target_age=%ds",
                     len(priority_symbols),
                     len(secondary_symbols),
+                    "yes" if slots_open_any else "no",
                     int(budget),
                     int(secondary_max_age_ms / 1000),
                 )
@@ -9806,12 +9866,21 @@ class Passivbot:
             await self.ccp.close()
         raise RestartBotException("Bot will restart.")
 
-    def _forager_refresh_budget(self, max_calls_per_minute: int) -> int:
+    def _forager_refresh_budget(
+        self,
+        max_calls_per_minute: int,
+        *,
+        max_cycle_budget: Optional[int] = None,
+        initial_tokens: Optional[float] = None,
+    ) -> int:
         """Token bucket budget for forager candle refreshes."""
+        if initial_tokens is None:
+            initial_tokens = max_calls_per_minute
         return self._token_bucket_budget(
             "_forager_refresh_state",
             max_calls_per_minute,
-            initial_tokens=max_calls_per_minute,
+            max_cycle_budget=max_cycle_budget,
+            initial_tokens=initial_tokens,
         )
 
     def _token_bucket_budget(
@@ -9989,10 +10058,16 @@ class Passivbot:
         if not all_candidates:
             return
 
+        cycle_cap = max(1, int(math.ceil(float(max_calls) / 4.0))) if max_calls > 0 else 0
         if slots_open_any:
             if max_calls > 0:
-                # Respect rate limit even with open slots; use token bucket budget.
-                budget = self._forager_refresh_budget(max_calls)
+                # Respect rate limit even with open slots; do not spend a full
+                # accumulated minute budget in one post-execution cleanup phase.
+                budget = self._forager_refresh_budget(
+                    max_calls,
+                    max_cycle_budget=cycle_cap,
+                    initial_tokens=cycle_cap,
+                )
                 if budget <= 0:
                     return
             else:
@@ -10000,13 +10075,19 @@ class Passivbot:
         else:
             if max_calls <= 0:
                 return
-            budget = self._forager_refresh_budget(max_calls)
+            budget = self._forager_refresh_budget(
+                max_calls,
+                max_cycle_budget=cycle_cap,
+                initial_tokens=cycle_cap,
+            )
             if budget <= 0:
                 return
 
-        # Skip actives; they are refreshed in update_ohlcvs_1m_for_actives
-        active = set(self.active_symbols) if hasattr(self, "active_symbols") else set()
-        candidates = sorted(all_candidates - active)
+        # Skip only the urgent per-cycle candle universe. The staged orchestrator
+        # managed universe may include flat graceful-stop symbols; those still
+        # need budgeted candidate refreshes for future forager readiness.
+        urgent = set(Passivbot._urgent_active_candle_symbols(self))
+        candidates = sorted(all_candidates - urgent)
         if not candidates:
             return
 
@@ -10206,60 +10287,12 @@ class Passivbot:
 
             fetch_delay_s = self._get_fetch_delay_seconds()
 
-            symbols = sorted(set(self.active_symbols))
-            priority_symbols = []
-            secondary_symbols = []
-            for sym in symbols:
-                has_pos = self.has_position(symbol=sym)
-                has_oo = bool(self.open_orders.get(sym)) if hasattr(self, "open_orders") else False
-                if has_pos or has_oo:
-                    priority_symbols.append(sym)
-                else:
-                    secondary_symbols.append(sym)
-            secondary_symbols = self._rank_symbols_by_candle_staleness(secondary_symbols, now_ms=now)
-            per_sym_ttl = {sym: max_age_ms for sym in priority_symbols}
-            budget = None
-            cache_only_never_fetched = set()
-            if self.is_forager_mode() and secondary_symbols:
-                max_calls = get_optional_live_value(self.config, "max_ohlcv_fetches_per_minute", 0)
-                try:
-                    max_calls = int(max_calls) if max_calls is not None else 0
-                except Exception:
-                    max_calls = 0
-                if max_calls > 0:
-                    cycle_cap = max(1, int(math.ceil(float(max_calls) / 4.0)))
-                    budget = self._token_bucket_budget(
-                        "_forager_active_candle_refresh_state",
-                        max_calls,
-                        max_cycle_budget=cycle_cap,
-                        initial_tokens=cycle_cap,
-                    )
-                    secondary_max_age_ms = max(
-                        max_age_ms,
-                        self._forager_target_staleness_ms(len(secondary_symbols), max_calls),
-                    )
-                else:
-                    budget = 0
-                    secondary_max_age_ms = int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
-                secondary_ttls, cache_only_never_fetched = self._compute_fetch_budget_ttls(
-                    secondary_symbols, secondary_max_age_ms, budget
-                )
-                per_sym_ttl.update(secondary_ttls)
-                logging.debug(
-                    "[candle] active forager refresh budget priority=%d secondary=%d budget=%d target_age=%ds",
-                    len(priority_symbols),
-                    len(secondary_symbols),
-                    int(budget),
-                    int(secondary_max_age_ms / 1000),
-                )
-            else:
-                per_sym_ttl.update({sym: max_age_ms for sym in secondary_symbols})
-            ordered_symbols = priority_symbols + secondary_symbols
+            ordered_symbols = Passivbot._urgent_active_candle_symbols(self)
             self._maybe_log_candle_refresh(
                 "active refresh",
-                symbols,
+                ordered_symbols,
                 target_age_ms=max_age_ms,
-                refreshed=len(symbols),
+                refreshed=len(ordered_symbols),
                 throttle_ms=60_000,
             )
             for sym in ordered_symbols:
@@ -10273,14 +10306,12 @@ class Passivbot:
                 if self.cm.is_rate_limited():
                     logging.debug("[candle] active refresh breaking early: rate limit backoff active")
                     break
-                if sym in cache_only_never_fetched:
-                    continue
                 try:
                     await self.cm.get_candles(
                         sym,
                         start_ts=start_ts,
                         end_ts=end_ts,
-                        max_age_ms=per_sym_ttl.get(sym, max_age_ms),
+                        max_age_ms=max_age_ms,
                         strict=False,
                         max_lookback_candles=window,
                     )
@@ -10307,10 +10338,6 @@ class Passivbot:
                 now_ms=utc_ms(),
                 epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
             )
-            # Best-effort candidate candles are useful for forager readiness, but
-            # must not delay planning/execution once account-active candles are fresh.
-            if not Passivbot._shutdown_requested(self):
-                self._schedule_forager_candidate_candle_refresh()
         except Exception as e:
             if Passivbot._shutdown_requested(self):
                 logging.debug("[shutdown] stopped candle refresh during shutdown: %s", e)
