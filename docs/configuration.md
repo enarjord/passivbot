@@ -540,7 +540,7 @@ Risk should be constrained through canonical `*_strategy_eq` metrics instead. De
   - **"backward_tp_grid"**: Creates a descending take-profit grid where `close_grid_markup_start` > `close_grid_markup_end`.
 - **crossover_probability**: Probability of performing crossover between two individuals in the genetic algorithm. Determines how often parents exchange genetic information to create offspring.
 - **crossover_eta**: Crowding factor (η) for simulated-binary crossover. Lower values (<20) allow offspring to move farther away from their parents; higher values keep them closer. Default is `20.0`.
-- **fixed_params**: List of `optimize.bounds` keys to freeze at the current config value for the whole run. This is the config-file equivalent of fine-tuning only a subset of parameters.
+- **fixed_params**: List of `optimize.bounds` selectors to freeze at the current config value for the whole run. Selectors are literal substring matches against bounds keys, so `close_grid` fixes both long and short close-grid bounds. Broad selectors such as `close` may match more than intended, and the optimizer logs the sorted expansion before running.
 - **fixed_runtime_overrides**: Runtime-only overrides applied during optimize evaluations without mutating the stored config. Use this for optimizer-specific safety knobs such as disabling terminal HSL no-restart while still keeping the live/backtest config unchanged on disk.
 - **iters**: Number of backtests per optimize session.
 - **mutation_probability**: Probability of mutating an individual in the genetic algorithm. Determines how often random changes are introduced to maintain diversity.

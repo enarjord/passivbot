@@ -230,22 +230,26 @@ Trade-offs:
 
 When you only want to adjust a handful of parameters and keep everything else fixed, use
 `--fine_tune_params` (short: `-ft`). Provide a comma-separated list of `optimize.bounds`
-keys to keep tunable; all other bounds are locked to their current config values before
-the run starts.
+selectors to keep tunable; all other bounds are locked to their current config values
+before the run starts. A selector matches any bounds key containing that string, so
+`close_grid` matches both `long_close_grid_*` and `short_close_grid_*` bounds.
 
 ```bash
 passivbot optimize configs/examples/default_trailing_grid_long_npos7.json \
-  --fine_tune_params long_entry_grid_spacing_pct,long_entry_initial_qty_pct
+  --fine_tune_params close_grid,entry_grid_spacing_pct
 ```
 
 Behind the scenes the optimizer sets every unlisted bound to `[value, value]`, so the GA
 can mutate only the parameters you specified. Bounds for the listed parameters remain as
-configured.
+configured. The optimizer logs each selector expansion on separate sorted lines before
+the run starts.
 
-`optimize.fixed_params` provides the config-file equivalent: list `optimize.bounds` keys that
-should always be fixed to their current config values. Internally, `--fine_tune_params` and
-`optimize.fixed_params` are merged into one effective fixed-parameter set before bounds are
-collapsed.
+`optimize.fixed_params` provides the config-file equivalent: list `optimize.bounds`
+selectors that should always be fixed to their current config values. Broad selectors are
+literal substring matches; for example, `trailing` fixes all bounds whose names contain
+`trailing`, while `close` also matches `unstuck_close_pct`. Use narrower selectors when
+needed. Internally, `--fine_tune_params` and `optimize.fixed_params` are merged into one
+effective fixed-parameter set before bounds are collapsed.
 
 `optimize.fixed_runtime_overrides` is different: it overrides runtime config values only during
 optimize evaluations, without changing the stored/live config value. This is useful for

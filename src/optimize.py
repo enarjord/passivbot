@@ -1414,7 +1414,7 @@ def add_extra_options(parser, *, help_all: bool):
         default="",
         dest="fine_tune_params",
         help=(
-            "Comma-separated optimize bounds keys to tune; other parameters are fixed to their current config values"
+            "Comma-separated optimize bounds selectors to tune; other parameters are fixed to their current config values"
             if help_all
             else argparse.SUPPRESS
         ),
@@ -1445,6 +1445,33 @@ def apply_fine_tune_bounds(
     cli_overridden_bounds: set[str],
 ) -> None:
     bounds = config.get("optimize", {}).get("bounds", {})
+
+    def _resolve_bound_selectors(selectors, label: str) -> set[str]:
+        resolved: set[str] = set()
+        selectors_sorted = sorted(
+            {str(selector).strip() for selector in selectors if str(selector).strip()}
+        )
+        if not selectors_sorted:
+            return resolved
+        logging.info("%s selectors:", label)
+        for selector in selectors_sorted:
+            matches = sorted(key for key in bounds if selector in key)
+            if not matches:
+                logging.warning("%s selector matched no optimize bounds: %s", label, selector)
+                continue
+            logging.info("  %s ->", selector)
+            for match in matches:
+                logging.info("    %s", match)
+            resolved.update(matches)
+        return resolved
+
+    def _log_bound_set(header: str, keys: set[str]) -> None:
+        if not keys:
+            logging.info("%s: none", header)
+            return
+        logging.info("%s:", header)
+        for key in sorted(keys):
+            logging.info("  %s", key)
 
     def _resolve_bound_key_path(bound_key: str):
         if bound_key in OPTIMIZABLE_BOT_KEY_PATHS:
@@ -1494,33 +1521,27 @@ def apply_fine_tune_bounds(
                 continue
             bounds[key] = [val, val]
 
-    fine_tune_set = set(fine_tune_params)
-    config_fixed_params = set(config.get("optimize", {}).get("fixed_params", []) or [])
+    fine_tune_set = _resolve_bound_selectors(fine_tune_params, "fine-tune")
+    config_fixed_params = _resolve_bound_selectors(
+        config.get("optimize", {}).get("fixed_params", []) or [],
+        "optimize.fixed_params",
+    )
 
     effective_fixed_params = set(config_fixed_params)
-    if fine_tune_set:
+    if fine_tune_params:
         effective_fixed_params.update(key for key in bounds if key not in fine_tune_set)
 
     if not effective_fixed_params:
         return
 
+    if fine_tune_set:
+        _log_bound_set("fine-tune tunable bounds", fine_tune_set)
+    _log_bound_set("fixed optimize bounds", effective_fixed_params)
+
     for key in sorted(effective_fixed_params):
         if key not in bounds:
             continue
         _fix_bound_to_current_value(key)
-
-    missing = [key for key in fine_tune_set if key not in bounds]
-    if missing:
-        logging.warning(
-            "fine-tune bounds: requested keys not found in optimize bounds: %s",
-            ",".join(sorted(missing)),
-        )
-    fixed_missing = [key for key in config_fixed_params if key not in bounds]
-    if fixed_missing:
-        logging.warning(
-            "optimize.fixed_params keys not found in optimize bounds: %s",
-            ",".join(sorted(fixed_missing)),
-        )
 
 
 def extract_configs(path):
@@ -1798,11 +1819,6 @@ async def main():
         if key.startswith("optimize.bounds.") and value is not None
     }
     apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
-    if fine_tune_params:
-        logging.info(
-            "Fine-tuning mode active for %s",
-            ", ".join(sorted(fine_tune_params)),
-        )
     suite_override = None
     if args.suite_config:
         logging.info("loading suite config %s", args.suite_config)
