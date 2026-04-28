@@ -212,10 +212,6 @@ class BinanceBot(CCXTBot):
                 "positions", self.capture_positions_snapshot(), timings_ms
             )
         )
-        if "fills" in plan:
-            tasks["fills"] = asyncio.create_task(
-                self._timed_authoritative_fetch("fills", self.update_pnls(), timings_ms)
-            )
         try:
             _raw_positions, positions = await tasks["positions"]
             out["positions"] = positions
@@ -228,11 +224,22 @@ class BinanceBot(CCXTBot):
                 self._fetch_open_orders_for_staged_symbols(symbols),
                 timings_ms,
             )
+            if "fills" in plan:
+                position_symbols = {position["symbol"] for position in positions}
+                open_order_symbols = {order["symbol"] for order in out.get("open_orders", [])}
+                self._fill_symbol_scope = sorted(position_symbols | open_order_symbols)
+                try:
+                    out["pnls_ok"] = await self._timed_authoritative_fetch(
+                        "fills", self.update_pnls(), timings_ms
+                    )
+                finally:
+                    try:
+                        delattr(self, "_fill_symbol_scope")
+                    except AttributeError:
+                        pass
             if "balance" in tasks:
                 _raw_balance, balance = await tasks["balance"]
                 out["balance"] = balance
-            if "fills" in tasks:
-                out["pnls_ok"] = await tasks["fills"]
             return out
         except Exception:
             for task in tasks.values():

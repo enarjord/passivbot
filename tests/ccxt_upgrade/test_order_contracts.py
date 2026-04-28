@@ -140,7 +140,10 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
             }
         ]
 
+    seen_fill_scope = []
+
     async def update_pnls():
+        seen_fill_scope.append(list(bot._fill_symbol_scope))
         return True
 
     fetched_symbols = []
@@ -171,6 +174,8 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
     assert snapshot["positions"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["position_side"] == "long"
+    assert seen_fill_scope == [["SOL/USDT:USDT"]]
+    assert not hasattr(bot, "_fill_symbol_scope")
 
 
 def test_bybit_position_side_uses_determine_pos_side_ccxt_contract():

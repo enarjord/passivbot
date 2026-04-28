@@ -762,6 +762,87 @@ async def test_binance_fetcher_symbol_pool_from_providers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_binance_fetcher_does_not_use_config_fallback_symbols_by_default(monkeypatch):
+    fetched_symbols: List[str] = []
+
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: [],
+        open_orders_provider=lambda: [],
+        fallback_symbols=["ADA/USDT:USDT", "BTC/USDT:USDT"],
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return []
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        fetched_symbols.append(symbol)
+        return []
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+
+    events = await fetcher.fetch(
+        since_ms=1_700_000_000_000,
+        until_ms=1_700_000_060_000,
+        detail_cache={},
+    )
+
+    assert events == []
+    assert fetched_symbols == []
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_uses_config_fallback_symbols_when_enabled(monkeypatch):
+    fetched_symbols: List[str] = []
+
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: [],
+        open_orders_provider=lambda: [],
+        fallback_symbols=["ADA/USDT:USDT", "BTC/USDT:USDT"],
+        allow_fallback_symbols=True,
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return []
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        fetched_symbols.append(symbol)
+        return []
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+
+    events = await fetcher.fetch(
+        since_ms=1_700_000_000_000,
+        until_ms=1_700_000_060_000,
+        detail_cache={},
+    )
+
+    assert events == []
+    assert fetched_symbols == ["ADA/USDT:USDT", "BTC/USDT:USDT"]
+
+
+@pytest.mark.asyncio
 async def test_binance_fetcher_detail_cache_usage(monkeypatch):
     """Test detail cache is used and populated."""
     trades = [

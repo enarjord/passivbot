@@ -1435,6 +1435,8 @@ class BinanceFetcher(BaseFetcher):
         positions_provider: Optional[Callable[[], Iterable[str]]] = None,
         open_orders_provider: Optional[Callable[[], Iterable[str]]] = None,
         stop_requested: Optional[Callable[[], bool]] = None,
+        fallback_symbols: Optional[Iterable[str]] = None,
+        allow_fallback_symbols: bool = False,
         income_limit: int = 1000,
         trade_limit: int = 1000,
     ) -> None:
@@ -1445,6 +1447,8 @@ class BinanceFetcher(BaseFetcher):
         self._positions_provider = positions_provider or (lambda: ())
         self._open_orders_provider = open_orders_provider or (lambda: ())
         self._stop_requested = stop_requested or (lambda: False)
+        self._fallback_symbols = list(fallback_symbols or [])
+        self._allow_fallback_symbols = bool(allow_fallback_symbols)
         self.income_limit = min(1000, max(1, income_limit))  # cap to max 1000
         self._now_func = now_func or (lambda: int(datetime.now(tz=timezone.utc).timestamp() * 1000))
         self.trade_limit = max(1, trade_limit)
@@ -1499,6 +1503,8 @@ class BinanceFetcher(BaseFetcher):
         symbol_pool = set(self._collect_symbols(self._positions_provider))
         symbol_pool.update(self._collect_symbols(self._open_orders_provider))
         symbol_pool.update(ev["symbol"] for ev in income_events if ev.get("symbol"))
+        if not symbol_pool and self._allow_fallback_symbols:
+            symbol_pool.update(self._collect_symbols(lambda: self._fallback_symbols))
         if detail_cache is None:
             detail_cache = {}
 
@@ -4824,6 +4830,9 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
     if exchange == "binance":
         def binance_live_symbol_provider() -> Iterable[str]:
             live_symbols: set[str] = set()
+            override_scope = getattr(bot, "_fill_symbol_scope", None)
+            if override_scope is not None:
+                live_symbols.update(str(symbol) for symbol in override_scope if symbol)
             positions = getattr(bot, "positions", {}) or {}
             for symbol, sides in positions.items():
                 if not isinstance(sides, dict):
@@ -4836,8 +4845,7 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
                         continue
             open_orders = getattr(bot, "open_orders", {}) or {}
             live_symbols.update(symbol for symbol, orders in open_orders.items() if orders)
-            live_symbols.update(getattr(bot, "active_symbols", []) or [])
-            return sorted(live_symbols) if live_symbols else symbols
+            return sorted(live_symbols)
 
         return BinanceFetcher(
             api=bot.cca,
@@ -4845,6 +4853,10 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
             positions_provider=binance_live_symbol_provider,
             open_orders_provider=binance_live_symbol_provider,
             stop_requested=getattr(bot, "_shutdown_requested", None),
+            fallback_symbols=symbols,
+            allow_fallback_symbols=bool(
+                getattr(bot, "_fill_fetcher_allow_config_symbol_fallback", False)
+            ),
         )
     if exchange == "bitget":
         return BitgetFetcher(
@@ -4903,6 +4915,7 @@ async def _run_cli(args: argparse.Namespace) -> None:
         live["user"] = args.user
     bot = _instantiate_bot(config)
     try:
+        bot._fill_fetcher_allow_config_symbol_fallback = True
         symbol_pool = _extract_symbol_pool(config, args.symbols)
         fetcher = _build_fetcher_for_bot(bot, symbol_pool)
         cache_root = Path(args.cache_root)
