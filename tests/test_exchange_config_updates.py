@@ -295,6 +295,10 @@ async def test_execute_to_exchange_configures_only_symbols_with_creations():
         balance_threshold = 0.0
         quote = "USDT"
         state_change_detected_by_symbol = set()
+        config = {
+            "live": {"authoritative_refresh_mode": "legacy"},
+            "_raw_effective": {"live": {"authoritative_refresh_mode": "legacy"}},
+        }
 
         def __init__(self):
             self.stop_signal_received = False
@@ -354,6 +358,9 @@ async def test_execute_to_exchange_configures_only_symbols_with_creations():
             self.created_orders = orders
             return []
 
+        async def _refresh_forager_candidate_candles(self):
+            return None
+
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
     bot = FakeBot()
@@ -372,6 +379,10 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
         balance_threshold = 0.0
         quote = "USDT"
         state_change_detected_by_symbol = set()
+        config = {
+            "live": {"authoritative_refresh_mode": "legacy"},
+            "_raw_effective": {"live": {"authoritative_refresh_mode": "legacy"}},
+        }
 
         def __init__(self):
             self.stop_signal_received = False
@@ -415,6 +426,9 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
         async def execute_orders_parent(self, orders):
             self.created_orders = orders
             return []
+
+        async def _refresh_forager_candidate_candles(self):
+            return None
 
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 

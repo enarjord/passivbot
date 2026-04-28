@@ -25,6 +25,20 @@ async def test_active_candle_refresh_only_fetches_urgent_symbols(monkeypatch):
         def get_last_refresh_ms(self, symbol):
             return int(self.last_refresh.get(symbol, 0))
 
+        def get_completed_candle_health(self, symbol, windows=None, now_ms=None):
+            return {
+                "ok": True,
+                "timeframes": {
+                    "1m": {
+                        "coverage_ok": True,
+                        "latest_expected_ts": 60_000,
+                        "last_cached_ts": 60_000,
+                        "runtime_synthetic_count": 0,
+                        "missing_candles": 0,
+                    }
+                },
+            }
+
         async def get_candles(self, symbol, **kwargs):
             self.calls.append((symbol, kwargs))
             return []
@@ -190,6 +204,69 @@ async def test_active_candle_refresh_ignores_broad_graceful_stop_universe(monkey
 
     called = [symbol for symbol, _kwargs in bot.cm.calls]
     assert called == ["POS/USDT:USDT"]
+
+
+@pytest.mark.asyncio
+async def test_active_candle_refresh_does_not_stamp_when_rate_limited(monkeypatch):
+    import passivbot as pb_mod
+
+    now_ms = 10_000_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+    stamps = []
+
+    class FakeCM:
+        default_window_candles = 120
+
+        def is_rate_limited(self):
+            return True
+
+        async def get_candles(self, symbol, **kwargs):
+            raise AssertionError("rate-limited active refresh should break before fetch")
+
+        def get_completed_candle_health(self, symbol, windows=None, now_ms=None):
+            return {
+                "ok": False,
+                "timeframes": {
+                    "1m": {
+                        "coverage_ok": False,
+                        "latest_expected_ts": 120_000,
+                        "last_cached_ts": 60_000,
+                        "missing_candles": 1,
+                    }
+                },
+            }
+
+    class FakeBot:
+        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        active_symbols = ["POS/USDT:USDT"]
+        PB_modes = {"long": {}, "short": {}}
+        positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+        open_orders = {}
+        stop_signal_received = False
+        cm = FakeCM()
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def _maybe_log_candle_refresh(self, *args, **kwargs):
+            return None
+
+        def _ensure_freshness_ledger(self):
+            class Ledger:
+                def stamp(self, *args, **kwargs):
+                    stamps.append((args, kwargs))
+
+            return Ledger()
+
+        _urgent_active_candle_symbols = pb_mod.Passivbot._urgent_active_candle_symbols
+        _completed_candle_freshness_signature = (
+            pb_mod.Passivbot._completed_candle_freshness_signature
+        )
+
+    bot = FakeBot()
+
+    assert await pb_mod.Passivbot.update_ohlcvs_1m_for_actives(bot) is False
+    assert stamps == []
 
 
 @pytest.mark.asyncio

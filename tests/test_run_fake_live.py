@@ -24,6 +24,7 @@ from tools.run_fake_live import (
     _prime_fake_candles,
     _prime_fake_fill_cache,
     _run_fake_bot,
+    _summarize_remote_calls,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -72,7 +73,7 @@ class _StubBot:
     def _hsl_psides(self):
         return ("long", "short")
 
-    async def execute_to_exchange(self):
+    async def execute_to_exchange(self, **kwargs):
         self.loop_calls += 1
         return {"cycle": self.loop_calls}
 
@@ -129,6 +130,59 @@ def test_apply_assertions_supports_path_assertions_and_logs():
         step_summaries=step_summaries,
         log_text="READY fake harness\n",
     )
+
+
+@pytest.mark.fake_live
+def test_apply_assertions_supports_remote_call_paths():
+    client = FakeCCXTClient(_scenario(), quote="USDT")
+    bot = _StubBot()
+    remote_calls = [
+        {"method": "fetch_balance", "step_index": 0},
+        {"method": "fetch_positions", "step_index": 0, "rows": 1},
+        {"method": "fetch_ohlcv", "step_index": 1, "symbol": "BTC/USDT:USDT", "rows": 2},
+    ]
+    remote_summary = _summarize_remote_calls(remote_calls)
+    scenario = {
+        "assertions": {
+            "remote_call_paths": {
+                "summary.total_calls": 3,
+                "summary.by_category.account_state": 2,
+                "summary.by_category.market_data": 1,
+                "summary.max_per_step_by_method.fetch_balance": 1,
+                "calls.2.symbol": "BTC/USDT:USDT",
+            }
+        }
+    }
+    _apply_assertions(
+        bot,
+        client,
+        scenario,
+        step_summaries=[],
+        log_text="",
+        remote_calls=remote_calls,
+        remote_call_summary=remote_summary,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
+async def test_fake_client_request_log_counts_order_writes():
+    client = FakeCCXTClient(_scenario(), quote="USDT")
+    order = await client.create_order(
+        "BTC/USDT:USDT",
+        "limit",
+        "buy",
+        0.01,
+        90.0,
+        {"positionSide": "LONG", "clientOrderId": "pb-test"},
+    )
+    await client.cancel_order(order["id"], "BTC/USDT:USDT")
+
+    summary = _summarize_remote_calls(client.export_request_log())
+
+    assert summary["by_method"]["create_order"] == 1
+    assert summary["by_method"]["cancel_order"] == 1
+    assert summary["by_category"]["order_write"] == 2
 
 
 @pytest.mark.fake_live
@@ -435,10 +489,23 @@ def test_compare_run_artifacts_reports_no_diff_for_matching_payloads():
         "positions": [],
         "hsl_trace": {"long": {"halted": False}},
         "run_metadata": {"authoritative_refresh_mode": "legacy"},
+        "remote_call_summary": {"total_calls": 3, "by_method": {"fetch_balance": 1}},
     }
-    report = _compare_run_artifacts(payload, {**payload, "run_metadata": {"authoritative_refresh_mode": "staged"}})
+    report = _compare_run_artifacts(
+        payload,
+        {
+            **payload,
+            "run_metadata": {"authoritative_refresh_mode": "staged"},
+            "remote_call_summary": {
+                "total_calls": 5,
+                "by_method": {"fetch_balance": 1, "fetch_tickers": 2},
+            },
+        },
+    )
     assert report["match"] is True
     assert report["diff_count"] == 0
+    assert report["remote_call_delta"] == 2
+    assert report["remote_call_delta_by_method"] == {"fetch_balance": 0, "fetch_tickers": 2}
 
 
 def test_compare_run_artifacts_ignores_nondeterministic_fields():
@@ -550,12 +617,22 @@ def test_load_run_artifacts_reads_expected_files(tmp_path):
     (tmp_path / "run_metadata.json").write_text(
         json.dumps({"authoritative_refresh_mode": "legacy"}), encoding="utf-8"
     )
+    (tmp_path / "remote_calls.json").write_text(json.dumps([{"method": "fetch_balance"}]), encoding="utf-8")
+    (tmp_path / "remote_call_summary.json").write_text(
+        json.dumps({"total_calls": 1}), encoding="utf-8"
+    )
+    (tmp_path / "candle_remote_fetches.json").write_text(
+        json.dumps([{"kind": "ccxt_fetch_ohlcv"}]), encoding="utf-8"
+    )
     (tmp_path / "fake_live.log").write_text("hello\n", encoding="utf-8")
 
     loaded = _load_run_artifacts(tmp_path)
 
     assert loaded["step_summaries"][0]["step_index"] == 0
     assert loaded["fake_exchange_state"]["balance_total"] == 1
+    assert loaded["remote_calls"][0]["method"] == "fetch_balance"
+    assert loaded["remote_call_summary"]["total_calls"] == 1
+    assert loaded["candle_remote_fetches"][0]["kind"] == "ccxt_fetch_ohlcv"
     assert loaded["log_text"] == "hello\n"
 
 
@@ -956,7 +1033,17 @@ async def test_fake_live_writes_remote_call_artifacts(tmp_path, monkeypatch):
             encoding="utf-8"
         )
     )
-    scenario.pop("assertions", None)
+    scenario["assertions"] = {
+        "remote_call_paths": {
+            "summary.total_calls": {"min": 1},
+            "summary.by_method.fetch_balance": {"min": 1},
+            "summary.by_method.fetch_positions": {"min": 1},
+            "summary.by_method.fetch_open_orders": {"min": 1},
+            "summary.by_method.fetch_ohlcv": {"min": 1},
+            "summary.by_category.account_state": {"min": 3},
+            "summary.by_category.market_data": {"min": 1},
+        }
+    }
     scenario_path = tmp_path / "fake_remote_call_trace.hjson"
     scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
     config_path = REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"
@@ -969,6 +1056,8 @@ async def test_fake_live_writes_remote_call_artifacts(tmp_path, monkeypatch):
         output_dir=str(tmp_path),
         log_level=1,
         snapshot_each_step=False,
+        authoritative_refresh_mode="staged",
+        compare_authoritative_refresh_modes=False,
     )
     assert await _async_main(args) == 0
 

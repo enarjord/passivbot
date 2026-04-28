@@ -840,14 +840,105 @@ class HyperliquidBot(CCXTBot):
             headers={"Content-Type": "application/json"},
             body=json.dumps({"type": "allMids"}),
         )
-        return {
-            self.coin_to_symbol(coin): {
-                "bid": float(fetched[coin]),
-                "ask": float(fetched[coin]),
-                "last": float(fetched[coin]),
-            }
-            for coin in fetched
-        }
+        tickers = {}
+        for coin, price_raw in fetched.items():
+            symbol = self.symbol_ids_inv.get(coin)
+            if symbol is None:
+                symbol = self.coin_to_symbol(coin, verbose=False)
+            if symbol not in self.markets_dict:
+                continue
+            price = float(price_raw)
+            tickers[symbol] = {"bid": price, "ask": price, "last": price}
+        return tickers
+
+    async def fetch_tickers_for_symbols(self, symbols: list[str]) -> dict:
+        """Fetch current tickers for specific symbols, including HIP-3 markets.
+
+        Hyperliquid's cheap allMids endpoint does not reliably expose builder
+        deployed HIP-3 markets with CCXT unified symbols. For those, use the
+        per-dex metaAndAssetCtxs endpoint and derive bid/ask/last from the
+        current asset context.
+        """
+        requested = [s for s in dict.fromkeys(symbols or []) if s in self.markets_dict]
+        if not requested:
+            return {}
+        out = {}
+        vanilla_symbols = []
+        hip3_by_dex = {}
+        for symbol in requested:
+            info = self.markets_dict.get(symbol, {}).get("info", {})
+            if info.get("hip3"):
+                dex = str(info.get("dex") or "").strip()
+                if not dex:
+                    raise ValueError(f"Hyperliquid HIP-3 symbol {symbol} missing dex metadata")
+                hip3_by_dex.setdefault(dex, []).append(symbol)
+            else:
+                vanilla_symbols.append(symbol)
+        if vanilla_symbols:
+            bulk = await self.fetch_tickers()
+            out.update({symbol: bulk[symbol] for symbol in vanilla_symbols if symbol in bulk})
+        for dex, dex_symbols in hip3_by_dex.items():
+            out.update(await self._fetch_hip3_tickers_for_symbols(dex, dex_symbols))
+        return out
+
+    async def _fetch_hip3_tickers_for_symbols(self, dex: str, symbols: list[str]) -> dict:
+        response = await self.cca.fetch(
+            self._hl_info_url(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"type": "metaAndAssetCtxs", "dex": dex}),
+        )
+        if not isinstance(response, list) or len(response) < 2:
+            raise ValueError(f"unexpected Hyperliquid HIP-3 meta response for dex={dex}")
+        universe = response[0].get("universe", []) if isinstance(response[0], dict) else []
+        asset_ctxs = response[1] if isinstance(response[1], list) else []
+        name_to_symbol = {}
+        for symbol in symbols:
+            market = self.markets_dict.get(symbol, {})
+            info = market.get("info", {})
+            for name in (info.get("name"), market.get("baseName")):
+                if name:
+                    name_to_symbol[str(name)] = symbol
+        out = {}
+        for idx, asset in enumerate(universe):
+            if not isinstance(asset, dict):
+                continue
+            symbol = name_to_symbol.get(str(asset.get("name") or ""))
+            if symbol is None:
+                continue
+            ctx = asset_ctxs[idx] if idx < len(asset_ctxs) and isinstance(asset_ctxs[idx], dict) else {}
+            ticker = self._hip3_ticker_from_asset_ctx(symbol, ctx)
+            if ticker is not None:
+                out[symbol] = ticker
+        return out
+
+    @staticmethod
+    def _hip3_ticker_from_asset_ctx(symbol: str, ctx: dict) -> dict | None:
+        def _positive(value):
+            try:
+                out = float(value)
+            except (TypeError, ValueError):
+                return None
+            return out if out > 0.0 else None
+
+        impact = ctx.get("impactPxs") if isinstance(ctx, dict) else None
+        bid = ask = None
+        if isinstance(impact, list) and len(impact) >= 2:
+            bid = _positive(impact[0])
+            ask = _positive(impact[1])
+        last = _positive(ctx.get("midPx")) or _positive(ctx.get("markPx")) or _positive(
+            ctx.get("oraclePx")
+        )
+        if bid is None:
+            bid = last
+        if ask is None:
+            ask = last
+        if last is None or bid is None or ask is None:
+            logging.debug(
+                "[market] hyperliquid HIP-3 ticker missing usable price | symbol=%s", symbol
+            )
+            return None
+        return {"bid": bid, "ask": ask, "last": last}
 
     async def fetch_ohlcv(self, symbol: str, timeframe="1m"):
         # intervals: 1,3,5,15,30,60,120,240,360,720,D,M,W

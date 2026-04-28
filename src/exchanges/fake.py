@@ -779,6 +779,20 @@ class FakeCCXTClient:
                 "reduceOnly": reduce_only,
             },
         }
+        self._record_request(
+            "create_order",
+            symbol=symbol,
+            order_type=order_type,
+            side=order_side,
+            amount=abs(float(amount)),
+            price=float(order["price"]),
+            position_side=position_side,
+            reduce_only=reduce_only,
+            client_order_id=client_order_id,
+            order_id=order_id,
+            params=params,
+            rows=1,
+        )
 
         if order_type == "market":
             self._fill_order(order, fill_price=last_price, liquidity="taker")
@@ -792,6 +806,15 @@ class FakeCCXTClient:
         return _copy_order(order)
 
     async def cancel_order(self, order_id: str, symbol: str = None, params: Optional[dict] = None) -> dict:
+        found = str(order_id) in self.open_orders
+        self._record_request(
+            "cancel_order",
+            symbol=symbol,
+            order_id=str(order_id),
+            found=bool(found),
+            params=params or {},
+            rows=1 if found else 0,
+        )
         order = self.open_orders.pop(str(order_id), None)
         if order is None:
             raise KeyError(f"Fake order {order_id} not found")

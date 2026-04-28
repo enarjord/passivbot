@@ -67,6 +67,12 @@ class FreshnessLedger:
     def surface_epoch(self, surface: str) -> int:
         return int(self.surfaces.get(surface, SurfaceState(surface)).epoch or 0)
 
+    def surface_signature(self, surface: str) -> Any:
+        return self.surfaces.get(surface, SurfaceState(surface)).signature
+
+    def surface_updated_ms(self, surface: str) -> int:
+        return int(self.surfaces.get(surface, SurfaceState(surface)).updated_ms or 0)
+
     def surfaces_missing_after(self, surfaces: set[str] | frozenset[str], min_epoch: int) -> list[str]:
         return sorted(surface for surface in surfaces if self.surface_epoch(surface) < int(min_epoch))
 

@@ -149,7 +149,7 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Hyperliquid unified DEBUG smoke.
 - [x] Hyperliquid non-unified vanilla DEBUG smoke.
 - [ ] Later: Bitget, Gate.io, OKX, Binance, KuCoin smoke tests.
-- [ ] Compare remote call counts before/after major changes.
+- [x] Add fake-live support for comparing remote call counts before/after major changes.
 
 ## Current Completed Work Relevant To This Plan
 
@@ -214,6 +214,14 @@ Before order planning/execution, live bot must have coherent state for:
   requested USDC perp symbols while the symbol-list endpoint was fast and complete.
 - [x] Batched position-change display price lookups so startup or manual-position transitions fetch
   one market snapshot cohort instead of one ticker request per changed position.
+- [x] Extended the fake-live validation harness for staged remote-call economy: fake exchange
+  request logs now include order writes, scenario assertions can validate request-count paths, and
+  staged-vs-legacy comparison reports include remote-call summaries and per-method deltas.
+- [x] Tightened staged planning freshness: completed candles are stamped only after exact
+  required-symbol coverage is verified, planning universe preparation now happens before market
+  refresh, market snapshots are revalidated immediately before order creation, the old
+  price-distance order gate was removed in favor of replacement tolerance, and EMA gating
+  diagnostics now use the correct PB mode shape.
 
 ## Initial Ticker Probe Findings
 

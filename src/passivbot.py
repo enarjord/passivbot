@@ -2511,7 +2511,7 @@ class Passivbot:
         for symbol in symbols:
             for pside in ("long", "short"):
                 # Check if mode is normal (not graceful_stop, manual, etc.)
-                mode = self.PB_modes.get(symbol, {}).get(pside)
+                mode = self.PB_modes.get(pside, {}).get(symbol)
                 if mode != "normal":
                     continue
 
@@ -3821,6 +3821,12 @@ class Passivbot:
                 if self.stop_signal_received:
                     break
                 self._set_log_silence_watchdog_context(
+                    phase="runtime", stage="prepare_planning_universe"
+                )
+                await self.execution_cycle()
+                if self.stop_signal_received:
+                    break
+                self._set_log_silence_watchdog_context(
                     phase="runtime", stage="refresh_market_state_if_needed"
                 )
                 try:
@@ -3837,7 +3843,7 @@ class Passivbot:
                     break
                 self._set_log_silence_watchdog_context(phase="runtime", stage="execute_to_exchange")
                 try:
-                    res = await self.execute_to_exchange()
+                    res = await self.execute_to_exchange(prepare_cycle=False)
                 except asyncio.CancelledError:
                     if self._shutdown_requested():
                         logging.debug("[shutdown] execution cancelled during shutdown")
@@ -4012,14 +4018,16 @@ class Passivbot:
             return False
         if self.stop_signal_received:
             return False
+        await self.execution_cycle()
+        if self.stop_signal_received:
+            return False
         return await self.refresh_market_state_if_needed()
 
     async def refresh_market_state_if_needed(self) -> bool:
         """Refresh market data needed before planning/execution."""
         if self.stop_signal_received:
             return False
-        await self.update_ohlcvs_1m_for_actives()
-        return True
+        return bool(await self.update_ohlcvs_1m_for_actives())
 
     def _market_snapshot_ticker_strategy(self) -> str:
         """Choose the cheapest safe ticker endpoint shape for market snapshots."""
@@ -4720,9 +4728,10 @@ class Passivbot:
                 new_detections, unique_count=len(self.foreign_passivbot_seen)
             )
 
-    async def execute_to_exchange(self):
+    async def execute_to_exchange(self, *, prepare_cycle: bool = True):
         """Run one execution cycle including config sync and order placement/cancellation."""
-        await self.execution_cycle()
+        if prepare_cycle:
+            await self.execution_cycle()
         # await self.update_EMAs()
         to_cancel, to_create = await self.calc_orders_to_cancel_and_create()
 
@@ -4795,6 +4804,9 @@ class Passivbot:
                     to_create_mod = [
                         order for order in to_create_mod if order["symbol"] not in pending_config
                     ]
+            to_create_mod = await Passivbot._filter_fresh_market_snapshot_creations(
+                self, to_create_mod
+            )
             res = None
             try:
                 res = await self.execute_orders_parent(to_create_mod)
@@ -4811,6 +4823,40 @@ class Passivbot:
             await self._refresh_forager_candidate_candles()
         if self.debug_mode:
             return to_cancel, to_create
+
+    async def _filter_fresh_market_snapshot_creations(self, orders: list[dict]) -> list[dict]:
+        """Block staged order creations unless live market snapshots are still fresh."""
+        if not orders or Passivbot._authoritative_refresh_mode(self) != "staged":
+            return orders
+        symbols = sorted({str(order["symbol"]) for order in orders if order.get("symbol")})
+        if not symbols:
+            return orders
+        try:
+            snapshots = await Passivbot._get_live_market_snapshots(
+                self,
+                symbols,
+                max_age_ms=Passivbot._live_market_snapshot_max_age_ms(self),
+                context="pre_create",
+                allow_completed_candle_fallback=False,
+            )
+            Passivbot._record_market_snapshot_surface(self, symbols, snapshots)
+            invalid = Passivbot._market_snapshot_signature_invalid(self, symbols)
+        except Exception as exc:
+            logging.warning(
+                "[market] skipping order creation; failed pre-create market snapshot refresh | symbols=%s error_type=%s error=%s",
+                ",".join(symbols[:12]),
+                type(exc).__name__,
+                exc,
+            )
+            return []
+        if invalid:
+            logging.warning(
+                "[market] skipping order creation; stale pre-create market snapshots | symbols=%s details=%s",
+                ",".join(symbols[:12]),
+                invalid[:8],
+            )
+            return []
+        return orders
 
     async def execute_orders_parent(self, orders: [dict]) -> [dict]:
         """Submit a batch of orders after throttling and bookkeeping."""
@@ -6384,8 +6430,75 @@ class Passivbot:
                 min_epochs[surface] = current_epoch
         return min_epochs
 
+    def _completed_candle_freshness_signature(
+        self, symbols: Iterable[str], *, now_ms: int | None = None
+    ) -> tuple[tuple, list[dict]]:
+        """Return exact completed-1m candle freshness signature plus missing details."""
+        ordered_symbols = tuple(sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)))
+        if not ordered_symbols:
+            return tuple(), []
+        now = utc_ms() if now_ms is None else int(now_ms)
+        signature = []
+        missing = []
+        cm = getattr(self, "cm", None)
+        for symbol in ordered_symbols:
+            if cm is None:
+                missing.append({"symbol": symbol, "reason": "missing_candlestick_manager"})
+                continue
+            if hasattr(cm, "get_completed_candle_health"):
+                try:
+                    report = cm.get_completed_candle_health(
+                        symbol,
+                        {"1m": 1},
+                        now_ms=now,
+                    )
+                    tf_report = (report.get("timeframes") or {}).get("1m") or {}
+                    if not bool(report.get("ok")) or not bool(tf_report.get("coverage_ok")):
+                        missing.append(
+                            {
+                                "symbol": symbol,
+                                "reason": "missing_latest_completed_1m",
+                                "latest_expected_ts": tf_report.get("latest_expected_ts"),
+                                "last_cached_ts": tf_report.get("last_cached_ts"),
+                                "missing_candles": tf_report.get("missing_candles"),
+                            }
+                        )
+                        continue
+                    signature.append(
+                        (
+                            symbol,
+                            int(tf_report.get("latest_expected_ts") or 0),
+                            int(tf_report.get("last_cached_ts") or 0),
+                            int(tf_report.get("runtime_synthetic_count") or 0),
+                        )
+                    )
+                    continue
+                except Exception as exc:
+                    missing.append(
+                        {
+                            "symbol": symbol,
+                            "reason": "candle_health_failed",
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        }
+                    )
+                    continue
+            try:
+                last_final = (
+                    int(cm.get_last_final_ts(symbol))
+                    if hasattr(cm, "get_last_final_ts")
+                    else int(cm.get_last_refresh_ms(symbol) or 0)
+                )
+            except Exception:
+                last_final = 0
+            if last_final <= 0:
+                missing.append({"symbol": symbol, "reason": "unknown_latest_completed_1m"})
+                continue
+            signature.append((symbol, int(last_final)))
+        return tuple(signature), missing
+
     def _staged_planner_precondition_state(
-        self, *, include_market_snapshot: bool = True
+        self, *, include_market_snapshot: bool = True, symbols: Iterable[str] | None = None
     ) -> tuple[bool, dict]:
         """Return staged planner input-completeness state for the current planning pass."""
         if self._authoritative_refresh_mode() != "staged":
@@ -6400,19 +6513,55 @@ class Passivbot:
             for surface in required
             if ledger.surface_epoch(surface) < int(min_epochs.get(surface, 0) or 0)
         )
+        invalid: dict[str, list] = {}
+        if "completed_candles" in required and "completed_candles" not in missing:
+            expected_symbols = tuple(Passivbot._urgent_active_candle_symbols(self))
+            signature, candle_missing = Passivbot._completed_candle_freshness_signature(
+                self, expected_symbols
+            )
+            stamped_signature = ledger.surface_signature("completed_candles")
+            if candle_missing or stamped_signature != signature:
+                missing.append("completed_candles")
+                invalid["completed_candles"] = candle_missing or [
+                    {
+                        "reason": "signature_mismatch",
+                        "expected_symbols": list(expected_symbols),
+                    }
+                ]
+        if (
+            include_market_snapshot
+            and "market_snapshot" in required
+            and "market_snapshot" not in missing
+        ):
+            expected_market_symbols = tuple(
+                sorted(dict.fromkeys(str(symbol) for symbol in (symbols or []) if symbol))
+            )
+            if expected_market_symbols:
+                snapshot_invalid = Passivbot._market_snapshot_signature_invalid(
+                    self, expected_market_symbols
+                )
+                if snapshot_invalid:
+                    missing.append("market_snapshot")
+                    invalid["market_snapshot"] = snapshot_invalid
         return not missing, {
-            "missing": missing,
+            "missing": sorted(set(missing)),
             "required": sorted(required),
             "epoch": int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
             "min_epochs": min_epochs,
+            "invalid": invalid,
         }
 
     def _assert_staged_planner_preconditions(
-        self, *, include_market_snapshot: bool = True, context: str = "planning"
+        self,
+        *,
+        include_market_snapshot: bool = True,
+        context: str = "planning",
+        symbols: Iterable[str] | None = None,
     ) -> None:
         """Hard-fail before Rust planning if staged live inputs are incomplete."""
         ok, details = self._staged_planner_precondition_state(
-            include_market_snapshot=include_market_snapshot
+            include_market_snapshot=include_market_snapshot,
+            symbols=symbols,
         )
         if ok:
             return
@@ -8872,11 +9021,11 @@ class Passivbot:
             return ({}, None) if return_snapshot else {}
         mode_overrides = self._build_orchestrator_mode_overrides(symbols)
         self._assert_staged_planner_preconditions(
-            include_market_snapshot=False, context="market snapshot refresh"
+            include_market_snapshot=False, context="market snapshot refresh", symbols=symbols
         )
         market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
         self._assert_staged_planner_preconditions(
-            include_market_snapshot=True, context="rust order calculation"
+            include_market_snapshot=True, context="rust order calculation", symbols=symbols
         )
         last_prices = {symbol: snap.last for symbol, snap in market_snapshots.items()}
         monitor_source = (
@@ -9175,6 +9324,42 @@ class Passivbot:
                 for symbol in ordered_symbols
                 if symbol not in snapshots or not snapshots[symbol].is_valid()
             ]
+            if missing and hasattr(self, "fetch_tickers_for_symbols"):
+                try:
+                    fetched_symbol_tickers = await self.fetch_tickers_for_symbols(missing)
+                    fetched_ms = utc_ms()
+                    for symbol, ticker in fetched_symbol_tickers.items():
+                        if symbol not in missing or not isinstance(ticker, dict):
+                            continue
+                        try:
+                            last = float(ticker.get("last") or ticker.get("close") or 0.0)
+                            bid = float(ticker.get("bid") or last)
+                            ask = float(ticker.get("ask") or last)
+                        except (TypeError, ValueError):
+                            continue
+                        snap = MarketSnapshot(
+                            symbol=symbol,
+                            bid=bid,
+                            ask=ask,
+                            last=last,
+                            fetched_ms=fetched_ms,
+                            source="hyperliquid_symbol_tickers",
+                        )
+                        if snap.is_valid():
+                            snapshots[symbol] = snap
+                except Exception as exc:
+                    logging.debug(
+                        "[market] hyperliquid symbol ticker snapshot failed | context=%s symbols=%s error_type=%s error=%s",
+                        context,
+                        len(missing),
+                        type(exc).__name__,
+                        exc,
+                    )
+                missing = [
+                    symbol
+                    for symbol in ordered_symbols
+                    if symbol not in snapshots or not snapshots[symbol].is_valid()
+                ]
 
         if missing and allow_completed_candle_fallback:
             completed_prices = await self.cm.get_last_prices(missing, max_age_ms=max_age_ms)
@@ -9260,6 +9445,18 @@ class Passivbot:
                 if symbol not in snapshots or not snapshots[symbol].is_valid()
             ]
             if invalid:
+                if str(getattr(self, "exchange", "") or "").lower() == "hyperliquid":
+                    try:
+                        snapshots = await self._get_live_market_snapshots(
+                            symbols,
+                            max_age_ms=ttl_ms,
+                            context="orchestrator",
+                            allow_completed_candle_fallback=False,
+                        )
+                        Passivbot._record_market_snapshot_surface(self, symbols, snapshots)
+                        return snapshots
+                    except RuntimeError:
+                        pass
                 logging.debug(
                     "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=%s | invalid_symbols=%s",
                     len(symbols),
@@ -9275,24 +9472,7 @@ class Passivbot:
                     len(symbols),
                     ",".join(f"{k}:{v}" for k, v in sorted(sources.items())),
                 )
-                self._ensure_freshness_ledger().stamp(
-                    "market_snapshot",
-                    tuple(
-                        sorted(
-                            (
-                                symbol,
-                                round(float(snap.bid), 12),
-                                round(float(snap.ask), 12),
-                                round(float(snap.last), 12),
-                                snap.source,
-                            )
-                            for symbol, snap in snapshots.items()
-                            if symbol in symbols
-                        )
-                    ),
-                    now_ms=utc_ms(),
-                    epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
-                )
+                Passivbot._record_market_snapshot_surface(self, symbols, snapshots)
             return snapshots
 
         return await self._get_live_market_snapshots(
@@ -9301,6 +9481,72 @@ class Passivbot:
             context="legacy_orchestrator",
             allow_completed_candle_fallback=True,
         )
+
+    def _live_market_snapshot_max_age_ms(self) -> int:
+        return 10_000
+
+    def _market_snapshot_signature(
+        self, symbols: Iterable[str], snapshots: dict[str, MarketSnapshot]
+    ) -> tuple:
+        expected = tuple(sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)))
+        return tuple(
+            sorted(
+                (
+                    symbol,
+                    round(float(snapshots[symbol].bid), 12),
+                    round(float(snapshots[symbol].ask), 12),
+                    round(float(snapshots[symbol].last), 12),
+                    int(snapshots[symbol].fetched_ms),
+                    snapshots[symbol].source,
+                )
+                for symbol in expected
+                if symbol in snapshots and snapshots[symbol].is_valid()
+            )
+        )
+
+    def _record_market_snapshot_surface(
+        self, symbols: Iterable[str], snapshots: dict[str, MarketSnapshot]
+    ) -> None:
+        self._ensure_freshness_ledger().stamp(
+            "market_snapshot",
+            Passivbot._market_snapshot_signature(self, symbols, snapshots),
+            now_ms=utc_ms(),
+            epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+        )
+
+    def _market_snapshot_signature_invalid(self, symbols: Iterable[str]) -> list[dict]:
+        expected = tuple(sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)))
+        if not expected:
+            return []
+        ledger = self._ensure_freshness_ledger()
+        signature = ledger.surface_signature("market_snapshot")
+        if not isinstance(signature, tuple):
+            return [{"reason": "missing_signature", "symbols": list(expected)}]
+        by_symbol = {}
+        for item in signature:
+            if not isinstance(item, (list, tuple)) or len(item) < 6:
+                continue
+            by_symbol[str(item[0])] = item
+        now = utc_ms()
+        max_age_ms = Passivbot._live_market_snapshot_max_age_ms(self)
+        invalid = []
+        for symbol in expected:
+            item = by_symbol.get(symbol)
+            if item is None:
+                invalid.append({"symbol": symbol, "reason": "missing"})
+                continue
+            fetched_ms = int(item[4])
+            age_ms = int(now - fetched_ms)
+            if age_ms > max_age_ms:
+                invalid.append(
+                    {
+                        "symbol": symbol,
+                        "reason": "stale",
+                        "age_ms": age_ms,
+                        "max_age_ms": max_age_ms,
+                    }
+                )
+        return invalid
 
     def _to_executable_orders(
         self, ideal_orders: dict, last_prices: Dict[str, float]
@@ -9324,39 +9570,10 @@ class Passivbot:
                     and "close_auto_reduce_wel" in order[2]
                 ):
                     wel_blocked_symbols.add(symbol)
-            any_partial = any("partial" in order[2] for _, order, _ in with_mprice_diff)
             for mprice_diff, order, order_side in sorted(with_mprice_diff, key=lambda item: item[0]):
                 position_side = "long" if "long" in order[2] else "short"
                 if order[0] == 0.0:
                     continue
-                if mprice_diff > float(self.live_value("price_distance_threshold")):
-                    if any_partial and "entry" in order[2]:
-                        logging.debug(
-                            "gated by price_distance_threshold (partial) | %s %s %s diff=%.5f",
-                            symbol,
-                            position_side,
-                            order[2],
-                            mprice_diff,
-                        )
-                        continue
-                    if any(token in order[2] for token in ("initial", "unstuck")):
-                        logging.debug(
-                            "gated by price_distance_threshold (initial/unstuck) | %s %s %s diff=%.5f",
-                            symbol,
-                            position_side,
-                            order[2],
-                            mprice_diff,
-                        )
-                        continue
-                    if not self.has_position(position_side, symbol):
-                        logging.debug(
-                            "gated by price_distance_threshold (no position) | %s %s %s diff=%.5f",
-                            symbol,
-                            position_side,
-                            order[2],
-                            mprice_diff,
-                        )
-                        continue
                 seen_key = str(abs(order[0])) + str(order[1]) + order[2]
                 if seen_key in seen:
                     logging.debug("duplicate ideal order for %s skipped: %s", symbol, order)
@@ -10265,7 +10482,7 @@ class Passivbot:
             return
         self.maintainers[key] = asyncio.create_task(self._forager_candidate_candle_refresh_task())
 
-    async def update_ohlcvs_1m_for_actives(self):
+    async def update_ohlcvs_1m_for_actives(self) -> bool:
         """Ensure active symbols have fresh 1m candles in CandlestickManager (<=60s old).
 
         Uses CandlestickManager.get_candles with max_age_ms=60_000 so it refreshes
@@ -10298,7 +10515,7 @@ class Passivbot:
             for sym in ordered_symbols:
                 if Passivbot._shutdown_requested(self):
                     logging.debug("[shutdown] aborting active candle refresh")
-                    return
+                    return False
                 # If a 429 triggered a global backoff in the CandlestickManager,
                 # stop the loop early; remaining symbols would all hit the same
                 # backoff.  They will be picked up on the next cycle; the
@@ -10327,23 +10544,31 @@ class Passivbot:
                     )
                 except Exception as exc:
                     logging.error("error refreshing candles for %s: %s", sym, exc, exc_info=True)
+            signature, missing = Passivbot._completed_candle_freshness_signature(
+                self, ordered_symbols, now_ms=utc_ms()
+            )
+            if missing:
+                logging.warning(
+                    "[candle] active completed-candle refresh incomplete | symbols=%d missing=%d examples=%s",
+                    len(ordered_symbols),
+                    len(missing),
+                    ",".join(str(item.get("symbol", "?")) for item in missing[:8]),
+                )
+                return False
             self._ensure_freshness_ledger().stamp(
                 "completed_candles",
-                tuple(
-                    sorted(
-                        (sym, int(self.cm.get_last_refresh_ms(sym) or 0))
-                        for sym in ordered_symbols
-                    )
-                ),
+                signature,
                 now_ms=utc_ms(),
                 epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
             )
+            return True
         except Exception as e:
             if Passivbot._shutdown_requested(self):
                 logging.debug("[shutdown] stopped candle refresh during shutdown: %s", e)
-                return
+                return False
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()
+            return False
 
     async def maintain_hourly_cycle(self):
         """Periodically refresh market metadata while the bot is running."""

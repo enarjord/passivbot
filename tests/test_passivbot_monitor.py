@@ -836,6 +836,11 @@ async def test_update_pos_oos_pnls_ohlcvs_propagates_open_order_failure():
 
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
     bot.stop_signal_received = False
+    bot.exchange = "bybit"
+    bot.config = {
+        "live": {"authoritative_refresh_mode": "legacy"},
+        "_raw_effective": {"live": {"authoritative_refresh_mode": "legacy"}},
+    }
     bot.update_positions_and_balance = AsyncMock(return_value=(True, True))
     bot.update_open_orders = AsyncMock(side_effect=RuntimeError("open orders failed"))
     bot.update_pnls = AsyncMock(return_value=True)

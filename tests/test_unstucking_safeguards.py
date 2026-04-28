@@ -4,6 +4,7 @@ import types
 
 import pytest
 import numpy as np
+from utils import utc_ms
 
 
 def _make_mock_pbr():
@@ -483,6 +484,18 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     last_price + 10,
                 ),
                 get_current_close=lambda symbol, max_age_ms=None: last_price,
+                get_completed_candle_health=lambda symbol, windows=None, now_ms=None: {
+                    "ok": True,
+                    "timeframes": {
+                        "1m": {
+                            "coverage_ok": True,
+                            "latest_expected_ts": 60_000,
+                            "last_cached_ts": 60_000,
+                            "runtime_synthetic_count": 0,
+                            "missing_candles": 0,
+                        }
+                    },
+                },
                 get_latest_ema_log_range_many=lambda items, **kwargs: {sym: 0.0 for sym, _ in items},
                 get_ema_bounds_many=lambda items, **kwargs: {
                     sym: (last_price - 10, last_price + 10) for sym, _, _ in items
@@ -840,7 +853,7 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(monk
                 bid=100.5,
                 ask=101.5,
                 last=101.0,
-                fetched_ms=123,
+                fetched_ms=utc_ms(),
                 source="test",
             )
             for s in symbols
@@ -866,8 +879,12 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(monk
     from freshness_ledger import ACCOUNT_SURFACES
 
     bot._begin_authoritative_refresh_epoch()
-    for surface in ACCOUNT_SURFACES | {"completed_candles"}:
+    for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
+    candle_signature, _missing = bot._completed_candle_freshness_signature(
+        bot._urgent_active_candle_symbols()
+    )
+    bot._record_authoritative_surface("completed_candles", candle_signature)
 
     await bot.calc_ideal_orders_orchestrator()
 
@@ -934,7 +951,7 @@ async def test_orchestrator_marks_ema_unavailable_symbols_non_tradable(monkeypat
                 bid=100.5,
                 ask=101.5,
                 last=101.0,
-                fetched_ms=123,
+                fetched_ms=utc_ms(),
                 source="test",
             )
             for s in symbols
@@ -961,8 +978,12 @@ async def test_orchestrator_marks_ema_unavailable_symbols_non_tradable(monkeypat
     from freshness_ledger import ACCOUNT_SURFACES
 
     bot._begin_authoritative_refresh_epoch()
-    for surface in ACCOUNT_SURFACES | {"completed_candles"}:
+    for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
+    candle_signature, _missing = bot._completed_candle_freshness_signature(
+        bot._urgent_active_candle_symbols()
+    )
+    bot._record_authoritative_surface("completed_candles", candle_signature)
 
     await bot.calc_ideal_orders_orchestrator()
 

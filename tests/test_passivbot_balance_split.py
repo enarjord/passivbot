@@ -24,6 +24,7 @@ sys.modules.setdefault(
 from passivbot import Passivbot
 import passivbot as passivbot_module
 from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
+from market_snapshot import MarketSnapshot
 
 
 def test_authoritative_refresh_mode_defaults_to_staged_without_explicit_choice():
@@ -67,6 +68,33 @@ def test_market_snapshot_ticker_strategy_respects_explicit_override():
     bot.config = {"live": {"market_snapshot_ticker_strategy": "bulk"}}
 
     assert bot._market_snapshot_ticker_strategy() == "bulk"
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_live_market_snapshot_uses_symbol_fallback_for_hip3():
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "hyperliquid"
+    bot.symbol_ids = {}
+    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=AsyncMock(return_value={}))
+
+    async def fake_fetch(*args, **kwargs):
+        return {}
+
+    async def fake_fetch_tickers_for_symbols(symbols):
+        assert symbols == ["XYZ-SILVER/USDC:USDC"]
+        return {"XYZ-SILVER/USDC:USDC": {"bid": 73.45, "ask": 73.46, "last": 73.455}}
+
+    bot.cca = SimpleNamespace(fetch=fake_fetch)
+    bot._hl_info_url = lambda: "https://example.invalid/info"
+    bot.fetch_tickers_for_symbols = fake_fetch_tickers_for_symbols
+
+    snapshots = await bot._get_live_market_snapshots(
+        ["XYZ-SILVER/USDC:USDC"], context="test"
+    )
+
+    snap = snapshots["XYZ-SILVER/USDC:USDC"]
+    assert snap.source == "hyperliquid_symbol_tickers"
+    assert snap.last == pytest.approx(73.455)
 
 
 @pytest.mark.asyncio
@@ -1969,8 +1997,9 @@ def test_staged_planner_preconditions_require_current_epoch_surfaces():
     assert ok is False
     assert details["missing"] == sorted(ACCOUNT_SURFACES | {"completed_candles"})
 
-    for surface in ACCOUNT_SURFACES | {"completed_candles"}:
+    for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
+    bot._record_authoritative_surface("completed_candles", tuple())
 
     ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
     assert ok is True
@@ -1994,8 +2023,9 @@ def test_staged_planner_preconditions_allow_open_orders_only_confirmation_epoch(
     bot._authoritative_pending_confirmations = {}
 
     bot._begin_authoritative_refresh_epoch()
-    for surface in ACCOUNT_SURFACES | {"completed_candles"}:
+    for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "baseline"))
+    bot._record_authoritative_surface("completed_candles", tuple())
 
     bot._request_authoritative_confirmation({"open_orders"})
     blocked, details = bot._authoritative_execution_barrier_state()
@@ -2004,7 +2034,7 @@ def test_staged_planner_preconditions_allow_open_orders_only_confirmation_epoch(
 
     bot._begin_authoritative_refresh_epoch()
     bot._record_authoritative_surface("open_orders", ("open_orders", "confirmed"))
-    bot._record_authoritative_surface("completed_candles", ("completed_candles", "current"))
+    bot._record_authoritative_surface("completed_candles", tuple())
 
     blocked, details = bot._authoritative_execution_barrier_state()
     assert blocked is False
@@ -2040,6 +2070,69 @@ def test_staged_planner_preconditions_raise_before_rust_planning():
         bot._assert_staged_planner_preconditions(
             include_market_snapshot=False, context="market snapshot refresh"
         )
+
+
+def test_staged_planner_preconditions_reject_stale_completed_candle_signature():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot.active_symbols = ["BTC/USDT:USDT"]
+    bot.positions = {"BTC/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    bot.open_orders = {}
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot.cm = SimpleNamespace(
+        get_completed_candle_health=lambda symbol, windows=None, now_ms=None: {
+            "ok": False,
+            "timeframes": {
+                "1m": {
+                    "coverage_ok": False,
+                    "latest_expected_ts": 120_000,
+                    "last_cached_ts": 60_000,
+                    "missing_candles": 1,
+                }
+            },
+        }
+    )
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+    bot._record_authoritative_surface("completed_candles", (("BTC/USDT:USDT", 60_000),))
+
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
+
+    assert ok is False
+    assert "completed_candles" in details["missing"]
+    assert details["invalid"]["completed_candles"][0]["symbol"] == "BTC/USDT:USDT"
+
+
+@pytest.mark.asyncio
+async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_refresh_epoch = 1
+    symbol = "BTC/USDT:USDT"
+
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        return {
+            s: MarketSnapshot(
+                symbol=s,
+                bid=100.0,
+                ask=100.0,
+                last=100.0,
+                fetched_ms=passivbot_module.utc_ms() - 20_000,
+                source="test",
+            )
+            for s in symbols
+        }
+
+    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=fake_get_snapshots)
+
+    orders = [{"symbol": symbol, "side": "buy", "position_side": "long", "qty": 1.0, "price": 99.0}]
+
+    assert await bot._filter_fresh_market_snapshot_creations(orders) == []
 
 
 def test_legacy_planner_preconditions_do_not_require_freshness_ledger():
@@ -2345,20 +2438,25 @@ async def test_run_execution_loop_waits_for_clean_authoritative_cycle_before_exe
         return True
 
     async def fake_refresh_market_state_if_needed():
+        executes.append("market")
         return True
 
-    async def fake_execute_to_exchange():
-        executes.append(cycle["n"])
+    async def fake_execution_cycle():
+        executes.append("universe")
+
+    async def fake_execute_to_exchange(*, prepare_cycle=True):
+        executes.append(("execute", prepare_cycle, cycle["n"]))
         return {"executed_cycle": cycle["n"]}
 
     bot.refresh_authoritative_state = fake_refresh_authoritative_state
     bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
+    bot.execution_cycle = fake_execution_cycle
     bot.execute_to_exchange = fake_execute_to_exchange
 
     result = await bot.run_execution_loop()
 
     assert result == {"executed_cycle": 1}
-    assert executes == [1]
+    assert executes == ["universe", "market", ("execute", False, 1)]
 
 
 @pytest.mark.asyncio

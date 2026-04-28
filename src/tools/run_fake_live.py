@@ -50,13 +50,46 @@ def _dump_json(path: Path, data: Any) -> None:
 def _summarize_remote_calls(call_log: List[dict]) -> dict:
     by_method: Dict[str, int] = {}
     by_step: Dict[str, Dict[str, int]] = {}
+    by_category: Dict[str, int] = {}
+    by_step_category: Dict[str, Dict[str, int]] = {}
+    max_per_step_by_method: Dict[str, int] = {}
     ohlcv_calls: List[dict] = []
+    account_state_methods = {
+        "fetch_balance",
+        "fetch_positions",
+        "fetch_open_orders",
+        "fetch_my_trades",
+    }
+    market_data_methods = {
+        "fetch_ticker",
+        "fetch_tickers",
+        "fetch_ohlcv",
+        "fetch_time",
+        "load_markets",
+    }
+    order_write_methods = {
+        "create_order",
+        "cancel_order",
+    }
     for entry in call_log:
         method = str(entry.get("method") or "unknown")
         step_key = str(entry.get("step_index") if entry.get("step_index") is not None else "unknown")
+        if method in account_state_methods:
+            category = "account_state"
+        elif method in market_data_methods:
+            category = "market_data"
+        elif method in order_write_methods:
+            category = "order_write"
+        elif method.startswith("set_"):
+            category = "account_config"
+        else:
+            category = "other"
         by_method[method] = by_method.get(method, 0) + 1
+        by_category[category] = by_category.get(category, 0) + 1
         step_bucket = by_step.setdefault(step_key, {})
         step_bucket[method] = step_bucket.get(method, 0) + 1
+        category_bucket = by_step_category.setdefault(step_key, {})
+        category_bucket[category] = category_bucket.get(category, 0) + 1
         if method == "fetch_ohlcv":
             ohlcv_calls.append(
                 {
@@ -69,10 +102,18 @@ def _summarize_remote_calls(call_log: List[dict]) -> dict:
                     "rows": entry.get("rows"),
                 }
             )
+    for step_bucket in by_step.values():
+        for method, count in step_bucket.items():
+            max_per_step_by_method[method] = max(max_per_step_by_method.get(method, 0), count)
     return {
         "total_calls": len(call_log),
+        "by_category": dict(sorted(by_category.items())),
         "by_method": dict(sorted(by_method.items())),
         "by_step": {key: dict(sorted(value.items())) for key, value in sorted(by_step.items())},
+        "by_step_category": {
+            key: dict(sorted(value.items())) for key, value in sorted(by_step_category.items())
+        },
+        "max_per_step_by_method": dict(sorted(max_per_step_by_method.items())),
         "ohlcv_calls": ohlcv_calls,
     }
 
@@ -204,6 +245,9 @@ def _apply_assertions(
     *,
     step_summaries: List[dict] | None = None,
     log_text: str = "",
+    remote_calls: List[dict] | None = None,
+    remote_call_summary: dict | None = None,
+    candle_remote_fetches: List[dict] | None = None,
 ) -> None:
     assertions = scenario.get("assertions") or {}
     if not assertions:
@@ -246,6 +290,17 @@ def _apply_assertions(
             "steps": step_summaries or [],
         }
         _apply_path_assertions("summary_paths", summary_root, assertions["summary_paths"])
+    if "remote_call_paths" in assertions:
+        remote_root = {
+            "calls": remote_calls or [],
+            "summary": remote_call_summary or _summarize_remote_calls(remote_calls or []),
+            "candle_fetches": candle_remote_fetches or [],
+        }
+        _apply_path_assertions(
+            "remote_call_paths",
+            remote_root,
+            assertions["remote_call_paths"],
+        )
     if "log_contains" in assertions:
         for fragment in assertions["log_contains"]:
             if str(fragment) not in log_text:
@@ -448,7 +503,7 @@ async def _run_fake_cycle(bot):
                 return await _run_fake_red_supervisor_step(bot)
             await bot._equity_hard_stop_run_red_supervisor()
             return {"red_supervisor": True}
-    return await bot.execute_to_exchange()
+    return await bot.execute_to_exchange(prepare_cycle=False)
 
 def _load_run_artifacts(output_dir: Path) -> dict[str, Any]:
     def _load(name: str, default):
@@ -465,6 +520,9 @@ def _load_run_artifacts(output_dir: Path) -> dict[str, Any]:
         "positions": _load("positions.json", []),
         "hsl_trace": _load("hsl_trace.json", {}),
         "run_metadata": _load("run_metadata.json", {}),
+        "remote_calls": _load("remote_calls.json", []),
+        "remote_call_summary": _load("remote_call_summary.json", {}),
+        "candle_remote_fetches": _load("candle_remote_fetches.json", []),
         "log_text": log_path.read_text(encoding="utf-8") if log_path.exists() else "",
     }
 
@@ -569,12 +627,27 @@ def _compare_run_artifacts(legacy: dict[str, Any], staged: dict[str, Any]) -> di
                     "staged": staged_normalized,
                 }
             )
+    legacy_summary = legacy.get("remote_call_summary") or {}
+    staged_summary = staged.get("remote_call_summary") or {}
+    legacy_by_method = legacy_summary.get("by_method") or {}
+    staged_by_method = staged_summary.get("by_method") or {}
+    remote_call_delta_by_method = {
+        method: int(staged_by_method.get(method, 0)) - int(legacy_by_method.get(method, 0))
+        for method in sorted(set(legacy_by_method) | set(staged_by_method))
+    }
     return {
         "match": not diffs,
         "diff_count": len(diffs),
         "diffs": diffs,
         "legacy_mode": legacy.get("run_metadata", {}).get("authoritative_refresh_mode"),
         "staged_mode": staged.get("run_metadata", {}).get("authoritative_refresh_mode"),
+        "remote_call_summary": {
+            "legacy": legacy_summary,
+            "staged": staged_summary,
+        },
+        "remote_call_delta": int(staged_summary.get("total_calls") or 0)
+        - int(legacy_summary.get("total_calls") or 0),
+        "remote_call_delta_by_method": remote_call_delta_by_method,
     }
 
 
@@ -598,7 +671,12 @@ async def _run_fake_case(
     )
     config.setdefault("live", {})
     config["live"]["fake_scenario_path"] = scenario_path
-    config["live"]["authoritative_refresh_mode"] = str(authoritative_refresh_mode or "legacy")
+    effective_mode = str(authoritative_refresh_mode or "legacy")
+    config["live"]["authoritative_refresh_mode"] = effective_mode
+    if isinstance(config.get("_raw_effective"), dict):
+        config["_raw_effective"].setdefault("live", {})
+        if isinstance(config["_raw_effective"]["live"], dict):
+            config["_raw_effective"]["live"]["authoritative_refresh_mode"] = effective_mode
 
     scenario = load_fake_scenario(scenario_path)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -634,6 +712,8 @@ async def _run_fake_case(
             run_initial_cycle=bool(scenario.get("run_initial_cycle", True)),
         )
         log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        remote_calls = bot.cca.export_request_log()
+        remote_call_summary = _summarize_remote_calls(remote_calls)
         if enforce_assertions:
             _apply_assertions(
                 bot,
@@ -641,6 +721,9 @@ async def _run_fake_case(
                 scenario,
                 step_summaries=step_summaries,
                 log_text=log_text,
+                remote_calls=remote_calls,
+                remote_call_summary=remote_call_summary,
+                candle_remote_fetches=candle_remote_fetches,
             )
 
         _dump_json(output_dir / "step_summaries.json", step_summaries)
@@ -659,9 +742,8 @@ async def _run_fake_case(
                 "scenario_path": str(scenario_path),
             },
         )
-        remote_calls = bot.cca.export_request_log()
         _dump_json(output_dir / "remote_calls.json", remote_calls)
-        _dump_json(output_dir / "remote_call_summary.json", _summarize_remote_calls(remote_calls))
+        _dump_json(output_dir / "remote_call_summary.json", remote_call_summary)
         _dump_json(output_dir / "candle_remote_fetches.json", candle_remote_fetches)
         return output_dir
     finally:

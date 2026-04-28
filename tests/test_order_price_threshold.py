@@ -32,9 +32,10 @@ class PriceThresholdBot(Passivbot):
         return f"cid-{order_type_id}"
 
 
-def test_close_orders_respect_price_threshold():
+def test_close_orders_are_not_filtered_by_price_distance_threshold():
     symbol = "TEST/USDT"
     bot = PriceThresholdBot(symbol, last_price=100.0)
+    bot.positions[symbol]["long"]["size"] = 1.0
     close_type_id = pbr.order_type_snake_to_id("close_grid_long")
     ideal_orders = {
         symbol: [
@@ -46,8 +47,6 @@ def test_close_orders_respect_price_threshold():
     orders_by_symbol, _ = bot._to_executable_orders(ideal_orders, {symbol: 100.0})
 
     close_orders = [order for order in orders_by_symbol[symbol] if order["reduce_only"]]
-    assert len(close_orders) == 1
-    close_order = close_orders[0]
-    assert close_order["price"] == pytest.approx(101.0)
-    assert close_order["qty"] == pytest.approx(0.0)
-    assert close_order["type"] == "limit"
+    assert [order["price"] for order in close_orders] == pytest.approx([101.0, 104.0])
+    assert [order["qty"] for order in close_orders] == pytest.approx([0.5, 0.5])
+    assert {order["type"] for order in close_orders} == {"limit"}
