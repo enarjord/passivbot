@@ -8480,7 +8480,9 @@ class Passivbot:
         m1_max_age_by_symbol = {s: 60_000 for s in symbols}
         h1_max_age_by_symbol = {s: 600_000 for s in symbols}
         cache_only_symbols: set[str] = set()
-        if self.is_forager_mode():
+        ema_unavailable_symbols: set[str] = set()
+        is_forager_mode = getattr(self, "is_forager_mode", lambda *args, **kwargs: False)
+        if is_forager_mode():
             priority_symbols = []
             secondary_symbols = []
             for sym in symbols:
@@ -8692,21 +8694,44 @@ class Passivbot:
 
         async def load_symbol_bundle(sym: str):
             Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-            if sym in cache_only_symbols or sym in cache_only_never_fetched:
+            if sym in cache_only_never_fetched:
                 logging.debug(
-                    "[candle] skipping orchestrator EMA fetch for cache-only symbol %s",
+                    "[candle] skipping orchestrator EMA fetch for never-fetched cache-only symbol %s",
                     sym,
                 )
+                ema_unavailable_symbols.add(sym)
                 return {}, {}, {}, {}
-            close = await fetch_close_map(sym, sorted(need_close_spans[sym]))
-            Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-            h1 = await fetch_required_map(
-                sym, sorted(need_h1_lr_spans[sym]), ema_lr_1h, "h1_log_range"
-            )
-            Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-            vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
-            Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-            lr1m = await fetch_map(sym, m1_lr_spans, ema_lr_1m, "m1_log_range")
+            try:
+                close = await fetch_close_map(sym, sorted(need_close_spans[sym]))
+                Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
+                h1 = await fetch_required_map(
+                    sym, sorted(need_h1_lr_spans[sym]), ema_lr_1h, "h1_log_range"
+                )
+                Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
+                vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
+                Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
+                lr1m = await fetch_map(sym, m1_lr_spans, ema_lr_1m, "m1_log_range")
+            except Exception:
+                if sym not in cache_only_symbols:
+                    raise
+                logging.debug(
+                    "[candle] cache-only orchestrator EMA unavailable for %s; marking non-tradable this cycle",
+                    sym,
+                )
+                ema_unavailable_symbols.add(sym)
+                return {}, {}, {}, {}
+            if sym in cache_only_symbols:
+                missing_volume = [span for span in m1_volume_spans if span not in vol]
+                missing_lr1m = [span for span in m1_lr_spans if span not in lr1m]
+                if missing_volume or missing_lr1m:
+                    logging.debug(
+                        "[candle] cache-only orchestrator forager EMA incomplete for %s; marking non-tradable this cycle missing_volume=%s missing_log_range=%s",
+                        sym,
+                        [float(span) for span in missing_volume],
+                        [float(span) for span in missing_lr1m],
+                    )
+                    ema_unavailable_symbols.add(sym)
+                    return {}, {}, {}, {}
             return close, vol, lr1m, h1
 
         # Ordering: symbols with open positions first (they need EMA data
@@ -8769,6 +8794,7 @@ class Passivbot:
         # Convenience: compute the single-span values used by legacy forager logging.
         volumes_long = {s: m1_volume_emas[s].get(vol_span_long, 0.0) for s in symbols}
         log_ranges_long = {s: m1_log_range_emas[s].get(lr_span_long, 0.0) for s in symbols}
+        self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
 
         return (
             m1_close_emas,
@@ -8812,6 +8838,7 @@ class Passivbot:
             _volumes_long,
             _log_ranges_long,
         ) = await self._load_orchestrator_ema_bundle(symbols, mode_overrides)
+        ema_unavailable_symbols = set(getattr(self, "_orchestrator_ema_unavailable_symbols", set()))
 
         unstuck_allowances = self._calc_unstuck_allowances_live(
             allow_new_unstuck=not self.has_open_unstuck_order()
@@ -8868,6 +8895,7 @@ class Passivbot:
             ask = float(snap.ask) if snap is not None and snap.is_valid() else mprice
 
             active = bool(self.markets_dict.get(symbol, {}).get("active", True))
+            tradable = bool(active and symbol not in ema_unavailable_symbols)
             effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
             if effective_min_cost <= 0.0:
                 effective_min_cost = self._calc_effective_min_cost_at_price(symbol, mprice)
@@ -8917,7 +8945,7 @@ class Passivbot:
                             self.markets_dict.get(symbol, {}).get("taker", 0.0) or 0.0
                         ),
                     },
-                    "tradable": bool(active),
+                    "tradable": tradable,
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {

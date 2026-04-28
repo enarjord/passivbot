@@ -677,7 +677,9 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
         captured["input"] = input_json
         return '{"orders": [], "diagnostics": {"warnings": []}}'
 
-    monkeypatch.setattr(bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot))
+    monkeypatch.setattr(
+        bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
+    )
     monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
 
     await bot.calc_ideal_orders_orchestrator()
@@ -874,6 +876,102 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(monk
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["order_book"]["bid"] == pytest.approx(100.5)
     assert rust_symbol["order_book"]["ask"] == pytest.approx(101.5)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_marks_ema_unavailable_symbols_non_tradable(monkeypatch):
+    cfg = _dummy_config()
+    cfg["live"]["authoritative_refresh_mode"] = "staged"
+    bot = _make_dummy_bot(cfg)
+    bot.exchange = "bybit"
+    bot.user_info["exchange"] = "bybit"
+    managed_symbol = _set_basic_state(bot)
+    flat_symbol = "ALT/USDT"
+    bot.active_symbols = [managed_symbol, flat_symbol]
+    bot.open_orders[flat_symbol] = []
+    bot.effective_min_cost[managed_symbol] = 1.0
+    bot.positions[flat_symbol] = {
+        "long": {"size": 0.0, "price": 0.0},
+        "short": {"size": 0.0, "price": 0.0},
+    }
+    for attr, value in (
+        ("qty_steps", 0.01),
+        ("price_steps", 0.01),
+        ("min_qtys", 0.0),
+        ("min_costs", 0.0),
+        ("c_mults", 1.0),
+        ("effective_min_cost", 1.0),
+    ):
+        getattr(bot, attr)[flat_symbol] = value
+    bot.markets_dict = {managed_symbol: {"active": True}, flat_symbol: {"active": True}}
+    bot.PB_modes = {
+        "long": {managed_symbol: "normal", flat_symbol: "normal"},
+        "short": {managed_symbol: "manual", flat_symbol: "manual"},
+    }
+    for symbol in (managed_symbol, flat_symbol):
+        bot.trailing_prices[symbol] = {
+            "long": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+            "short": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+        }
+
+    from market_snapshot import MarketSnapshot
+    import passivbot_rust as pbr
+
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        return {
+            s: MarketSnapshot(
+                symbol=s,
+                bid=100.5,
+                ask=101.5,
+                last=101.0,
+                fetched_ms=123,
+                source="test",
+            )
+            for s in symbols
+        }
+
+    async def fake_load_bundle(self, symbols, modes):
+        self._orchestrator_ema_unavailable_symbols = {flat_symbol}
+        m1_close = {symbol: {1.0: 100.0, 2.0: 100.0} for symbol in symbols}
+        m1_volume = {symbol: {10.0: 1_000.0} for symbol in symbols}
+        m1_log_range = {symbol: {10.0: 0.01} for symbol in symbols}
+        h1_log_range = {symbol: {10.0: 0.01} for symbol in symbols}
+        return m1_close, m1_volume, m1_log_range, h1_log_range, {}, {}
+
+    captured = {}
+
+    def fake_compute(input_json: str) -> str:
+        captured["input"] = json.loads(input_json)
+        return '{"orders": [], "diagnostics": {"warnings": []}}'
+
+    bot.market_snapshot_provider = types.SimpleNamespace(get_snapshots=fake_get_snapshots)
+    monkeypatch.setattr(bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot))
+    monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
+
+    from freshness_ledger import ACCOUNT_SURFACES
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES | {"completed_candles"}:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+
+    await bot.calc_ideal_orders_orchestrator()
+
+    tradable_by_symbol = {
+        item["symbol_idx"]: item["tradable"] for item in captured["input"]["symbols"]
+    }
+    symbol_to_idx = {s: i for i, s in enumerate(sorted([managed_symbol, flat_symbol]))}
+    assert tradable_by_symbol[symbol_to_idx[managed_symbol]] is True
+    assert tradable_by_symbol[symbol_to_idx[flat_symbol]] is False
 
 
 @pytest.mark.asyncio
