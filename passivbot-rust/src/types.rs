@@ -410,6 +410,7 @@ pub struct BotParams {
     pub close_trailing_threshold_pct: f64,
     #[serde(default)]
     pub entry_grid_double_down_factor: f64,
+    #[serde(default)]
     pub entry_grid_spacing_volatility_weight: f64,
     #[serde(default)]
     pub entry_grid_spacing_we_weight: f64,

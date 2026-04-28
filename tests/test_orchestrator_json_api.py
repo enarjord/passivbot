@@ -432,9 +432,17 @@ def test_adaptive_grid_short_entry_output_regression():
         {
             "symbol_idx": 0,
             "pside": "short",
-            "qty": -5.63,
+            "qty": -3.96,
             "price": 105.1,
-            "order_type": "entry_grid_inflated_short",
+            "order_type": "entry_grid_normal_short",
+            "execution_type": "limit",
+        },
+        {
+            "symbol_idx": 0,
+            "pside": "short",
+            "qty": -1.65,
+            "price": 106.15,
+            "order_type": "entry_grid_cropped_short",
             "execution_type": "limit",
         },
     ]

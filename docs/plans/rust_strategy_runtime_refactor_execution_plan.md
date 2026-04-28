@@ -32,10 +32,11 @@ Completed on this branch:
   - `clean_config()` now prunes inactive strategy subtrees and inactive strategy bounds
   - shipped canonical configs and artifact configs stay active-only by default
 
-Next branch task:
+Current health-gate task:
 
-- merge `master` cleanly into `refactor/rust-strategy-runtime-plan` now that
-  `integration/hsl-merge_codex` has landed
+- keep the Rust/Python boundary and config-pipeline tests green after the 2026-04-28
+  `origin/master` merge
+- refresh the `refactor_test` baseline once the current branch behavior is explicitly accepted
 
 ## Branch
 
@@ -69,6 +70,20 @@ Frozen baseline metrics for pure-refactor phases:
 - `hard_stop_restarts = 109`
 - `total_wallet_exposure_max = 1.7589753109100572`
 - `fills = 30539`
+
+Latest post-merge smoke artifact:
+
+- `backtests/combined/2026-04-28T18_33_35`
+
+Latest post-merge smoke metrics:
+
+- `gain_usd = 1.7003610119451211`
+- `adg_usd = 0.00044768921199223044`
+- `adg_strategy_eq = 0.00044768921199223044`
+- `drawdown_worst_strategy_eq = 0.4606813979729244`
+- `loss_profit_ratio = 0.7972439602460609`
+- `hard_stop_restarts = 66`
+- `fills.csv rows including header = 39451`
 
 Comparison rule after every behavior-affecting pass:
 

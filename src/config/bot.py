@@ -10,6 +10,7 @@ from .migrations import apply_backward_compatibility_renames
 from .optimize_bounds import get_optimize_bounds_defaults
 from .shared_bot import (
     BOT_POSITION_SIDES,
+    FLAT_BOT_KEY_TO_GROUP_PATH,
     canonicalize_shared_bot_side,
     flatten_shared_bot_side,
     get_bot_group,
@@ -307,8 +308,20 @@ def normalize_cliff_edge_thresholds(
                 verbose=verbose,
             )
             if tracker is not None and raw_value != normalized:
-                tracker.update(["bot", pside, key], raw_value, normalized)
-            if risk_cfg:
+                group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(key)
+                if group_path is not None:
+                    tracker.update(["bot", pside, *group_path], raw_value, normalized)
+                else:
+                    tracker.update(["bot", pside, key], raw_value, normalized)
+            group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(key)
+            if group_path is not None:
+                group_name, local_key = group_path
+                group_cfg = get_bot_group(result["bot"][pside], group_name)
+                if group_cfg:
+                    group_cfg[local_key] = normalized
+                else:
+                    result["bot"][pside][key] = normalized
+            elif risk_cfg:
                 risk_cfg[key.removeprefix("risk_")] = normalized
             else:
                 result["bot"][pside][key] = normalized
@@ -639,7 +652,10 @@ def format_bot_config(
     for pside in BOT_POSITION_SIDES:
         if pside not in result["bot"]:
             seeded = deepcopy(template["bot"][pside])
-            seeded["total_wallet_exposure_limit"] = 0.0
+            if isinstance(seeded.get("risk"), dict):
+                seeded["risk"]["total_wallet_exposure_limit"] = 0.0
+            else:
+                seeded["total_wallet_exposure_limit"] = 0.0
             result["bot"][pside] = seeded
             if tracker is not None:
                 tracker.add(["bot", pside], seeded)

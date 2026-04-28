@@ -499,41 +499,43 @@ def test_prepare_config_warns_and_removes_entry_grid_inflation_enabled(caplog):
 
 def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(caplog):
     source = get_template_config()
-    for key in [
+    trailing_grid = source["bot"]["long"]["strategy"]["trailing_grid"]
+    risk = source["bot"]["long"]["risk"]
+    for key in (
         "entry_trailing_retracement_volatility_weight",
         "entry_trailing_retracement_we_weight",
         "entry_trailing_threshold_volatility_weight",
         "entry_trailing_threshold_we_weight",
         "entry_volatility_ema_span_hours",
-        "risk_twel_enforcer_threshold",
-        "risk_we_excess_allowance_pct",
-        "risk_wel_enforcer_threshold",
-    ]:
-        source["bot"]["long"].pop(key)
+    ):
+        trailing_grid.pop(key)
+    for key in (
+        "twel_enforcer_threshold",
+        "we_excess_allowance_pct",
+        "wel_enforcer_threshold",
+    ):
+        risk.pop(key)
 
     with caplog.at_level(logging.INFO):
         prepared = prepare_config(source, verbose=True, target="canonical", runtime=None)
 
-    long_cfg = prepared["bot"]["long"]
-    assert long_cfg["entry_trailing_retracement_volatility_weight"] == 0.0
-    assert long_cfg["entry_trailing_retracement_we_weight"] == 0.0
-    assert long_cfg["entry_trailing_threshold_volatility_weight"] == 0.0
-    assert long_cfg["entry_trailing_threshold_we_weight"] == 0.0
-    assert long_cfg["entry_volatility_ema_span_hours"] == 0.0
-    assert long_cfg["risk_twel_enforcer_threshold"] == 0.0
-    assert long_cfg["risk_we_excess_allowance_pct"] == 0.0
-    assert long_cfg["risk_wel_enforcer_threshold"] == 0.0
-    assert any(
-        "hydrating omitted bot.long.risk_wel_enforcer_threshold" in rec.message
-        for rec in caplog.records
-    )
+    long_strategy = _strategy_side(prepared, "long")
+    long_risk = prepared["bot"]["long"]["risk"]
+    assert long_strategy["entry_trailing_retracement_volatility_weight"] == pytest.approx(87)
+    assert long_strategy["entry_trailing_retracement_we_weight"] == pytest.approx(3.97)
+    assert long_strategy["entry_trailing_threshold_volatility_weight"] == pytest.approx(76)
+    assert long_strategy["entry_trailing_threshold_we_weight"] == pytest.approx(1.31)
+    assert long_strategy["entry_volatility_ema_span_hours"] == pytest.approx(1690)
+    assert long_risk["twel_enforcer_threshold"] == pytest.approx(1.0)
+    assert long_risk["we_excess_allowance_pct"] == pytest.approx(0.37)
+    assert long_risk["wel_enforcer_threshold"] == pytest.approx(0.994)
 
 
 def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
     prepared = load_prepared_config("configs/fake_live_hsl_btc.hjson", verbose=False, target="live")
 
-    assert prepared["bot"]["short"]["total_wallet_exposure_limit"] == 0.0
-    assert prepared["bot"]["short"]["entry_trailing_double_down_factor"] == pytest.approx(1.0)
+    assert prepared["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert _strategy_side(prepared, "short")["entry_trailing_double_down_factor"] == pytest.approx(0.5)
 
 
 def test_prepare_config_silently_removes_disabled_entry_grid_inflation_flag(caplog):
@@ -578,21 +580,21 @@ def test_prepare_config_warns_and_removes_coin_override_entry_grid_inflation(cap
 
 def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readiness_only():
     source = get_template_config()
-    source["bot"]["long"]["forager_score_weights"] = {
+    source["bot"]["long"]["forager"]["score_weights"] = {
         "volume": 0.0,
         "ema_readiness": 0.0,
         "volatility": 0.0,
     }
-    source["bot"]["long"]["forager_volume_ema_span"] = 0.0
-    source["bot"]["long"]["forager_volatility_ema_span"] = 0.0
-    source["bot"]["long"]["forager_volume_drop_pct"] = 0.0
+    source["bot"]["long"]["forager"]["volume_ema_span"] = 0.0
+    source["bot"]["long"]["forager"]["volatility_ema_span"] = 0.0
+    source["bot"]["long"]["forager"]["volume_drop_pct"] = 0.0
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["bot"]["long"]["forager_score_weights"] == {
+    assert prepared["bot"]["long"]["forager"]["score_weights"] == {
         "volume": 0.0,
         "ema_readiness": 1.0,
         "volatility": 0.0,
     }
-    assert prepared["bot"]["long"]["forager_volume_ema_span"] == 0.0
-    assert prepared["bot"]["long"]["forager_volatility_ema_span"] == 0.0
+    assert prepared["bot"]["long"]["forager"]["volume_ema_span"] == 0.0
+    assert prepared["bot"]["long"]["forager"]["volatility_ema_span"] == 0.0
