@@ -222,6 +222,10 @@ Before order planning/execution, live bot must have coherent state for:
   refresh, market snapshots are revalidated immediately before order creation, the old
   price-distance order gate was removed in favor of replacement tolerance, and EMA gating
   diagnostics now use the correct PB mode shape.
+- [x] Added a formal staged `PlanningSnapshot` contract capturing the exact symbols, ledger
+  surface stamps, candle signature, market snapshots, and max ticker age used for a Rust planning
+  call. The snapshot is validated immediately before payload construction and attached to
+  debug/fake-live return snapshots for review.
 
 ## Initial Ticker Probe Findings
 

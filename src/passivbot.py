@@ -41,6 +41,7 @@ from fill_events_manager import (
 from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from monitor_publisher import MonitorPublisher
 from market_snapshot import MarketSnapshot, MarketSnapshotProvider
+from planning_snapshot import PlanningSnapshot
 from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
 import passivbot_monitor as pb_monitor
@@ -6516,8 +6517,9 @@ class Passivbot:
         invalid: dict[str, list] = {}
         if "completed_candles" in required and "completed_candles" not in missing:
             expected_symbols = tuple(Passivbot._urgent_active_candle_symbols(self))
+            candle_check_ms = ledger.surface_updated_ms("completed_candles") or utc_ms()
             signature, candle_missing = Passivbot._completed_candle_freshness_signature(
-                self, expected_symbols
+                self, expected_symbols, now_ms=candle_check_ms
             )
             stamped_signature = ledger.surface_signature("completed_candles")
             if candle_missing or stamped_signature != signature:
@@ -6572,6 +6574,37 @@ class Passivbot:
             f"missing current-epoch surfaces={missing} epoch={details['epoch']} "
             f"required={required}"
         )
+
+    def _build_staged_planning_snapshot(
+        self, symbols: Iterable[str], market_snapshots: dict[str, MarketSnapshot]
+    ) -> PlanningSnapshot | None:
+        """Capture and validate the exact staged data set handed to Rust."""
+        if self._authoritative_refresh_mode() != "staged":
+            return None
+        ordered_symbols = tuple(sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)))
+        ok, details = Passivbot._staged_planner_precondition_state(
+            self, include_market_snapshot=True, symbols=ordered_symbols
+        )
+        if not ok:
+            raise RuntimeError(
+                f"planning snapshot invalid before capture: {details}"
+            )
+        ledger = self._ensure_freshness_ledger()
+        required = self._staged_planner_required_surfaces(include_market_snapshot=True)
+        min_epochs = self._staged_planner_surface_min_epochs(required)
+        snapshot = PlanningSnapshot.capture(
+            ts_ms=utc_ms(),
+            exchange=str(getattr(self, "exchange", "")),
+            user=str(self.config_get(["live", "user"]) or ""),
+            ledger=ledger,
+            required_surfaces=required,
+            min_epochs=min_epochs,
+            symbols=ordered_symbols,
+            market_snapshots=market_snapshots,
+            market_snapshot_max_age_ms=Passivbot._live_market_snapshot_max_age_ms(self),
+        )
+        snapshot.raise_if_invalid(now_ms=utc_ms(), context="rust order calculation")
+        return snapshot
 
     def _apply_freshness_creation_guardrails(self, orders: list[dict]) -> tuple[list[dict], int]:
         blocked = self._freshness_creation_blocked_symbols()
@@ -9027,7 +9060,14 @@ class Passivbot:
         self._assert_staged_planner_preconditions(
             include_market_snapshot=True, context="rust order calculation", symbols=symbols
         )
-        last_prices = {symbol: snap.last for symbol, snap in market_snapshots.items()}
+        planning_snapshot = Passivbot._build_staged_planning_snapshot(
+            self, symbols, market_snapshots
+        )
+        last_prices = (
+            planning_snapshot.last_prices()
+            if planning_snapshot is not None
+            else {symbol: snap.last for symbol, snap in market_snapshots.items()}
+        )
         monitor_source = (
             "orchestrator_live_market_snapshot_staged"
             if self._authoritative_refresh_mode() == "staged"
@@ -9249,6 +9289,9 @@ class Passivbot:
                 "user": str(self.config_get(["live", "user"]) or ""),
                 "active_symbols": list(symbols),
                 "realized_pnl_cumsum": realized_pnl_cumsum,
+                "planning_snapshot": (
+                    planning_snapshot.to_dict() if planning_snapshot is not None else None
+                ),
                 "orchestrator_input": input_dict,
                 "orchestrator_output": out,
             }
@@ -9434,10 +9477,16 @@ class Passivbot:
                 if symbol not in snapshots or not snapshots[symbol].is_valid()
             ]
             if missing:
+                suffix = (
+                    " | attempting hyperliquid fallback"
+                    if str(getattr(self, "exchange", "") or "").lower() == "hyperliquid"
+                    else ""
+                )
                 logging.debug(
-                    "[state] staged market snapshots missing | symbols=%s | missing=%s",
+                    "[state] staged bulk market snapshots incomplete | symbols=%s | missing=%s%s",
                     len(symbols),
                     ",".join(missing[:12]),
+                    suffix,
                 )
             invalid = [
                 symbol
@@ -9454,6 +9503,13 @@ class Passivbot:
                             allow_completed_candle_fallback=False,
                         )
                         Passivbot._record_market_snapshot_surface(self, symbols, snapshots)
+                        sources = Counter(snap.source for snap in snapshots.values())
+                        logging.debug(
+                            "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=0 | sources=%s",
+                            len(symbols),
+                            len(symbols),
+                            ",".join(f"{k}:{v}" for k, v in sorted(sources.items())),
+                        )
                         return snapshots
                     except RuntimeError:
                         pass
