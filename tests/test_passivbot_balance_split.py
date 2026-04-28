@@ -2581,7 +2581,7 @@ async def test_run_execution_loop_waits_for_clean_authoritative_cycle_before_exe
         executes.append("market")
         return True
 
-    async def fake_execution_cycle():
+    async def fake_prepare_planning_universe():
         executes.append("universe")
 
     async def fake_execute_to_exchange(*, prepare_cycle=True):
@@ -2590,13 +2590,33 @@ async def test_run_execution_loop_waits_for_clean_authoritative_cycle_before_exe
 
     bot.refresh_authoritative_state = fake_refresh_authoritative_state
     bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
-    bot.execution_cycle = fake_execution_cycle
+    bot.prepare_planning_universe = fake_prepare_planning_universe
     bot.execute_to_exchange = fake_execute_to_exchange
 
     result = await bot.run_execution_loop()
 
     assert result == {"executed_cycle": 1}
     assert executes == ["universe", "market", ("execute", False, 1)]
+
+
+@pytest.mark.asyncio
+async def test_refresh_market_state_updates_trailing_after_candles():
+    bot = Passivbot.__new__(Passivbot)
+    bot.stop_signal_received = False
+    events = []
+
+    async def fake_update_ohlcvs_1m_for_actives():
+        events.append("candles")
+        return True
+
+    async def fake_update_trailing_data():
+        events.append("trailing")
+
+    bot.update_ohlcvs_1m_for_actives = fake_update_ohlcvs_1m_for_actives
+    bot.update_trailing_data = fake_update_trailing_data
+
+    assert await bot.refresh_market_state_if_needed() is True
+    assert events == ["candles", "trailing"]
 
 
 @pytest.mark.asyncio

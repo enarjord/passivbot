@@ -3824,7 +3824,7 @@ class Passivbot:
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="prepare_planning_universe"
                 )
-                await self.execution_cycle()
+                await self.prepare_planning_universe()
                 if self.stop_signal_received:
                     break
                 self._set_log_silence_watchdog_context(
@@ -4019,7 +4019,7 @@ class Passivbot:
             return False
         if self.stop_signal_received:
             return False
-        await self.execution_cycle()
+        await self.prepare_planning_universe()
         if self.stop_signal_received:
             return False
         return await self.refresh_market_state_if_needed()
@@ -4028,7 +4028,10 @@ class Passivbot:
         """Refresh market data needed before planning/execution."""
         if self.stop_signal_received:
             return False
-        return bool(await self.update_ohlcvs_1m_for_actives())
+        if not await self.update_ohlcvs_1m_for_actives():
+            return False
+        await self.update_trailing_data()
+        return True
 
     def _market_snapshot_ticker_strategy(self) -> str:
         """Choose the cheapest safe ticker endpoint shape for market snapshots."""
@@ -5606,8 +5609,8 @@ class Passivbot:
         except Exception as e:
             logging.error(f"Error with {get_function_name()} {e}")
 
-    async def execution_cycle(self):
-        """Prepare bot state before talking to the exchange in an execution loop."""
+    async def prepare_planning_universe(self):
+        """Build the final symbol universe before refreshing market data."""
         await self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
         self.set_wallet_exposure_limits()
@@ -5624,6 +5627,10 @@ class Passivbot:
             if symbol not in self.open_orders:
                 self.open_orders[symbol] = []
         self.set_wallet_exposure_limits()
+
+    async def execution_cycle(self):
+        """Compatibility wrapper for callers that prepare and plan in one step."""
+        await self.prepare_planning_universe()
         await self.update_trailing_data()
 
     def _log_mode_changes(self, res: dict, previous_PB_modes: dict) -> None:
