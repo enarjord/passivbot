@@ -2162,6 +2162,66 @@ async def test_manager_refresh_latest_uses_overlap(tmp_path: Path, sample_events
 
 
 @pytest.mark.asyncio
+async def test_manager_refresh_latest_can_bound_start_from_last_successful_refresh(
+    tmp_path: Path, sample_events
+):
+    cache_dir = tmp_path / "fills_latest_bounded"
+    last_refresh_ms = sample_events[-1]["timestamp"] + 24 * 60 * 60 * 1000
+    overlap_ms = 60 * 60 * 1000
+
+    class _RecordingFetcher(BaseFetcher):
+        def __init__(self, batch):
+            self.batch = batch
+            self.calls = []
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            if on_batch and self.batch:
+                on_batch(self.batch)
+            batch = self.batch
+            self.batch = []
+            return batch
+
+    fetcher = _RecordingFetcher([dict(event) for event in sample_events])
+    manager = FillEventsManager(
+        exchange="bitget",
+        user="default",
+        fetcher=fetcher,
+        cache_path=cache_dir,
+    )
+
+    await manager.refresh()
+    metadata = manager.cache.load_metadata()
+    metadata["last_refresh_ms"] = last_refresh_ms
+    manager.cache.save_metadata(metadata)
+
+    await manager.refresh_latest(overlap=20, last_refresh_overlap_ms=overlap_ms)
+
+    assert fetcher.calls[1] == (last_refresh_ms - overlap_ms, None)
+
+
+def test_fill_event_cache_load_ignores_metadata_file(tmp_path: Path, sample_events, caplog):
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(dict(sample_events[0]))])
+    cache.save_metadata(
+        {
+            "last_refresh_ms": sample_events[0]["timestamp"],
+            "oldest_event_ts": sample_events[0]["timestamp"],
+            "newest_event_ts": sample_events[0]["timestamp"],
+            "covered_start_ms": sample_events[0]["timestamp"],
+            "known_gaps": [],
+            "history_scope": "window",
+        }
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        loaded = cache.load()
+
+    assert [event.id for event in loaded] == [sample_events[0]["id"]]
+    assert not any("metadata.json" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_manager_refresh_for_lookback_persists_coverage_across_restart(tmp_path: Path):
     cache_dir = tmp_path / "fills_lookback_coverage"
     start_ms = 1_700_000_000_000

@@ -817,7 +817,10 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
 
     assert result is True
     bot._pnls_manager.refresh.assert_not_awaited()
-    bot._pnls_manager.refresh_latest.assert_awaited_once_with(overlap=20)
+    bot._pnls_manager.refresh_latest.assert_awaited_once_with(
+        overlap=20,
+        last_refresh_overlap_ms=60 * 60 * 1000,
+    )
     assert bot._pnls_manager.history_scope == "all"
 
 
@@ -869,7 +872,7 @@ async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
             self.refresh = AsyncMock()
             self.history_scope = "all"
 
-        async def refresh_latest(self, overlap=20):
+        async def refresh_latest(self, overlap=20, last_refresh_overlap_ms=None):
             bot.stop_signal_received = True
             raise RuntimeError("connector is closed")
 

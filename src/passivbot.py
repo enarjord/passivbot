@@ -6728,7 +6728,10 @@ class Passivbot:
                 self._pnls_manager.set_history_scope("all" if lookback.is_all else "window")
             else:
                 # Incremental refresh
-                await self._pnls_manager.refresh_latest(overlap=20)
+                await self._pnls_manager.refresh_latest(
+                    overlap=20,
+                    last_refresh_overlap_ms=60 * 60 * 1000,
+                )
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()

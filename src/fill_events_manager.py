@@ -797,7 +797,7 @@ class FillEventCache:
         self._metadata: Optional[CacheMetadata] = None
 
     def load(self) -> List[FillEvent]:
-        files = sorted(self.root.glob("*.json"))
+        files = sorted(path for path in self.root.glob("*.json") if path.name != "metadata.json")
         events: List[FillEvent] = []
         for path in files:
             try:
@@ -2502,7 +2502,12 @@ class FillEventsManager:
         else:
             logger.debug("[fills] refresh: events=%d (no changes)", len(self._events))
 
-    async def refresh_latest(self, *, overlap: int = 20) -> None:
+    async def refresh_latest(
+        self,
+        *,
+        overlap: int = 20,
+        last_refresh_overlap_ms: Optional[int] = None,
+    ) -> None:
         """Fetch only the most recent fills, overlapping by `overlap` events."""
         await self.ensure_loaded()
         if not self._events:
@@ -2511,6 +2516,12 @@ class FillEventsManager:
         if self._events:
             idx = max(0, len(self._events) - overlap)
             start_ms = self._events[idx].timestamp
+        if last_refresh_overlap_ms is not None:
+            metadata = self.cache.load_metadata()
+            last_refresh_ms = int(metadata.get("last_refresh_ms", 0) or 0)
+            if last_refresh_ms > 0:
+                metadata_start_ms = max(0, last_refresh_ms - int(last_refresh_overlap_ms))
+                start_ms = metadata_start_ms if start_ms is None else max(start_ms, metadata_start_ms)
         await self.refresh(start_ms=start_ms, end_ms=None)
 
     async def refresh_for_lookback(
