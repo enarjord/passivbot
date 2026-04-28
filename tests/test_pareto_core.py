@@ -4,6 +4,7 @@ from config.scoring import ObjectiveSpec
 from pareto_core import (
     compute_ideal,
     crowding_distances,
+    detect_latest_pareto_dir,
     dominates_with_violation,
     extract_objectives,
     prune_front_with_extremes,
@@ -65,3 +66,23 @@ def test_compute_ideal_weighted_respects_mixed_objective_goals():
 
     assert ideal[0] == np.float64(0.0025)
     assert ideal[1] == np.float64(500.0)
+
+
+def test_detect_latest_pareto_dir_uses_run_name_and_requires_json(tmp_path):
+    older = tmp_path / "optimize_results" / "2026-04-28T09_00_00_old" / "pareto"
+    newer = tmp_path / "optimize_results" / "2026-04-28T10_00_00_new" / "pareto"
+    empty_latest = tmp_path / "optimize_results" / "2026-04-28T11_00_00_empty" / "pareto"
+    junk_latest = tmp_path / "optimize_results" / "2026-04-28T12_00_00_junk" / "pareto"
+    older.mkdir(parents=True)
+    newer.mkdir(parents=True)
+    empty_latest.mkdir(parents=True)
+    junk_latest.mkdir(parents=True)
+    (older / "older.json").write_text("{}", encoding="utf-8")
+    (newer / "newer.json").write_text("{}", encoding="utf-8")
+    (junk_latest / ".DS_Store").write_text("junk", encoding="utf-8")
+    older_dir = older.resolve()
+    newer_dir = newer.resolve()
+    older_dir.touch()
+    newer_dir.touch()
+
+    assert detect_latest_pareto_dir(tmp_path / "optimize_results") == newer_dir

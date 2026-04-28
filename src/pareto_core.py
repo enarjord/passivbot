@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -14,6 +15,20 @@ class ParetoPoint:
     hash_id: str
     objectives: Tuple[float, ...]
     violation: float = 0.0
+
+
+def detect_latest_pareto_dir(root: str | Path = "optimize_results") -> Optional[Path]:
+    base = Path(root).expanduser()
+    if not base.is_dir():
+        return None
+    runs = [
+        path
+        for path in base.iterdir()
+        if path.is_dir() and (path / "pareto").is_dir() and any((path / "pareto").glob("*.json"))
+    ]
+    if not runs:
+        return None
+    return (sorted(runs, key=lambda path: path.name)[-1] / "pareto").resolve()
 
 
 def extract_objectives(
