@@ -4835,6 +4835,16 @@ class Passivbot:
         symbols = sorted({str(order["symbol"]) for order in orders if order.get("symbol")})
         if not symbols:
             return orders
+        planning_snapshot_invalid = Passivbot._current_planning_snapshot_invalid_for_creations(
+            self, symbols
+        )
+        if planning_snapshot_invalid:
+            logging.warning(
+                "[market] skipping order creation; planning snapshot stale before create | symbols=%s details=%s",
+                ",".join(symbols[:12]),
+                planning_snapshot_invalid[:8],
+            )
+            return []
         try:
             snapshots = await Passivbot._get_live_market_snapshots(
                 self,
@@ -6612,6 +6622,35 @@ class Passivbot:
         )
         snapshot.raise_if_invalid(now_ms=utc_ms(), context="rust order calculation")
         return snapshot
+
+    def _current_planning_snapshot_invalid_for_creations(
+        self, symbols: Iterable[str]
+    ) -> list[dict]:
+        """Return reasons the current staged planning snapshot is unsafe for creations."""
+        if self._authoritative_refresh_mode() != "staged":
+            return []
+        snapshot = getattr(self, "_current_planning_snapshot", None)
+        ordered_symbols = tuple(sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)))
+        if snapshot is None:
+            return [
+                {
+                    "surface": "planning_snapshot",
+                    "reason": "missing_current_snapshot",
+                    "symbols": list(ordered_symbols),
+                }
+            ]
+        invalid = list(snapshot.invalid_details(now_ms=utc_ms()))
+        snapshot_symbols = set(snapshot.symbols)
+        missing_order_symbols = [symbol for symbol in ordered_symbols if symbol not in snapshot_symbols]
+        if missing_order_symbols:
+            invalid.append(
+                {
+                    "surface": "planning_snapshot",
+                    "reason": "creation_symbols_not_in_snapshot",
+                    "symbols": missing_order_symbols,
+                }
+            )
+        return invalid
 
     def _apply_freshness_creation_guardrails(self, orders: list[dict]) -> tuple[list[dict], int]:
         blocked = self._freshness_creation_blocked_symbols()
@@ -9056,6 +9095,7 @@ class Passivbot:
 
     async def calc_ideal_orders_orchestrator(self, *, return_snapshot: bool = False):
         """Compute desired orders using Rust orchestrator (JSON API)."""
+        self._current_planning_snapshot = None
         symbols = sorted(set(getattr(self, "active_symbols", []) or self._build_live_symbol_universe()))
         if not symbols:
             return ({}, None) if return_snapshot else {}
@@ -9070,6 +9110,7 @@ class Passivbot:
         planning_snapshot = Passivbot._build_staged_planning_snapshot(
             self, symbols, market_snapshots
         )
+        self._current_planning_snapshot = planning_snapshot
         last_prices = (
             planning_snapshot.last_prices()
             if planning_snapshot is not None

@@ -229,6 +229,10 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Split planning-universe preparation from derived market-state refresh in the live loop.
   The loop now builds the final symbol universe before refreshing completed candles, and trailing
   data is recomputed only after candle freshness succeeds.
+- [x] Guard order creation against planning-snapshot age. The staged executor now keeps the
+  exact `PlanningSnapshot` used for Rust planning and refuses to create orders if that snapshot
+  is missing, stale, or does not cover the creation symbol, even if a later pre-create ticker
+  refresh would be fresh.
 
 ## Initial Ticker Probe Findings
 
