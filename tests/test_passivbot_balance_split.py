@@ -28,7 +28,7 @@ from passivbot import Passivbot
 import passivbot as passivbot_module
 from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from market_snapshot import MarketSnapshot
-from planning_snapshot import PlanningMarketSnapshot, PlanningSnapshot
+from planning_snapshot import PlanningMarketSnapshot, PlanningSnapshot, PlanningSurfaceStamp
 from exchanges.binance import BinanceBot
 
 
@@ -2599,10 +2599,12 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
 
 
 @pytest.mark.asyncio
-async def test_pre_create_snapshot_filter_blocks_stale_planning_snapshot_before_refetch():
+async def test_pre_create_snapshot_filter_refreshes_stale_planning_market_snapshot():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
     bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_refresh_epoch = 1
     symbol = "BTC/USDT:USDT"
     now_ms = passivbot_module.utc_ms()
     bot._current_planning_snapshot = PlanningSnapshot(
@@ -2627,8 +2629,64 @@ async def test_pre_create_snapshot_filter_blocks_stale_planning_snapshot_before_
         completed_candle_signature=tuple(),
     )
 
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        return {
+            s: MarketSnapshot(
+                symbol=s,
+                bid=101.0,
+                ask=101.0,
+                last=101.0,
+                fetched_ms=passivbot_module.utc_ms(),
+                source="test",
+            )
+            for s in symbols
+        }
+
+    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=fake_get_snapshots)
+    orders = [{"symbol": symbol, "side": "buy", "position_side": "long", "qty": 1.0, "price": 99.0}]
+
+    assert await bot._filter_fresh_market_snapshot_creations(orders) == orders
+
+
+@pytest.mark.asyncio
+async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidation():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.exchange = "bybit"
+    symbol = "BTC/USDT:USDT"
+    now_ms = passivbot_module.utc_ms()
+    bot._current_planning_snapshot = PlanningSnapshot(
+        ts_ms=now_ms,
+        exchange="bybit",
+        user="tester",
+        epoch=1,
+        symbols=(symbol,),
+        required_surfaces=("positions",),
+        surfaces=(
+            PlanningSurfaceStamp(
+                name="positions",
+                epoch=1,
+                updated_ms=now_ms,
+                signature=("old",),
+                min_epoch=2,
+            ),
+        ),
+        market_snapshots=(
+            PlanningMarketSnapshot(
+                symbol=symbol,
+                bid=100.0,
+                ask=100.0,
+                last=100.0,
+                fetched_ms=now_ms,
+                source="test",
+            ),
+        ),
+        market_snapshot_max_age_ms=10_000,
+        completed_candle_signature=tuple(),
+    )
+
     async def fail_if_called(*args, **kwargs):
-        raise AssertionError("pre-create refresh must not rescue a stale planning snapshot")
+        raise AssertionError("pre-create refresh must not rescue non-market invalid state")
 
     bot.market_snapshot_provider = SimpleNamespace(get_snapshots=fail_if_called)
     orders = [{"symbol": symbol, "side": "buy", "position_side": "long", "qty": 1.0, "price": 99.0}]

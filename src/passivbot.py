@@ -4983,12 +4983,25 @@ class Passivbot:
             self, symbols
         )
         if planning_snapshot_invalid:
-            logging.warning(
-                "[market] skipping order creation; planning snapshot stale before create | symbols=%s details=%s",
+            refreshable_reasons = {
+                ("market_snapshot", "snapshot_too_old"),
+            }
+            if not all(
+                isinstance(item, dict)
+                and (str(item.get("surface")), str(item.get("reason"))) in refreshable_reasons
+                for item in planning_snapshot_invalid
+            ):
+                logging.warning(
+                    "[market] skipping order creation; planning snapshot invalid before create | symbols=%s details=%s",
+                    ",".join(symbols[:12]),
+                    planning_snapshot_invalid[:8],
+                )
+                return []
+            logging.info(
+                "[market] refreshing stale planning market snapshot before create | symbols=%s stale=%s",
                 ",".join(symbols[:12]),
-                planning_snapshot_invalid[:8],
+                len(planning_snapshot_invalid),
             )
-            return []
         try:
             snapshots = await Passivbot._get_live_market_snapshots(
                 self,

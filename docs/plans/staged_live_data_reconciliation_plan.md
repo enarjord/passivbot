@@ -261,8 +261,9 @@ changing behavior during extraction commits.
   data is recomputed only after candle freshness succeeds.
 - [x] Guard order creation against planning-snapshot age. The staged executor now keeps the
   exact `PlanningSnapshot` used for Rust planning and refuses to create orders if that snapshot
-  is missing, stale, or does not cover the creation symbol, even if a later pre-create ticker
-  refresh would be fresh.
+  is missing, has non-market invalidation, or does not cover the creation symbol. Pure
+  market-snapshot staleness is refreshed at the pre-create gate because ticker freshness is the
+  intended final guard before order writes.
 - [x] Completed the duplicate-order guardrail test matrix for bot-cancel confirmation, unknown
   manual/exchange disappearance, self-emitted order disappearance, full-refresh recovery, and
   restart/inherited-order recovery.
@@ -272,10 +273,11 @@ changing behavior during extraction commits.
 - [x] Verified live staged precondition defers on Binance/OKX are non-fatal in VPS logs:
   `[state] staged execution deferred` appears with `errors=0/10` instead of restart-counting
   `RuntimeError` precondition failures.
-- [ ] Latest VPS Hyperliquid runs show non-unified HIP-3 account state remains expensive:
+- [x] Latest VPS Hyperliquid runs show non-unified HIP-3 account state remains expensive at startup:
   full dex `positions` and `open_orders` sweeps take roughly 10-22s when all known dexes are queried.
-  Startup full sweep is acceptable; steady-state periodic sweeps should be much slower and clearly
-  logged as `scope=full` vs `scope=active`.
+  Startup full sweep is acceptable; steady-state refresh now logs `positions_scope=active` and avoids
+  HIP-3 dex queries when no HIP-3 dex is currently active, while retaining slower periodic safety
+  full sweeps.
 - [ ] Latest VPS KuCoin runs show two separate robustness issues: frequent REST OHLCV timeouts during
   broad warmup, and CCXT websocket `ping timeout` exceptions emitted through an asyncio callback
   before the normal watch-orders reconnect log. Treat these as reconnectable/noisy-runtime issues,
