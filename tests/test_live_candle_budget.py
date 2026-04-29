@@ -270,7 +270,7 @@ async def test_active_candle_refresh_does_not_stamp_when_rate_limited(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_execute_to_exchange_refreshes_forager_candidates_after_planning(monkeypatch):
+async def test_execute_to_exchange_schedules_forager_candidates_after_planning(monkeypatch):
     import passivbot as pb_mod
 
     now_ms = 10_000_000
@@ -292,12 +292,15 @@ async def test_execute_to_exchange_refreshes_forager_candidates_after_planning(m
             self.events.append("plan")
             return [], []
 
+        def _schedule_forager_candidate_candle_refresh(self):
+            self.events.append("forager_refresh_scheduled")
+
         async def _refresh_forager_candidate_candles(self):
-            self.events.append("forager_refresh")
+            raise AssertionError("forager candidate refresh must not block execute_to_exchange")
 
     bot = FakeBot()
     assert await pb_mod.Passivbot.execute_to_exchange(bot) == ([], [])
-    assert bot.events == ["execution_cycle", "plan", "forager_refresh"]
+    assert bot.events == ["execution_cycle", "plan", "forager_refresh_scheduled"]
 
 
 @pytest.mark.asyncio

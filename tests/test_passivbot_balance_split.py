@@ -72,6 +72,40 @@ def test_market_snapshot_ticker_strategy_respects_explicit_override():
 
 
 @pytest.mark.asyncio
+async def test_staged_orchestrator_market_snapshot_fetch_uses_headroom_ttl():
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "bitget"
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_pending_confirmations = {}
+    symbol = "BTC/USDT:USDT"
+    seen_max_age_ms = []
+
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        seen_max_age_ms.append(max_age_ms)
+        return {
+            symbol: MarketSnapshot(
+                symbol=symbol,
+                bid=100.0,
+                ask=101.0,
+                last=100.5,
+                fetched_ms=passivbot_module.utc_ms() - 4_000,
+                source="test",
+            )
+        }
+
+    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=fake_get_snapshots)
+    bot._begin_authoritative_refresh_epoch()
+
+    snapshots = await bot._get_orchestrator_market_snapshots([symbol])
+
+    assert seen_max_age_ms == [5_000]
+    assert snapshots[symbol].last == 100.5
+    assert bot.freshness_ledger.surface_epoch("market_snapshot") == bot._authoritative_refresh_epoch
+    assert bot._market_snapshot_signature_invalid([symbol]) == []
+
+
+@pytest.mark.asyncio
 async def test_hyperliquid_live_market_snapshot_uses_symbol_fallback_for_hip3():
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "hyperliquid"

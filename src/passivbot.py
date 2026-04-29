@@ -4864,7 +4864,7 @@ class Passivbot:
         if to_cancel or to_create:
             self.execution_scheduled = True
         if not Passivbot._shutdown_requested(self):
-            await self._refresh_forager_candidate_candles()
+            self._schedule_forager_candidate_candle_refresh()
         if self.debug_mode:
             return to_cancel, to_create
 
@@ -9608,16 +9608,18 @@ class Passivbot:
         block planning. Legacy mode keeps an explicit completed-candle fallback.
         """
         ttl_ms = 10_000
+        fetch_ttl_ms = Passivbot._live_market_snapshot_fetch_max_age_ms(self)
         if self._authoritative_refresh_mode() == "staged":
             provider = getattr(self, "market_snapshot_provider", None)
             snapshots: dict[str, MarketSnapshot] = {}
             if provider is not None:
                 logging.debug(
-                    "[state] staged orchestrator requesting market snapshots | symbols=%s | ttl=%sms",
+                    "[state] staged orchestrator requesting market snapshots | symbols=%s | ttl=%sms fetch_ttl=%sms",
                     len(symbols),
                     ttl_ms,
+                    fetch_ttl_ms,
                 )
-                snapshots = await provider.get_snapshots(symbols, max_age_ms=ttl_ms)
+                snapshots = await provider.get_snapshots(symbols, max_age_ms=fetch_ttl_ms)
             missing = [
                 symbol
                 for symbol in symbols
@@ -9645,7 +9647,7 @@ class Passivbot:
                     try:
                         snapshots = await self._get_live_market_snapshots(
                             symbols,
-                            max_age_ms=ttl_ms,
+                            max_age_ms=fetch_ttl_ms,
                             context="orchestrator",
                             allow_completed_candle_fallback=False,
                         )
@@ -9687,6 +9689,11 @@ class Passivbot:
 
     def _live_market_snapshot_max_age_ms(self) -> int:
         return 10_000
+
+    def _live_market_snapshot_fetch_max_age_ms(self) -> int:
+        """Use a stricter fetch TTL than the hard safety TTL to leave planning headroom."""
+        max_age_ms = int(Passivbot._live_market_snapshot_max_age_ms(self))
+        return max(1_000, min(max_age_ms, int(max_age_ms * 0.5)))
 
     def _market_snapshot_signature(
         self, symbols: Iterable[str], snapshots: dict[str, MarketSnapshot]

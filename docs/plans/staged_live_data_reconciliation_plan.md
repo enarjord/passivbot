@@ -117,7 +117,7 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Split minimal trading-ready startup from background broad catch-up.
 - [x] Fetch account-critical state first: positions, fills, balance, open orders.
 - [x] Fetch active-symbol completed candles before broad eligible-universe candles.
-- [ ] Fetch fresh active market snapshots before order creation.
+- [x] Fetch fresh active market snapshots before order creation.
 - [x] Pace broad eligible-universe candle catch-up in the background.
 - [x] Add startup timing diagnostics: account-ready, market-ready, active-candle-ready, full-warmup-ready.
 - [x] Add tests preventing broad simultaneous OHLCV startup bursts where feasible.
@@ -257,6 +257,12 @@ changing behavior during extraction commits.
   restart/inherited-order recovery.
 - [x] Added startup readiness timing logs for account-ready, active-candle-ready, first
   market-ready, startup-ready, and full-warmup-ready milestones.
+- [x] Kept broad forager candidate candle refresh out of the order execution critical path.
+  Execution now schedules the coalesced background refresh instead of awaiting it after every
+  cancellation/creation pass.
+- [x] Added staged market snapshot fetch headroom. Rust planning now requests ticker snapshots
+  with a stricter cache TTL than the hard safety max, avoiding false precondition failures from
+  near-expired cached tickers while preserving the pre-create stale-snapshot guard.
 
 ## Initial Ticker Probe Findings
 
