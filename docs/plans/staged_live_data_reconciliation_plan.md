@@ -135,11 +135,11 @@ Before order planning/execution, live bot must have coherent state for:
 
 ### 9. Websocket-Triggered Reconciliation
 
-- [ ] On order websocket event, mark account-critical state dirty.
-- [ ] On missing bot-created order, force account-critical refresh before creations.
-- [ ] On position change, force fills refresh.
-- [ ] On significant balance change, force planner/order reconciliation.
-- [ ] Add DEBUG/INFO reason logs for refresh causes.
+- [x] On order websocket event, mark account-critical state dirty.
+- [x] On missing bot-created order, force account-critical refresh before creations.
+- [x] On position change, force fills refresh.
+- [x] On significant balance change, force planner/order reconciliation.
+- [x] Add DEBUG/INFO reason logs for refresh causes.
 
 ### 10. Validation Matrix
 

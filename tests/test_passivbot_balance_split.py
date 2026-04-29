@@ -460,6 +460,7 @@ def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
 def test_handle_order_update_logs_summary_and_dedupes(caplog, monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.execution_scheduled = False
+    bot._authoritative_refresh_epoch = 0
     now = [1000.0]
 
     monkeypatch.setattr(time, "time", lambda: now[0])
@@ -481,6 +482,12 @@ def test_handle_order_update_logs_summary_and_dedupes(caplog, monkeypatch):
         "[ws] order update detected | cause=replace_hint | events=2 | symbols=BTC/USDC:USDC,SOL/USDC:USDC | statuses=canceled,open | scheduling refresh",
     ]
     assert bot.execution_scheduled is True
+    assert bot._authoritative_pending_confirmations == {
+        "balance": 1,
+        "positions": 1,
+        "open_orders": 1,
+        "fills": 1,
+    }
 
 
 def test_handle_order_update_ignores_empty_batches(caplog):
@@ -497,6 +504,7 @@ def test_handle_order_update_ignores_empty_batches(caplog):
 def test_handle_order_update_suppresses_recent_self_echoes(caplog, monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.execution_scheduled = False
+    bot._authoritative_pending_confirmations = {}
     now_ms = 1_000_000
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms)
     bot.recent_order_executions = [
@@ -542,7 +550,45 @@ def test_handle_order_update_suppresses_recent_self_echoes(caplog, monkeypatch):
         bot.handle_order_update(batch)
 
     assert bot.execution_scheduled is True
+    assert bot._authoritative_pending_confirmations == {}
     assert not [record.message for record in caplog.records if "[ws]" in record.message]
+
+
+def test_handle_order_update_cancel_hint_requests_full_confirmation(caplog, monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.execution_scheduled = False
+    bot._authoritative_refresh_epoch = 7
+    bot.state_change_detected_by_symbol = set()
+    bot.recent_order_cancellations = []
+
+    monkeypatch.setattr(time, "time", lambda: 1000.0)
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+
+    with caplog.at_level(logging.DEBUG):
+        bot.handle_order_update(
+            [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "status": "canceled",
+                    "id": "manual-cancel",
+                }
+            ]
+        )
+
+    assert bot.execution_scheduled is True
+    assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
+    assert bot._authoritative_pending_confirmations == {
+        "balance": 8,
+        "positions": 8,
+        "open_orders": 8,
+        "fills": 8,
+    }
+    assert any("cause=cancel_hint" in record.message for record in caplog.records)
+    assert any(
+        "account-critical refresh requested" in record.message
+        and "reason=order_ws_cancel_hint" in record.message
+        for record in caplog.records
+    )
 
 
 def test_handle_order_update_fill_hint_requests_full_confirmation(caplog, monkeypatch):

@@ -6457,6 +6457,50 @@ class Passivbot:
             details["order_id"],
         )
 
+    def _mark_account_critical_state_dirty(
+        self,
+        *,
+        reason: str,
+        symbols: Iterable[str] | None = None,
+        source: str = "unknown",
+        level: int = logging.DEBUG,
+    ) -> None:
+        """Force a coherent account-state refresh before the next execution cycle."""
+        min_epoch = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0) + 1
+        self._request_authoritative_confirmation(ACCOUNT_SURFACES, min_epoch=min_epoch)
+        self.execution_scheduled = True
+        normalized_symbols = sorted({str(symbol) for symbol in (symbols or []) if symbol})
+        if normalized_symbols:
+            if not hasattr(self, "state_change_detected_by_symbol"):
+                self.state_change_detected_by_symbol = set()
+            self.state_change_detected_by_symbol.update(normalized_symbols)
+        log_key = (
+            str(source),
+            str(reason),
+            tuple(normalized_symbols[:8]),
+            len(normalized_symbols),
+            min_epoch,
+        )
+        now_ms = utc_ms()
+        last_key = getattr(self, "_account_dirty_last_log_key", None)
+        last_ms = int(getattr(self, "_account_dirty_last_log_ms", 0) or 0)
+        if log_key == last_key and now_ms - last_ms < 5_000:
+            return
+        self._account_dirty_last_log_key = log_key
+        self._account_dirty_last_log_ms = now_ms
+        symbol_preview = ",".join(normalized_symbols[:6]) if normalized_symbols else "unknown"
+        if len(normalized_symbols) > 6:
+            symbol_preview += f",+{len(normalized_symbols) - 6} more"
+        logging.log(
+            level,
+            "[state] account-critical refresh requested | source=%s | reason=%s | symbols=%s | required=%s | min_epoch=%s",
+            source,
+            reason,
+            symbol_preview,
+            ",".join(sorted(ACCOUNT_SURFACES)),
+            min_epoch,
+        )
+
     def _freshness_creation_blocked_symbols(self) -> dict[str, object]:
         ledger = getattr(self, "freshness_ledger", None)
         if ledger is None:
@@ -6814,6 +6858,13 @@ class Passivbot:
             _log_key = None
             _log_msg = None
             _cause = None
+            _symbols = sorted(
+                {
+                    str(order.get("symbol") or "")
+                    for order in upd_list
+                    if isinstance(order, dict) and order.get("symbol")
+                }
+            )
             if not self._ws_order_update_is_self_echo(upd_list):
                 _log_key, _log_msg, _cause = self._summarize_order_update_batch(upd_list)
                 now = time.time()
@@ -6823,11 +6874,13 @@ class Passivbot:
                     logging.info(_log_msg)
                     self._ws_order_update_last_log_key = _log_key
                     self._ws_order_update_last_log_ts = now
-            if _cause in {"fill_hint", "mixed_hint"}:
-                self._request_authoritative_confirmation(
-                    {"balance", "positions", "open_orders", "fills"}
+                self._mark_account_critical_state_dirty(
+                    reason=f"order_ws_{_cause or 'update'}",
+                    symbols=_symbols,
+                    source="order_ws",
                 )
-            self.execution_scheduled = True
+            else:
+                self.execution_scheduled = True
         return
 
     async def handle_balance_update(self, source="REST"):
