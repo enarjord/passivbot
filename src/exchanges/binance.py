@@ -72,8 +72,8 @@ class BinanceBot(CCXTBot):
         print(front_pad + "#" * (max_len + 2) + back_pad)
         print("\n\n")
 
-    async def execute_to_exchange(self):
-        res = await super().execute_to_exchange()
+    async def execute_to_exchange(self, *, prepare_cycle: bool = True):
+        res = await super().execute_to_exchange(prepare_cycle=prepare_cycle)
         await self.print_new_user_suggestion()
         return res
 

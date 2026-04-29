@@ -267,6 +267,34 @@ def test_hyperliquid_selects_active_dex_scope_until_periodic_full_sweep(stubbed_
     assert dexes == ["gold", "xyz"]
 
 
+def test_hyperliquid_skips_hip3_dex_queries_when_no_active_dex_until_safety_sweep(
+    stubbed_modules, monkeypatch
+):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.markets_dict = {
+        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+        "PARA-TOTAL2/USDC:USDC": {
+            "baseName": "para:TOTAL2",
+            "info": {"baseName": "para:TOTAL2"},
+        },
+    }
+    bot.active_symbols = []
+    bot.open_orders = {}
+    bot.positions = {}
+    bot._hl_force_full_dex_sweep = False
+    bot._hl_force_full_dex_sweep_surfaces = set()
+    bot._hl_last_full_dex_sweep_ms_by_surface = {"positions": 1_000}
+
+    monkeypatch.setattr("exchanges.hyperliquid.utc_ms", lambda: 50_000)
+
+    dexes, full = bot._hl_select_dex_names_for_state("positions")
+
+    assert (dexes, full) == ([], False)
+    assert bot._hl_last_dex_scope_summary("positions") == "positions_scope=active positions_dexes=0"
+
+
 def test_hyperliquid_ws_unknown_dex_activity_forces_full_sweep(stubbed_modules, caplog):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
 

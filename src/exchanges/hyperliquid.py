@@ -32,7 +32,9 @@ class HyperliquidBot(CCXTBot):
     HIP3_PREFIX = "xyz:"
     HIP3_ALT_PREFIXES = ("XYZ-", "XYZ:")
     HIP3_ISOLATED_SUPPORTED = False
-    HIP3_FULL_DEX_SWEEP_INTERVAL_MS = 300_000
+    # Full HIP-3 dex sweeps are safety sweeps. Startup and unknown-dex WS events still force
+    # immediate full coverage, but steady-state refreshes should prefer active dexes.
+    HIP3_FULL_DEX_SWEEP_INTERVAL_MS = 30 * 60_000
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -42,6 +44,7 @@ class HyperliquidBot(CCXTBot):
         self._hl_live_margin_modes = {}
         self._hl_force_full_dex_sweep_surfaces = set()
         self._hl_last_full_dex_sweep_ms_by_surface = {}
+        self._hl_last_dex_scope_by_surface = {}
         if "is_vault" not in self.user_info or self.user_info["is_vault"] == "":
             logging.info(
                 f"parameter 'is_vault' missing from api-keys.json for user {self.user}. Setting to false"
@@ -317,6 +320,12 @@ class HyperliquidBot(CCXTBot):
         """Choose HIP-3 dexes for the next authoritative state query for one surface."""
         full_sweep = self._hl_should_force_full_dex_sweep(surface)
         dexes = self._get_hl_hip3_dex_names() if full_sweep else self._get_hl_active_dex_names()
+        if not hasattr(self, "_hl_last_dex_scope_by_surface"):
+            self._hl_last_dex_scope_by_surface = {}
+        self._hl_last_dex_scope_by_surface[surface] = {
+            "dexes": tuple(dexes),
+            "full_sweep": bool(full_sweep),
+        }
         if not dexes and full_sweep:
             if not hasattr(self, "_hl_last_full_dex_sweep_ms_by_surface"):
                 self._hl_last_full_dex_sweep_ms_by_surface = {}
@@ -326,6 +335,12 @@ class HyperliquidBot(CCXTBot):
             self._hl_force_full_dex_sweep = False
             self._hl_force_full_dex_sweep_surfaces.discard(surface)
         return dexes, full_sweep
+
+    def _hl_last_dex_scope_summary(self, surface: str) -> str:
+        scope = (getattr(self, "_hl_last_dex_scope_by_surface", {}) or {}).get(surface) or {}
+        dexes = tuple(scope.get("dexes") or ())
+        label = "full" if bool(scope.get("full_sweep", False)) else "active"
+        return f"{surface}_scope={label} {surface}_dexes={len(dexes)}"
 
     def _hl_mark_dex_scope_consumed(self, surface: str, *, full_sweep: bool) -> None:
         """Update dex-sweep bookkeeping after a successful scoped/full HIP-3 query."""
@@ -711,7 +726,7 @@ class HyperliquidBot(CCXTBot):
                 timings_ms=timings_ms,
                 extra_parts=[
                     f"unified={'yes' if self._hl_balance_payload_mode == 'unified_total' else 'no'}",
-                    f"hip3_dexes={len(self._get_hl_hip3_dex_names())}",
+                    self._hl_last_dex_scope_summary("positions"),
                 ],
             )
             return raw_snapshot, list(positions.values()), balance

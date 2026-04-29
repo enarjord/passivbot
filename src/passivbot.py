@@ -310,6 +310,10 @@ def signal_handler(sig, frame):
         loop = None
 
     if bot is not None:
+        try:
+            logging.info("[shutdown] signal received; requesting graceful stop")
+        except Exception:
+            pass
         bot.stop_signal_received = True
         if loop is not None:
             shutdown_task = getattr(bot, "_shutdown_task", None)
@@ -2273,6 +2277,7 @@ class Passivbot:
 
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
+        self._install_asyncio_runtime_exception_handler()
         Passivbot._startup_timing_begin(self)
         self._log_startup_banner()
         self._bot_ready = False
@@ -3882,6 +3887,12 @@ class Passivbot:
                 Passivbot._startup_timing_mark(self, "market")
                 if self.stop_signal_received:
                     break
+                staged_ready, staged_details = self._staged_execution_ready_state(
+                    include_market_snapshot=False, context="market snapshot refresh"
+                )
+                if not staged_ready:
+                    await self._defer_staged_execution_cycle(staged_details, loop_start_ms)
+                    continue
                 self._set_log_silence_watchdog_context(phase="runtime", stage="execute_to_exchange")
                 try:
                     res = await self.execute_to_exchange(prepare_cycle=False)
@@ -3889,6 +3900,12 @@ class Passivbot:
                     if self._shutdown_requested():
                         logging.debug("[shutdown] execution cancelled during shutdown")
                         break
+                    raise
+                except RuntimeError as exc:
+                    handled, details = self._handle_staged_execution_precondition_error(exc)
+                    if handled:
+                        await self._defer_staged_execution_cycle(details, loop_start_ms)
+                        continue
                     raise
                 if self.debug_mode:
                     if getattr(self, "_execution_loop_task", None) is current_task:
@@ -3956,6 +3973,70 @@ class Passivbot:
             or getattr(self, "_shutdown_in_progress", False)
         )
 
+    def _candle_fetch_concurrency(self, *, context: str = "runtime") -> int:
+        """Return a conservative candle-fetch concurrency for non-critical bulk work."""
+        cfg_concurrency = get_optional_live_value(self.config, "warmup_concurrency", 0)
+        try:
+            cfg_concurrency = int(cfg_concurrency) if cfg_concurrency else 0
+        except Exception:
+            cfg_concurrency = 0
+        if cfg_concurrency > 0:
+            return max(1, cfg_concurrency)
+        exchange_lower = str(getattr(self, "exchange", "") or "").lower()
+        if exchange_lower == "hyperliquid":
+            return 1
+        if context == "history_replay":
+            return 2
+        return max(1, int(getattr(self, "max_n_concurrent_ohlcvs_1m_updates", 4) or 4))
+
+    def _install_asyncio_runtime_exception_handler(self) -> None:
+        """Install a narrow asyncio callback exception classifier for noisy WS libraries."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if getattr(self, "_asyncio_exception_handler_loop", None) is loop:
+            return
+        previous_handler = loop.get_exception_handler()
+        self._previous_asyncio_exception_handler = previous_handler
+        self._asyncio_exception_handler_loop = loop
+
+        def _handler(active_loop, context):
+            try:
+                if self._handle_asyncio_runtime_exception(context):
+                    return
+            except Exception:
+                pass
+            if previous_handler is not None:
+                previous_handler(active_loop, context)
+            else:
+                active_loop.default_exception_handler(context)
+
+        loop.set_exception_handler(_handler)
+
+    def _handle_asyncio_runtime_exception(self, context: dict) -> bool:
+        """Return True when a known non-critical callback exception has been logged."""
+        exc = context.get("exception") if isinstance(context, dict) else None
+        message = str(context.get("message") or "") if isinstance(context, dict) else ""
+        exc_text = f"{type(exc).__name__}: {exc}" if exc is not None else ""
+        combined = f"{message} {exc_text}".lower()
+        if "ping timeout" not in combined:
+            return False
+        if "kucoin" not in combined and "websocket" not in combined and "ws" not in combined:
+            return False
+        now_ms = utc_ms()
+        last_ms = int(getattr(self, "_asyncio_ws_callback_last_log_ms", 0) or 0)
+        if now_ms - last_ms >= 30_000:
+            self._asyncio_ws_callback_last_log_ms = now_ms
+            level = logging.DEBUG if self._shutdown_requested() else logging.WARNING
+            logging.log(
+                level,
+                "[ws] %s: websocket callback ping timeout; suppressing callback traceback "
+                "and relying on watch_orders reconnect",
+                self.exchange,
+            )
+        return True
+
     def _raise_if_shutdown_requested(self, stage: str) -> None:
         if Passivbot._shutdown_requested(self):
             logging.debug("[shutdown] aborting %s", stage)
@@ -3992,7 +4073,30 @@ class Passivbot:
             logging.error("[shutdown] error stopping maintainers: %s", e)
         if maintainer_tasks:
             try:
-                await asyncio.gather(*maintainer_tasks, return_exceptions=True)
+                try:
+                    maintainer_grace = float(
+                        getattr(self, "_shutdown_maintainer_grace_seconds", 5.0)
+                    )
+                except Exception:
+                    maintainer_grace = 5.0
+                maintainer_grace = max(0.0, maintainer_grace)
+                maintainer_gather = asyncio.gather(*maintainer_tasks, return_exceptions=True)
+                await asyncio.wait_for(
+                    asyncio.shield(maintainer_gather),
+                    timeout=maintainer_grace,
+                )
+            except asyncio.TimeoutError:
+                logging.warning(
+                    "[shutdown] timed out after %.1fs waiting for maintainers; closing sessions",
+                    maintainer_grace,
+                )
+                for task in maintainer_tasks:
+                    if task is not None and not task.done():
+                        task.cancel()
+                try:
+                    await asyncio.wait_for(maintainer_gather, timeout=1.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
             except Exception as e:
                 logging.error("[shutdown] error awaiting maintainer cancellation: %s", e)
         execution_loop_stopped = getattr(self, "_execution_loop_stopped", None)
@@ -6676,6 +6780,102 @@ class Passivbot:
             f"required={required}"
         )
 
+    def _staged_execution_ready_state(
+        self,
+        *,
+        include_market_snapshot: bool = True,
+        context: str = "planning",
+        symbols: Iterable[str] | None = None,
+    ) -> tuple[bool, dict]:
+        """Return whether live execution may proceed without raising on transient staleness."""
+        ok, details = self._staged_planner_precondition_state(
+            include_market_snapshot=include_market_snapshot,
+            symbols=symbols,
+        )
+        details = dict(details)
+        details["context"] = context
+        details["defer_reason"] = "staged_planner_inputs_not_fresh"
+        return ok, details
+
+    def _handle_staged_execution_precondition_error(self, exc: RuntimeError) -> tuple[bool, dict]:
+        """Classify staged precondition failures as safe live-loop defers.
+
+        Direct planner calls still fail loudly. The live execution loop can safely defer instead
+        of consuming restart budget because no Rust planning result is executed from stale inputs.
+        """
+        message = str(exc)
+        transient_prefixes = (
+            "staged planner precondition failed",
+            "planning snapshot invalid before capture",
+        )
+        if self._authoritative_refresh_mode() != "staged" or not message.startswith(
+            transient_prefixes
+        ):
+            return False, {}
+        ok, details = self._staged_execution_ready_state(
+            include_market_snapshot=True,
+            context="rust order calculation",
+        )
+        if ok:
+            details["missing"] = []
+        details["exception"] = message
+        return True, details
+
+    def _log_staged_execution_defer(self, details: dict) -> None:
+        """Log a throttled non-trading defer while staged inputs settle."""
+        missing = tuple(details.get("missing", ()))
+        required = tuple(details.get("required", ()))
+        context = str(details.get("context") or "planning")
+        invalid = details.get("invalid") or {}
+        log_key = (context, missing, required, tuple(sorted(invalid)))
+        now_ms = utc_ms()
+        last_log_ms = int(getattr(self, "_staged_execution_defer_last_log_ms", 0) or 0)
+        if (
+            log_key == getattr(self, "_staged_execution_defer_last_log_key", None)
+            and now_ms - last_log_ms < 15_000
+        ):
+            return
+        self._staged_execution_defer_last_log_key = log_key
+        self._staged_execution_defer_last_log_ms = now_ms
+        parts = [
+            f"context={context}",
+            f"epoch={int(details.get('epoch', 0) or 0)}",
+        ]
+        if missing:
+            parts.append(f"missing={','.join(missing)}")
+        if invalid:
+            summaries = []
+            for surface, items in invalid.items():
+                if isinstance(items, list) and items:
+                    first = items[0]
+                    if isinstance(first, dict):
+                        reason = first.get("reason") or "invalid"
+                        symbol = first.get("symbol")
+                        suffix = f":{symbol}" if symbol else ""
+                        summaries.append(f"{surface}:{reason}{suffix}")
+                    else:
+                        summaries.append(f"{surface}:{type(first).__name__}")
+                else:
+                    summaries.append(str(surface))
+            if summaries:
+                parts.append("invalid=" + ",".join(summaries[:4]))
+        logging.info("[state] staged execution deferred | %s", " | ".join(parts))
+
+    async def _defer_staged_execution_cycle(self, details: dict, loop_start_ms: int) -> None:
+        """Skip trading for this loop while staged planner inputs settle."""
+        self._log_staged_execution_defer(details)
+        self._last_loop_duration_ms = utc_ms() - loop_start_ms
+        self._maybe_log_health_summary()
+        self._maybe_log_unstuck_status()
+        self._set_log_silence_watchdog_context(phase="runtime", stage="flush_snapshot")
+        await self._monitor_flush_snapshot()
+        self._set_log_silence_watchdog_context(
+            phase="runtime", stage="staged_precondition_delay"
+        )
+        await asyncio.sleep(
+            self._authoritative_confirmation_retry_delay_seconds(details=details)
+        )
+
     def _build_staged_planning_snapshot(
         self, symbols: Iterable[str], market_snapshots: dict[str, MarketSnapshot]
     ) -> PlanningSnapshot | None:
@@ -7588,17 +7788,36 @@ class Passivbot:
         price_lookup: Dict[str, Dict[int, float]] = {}
         approximate_price_sources: Dict[str, Dict[str, int]] = {}
         if symbols and getattr(self, "cm", None) is not None:
-            tasks = {
-                sym: asyncio.create_task(
-                    self.cm.get_candles(sym, start_ts=start_minute, end_ts=end_minute, strict=False)
-                )
-                for sym in symbols
-            }
-            for sym, task in tasks.items():
-                try:
-                    arr = await task
-                except Exception as exc:
+            replay_concurrency = self._candle_fetch_concurrency(context="history_replay")
+            replay_sem = asyncio.Semaphore(max(1, int(replay_concurrency)))
+            replay_fetch_delay_s = self._get_fetch_delay_seconds()
+
+            async def fetch_replay_candles(sym: str, *, timeframe: str = "1m"):
+                async with replay_sem:
+                    try:
+                        arr = await self.cm.get_candles(
+                            sym,
+                            start_ts=start_minute,
+                            end_ts=end_minute,
+                            strict=False,
+                            timeframe=timeframe,
+                        )
+                        return sym, arr, None
+                    except Exception as exc:
+                        return sym, None, exc
+                    finally:
+                        if replay_fetch_delay_s > 0.0:
+                            await self._sleep_unless_shutdown(
+                                replay_fetch_delay_s, stage="history_replay_candles"
+                            )
+
+            for sym, arr, exc in await asyncio.gather(
+                *(fetch_replay_candles(sym) for sym in sorted(symbols))
+            ):
+                if exc is not None:
                     logging.error(f"error fetching candles for {sym} {exc}")
+                    arr = np.empty((0,), dtype=CANDLE_DTYPE)
+                if arr is None:
                     arr = np.empty((0,), dtype=CANDLE_DTYPE)
                 price_lookup[sym] = {
                     int(row["ts"]): float(row["c"]) for row in arr if float(row["c"]) > 0.0
@@ -7612,22 +7831,13 @@ class Passivbot:
                 if lookback_minutes > 5000 * 5:
                     tf_plan.append(("15m", 15))
                 for timeframe, tf_minutes in tf_plan:
-                    tf_tasks = {
-                        sym: asyncio.create_task(
-                            self.cm.get_candles(
-                                sym,
-                                start_ts=start_minute,
-                                end_ts=end_minute,
-                                strict=False,
-                                timeframe=timeframe,
-                            )
+                    for sym, arr, exc in await asyncio.gather(
+                        *(
+                            fetch_replay_candles(sym, timeframe=timeframe)
+                            for sym in sorted(symbols)
                         )
-                        for sym in symbols
-                    }
-                    for sym, task in tf_tasks.items():
-                        try:
-                            arr = await task
-                        except Exception as exc:
+                    ):
+                        if exc is not None:
                             logging.error(
                                 "error fetching %s candles for %s during equity history replay: %s",
                                 timeframe,

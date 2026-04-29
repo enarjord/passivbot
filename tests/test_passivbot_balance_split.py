@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import inspect
 import json
 import logging
 import sys
@@ -7,6 +9,7 @@ import types
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import numpy as np
 import pytest
 from passivbot_exceptions import FatalBotException
 
@@ -26,6 +29,7 @@ import passivbot as passivbot_module
 from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from market_snapshot import MarketSnapshot
 from planning_snapshot import PlanningMarketSnapshot, PlanningSnapshot
+from exchanges.binance import BinanceBot
 
 
 def test_authoritative_refresh_mode_defaults_to_staged_without_explicit_choice():
@@ -34,6 +38,13 @@ def test_authoritative_refresh_mode_defaults_to_staged_without_explicit_choice()
     bot.config = {"live": {"authoritative_refresh_mode": "legacy"}, "_raw_effective": {"live": {}}}
 
     assert bot._authoritative_refresh_mode() == "staged"
+
+
+def test_binance_execute_to_exchange_accepts_staged_prepare_cycle_kwarg():
+    signature = inspect.signature(BinanceBot.execute_to_exchange)
+
+    assert "prepare_cycle" in signature.parameters
+    assert signature.parameters["prepare_cycle"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def test_authoritative_refresh_mode_respects_explicit_legacy_opt_out_for_hyperliquid():
@@ -272,6 +283,60 @@ async def test_shutdown_gracefully_awaits_cancelled_maintainers():
 
 
 @pytest.mark.asyncio
+async def test_shutdown_gracefully_times_out_stuck_maintainer_before_closing_sessions(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._shutdown_maintainer_grace_seconds = 0.01
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+
+    seen = []
+    keep_running = asyncio.Event()
+    cancel_count = 0
+
+    async def _stuck_maintainer():
+        nonlocal cancel_count
+        while True:
+            try:
+                await keep_running.wait()
+            except asyncio.CancelledError:
+                cancel_count += 1
+                seen.append("maintainer_cancel_requested")
+                if cancel_count >= 2:
+                    raise
+                task = asyncio.current_task()
+                if task is not None and hasattr(task, "uncancel"):
+                    task.uncancel()
+
+    class _Closer:
+        def __init__(self, key):
+            self.key = key
+
+        async def close(self):
+            seen.append(self.key)
+
+    maintainer_task = asyncio.create_task(_stuck_maintainer())
+    bot.maintainers = {"watch_orders": maintainer_task}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Closer("ccp_closed")
+    bot.cca = _Closer("cca_closed")
+
+    await asyncio.sleep(0)
+    with caplog.at_level(logging.WARNING):
+        await bot.shutdown_gracefully()
+
+    assert "ccp_closed" in seen
+    assert "cca_closed" in seen
+    assert any("timed out" in record.message for record in caplog.records)
+
+    maintainer_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(maintainer_task, timeout=0.1)
+
+
+@pytest.mark.asyncio
 async def test_shutdown_gracefully_waits_for_execution_loop_before_closing_sessions():
     bot = Passivbot.__new__(Passivbot)
     bot._shutdown_in_progress = False
@@ -397,6 +462,118 @@ async def test_shutdown_gracefully_does_not_cancel_inline_execution_task_on_time
     execution_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await execution_task
+
+
+def test_asyncio_runtime_exception_handler_suppresses_ping_timeout_callback(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._asyncio_ws_callback_last_log_ms = 0
+
+    with caplog.at_level(logging.WARNING):
+        handled = bot._handle_asyncio_runtime_exception(
+            {
+                "message": "Exception in callback Client.receive_loop",
+                "exception": Exception("kucoinfutures ping timeout"),
+            }
+        )
+
+    assert handled is True
+    assert any("websocket callback ping timeout" in record.message for record in caplog.records)
+    assert (
+        bot._handle_asyncio_runtime_exception(
+            {
+                "message": "Exception in callback unrelated",
+                "exception": Exception("unexpected transport failure"),
+            }
+        )
+        is False
+    )
+
+
+def test_candle_fetch_concurrency_is_conservative_for_history_replay():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "hyperliquid"
+
+    assert bot._candle_fetch_concurrency(context="history_replay") == 1
+
+    bot.exchange = "kucoin"
+    assert bot._candle_fetch_concurrency(context="history_replay") == 2
+
+    bot.config = {"live": {"warmup_concurrency": 7}}
+    assert bot._candle_fetch_concurrency(context="history_replay") == 7
+
+
+@pytest.mark.asyncio
+async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "kucoin"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    bot.get_exchange_time = lambda: base_ts + 120_000
+    bot.get_raw_balance = lambda: 100.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    bot.positions = {}
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot.c_mults = {
+        "BTC/USDT:USDT": 1.0,
+        "ETH/USDT:USDT": 1.0,
+        "SOL/USDT:USDT": 1.0,
+    }
+    monkeypatch.setattr(passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None)
+
+    class _CM:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+            self.calls = []
+
+        async def get_candles(self, symbol, **kwargs):
+            self.calls.append((symbol, kwargs.get("timeframe")))
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                await asyncio.sleep(0.01)
+                return np.array(
+                    [
+                        (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                        (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                        (base_ts + 120_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                    ],
+                    dtype=passivbot_module.CANDLE_DTYPE,
+                )
+            finally:
+                self.active -= 1
+
+    cm = _CM()
+    bot.cm = cm
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        }
+        for symbol in bot.c_mults
+    ]
+
+    await bot.get_balance_equity_history(fill_events=fill_events, current_balance=100.0)
+
+    assert cm.max_active == 2
+    assert sorted(symbol for symbol, timeframe in cm.calls if timeframe == "1m") == sorted(
+        bot.c_mults
+    )
 
 
 @pytest.mark.asyncio
@@ -2855,6 +3032,7 @@ async def test_run_execution_loop_waits_for_clean_authoritative_cycle_before_exe
             ("fills", ("f", 1)),
         ):
             bot._record_authoritative_surface(surface, sig)
+        bot._record_authoritative_surface("completed_candles", tuple())
         return True
 
     async def fake_refresh_market_state_if_needed():
@@ -2877,6 +3055,74 @@ async def test_run_execution_loop_waits_for_clean_authoritative_cycle_before_exe
 
     assert result == {"executed_cycle": 1}
     assert executes == ["universe", "market", ("execute", False, 1)]
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_defers_staged_precondition_without_error_count():
+    bot = Passivbot.__new__(Passivbot)
+    cycle = {"n": 0}
+    executes = []
+
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = True
+    bot.active_symbols = []
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_refresh_authoritative_state():
+        cycle["n"] += 1
+        bot._begin_authoritative_refresh_epoch()
+        for surface, sig in (
+            ("balance", ("b", cycle["n"])),
+            ("positions", ("p", cycle["n"])),
+            ("open_orders", ("o", cycle["n"])),
+            ("fills", ("f", cycle["n"])),
+        ):
+            bot._record_authoritative_surface(surface, sig)
+        if cycle["n"] > 1:
+            bot._record_authoritative_surface("completed_candles", tuple())
+        return True
+
+    async def fake_prepare_planning_universe():
+        executes.append(("universe", cycle["n"]))
+
+    async def fake_refresh_market_state_if_needed():
+        executes.append(("market", cycle["n"]))
+        return True
+
+    async def fake_execute_to_exchange(*, prepare_cycle=True):
+        executes.append(("execute", prepare_cycle, cycle["n"]))
+        return {"executed_cycle": cycle["n"]}
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.prepare_planning_universe = fake_prepare_planning_universe
+    bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
+    bot.execute_to_exchange = fake_execute_to_exchange
+
+    result = await bot.run_execution_loop()
+
+    assert result == {"executed_cycle": 2}
+    assert executes == [
+        ("universe", 1),
+        ("market", 1),
+        ("universe", 2),
+        ("market", 2),
+        ("execute", False, 2),
+    ]
+    bot.restart_bot_on_too_many_errors.assert_not_called()
 
 
 @pytest.mark.asyncio

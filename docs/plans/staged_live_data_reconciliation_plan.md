@@ -109,6 +109,12 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Add configurable maximum inactive eligible candle staleness, e.g. `live.max_forager_candle_staleness_minutes`.
 - [x] Ensure no active symbol is budget-starved.
 - [ ] Ensure remote-call pacing avoids startup and minute-boundary bursts.
+- [ ] Ensure HSL/balance-equity replay candle fetches use the same remote-call economy principles as
+  active/forager candle refreshes; latest VPS Hyperliquid logs show replay can still burst 5m/15m
+  candle fetches and hit 429s during restart.
+- [ ] Avoid repeated full-scope exchange-specific state sweeps in steady state. Hyperliquid HIP-3
+  full dex sweeps are required at startup, periodically for safety, and after unknown-dex WS
+  activity, but should not run on every ordinary account refresh cycle.
 - [x] Add tests for fair stale-symbol rotation.
 - [x] Add tests proving active symbols bypass non-critical budgeting.
 
@@ -153,6 +159,11 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Hyperliquid non-unified vanilla DEBUG smoke.
 - [ ] Later: Bitget, Gate.io, OKX, Binance, KuCoin smoke tests.
 - [x] Add fake-live support for comparing remote call counts before/after major changes.
+- [ ] Add/extend fake-live request-count validation for steady-state staged account refreshes, with
+  exchange-specific hooks where needed to catch repeated broad state sweeps.
+- [ ] Add shutdown/reconnect smoke coverage for exchanges whose CCXT websocket layer emits callback
+  errors outside `watch_orders()`; latest KuCoin logs show `kucoinfutures ping timeout` as an
+  asyncio callback traceback even though the watch loop also reconnects.
 
 ### 11. `src/live/` Module Split
 
@@ -258,6 +269,17 @@ changing behavior during extraction commits.
 - [x] Added startup readiness timing logs for account-ready, active-candle-ready, first
   market-ready, startup-ready, and full-warmup-ready milestones.
 - [x] Kept broad forager candidate candle refresh out of the order execution critical path.
+- [x] Verified live staged precondition defers on Binance/OKX are non-fatal in VPS logs:
+  `[state] staged execution deferred` appears with `errors=0/10` instead of restart-counting
+  `RuntimeError` precondition failures.
+- [ ] Latest VPS Hyperliquid runs show non-unified HIP-3 account state remains expensive:
+  full dex `positions` and `open_orders` sweeps take roughly 10-22s when all known dexes are queried.
+  Startup full sweep is acceptable; steady-state periodic sweeps should be much slower and clearly
+  logged as `scope=full` vs `scope=active`.
+- [ ] Latest VPS KuCoin runs show two separate robustness issues: frequent REST OHLCV timeouts during
+  broad warmup, and CCXT websocket `ping timeout` exceptions emitted through an asyncio callback
+  before the normal watch-orders reconnect log. Treat these as reconnectable/noisy-runtime issues,
+  while preserving hard failures for required trading inputs.
   Execution now schedules the coalesced background refresh instead of awaiting it after every
   cancellation/creation pass.
 - [x] Added staged market snapshot fetch headroom. Rust planning now requests ticker snapshots
