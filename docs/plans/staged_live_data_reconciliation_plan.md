@@ -152,6 +152,22 @@ Before order planning/execution, live bot must have coherent state for:
 - [ ] Later: Bitget, Gate.io, OKX, Binance, KuCoin smoke tests.
 - [x] Add fake-live support for comparing remote call counts before/after major changes.
 
+### 11. `src/live/` Module Split
+
+Goal: reduce `src/passivbot.py` size and make staged live data contracts reviewable without
+changing behavior during extraction commits.
+
+- [ ] Create `src/live/` package with narrow, import-safe modules and no exchange side effects.
+- [ ] Move pure/data-contract types first: planning snapshot, freshness helpers, and market snapshot helpers.
+- [ ] Extract account-state refresh orchestration into `src/live/state_refresh.py`.
+- [ ] Extract market/candle/ticker planning helpers into `src/live/market_data.py`.
+- [ ] Extract actual-vs-ideal diffing, stale-state guardrails, and duplicate-order checks into `src/live/reconciler.py`.
+- [ ] Extract order execution payload/cap/safety helpers into `src/live/executor.py`.
+- [ ] Extract startup/shutdown/health timing utilities where practical into `src/live/runtime.py`.
+- [ ] Keep exchange-specific overrides in `src/exchanges/*`; move only generic live orchestration.
+- [ ] Do the split mechanically in small commits with parity tests after each extraction.
+- [ ] After extraction, remove the temporary legacy authoritative-refresh path when staged-only validation is complete.
+
 ## Current Completed Work Relevant To This Plan
 
 - [x] Staged account refresh path exists and logs per-surface timings.
@@ -234,6 +250,11 @@ Before order planning/execution, live bot must have coherent state for:
   exact `PlanningSnapshot` used for Rust planning and refuses to create orders if that snapshot
   is missing, stale, or does not cover the creation symbol, even if a later pre-create ticker
   refresh would be fresh.
+- [x] Completed the duplicate-order guardrail test matrix for bot-cancel confirmation, unknown
+  manual/exchange disappearance, self-emitted order disappearance, full-refresh recovery, and
+  restart/inherited-order recovery.
+- [x] Added startup readiness timing logs for account-ready, active-candle-ready, first
+  market-ready, startup-ready, and full-warmup-ready milestones.
 
 ## Initial Ticker Probe Findings
 
@@ -269,10 +290,8 @@ Hyperliquid USDC perps with `hyperliquid_01`:
 
 - Ticker endpoint probing is now systematic in tooling, but still needs VPS results for Bitget,
   Gate.io, OKX, Binance, and KuCoin before choosing durable per-exchange ticker strategies.
-- Duplicate-order guardrail covers disappeared self-orders; broader stale-state scenarios still
-  need fake-live/staged comparison coverage.
-- Startup/warmup is split into trading-ready and background work, but account-ready,
-  market-ready, active-candle-ready, and full-warmup-ready timing diagnostics are still incomplete.
+- Fake-live staged-vs-legacy comparison support exists, but still needs practical scenario coverage
+  focused on staged safety and request-count regression.
 - Bybit DEBUG smoke still hit OHLCV rate-limit/availability warnings during broad candle/EMA
   work, even though market snapshots were healthy.
 - Shutdown responsiveness during candle/EMA warmup is verified for Bybit warmup jitter; further
