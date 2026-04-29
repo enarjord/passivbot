@@ -9152,9 +9152,9 @@ class Passivbot:
         m1_volume_emas: dict[str, dict[float, float]] = {}
         m1_log_range_emas: dict[str, dict[float, float]] = {}
         h1_log_range_emas: dict[str, dict[float, float]] = {}
-        errors: list[tuple[str, Exception]] = []
+        errors: list[tuple[str, BaseException]] = []
         for sym, res in zip(ordered_symbols, symbol_results):
-            if isinstance(res, Exception):
+            if isinstance(res, BaseException):
                 errors.append((sym, res))
                 continue
             close, vol, lr1m, h1 = res
@@ -9163,6 +9163,9 @@ class Passivbot:
             m1_log_range_emas[sym] = lr1m
             h1_log_range_emas[sym] = h1
         if errors:
+            fatal = next((err for _sym, err in errors if not isinstance(err, Exception)), None)
+            if fatal is not None:
+                raise fatal
             for sym, err in errors[1:]:
                 logging.debug(
                     "[ema] additional symbol EMA bundle failure %s: %s: %s",
@@ -9196,6 +9199,23 @@ class Passivbot:
         self._assert_staged_planner_preconditions(
             include_market_snapshot=False, context="market snapshot refresh", symbols=symbols
         )
+
+        # Complete slow preparatory work before capturing the ticker snapshot
+        # used for Rust planning. This keeps the planning snapshot fresh through
+        # the create-side safety guard instead of aging it during EMA loading.
+        if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:
+            await self.update_effective_min_cost()
+
+        (
+            m1_close_emas,
+            m1_volume_emas,
+            m1_log_range_emas,
+            h1_log_range_emas,
+            _volumes_long,
+            _log_ranges_long,
+        ) = await self._load_orchestrator_ema_bundle(symbols, mode_overrides)
+        ema_unavailable_symbols = set(getattr(self, "_orchestrator_ema_unavailable_symbols", set()))
+
         market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
         self._assert_staged_planner_preconditions(
             include_market_snapshot=True, context="rust order calculation", symbols=symbols
@@ -9215,20 +9235,6 @@ class Passivbot:
             else "orchestrator_live"
         )
         Passivbot._monitor_record_price_ticks(self, last_prices, ts=utc_ms(), source=monitor_source)
-
-        # Ensure effective min cost is up to date.
-        if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:
-            await self.update_effective_min_cost()
-
-        (
-            m1_close_emas,
-            m1_volume_emas,
-            m1_log_range_emas,
-            h1_log_range_emas,
-            _volumes_long,
-            _log_ranges_long,
-        ) = await self._load_orchestrator_ema_bundle(symbols, mode_overrides)
-        ema_unavailable_symbols = set(getattr(self, "_orchestrator_ema_unavailable_symbols", set()))
 
         unstuck_allowances = self._calc_unstuck_allowances_live(
             allow_new_unstuck=not self.has_open_unstuck_order()

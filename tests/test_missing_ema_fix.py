@@ -608,3 +608,22 @@ async def test_ema_bundle_serializes_fetches_when_exchange_has_default_pacing(mo
     )
 
     assert bot.cm.max_concurrency == 1
+
+
+@pytest.mark.asyncio
+async def test_ema_bundle_parallel_shutdown_cancel_propagates(monkeypatch):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    monkeypatch.setattr(pb_mod.random, "shuffle", lambda items: None)
+    bot = _PacingProbeBot(exchange="binance", sleep_fn=asyncio.sleep)
+    bot.stop_signal_received = True
+
+    with pytest.raises(asyncio.CancelledError):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot,
+            ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+            {"long": {}, "short": {}},
+        )

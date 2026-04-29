@@ -839,12 +839,14 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(monk
 
     cm_calls = []
     snapshot_calls = []
+    call_order = []
 
     async def fake_get_last_prices(symbols, max_age_ms=None):
         cm_calls.append((list(symbols), max_age_ms))
         return {s: 101.0 for s in symbols}
 
     async def fake_get_snapshots(symbols, max_age_ms=None):
+        call_order.append("market_snapshot")
         snapshot_calls.append((list(symbols), max_age_ms))
         return {
             s: MarketSnapshot(
@@ -859,6 +861,7 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(monk
         }
 
     async def fake_load_bundle(self, symbols, modes):
+        call_order.append("ema_bundle")
         m1_close = {symbol: {1.0: 100.0, 2.0: 100.0}}
         m1_volume = {symbol: {10.0: 1_000.0}}
         m1_log_range = {symbol: {10.0: 0.01}}
@@ -887,6 +890,7 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(monk
 
     await bot.calc_ideal_orders_orchestrator()
 
+    assert call_order == ["ema_bundle", "market_snapshot"]
     assert snapshot_calls == [([symbol], 10_000)]
     assert cm_calls == []
     rust_symbol = captured["input"]["symbols"][0]
