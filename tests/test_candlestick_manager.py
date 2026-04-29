@@ -97,20 +97,24 @@ def test_candle_manager_hides_high_volume_cache_debug_below_trace(tmp_path, capl
 
     cm._log("debug", "index_cached", symbol="BTC/USDT:USDT", timeframe="1m", mtime=1.0)
     cm._log("debug", "ccxt_fetch_ohlcv", symbol="BTC/USDT:USDT", tf="1m")
+    cm._log("debug", "saved_range", symbol="BTC/USDT:USDT", rows=10)
 
     messages = [rec.getMessage() for rec in caplog.records]
     assert not any("event=index_cached" in msg for msg in messages)
-    assert any("event=ccxt_fetch_ohlcv" in msg for msg in messages)
+    assert not any("event=ccxt_fetch_ohlcv" in msg for msg in messages)
+    assert any("event=saved_range" in msg for msg in messages)
 
 
 def test_candle_manager_emits_high_volume_cache_debug_at_trace(tmp_path, caplog):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     cm.debug_level = 3
-    caplog.set_level(logging.DEBUG, logger=cm.log.name)
+    caplog.set_level(int(getattr(logging, "TRACE", 5)), logger=cm.log.name)
 
     cm._log("debug", "index_cached", symbol="BTC/USDT:USDT", timeframe="1m", mtime=1.0)
 
-    assert any("event=index_cached" in rec.getMessage() for rec in caplog.records)
+    records = [rec for rec in caplog.records if "event=index_cached" in rec.getMessage()]
+    assert records
+    assert records[0].levelno == int(getattr(logging, "TRACE", 5))
 
 
 @pytest.mark.asyncio

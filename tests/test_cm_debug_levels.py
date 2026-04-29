@@ -20,11 +20,14 @@ def test_debug_level_network_only_filters_non_ccxt():
 
     # Non-network debug should be filtered at level 1
     cm._log("debug", "saved_range", symbol="X")
-    # Network debug should pass
+    # Non-firehose network debug should pass
+    cm._log("debug", "archive_http_get", symbol="X")
+    # Per-page OHLCV fetch logs belong to TRACE, not DEBUG.
     cm._log("debug", "ccxt_fetch_ohlcv", symbol="X")
 
     msgs = cap.messages
-    assert any("event=ccxt_fetch_ohlcv" in m for m in msgs)
+    assert any("event=archive_http_get" in m for m in msgs)
+    assert not any("event=ccxt_fetch_ohlcv" in m for m in msgs)
     assert not any("event=saved_range" in m for m in msgs)
 
 
@@ -38,5 +41,18 @@ def test_debug_level_full_allows_all_debug():
     cm._log("debug", "ccxt_fetch_ohlcv", bar=2)
 
     msgs = cap.messages
-    assert any("event=ccxt_fetch_ohlcv" in m for m in msgs)
+    assert not any("event=ccxt_fetch_ohlcv" in m for m in msgs)
     assert any("event=saved_range" in m for m in msgs)
+
+
+def test_debug_level_trace_allows_candle_firehose():
+    cm = CandlestickManager(exchange=None, exchange_name="ex", debug=3)
+    cap = _Capture()
+    trace_level = int(getattr(logging, "TRACE", 5))
+    cap.setLevel(trace_level)
+    cm.log.addHandler(cap)
+    cm.log.setLevel(trace_level)
+
+    cm._log("debug", "ccxt_fetch_ohlcv", bar=2)
+
+    assert any("event=ccxt_fetch_ohlcv" in m for m in cap.messages)

@@ -596,7 +596,7 @@ class CandlestickManager:
         self.max_disk_candles_per_symbol_per_tf = int(max_disk_candles_per_symbol_per_tf)
         # Archive fetching: if False, only use ccxt REST API
         self.archive_enabled = bool(archive_enabled)
-        # Debug levels: 0=warnings, 1=network-only, 2=full debug, 3=trace
+        # Debug levels: 0=warnings, 1=network summaries, 2=debug, 3=trace/firehose
         try:
             dbg = int(float(debug))
         except Exception:
@@ -1155,7 +1155,8 @@ class CandlestickManager:
                 parts.append(f"{k}={v}")
         msg = " ".join(base + parts)
         if level == "debug":
-            # Apply debug filtering: level 0 -> drop; level 1 -> only ccxt_* events; level 2 -> all
+            # Apply filtering: level 0 -> drop; level 1 -> network summaries;
+            # level 2 -> actionable debug; level 3 -> trace/firehose.
             if self.debug_level <= 0:
                 return
             is_network = isinstance(event, str) and (
@@ -1171,11 +1172,30 @@ class CandlestickManager:
                 "disk_load_progress",
                 "get_candles_check_refresh",
                 "get_candles_present_decision",
+                "ccxt_fetch_ohlcv",
+                "ccxt_fetch_ohlcv_ok",
+                "ccxt_fetch_paginated_done",
+                "ccxt_fetch_progress",
+                "fetch_lock_acquired",
+                "fetch_lock_reentrant",
+                "historical_missing_spans",
+                "historical_missing_spans_coalesced",
                 "index_cached",
+                "index_rebuild_range",
+                "index_reload",
+                "large_span_check",
+                "large_span_needs_gap_fill",
                 "load_from_disk",
+                "refresh_fetch",
+                "refresh_skip_since",
+                "runtime_synthetic_gap_materialized",
                 "ttl_bypass_missing_coverage",
+                "ttl_skip_trailing_present_gap",
             }
-            if self.debug_level < 3 and event in high_volume_events:
+            if event in high_volume_events:
+                if self.debug_level < 3:
+                    return
+                self.log.log(int(getattr(logging, "TRACE", 5)), msg)
                 return
             self.log.debug(msg)
         elif level == "info":
@@ -3950,8 +3970,12 @@ class CandlestickManager:
                 break
             since = new_since
             prev_last_ts = last_ts
-        self.log.debug(
-            f"paginated fetch done exchange={self._ex_id} symbol={symbol} tf={tf_norm} rows={sum(a.shape[0] for a in all_rows) if all_rows else 0}"
+        self._log(
+            "debug",
+            "ccxt_fetch_paginated_done",
+            symbol=symbol,
+            tf=tf_norm,
+            rows=sum(a.shape[0] for a in all_rows) if all_rows else 0,
         )
         if not all_rows:
             return np.empty((0,), dtype=CANDLE_DTYPE)
