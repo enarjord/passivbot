@@ -164,11 +164,11 @@ Behavior summary:
 
 Signal mode:
 
-1. `live.hsl_signal_mode = "pside"`
-   - each `pside` controller uses its own realized/unrealized strategy PnL
-2. `live.hsl_signal_mode = "unified"`
+1. `live.hsl_signal_mode = "unified"` (default)
    - long and short keep separate HSL controllers
    - both are fed from the same combined account-level strategy signal
+2. `live.hsl_signal_mode = "pside"`
+   - each `pside` controller uses its own realized/unrealized strategy PnL
 
 Backtest-specific note:
 
@@ -399,7 +399,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - `manual`: leave that position in `manual` mode while keeping the original cooldown running and blocking fresh initials.
   - `tp_only`: keep the original cooldown running, block new entries, and allow only close management on that `pside`.
   - `graceful_stop`: keep the original cooldown running and manage any existing position with `graceful_stop` semantics while still blocking fresh initials.
-- **hsl_signal_mode**: Selects whether HSL drawdown is tracked per-side (`"pside"`, default) or from one combined account-level strategy signal (`"unified"`). See [Equity Hard Stop Loss](equity_hard_stop_loss.md).
+- **hsl_signal_mode**: Selects whether HSL drawdown is tracked from one combined account-level strategy signal (`"unified"`, default) or independently per side (`"pside"`). See [Equity Hard Stop Loss](equity_hard_stop_loss.md).
 - **max_memory_candles_per_symbol**: Maximum number of 1m candles retained in RAM per symbol. Older entries are trimmed once this cap is exceeded. Default is `200_000`.
 - **max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
 - **candle_lock_timeout_seconds**: Seconds to wait when another process holds the CandlestickManager per-symbol candle fetch lock (default `10`). Increase when running many bots sharing the same cache directory to avoid spurious timeouts during slow API calls.

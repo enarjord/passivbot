@@ -222,7 +222,7 @@ def _resolve_backtest_hsl_configs(config: dict) -> tuple[dict, dict]:
 
 def _resolve_backtest_hsl_signal_mode(config: dict) -> str:
     return normalize_hsl_signal_mode(
-        get_optional_config_value(config, "live.hsl_signal_mode", "pside")
+        get_optional_config_value(config, "live.hsl_signal_mode", "unified")
     )
 
 

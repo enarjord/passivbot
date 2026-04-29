@@ -9,39 +9,40 @@ HSL is configured separately for each `pside`:
 
 Signal construction is selected globally with `live.hsl_signal_mode`:
 
-1. `pside`
-   - long HSL uses long realized/unrealized strategy PnL
-   - short HSL uses short realized/unrealized strategy PnL
-2. `unified`
+1. `unified` (default)
    - long and short keep separate HSL controllers
    - both controllers are fed from the same combined account-level strategy signal
+2. `pside`
+   - long HSL uses long realized/unrealized strategy PnL
+   - short HSL uses short realized/unrealized strategy PnL
 
 ### Choosing a Signal Mode
 
-`pside` is the better default in most cases:
+`unified` is the default and the safer general-purpose choice:
 
-1. long HSL reacts to long deterioration
-2. short HSL reacts to short deterioration
+1. HSL reacts to whole-account strategy drawdown
+2. long and short still keep separate thresholds, cooldowns, and halts
+3. account-level stress on either side can influence both HSL controllers
+4. it avoids side-local churn where one side repeatedly halts while the other keeps adding account risk
+
+Use `unified` when:
+
+1. the strategy is intended to behave as one combined book
+2. long and short share one capital pool
+3. you want portfolio/account-level drawdown control
+
+`pside` is a specialized side-local signal mode:
+
+1. long HSL reacts only to long deterioration
+2. short HSL reacts only to short deterioration
 3. one profitable `pside` cannot hide a weak one
 4. side-specific `*_strategy_eq_long` and `*_strategy_eq_short` metrics are easier to interpret
 
 Use `pside` when:
 
-1. long and short are tuned differently
+1. long and short are intentionally independent strategies
 2. one `pside` should be allowed to halt while the other continues
-3. you want clearer side-local diagnostics and optimization feedback
-
-`unified` is better when you want whole-account awareness:
-
-1. long and short still keep separate thresholds, cooldowns, and halts
-2. both controllers see the same combined account-level strategy signal
-3. one profitable `pside` can offset stress on the other in the HSL trigger signal
-
-Use `unified` when:
-
-1. the strategy is intended to behave as one combined book
-2. long and short naturally hedge or subsidize each other
-3. you want account-level stress on one side to influence the HSL trigger signal on the other side
+3. you optimize and deploy with `live.hsl_signal_mode = "pside"` consistently
 
 This is separate from auto-unstuck and the realized-loss gate:
 
