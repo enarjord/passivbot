@@ -2346,20 +2346,27 @@ def test_legacy_planner_preconditions_do_not_require_freshness_ledger():
     assert details["missing"] == []
 
 
-@pytest.mark.asyncio
-async def test_disappeared_self_order_blocks_creations_until_full_freshness():
+def _make_open_order_guardrail_bot(*, epoch: int = 3):
     bot = Passivbot.__new__(Passivbot)
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_surface_signatures = {}
     bot._authoritative_surface_generations = {}
-    bot._authoritative_refresh_epoch = 3
+    bot._authoritative_refresh_epoch = epoch
     bot._authoritative_refresh_epoch_fresh = set()
     bot._authoritative_refresh_epoch_changed = set()
     bot._authoritative_pending_confirmations = {}
     bot.execution_scheduled = False
     bot.state_change_detected_by_symbol = set()
     bot.recent_order_cancellations = []
+    bot.recent_order_executions = []
+    bot.orders_emitted_to_exchange = []
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._reconcile_balance_after_open_orders_refresh = lambda: False
+    bot._detect_foreign_passivbot_orders = AsyncMock(return_value=None)
+    return bot
 
+
+def _guardrail_order(**overrides):
     order = {
         "id": "created-1",
         "symbol": "BTC/USDT:USDT",
@@ -2370,13 +2377,19 @@ async def test_disappeared_self_order_blocks_creations_until_full_freshness():
         "price": 99_000.0,
         "reduce_only": False,
     }
+    order.update(overrides)
+    return order
+
+
+@pytest.mark.asyncio
+async def test_disappeared_self_order_blocks_creations_until_full_freshness():
+    bot = _make_open_order_guardrail_bot(epoch=3)
+    order = _guardrail_order()
     bot.open_orders = {"BTC/USDT:USDT": [order]}
     bot.fetched_open_orders = [order]
     bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
     bot.order_matches_bot_cancellation = lambda _order: False
     bot.order_was_recently_cancelled = lambda _order: 0.0
-    bot.log_order_action = lambda *args, **kwargs: None
-    bot._reconcile_balance_after_open_orders_refresh = lambda: False
 
     ok = await Passivbot._apply_open_orders_snapshot(
         bot,
@@ -2412,18 +2425,112 @@ async def test_disappeared_self_order_blocks_creations_until_full_freshness():
 
 
 @pytest.mark.asyncio
+async def test_bot_cancelled_order_disappearance_does_not_arm_duplicate_guardrail():
+    bot = _make_open_order_guardrail_bot(epoch=5)
+    order = _guardrail_order()
+    bot.open_orders = {"BTC/USDT:USDT": [order]}
+    bot.fetched_open_orders = [order]
+    bot.order_matches_bot_cancellation = lambda _order: True
+    bot.order_was_recently_cancelled = lambda _order: 0.0
+    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
+
+    ok = await Passivbot._apply_open_orders_snapshot(
+        bot,
+        [],
+        allow_followup_positions_refresh=False,
+    )
+
+    assert ok is True
+    assert bot.freshness_ledger.blocked_symbols() == {}
+    assert bot._authoritative_pending_confirmations == {}
+    assert bot.state_change_detected_by_symbol == set()
+
+
+@pytest.mark.asyncio
+async def test_unknown_manual_or_exchange_cancel_requests_confirmation_without_symbol_block():
+    bot = _make_open_order_guardrail_bot(epoch=5)
+    order = _guardrail_order(id="manual-or-exchange-cancel")
+    bot.open_orders = {"BTC/USDT:USDT": [order]}
+    bot.fetched_open_orders = [order]
+    bot.order_matches_bot_cancellation = lambda _order: False
+    bot.order_was_recently_cancelled = lambda _order: 0.0
+    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: False
+
+    ok = await Passivbot._apply_open_orders_snapshot(
+        bot,
+        [],
+        allow_followup_positions_refresh=False,
+    )
+
+    assert ok is True
+    assert bot.freshness_ledger.blocked_symbols() == {}
+    assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
+    assert bot._authoritative_pending_confirmations == {
+        surface: 6 for surface in ACCOUNT_SURFACES
+    }
+
+
+@pytest.mark.asyncio
+async def test_disappeared_emitted_order_record_arms_duplicate_guardrail_without_recent_execution():
+    bot = _make_open_order_guardrail_bot(epoch=8)
+    order = _guardrail_order(
+        custom_id="entry_grid_normal_long",
+        info={"clientOrderId": "entry_grid_normal_long"},
+    )
+    bot.get_exchange_time = lambda: 10_000
+    bot.open_orders = {"BTC/USDT:USDT": [order]}
+    bot.fetched_open_orders = [order]
+    bot.order_matches_bot_cancellation = lambda _order: False
+    bot.order_was_recently_cancelled = lambda _order: 0.0
+    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: False
+    Passivbot._record_emitted_order_custom_id(bot, order, emitted_ts=9_000)
+
+    ok = await Passivbot._apply_open_orders_snapshot(
+        bot,
+        [],
+        allow_followup_positions_refresh=False,
+    )
+
+    assert ok is True
+    assert set(bot.freshness_ledger.blocked_symbols()) == {"BTC/USDT:USDT"}
+    assert bot.freshness_ledger.blocked_symbols()["BTC/USDT:USDT"].min_epoch == 9
+    assert bot._authoritative_pending_confirmations == {
+        surface: 9 for surface in ACCOUNT_SURFACES
+    }
+
+
+@pytest.mark.asyncio
+async def test_restarted_inherited_order_disappearance_uses_confirmation_not_symbol_block():
+    bot = _make_open_order_guardrail_bot(epoch=8)
+    order = _guardrail_order(
+        id="inherited-after-restart",
+        custom_id="entry_grid_normal_long",
+        info={"clientOrderId": "entry_grid_normal_long"},
+    )
+    bot.open_orders = {"BTC/USDT:USDT": [order]}
+    bot.fetched_open_orders = [order]
+    bot.order_matches_bot_cancellation = lambda _order: False
+    bot.order_was_recently_cancelled = lambda _order: 0.0
+    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: False
+    bot.orders_emitted_to_exchange = []
+
+    ok = await Passivbot._apply_open_orders_snapshot(
+        bot,
+        [],
+        allow_followup_positions_refresh=False,
+    )
+
+    assert ok is True
+    assert bot.freshness_ledger.blocked_symbols() == {}
+    assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
+    assert bot._authoritative_pending_confirmations == {
+        surface: 9 for surface in ACCOUNT_SURFACES
+    }
+
+
+@pytest.mark.asyncio
 async def test_disappeared_self_order_guardrail_blocks_real_plan_create_until_refresh(caplog):
-    bot = Passivbot.__new__(Passivbot)
-    bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    bot._authoritative_surface_signatures = {}
-    bot._authoritative_surface_generations = {}
-    bot._authoritative_refresh_epoch = 7
-    bot._authoritative_refresh_epoch_fresh = set()
-    bot._authoritative_refresh_epoch_changed = set()
-    bot._authoritative_pending_confirmations = {}
-    bot.execution_scheduled = False
-    bot.state_change_detected_by_symbol = set()
-    bot.recent_order_cancellations = []
+    bot = _make_open_order_guardrail_bot(epoch=7)
     bot._last_plan_detail = {}
     bot._order_plan_summary_is_interesting = lambda **kwargs: False
     bot.PB_modes = {"long": {}, "short": {}}
@@ -2440,23 +2547,12 @@ async def test_disappeared_self_order_guardrail_blocks_real_plan_create_until_re
     bot._get_live_last_prices = fake_get_live_last_prices
     bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_pct" else 0.0
 
-    disappeared_order = {
-        "id": "created-1",
-        "symbol": "BTC/USDT:USDT",
-        "side": "buy",
-        "position_side": "long",
-        "qty": 0.01,
-        "amount": 0.01,
-        "price": 99_000.0,
-        "reduce_only": False,
-    }
+    disappeared_order = _guardrail_order()
     bot.open_orders = {"BTC/USDT:USDT": [disappeared_order], "ETH/USDT:USDT": []}
     bot.fetched_open_orders = [disappeared_order]
     bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
     bot.order_matches_bot_cancellation = lambda _order: False
     bot.order_was_recently_cancelled = lambda _order: 0.0
-    bot.log_order_action = lambda *args, **kwargs: None
-    bot._reconcile_balance_after_open_orders_refresh = lambda: False
 
     await Passivbot._apply_open_orders_snapshot(
         bot,

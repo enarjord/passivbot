@@ -122,13 +122,14 @@ Before order planning/execution, live bot must have coherent state for:
 
 ### 8. Duplicate-Order Guardrail
 
-- [ ] Track known bot-emitted orders by exchange/client/order id with symbol, side, position side, qty, and price.
-- [ ] Detect when a known bot-created order disappears from open orders.
-- [ ] If position for that symbol is unchanged, mark symbol as suspect fill/stale position.
-- [ ] Block order creations for suspect symbols until positions, fills, and open orders are refreshed coherently.
-- [ ] Prefer blocking creations over risking duplicate entries.
-- [ ] Keep cancellation behavior conservative but avoid churn under ambiguous state.
-- [ ] Add tests for user cancel, exchange cancel, fill with stale position, fill with fresh position, and restart recovery.
+- [x] Track known bot-emitted orders by exchange/client/order id with symbol, side, position side, qty, and price.
+- [x] Detect when a known bot-created order disappears from open orders.
+- [x] If a known bot-created order disappears, conservatively mark the symbol as suspect fill/stale position.
+- [x] Block order creations for suspect symbols until positions, fills, and open orders are refreshed coherently.
+- [x] Prefer blocking creations over risking duplicate entries.
+- [x] Keep cancellation behavior conservative but avoid churn under ambiguous state.
+- [x] Add tests for bot cancel, unknown manual/exchange cancel, disappeared self-order with stale state,
+  full-refresh recovery, emitted-record matching, and restart/inherited-order recovery.
 
 ### 9. Websocket-Triggered Reconciliation
 
