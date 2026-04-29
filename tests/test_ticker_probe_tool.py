@@ -1,7 +1,9 @@
 import pytest
 
 from tools.probe_ticker_capabilities import (
+    create_exchange,
     probe_ticker_capabilities,
+    resolve_symbols,
     summarize_order_book,
     summarize_ticker,
     summarize_tickers,
@@ -94,8 +96,10 @@ async def test_probe_ticker_capabilities_summarizes_success_and_errors():
 def test_select_default_symbols_prefers_active_linear_swaps_for_quote():
     markets = {
         "BTC/USDT:USDT": {"quote": "USDT", "active": True, "swap": True, "linear": True},
-        "ETH/USDT:USDT": {"quote": "USDT", "active": True, "contract": True, "linear": True},
+        "ETH/USDT:USDT": {"quote": "USDT", "active": True, "swap": True, "linear": True},
         "BTC/USD:BTC": {"quote": "USD", "active": True, "swap": True, "linear": False},
+        "ETH/USD:USD": {"quote": "USD", "active": True, "future": True, "contract": True},
+        "COIN/USDT:USDT": {"quote": "USDT", "active": True, "contract": True, "linear": True},
         "OLD/USDT:USDT": {"quote": "USDT", "active": False, "swap": True, "linear": True},
         "SPOT/USDT": {"quote": "USDT", "active": True, "spot": True},
     }
@@ -104,6 +108,67 @@ def test_select_default_symbols_prefers_active_linear_swaps_for_quote():
         "BTC/USDT:USDT",
         "ETH/USDT:USDT",
     ]
+
+
+@pytest.mark.asyncio
+async def test_resolve_symbols_requires_active_linear_swaps_for_coins():
+    class FakeExchange:
+        async def load_markets(self):
+            return {
+                "ETH/BTC:BTC": {
+                    "base": "ETH",
+                    "quote": "BTC",
+                    "active": True,
+                    "swap": True,
+                    "linear": False,
+                },
+                "ETH/USD:USD": {
+                    "base": "ETH",
+                    "quote": "USD",
+                    "active": True,
+                    "future": True,
+                    "contract": True,
+                    "linear": False,
+                },
+                "ETH/USDT:USDT": {
+                    "base": "ETH",
+                    "quote": "USDT",
+                    "active": True,
+                    "swap": True,
+                    "linear": True,
+                },
+            }
+
+    assert await resolve_symbols(FakeExchange(), ["ETH"], quote="USDT") == ["ETH/USDT:USDT"]
+
+
+def test_create_exchange_sets_default_type_swap_before_load_markets(monkeypatch):
+    captured = {}
+
+    class FakeCCXTExchange:
+        def __init__(self, config):
+            captured["config"] = config
+            self.options = {}
+
+    monkeypatch.setattr(
+        "tools.probe_ticker_capabilities.ccxt_async.fakeprobe",
+        FakeCCXTExchange,
+        raising=False,
+    )
+
+    session = create_exchange(
+        "fakeprobe",
+        {
+            "exchange": "fakeprobe",
+            "apiKey": "key",
+            "secret": "secret",
+            "options": {"defaultType": "future", "adjustForTimeDifference": True},
+        },
+    )
+
+    assert captured["config"]["options"]["defaultType"] == "swap"
+    assert captured["config"]["options"]["adjustForTimeDifference"] is True
+    assert session.options["defaultType"] == "swap"
 
 
 @pytest.mark.asyncio

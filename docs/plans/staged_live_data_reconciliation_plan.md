@@ -76,7 +76,9 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Capture endpoint failure modes and rate-limit behavior.
 - [x] Run and record Bybit probe.
 - [x] Run and record Hyperliquid probe.
-- [ ] Later: run Bitget, Gate.io, OKX, Binance, KuCoin probes.
+- [x] Run initial Bitget, Gate.io, OKX, Binance, KuCoin probes.
+- [x] Rerun quote-specific VPS probes for Bitget, Gate.io, OKX, Binance, and KuCoin before
+  locking durable non-Hyperliquid ticker strategies.
 - [x] Store durable exchange quirks/config for cheapest safe ticker strategy for tested exchanges.
 
 ### 4. Candlestick Manager Completed-Only Scope
@@ -258,6 +260,106 @@ changing behavior during extraction commits.
 
 ## Initial Ticker Probe Findings
 
+Initial remaining-exchange probe command, run locally through VPN while some live bots were also
+running:
+
+```bash
+passivbot tool ticker-endpoint-probe --users bitget_01,gateio_01,okx_faisal,binance_01,kucoin_01 --coins BTC,ETH,SOL --repeats 2 --sleep-between-seconds 5 --out tmp/ticker_endpoint_probe_remaining.json
+```
+
+Caveat: because no `--quote` was supplied, symbol resolution selected mixed contract types:
+Bitget and KuCoin resolved USDC perps, Gate.io resolved USDT perps, OKX resolved USD
+coin-margined contracts, and Binance resolved `ETH/BTC:BTC` for ETH. Use these results as
+endpoint-shape evidence, not final USDT-perp strategy evidence.
+
+Bitget:
+
+- `fetch_tickers(symbols)` was fastest of the ticker shapes for the tested symbols
+  (median about 0.54s) and stayed complete.
+- Broad `fetch_tickers()` also worked (median about 0.81s), but the earlier VPS probe showed broad
+  Bitget CCXT responses can miss requested USDC perp symbols.
+- Keep Bitget defaulting to the symbol-list ticker strategy unless a later quote-specific VPS probe
+  disproves it.
+
+Gate.io:
+
+- Broad `fetch_tickers()` worked but was slower and more variable (median about 2.28s).
+- `fetch_tickers(symbols)` worked in one request and was better for the tested set
+  (median about 1.41s).
+- Concurrent per-symbol `fetch_ticker()` was fastest for three symbols (median about 0.68s), but
+  it scales as one remote call per symbol and is not a good default for broad live universes.
+- Later VPS USDT results superseded this local/VPN result; keep the broad default for Gate.io.
+
+OKX:
+
+- Broad `fetch_tickers()` worked but was variable (about 0.63s then 2.18s).
+- `fetch_tickers(symbols)` was stable for the tested set (median about 0.86s).
+- The probe selected USD coin-margined contracts, so this local result was superseded by the later
+  VPS USDT probe.
+
+Binance:
+
+- Broad `fetch_tickers()` was fast (median about 0.78s).
+- `fetch_tickers(symbols)` was slow (median about 2.73s), and sequential per-symbol tickers were
+  slower still.
+- `fetch_bids_asks()` and `fetch_bids_asks(symbols)` were both fast (about 0.58-0.65s), making a
+  future bid/ask strategy attractive if Binance needs more top-of-book economy than broad
+  tickers.
+- Broad `fetch_open_orders()` without a symbol triggered CCXT's high-rate-limit warning; Binance
+  account-state refresh should avoid unsymbolized open-order fetches.
+- Keep Binance on broad tickers for now. Do not infer final USDT-perp behavior from this probe
+  because ETH resolved to `ETH/BTC:BTC`.
+
+KuCoin:
+
+- Broad `fetch_tickers()` and `fetch_tickers(symbols)` were effectively tied for the tested set
+  (both around 0.92s median).
+- `fetch_bids_asks()` is not supported by CCXT for KuCoin.
+- The order-book probe failed without a captured exception type/message; that should be treated as
+  a probe-tool diagnostic gap, not a market-snapshot blocker.
+- Later VPS USDT results did not show a large enough advantage for symbol-list tickers to justify
+  changing the default.
+
+VPS USDT perp probe command:
+
+```bash
+passivbot tool ticker-endpoint-probe --users bitget_01,gateio_01,okx_faisal,binance_01,kucoin_01 --coins BTC,ETH,SOL --quote USDT --repeats 2 --sleep-between-seconds 5 --out tmp/ticker_endpoint_probe_remaining_usdt_vps.json
+```
+
+The initial Bitget private-key probe failed on one VPS, so Bitget was rerun separately from the
+other VPS:
+
+```bash
+passivbot tool ticker-endpoint-probe --users bitget_01 --coins BTC,ETH,SOL --quote USDT --repeats 2 --sleep-between-seconds 5 --out tmp/ticker_endpoint_probe_remaining_usdt_vps_bitget.json
+```
+
+VPS USDT results:
+
+- All successful probes resolved active linear USDT swap markets for BTC, ETH, and SOL.
+- Bitget: `fetch_tickers(symbols)` and broad `fetch_tickers()` were both complete and similar
+  on the successful VPS run, but keep Bitget on symbol-list tickers because the earlier VPS probe
+  showed broad Bitget CCXT responses can miss requested perp symbols.
+- Gate.io: broad `fetch_tickers()` was complete and faster than `fetch_tickers(symbols)` on VPS
+  (median about 0.35s vs 0.66s), so keep the default broad strategy.
+- OKX: `fetch_tickers(symbols)` was complete and modestly faster than broad tickers
+  (median about 0.20s vs 0.26s), but the difference is small and broad tickers populate the
+  process cache for more symbols. Keep broad as default unless future live logs show OKX ticker
+  bulk is a bottleneck.
+- Binance: broad `fetch_tickers()` was complete and much faster than `fetch_tickers(symbols)`
+  (median about 0.25s vs 2.13s). `fetch_bids_asks()` was faster still (median about 0.15s), but
+  using it would require a separate market-snapshot provider strategy. Keep broad tickers for now.
+- Binance: unsymbolized `fetch_open_orders()` triggers CCXT's high-rate-limit warning; keep
+  Binance account-state refresh away from broad open-order fetches.
+- KuCoin: broad and symbol-list tickers were both complete, with symbol-list only modestly faster
+  (median about 0.40s vs 0.48s). Keep broad as default for better cache population.
+
+Durable strategy after VPS probes:
+
+- Hyperliquid: broad custom `allMids` path for vanilla symbols, symbol fallback for HIP-3.
+- Bitget: `fetch_tickers(symbols)`.
+- Bybit, Gate.io, OKX, Binance, KuCoin: broad `fetch_tickers()` until live logs show a concrete
+  bottleneck or incomplete coverage.
+
 Lightweight single-user probe command shape:
 
 ```bash
@@ -288,8 +390,9 @@ Hyperliquid USDC perps with `hyperliquid_01`:
 
 ## Current Known Gaps
 
-- Ticker endpoint probing is now systematic in tooling, but still needs VPS results for Bitget,
-  Gate.io, OKX, Binance, and KuCoin before choosing durable per-exchange ticker strategies.
+- Ticker endpoint probing is now systematic in tooling. Bitget, Gate.io, OKX, Binance, and KuCoin
+  have both initial local probe results and quote-specific VPS USDT results; current durable
+  default remains broad tickers except for Hyperliquid and Bitget.
 - Fake-live staged-vs-legacy comparison support exists, but still needs practical scenario coverage
   focused on staged safety and request-count regression.
 - Bybit DEBUG smoke still hit OHLCV rate-limit/availability warnings during broad candle/EMA

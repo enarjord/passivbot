@@ -44,8 +44,11 @@ def create_exchange(exchange_id: str, user_info: dict[str, Any] | None = None):
     if exchange_class is None:
         raise ValueError(f"exchange {exchange_id!r} not found in ccxt.async_support")
     user_info = user_info or {}
-    session = exchange_class(build_ccxt_config(user_info))
     options = dict(user_info.get("options", {}) if isinstance(user_info.get("options"), dict) else {})
+    options["defaultType"] = "swap"
+    config = build_ccxt_config(user_info)
+    config["options"] = dict(options)
+    session = exchange_class(config)
     session.options.update(options)
     session.options["defaultType"] = "swap"
     if exchange_id == "hyperliquid":
@@ -54,6 +57,16 @@ def create_exchange(exchange_id: str, user_info: dict[str, Any] | None = None):
             {"types": ["swap", "hip3"], "hip3": {"dex": ["xyz"]}},
         )
     return session
+
+
+def is_active_linear_swap(market: Any) -> bool:
+    if not isinstance(market, dict):
+        return False
+    return bool(
+        market.get("active") is not False
+        and market.get("swap") is True
+        and market.get("linear") is True
+    )
 
 
 def summarize_ticker(ticker: Any) -> dict[str, Any]:
@@ -142,12 +155,12 @@ async def resolve_symbols(exchange, coins: list[str], quote: str | None = None) 
                 continue
             if quote_upper and str(market.get("quote") or "").upper() != quote_upper:
                 continue
-            if not bool(market.get("swap") or market.get("contract")):
+            if not is_active_linear_swap(market):
                 continue
             candidates.append((symbol, market))
         if not candidates:
-            raise ValueError(f"could not resolve swap symbol for coin {coin!r} quote={quote!r}")
-        candidates.sort(key=lambda item: (0 if item[1].get("linear") else 1, item[0]))
+            raise ValueError(f"could not resolve active linear swap symbol for coin {coin!r} quote={quote!r}")
+        candidates.sort(key=lambda item: item[0])
         resolved.append(candidates[0][0])
     return resolved
 

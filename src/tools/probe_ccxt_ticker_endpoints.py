@@ -9,6 +9,7 @@ from typing import Any
 from procedures import load_user_info
 from tools.probe_ticker_capabilities import (
     create_exchange,
+    is_active_linear_swap,
     resolve_symbols,
     split_csv,
     summarize_order_book,
@@ -30,11 +31,11 @@ def select_default_symbols(
             continue
         if market.get("active") is False:
             continue
-        if not bool(market.get("swap") or market.get("contract")):
+        if not is_active_linear_swap(market):
             continue
-        candidates.append((0 if market.get("linear") else 1, str(symbol)))
+        candidates.append(str(symbol))
     candidates.sort()
-    return [symbol for _, symbol in candidates[: max(0, int(max_symbols))]]
+    return candidates[: max(0, int(max_symbols))]
 
 
 def summarize_market(market: Any) -> dict[str, Any]:
