@@ -33,16 +33,16 @@ For one `pside`, define:
    - `P + hsl_cooldown_minutes_after_red`
 3. `E`
    - first non-panic entry fill on that `pside` after `P`
-4. `flat_now`
-   - current exchange-truth flatness for that `pside`
-5. `pos_now`
-   - current exchange-truth non-flat position for that `pside`
+4. `all_positions_closed_now`
+   - exchange currently reports no open positions for that `pside`
+5. `open_position_now`
+   - exchange currently reports an open position for that `pside`
 
 Important distinction:
 
 1. unresolved panic residue
    - panic close exists
-   - `pos_now` is non-flat
+   - `open_position_now` is true
    - no later entry `E`
 2. cooldown intervention
    - panic close exists
@@ -63,17 +63,17 @@ Apply in order for one `pside`:
    - HSL drawdown baseline is post-panic
 3. If `now < cooldown_end` and no `E` exists:
    - cooldown episode is still active
-   - if `flat_now`: wait
-   - if `pos_now`: unresolved panic residue, not operator intervention
+   - if `all_positions_closed_now`: wait
+   - if `open_position_now`: unresolved panic residue, not operator intervention
 4. If `now < cooldown_end` and `E` exists:
    - cooldown intervention happened
    - apply `hsl_position_during_cooldown_policy`
 
 Shared invariants:
 
-1. after a valid panic flatten, HSL drawdown tracking resets from after the panic
-2. while cooldown is active and the side is flat, the bot must not open fresh initials on that `pside`
-3. unresolved panic residue must still allow the bot to continue panic/flatten handling
+1. after a valid panic close fully closes all positions on that `pside`, HSL drawdown tracking resets from after the panic
+2. while cooldown is active and the side has no open positions, the bot must not open fresh initials on that `pside`
+3. unresolved panic residue must still allow the bot to continue panic-close handling
 
 ## Supported Policies
 
@@ -114,7 +114,7 @@ Contract:
 
 Important:
 
-1. while the side is still flat and no `E` exists, do not open fresh initials
+1. while the side still has no open positions and no `E` exists, do not open fresh initials
 2. reset boundary is the first post-panic non-panic entry `E`
 3. not the latest DCA add
 4. not a local marker
@@ -130,7 +130,7 @@ Intent:
 Contract:
 
 1. if intervention exists, panic-close it again
-2. once flat, reset drawdown baseline from after the new panic
+2. once all positions on that `pside` are fully closed, reset drawdown baseline from after the new panic
 3. restart cooldown from the new panic timestamp
 
 Note:
@@ -168,7 +168,7 @@ Contract:
 2. do not create new entry orders
 3. allow close management according to normal TP/close logic
 4. keep original `cooldown_end`
-5. once flat before cooldown expiry, continue waiting until cooldown ends
+5. once all positions on that `pside` are fully closed before cooldown expiry, continue waiting until cooldown ends
 6. once cooldown ends, resume normal operation
 
 ### `graceful_stop`
@@ -184,16 +184,16 @@ Contract:
 1. block fresh initials
 2. if a position exists, manage it with normal `graceful_stop` semantics
 3. keep original `cooldown_end`
-4. if the position closes before cooldown ends, continue waiting flat
+4. if all positions on that `pside` are fully closed before cooldown ends, continue waiting
 5. once cooldown ends, resume normal operation
 
 ## Unresolved Panic Residue
 
-If `now < cooldown_end`, `pos_now` is non-flat, and no later entry `E` exists:
+If `now < cooldown_end`, `open_position_now` is true, and no later entry `E` exists:
 
 1. this is not intervention
 2. do not apply `normal`, `manual`, `tp_only`, or `graceful_stop` semantics
-3. continue panic/flatten handling
-4. the bot must still be able to succeed in flattening
+3. continue panic-close handling
+4. the bot must still be able to fully close all positions on that `pside`
 
-This is required so the bot is not confused by a failed or partial panic flatten.
+This is required so the bot is not confused by a failed or partial panic close.

@@ -122,6 +122,21 @@ HLCVS_CACHE_HASH_LEN = 16
 HLCVS_CACHE_DIR_SEP = "__"
 
 
+@dataclass(frozen=True)
+class BacktestPlotContext:
+    hlcvs: np.ndarray | None = None
+    timestamps: np.ndarray | None = None
+    hard_stop_plot_data: Any = None
+
+    @classmethod
+    def from_payload(cls, payload) -> "BacktestPlotContext":
+        return cls(
+            hlcvs=np.asarray(payload.bundle.hlcvs),
+            timestamps=np.asarray(payload.bundle.timestamps),
+            hard_stop_plot_data=payload.hard_stop_plot_data,
+        )
+
+
 def parse_disabled_plot_groups(value) -> set[str]:
     if value in (None, False, "", [], ()):
         return set()
@@ -207,7 +222,7 @@ def _resolve_backtest_hsl_configs(config: dict) -> tuple[dict, dict]:
 
 def _resolve_backtest_hsl_signal_mode(config: dict) -> str:
     return normalize_hsl_signal_mode(
-        get_optional_config_value(config, "live.hsl_signal_mode", "pside")
+        get_optional_config_value(config, "live.hsl_signal_mode", "unified")
     )
 
 
@@ -978,7 +993,11 @@ def check_keys(dict0, dict1):
 
 def get_cache_hash(config, exchange):
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
-    approved_coins = require_live_value(config, "approved_coins")
+    approved_coins_raw = require_live_value(config, "approved_coins")
+    approved_coins = {
+        "long": sorted(approved_coins_raw.get("long", [])),
+        "short": sorted(approved_coins_raw.get("short", [])),
+    }
     minimum_coin_age = require_live_value(config, "minimum_coin_age_days")
     backtest_cfg = config.get("backtest", {}) or {}
     coin_sources = backtest_cfg.get("coin_sources") or {}
@@ -1757,8 +1776,7 @@ def post_process(
     results_path,
     exchange,
     label=None,
-    plot_hlcvs=None,
-    hard_stop_plot_data=None,
+    plot_context: BacktestPlotContext | None = None,
 ):
     sts = utc_ms()
     disabled_plot_groups = parse_disabled_plot_groups(config.get("disable_plotting"))
@@ -1822,7 +1840,7 @@ def post_process(
         hard_stop_figs = create_forager_hard_stop_drawdown_figure(
             bal_eq,
             config,
-            hard_stop_plot_data=hard_stop_plot_data,
+            hard_stop_plot_data=plot_context.hard_stop_plot_data if plot_context else None,
             autoplot=False,
             return_figures=True,
         )
@@ -1832,7 +1850,11 @@ def post_process(
         try:
             coins = require_config_value(config, f"backtest.coins.{exchange}")
             fills_plot_dir = oj(results_path, "fills_plots")
-            hlcvs_for_plot = plot_hlcvs if plot_hlcvs is not None else hlcvs
+            hlcvs_for_plot = (
+                plot_context.hlcvs
+                if plot_context is not None and plot_context.hlcvs is not None
+                else hlcvs
+            )
 
             def _save_coin_figure(name, fig):
                 save_figures({name: fig}, fills_plot_dir, close=True)
@@ -1841,6 +1863,7 @@ def post_process(
                 coins,
                 fdf,
                 hlcvs_for_plot,
+                timestamps=plot_context.timestamps if plot_context else None,
                 on_figure=_save_coin_figure,
                 close_after_callback=False,
             )
@@ -2116,8 +2139,7 @@ async def main():
             analysis,
             results_path,
             exchange,
-            plot_hlcvs=np.asarray(payload.bundle.hlcvs),
-            hard_stop_plot_data=payload.hard_stop_plot_data,
+            plot_context=BacktestPlotContext.from_payload(payload),
         )
     else:
         # Single exchange mode
@@ -2151,8 +2173,7 @@ async def main():
                 analysis,
                 results_path,
                 exchange,
-                plot_hlcvs=np.asarray(payload.bundle.hlcvs),
-                hard_stop_plot_data=payload.hard_stop_plot_data,
+                plot_context=BacktestPlotContext.from_payload(payload),
             )
 
 

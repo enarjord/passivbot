@@ -4,7 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Changed the HSL config default `live.hsl_signal_mode` to `unified`, making account-level strategy drawdown the canonical HSL signal while keeping `pside` available for side-local HSL tuning, and clarified that HSL RED waits for all positions on that side to be fully closed rather than waiting for PnL recovery.
 - Added `passivbot tool merge-paretos` for combining two or more Pareto run/front directories into capped long/short starting-config sets.
+- Changed optimizer `fixed_params` and `--fine_tune_params` from exact-only bounds keys to literal bounds-key selectors, with sorted multi-line logs showing each selector expansion and the resulting fixed/tunable bounds.
+- Changed no-path `passivbot tool pareto` discovery to choose the lexicographically latest `optimize_results/<run>/pareto` directory containing at least one `*.json` candidate instead of using directory modified time.
 - Fixed Gate.io live order creation with current CCXT/Gate.io by passing Passivbot custom ids as `clientOrderId`, letting CCXT emit Gate.io's required `t-`-prefixed order `text` while preserving the embedded Passivbot order-type marker.
 - Fixed live foreign-writer detection so a bot's own freshly acknowledged orders can be recognized by exchange order id, canonical Passivbot custom id, or a strict recent order fingerprint instead of relying only on raw client-id string equality.
 - Fixed OHLCV v2 planning so persistent gaps are not bypassed by sparse store bounds, and single-exchange backtest preparation no longer attempts the same v2 local path twice before falling back.
@@ -25,6 +28,7 @@ All notable user-facing changes will be documented in this file.
 - Live shutdown now interrupts candle/EMA warmup and cancels a stuck execution loop before closing exchange sessions, reducing Ctrl-C/shutdown hangs during broad market-data refresh.
 - Removed the deprecated `live.price_distance_threshold` setting. Rust-owned order generation and the live `order_match_tolerance_pct` replacement tolerance now define order placement/churn behavior; stale `price_distance_threshold` keys are stripped during config normalization.
 - Live startup logs one-shot readiness timings for account state, active candles, first market refresh, startup readiness, and broad candle warmup completion.
+- Fixed OHLCV v2 local preparation so sparse invalid v2 windows are repaired from existing legacy daily shards first, then fetched with exact intraday ranges instead of triggering full-range archive downloads or collapsing same-day repair windows to empty fetches.
 
 ## v7.10.0 - 2026-04-22
 

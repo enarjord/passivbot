@@ -6,10 +6,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from hlcv_preparation import prepare_hlcvs, try_prepare_hlcvs_v2_local
+from hlcv_preparation import (
+    _fetch_coin_range_into_v2_store,
+    _resolve_v2_store_range,
+    prepare_hlcvs,
+    try_prepare_hlcvs_v2_local,
+)
 from ohlcv_catalog import OhlcvCatalog
 from ohlcv_legacy_import import resolve_legacy_symbol_dir
-from ohlcv_store import month_start_ts
+from ohlcv_store import OhlcvStore, month_start_ts
 
 
 LEGACY_DTYPE = np.dtype(
@@ -28,6 +33,284 @@ def _write_day(root, exchange, symbol, day, rows):
     symbol_dir = resolve_legacy_symbol_dir(root, exchange, "1m", symbol)
     symbol_dir.mkdir(parents=True, exist_ok=True)
     np.save(symbol_dir / f"{day}.npy", np.array(rows, dtype=LEGACY_DTYPE))
+
+
+@pytest.mark.asyncio
+async def test_fetch_coin_range_into_v2_store_preserves_intraday_end(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4) + 24 * 24 * 60 * 60_000 + 60_000
+    end_ts = start_ts + 2 * 60_000
+    seen_ranges = []
+
+    class FakeOhlcvManager:
+        cm = None
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+            seen_ranges.append((self.start_ts, self.end_ts))
+
+        async def get_ohlcvs(self, coin):
+            timestamps = np.array(
+                [self.start_ts + i * 60_000 for i in range(3)],
+                dtype=np.int64,
+            )
+            return pd.DataFrame(
+                {
+                    "timestamp": timestamps,
+                    "high": np.array([101.0, 102.0, 103.0], dtype=np.float32),
+                    "low": np.array([99.0, 100.0, 101.0], dtype=np.float32),
+                    "close": np.array([100.0, 101.0, 102.0], dtype=np.float32),
+                    "volume": np.array([10.0, 11.0, 12.0], dtype=np.float32),
+                }
+            )
+
+    ok = await _fetch_coin_range_into_v2_store(
+        om=FakeOhlcvManager(),
+        catalog=catalog,
+        store=store,
+        exchange="binance",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert ok
+    assert seen_ranges == [(start_ts, end_ts)]
+    rng = store.read_range("binance", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert rng.valid.all()
+    np.testing.assert_array_equal(rng.timestamps, np.array([start_ts, start_ts + 60_000, end_ts]))
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_store_range_repairs_invalid_windows_from_partial_legacy(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    legacy_root = tmp_path / "caches" / "ohlcv"
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "ETH/USDT:USDT"
+    start = month_start_ts(2026, 4) + 1438 * 60_000
+    timestamps = np.array([start + i * 60_000 for i in range(3)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 104.0, dtype=np.float32),
+            np.arange(99.0, 102.0, dtype=np.float32),
+            np.arange(100.0, 103.0, dtype=np.float32),
+            np.arange(10.0, 13.0, dtype=np.float32),
+        ]
+    )
+
+    # V2 has bounded local data but one invalid middle minute. The requested
+    # range spans into 2026-04-02, which is absent from legacy, so full-range
+    # legacy inspection is intentionally partial even though the missing v2
+    # minute is repairable from the 2026-04-01 legacy shard.
+    store.write_rows("binance", "1m", symbol, timestamps[[0, 2]], values[[0, 2]])
+    _write_day(
+        legacy_root,
+        "binance",
+        symbol,
+        "2026-04-01",
+        [(int(timestamps[1]), 0.0, 203.0, 201.0, 202.0, 22.0)],
+    )
+
+    async def fail_remote_fetch(*args, **kwargs):
+        raise AssertionError("legacy repair should happen before remote fetch")
+
+    monkeypatch.setattr("hlcv_preparation._fetch_coin_range_into_v2_store", fail_remote_fetch)
+
+    rng = await _resolve_v2_store_range(
+        om=object(),
+        catalog=catalog,
+        store=store,
+        legacy_root=legacy_root,
+        exchange="binance",
+        coin="ETH",
+        symbol=symbol,
+        start_ts=int(timestamps[0]),
+        end_ts=int(timestamps[-1]),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert rng is not None
+    assert rng.valid.all()
+    np.testing.assert_array_equal(rng.timestamps, timestamps)
+    assert float(rng.values[1, 2]) == 202.0
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_store_range_fetches_invalid_windows_with_context(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "ETH/USDT:USDT"
+    start = month_start_ts(2026, 4)
+    timestamps = np.array([start + i * 60_000 for i in range(3)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 104.0, dtype=np.float32),
+            np.arange(99.0, 102.0, dtype=np.float32),
+            np.arange(100.0, 103.0, dtype=np.float32),
+            np.arange(10.0, 13.0, dtype=np.float32),
+        ]
+    )
+    store.write_rows("binance", "1m", symbol, timestamps[[0, 2]], values[[0, 2]])
+    calls = []
+
+    async def fake_remote_fetch(**kwargs):
+        calls.append((kwargs["start_ts"], kwargs["end_ts"]))
+        assert kwargs["start_ts"] == int(timestamps[0])
+        assert kwargs["end_ts"] == int(timestamps[-1])
+        kwargs["store"].write_rows(
+            kwargs["exchange"],
+            "1m",
+            kwargs["symbol"],
+            timestamps[[1]],
+            values[[1]],
+        )
+        return True
+
+    monkeypatch.setattr("hlcv_preparation._fetch_coin_range_into_v2_store", fake_remote_fetch)
+
+    rng = await _resolve_v2_store_range(
+        om=object(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="ETH",
+        symbol=symbol,
+        start_ts=int(timestamps[0]),
+        end_ts=int(timestamps[-1]),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert calls == [(int(timestamps[0]), int(timestamps[-1]))]
+    assert rng is not None
+    assert rng.valid.all()
+    np.testing.assert_array_equal(rng.timestamps, timestamps)
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_store_range_ignores_persistent_gap_after_local_repair(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "ETH/USDT:USDT"
+    start = month_start_ts(2026, 4)
+    timestamps = np.array([start + i * 60_000 for i in range(4)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 105.0, dtype=np.float32),
+            np.arange(99.0, 103.0, dtype=np.float32),
+            np.arange(100.0, 104.0, dtype=np.float32),
+            np.arange(10.0, 14.0, dtype=np.float32),
+        ]
+    )
+    store.write_rows("binance", "1m", symbol, timestamps[[0, 1, 3]], values[[0, 1, 3]])
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(timestamps[0]),
+        end_ts=int(timestamps[0]),
+        reason="stale_repaired_gap",
+        persistent=True,
+    )
+    calls = []
+
+    async def fake_remote_fetch(**kwargs):
+        calls.append((kwargs["start_ts"], kwargs["end_ts"]))
+        assert kwargs["start_ts"] == int(timestamps[0])
+        assert kwargs["end_ts"] == int(timestamps[-1])
+        kwargs["store"].write_rows(
+            kwargs["exchange"],
+            "1m",
+            kwargs["symbol"],
+            timestamps[[2]],
+            values[[2]],
+        )
+        return True
+
+    monkeypatch.setattr("hlcv_preparation._fetch_coin_range_into_v2_store", fake_remote_fetch)
+
+    rng = await _resolve_v2_store_range(
+        om=object(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="ETH",
+        symbol=symbol,
+        start_ts=int(timestamps[0]),
+        end_ts=int(timestamps[-1]),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert calls == [(int(timestamps[0]), int(timestamps[-1]))]
+    assert rng is not None
+    assert rng.valid.all()
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_store_range_blocks_unrepaired_persistent_gap(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "ETH/USDT:USDT"
+    start = month_start_ts(2026, 4)
+    timestamps = np.array([start + i * 60_000 for i in range(3)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 104.0, dtype=np.float32),
+            np.arange(99.0, 102.0, dtype=np.float32),
+            np.arange(100.0, 103.0, dtype=np.float32),
+            np.arange(10.0, 13.0, dtype=np.float32),
+        ]
+    )
+    store.write_rows("binance", "1m", symbol, timestamps[[0, 2]], values[[0, 2]])
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(timestamps[1]),
+        end_ts=int(timestamps[1]),
+        reason="no_archive",
+        persistent=True,
+    )
+
+    async def fail_remote_fetch(*args, **kwargs):
+        raise AssertionError("persistent gap should block remote fetch")
+
+    monkeypatch.setattr("hlcv_preparation._fetch_coin_range_into_v2_store", fail_remote_fetch)
+
+    rng = await _resolve_v2_store_range(
+        om=object(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="ETH",
+        symbol=symbol,
+        start_ts=int(timestamps[0]),
+        end_ts=int(timestamps[-1]),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert rng is None
 
 
 @pytest.mark.asyncio

@@ -188,6 +188,12 @@ class HLCVManager:
             self.end_date = format_end_date(self.end_date)
             self.end_ts = int(date_to_ts(self.end_date))
 
+    def update_timestamp_range(self, new_start_ts: int, new_end_ts: int):
+        self.start_ts = int(new_start_ts)
+        self.end_ts = int(new_end_ts)
+        self.start_date = ts_to_date(self.start_ts)
+        self.end_date = ts_to_date(self.end_ts)
+
     def load_cc(self):
         if self.cc is None:
             self.cc = load_ccxt_instance(self.exchange, enable_rate_limit=True)
@@ -1173,7 +1179,52 @@ async def _resolve_v2_store_range(
             ts_to_date(start_ts),
             ts_to_date(end_ts),
         )
+    elif plan.blocked_by_persistent_gap and plan.legacy_inspection is not None:
+        # Even when legacy data doesn't fully cover the persistent gap,
+        # import whatever is available so the valid window starts earlier.
+        imported_rows = import_legacy_range_into_store(
+            store=store,
+            legacy_root=legacy_root,
+            exchange=exchange,
+            timeframe="1m",
+            symbol=symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+        if imported_rows > 0:
+            logging.info(
+                "[%s] imported %d partial-coverage legacy 1m rows into v2 store for %s (%s -> %s)",
+                exchange,
+                imported_rows,
+                coin,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
     rng = store.read_range(exchange, "1m", symbol, start_ts, end_ts)
+    if (
+        not rng.valid.all()
+        and rng.valid.any()
+        and legacy_root is not None
+    ):
+        imported_rows = _import_legacy_invalid_windows(
+            store=store,
+            legacy_root=legacy_root,
+            exchange=exchange,
+            timeframe="1m",
+            symbol=symbol,
+            timestamps=rng.timestamps,
+            valid=rng.valid,
+        )
+        if imported_rows > 0:
+            logging.info(
+                "[%s] imported %d legacy 1m rows for invalid v2 windows for %s (%s -> %s)",
+                exchange,
+                imported_rows,
+                coin,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
+            rng = store.read_range(exchange, "1m", symbol, start_ts, end_ts)
     if rng.valid.all():
         logging.info(
             "[%s] %s for %s (%s -> %s)",
@@ -1184,7 +1235,12 @@ async def _resolve_v2_store_range(
             ts_to_date(end_ts),
         )
         return rng
-    if plan.persistent_gaps:
+    invalid_windows = (
+        _iter_invalid_windows(rng.timestamps, rng.valid)
+        if rng.valid.any()
+        else [(int(start_ts), int(end_ts))]
+    )
+    if _persistent_gaps_overlap_windows(plan.persistent_gaps, invalid_windows):
         partial_rng = _extract_single_valid_window(rng) if allow_partial_window else None
         if partial_rng is not None:
             logging.info(
@@ -1205,6 +1261,50 @@ async def _resolve_v2_store_range(
         return None
 
     if not allow_remote_fetch:
+        return None
+
+    if rng.valid.any():
+        logging.info(
+            "[%s] %s for %s: %d invalid local window(s) within %s -> %s",
+            exchange,
+            remote_fetch_log_label,
+            coin,
+            len(invalid_windows),
+            ts_to_date(start_ts),
+            ts_to_date(end_ts),
+        )
+        await _fetch_invalid_windows_into_v2_store(
+            om=om,
+            catalog=catalog,
+            store=store,
+            exchange=exchange,
+            coin=coin,
+            symbol=symbol,
+            timestamps=rng.timestamps,
+            valid=rng.valid,
+        )
+        rng = store.read_range(exchange, "1m", symbol, start_ts, end_ts)
+        if rng.valid.all():
+            logging.info(
+                "[%s] %s for %s after targeted fetch (%s -> %s)",
+                exchange,
+                local_hit_log_label,
+                coin,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
+            return rng
+        if allow_partial_window:
+            partial_rng = _extract_single_valid_window(rng)
+            if partial_rng is not None:
+                logging.info(
+                    "[%s] using partial v2 local window for %s after targeted fetch (%s -> %s)",
+                    exchange,
+                    coin,
+                    ts_to_date(int(partial_rng.timestamps[0])),
+                    ts_to_date(int(partial_rng.timestamps[-1])),
+                )
+                return partial_rng
         return None
 
     logging.info(
@@ -1318,6 +1418,95 @@ def _extract_single_valid_window(rng):
     )
 
 
+def _iter_invalid_windows(timestamps: np.ndarray, valid: np.ndarray) -> list[tuple[int, int]]:
+    invalid_ts = np.asarray(timestamps)[~np.asarray(valid, dtype=bool)]
+    if invalid_ts.size == 0:
+        return []
+    windows: list[tuple[int, int]] = []
+    start = prev = int(invalid_ts[0])
+    for raw_ts in invalid_ts[1:]:
+        ts = int(raw_ts)
+        if ts == prev + 60_000:
+            prev = ts
+            continue
+        windows.append((start, prev))
+        start = prev = ts
+    windows.append((start, prev))
+    return windows
+
+
+def _persistent_gaps_overlap_windows(gaps, windows: list[tuple[int, int]]) -> bool:
+    for gap in gaps:
+        if not bool(gap.persistent):
+            continue
+        gap_start = int(gap.start_ts)
+        gap_end = int(gap.end_ts)
+        for window_start, window_end in windows:
+            if gap_start <= int(window_end) and gap_end >= int(window_start):
+                return True
+    return False
+
+
+def _import_legacy_invalid_windows(
+    *,
+    store: OhlcvStore,
+    legacy_root: Path,
+    exchange: str,
+    timeframe: str,
+    symbol: str,
+    timestamps: np.ndarray,
+    valid: np.ndarray,
+) -> int:
+    imported_rows = 0
+    for window_start_ts, window_end_ts in _iter_invalid_windows(timestamps, valid):
+        imported_rows += import_legacy_range_into_store(
+            store=store,
+            legacy_root=legacy_root,
+            exchange=exchange,
+            timeframe=timeframe,
+            symbol=symbol,
+            start_ts=window_start_ts,
+            end_ts=window_end_ts,
+        )
+    return imported_rows
+
+
+async def _fetch_invalid_windows_into_v2_store(
+    *,
+    om: HLCVManager,
+    catalog: OhlcvCatalog,
+    store: OhlcvStore,
+    exchange: str,
+    coin: str,
+    symbol: str,
+    timestamps: np.ndarray,
+    valid: np.ndarray,
+) -> bool:
+    fetched_any = False
+    full_start_ts = int(timestamps[0])
+    full_end_ts = int(timestamps[-1])
+    context_ms = max(
+        60_000,
+        int(float(getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)) * 60_000),
+    )
+    for window_start_ts, window_end_ts in _iter_invalid_windows(timestamps, valid):
+        fetch_start_ts = max(full_start_ts, int(window_start_ts) - context_ms)
+        fetch_end_ts = min(full_end_ts, int(window_end_ts) + context_ms)
+        if not await _fetch_coin_range_into_v2_store(
+            om=om,
+            catalog=catalog,
+            store=store,
+            exchange=exchange,
+            coin=coin,
+            symbol=symbol,
+            start_ts=fetch_start_ts,
+            end_ts=fetch_end_ts,
+        ):
+            return fetched_any
+        fetched_any = True
+    return fetched_any
+
+
 async def _fetch_coin_range_into_v2_store(
     *,
     om: HLCVManager,
@@ -1330,7 +1519,10 @@ async def _fetch_coin_range_into_v2_store(
     end_ts: int,
 ) -> bool:
     interval_ms = 60_000
-    om.update_date_range(start_ts, end_ts)
+    if hasattr(om, "update_timestamp_range"):
+        om.update_timestamp_range(start_ts, end_ts)
+    else:
+        om.update_date_range(start_ts, end_ts)
     fetch_started = time.perf_counter()
     attempt = len(catalog.list_fetch_attempts(exchange, "1m", symbol, start_ts, end_ts)) + 1
     try:
