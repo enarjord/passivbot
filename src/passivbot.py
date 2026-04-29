@@ -2273,6 +2273,7 @@ class Passivbot:
 
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
+        Passivbot._startup_timing_begin(self)
         self._log_startup_banner()
         self._bot_ready = False
         logging.info("[boot] starting bot %s...", self.exchange)
@@ -2334,6 +2335,7 @@ class Passivbot:
                 return
             boot_stage = "init_markets"
             await self.init_markets()
+            Passivbot._startup_timing_mark(self, "account")
             await self._monitor_flush_snapshot(force=True, ts=utc_ms())
             if self.stop_signal_received:
                 self._monitor_emit_stop(
@@ -2348,6 +2350,7 @@ class Passivbot:
                 await self.warmup_trading_ready_candles()
             except Exception as e:
                 logging.info("[boot] trading-ready candle warmup skipped due to: %s", e)
+            Passivbot._startup_timing_mark(self, "active-candle")
             if self.stop_signal_received:
                 self._monitor_emit_stop(
                     "startup_aborted",
@@ -2385,6 +2388,7 @@ class Passivbot:
             logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
             logging.info("[boot] READY - Bot initialization complete, entering main trading loop")
             logging.info("[boot] ══════════════════════════════════════════════════════════════════════")
+            Passivbot._startup_timing_mark(self, "startup")
             self._bot_ready = True
             ready_ts = utc_ms()
             self._monitor_record_event(
@@ -2427,6 +2431,40 @@ class Passivbot:
                 payload={"stage": boot_stage, "error_type": type(exc).__name__},
             )
             raise
+
+    def _startup_timing_begin(self) -> None:
+        """Initialize one-shot startup readiness timing diagnostics."""
+        now_ms = utc_ms()
+        self._startup_timing_started_ms = now_ms
+        self._startup_timing_last_mark_ms = now_ms
+        self._startup_timing_marks = {}
+
+    def _startup_timing_mark(self, label: str, *, details: str = "") -> None:
+        """Log first readiness timing for a startup phase."""
+        label = str(label or "").strip()
+        if not label:
+            return
+        marks = getattr(self, "_startup_timing_marks", None)
+        if not isinstance(marks, dict):
+            Passivbot._startup_timing_begin(self)
+            marks = self._startup_timing_marks
+        if label in marks:
+            return
+        now_ms = utc_ms()
+        started_ms = int(getattr(self, "_startup_timing_started_ms", now_ms) or now_ms)
+        previous_ms = int(getattr(self, "_startup_timing_last_mark_ms", started_ms) or started_ms)
+        elapsed_s = max(0.0, (now_ms - started_ms) / 1000.0)
+        since_previous_s = max(0.0, (now_ms - previous_ms) / 1000.0)
+        marks[label] = now_ms
+        self._startup_timing_last_mark_ms = now_ms
+        suffix = f" | {details}" if details else ""
+        logging.info(
+            "[boot] startup timing | %s-ready=%.2fs | since_previous=%.2fs%s",
+            label,
+            elapsed_s,
+            since_previous_s,
+            suffix,
+        )
 
     async def init_markets(self, verbose=True):
         """Load exchange market metadata and refresh approval lists."""
@@ -3227,6 +3265,7 @@ class Passivbot:
             logging.info("[boot] background candle warmup starting")
             await self.warmup_candles_staggered(context="background warmup")
             logging.info("[boot] background candle warmup complete")
+            Passivbot._startup_timing_mark(self, "full-warmup")
         except asyncio.CancelledError:
             logging.debug("[shutdown] background candle warmup cancelled")
             raise
@@ -3840,6 +3879,7 @@ class Passivbot:
                 if not market_ok:
                     await asyncio.sleep(0.5)
                     continue
+                Passivbot._startup_timing_mark(self, "market")
                 if self.stop_signal_received:
                     break
                 self._set_log_silence_watchdog_context(phase="runtime", stage="execute_to_exchange")

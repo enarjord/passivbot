@@ -117,7 +117,7 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Fetch active-symbol completed candles before broad eligible-universe candles.
 - [ ] Fetch fresh active market snapshots before order creation.
 - [x] Pace broad eligible-universe candle catch-up in the background.
-- [ ] Add startup timing diagnostics: account-ready, market-ready, active-candle-ready, full-warmup-ready.
+- [x] Add startup timing diagnostics: account-ready, market-ready, active-candle-ready, full-warmup-ready.
 - [x] Add tests preventing broad simultaneous OHLCV startup bursts where feasible.
 
 ### 8. Duplicate-Order Guardrail

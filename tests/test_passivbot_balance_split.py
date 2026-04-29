@@ -408,6 +408,50 @@ async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypa
     assert stop_events[-1][1]["payload"]["stage"] == "warmup_trading_ready_candles"
 
 
+def test_startup_timing_marks_log_once(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    now_ms = [1_000]
+
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms[0])
+
+    Passivbot._startup_timing_begin(bot)
+    now_ms[0] = 2_500
+    with caplog.at_level(logging.INFO):
+        Passivbot._startup_timing_mark(bot, "account")
+        now_ms[0] = 4_000
+        Passivbot._startup_timing_mark(bot, "account")
+        now_ms[0] = 9_000
+        Passivbot._startup_timing_mark(bot, "active-candle", details="symbols=2")
+
+    messages = [record.message for record in caplog.records if "startup timing" in record.message]
+    assert messages == [
+        "[boot] startup timing | account-ready=1.50s | since_previous=1.50s",
+        "[boot] startup timing | active-candle-ready=8.00s | since_previous=6.50s | symbols=2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_background_candle_warmup_marks_full_warmup_ready(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    now_ms = [10_000]
+    calls = []
+
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms[0])
+
+    async def warmup_candles_staggered(**kwargs):
+        calls.append(kwargs)
+        now_ms[0] = 14_250
+
+    bot.warmup_candles_staggered = warmup_candles_staggered
+    Passivbot._startup_timing_begin(bot)
+
+    with caplog.at_level(logging.INFO):
+        await Passivbot._background_candle_warmup_task(bot)
+
+    assert calls == [{"context": "background warmup"}]
+    assert any("full-warmup-ready=4.25s" in record.message for record in caplog.records)
+
+
 def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
     bot.config = {"live": {"pnls_max_lookback_days": float(lookback_days)}}
     bot.get_exchange_time = lambda: now_ms
