@@ -97,11 +97,15 @@ def test_candle_manager_hides_high_volume_cache_debug_below_trace(tmp_path, capl
 
     cm._log("debug", "index_cached", symbol="BTC/USDT:USDT", timeframe="1m", mtime=1.0)
     cm._log("debug", "ccxt_fetch_ohlcv", symbol="BTC/USDT:USDT", tf="1m")
+    cm._log("debug", "get_candles_present_inner", symbol="BTC/USDT:USDT", need_fetch=True)
+    cm._log("debug", "legacy_index_built", symbol="BTC/USDT:USDT", legacy_days=1000)
     cm._log("debug", "saved_range", symbol="BTC/USDT:USDT", rows=10)
 
     messages = [rec.getMessage() for rec in caplog.records]
     assert not any("event=index_cached" in msg for msg in messages)
     assert not any("event=ccxt_fetch_ohlcv" in msg for msg in messages)
+    assert not any("event=get_candles_present_inner" in msg for msg in messages)
+    assert not any("event=legacy_index_built" in msg for msg in messages)
     assert any("event=saved_range" in msg for msg in messages)
 
 
