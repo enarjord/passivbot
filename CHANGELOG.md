@@ -23,6 +23,7 @@ All notable user-facing changes will be documented in this file.
 - Live forager candle budgeting now ranks refresh candidates by latest completed-candle staleness, keeps position/open-order symbols outside non-critical budget limits, and supports `live.max_forager_candle_staleness_minutes` to cap acceptable eligible-coin staleness.
 - Live startup now performs only a minimal trading-ready candle warmup for symbols with positions/open orders before entering the main loop, then runs broad approved-coin candle catch-up in a cancellable background task. Set `live.defer_broad_candle_warmup=false` to keep the old blocking broad warmup behavior.
 - Live shutdown now interrupts candle/EMA warmup and cancels a stuck execution loop before closing exchange sessions, reducing Ctrl-C/shutdown hangs during broad market-data refresh.
+- Removed the deprecated `live.price_distance_threshold` setting. Rust-owned order generation and the live `order_match_tolerance_pct` replacement tolerance now define order placement/churn behavior; stale `price_distance_threshold` keys are stripped during config normalization.
 
 ## v7.10.0 - 2026-04-22
 

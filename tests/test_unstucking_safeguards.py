@@ -468,7 +468,6 @@ def _make_dummy_bot(config, *, last_price=100.0):
             }
             self._live_values = {
                 "filter_by_min_effective_cost": False,
-                "price_distance_threshold": 1.0,
                 "market_orders_allowed": False,
                 "order_match_tolerance_pct": 0.0,
                 "hsl_position_during_cooldown_policy": "panic",

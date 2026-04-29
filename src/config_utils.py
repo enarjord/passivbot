@@ -861,15 +861,6 @@ RESERVED_CLI_ARGS = {
         },
         "help": "How far into the past to fetch realized PnL history: 0=minimal lookback, positive=float days, 'all'=full history.",
     },
-    "live.price_distance_threshold": {
-        "visible": ["--price-distance-threshold", "-pdt"],
-        "hidden": ["--live.price_distance_threshold", "--live_price_distance_threshold"],
-        "type": float,
-        "metavar": "FLOAT",
-        "commands": {"live"},
-        "group": {"live": "Behavior"},
-        "help": "Reject orders whose price is too far from the market.",
-    },
     "live.time_in_force": {
         "visible": ["--time-in-force", "-tif"],
         "hidden": ["--live.time_in_force", "--live_time_in_force"],
@@ -1131,7 +1122,6 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "live.market_orders_allowed",
         "live.max_realized_loss_pct",
         "live.order_match_tolerance_pct",
-        "live.price_distance_threshold",
     }
     runtime = {
         "live.execution_delay_seconds",

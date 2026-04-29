@@ -23,7 +23,7 @@ class PriceThresholdBot(Passivbot):
         self.c_mults = {symbol: 1.0}
         self.custom_id_max_length = 36
         self.equity_hard_stop_loss = {"panic_close_order_type": "market"}
-        self._live_values = {"price_distance_threshold": 0.015, "market_orders_allowed": False}
+        self._live_values = {"market_orders_allowed": False}
 
     def live_value(self, key: str):
         return self._live_values.get(key, 0.0)
@@ -32,7 +32,7 @@ class PriceThresholdBot(Passivbot):
         return f"cid-{order_type_id}"
 
 
-def test_close_orders_are_not_filtered_by_price_distance_threshold():
+def test_close_orders_are_not_filtered_by_deprecated_price_distance_gate():
     symbol = "TEST/USDT"
     bot = PriceThresholdBot(symbol, last_price=100.0)
     bot.positions[symbol]["long"]["size"] = 1.0

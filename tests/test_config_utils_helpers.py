@@ -52,6 +52,22 @@ def test_default_example_config_matches_schema_defaults():
     assert example == get_template_config()
 
 
+def test_prepare_config_strips_deprecated_price_distance_threshold():
+    source = get_template_config()
+    source["live"]["price_distance_threshold"] = 0.002
+
+    prepared = prepare_config(
+        source,
+        base_config_path="",
+        live_only=True,
+        verbose=False,
+        target="live",
+        runtime="live",
+    )
+
+    assert "price_distance_threshold" not in prepared["live"]
+
+
 def test_prepare_config_preserves_raw_snapshot_and_effective_input():
     source, base_config_path, raw_snapshot = load_input_config(None, log_info=False)
     source["live"]["user"] = "test_user"

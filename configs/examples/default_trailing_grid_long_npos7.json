@@ -351,6 +351,7 @@
                 "UNI"
             ]
         },
+        "authoritative_refresh_mode": "staged",
         "auto_gs": true,
         "balance_hysteresis_snap_pct": 0.01,
         "balance_override": null,
@@ -370,6 +371,7 @@
         "inactive_coin_candle_ttl_minutes": 10,
         "leverage": 10,
         "margin_mode_preference": "cross",
+        "market_snapshot_ticker_strategy": "auto",
         "market_order_near_touch_threshold": 0.001,
         "market_orders_allowed": false,
         "max_concurrent_api_requests": null,
@@ -384,7 +386,6 @@
         "minimum_coin_age_days": 365,
         "order_match_tolerance_pct": 0.0002,
         "pnls_max_lookback_days": 30,
-        "price_distance_threshold": 0.002,
         "recv_window_ms": 5000,
         "time_in_force": "good_till_cancelled",
         "user": "bybit_01",
