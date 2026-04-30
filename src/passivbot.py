@@ -6922,7 +6922,14 @@ class Passivbot:
     def _completed_candle_freshness_signature(
         self, symbols: Iterable[str], *, now_ms: int | None = None
     ) -> tuple[tuple, list[dict]]:
-        """Return exact completed-1m candle freshness signature plus missing details."""
+        """Return required completed-1m candle target signature plus missing details.
+
+        The signature is intentionally limited to the required completed minute
+        per symbol. Cache internals such as last cached timestamp and synthetic
+        count may improve after this surface is stamped by background refreshes;
+        those improvements must not invalidate a cycle that already had the
+        required completed candle coverage.
+        """
         ordered_symbols = tuple(sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)))
         if not ordered_symbols:
             return tuple(), []
@@ -6957,8 +6964,6 @@ class Passivbot:
                         (
                             symbol,
                             int(tf_report.get("latest_expected_ts") or 0),
-                            int(tf_report.get("last_cached_ts") or 0),
-                            int(tf_report.get("runtime_synthetic_count") or 0),
                         )
                     )
                     continue

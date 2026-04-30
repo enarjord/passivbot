@@ -100,6 +100,9 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Add diagnostics for last completed 1m/15m/1h candle, gaps, synthetic count, cache coverage, and stale age.
 - [x] Add INFO logs only for interesting candle health events.
 - [x] Keep detailed candle health diagnostics at DEBUG.
+- [x] Make staged completed-candle ledger signatures stable across cache improvements: the
+  signature now represents the required completed minute per symbol, while mutable cache
+  details remain diagnostics only.
 
 ### 6. Remote-Call Budgeting
 

@@ -2559,9 +2559,7 @@ def test_staged_planner_preconditions_explain_completed_candle_signature_mismatc
     bot._begin_authoritative_refresh_epoch()
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
-    bot._record_authoritative_surface(
-        "completed_candles", (("BTC/USDT:USDT", 60_000, 60_000, 0),)
-    )
+    bot._record_authoritative_surface("completed_candles", (("BTC/USDT:USDT", 60_000),))
 
     ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
 
@@ -2574,6 +2572,50 @@ def test_staged_planner_preconditions_explain_completed_candle_signature_mismatc
     assert mismatch["changed_symbols"] == ["BTC/USDT:USDT"]
 
 
+def test_completed_candle_signature_ignores_later_cache_improvements():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    symbol = "BTC/USDT:USDT"
+    stamp_ms = 120_500
+    bot.active_symbols = [symbol]
+    bot.positions = {symbol: {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    bot.open_orders = {}
+    bot.PB_modes = {"long": {}, "short": {}}
+
+    def completed_candle_health(_symbol, windows=None, now_ms=None):
+        return {
+            "ok": True,
+            "timeframes": {
+                "1m": {
+                    "coverage_ok": True,
+                    "latest_expected_ts": 60_000,
+                    "last_cached_ts": 60_000 if int(now_ms) == stamp_ms else 120_000,
+                    "missing_candles": 0,
+                    "runtime_synthetic_count": 0 if int(now_ms) == stamp_ms else 3,
+                }
+            },
+        }
+
+    bot.cm = SimpleNamespace(get_completed_candle_health=completed_candle_health)
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+    bot.freshness_ledger.stamp(
+        "completed_candles",
+        ((symbol, 60_000),),
+        now_ms=stamp_ms,
+        epoch=bot._authoritative_refresh_epoch,
+    )
+
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
+
+    assert ok is True
+    assert details["missing"] == []
+
+
 def test_staged_planner_preconditions_validate_candles_at_surface_stamp_time():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
@@ -2581,7 +2623,7 @@ def test_staged_planner_preconditions_validate_candles_at_surface_stamp_time():
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     symbol = "BTC/USDT:USDT"
     stamp_ms = 120_500
-    stamped_signature = ((symbol, 60_000, 60_000, 0),)
+    stamped_signature = ((symbol, 60_000),)
     bot.active_symbols = [symbol]
     bot.positions = {symbol: {"long": {"size": 1.0}, "short": {"size": 0.0}}}
     bot.open_orders = {}
@@ -2671,7 +2713,7 @@ def test_build_staged_planning_snapshot_captures_exact_surface_contract():
     bot._begin_authoritative_refresh_epoch()
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
-    candle_signature = ((symbol, 120_000, 120_000, 0),)
+    candle_signature = ((symbol, 120_000),)
     bot._record_authoritative_surface("completed_candles", candle_signature)
     bot._record_market_snapshot_surface([symbol], snapshots)
 
