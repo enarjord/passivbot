@@ -137,7 +137,7 @@ def _equity_hard_stop_enabled(self, pside: Optional[str] = None) -> bool:
 
 def _equity_hard_stop_signal_mode(self) -> str:
     config = getattr(self, "config", {})
-    return normalize_hsl_signal_mode(get_optional_live_value(config, "hsl_signal_mode", "pside"))
+    return normalize_hsl_signal_mode(get_optional_live_value(config, "hsl_signal_mode", "unified"))
 
 
 def _equity_hard_stop_cooldown_position_policy(self) -> str:

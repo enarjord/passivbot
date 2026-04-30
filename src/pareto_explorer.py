@@ -26,6 +26,7 @@ from config.scoring import (
     objective_spec_by_metric,
 )
 from metrics_schema import flatten_metric_stats
+from pareto_core import detect_latest_pareto_dir
 
 
 METHOD_ALIASES = {
@@ -255,16 +256,6 @@ def _score_label_and_value(result: SelectionResult) -> tuple[str, str]:
     return "Score", f"{float(result.score):.6f}"
 
 
-def detect_latest_pareto_dir(root: str | os.PathLike[str] = "optimize_results") -> Optional[Path]:
-    base = Path(root).expanduser()
-    if not base.is_dir():
-        return None
-    candidates = [path for path in base.glob("*/pareto") if path.is_dir()]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda path: path.stat().st_mtime).resolve()
-
-
 def resolve_pareto_directory(path: str | os.PathLike[str]) -> Path:
     raw = Path(path).expanduser()
     if raw.is_dir():
@@ -343,7 +334,10 @@ def build_parser() -> argparse.ArgumentParser:
         "path",
         nargs="?",
         type=str,
-        help="Pareto directory or optimization run directory. Defaults to the newest optimize_results/.../pareto.",
+        help=(
+            "Pareto directory or optimization run directory. Defaults to the "
+            "lexicographically latest optimize_results/<run>/pareto with JSON candidates."
+        ),
     )
     parser.add_argument(
         "-m",
@@ -1224,7 +1218,8 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         latest = detect_latest_pareto_dir()
         if latest is None:
             raise FileNotFoundError(
-                "No pareto path provided and no optimize_results/.../pareto directory was found."
+                "No pareto path provided and no valid optimize_results/<run>/pareto directory "
+                "with at least one *.json candidate was found."
             )
         raw_path = str(latest)
     pareto_dir, candidates, scoring_specs = load_candidates(raw_path)

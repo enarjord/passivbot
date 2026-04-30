@@ -21,8 +21,9 @@ Pass `--run optimize_results/<timestamp>/` to load a specific run or point it at
 `passivbot tool pareto` reads a Pareto directory of JSON members, optionally filters it with
 optimizer-style limit expressions, and selects one candidate using a named decision method.
 If you omit the path entirely, it defaults to the newest local `optimize_results/.../pareto`
-directory. If you point it at an optimize run directory instead of the nested `pareto/`
-directory, it resolves that automatically.
+directory by lexicographic run-directory name, considering only runs whose `pareto/`
+subdirectory contains at least one `*.json` candidate. If you point it at an optimize run
+directory instead of the nested `pareto/` directory, it resolves that automatically.
 
 ```shell
 passivbot tool pareto optimize_results/.../pareto

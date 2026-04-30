@@ -191,7 +191,7 @@ impl Default for EquityHardStopLossConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            signal_mode: "pside".to_string(),
+            signal_mode: "unified".to_string(),
             red_threshold: 0.25,
             ema_span_minutes: 60.0,
             cooldown_minutes_after_red: 0.0,

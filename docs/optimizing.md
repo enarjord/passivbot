@@ -386,8 +386,9 @@ python3 src/pareto_store.py optimize_results/.../pareto/
 loads the JSON artifacts, optionally filters them with `--limit` / `--limits`, then chooses one
 candidate using a named decision rule. It accepts either a `pareto/` directory, an optimize run
 directory, or no path at all, in which case it falls back to the newest local
-`optimize_results/.../pareto`. It also shows the retained front's ideal point for the active
-objectives. Recommended workflow:
+`optimize_results/.../pareto` by lexicographic run-directory name, considering only runs whose
+`pareto/` subdirectory contains at least one `*.json` candidate. It also shows the retained
+front's ideal point for the active objectives. Recommended workflow:
 
 1. apply hard filters with `--limit`
 2. use `-m reference` if you already know your target ADG / drawdown / recovery regime

@@ -57,6 +57,7 @@ def test_load_input_config_without_path_uses_schema_defaults():
     assert base_config_path == ""
     assert source == get_template_config()
     assert raw_snapshot == get_template_config()
+    assert source["live"]["hsl_signal_mode"] == "unified"
 
 
 def test_default_example_config_loads_with_grouped_shape_and_live_execution_settings():

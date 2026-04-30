@@ -24,6 +24,7 @@ from pareto_core import (
     compute_ideal,
     crowding_distances,
     dominates_with_violation,
+    detect_latest_pareto_dir,
     extract_objectives,
     extract_violation,
     prune_front_with_extremes,
@@ -433,21 +434,6 @@ def comma_separated_values_float(x):
     return [float(z) for z in x.split(",")]
 
 
-def detect_latest_pareto_dir(root: Path = Path("optimize_results")) -> Optional[str]:
-    if not root.exists():
-        return None
-    latest: Optional[tuple[float, Path]] = None
-    for child in sorted(root.iterdir()):
-        pareto_path = child / "pareto"
-        if pareto_path.is_dir():
-            mtime = pareto_path.stat().st_mtime
-            if latest is None or mtime > latest[0]:
-                latest = (mtime, pareto_path)
-    if latest is None:
-        return None
-    return str(latest[1])
-
-
 def main():
     import argparse
     import matplotlib.pyplot as plt
@@ -478,8 +464,8 @@ def main():
         default=None,
         help=(
             "Path to a pareto/ directory produced by the optimizer or suite. When\n"
-            "omitted the script auto-detects the most recent run under\n"
-            "optimize_results/."
+            "omitted the script auto-detects the lexicographically latest run\n"
+            "under optimize_results/ whose pareto/ dir has JSON candidates."
         ),
     )
     parser.add_argument(
@@ -545,11 +531,11 @@ def main():
         auto_dir = detect_latest_pareto_dir()
         if auto_dir is None:
             parser.error(
-                "No pareto directory specified and none found under optimize_results/. "
-                "Provide a path explicitly."
+                "No pareto directory specified and no valid optimize_results/<run>/pareto "
+                "directory with at least one *.json candidate was found. Provide a path explicitly."
             )
         print(f"[info] Using latest pareto directory: {auto_dir}")
-        pareto_dir = auto_dir
+        pareto_dir = str(auto_dir)
 
     pareto_dir = pareto_dir.rstrip("/")
     entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))

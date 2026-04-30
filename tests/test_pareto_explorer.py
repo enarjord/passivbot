@@ -9,7 +9,6 @@ import pytest
 
 from pareto_explorer import (
     build_parser,
-    detect_latest_pareto_dir,
     filter_candidates,
     load_candidates,
     run_from_args,
@@ -145,24 +144,6 @@ def test_load_candidates_accepts_run_or_pareto_dir(sample_pareto_dir: Path):
     assert run_dir == sample_pareto_dir.resolve()
     assert len(candidates_from_run) == 4
     assert [spec.metric for spec in specs_from_run] == ["metric_a", "metric_b", "metric_c"]
-
-
-def test_detect_latest_pareto_dir_selects_newest(tmp_path: Path):
-    older = tmp_path / "optimize_results" / "older" / "pareto"
-    newer = tmp_path / "optimize_results" / "newer" / "pareto"
-    older.mkdir(parents=True)
-    newer.mkdir(parents=True)
-    older.touch()
-    newer.touch()
-    older.parent.touch()
-    newer.parent.touch()
-    older_dir = older.resolve()
-    newer_dir = newer.resolve()
-    os.utime(older_dir, (1000, 1000))
-    os.utime(newer_dir, (2000, 2000))
-
-    resolved = detect_latest_pareto_dir(tmp_path / "optimize_results")
-    assert resolved == newer_dir
 
 
 def test_filter_candidates_with_cli_keep_condition(sample_pareto_dir: Path):
@@ -340,8 +321,10 @@ def test_run_from_args_prints_summary(sample_pareto_dir: Path, capsys):
 
 def test_run_from_args_uses_latest_pareto_dir_when_path_omitted(tmp_path: Path, monkeypatch, capsys):
     root = tmp_path / "optimize_results"
-    older = root / "older" / "pareto"
-    newer = root / "newer" / "pareto"
+    older_run = "2026-04-28T09_00_00_older"
+    newer_run = "2026-04-28T10_00_00_newer"
+    older = root / older_run / "pareto"
+    newer = root / newer_run / "pareto"
     older.mkdir(parents=True)
     newer.mkdir(parents=True)
     _write_candidate(older, "older_balanced", {"metric_a": 0.6, "metric_b": 0.6, "metric_c": 0.6})
@@ -365,8 +348,11 @@ def test_run_from_args_uses_latest_pareto_dir_when_path_omitted(tmp_path: Path, 
     result = run_from_args(args)
     captured = capsys.readouterr().out
     assert str(newer.resolve()) not in captured
-    assert "optimize_results/newer/pareto" in captured
-    assert "Backtest command: passivbot backtest optimize_results/newer/pareto/newer_balanced.json" in captured
+    assert f"optimize_results/{newer_run}/pareto" in captured
+    assert (
+        f"Backtest command: passivbot backtest "
+        f"optimize_results/{newer_run}/pareto/newer_balanced.json"
+    ) in captured
     assert result.candidate.path.stem == "newer_balanced"
 
 

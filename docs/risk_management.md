@@ -171,18 +171,18 @@ It exists for cases where:
 
 1. auto-unstuck is too slow
 2. the realized-loss gate is still allowing the bot to operate in a clearly degraded state
-3. you want a final supervisory backstop that can flatten and halt one `pside`
+3. you want a final supervisory backstop that can close all positions on one `pside` and halt that `pside`
 
 Behavior:
 
 1. `yellow`: warning tier
 2. `orange`: reduced-risk mode (`graceful_stop` or `tp_only_with_active_entry_cancellation`) for that `pside`
-3. `red`: force panic exits, wait until that `pside` is flat, and halt that `pside`
+3. `red`: force panic exits, wait until all positions on that `pside` are fully closed, and halt that `pside`
 
 Operational notes:
 
 1. HSL is configured separately under `bot.long.hsl_*` and `bot.short.hsl_*`.
-2. `live.hsl_signal_mode` chooses whether each `pside` controller uses its own `pside` strategy signal or a shared `unified` account-level signal.
+2. `live.hsl_signal_mode` defaults to the shared `unified` account-level signal, with `pside` available when each side should use its own side-local strategy signal.
 3. RED can auto-restart after `hsl_cooldown_minutes_after_red`. Terminal no-restart uses persistent cross-restart HSL drawdown.
 4. In backtests, simulated market panic closes use `backtest.market_order_slippage_pct`.
 5. Backtests export canonical strategy-equity metrics under `*_strategy_eq`, including side-specific `*_strategy_eq_long` / `*_strategy_eq_short` metrics. Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results.

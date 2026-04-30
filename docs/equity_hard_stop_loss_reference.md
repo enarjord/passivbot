@@ -16,8 +16,8 @@ See also:
    - `bot.long.hsl_*`
    - `bot.short.hsl_*`
 3. `live.hsl_signal_mode` selects whether those `pside` runtimes use:
-   - `pside` signals
-   - one shared `unified` signal
+   - one shared `unified` signal (default)
+   - side-local `pside` signals
 4. Live and backtest use the same reconstructed strategy-drawdown concept for each `pside`.
 5. RED can halt permanently or restart after cooldown, per `pside`.
 6. Live startup behavior is reconstructed from exchange-derived history rather than depending on a local latch file.
@@ -29,15 +29,15 @@ See also:
 
 These should stay under explicit review as HSL evolves:
 
-1. Restart during active RED before flat confirmation on one `pside`
-2. Restart after flat confirmation but before cooldown expiry on one `pside`
+1. Restart during active RED before all positions on one `pside` are fully closed
+2. Restart after all positions on one `pside` are fully closed but before cooldown expiry
 3. Restart after cooldown expiry, where that `pside` should begin a fresh post-restart regime
 4. Restart after a terminal RED stop, which must still block trading on that `pside`
 5. Manual trading or balance changes during downtime, which should be reflected purely through fetched exchange state/history
 6. Missing or incomplete exchange history rows, which must fail clearly rather than silently changing restart behavior
 7. Exchange time skew around cooldown boundaries
 8. Restart while panic-close orders are still live on the exchange
-9. Restart while a `pside` is flat but stale non-panic close orders remain open
+9. Restart while a `pside` has no open positions but stale non-panic close orders remain open
 10. Restart after partial manual cleanup, where the account state no longer matches what the bot originally intended
 
 ## Backtest / Live Parity Review Items
@@ -55,7 +55,7 @@ These are the main parity surfaces that should be reviewed together:
    - `tp_only_with_active_entry_cancellation`
 3. RED behavior
    - panic close order type
-   - flat confirmation
+   - confirmation that all positions on the triggered `pside` are fully closed
    - cooldown restart
    - terminal latch
 4. Order execution intent
@@ -98,7 +98,7 @@ These are the main parity surfaces that should be reviewed together:
 
 ### Confirmed Gaps / Risks
 
-1. Flat-confirmation parity
+1. All-positions-closed confirmation parity
    - Live RED supervisor finalization still depends on live exchange state and open-order cleanup details
    - Backtest finalization remains an approximation of that process
 2. Stateless restart coverage is still incomplete
@@ -112,7 +112,7 @@ These are the main parity surfaces that should be reviewed together:
 ### Missing or Weak Test Coverage
 
 1. Direct live/backtest sample-parity regression for per-`pside` strategy drawdown reconstruction
-2. Restart during active RED before flat confirmation
+2. Restart during active RED before all positions on one `pside` are fully closed
 3. Restart while panic-close orders are still open
 4. Manual trading during downtime
 
