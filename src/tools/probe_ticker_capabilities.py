@@ -69,6 +69,32 @@ def is_active_linear_swap(market: Any) -> bool:
     )
 
 
+def market_matches_coin(market: Any, coin: str) -> bool:
+    """Return True when a market matches a user-facing base coin selector."""
+    if not isinstance(market, dict):
+        return False
+    coin_upper = str(coin or "").upper()
+    if not coin_upper:
+        return False
+    names = set()
+    info = market.get("info")
+    for value in (
+        market.get("base"),
+        market.get("baseName"),
+        market.get("id"),
+        info.get("name") if isinstance(info, dict) else None,
+    ):
+        if value is None:
+            continue
+        raw = str(value)
+        names.add(raw.upper())
+        if ":" in raw:
+            names.add(raw.split(":", 1)[1].upper())
+        if "-" in raw:
+            names.add(raw.split("-", 1)[1].upper())
+    return coin_upper in names
+
+
 def summarize_ticker(ticker: Any) -> dict[str, Any]:
     if not isinstance(ticker, dict):
         return {"type": type(ticker).__name__, "valid": False}
@@ -148,10 +174,9 @@ async def resolve_symbols(exchange, coins: list[str], quote: str | None = None) 
     quote_upper = str(quote or "").upper()
     resolved = []
     for coin in coins:
-        coin_upper = coin.upper()
         candidates = []
         for symbol, market in markets.items():
-            if str(market.get("base") or "").upper() != coin_upper:
+            if not market_matches_coin(market, coin):
                 continue
             if quote_upper and str(market.get("quote") or "").upper() != quote_upper:
                 continue

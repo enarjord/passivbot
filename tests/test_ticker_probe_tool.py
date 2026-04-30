@@ -142,6 +142,40 @@ async def test_resolve_symbols_requires_active_linear_swaps_for_coins():
     assert await resolve_symbols(FakeExchange(), ["ETH"], quote="USDT") == ["ETH/USDT:USDT"]
 
 
+@pytest.mark.asyncio
+async def test_resolve_symbols_accepts_hyperliquid_hip3_coin_aliases():
+    class FakeExchange:
+        async def load_markets(self):
+            return {
+                "XYZ-SP500/USDC:USDC": {
+                    "base": "XYZ-SP500",
+                    "baseName": "xyz:SP500",
+                    "quote": "USDC",
+                    "active": True,
+                    "swap": True,
+                    "linear": True,
+                    "info": {"name": "xyz:SP500"},
+                },
+                "BTC/USDC:USDC": {
+                    "base": "BTC",
+                    "quote": "USDC",
+                    "active": True,
+                    "swap": True,
+                    "linear": True,
+                },
+            }
+
+    assert await resolve_symbols(FakeExchange(), ["SP500"], quote="USDC") == [
+        "XYZ-SP500/USDC:USDC"
+    ]
+    assert await resolve_symbols(FakeExchange(), ["xyz:SP500"], quote="USDC") == [
+        "XYZ-SP500/USDC:USDC"
+    ]
+    assert await resolve_symbols(FakeExchange(), ["XYZ-SP500"], quote="USDC") == [
+        "XYZ-SP500/USDC:USDC"
+    ]
+
+
 def test_create_exchange_sets_default_type_swap_before_load_markets(monkeypatch):
     captured = {}
 

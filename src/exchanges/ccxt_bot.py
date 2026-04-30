@@ -34,7 +34,6 @@ To customize behavior for a new exchange:
 import asyncio
 import math
 import time
-import traceback
 from copy import deepcopy
 
 from passivbot import Passivbot, logging, custom_id_to_snake
@@ -463,16 +462,14 @@ class CCXTBot(Passivbot):
                 break
             except Exception as e:
                 self._health_ws_reconnects += 1
-                logging.warning(
-                    "[ws] %s: connection lost (reconnect #%d), retrying in 1s: %s",
-                    self.exchange,
-                    self._health_ws_reconnects,
-                    type(e).__name__,
+                self._log_ws_reconnect(
+                    reconnect_no=self._health_ws_reconnects,
+                    retry_delay_s=1.0,
+                    reason="connection_lost",
+                    exc=e,
                 )
-                logging.debug("[ws] %s: full exception: %s", self.exchange, e)
-                logging.debug("".join(traceback.format_exc()))
                 await asyncio.sleep(1)
-                logging.info("[ws] %s: reconnecting...", self.exchange)
+                logging.debug("[ws] %s: reconnecting...", self.exchange)
 
     async def update_exchange_config(self):
         """Set exchange to hedge mode if supported.

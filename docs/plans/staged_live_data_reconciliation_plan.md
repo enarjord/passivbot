@@ -109,6 +109,9 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Add configurable maximum inactive eligible candle staleness, e.g. `live.max_forager_candle_staleness_minutes`.
 - [x] Ensure no active symbol is budget-starved.
 - [ ] Ensure remote-call pacing avoids startup and minute-boundary bursts.
+- [x] Reduce broad background warmup pressure during live operation. Background candle warmup now
+  defaults to one concurrent symbol across exchanges and applies a minimum 0.5s inter-symbol
+  delay unless the operator explicitly configures a slower delay.
 - [ ] Ensure HSL/balance-equity replay candle fetches use the same remote-call economy principles as
   active/forager candle refreshes; latest VPS Hyperliquid logs show replay can still burst 5m/15m
   candle fetches and hit 429s during restart.
@@ -183,6 +186,8 @@ Before order planning/execution, live bot must have coherent state for:
 - [ ] Add shutdown/reconnect smoke coverage for exchanges whose CCXT websocket layer emits callback
   errors outside `watch_orders()`; latest KuCoin logs show `kucoinfutures ping timeout` as an
   asyncio callback traceback even though the watch loop also reconnects.
+- [x] Throttle websocket reconnect WARN logs generally: first few reconnects remain visible,
+  persistent reconnect storms emit periodic WARNs, and repeated details move to DEBUG.
 - [x] Add focused overnight-log regression checks for INFO-level noise: aggregate or throttle
   repeated `initial entries blocked by min effective cost` and `active completed-candle refresh
   incomplete` without hiding first occurrence and summary counts.

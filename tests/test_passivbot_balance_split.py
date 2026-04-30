@@ -641,6 +641,45 @@ def test_startup_timing_marks_log_once(monkeypatch, caplog):
     ]
 
 
+def test_background_warmup_uses_low_priority_candle_concurrency():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "bitget"
+    bot.max_n_concurrent_ohlcvs_1m_updates = 8
+
+    assert bot._candle_fetch_concurrency(context="runtime") == 8
+    assert bot._candle_fetch_concurrency(context="background warmup") == 1
+
+
+def test_ws_reconnect_warning_logs_are_throttled(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    now_ms = [1_000]
+
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms[0])
+
+    with caplog.at_level(logging.DEBUG):
+        for reconnect_no in range(1, 6):
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=reconnect_no,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=TimeoutError("ping timeout"),
+            )
+
+    reconnect_records = [
+        record for record in caplog.records if "[ws] kucoin: connection lost" in record.message
+    ]
+    assert [record.levelno for record in reconnect_records] == [
+        logging.WARNING,
+        logging.WARNING,
+        logging.WARNING,
+        logging.DEBUG,
+        logging.DEBUG,
+    ]
+
+
 @pytest.mark.asyncio
 async def test_background_candle_warmup_marks_full_warmup_ready(monkeypatch, caplog):
     bot = Passivbot.__new__(Passivbot)
@@ -2486,6 +2525,53 @@ def test_staged_planner_preconditions_reject_stale_completed_candle_signature():
     assert ok is False
     assert "completed_candles" in details["missing"]
     assert details["invalid"]["completed_candles"][0]["symbol"] == "BTC/USDT:USDT"
+
+
+def test_staged_planner_preconditions_explain_completed_candle_signature_mismatch():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot.active_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    bot.positions = {
+        "BTC/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}},
+        "ETH/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}},
+    }
+    bot.open_orders = {}
+    bot.PB_modes = {"long": {}, "short": {}}
+
+    def completed_candle_health(symbol, windows=None, now_ms=None):
+        return {
+            "ok": True,
+            "timeframes": {
+                "1m": {
+                    "coverage_ok": True,
+                    "latest_expected_ts": 120_000,
+                    "last_cached_ts": 120_000,
+                    "missing_candles": 0,
+                    "runtime_synthetic_count": 0,
+                }
+            },
+        }
+
+    bot.cm = SimpleNamespace(get_completed_candle_health=completed_candle_health)
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+    bot._record_authoritative_surface(
+        "completed_candles", (("BTC/USDT:USDT", 60_000, 60_000, 0),)
+    )
+
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
+
+    assert ok is False
+    mismatch = details["invalid"]["completed_candles"][0]
+    assert mismatch["reason"] == "signature_mismatch"
+    assert mismatch["expected_count"] == 2
+    assert mismatch["stamped_count"] == 1
+    assert mismatch["missing_symbols"] == ["ETH/USDT:USDT"]
+    assert mismatch["changed_symbols"] == ["BTC/USDT:USDT"]
 
 
 def test_staged_planner_preconditions_validate_candles_at_surface_stamp_time():

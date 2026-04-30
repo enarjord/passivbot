@@ -3184,6 +3184,11 @@ class Passivbot:
             self.cm.start_candle_replace_batch()
 
         fetch_delay_s = self._get_fetch_delay_seconds()
+        background_context = str(context).lower() in {"background warmup", "background_warmup"}
+        if background_context:
+            # Broad warmup is explicitly lower priority than account-state refresh and execution.
+            # Pace it even on exchanges whose per-request delay normally defaults to zero.
+            fetch_delay_s = max(fetch_delay_s, 0.5)
 
         async def one(sym: str):
             nonlocal completed, last_log_ms
@@ -4080,13 +4085,11 @@ class Passivbot:
         if cfg_concurrency > 0:
             return max(1, cfg_concurrency)
         exchange_lower = str(getattr(self, "exchange", "") or "").lower()
+        if str(context).lower() in {"background warmup", "background_warmup"}:
+            return 1
         if exchange_lower == "hyperliquid":
             return 1
-        if exchange_lower == "kucoin" and str(context).lower() in {
-            "background warmup",
-            "background_warmup",
-            "history_replay",
-        }:
+        if exchange_lower == "kucoin" and str(context).lower() in {"history_replay"}:
             return 1
         if context == "history_replay":
             return 2
@@ -4153,6 +4156,62 @@ class Passivbot:
             await asyncio.sleep(chunk)
             remaining -= chunk
         Passivbot._raise_if_shutdown_requested(self, stage)
+
+    def _should_log_ws_reconnect_warning(
+        self, reconnect_no: int, *, now_ms: int | None = None
+    ) -> bool:
+        """Return whether a websocket reconnect should be operator-visible."""
+        reconnect_no = int(reconnect_no or 0)
+        if reconnect_no <= 3 or reconnect_no % 10 == 0:
+            should_warn = True
+        else:
+            now = utc_ms() if now_ms is None else int(now_ms)
+            last_warning_ms = int(getattr(self, "_ws_reconnect_warning_last_ms", 0) or 0)
+            should_warn = last_warning_ms <= 0 or now - last_warning_ms >= 15 * 60 * 1000
+        if should_warn:
+            self._ws_reconnect_warning_last_ms = utc_ms() if now_ms is None else int(now_ms)
+        return should_warn
+
+    def _log_ws_reconnect(
+        self,
+        *,
+        reconnect_no: int,
+        retry_delay_s: float,
+        reason: str,
+        exc: BaseException | None = None,
+        rate_limited: bool = False,
+    ) -> None:
+        """Throttle noisy websocket reconnects without hiding persistent instability."""
+        exchange = str(getattr(self, "exchange", "") or "exchange")
+        reconnect_no = int(reconnect_no or 0)
+        retry_delay_s = max(0.0, float(retry_delay_s or 0.0))
+        reason = str(reason or "connection_lost")
+        level = (
+            logging.WARNING
+            if Passivbot._should_log_ws_reconnect_warning(self, reconnect_no)
+            else logging.DEBUG
+        )
+        if rate_limited:
+            logging.log(
+                level,
+                "[ws] %s: rate limited (reconnect #%d), backing off %.1fs",
+                exchange,
+                reconnect_no,
+                retry_delay_s,
+            )
+        else:
+            exc_name = type(exc).__name__ if exc is not None else reason
+            logging.log(
+                level,
+                "[ws] %s: connection lost (reconnect #%d), retrying in %.1fs: %s",
+                exchange,
+                reconnect_no,
+                retry_delay_s,
+                exc_name,
+            )
+        if exc is not None:
+            logging.debug("[ws] %s: reconnect reason=%s exception=%s", exchange, reason, exc)
+            logging.debug("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
 
     async def shutdown_gracefully(self):
         if getattr(self, "_shutdown_in_progress", False):
@@ -6927,6 +6986,59 @@ class Passivbot:
             signature.append((symbol, int(last_final)))
         return tuple(signature), missing
 
+    def _completed_candle_signature_mismatch_details(
+        self,
+        *,
+        expected_symbols: Iterable[str],
+        expected_signature,
+        stamped_signature,
+    ) -> list[dict]:
+        """Summarize why the completed-candle freshness stamp no longer matches."""
+
+        def _by_symbol(signature) -> dict[str, tuple]:
+            out: dict[str, tuple] = {}
+            if not isinstance(signature, (list, tuple)):
+                return out
+            for item in signature:
+                if not isinstance(item, (list, tuple)) or not item:
+                    continue
+                symbol = str(item[0] or "")
+                if symbol:
+                    out[symbol] = tuple(item)
+            return out
+
+        expected_symbols_tuple = tuple(
+            sorted(dict.fromkeys(str(symbol) for symbol in expected_symbols if symbol))
+        )
+        expected_by_symbol = _by_symbol(expected_signature)
+        stamped_by_symbol = _by_symbol(stamped_signature)
+        missing_from_stamp = [
+            symbol for symbol in expected_symbols_tuple if symbol not in stamped_by_symbol
+        ]
+        extra_in_stamp = [
+            symbol for symbol in sorted(stamped_by_symbol) if symbol not in expected_by_symbol
+        ]
+        changed_symbols = [
+            symbol
+            for symbol in expected_symbols_tuple
+            if symbol in expected_by_symbol
+            and symbol in stamped_by_symbol
+            and expected_by_symbol[symbol] != stamped_by_symbol[symbol]
+        ]
+        return [
+            {
+                "reason": "signature_mismatch",
+                "expected_count": len(expected_by_symbol),
+                "stamped_count": len(stamped_by_symbol),
+                "missing_symbols": missing_from_stamp[:12],
+                "missing_count": len(missing_from_stamp),
+                "extra_symbols": extra_in_stamp[:12],
+                "extra_count": len(extra_in_stamp),
+                "changed_symbols": changed_symbols[:12],
+                "changed_count": len(changed_symbols),
+            }
+        ]
+
     def _staged_planner_precondition_state(
         self, *, include_market_snapshot: bool = True, symbols: Iterable[str] | None = None
     ) -> tuple[bool, dict]:
@@ -6953,12 +7065,14 @@ class Passivbot:
             stamped_signature = ledger.surface_signature("completed_candles")
             if candle_missing or stamped_signature != signature:
                 missing.append("completed_candles")
-                invalid["completed_candles"] = candle_missing or [
-                    {
-                        "reason": "signature_mismatch",
-                        "expected_symbols": list(expected_symbols),
-                    }
-                ]
+                invalid["completed_candles"] = candle_missing or (
+                    Passivbot._completed_candle_signature_mismatch_details(
+                        self,
+                        expected_symbols=expected_symbols,
+                        expected_signature=signature,
+                        stamped_signature=stamped_signature,
+                    )
+                )
         if (
             include_market_snapshot
             and "market_snapshot" in required
@@ -7075,7 +7189,21 @@ class Passivbot:
                     if isinstance(first, dict):
                         reason = first.get("reason") or "invalid"
                         symbol = first.get("symbol")
-                        suffix = f":{symbol}" if symbol else ""
+                        if symbol:
+                            suffix = f":{symbol}"
+                        elif reason == "signature_mismatch":
+                            missing_count = int(first.get("missing_count") or 0)
+                            extra_count = int(first.get("extra_count") or 0)
+                            changed_count = int(first.get("changed_count") or 0)
+                            expected_count = int(first.get("expected_count") or 0)
+                            stamped_count = int(first.get("stamped_count") or 0)
+                            suffix = (
+                                f":expected={expected_count} stamped={stamped_count}"
+                                f" missing={missing_count} extra={extra_count}"
+                                f" changed={changed_count}"
+                            )
+                        else:
+                            suffix = ""
                         summaries.append(f"{surface}:{reason}{suffix}")
                     else:
                         summaries.append(f"{surface}:{type(first).__name__}")
@@ -7084,6 +7212,8 @@ class Passivbot:
             if summaries:
                 parts.append("invalid=" + ",".join(summaries[:4]))
         logging.info("[state] staged execution deferred | %s", " | ".join(parts))
+        if invalid:
+            logging.debug("[state] staged execution deferred details | invalid=%s", invalid)
 
     async def _defer_staged_execution_cycle(self, details: dict, loop_start_ms: int) -> None:
         """Skip trading for this loop while staged planner inputs settle."""

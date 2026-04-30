@@ -1,7 +1,6 @@
 import asyncio
 import json
 import random
-import traceback
 from copy import deepcopy
 
 import ccxt.pro as ccxt_pro
@@ -525,27 +524,25 @@ class HyperliquidBot(CCXTBot):
                 self._health_rate_limits += 1
                 _ws_consecutive_rate_limits += 1
                 backoff = min(30, 2 ** _ws_consecutive_rate_limits) + random.uniform(0, 1)
-                logging.warning(
-                    "[ws] %s: rate limited (reconnect #%d), backing off %.0fs...",
-                    self.exchange,
-                    self._health_ws_reconnects,
-                    backoff,
+                self._log_ws_reconnect(
+                    reconnect_no=self._health_ws_reconnects,
+                    retry_delay_s=backoff,
+                    reason="rate_limited",
+                    rate_limited=True,
                 )
                 await asyncio.sleep(backoff)
-                logging.info("[ws] %s: reconnecting after rate limit...", self.exchange)
+                logging.debug("[ws] %s: reconnecting after rate limit...", self.exchange)
             except Exception as e:
                 self._health_ws_reconnects += 1
                 _ws_consecutive_rate_limits = 0
-                logging.warning(
-                    "[ws] %s: connection lost (reconnect #%d), retrying in 1s: %s",
-                    self.exchange,
-                    self._health_ws_reconnects,
-                    type(e).__name__,
+                self._log_ws_reconnect(
+                    reconnect_no=self._health_ws_reconnects,
+                    retry_delay_s=1.0,
+                    reason="connection_lost",
+                    exc=e,
                 )
-                logging.debug("[ws] %s: full exception: %s", self.exchange, e)
-                logging.debug("".join(traceback.format_exc()))
                 await asyncio.sleep(1)
-                logging.info("[ws] %s: reconnecting...", self.exchange)
+                logging.debug("[ws] %s: reconnecting...", self.exchange)
 
     def determine_pos_side(self, order):
         # hyperliquid is not hedge mode
@@ -887,8 +884,9 @@ class HyperliquidBot(CCXTBot):
         hip3_by_dex = {}
         for symbol in requested:
             info = self.markets_dict.get(symbol, {}).get("info", {})
-            if info.get("hip3"):
-                dex = str(info.get("dex") or "").strip()
+            dex = self._get_hl_dex_for_symbol(symbol)
+            if dex or info.get("hip3"):
+                dex = str(dex or info.get("dex") or "").strip()
                 if not dex:
                     raise ValueError(f"Hyperliquid HIP-3 symbol {symbol} missing dex metadata")
                 hip3_by_dex.setdefault(dex, []).append(symbol)
@@ -916,9 +914,17 @@ class HyperliquidBot(CCXTBot):
         for symbol in symbols:
             market = self.markets_dict.get(symbol, {})
             info = market.get("info", {})
-            for name in (info.get("name"), market.get("baseName")):
+            names = set()
+            for name in (info.get("name"), market.get("baseName"), market.get("base")):
                 if name:
-                    name_to_symbol[str(name)] = symbol
+                    raw_name = str(name)
+                    names.add(raw_name)
+                    if ":" in raw_name:
+                        names.add(raw_name.split(":", 1)[1])
+                    if "-" in raw_name:
+                        names.add(raw_name.split("-", 1)[1])
+            for name in names:
+                name_to_symbol[name] = symbol
         out = {}
         for idx, asset in enumerate(universe):
             if not isinstance(asset, dict):
