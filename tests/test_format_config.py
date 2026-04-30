@@ -148,6 +148,21 @@ def test_format_config_current_roundtrip_basic():
     assert "risk_twel_enforcer_threshold" not in out["bot"]["long"]
 
 
+def test_format_config_lifts_flat_trailing_grid_keys_into_strategy_group():
+    current = copy.deepcopy(_template())
+    current["bot"]["long"]["entry_weight_volatility_1h"] = 12.0
+    current["bot"]["long"]["entry_weight_volatility_1m"] = 8.0
+    current["bot"]["long"]["close_weight_volatility_1h"] = 5.0
+
+    out = format_config(current, verbose=False)
+    trailing_grid = out["bot"]["long"]["strategy"]["trailing_grid"]
+
+    assert trailing_grid["entry_weight_volatility_1h"] == pytest.approx(12.0)
+    assert trailing_grid["entry_weight_volatility_1m"] == pytest.approx(8.0)
+    assert trailing_grid["close_weight_volatility_1h"] == pytest.approx(5.0)
+    assert "entry_weight_volatility_1h" not in out["bot"]["long"]
+
+
 def test_format_config_preserves_approved_coins_dict():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
@@ -330,12 +345,12 @@ def test_format_config_legacy_omissions_disable_newer_bot_features():
         "close_trailing_threshold_pct",
         "entry_trailing_grid_ratio",
         "entry_trailing_retracement_pct",
-        "entry_trailing_retracement_volatility_weight",
-        "entry_trailing_retracement_we_weight",
         "entry_trailing_threshold_pct",
-        "entry_trailing_threshold_volatility_weight",
-        "entry_trailing_threshold_we_weight",
         "entry_volatility_ema_span_hours",
+        "entry_volatility_ema_span_minutes",
+        "entry_weight_volatility_1h",
+        "entry_weight_volatility_1m",
+        "entry_we_weight",
     ):
         trailing_grid.pop(key)
     current["bot"]["long"]["forager"].pop("volatility_ema_span")
@@ -359,12 +374,12 @@ def test_format_config_legacy_omissions_disable_newer_bot_features():
     assert long_strategy["close_trailing_threshold_pct"] == pytest.approx(0.001)
     assert long_strategy["entry_trailing_grid_ratio"] == pytest.approx(-0.5)
     assert long_strategy["entry_trailing_retracement_pct"] == pytest.approx(0.0276)
-    assert long_strategy["entry_trailing_retracement_volatility_weight"] == pytest.approx(87)
-    assert long_strategy["entry_trailing_retracement_we_weight"] == pytest.approx(3.97)
     assert long_strategy["entry_trailing_threshold_pct"] == pytest.approx(0.0029)
-    assert long_strategy["entry_trailing_threshold_volatility_weight"] == pytest.approx(76)
-    assert long_strategy["entry_trailing_threshold_we_weight"] == pytest.approx(1.31)
     assert long_strategy["entry_volatility_ema_span_hours"] == pytest.approx(1690)
+    assert long_strategy["entry_volatility_ema_span_minutes"] == pytest.approx(60.0)
+    assert long_strategy["entry_weight_volatility_1h"] == pytest.approx(2.4)
+    assert long_strategy["entry_weight_volatility_1m"] == pytest.approx(0.0)
+    assert long_strategy["entry_we_weight"] == pytest.approx(0.135)
     assert long_cfg["forager"]["volatility_ema_span"] == pytest.approx(225.0)
     assert long_cfg["forager"]["volume_ema_span"] == pytest.approx(520.0)
     assert long_cfg["hsl"]["panic_close_order_type"] == "limit"

@@ -186,18 +186,12 @@
             "ema_span_1": 620.0,
             "entry_grid_double_down_factor": 1.39,
             "entry_grid_spacing_pct": 0.02312,
-            "entry_grid_spacing_volatility_weight": 17.8,
-            "entry_grid_spacing_we_weight": 0.6766,
             "entry_initial_ema_dist": 0.0078,
             "entry_initial_qty_pct": 0.0122,
             "entry_trailing_double_down_factor": 1.0,
             "entry_trailing_grid_ratio": -0.32,
             "entry_trailing_retracement_pct": 0.01498,
-            "entry_trailing_retracement_volatility_weight": 37.9,
-            "entry_trailing_retracement_we_weight": 4.958,
             "entry_trailing_threshold_pct": 0.00215,
-            "entry_trailing_threshold_volatility_weight": 15.2,
-            "entry_trailing_threshold_we_weight": 4.243,
             "entry_volatility_ema_span_hours": 1909.0,
             "forager_score_weights": {
                 "ema_readiness": 0.06,
@@ -226,7 +220,13 @@
             "unstuck_close_pct": 0.053,
             "unstuck_ema_dist": -0.04,
             "unstuck_loss_allowance_pct": 0.00024,
-            "unstuck_threshold": 0.866
+            "unstuck_threshold": 0.866,
+            "close_weight_volatility_1h": 0.0,
+            "close_weight_volatility_1m": 0.0,
+            "entry_volatility_ema_span_minutes": 60.0,
+            "entry_weight_volatility_1h": 17.8,
+            "entry_we_weight": 0.6766,
+            "entry_weight_volatility_1m": 0.0
         },
         "short": {
             "close_grid_markup_end": 0.00223,
@@ -240,18 +240,12 @@
             "ema_span_1": 265.0,
             "entry_grid_double_down_factor": 0.57,
             "entry_grid_spacing_pct": 0.03575,
-            "entry_grid_spacing_volatility_weight": 10.4,
-            "entry_grid_spacing_we_weight": 4.2641,
             "entry_initial_ema_dist": 0.0093,
             "entry_initial_qty_pct": 0.0122,
             "entry_trailing_double_down_factor": 0.85,
             "entry_trailing_grid_ratio": -0.7,
             "entry_trailing_retracement_pct": 0.00135,
-            "entry_trailing_retracement_volatility_weight": 10.9,
-            "entry_trailing_retracement_we_weight": 0.381,
             "entry_trailing_threshold_pct": 0.00186,
-            "entry_trailing_threshold_volatility_weight": 13.4,
-            "entry_trailing_threshold_we_weight": 0.132,
             "entry_volatility_ema_span_hours": 1381.0,
             "forager_score_weights": {
                 "ema_readiness": 0.21978021978021978,
@@ -280,7 +274,13 @@
             "unstuck_close_pct": 0.076,
             "unstuck_ema_dist": -0.0286,
             "unstuck_loss_allowance_pct": 0.00201,
-            "unstuck_threshold": 0.892
+            "unstuck_threshold": 0.892,
+            "close_weight_volatility_1h": 0.0,
+            "close_weight_volatility_1m": 0.0,
+            "entry_volatility_ema_span_minutes": 60.0,
+            "entry_weight_volatility_1h": 10.4,
+            "entry_we_weight": 4.2641,
+            "entry_weight_volatility_1m": 0.0
         }
     },
     "coin_overrides": {},
@@ -476,16 +476,6 @@
                 0.04,
                 1e-05
             ],
-            "long_entry_grid_spacing_volatility_weight": [
-                1,
-                40,
-                0.1
-            ],
-            "long_entry_grid_spacing_we_weight": [
-                0,
-                5,
-                0.0001
-            ],
             "long_entry_initial_ema_dist": [
                 -0.01,
                 0.01,
@@ -511,30 +501,10 @@
                 0.015,
                 1e-05
             ],
-            "long_entry_trailing_retracement_volatility_weight": [
-                1,
-                40,
-                0.1
-            ],
-            "long_entry_trailing_retracement_we_weight": [
-                0,
-                5,
-                0.001
-            ],
             "long_entry_trailing_threshold_pct": [
                 0.001,
                 0.015,
                 1e-05
-            ],
-            "long_entry_trailing_threshold_volatility_weight": [
-                1,
-                40,
-                0.1
-            ],
-            "long_entry_trailing_threshold_we_weight": [
-                0,
-                5,
-                0.001
             ],
             "long_entry_volatility_ema_span_hours": [
                 672,
@@ -685,16 +655,6 @@
                 0.04,
                 1e-05
             ],
-            "short_entry_grid_spacing_volatility_weight": [
-                1,
-                40,
-                0.1
-            ],
-            "short_entry_grid_spacing_we_weight": [
-                0,
-                5,
-                0.0001
-            ],
             "short_entry_initial_ema_dist": [
                 -0.01,
                 0.01,
@@ -720,30 +680,10 @@
                 0.015,
                 1e-05
             ],
-            "short_entry_trailing_retracement_volatility_weight": [
-                1,
-                40,
-                0.1
-            ],
-            "short_entry_trailing_retracement_we_weight": [
-                0,
-                5,
-                0.001
-            ],
             "short_entry_trailing_threshold_pct": [
                 0.001,
                 0.015,
                 1e-05
-            ],
-            "short_entry_trailing_threshold_volatility_weight": [
-                1,
-                40,
-                0.1
-            ],
-            "short_entry_trailing_threshold_we_weight": [
-                0,
-                5,
-                0.001
             ],
             "short_entry_volatility_ema_span_hours": [
                 672,
@@ -837,6 +777,66 @@
             "short_unstuck_threshold": [
                 0.4,
                 0.9,
+                0.001
+            ],
+            "long_close_weight_volatility_1h": [
+                0,
+                40,
+                0.1
+            ],
+            "long_close_weight_volatility_1m": [
+                0,
+                40,
+                0.1
+            ],
+            "long_entry_volatility_ema_span_minutes": [
+                5,
+                720,
+                1
+            ],
+            "long_entry_weight_volatility_1h": [
+                1,
+                40,
+                0.1
+            ],
+            "long_entry_weight_volatility_1m": [
+                0,
+                40,
+                0.1
+            ],
+            "long_entry_we_weight": [
+                0,
+                5,
+                0.001
+            ],
+            "short_close_weight_volatility_1h": [
+                0,
+                40,
+                0.1
+            ],
+            "short_close_weight_volatility_1m": [
+                0,
+                40,
+                0.1
+            ],
+            "short_entry_volatility_ema_span_minutes": [
+                5,
+                720,
+                1
+            ],
+            "short_entry_weight_volatility_1h": [
+                1,
+                40,
+                0.1
+            ],
+            "short_entry_weight_volatility_1m": [
+                0,
+                40,
+                0.1
+            ],
+            "short_entry_we_weight": [
+                0,
+                5,
                 0.001
             ]
         },

@@ -220,16 +220,15 @@ Passivbot can be configured to create a grid of entry orders, with prices and qu
   - Quantity of the next grid entry is position size times the double down factor.
   - Example: If position size is `1.4` and `double_down_factor` is `0.9`, then the next entry quantity is `1.4 * 0.9 = 1.26`.
   - Also applies to trailing entries.
-- **entry_grid_spacing_pct**, **entry_grid_spacing_we_weight**:
+- **entry_grid_spacing_pct**, **entry_we_weight**:
   - Grid re-entry prices are determined as follows:
     - `next_reentry_price_long = pos_price * (1 - entry_grid_spacing_pct * multiplier)`
     - `next_reentry_price_short = pos_price * (1 + entry_grid_spacing_pct * multiplier)`
-  - `multiplier = 1 + (wallet_exposure / wallet_exposure_limit) * entry_grid_spacing_we_weight + log_component`
-  - Setting `entry_grid_spacing_we_weight` > 0 widens spacing as the position approaches the wallet exposure limit; negative values tighten spacing when exposure is small.
-- **entry_grid_spacing_volatility_weight**, **entry_volatility_ema_span_hours**:
-  - The `log_component` in the multiplier above is derived from the EMA of the per-candle log range `ln(high/low)`.
-  - `entry_grid_spacing_volatility_weight` controls how strongly the recent log range widens or narrows spacing. A value of `0` disables the log-based adjustment.
-  - `entry_volatility_ema_span_hours` sets the EMA span (in hours) used when smoothing the volatility (log-range) signal before applying the weight. The same volatility EMA also powers the multipliers for `entry_trailing_threshold_volatility_weight` and `entry_trailing_retracement_volatility_weight`.
+  - `multiplier = max(1, 1 + entry_we_weight * wallet_exposure_ratio + volatility_component)`
+  - Setting `entry_we_weight` > 0 widens grid spacing, trailing-entry threshold, and trailing-entry retracement as the position approaches the effective wallet exposure limit.
+- **entry_weight_volatility_1h**, **entry_weight_volatility_1m**, **entry_volatility_ema_span_hours**, **entry_volatility_ema_span_minutes**:
+  - The `volatility_component` is derived from EMAs of per-candle log range `ln(high/low)` on 1h and 1m candles.
+  - Positive volatility weights widen entry grid spacing and trailing-entry threshold/retracement in volatile markets. A value of `0` disables that horizon.
 - **entry_initial_ema_dist**:
   - Offset from lower/upper EMA band.
   - Long initial entry/short unstuck close prices are lower EMA band minus offset.
@@ -241,10 +240,7 @@ Passivbot can be configured to create a grid of entry orders, with prices and qu
   - Multiplier controlling how aggressively trailing re-entries ramp up. As with the grid equivalent, any positive value increases the size of successive fills (higher values grow them faster).
 - **entry_trailing_threshold_pct**, **entry_trailing_retracement_pct**:
   - Same semantics as the trailing-close parameters below, but applied to trailing entries. The bot waits for a favorable move (`threshold_pct`) and subsequent pullback (`retracement_pct`) before firing a trailing re-entry.
-- **entry_trailing_threshold_we_weight**, **entry_trailing_retracement_we_weight**:
-  - Extra scaling based on wallet exposure. As exposure approaches the per-symbol limit, positive weights widen the trailing bands to slow additional entries. Set to `0.0` to disable the adjustment.
-- **entry_trailing_threshold_volatility_weight**, **entry_trailing_retracement_volatility_weight**:
-  - Adds sensitivity to recent volatility using the shared `entry_volatility_ema_span_hours` EMA. Positive weights increase the thresholds in choppy markets; `0.0` removes the volatility modulation.
+  - Entry trailing threshold and retracement use the same `entry_we_weight` and volatility multiplier as grid spacing.
 
 ### Trailing Parameters
 
@@ -347,8 +343,9 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
       [
         close_grid_markup_end, close_grid_markup_start, close_grid_qty_pct, close_trailing_grid_ratio, close_trailing_qty_pct,
     close_trailing_retracement_pct, close_trailing_threshold_pct, ema_span_0, ema_span_1,
-        entry_grid_double_down_factor, entry_grid_spacing_pct, entry_grid_spacing_we_weight,
-        entry_grid_spacing_volatility_weight, entry_volatility_ema_span_hours, entry_initial_ema_dist,
+        entry_grid_double_down_factor, entry_grid_spacing_pct, entry_we_weight,
+        entry_weight_volatility_1h, entry_weight_volatility_1m, entry_volatility_ema_span_hours,
+        entry_volatility_ema_span_minutes, entry_initial_ema_dist,
         entry_initial_qty_pct, entry_trailing_double_down_factor, entry_trailing_grid_ratio, entry_trailing_retracement_pct,
         entry_trailing_threshold_pct, unstuck_close_pct, unstuck_ema_dist, unstuck_threshold, wallet_exposure_limit
       ]

@@ -59,6 +59,7 @@ from config.strategy import (
     get_active_strategy_side,
     normalize_strategy_kind,
 )
+from config.shared_bot import get_grouped_bot_value
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.overrides import parse_overrides
 from logging_setup import (
@@ -453,6 +454,7 @@ def compute_live_warmup_windows(
                 _get_bp(pside, "ema_span_0", sym),
                 _get_bp(pside, "ema_span_1", sym),
                 _get_bp(pside, "offset_volatility_ema_span_minutes", sym),
+                _get_bp(pside, "entry_volatility_ema_span_minutes", sym),
             )
             if (pside == "long" and is_forager_long) or (pside == "short" and is_forager_short):
                 max_1m_span = max(
@@ -867,6 +869,16 @@ class Passivbot:
         return require_live_value(self.config, key)
 
     def bot_value(self, pside: str, key: str):
+        bot_side = self.config.get("bot", {}).get(pside, {})
+        sentinel = object()
+        if "." in key:
+            root_key, rest = key.split(".", 1)
+            root_value = get_grouped_bot_value(bot_side, root_key, default=sentinel)
+            if root_value is not sentinel:
+                return require_config_value({root_key: root_value}, f"{root_key}.{rest}")
+        value = get_grouped_bot_value(bot_side, key, default=sentinel)
+        if value is not sentinel:
+            return value
         return require_config_value(self.config, f"bot.{pside}.{key}")
 
     def _set_log_silence_watchdog_context(
@@ -4086,9 +4098,10 @@ class Passivbot:
         """Return True when trailing logic is active for the given symbol and side."""
         if pside is None:
             return self.is_trailing(symbol, "long") or self.is_trailing(symbol, "short")
+        strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
         return (
-            self.bp(pside, "entry_trailing_grid_ratio", symbol) != 0.0
-            or self.bp(pside, "close_trailing_grid_ratio", symbol) != 0.0
+            float(strategy_cfg.get("entry_trailing_grid_ratio", 0.0) or 0.0) != 0.0
+            or float(strategy_cfg.get("close_trailing_grid_ratio", 0.0) or 0.0) != 0.0
         )
 
     def get_last_position_changes(self, symbol=None):
@@ -6212,9 +6225,10 @@ class Passivbot:
         return await self.calc_ideal_orders_orchestrator()
 
     def _strategy_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
-        strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
+        config = getattr(self, "config", {})
+        strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
         strategy_cfg = get_active_strategy_side(
-            self.config.get("bot", {}).get(pside, {}),
+            config.get("bot", {}).get(pside, {}),
             strategy_kind=strategy_kind,
             pside=pside,
         )
@@ -6245,6 +6259,32 @@ class Passivbot:
             "risk_twel_enforcer_threshold",
             "unstuck_loss_allowance_pct",
         }
+        strategy_keys = {
+            "close_grid_markup_end",
+            "close_grid_markup_start",
+            "close_grid_qty_pct",
+            "close_trailing_retracement_pct",
+            "close_trailing_grid_ratio",
+            "close_trailing_qty_pct",
+            "close_trailing_threshold_pct",
+            "close_weight_volatility_1h",
+            "close_weight_volatility_1m",
+            "entry_grid_double_down_factor",
+            "entry_grid_spacing_pct",
+            "entry_volatility_ema_span_hours",
+            "entry_volatility_ema_span_minutes",
+            "entry_weight_volatility_1h",
+            "entry_weight_volatility_1m",
+            "entry_we_weight",
+            "entry_initial_ema_dist",
+            "entry_initial_qty_pct",
+            "entry_trailing_double_down_factor",
+            "entry_trailing_retracement_pct",
+            "entry_trailing_grid_ratio",
+            "entry_trailing_threshold_pct",
+            "ema_span_0",
+            "ema_span_1",
+        }
         # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
         fields = [
             "close_grid_markup_end",
@@ -6254,21 +6294,21 @@ class Passivbot:
             "close_trailing_grid_ratio",
             "close_trailing_qty_pct",
             "close_trailing_threshold_pct",
+            "close_weight_volatility_1h",
+            "close_weight_volatility_1m",
             "entry_grid_double_down_factor",
-            "entry_grid_spacing_volatility_weight",
-            "entry_grid_spacing_we_weight",
             "entry_grid_spacing_pct",
             "entry_volatility_ema_span_hours",
+            "entry_volatility_ema_span_minutes",
+            "entry_weight_volatility_1h",
+            "entry_weight_volatility_1m",
+            "entry_we_weight",
             "entry_initial_ema_dist",
             "entry_initial_qty_pct",
             "entry_trailing_double_down_factor",
             "entry_trailing_retracement_pct",
-            "entry_trailing_retracement_we_weight",
-            "entry_trailing_retracement_volatility_weight",
             "entry_trailing_grid_ratio",
             "entry_trailing_threshold_pct",
-            "entry_trailing_threshold_we_weight",
-            "entry_trailing_threshold_volatility_weight",
             "forager_volatility_ema_span",
             "forager_volume_ema_span",
             "forager_volume_drop_pct",
@@ -6286,9 +6326,18 @@ class Passivbot:
             "unstuck_threshold",
         ]
         out: dict[str, object] = {}
+        strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
+        strategy_cfg = strategy_getter(pside, symbol) if callable(strategy_getter) else {}
         for key in fields:
             if key in global_keys:
                 val = self.bot_value(pside, key)
+            elif key in strategy_keys:
+                if key in strategy_cfg:
+                    val = strategy_cfg[key]
+                elif callable(strategy_getter):
+                    val = 0.0
+                else:
+                    val = self.bp(pside, key, symbol) if symbol is not None else self.bp(pside, key)
             else:
                 val = self.bp(pside, key, symbol) if symbol is not None else self.bp(pside, key)
             out_key = key
@@ -6512,7 +6561,8 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
-        strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
+        config = getattr(self, "config", {})
+        strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
         input_dict = {
             "timestamp_ms": timestamp_ms,
             "balance": self.get_hysteresis_snapped_balance(),
@@ -6732,18 +6782,40 @@ class Passivbot:
 
         for pside in ["long", "short"]:
             for symbol in symbols:
-                strategy_params = self._strategy_params_to_rust_dict(pside, symbol)
-                span0 = float(self._strategy_value(pside, "ema_span_0", symbol))
-                span1 = float(self._strategy_value(pside, "ema_span_1", symbol))
+                strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
+                if callable(strategy_getter):
+                    strategy_params = strategy_getter(pside, symbol)
+                    span0 = float(strategy_params.get("ema_span_0", 0.0) or 0.0)
+                    span1 = float(strategy_params.get("ema_span_1", 0.0) or 0.0)
+                else:
+                    strategy_params = {}
+                    span0 = float(self.bp(pside, "ema_span_0", symbol) or 0.0)
+                    span1 = float(self.bp(pside, "ema_span_1", symbol) or 0.0)
                 span2 = float((span0 * span1) ** 0.5) if span0 > 0.0 and span1 > 0.0 else 0.0
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
-                m1_lr_span = float(strategy_params.get("offset_volatility_ema_span_minutes", 0.0) or 0.0)
-                if m1_lr_span > 0.0 and math.isfinite(m1_lr_span):
+                m1_lr_span = float(
+                    strategy_params.get(
+                        "entry_volatility_ema_span_minutes",
+                        strategy_params.get("offset_volatility_ema_span_minutes", 0.0),
+                    )
+                    or 0.0
+                )
+                m1_lr_weight = max(
+                    abs(float(strategy_params.get("entry_weight_volatility_1m", 0.0) or 0.0)),
+                    abs(float(strategy_params.get("close_weight_volatility_1m", 0.0) or 0.0)),
+                    abs(float(strategy_params.get("offset_volatility_1m_weight", 0.0) or 0.0)),
+                )
+                if m1_lr_weight > 0.0 and m1_lr_span > 0.0 and math.isfinite(m1_lr_span):
                     need_m1_lr_spans[symbol].add(m1_lr_span)
                 h1_span = float(strategy_params.get("entry_volatility_ema_span_hours", 0.0) or 0.0)
-                if h1_span > 0.0 and math.isfinite(h1_span):
+                h1_lr_weight = max(
+                    abs(float(strategy_params.get("entry_weight_volatility_1h", 0.0) or 0.0)),
+                    abs(float(strategy_params.get("close_weight_volatility_1h", 0.0) or 0.0)),
+                    abs(float(strategy_params.get("offset_volatility_1h_weight", 0.0) or 0.0)),
+                )
+                if h1_lr_weight > 0.0 and h1_span > 0.0 and math.isfinite(h1_span):
                     need_h1_lr_spans[symbol].add(h1_span)
 
         # Forager metrics use global spans (per side); include them for all symbols.
@@ -7026,7 +7098,8 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
-        strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
+        config = getattr(self, "config", {})
+        strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
         input_dict = {
             "timestamp_ms": now_ms,
             "balance": self.get_hysteresis_snapped_balance(),
@@ -7161,6 +7234,7 @@ class Passivbot:
                 symbols=symbols,
                 last_prices=last_prices,
                 m1_close_emas=m1_close_emas,
+                m1_log_range_emas=m1_log_range_emas,
                 h1_log_range_emas=h1_log_range_emas,
                 idx_to_symbol=idx_to_symbol,
                 orders=orders,

@@ -10,6 +10,7 @@ All notable user-facing changes will be documented in this file.
 - Fixed Gate.io live order creation with current CCXT/Gate.io by passing Passivbot custom ids as `clientOrderId`, letting CCXT emit Gate.io's required `t-`-prefixed order `text` while preserving the embedded Passivbot order-type marker.
 - Fixed live foreign-writer detection so a bot's own freshly acknowledged orders can be recognized by exchange order id, canonical Passivbot custom id, or a strict recent order fingerprint instead of relying only on raw client-id string equality.
 - Fixed OHLCV v2 planning so persistent gaps are not bypassed by sparse store bounds, and single-exchange backtest preparation no longer attempts the same v2 local path twice before falling back.
+- Redesigned `trailing_grid` distance weighting: entry grid spacing and entry trailing distances now share side-level 1h/1m volatility weights plus one wallet-exposure weight, while close grid/trailing distances share side-level 1h/1m volatility weights.
 
 ## v7.10.0 - 2026-04-22
 

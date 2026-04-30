@@ -216,19 +216,19 @@
                     "ema_span_1": 210,
                     "entry_grid_double_down_factor": 0.73,
                     "entry_grid_spacing_pct": 0.033,
-                    "entry_grid_spacing_volatility_weight": 2.4,
-                    "entry_grid_spacing_we_weight": 0.135,
                     "entry_initial_ema_dist": 0.0097,
                     "entry_initial_qty_pct": 0.0276,
                     "entry_trailing_double_down_factor": 0.9,
                     "entry_trailing_grid_ratio": -0.5,
                     "entry_trailing_retracement_pct": 0.0276,
-                    "entry_trailing_retracement_volatility_weight": 87,
-                    "entry_trailing_retracement_we_weight": 3.97,
                     "entry_trailing_threshold_pct": 0.0029,
-                    "entry_trailing_threshold_volatility_weight": 76,
-                    "entry_trailing_threshold_we_weight": 1.31,
-                    "entry_volatility_ema_span_hours": 1690
+                    "entry_volatility_ema_span_hours": 1690,
+                    "close_weight_volatility_1h": 0.0,
+                    "close_weight_volatility_1m": 0.0,
+                    "entry_volatility_ema_span_minutes": 60.0,
+                    "entry_weight_volatility_1h": 2.4,
+                    "entry_we_weight": 0.135,
+                    "entry_weight_volatility_1m": 0.0
                 },
                 "ema_anchor": {
                     "base_qty_pct": 0.01,
@@ -289,19 +289,19 @@
                     "ema_span_1": 100,
                     "entry_grid_double_down_factor": 0.5,
                     "entry_grid_spacing_pct": 0.025,
-                    "entry_grid_spacing_volatility_weight": 1,
-                    "entry_grid_spacing_we_weight": 0,
                     "entry_initial_ema_dist": -0.01,
                     "entry_initial_qty_pct": 0.01,
                     "entry_trailing_double_down_factor": 0.5,
                     "entry_trailing_grid_ratio": -0.5,
                     "entry_trailing_retracement_pct": 0.001,
-                    "entry_trailing_retracement_volatility_weight": 1,
-                    "entry_trailing_retracement_we_weight": 0,
                     "entry_trailing_threshold_pct": 0.001,
-                    "entry_trailing_threshold_volatility_weight": 1,
-                    "entry_trailing_threshold_we_weight": 0,
-                    "entry_volatility_ema_span_hours": 672
+                    "entry_volatility_ema_span_hours": 672,
+                    "close_weight_volatility_1h": 0.0,
+                    "close_weight_volatility_1m": 0.0,
+                    "entry_volatility_ema_span_minutes": 60.0,
+                    "entry_weight_volatility_1h": 1,
+                    "entry_we_weight": 0,
+                    "entry_weight_volatility_1m": 0.0
                 },
                 "ema_anchor": {
                     "base_qty_pct": 0.01,
@@ -587,16 +587,6 @@
                             0.04,
                             1e-05
                         ],
-                        "entry_grid_spacing_volatility_weight": [
-                            1,
-                            40,
-                            0.1
-                        ],
-                        "entry_grid_spacing_we_weight": [
-                            0,
-                            5,
-                            0.0001
-                        ],
                         "entry_initial_ema_dist": [
                             -0.01,
                             0.01,
@@ -622,35 +612,45 @@
                             0.015,
                             1e-05
                         ],
-                        "entry_trailing_retracement_volatility_weight": [
-                            1,
-                            40,
-                            0.1
-                        ],
-                        "entry_trailing_retracement_we_weight": [
-                            0,
-                            5,
-                            0.001
-                        ],
                         "entry_trailing_threshold_pct": [
                             0.001,
                             0.015,
                             1e-05
                         ],
-                        "entry_trailing_threshold_volatility_weight": [
-                            1,
-                            40,
-                            0.1
-                        ],
-                        "entry_trailing_threshold_we_weight": [
-                            0,
-                            5,
-                            0.001
-                        ],
                         "entry_volatility_ema_span_hours": [
                             672,
                             2016,
                             1
+                        ],
+                        "close_weight_volatility_1h": [
+                            0,
+                            40,
+                            0.1
+                        ],
+                        "close_weight_volatility_1m": [
+                            0,
+                            40,
+                            0.1
+                        ],
+                        "entry_volatility_ema_span_minutes": [
+                            5,
+                            720,
+                            1
+                        ],
+                        "entry_weight_volatility_1h": [
+                            1,
+                            40,
+                            0.1
+                        ],
+                        "entry_we_weight": [
+                            0,
+                            5,
+                            0.0001
+                        ],
+                        "entry_weight_volatility_1m": [
+                            0,
+                            40,
+                            0.1
                         ]
                     },
                     "ema_anchor": {
@@ -837,16 +837,6 @@
                             0.04,
                             1e-05
                         ],
-                        "entry_grid_spacing_volatility_weight": [
-                            1,
-                            40,
-                            0.1
-                        ],
-                        "entry_grid_spacing_we_weight": [
-                            0,
-                            5,
-                            0.0001
-                        ],
                         "entry_initial_ema_dist": [
                             -0.01,
                             0.01,
@@ -872,35 +862,45 @@
                             0.015,
                             1e-05
                         ],
-                        "entry_trailing_retracement_volatility_weight": [
-                            1,
-                            40,
-                            0.1
-                        ],
-                        "entry_trailing_retracement_we_weight": [
-                            0,
-                            5,
-                            0.001
-                        ],
                         "entry_trailing_threshold_pct": [
                             0.001,
                             0.015,
                             1e-05
                         ],
-                        "entry_trailing_threshold_volatility_weight": [
-                            1,
-                            40,
-                            0.1
-                        ],
-                        "entry_trailing_threshold_we_weight": [
-                            0,
-                            5,
-                            0.001
-                        ],
                         "entry_volatility_ema_span_hours": [
                             672,
                             2016,
                             1
+                        ],
+                        "close_weight_volatility_1h": [
+                            0,
+                            40,
+                            0.1
+                        ],
+                        "close_weight_volatility_1m": [
+                            0,
+                            40,
+                            0.1
+                        ],
+                        "entry_volatility_ema_span_minutes": [
+                            5,
+                            720,
+                            1
+                        ],
+                        "entry_weight_volatility_1h": [
+                            1,
+                            40,
+                            0.1
+                        ],
+                        "entry_we_weight": [
+                            0,
+                            5,
+                            0.0001
+                        ],
+                        "entry_weight_volatility_1m": [
+                            0,
+                            40,
+                            0.1
                         ]
                     },
                     "ema_anchor": {

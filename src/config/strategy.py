@@ -19,23 +19,23 @@ TRAILING_GRID_PARAM_KEYS = (
     "close_trailing_qty_pct",
     "close_trailing_retracement_pct",
     "close_trailing_threshold_pct",
+    "close_weight_volatility_1h",
+    "close_weight_volatility_1m",
     "ema_span_0",
     "ema_span_1",
     "entry_grid_double_down_factor",
     "entry_grid_spacing_pct",
-    "entry_grid_spacing_volatility_weight",
-    "entry_grid_spacing_we_weight",
     "entry_initial_ema_dist",
     "entry_initial_qty_pct",
     "entry_trailing_double_down_factor",
     "entry_trailing_grid_ratio",
     "entry_trailing_retracement_pct",
-    "entry_trailing_retracement_volatility_weight",
-    "entry_trailing_retracement_we_weight",
     "entry_trailing_threshold_pct",
-    "entry_trailing_threshold_volatility_weight",
-    "entry_trailing_threshold_we_weight",
     "entry_volatility_ema_span_hours",
+    "entry_volatility_ema_span_minutes",
+    "entry_weight_volatility_1h",
+    "entry_weight_volatility_1m",
+    "entry_we_weight",
 )
 
 EMA_ANCHOR_PARAM_KEYS = (
@@ -67,23 +67,23 @@ STRATEGY_DEFAULTS_BY_KIND = {
             "close_trailing_qty_pct": 0.05,
             "close_trailing_retracement_pct": 0.00279,
             "close_trailing_threshold_pct": 0.001,
+            "close_weight_volatility_1h": 0.0,
+            "close_weight_volatility_1m": 0.0,
             "ema_span_0": 770,
             "ema_span_1": 210,
             "entry_grid_double_down_factor": 0.73,
             "entry_grid_spacing_pct": 0.033,
-            "entry_grid_spacing_volatility_weight": 2.4,
-            "entry_grid_spacing_we_weight": 0.135,
             "entry_initial_ema_dist": 0.0097,
             "entry_initial_qty_pct": 0.0276,
             "entry_trailing_double_down_factor": 0.9,
             "entry_trailing_grid_ratio": -0.5,
             "entry_trailing_retracement_pct": 0.0276,
-            "entry_trailing_retracement_volatility_weight": 87,
-            "entry_trailing_retracement_we_weight": 3.97,
             "entry_trailing_threshold_pct": 0.0029,
-            "entry_trailing_threshold_volatility_weight": 76,
-            "entry_trailing_threshold_we_weight": 1.31,
             "entry_volatility_ema_span_hours": 1690,
+            "entry_volatility_ema_span_minutes": 60.0,
+            "entry_weight_volatility_1h": 2.4,
+            "entry_weight_volatility_1m": 0.0,
+            "entry_we_weight": 0.135,
         },
         "short": {
             "close_grid_markup_end": 0.0015,
@@ -94,23 +94,23 @@ STRATEGY_DEFAULTS_BY_KIND = {
             "close_trailing_qty_pct": 0.05,
             "close_trailing_retracement_pct": 0.001,
             "close_trailing_threshold_pct": 0.001,
+            "close_weight_volatility_1h": 0.0,
+            "close_weight_volatility_1m": 0.0,
             "ema_span_0": 100,
             "ema_span_1": 100,
             "entry_grid_double_down_factor": 0.5,
             "entry_grid_spacing_pct": 0.025,
-            "entry_grid_spacing_volatility_weight": 1,
-            "entry_grid_spacing_we_weight": 0,
             "entry_initial_ema_dist": -0.01,
             "entry_initial_qty_pct": 0.01,
             "entry_trailing_double_down_factor": 0.5,
             "entry_trailing_grid_ratio": -0.5,
             "entry_trailing_retracement_pct": 0.001,
-            "entry_trailing_retracement_volatility_weight": 1,
-            "entry_trailing_retracement_we_weight": 0,
             "entry_trailing_threshold_pct": 0.001,
-            "entry_trailing_threshold_volatility_weight": 1,
-            "entry_trailing_threshold_we_weight": 0,
             "entry_volatility_ema_span_hours": 672,
+            "entry_volatility_ema_span_minutes": 60.0,
+            "entry_weight_volatility_1h": 1.0,
+            "entry_weight_volatility_1m": 0.0,
+            "entry_we_weight": 0.0,
         },
     },
     EMA_ANCHOR_STRATEGY_KIND: {
@@ -340,6 +340,26 @@ def sync_canonical_strategy_config(config: dict, *, tracker: Optional[object] = 
                 )
 
             for key in get_strategy_param_keys(kind):
+                if key in bot_side:
+                    flat_value = bot_side.pop(key)
+                    if current_strategy_side.get(key) != flat_value:
+                        old_value = current_strategy_side.get(key)
+                        current_strategy_side[key] = flat_value
+                        if tracker is not None:
+                            if old_value is None:
+                                tracker.rename(
+                                    ["bot", pside, key],
+                                    ["bot", pside, "strategy", kind, key],
+                                    flat_value,
+                                )
+                            else:
+                                tracker.update(
+                                    ["bot", pside, "strategy", kind, key],
+                                    old_value,
+                                    flat_value,
+                                )
+                    elif tracker is not None:
+                        tracker.remove(["bot", pside, key], flat_value)
                 if key not in current_strategy_side:
                     if key in defaults_by_side:
                         current_strategy_side[key] = deepcopy(defaults_by_side[key])

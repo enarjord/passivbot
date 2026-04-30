@@ -77,7 +77,7 @@ def test_pareto_store_persists_candidate_without_extra_rounding(tmp_path):
     entry = {
         "bot": {
             "long": {
-                "entry_trailing_threshold_we_weight": 1.384,
+                "entry_we_weight": 1.384,
             },
             "short": {},
         },
@@ -103,4 +103,4 @@ def test_pareto_store_persists_candidate_without_extra_rounding(tmp_path):
     assert len(saved_files) == 1
     saved = json.loads(saved_files[0].read_text())
 
-    assert saved["bot"]["long"]["entry_trailing_threshold_we_weight"] == 1.384
+    assert saved["bot"]["long"]["entry_we_weight"] == 1.384

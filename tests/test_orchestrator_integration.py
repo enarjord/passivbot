@@ -21,6 +21,75 @@ import pytest
 # ============================================================================
 
 
+ADAPTIVE_STRATEGY_KEYS = {
+    "close_grid_markup_end",
+    "close_grid_markup_start",
+    "close_grid_qty_pct",
+    "grid_close_price_anchor",
+    "close_trailing_retracement_pct",
+    "close_trailing_grid_ratio",
+    "close_trailing_qty_pct",
+    "close_trailing_threshold_pct",
+    "close_weight_volatility_1h",
+    "close_weight_volatility_1m",
+    "entry_grid_double_down_factor",
+    "entry_grid_spacing_pct",
+    "entry_volatility_ema_span_hours",
+    "entry_volatility_ema_span_minutes",
+    "entry_weight_volatility_1h",
+    "entry_weight_volatility_1m",
+    "entry_we_weight",
+    "entry_initial_ema_dist",
+    "entry_initial_qty_pct",
+    "entry_trailing_double_down_factor",
+    "entry_trailing_retracement_pct",
+    "entry_trailing_grid_ratio",
+    "entry_trailing_threshold_pct",
+    "ema_span_0",
+    "ema_span_1",
+}
+
+
+def adaptive_strategy_params(**overrides):
+    """Create trailing_grid strategy params with overrides."""
+    base = {
+        "close_grid_markup_end": 0.01,
+        "close_grid_markup_start": 0.01,
+        "close_grid_qty_pct": 1.0,
+        "grid_close_price_anchor": "position_price",
+        "close_trailing_retracement_pct": 0.0,
+        "close_trailing_grid_ratio": 0.0,
+        "close_trailing_qty_pct": 0.0,
+        "close_trailing_threshold_pct": 0.0,
+        "close_weight_volatility_1h": 0.0,
+        "close_weight_volatility_1m": 0.0,
+        "entry_grid_double_down_factor": 1.0,
+        "entry_weight_volatility_1h": 0.0,
+        "entry_weight_volatility_1m": 0.0,
+        "entry_we_weight": 0.0,
+        "entry_grid_spacing_pct": 0.02,
+        "entry_volatility_ema_span_hours": 0.0,
+        "entry_volatility_ema_span_minutes": 60.0,
+        "entry_initial_ema_dist": 0.0,
+        "entry_initial_qty_pct": 0.1,
+        "entry_trailing_double_down_factor": 0.0,
+        "entry_trailing_retracement_pct": 0.0,
+        "entry_trailing_grid_ratio": 0.0,
+        "entry_trailing_threshold_pct": 0.0,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+    }
+    base.update(overrides)
+    return base
+
+
+def _split_bot_and_adaptive_strategy_overrides(overrides):
+    raw = dict(overrides or {})
+    bot_overrides = {k: v for k, v in raw.items() if k not in ADAPTIVE_STRATEGY_KEYS}
+    strategy_overrides = {k: v for k, v in raw.items() if k in ADAPTIVE_STRATEGY_KEYS}
+    return bot_overrides, strategy_overrides
+
+
 def bot_params(**overrides):
     """Create base bot params with overrides."""
     base = {
@@ -32,20 +101,18 @@ def bot_params(**overrides):
         "close_trailing_qty_pct": 0.0,
         "close_trailing_threshold_pct": 0.0,
         "entry_grid_double_down_factor": 1.0,
-        "entry_grid_spacing_volatility_weight": 0.0,
-        "entry_grid_spacing_we_weight": 0.0,
+        "entry_weight_volatility_1h": 0.0,
+        "entry_weight_volatility_1m": 0.0,
+        "entry_we_weight": 0.0,
         "entry_grid_spacing_pct": 0.02,
         "entry_volatility_ema_span_hours": 0.0,
+        "entry_volatility_ema_span_minutes": 60.0,
         "entry_initial_ema_dist": 0.0,
         "entry_initial_qty_pct": 0.1,
         "entry_trailing_double_down_factor": 0.0,
         "entry_trailing_retracement_pct": 0.0,
-        "entry_trailing_retracement_we_weight": 0.0,
-        "entry_trailing_retracement_volatility_weight": 0.0,
         "entry_trailing_grid_ratio": 0.0,
         "entry_trailing_threshold_pct": 0.0,
-        "entry_trailing_threshold_we_weight": 0.0,
-        "entry_trailing_threshold_volatility_weight": 0.0,
         "filter_volatility_ema_span": 10.0,
         "filter_volatility_drop_pct": 0.0,
         "filter_volume_ema_span": 10.0,
@@ -149,9 +216,17 @@ def make_symbol(
     short_pos_price=0.0,
     long_bp=None,
     short_bp=None,
+    long_strategy=None,
+    short_strategy=None,
     emas=None,
 ):
     """Create a symbol entry for orchestrator input."""
+    long_bot_overrides, long_strategy_overrides = _split_bot_and_adaptive_strategy_overrides(long_bp)
+    short_bot_overrides, short_strategy_overrides = _split_bot_and_adaptive_strategy_overrides(short_bp)
+    if long_strategy is None:
+        long_strategy = adaptive_strategy_params(**long_strategy_overrides)
+    if short_strategy is None:
+        short_strategy = adaptive_strategy_params(**short_strategy_overrides)
     return {
         "symbol_idx": symbol_idx,
         "order_book": {"bid": bid, "ask": ask},
@@ -173,7 +248,8 @@ def make_symbol(
             "mode": long_mode,
             "position": {"size": long_pos_size, "price": long_pos_price},
             "trailing": trailing_bundle(),
-            "bot_params": bot_params(**(long_bp or {})),
+            "bot_params": bot_params(**long_bot_overrides),
+            "strategy_params": long_strategy,
         },
         "short": {
             "mode": short_mode,
@@ -185,9 +261,10 @@ def make_symbol(
                         "n_positions": 0,
                         "total_wallet_exposure_limit": 0.0,
                     }
-                    | (short_bp or {})
+                    | short_bot_overrides
                 )
             ),
+            "strategy_params": short_strategy,
         },
     }
 

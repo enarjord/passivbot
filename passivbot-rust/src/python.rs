@@ -1724,27 +1724,27 @@ fn trailing_grid_strategy_params_from_dict(dict: &PyDict, side: &str) -> PyResul
         "close_trailing_qty_pct": extract_value::<f64>(dict, "close_trailing_qty_pct")?,
         "close_trailing_retracement_pct": extract_value::<f64>(dict, "close_trailing_retracement_pct")?,
         "close_trailing_threshold_pct": extract_value::<f64>(dict, "close_trailing_threshold_pct")?,
+        "close_weight_volatility_1h": extract_value::<f64>(dict, "close_weight_volatility_1h")?,
+        "close_weight_volatility_1m": extract_value::<f64>(dict, "close_weight_volatility_1m")?,
         "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
         "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
         "entry_grid_double_down_factor": extract_value::<f64>(dict, "entry_grid_double_down_factor")?,
         "entry_grid_spacing_pct": extract_value::<f64>(dict, "entry_grid_spacing_pct")?,
-        "entry_grid_spacing_volatility_weight": extract_value::<f64>(dict, "entry_grid_spacing_volatility_weight")?,
-        "entry_grid_spacing_we_weight": extract_grid_spacing_we_weight(dict)?,
         "entry_initial_ema_dist": extract_value::<f64>(dict, "entry_initial_ema_dist")?,
         "entry_initial_qty_pct": extract_value::<f64>(dict, "entry_initial_qty_pct")?,
         "entry_trailing_double_down_factor": extract_value::<f64>(dict, "entry_trailing_double_down_factor")?,
         "entry_trailing_grid_ratio": extract_value::<f64>(dict, "entry_trailing_grid_ratio")?,
         "entry_trailing_retracement_pct": extract_value::<f64>(dict, "entry_trailing_retracement_pct")?,
-        "entry_trailing_retracement_volatility_weight": extract_value::<f64>(dict, "entry_trailing_retracement_volatility_weight")?,
-        "entry_trailing_retracement_we_weight": extract_value::<f64>(dict, "entry_trailing_retracement_we_weight")?,
         "entry_trailing_threshold_pct": extract_value::<f64>(dict, "entry_trailing_threshold_pct")?,
-        "entry_trailing_threshold_volatility_weight": extract_value::<f64>(dict, "entry_trailing_threshold_volatility_weight")?,
-        "entry_trailing_threshold_we_weight": extract_value::<f64>(dict, "entry_trailing_threshold_we_weight")?,
         "entry_volatility_ema_span_hours": extract_value_with_fallback::<f64>(
             dict,
             "entry_volatility_ema_span_hours",
             "entry_log_range_ema_span_hours",
         )?,
+        "entry_volatility_ema_span_minutes": extract_value::<f64>(dict, "entry_volatility_ema_span_minutes")?,
+        "entry_weight_volatility_1h": extract_value::<f64>(dict, "entry_weight_volatility_1h")?,
+        "entry_weight_volatility_1m": extract_value::<f64>(dict, "entry_weight_volatility_1m")?,
+        "entry_we_weight": extract_value::<f64>(dict, "entry_we_weight")?,
     }))
 }
 
@@ -1794,14 +1794,6 @@ fn strategy_params_pair_from_dict(
         }
     };
     Ok(StrategyParamsPairValue { long, short })
-}
-
-fn extract_grid_spacing_we_weight(dict: &PyDict) -> PyResult<f64> {
-    if let Some(obj) = dict.get_item("entry_grid_spacing_we_weight")? {
-        obj.extract::<f64>()
-    } else {
-        extract_value(dict, "entry_grid_spacing_we_weight")
-    }
 }
 
 fn extract_grid_close_price_anchor(dict: &PyDict, side: &str) -> PyResult<&'static str> {
@@ -1883,12 +1875,9 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         close_trailing_grid_ratio: extract_optional_f64(dict, "close_trailing_grid_ratio")?,
         close_trailing_qty_pct: extract_optional_f64(dict, "close_trailing_qty_pct")?,
         close_trailing_threshold_pct: extract_optional_f64(dict, "close_trailing_threshold_pct")?,
+        close_weight_volatility_1h: extract_optional_f64(dict, "close_weight_volatility_1h")?,
+        close_weight_volatility_1m: extract_optional_f64(dict, "close_weight_volatility_1m")?,
         entry_grid_double_down_factor: extract_optional_f64(dict, "entry_grid_double_down_factor")?,
-        entry_grid_spacing_volatility_weight: extract_optional_f64(
-            dict,
-            "entry_grid_spacing_volatility_weight",
-        )?,
-        entry_grid_spacing_we_weight: extract_optional_f64(dict, "entry_grid_spacing_we_weight")?,
         entry_grid_spacing_pct: extract_optional_f64(dict, "entry_grid_spacing_pct")?,
         entry_volatility_ema_span_hours: match dict.get_item("entry_volatility_ema_span_hours")? {
             Some(item) => item.extract::<f64>()?,
@@ -1897,6 +1886,13 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
                 None => 0.0,
             },
         },
+        entry_volatility_ema_span_minutes: extract_optional_f64(
+            dict,
+            "entry_volatility_ema_span_minutes",
+        )?,
+        entry_weight_volatility_1h: extract_optional_f64(dict, "entry_weight_volatility_1h")?,
+        entry_weight_volatility_1m: extract_optional_f64(dict, "entry_weight_volatility_1m")?,
+        entry_we_weight: extract_optional_f64(dict, "entry_we_weight")?,
         entry_initial_ema_dist: extract_optional_f64(dict, "entry_initial_ema_dist")?,
         entry_initial_qty_pct: extract_optional_f64(dict, "entry_initial_qty_pct")?,
         entry_trailing_double_down_factor: extract_optional_f64(
@@ -1907,24 +1903,8 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
             dict,
             "entry_trailing_retracement_pct",
         )?,
-        entry_trailing_retracement_we_weight: extract_optional_f64(
-            dict,
-            "entry_trailing_retracement_we_weight",
-        )?,
-        entry_trailing_retracement_volatility_weight: extract_optional_f64(
-            dict,
-            "entry_trailing_retracement_volatility_weight",
-        )?,
         entry_trailing_grid_ratio: extract_optional_f64(dict, "entry_trailing_grid_ratio")?,
         entry_trailing_threshold_pct: extract_optional_f64(dict, "entry_trailing_threshold_pct")?,
-        entry_trailing_threshold_we_weight: extract_optional_f64(
-            dict,
-            "entry_trailing_threshold_we_weight",
-        )?,
-        entry_trailing_threshold_volatility_weight: extract_optional_f64(
-            dict,
-            "entry_trailing_threshold_volatility_weight",
-        )?,
         filter_volatility_ema_span: extract_value_with_fallback(
             dict,
             "forager_volatility_ema_span",
@@ -2042,35 +2022,29 @@ fn extract_value_with_fallback<'a, T: pyo3::FromPyObject<'a>>(
 
 fn make_trailing_grid_entry_params(
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_volatility_weight: f64,
-    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
     entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
-    entry_trailing_retracement_we_weight: f64,
-    entry_trailing_retracement_volatility_weight: f64,
     entry_trailing_threshold_pct: f64,
-    entry_trailing_threshold_we_weight: f64,
-    entry_trailing_threshold_volatility_weight: f64,
+    entry_weight_volatility_1h: f64,
+    entry_weight_volatility_1m: f64,
+    entry_we_weight: f64,
 ) -> TrailingGridEntryParams {
     TrailingGridEntryParams {
         entry_grid_double_down_factor,
         entry_grid_spacing_pct,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_volatility_weight,
-        entry_trailing_retracement_we_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_volatility_weight,
-        entry_trailing_threshold_we_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
     }
 }
 
@@ -2083,6 +2057,8 @@ fn make_trailing_grid_close_params(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
+    close_weight_volatility_1h: f64,
+    close_weight_volatility_1m: f64,
     grid_close_price_anchor: &str,
 ) -> PyResult<TrailingGridCloseParams> {
     let grid_close_price_anchor = parse_helper_close_anchor(side, grid_close_price_anchor)?;
@@ -2095,6 +2071,8 @@ fn make_trailing_grid_close_params(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
     })
 }
 
@@ -2140,19 +2118,16 @@ pub fn calc_next_entry_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_volatility_weight: f64,
-    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
     entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
-    entry_trailing_retracement_we_weight: f64,
-    entry_trailing_retracement_volatility_weight: f64,
     entry_trailing_threshold_pct: f64,
-    entry_trailing_threshold_we_weight: f64,
-    entry_trailing_threshold_volatility_weight: f64,
+    entry_weight_volatility_1h: f64,
+    entry_weight_volatility_1m: f64,
+    entry_we_weight: f64,
     wallet_exposure_limit: f64,
     risk_we_excess_allowance_pct: f64,
     balance: f64,
@@ -2164,6 +2139,7 @@ pub fn calc_next_entry_long_py(
     min_since_max: f64,
     ema_bands_lower: f64,
     entry_volatility_logrange_ema_1h: f64,
+    entry_volatility_logrange_ema_1m: f64,
     order_book_bid: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -2185,42 +2161,37 @@ pub fn calc_next_entry_long_py(
             ..Default::default()
         },
         entry_volatility_logrange_ema_1h,
+        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
     let entry_params = make_trailing_grid_entry_params(
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
     );
     let position = Position {
         size: position_size,
@@ -2275,6 +2246,10 @@ pub fn calc_next_entry_long_py(
     min_since_max,
     order_book_ask,
     ema_bands_upper = 0.0,
+    entry_volatility_logrange_ema_1h = 0.0,
+    entry_volatility_logrange_ema_1m = 0.0,
+    close_weight_volatility_1h = 0.0,
+    close_weight_volatility_1m = 0.0,
     grid_close_price_anchor = "position_price".to_string()
 ))]
 pub fn calc_next_close_long_py(
@@ -2302,6 +2277,10 @@ pub fn calc_next_close_long_py(
     min_since_max: f64,
     order_book_ask: f64,
     ema_bands_upper: f64,
+    entry_volatility_logrange_ema_1h: f64,
+    entry_volatility_logrange_ema_1m: f64,
+    close_weight_volatility_1h: f64,
+    close_weight_volatility_1m: f64,
     grid_close_price_anchor: String,
 ) -> PyResult<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
@@ -2322,6 +2301,8 @@ pub fn calc_next_close_long_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
+        entry_volatility_logrange_ema_1h,
+        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -2332,6 +2313,8 @@ pub fn calc_next_close_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         risk_wel_enforcer_threshold,
@@ -2346,6 +2329,8 @@ pub fn calc_next_close_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         &grid_close_price_anchor,
     )?;
     validate_helper_close_anchor_inputs(
@@ -2388,19 +2373,16 @@ pub fn calc_next_entry_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_volatility_weight: f64,
-    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
     entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
-    entry_trailing_retracement_we_weight: f64,
-    entry_trailing_retracement_volatility_weight: f64,
     entry_trailing_threshold_pct: f64,
-    entry_trailing_threshold_we_weight: f64,
-    entry_trailing_threshold_volatility_weight: f64,
+    entry_weight_volatility_1h: f64,
+    entry_weight_volatility_1m: f64,
+    entry_we_weight: f64,
     wallet_exposure_limit: f64,
     risk_we_excess_allowance_pct: f64,
     balance: f64,
@@ -2412,6 +2394,7 @@ pub fn calc_next_entry_short_py(
     min_since_max: f64,
     ema_bands_upper: f64,
     entry_volatility_logrange_ema_1h: f64,
+    entry_volatility_logrange_ema_1m: f64,
     order_book_ask: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -2433,42 +2416,37 @@ pub fn calc_next_entry_short_py(
             ..Default::default()
         },
         entry_volatility_logrange_ema_1h,
+        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
     let entry_params = make_trailing_grid_entry_params(
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
     );
     let position = Position {
         size: position_size,
@@ -2523,6 +2501,10 @@ pub fn calc_next_entry_short_py(
     min_since_max,
     order_book_bid,
     ema_bands_lower = 0.0,
+    entry_volatility_logrange_ema_1h = 0.0,
+    entry_volatility_logrange_ema_1m = 0.0,
+    close_weight_volatility_1h = 0.0,
+    close_weight_volatility_1m = 0.0,
     grid_close_price_anchor = "position_price".to_string()
 ))]
 pub fn calc_next_close_short_py(
@@ -2550,6 +2532,10 @@ pub fn calc_next_close_short_py(
     min_since_max: f64,
     order_book_bid: f64,
     ema_bands_lower: f64,
+    entry_volatility_logrange_ema_1h: f64,
+    entry_volatility_logrange_ema_1m: f64,
+    close_weight_volatility_1h: f64,
+    close_weight_volatility_1m: f64,
     grid_close_price_anchor: String,
 ) -> PyResult<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
@@ -2570,6 +2556,8 @@ pub fn calc_next_close_short_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
+        entry_volatility_logrange_ema_1h,
+        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -2580,6 +2568,8 @@ pub fn calc_next_close_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         risk_wel_enforcer_threshold,
@@ -2594,6 +2584,8 @@ pub fn calc_next_close_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         &grid_close_price_anchor,
     )?;
     validate_helper_close_anchor_inputs(
@@ -2636,19 +2628,16 @@ pub fn calc_entries_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_volatility_weight: f64,
-    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
     entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
-    entry_trailing_retracement_we_weight: f64,
-    entry_trailing_retracement_volatility_weight: f64,
     entry_trailing_threshold_pct: f64,
-    entry_trailing_threshold_we_weight: f64,
-    entry_trailing_threshold_volatility_weight: f64,
+    entry_weight_volatility_1h: f64,
+    entry_weight_volatility_1m: f64,
+    entry_we_weight: f64,
     wallet_exposure_limit: f64,
     risk_we_excess_allowance_pct: f64,
     balance: f64,
@@ -2660,6 +2649,7 @@ pub fn calc_entries_long_py(
     min_since_max: f64,
     ema_bands_lower: f64,
     entry_volatility_logrange_ema_1h: f64,
+    entry_volatility_logrange_ema_1m: f64,
     order_book_bid: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -2682,43 +2672,38 @@ pub fn calc_entries_long_py(
             ..Default::default()
         },
         entry_volatility_logrange_ema_1h,
+        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
         ..Default::default()
     };
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
     let entry_params = make_trailing_grid_entry_params(
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
     );
 
     let position = Position {
@@ -2757,19 +2742,16 @@ pub fn calc_entries_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_volatility_weight: f64,
-    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
     entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
-    entry_trailing_retracement_we_weight: f64,
-    entry_trailing_retracement_volatility_weight: f64,
     entry_trailing_threshold_pct: f64,
-    entry_trailing_threshold_we_weight: f64,
-    entry_trailing_threshold_volatility_weight: f64,
+    entry_weight_volatility_1h: f64,
+    entry_weight_volatility_1m: f64,
+    entry_we_weight: f64,
     wallet_exposure_limit: f64,
     risk_we_excess_allowance_pct: f64,
     balance: f64,
@@ -2781,6 +2763,7 @@ pub fn calc_entries_short_py(
     min_since_max: f64,
     ema_bands_upper: f64,
     entry_volatility_logrange_ema_1h: f64,
+    entry_volatility_logrange_ema_1m: f64,
     order_book_ask: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -2803,43 +2786,38 @@ pub fn calc_entries_short_py(
             ..Default::default()
         },
         entry_volatility_logrange_ema_1h,
+        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
         ..Default::default()
     };
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
     let entry_params = make_trailing_grid_entry_params(
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
     );
 
     let position = Position {
@@ -2914,6 +2892,10 @@ pub fn calc_min_entry_qty_py(
     min_since_max,
     order_book_ask,
     ema_bands_upper = 0.0,
+    entry_volatility_logrange_ema_1h = 0.0,
+    entry_volatility_logrange_ema_1m = 0.0,
+    close_weight_volatility_1h = 0.0,
+    close_weight_volatility_1m = 0.0,
     grid_close_price_anchor = "position_price".to_string()
 ))]
 pub fn calc_closes_long_py(
@@ -2941,6 +2923,10 @@ pub fn calc_closes_long_py(
     min_since_max: f64,
     order_book_ask: f64,
     ema_bands_upper: f64,
+    entry_volatility_logrange_ema_1h: f64,
+    entry_volatility_logrange_ema_1m: f64,
+    close_weight_volatility_1h: f64,
+    close_weight_volatility_1m: f64,
     grid_close_price_anchor: String,
 ) -> PyResult<Vec<(f64, f64, u16)>> {
     let exchange_params = ExchangeParams {
@@ -2962,6 +2948,8 @@ pub fn calc_closes_long_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
+        entry_volatility_logrange_ema_1h,
+        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
         ..Default::default()
     };
 
@@ -2973,6 +2961,8 @@ pub fn calc_closes_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         risk_wel_enforcer_threshold,
@@ -2987,6 +2977,8 @@ pub fn calc_closes_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         &grid_close_price_anchor,
     )?;
     validate_helper_close_anchor_inputs(
@@ -3048,6 +3040,10 @@ pub fn calc_closes_long_py(
     min_since_max,
     order_book_bid,
     ema_bands_lower = 0.0,
+    entry_volatility_logrange_ema_1h = 0.0,
+    entry_volatility_logrange_ema_1m = 0.0,
+    close_weight_volatility_1h = 0.0,
+    close_weight_volatility_1m = 0.0,
     grid_close_price_anchor = "position_price".to_string()
 ))]
 pub fn calc_closes_short_py(
@@ -3075,6 +3071,10 @@ pub fn calc_closes_short_py(
     min_since_max: f64,
     order_book_bid: f64,
     ema_bands_lower: f64,
+    entry_volatility_logrange_ema_1h: f64,
+    entry_volatility_logrange_ema_1m: f64,
+    close_weight_volatility_1h: f64,
+    close_weight_volatility_1m: f64,
     grid_close_price_anchor: String,
 ) -> PyResult<Vec<(f64, f64, u16)>> {
     let exchange_params = ExchangeParams {
@@ -3096,6 +3096,8 @@ pub fn calc_closes_short_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
+        entry_volatility_logrange_ema_1h,
+        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
         ..Default::default()
     };
 
@@ -3107,6 +3109,8 @@ pub fn calc_closes_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         risk_wel_enforcer_threshold,
@@ -3121,6 +3125,8 @@ pub fn calc_closes_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         &grid_close_price_anchor,
     )?;
     validate_helper_close_anchor_inputs(

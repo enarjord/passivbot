@@ -198,6 +198,7 @@ def test_resume_normal_cooldown_does_not_preauthorize_flat_halted_side():
     )
     cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
     cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = 2.0
+    cfg["bot"]["long"].setdefault("hsl", {})["cooldown_minutes_after_red"] = 2.0
     cfg["live"]["hsl_position_during_cooldown_policy"] = "normal"
     cfg["live"]["hsl_signal_mode"] = "unified"
     cfg["bot"]["short"] = json.loads(json.dumps(cfg["bot"]["long"]))
@@ -237,21 +238,21 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "close_trailing_grid_ratio": 0.0,
                 "close_trailing_qty_pct": 0.0,
                 "close_trailing_threshold_pct": 0.001,
+                "close_weight_volatility_1h": 0.0,
+                "close_weight_volatility_1m": 0.0,
                 "entry_grid_double_down_factor": 1.0,
-                "entry_grid_spacing_volatility_weight": 0.0,
-                "entry_grid_spacing_we_weight": 0.0,
+                "entry_weight_volatility_1h": 0.0,
+                "entry_weight_volatility_1m": 0.0,
+                "entry_we_weight": 0.0,
                 "entry_grid_spacing_pct": 0.01,
                 "entry_volatility_ema_span_hours": 0.0,
+                "entry_volatility_ema_span_minutes": 60.0,
                 "entry_initial_ema_dist": -0.001,
                 "entry_initial_qty_pct": 0.1,
                 "entry_trailing_double_down_factor": 1.0,
                 "entry_trailing_retracement_pct": 0.001,
-                "entry_trailing_retracement_we_weight": 0.0,
-                "entry_trailing_retracement_volatility_weight": 0.0,
                 "entry_trailing_grid_ratio": 0.0,
                 "entry_trailing_threshold_pct": 0.001,
-                "entry_trailing_threshold_we_weight": 0.0,
-                "entry_trailing_threshold_volatility_weight": 0.0,
                 "filter_volatility_ema_span": 0.0,
                 "filter_volume_ema_span": 1.0,
                 "forager_volume_drop_pct": 0.0,
@@ -273,6 +274,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "n_positions": 1.0,
                 "total_wallet_exposure_limit": 5.0,
                 "wallet_exposure_limit": 5.0,
+                "risk_entry_cooldown_minutes": 0.0,
                 "risk_wel_enforcer_threshold": 1.0,
                 "risk_twel_enforcer_threshold": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
@@ -322,21 +324,21 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "close_trailing_grid_ratio": 0.0,
                         "close_trailing_qty_pct": 0.0,
                         "close_trailing_threshold_pct": 0.001,
+                        "close_weight_volatility_1h": 0.0,
+                        "close_weight_volatility_1m": 0.0,
                         "entry_grid_double_down_factor": 1.0,
-                        "entry_grid_spacing_volatility_weight": 0.0,
-                        "entry_grid_spacing_we_weight": 0.0,
+                        "entry_weight_volatility_1h": 0.0,
+                        "entry_weight_volatility_1m": 0.0,
+                        "entry_we_weight": 0.0,
                         "entry_grid_spacing_pct": 0.01,
                         "entry_volatility_ema_span_hours": 0.0,
+                        "entry_volatility_ema_span_minutes": 60.0,
                         "entry_initial_ema_dist": -0.001,
                         "entry_initial_qty_pct": 0.1,
                         "entry_trailing_double_down_factor": 1.0,
                         "entry_trailing_retracement_pct": 0.001,
-                        "entry_trailing_retracement_we_weight": 0.0,
-                        "entry_trailing_retracement_volatility_weight": 0.0,
                         "entry_trailing_grid_ratio": 0.0,
                         "entry_trailing_threshold_pct": 0.001,
-                        "entry_trailing_threshold_we_weight": 0.0,
-                        "entry_trailing_threshold_volatility_weight": 0.0,
                         "forager_volatility_ema_span": 0.0,
                         "forager_volume_ema_span": 1.0,
                         "forager_volume_drop_pct": 0.0,
@@ -358,6 +360,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "n_positions": 1.0,
                         "total_wallet_exposure_limit": 5.0,
                         "wallet_exposure_limit": 5.0,
+                        "risk_entry_cooldown_minutes": 0.0,
                         "risk_wel_enforcer_threshold": 1.0,
                         "risk_twel_enforcer_threshold": 1.0,
                         "risk_we_excess_allowance_pct": 0.0,
@@ -578,6 +581,9 @@ async def test_hsl_replay_scenarios_run_end_to_end(
     if cooldown_override is not None:
         cfg = load_config(str(config_path), verbose=False)
         cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = float(cooldown_override)
+        cfg["bot"]["long"].setdefault("hsl", {})["cooldown_minutes_after_red"] = float(
+            cooldown_override
+        )
         if policy_override is not None:
             cfg["live"]["hsl_position_during_cooldown_policy"] = str(policy_override)
         config_path = tmp_path / "fake_live_hsl_btc_override.json"

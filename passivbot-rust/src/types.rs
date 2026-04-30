@@ -409,15 +409,23 @@ pub struct BotParams {
     #[serde(default)]
     pub close_trailing_threshold_pct: f64,
     #[serde(default)]
+    pub close_weight_volatility_1h: f64,
+    #[serde(default)]
+    pub close_weight_volatility_1m: f64,
+    #[serde(default)]
     pub entry_grid_double_down_factor: f64,
-    #[serde(default)]
-    pub entry_grid_spacing_volatility_weight: f64,
-    #[serde(default)]
-    pub entry_grid_spacing_we_weight: f64,
     #[serde(default)]
     pub entry_grid_spacing_pct: f64,
     #[serde(default)]
     pub entry_volatility_ema_span_hours: f64,
+    #[serde(default)]
+    pub entry_volatility_ema_span_minutes: f64,
+    #[serde(default)]
+    pub entry_weight_volatility_1h: f64,
+    #[serde(default)]
+    pub entry_weight_volatility_1m: f64,
+    #[serde(default)]
+    pub entry_we_weight: f64,
     #[serde(default)]
     pub entry_initial_ema_dist: f64,
     #[serde(default)]
@@ -427,17 +435,9 @@ pub struct BotParams {
     #[serde(default)]
     pub entry_trailing_retracement_pct: f64,
     #[serde(default)]
-    pub entry_trailing_retracement_we_weight: f64,
-    #[serde(default)]
-    pub entry_trailing_retracement_volatility_weight: f64,
-    #[serde(default)]
     pub entry_trailing_grid_ratio: f64,
     #[serde(default)]
     pub entry_trailing_threshold_pct: f64,
-    #[serde(default)]
-    pub entry_trailing_threshold_we_weight: f64,
-    #[serde(default)]
-    pub entry_trailing_threshold_volatility_weight: f64,
     pub filter_volatility_ema_span: f64,
     pub filter_volume_ema_span: f64,
     #[serde(default, skip_serializing, rename = "filter_volatility_drop_pct")]

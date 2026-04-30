@@ -21,8 +21,10 @@ Throughout:
 
 ```text
 alpha(span)         = 2 / (span + 1)
-ramp_spacing(wel)   = 1 + (wel / wel_base) * entry_grid_spacing_we_weight + vol_term
-vol_term            = log_range_ema * entry_grid_spacing_volatility_weight
+entry_vol_term      = log_range_ema_1h * entry_weight_volatility_1h
+                    + log_range_ema_1m * entry_weight_volatility_1m
+entry_we_term       = (wel / wel_base) * entry_we_weight
+entry_multiplier    = max(1, 1 + entry_vol_term + entry_we_term)
 
 initial_price(pside) =
     long  : min(best_bid, EMA_low * (1 - entry_initial_ema_dist))
@@ -33,8 +35,8 @@ initial_qty(balance) =
         balance * wel_base * entry_initial_qty_pct / initial_price)
 
 next_grid_price(pside, k) =
-    long  : last_fill_price * (1 - entry_grid_spacing_pct * ramp_spacing(wel))^k
-    short : last_fill_price * (1 + entry_grid_spacing_pct * ramp_spacing(wel))^k
+    long  : last_fill_price * (1 - entry_grid_spacing_pct * entry_multiplier)^k
+    short : last_fill_price * (1 + entry_grid_spacing_pct * entry_multiplier)^k
 
 next_grid_qty(last_fill_qty) =
     last_fill_qty * entry_grid_double_down_factor
@@ -54,13 +56,9 @@ Trailing entries activate after the position experiences a favourable excursion 
 a pullback.
 
 ```text
-threshold = entry_trailing_threshold_pct *
-            (1 + entry_trailing_threshold_we_weight * wel_ratio
-               + entry_trailing_threshold_volatility_weight * log_range_ema)
+threshold = entry_trailing_threshold_pct * entry_multiplier
 
-retracement = entry_trailing_retracement_pct *
-              (1 + entry_trailing_retracement_we_weight * wel_ratio
-                 + entry_trailing_retracement_volatility_weight * log_range_ema)
+retracement = entry_trailing_retracement_pct * entry_multiplier
 
 wel_ratio = wallet_exposure(...) / wel_base
 

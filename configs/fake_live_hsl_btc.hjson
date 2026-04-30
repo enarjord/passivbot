@@ -1,30 +1,35 @@
 {
   bot: {
     long: {
-      close_grid_markup_end: 0.01
-      close_grid_markup_start: 0.005
-      close_grid_qty_pct: 1.0
-      close_trailing_grid_ratio: 0.0
-      close_trailing_qty_pct: 0.0
-      close_trailing_retracement_pct: 0.001
-      close_trailing_threshold_pct: 0.001
-      ema_span_0: 2.0
-      ema_span_1: 4.0
-      entry_grid_double_down_factor: 1.0
-      entry_grid_spacing_pct: 0.01
-      entry_grid_spacing_volatility_weight: 0.0
-      entry_grid_spacing_we_weight: 0.0
-      entry_initial_ema_dist: -0.001
-      entry_initial_qty_pct: 0.1
-      entry_trailing_double_down_factor: 1.0
-      entry_trailing_grid_ratio: 0.0
-      entry_trailing_retracement_pct: 0.001
-      entry_trailing_retracement_volatility_weight: 0.0
-      entry_trailing_retracement_we_weight: 0.0
-      entry_trailing_threshold_pct: 0.001
-      entry_trailing_threshold_volatility_weight: 0.0
-      entry_trailing_threshold_we_weight: 0.0
-      entry_volatility_ema_span_hours: 0.0
+      strategy: {
+        trailing_grid: {
+          close_grid_markup_end: 0.01
+          close_grid_markup_start: 0.005
+          close_grid_qty_pct: 1.0
+          grid_close_price_anchor: position_price
+          close_trailing_grid_ratio: 0.0
+          close_trailing_qty_pct: 0.0
+          close_trailing_retracement_pct: 0.001
+          close_trailing_threshold_pct: 0.001
+          close_weight_volatility_1h: 0.0
+          close_weight_volatility_1m: 0.0
+          ema_span_0: 2.0
+          ema_span_1: 4.0
+          entry_grid_double_down_factor: 1.0
+          entry_grid_spacing_pct: 0.01
+          entry_initial_ema_dist: -0.001
+          entry_initial_qty_pct: 0.1
+          entry_trailing_double_down_factor: 1.0
+          entry_trailing_grid_ratio: 0.0
+          entry_trailing_retracement_pct: 0.001
+          entry_trailing_threshold_pct: 0.001
+          entry_volatility_ema_span_hours: 0.0
+          entry_volatility_ema_span_minutes: 60.0
+          entry_weight_volatility_1h: 0.0
+          entry_weight_volatility_1m: 0.0
+          entry_we_weight: 0.0
+        }
+      }
       forager_score_weights: {volume: 1.0, ema_readiness: 0.0, volatility: 0.0}
       forager_volatility_ema_span: 0.0
       forager_volume_drop_pct: 0.0
@@ -49,9 +54,35 @@
     }
     short: {
       hsl_enabled: false
-      ema_span_0: 0.0
-      ema_span_1: 0.0
-      entry_volatility_ema_span_hours: 0.0
+      strategy: {
+        trailing_grid: {
+          close_grid_markup_end: 0.01
+          close_grid_markup_start: 0.005
+          close_grid_qty_pct: 1.0
+          grid_close_price_anchor: position_price
+          close_trailing_grid_ratio: 0.0
+          close_trailing_qty_pct: 0.0
+          close_trailing_retracement_pct: 0.001
+          close_trailing_threshold_pct: 0.001
+          close_weight_volatility_1h: 0.0
+          close_weight_volatility_1m: 0.0
+          ema_span_0: 0.0
+          ema_span_1: 0.0
+          entry_grid_double_down_factor: 0.5
+          entry_grid_spacing_pct: 0.025
+          entry_initial_ema_dist: -0.01
+          entry_initial_qty_pct: 0.01
+          entry_trailing_double_down_factor: 0.5
+          entry_trailing_grid_ratio: 0.0
+          entry_trailing_retracement_pct: 0.001
+          entry_trailing_threshold_pct: 0.001
+          entry_volatility_ema_span_hours: 0.0
+          entry_volatility_ema_span_minutes: 60.0
+          entry_weight_volatility_1h: 0.0
+          entry_weight_volatility_1m: 0.0
+          entry_we_weight: 0.0
+        }
+      }
       forager_score_weights: {volume: 1.0, ema_readiness: 0.0, volatility: 0.0}
       forager_volatility_ema_span: 0.0
       forager_volume_drop_pct: 0.0

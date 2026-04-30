@@ -9,19 +9,16 @@ from config.shared_bot import flatten_shared_bot_side
 
 ENTRY_CONFIG_KEYS = [
     "entry_grid_double_down_factor",
-    "entry_grid_spacing_volatility_weight",
-    "entry_grid_spacing_we_weight",
     "entry_grid_spacing_pct",
     "entry_initial_ema_dist",
     "entry_initial_qty_pct",
     "entry_trailing_double_down_factor",
     "entry_trailing_grid_ratio",
     "entry_trailing_retracement_pct",
-    "entry_trailing_retracement_we_weight",
-    "entry_trailing_retracement_volatility_weight",
     "entry_trailing_threshold_pct",
-    "entry_trailing_threshold_we_weight",
-    "entry_trailing_threshold_volatility_weight",
+    "entry_weight_volatility_1h",
+    "entry_weight_volatility_1m",
+    "entry_we_weight",
     "wallet_exposure_limit",
     "risk_we_excess_allowance_pct",
 ]
@@ -35,6 +32,8 @@ CLOSE_CONFIG_KEYS = [
     "close_trailing_qty_pct",
     "close_trailing_retracement_pct",
     "close_trailing_threshold_pct",
+    "close_weight_volatility_1h",
+    "close_weight_volatility_1m",
     "wallet_exposure_limit",
     "risk_we_excess_allowance_pct",
     "risk_wel_enforcer_threshold",
@@ -62,6 +61,7 @@ NUMERIC_INPUT_KEYS = [
     "ema_lower",
     "ema_upper",
     "h1_log_range_ema",
+    "m1_log_range_ema",
     *TRAILING_EXTREMA_KEYS,
     *sorted(set(ENTRY_CONFIG_KEYS + CLOSE_CONFIG_KEYS)),
 ]
@@ -202,7 +202,8 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     if ema_reference <= 0.0 or current_price <= 0.0:
         return None
     trailing_bundle = normalize_trailing_extrema(inputs)
-    entry_volatility_lr = _float(inputs.get("h1_log_range_ema"))
+    entry_volatility_1h = _float(inputs.get("h1_log_range_ema"))
+    entry_volatility_1m = _float(inputs.get("m1_log_range_ema"))
     common_args = [
         _float(inputs.get("qty_step")),
         _float(inputs.get("price_step")),
@@ -210,19 +211,16 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         _float(inputs.get("min_cost")),
         c_mult,
         _float(inputs.get("entry_grid_double_down_factor")),
-        _float(inputs.get("entry_grid_spacing_volatility_weight")),
-        _float(inputs.get("entry_grid_spacing_we_weight")),
         _float(inputs.get("entry_grid_spacing_pct")),
         _float(inputs.get("entry_initial_ema_dist")),
         _float(inputs.get("entry_initial_qty_pct")),
         _float(inputs.get("entry_trailing_double_down_factor")),
         _float(inputs.get("entry_trailing_grid_ratio")),
         _float(inputs.get("entry_trailing_retracement_pct")),
-        _float(inputs.get("entry_trailing_retracement_we_weight")),
-        _float(inputs.get("entry_trailing_retracement_volatility_weight")),
         _float(inputs.get("entry_trailing_threshold_pct")),
-        _float(inputs.get("entry_trailing_threshold_we_weight")),
-        _float(inputs.get("entry_trailing_threshold_volatility_weight")),
+        _float(inputs.get("entry_weight_volatility_1h")),
+        _float(inputs.get("entry_weight_volatility_1m")),
+        _float(inputs.get("entry_we_weight")),
         _float(inputs.get("wallet_exposure_limit")),
         _float(inputs.get("risk_we_excess_allowance_pct")),
         balance_raw,
@@ -233,7 +231,8 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         trailing_bundle["max_since_open"],
         trailing_bundle["min_since_max"],
         ema_reference,
-        entry_volatility_lr,
+        entry_volatility_1h,
+        entry_volatility_1m,
         current_price,
     ]
     if pside == "long":
@@ -244,29 +243,19 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     if "trailing" not in order_type:
         return None
 
-    threshold_multiplier = (
-        (wallet_exposure / limit_cap) * _float(inputs.get("entry_trailing_threshold_we_weight"))
-        if limit_cap > 0.0
-        else 0.0
+    entry_multiplier = max(
+        1.0,
+        1.0
+        + entry_volatility_1h * _float(inputs.get("entry_weight_volatility_1h"))
+        + entry_volatility_1m * _float(inputs.get("entry_weight_volatility_1m"))
+        + (
+            (wallet_exposure / limit_cap) * _float(inputs.get("entry_we_weight"))
+            if limit_cap > 0.0
+            else 0.0
+        ),
     )
-    threshold_log_multiplier = entry_volatility_lr * _float(
-        inputs.get("entry_trailing_threshold_volatility_weight")
-    )
-    threshold_pct = _float(inputs.get("entry_trailing_threshold_pct")) * max(
-        0.0, 1.0 + threshold_multiplier + threshold_log_multiplier
-    )
-
-    retracement_multiplier = (
-        (wallet_exposure / limit_cap) * _float(inputs.get("entry_trailing_retracement_we_weight"))
-        if limit_cap > 0.0
-        else 0.0
-    )
-    retracement_log_multiplier = entry_volatility_lr * _float(
-        inputs.get("entry_trailing_retracement_volatility_weight")
-    )
-    retracement_pct = _float(inputs.get("entry_trailing_retracement_pct")) * max(
-        0.0, 1.0 + retracement_multiplier + retracement_log_multiplier
-    )
+    threshold_pct = _float(inputs.get("entry_trailing_threshold_pct")) * entry_multiplier
+    retracement_pct = _float(inputs.get("entry_trailing_retracement_pct")) * entry_multiplier
 
     if pside == "long":
         threshold_price = position_price * (1.0 - threshold_pct) if threshold_pct > 0.0 else None
@@ -342,6 +331,8 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     if position_size == 0.0 or position_price <= 0.0 or current_price <= 0.0:
         return None
     trailing_bundle = normalize_trailing_extrema(inputs)
+    close_volatility_1h = _float(inputs.get("h1_log_range_ema"))
+    close_volatility_1m = _float(inputs.get("m1_log_range_ema"))
     common_args = [
         _float(inputs.get("qty_step")),
         _float(inputs.get("price_step")),
@@ -366,6 +357,11 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         trailing_bundle["max_since_open"],
         trailing_bundle["min_since_max"],
         current_price,
+        0.0,
+        close_volatility_1h,
+        close_volatility_1m,
+        _float(inputs.get("close_weight_volatility_1h")),
+        _float(inputs.get("close_weight_volatility_1m")),
     ]
     if pside == "long":
         qty, price, order_type = pbr.calc_next_close_long_py(*common_args)
@@ -375,8 +371,14 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     if "trailing" not in order_type:
         return None
 
-    threshold_pct = _float(inputs.get("close_trailing_threshold_pct"))
-    retracement_pct = _float(inputs.get("close_trailing_retracement_pct"))
+    close_multiplier = max(
+        1.0,
+        1.0
+        + close_volatility_1h * _float(inputs.get("close_weight_volatility_1h"))
+        + close_volatility_1m * _float(inputs.get("close_weight_volatility_1m")),
+    )
+    threshold_pct = _float(inputs.get("close_trailing_threshold_pct")) * close_multiplier
+    retracement_pct = _float(inputs.get("close_trailing_retracement_pct")) * close_multiplier
     if pside == "long":
         threshold_price = position_price * (1.0 + threshold_pct) if threshold_pct > 0.0 else None
         threshold_met = True if threshold_pct <= 0.0 else trailing_bundle["max_since_open"] > threshold_price

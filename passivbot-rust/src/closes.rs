@@ -240,6 +240,29 @@ fn grid_close_anchor_price_short(
     }
 }
 
+fn calc_close_distance_multiplier(
+    state_params: &StateParams,
+    close_params: &TrailingGridCloseParams,
+) -> f64 {
+    let vol_term = state_params.entry_volatility_logrange_ema_1h
+        * close_params.close_weight_volatility_1h
+        + state_params.offset_volatility_logrange_ema_1m * close_params.close_weight_volatility_1m;
+    (1.0 + vol_term).max(1.0)
+}
+
+fn widen_close_grid_markups(
+    close_params: &TrailingGridCloseParams,
+    close_multiplier: f64,
+) -> (f64, f64) {
+    let center = (close_params.close_grid_markup_start + close_params.close_grid_markup_end) * 0.5;
+    let half_width =
+        (close_params.close_grid_markup_start - close_params.close_grid_markup_end) * 0.5;
+    (
+        center + half_width * close_multiplier,
+        center - half_width * close_multiplier,
+    )
+}
+
 pub fn calc_grid_close_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
@@ -252,13 +275,16 @@ pub fn calc_grid_close_long(
         return Order::default();
     }
     let anchor_price = grid_close_anchor_price_long(state_params, close_params, position);
+    let close_multiplier = calc_close_distance_multiplier(state_params, close_params);
+    let (close_grid_markup_start, close_grid_markup_end) =
+        widen_close_grid_markups(close_params, close_multiplier);
     if close_params.close_grid_qty_pct < 0.0 || close_params.close_grid_qty_pct >= 1.0 {
         return Order {
             qty: -round_(position.size, exchange_params.qty_step),
             price: f64::max(
                 state_params.order_book.ask,
                 round_up(
-                    anchor_price * (1.0 + close_params.close_grid_markup_start),
+                    anchor_price * (1.0 + close_grid_markup_start),
                     exchange_params.price_step,
                 ),
             ),
@@ -266,11 +292,11 @@ pub fn calc_grid_close_long(
         };
     }
     let close_prices_start = round_up(
-        anchor_price * (1.0 + close_params.close_grid_markup_start),
+        anchor_price * (1.0 + close_grid_markup_start),
         exchange_params.price_step,
     );
     let close_prices_end = round_up(
-        anchor_price * (1.0 + close_params.close_grid_markup_end),
+        anchor_price * (1.0 + close_grid_markup_end),
         exchange_params.price_step,
     );
     if close_prices_start == close_prices_end {
@@ -335,12 +361,15 @@ pub fn calc_trailing_close_long(
     if position.size == 0.0 {
         return Order::default();
     }
-    if close_params.close_trailing_threshold_pct <= 0.0 {
+    let close_multiplier = calc_close_distance_multiplier(state_params, close_params);
+    let close_trailing_threshold_pct = close_params.close_trailing_threshold_pct * close_multiplier;
+    let close_trailing_retracement_pct =
+        close_params.close_trailing_retracement_pct * close_multiplier;
+    if close_trailing_threshold_pct <= 0.0 {
         // means trailing close immediately from pos open
-        if close_params.close_trailing_retracement_pct > 0.0
+        if close_trailing_retracement_pct > 0.0
             && trailing_price_bundle.min_since_max
-                < trailing_price_bundle.max_since_open
-                    * (1.0 - close_params.close_trailing_retracement_pct)
+                < trailing_price_bundle.max_since_open * (1.0 - close_trailing_retracement_pct)
         {
             Order {
                 qty: -calc_close_qty(
@@ -364,12 +393,12 @@ pub fn calc_trailing_close_long(
         }
     } else {
         // means trailing close will activate only after a threshold
-        if close_params.close_trailing_retracement_pct <= 0.0 {
+        if close_trailing_retracement_pct <= 0.0 {
             // close at threshold
             let close_price = f64::max(
                 state_params.order_book.ask,
                 round_up(
-                    position.price * (1.0 + close_params.close_trailing_threshold_pct),
+                    position.price * (1.0 + close_trailing_threshold_pct),
                     exchange_params.price_step,
                 ),
             );
@@ -389,17 +418,15 @@ pub fn calc_trailing_close_long(
         } else {
             // close if both conditions are met
             if trailing_price_bundle.max_since_open
-                > position.price * (1.0 + close_params.close_trailing_threshold_pct)
+                > position.price * (1.0 + close_trailing_threshold_pct)
                 && trailing_price_bundle.min_since_max
-                    < trailing_price_bundle.max_since_open
-                        * (1.0 - close_params.close_trailing_retracement_pct)
+                    < trailing_price_bundle.max_since_open * (1.0 - close_trailing_retracement_pct)
             {
                 let close_price = f64::max(
                     state_params.order_book.ask,
                     round_up(
                         position.price
-                            * (1.0 + close_params.close_trailing_threshold_pct
-                                - close_params.close_trailing_retracement_pct),
+                            * (1.0 + close_trailing_threshold_pct - close_trailing_retracement_pct),
                         exchange_params.price_step,
                     ),
                 );
@@ -589,13 +616,16 @@ pub fn calc_grid_close_short(
         return Order::default();
     }
     let anchor_price = grid_close_anchor_price_short(state_params, close_params, position);
+    let close_multiplier = calc_close_distance_multiplier(state_params, close_params);
+    let (close_grid_markup_start, close_grid_markup_end) =
+        widen_close_grid_markups(close_params, close_multiplier);
     if close_params.close_grid_qty_pct < 0.0 || close_params.close_grid_qty_pct >= 1.0 {
         return Order {
             qty: round_(position_size_abs, exchange_params.qty_step),
             price: f64::min(
                 state_params.order_book.bid,
                 round_dn(
-                    anchor_price * (1.0 - close_params.close_grid_markup_start),
+                    anchor_price * (1.0 - close_grid_markup_start),
                     exchange_params.price_step,
                 ),
             ),
@@ -603,11 +633,11 @@ pub fn calc_grid_close_short(
         };
     }
     let close_prices_start = round_dn(
-        anchor_price * (1.0 - close_params.close_grid_markup_start),
+        anchor_price * (1.0 - close_grid_markup_start),
         exchange_params.price_step,
     );
     let close_prices_end = round_dn(
-        anchor_price * (1.0 - close_params.close_grid_markup_end),
+        anchor_price * (1.0 - close_grid_markup_end),
         exchange_params.price_step,
     );
     if close_prices_start == close_prices_end {
@@ -672,12 +702,15 @@ pub fn calc_trailing_close_short(
     if position_size_abs == 0.0 {
         return Order::default();
     }
-    if close_params.close_trailing_threshold_pct <= 0.0 {
+    let close_multiplier = calc_close_distance_multiplier(state_params, close_params);
+    let close_trailing_threshold_pct = close_params.close_trailing_threshold_pct * close_multiplier;
+    let close_trailing_retracement_pct =
+        close_params.close_trailing_retracement_pct * close_multiplier;
+    if close_trailing_threshold_pct <= 0.0 {
         // means trailing stop immediately from pos open
-        if close_params.close_trailing_retracement_pct > 0.0
+        if close_trailing_retracement_pct > 0.0
             && trailing_price_bundle.max_since_min
-                > trailing_price_bundle.min_since_open
-                    * (1.0 + close_params.close_trailing_retracement_pct)
+                > trailing_price_bundle.min_since_open * (1.0 + close_trailing_retracement_pct)
         {
             Order {
                 qty: calc_close_qty(
@@ -701,12 +734,12 @@ pub fn calc_trailing_close_short(
         }
     } else {
         // means trailing stop will activate only after a threshold
-        if close_params.close_trailing_retracement_pct <= 0.0 {
+        if close_trailing_retracement_pct <= 0.0 {
             // close at threshold
             let close_price = f64::min(
                 state_params.order_book.bid,
                 round_dn(
-                    position.price * (1.0 - close_params.close_trailing_threshold_pct),
+                    position.price * (1.0 - close_trailing_threshold_pct),
                     exchange_params.price_step,
                 ),
             );
@@ -725,17 +758,15 @@ pub fn calc_trailing_close_short(
             }
         } else {
             if trailing_price_bundle.min_since_open
-                < position.price * (1.0 - close_params.close_trailing_threshold_pct)
+                < position.price * (1.0 - close_trailing_threshold_pct)
                 && trailing_price_bundle.max_since_min
-                    > trailing_price_bundle.min_since_open
-                        * (1.0 + close_params.close_trailing_retracement_pct)
+                    > trailing_price_bundle.min_since_open * (1.0 + close_trailing_retracement_pct)
             {
                 let close_price = f64::min(
                     state_params.order_book.bid,
                     round_dn(
                         position.price
-                            * (1.0 - close_params.close_trailing_threshold_pct
-                                + close_params.close_trailing_retracement_pct),
+                            * (1.0 - close_trailing_threshold_pct + close_trailing_retracement_pct),
                         exchange_params.price_step,
                     ),
                 );
@@ -947,6 +978,8 @@ mod tests {
             close_trailing_qty_pct: 0.0,
             close_trailing_retracement_pct: 0.0,
             close_trailing_threshold_pct: 0.0,
+            close_weight_volatility_1h: 0.0,
+            close_weight_volatility_1m: 0.0,
         }
     }
 
@@ -1119,6 +1152,52 @@ mod tests {
 
         assert_eq!(order.order_type, OrderType::CloseGridShort);
         assert_eq!(order.price, 89.1);
+    }
+
+    #[test]
+    fn test_grid_close_long_widens_and_interpolates_with_volatility_weights() {
+        let exchange = make_exchange_params();
+        let state = StateParams {
+            balance: 10_000.0,
+            order_book: crate::types::OrderBook {
+                ask: 100.0,
+                bid: 100.0,
+                ..Default::default()
+            },
+            entry_volatility_logrange_ema_1h: 0.004,
+            offset_volatility_logrange_ema_1m: 0.002,
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            risk_we_excess_allowance_pct: 0.0,
+            ..Default::default()
+        };
+        let close = TrailingGridCloseParams {
+            close_grid_markup_start: 0.008,
+            close_grid_markup_end: -0.006,
+            close_grid_qty_pct: 0.1,
+            close_weight_volatility_1h: 25.0,
+            close_weight_volatility_1m: 15.0,
+            ..make_close_params()
+        };
+        let pos = Position {
+            size: 50.0,
+            price: 100.0,
+        };
+
+        let order = calc_grid_close_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &close,
+            &pos,
+        );
+
+        assert_eq!(order.order_type, OrderType::CloseGridLong);
+        assert_eq!(order.price, 100.11);
+        assert_eq!(order.qty, -10.0);
     }
 }
 

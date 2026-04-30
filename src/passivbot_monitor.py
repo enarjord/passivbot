@@ -766,12 +766,14 @@ def _update_monitor_runtime_hints(
     symbols: Iterable[str],
     last_prices: dict[str, float],
     m1_close_emas: dict[str, dict[float, float]],
+    m1_log_range_emas: dict[str, dict[float, float]],
     h1_log_range_emas: dict[str, dict[float, float]],
     idx_to_symbol: dict[int, str],
     orders: list[dict[str, Any]],
 ) -> None:
     market_hints = self._build_monitor_runtime_market_hints(symbols, last_prices, m1_close_emas)
     self._monitor_runtime_market_hints = market_hints
+    self._monitor_runtime_m1_log_range_emas = deepcopy(m1_log_range_emas)
     self._monitor_runtime_h1_log_range_emas = deepcopy(h1_log_range_emas)
     self._monitor_runtime_unstuck_hints = self._build_monitor_runtime_unstuck_hints(
         idx_to_symbol,
@@ -798,6 +800,15 @@ def _monitor_wallet_exposure_limit_with_allowance(self, pside: str, symbol: str)
     return wel * (1.0 + max(0.0, allowance_pct))
 
 
+def _monitor_strategy_value(self, pside: str, key: str, symbol: str) -> float:
+    strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
+    if callable(strategy_getter):
+        strategy_cfg = strategy_getter(pside, symbol)
+        if key in strategy_cfg:
+            return float(strategy_cfg[key])
+    return float(self.bp(pside, key, symbol))
+
+
 def _monitor_entry_trailing_limit_cap(
     self,
     pside: str,
@@ -807,7 +818,7 @@ def _monitor_entry_trailing_limit_cap(
     allowed_limit = _monitor_wallet_exposure_limit_with_allowance(self, pside, symbol)
     if allowed_limit <= 0.0:
         return None, None
-    trailing_ratio = float(self.bp(pside, "entry_trailing_grid_ratio", symbol))
+    trailing_ratio = _monitor_strategy_value(self, pside, "entry_trailing_grid_ratio", symbol)
     if trailing_ratio >= 1.0 or trailing_ratio <= -1.0:
         return allowed_limit, "trailing_only"
     if trailing_ratio == 0.0:
@@ -832,7 +843,24 @@ def _monitor_h1_entry_logrange(self, pside: str, symbol: str) -> float:
     if not isinstance(symbol_entry, dict):
         return 0.0
     try:
-        span = float(self.bp(pside, "entry_volatility_ema_span_hours", symbol))
+        span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_hours", symbol)
+    except Exception:
+        return 0.0
+    try:
+        return float(symbol_entry.get(span, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _monitor_m1_entry_logrange(self, pside: str, symbol: str) -> float:
+    m1_log_range_emas = getattr(self, "_monitor_runtime_m1_log_range_emas", {})
+    if not isinstance(m1_log_range_emas, dict):
+        return 0.0
+    symbol_entry = m1_log_range_emas.get(symbol, {})
+    if not isinstance(symbol_entry, dict):
+        return 0.0
+    try:
+        span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_minutes", symbol)
     except Exception:
         return 0.0
     try:
@@ -896,23 +924,24 @@ def _build_monitor_trailing_entry_payload(
         "ema_lower": float(side_ema_bands.get("lower", 0.0) or 0.0),
         "ema_upper": float(side_ema_bands.get("upper", 0.0) or 0.0),
         "h1_log_range_ema": float(_monitor_h1_entry_logrange(self, pside, symbol)),
+        "m1_log_range_ema": float(_monitor_m1_entry_logrange(self, pside, symbol)),
         **dict(trailing_bundle),
     }
     for key in (
         "entry_grid_double_down_factor",
-        "entry_grid_spacing_volatility_weight",
-        "entry_grid_spacing_we_weight",
         "entry_grid_spacing_pct",
         "entry_initial_ema_dist",
         "entry_initial_qty_pct",
         "entry_trailing_double_down_factor",
         "entry_trailing_grid_ratio",
         "entry_trailing_retracement_pct",
-        "entry_trailing_retracement_we_weight",
-        "entry_trailing_retracement_volatility_weight",
         "entry_trailing_threshold_pct",
-        "entry_trailing_threshold_we_weight",
-        "entry_trailing_threshold_volatility_weight",
+        "entry_weight_volatility_1h",
+        "entry_weight_volatility_1m",
+        "entry_we_weight",
+    ):
+        inputs[key] = _monitor_strategy_value(self, pside, key, symbol)
+    for key in (
         "wallet_exposure_limit",
         "risk_we_excess_allowance_pct",
     ):
@@ -951,6 +980,8 @@ def _build_monitor_trailing_close_payload(
             )
         ),
         "c_mult": float(self.c_mults[symbol]),
+        "h1_log_range_ema": float(_monitor_h1_entry_logrange(self, pside, symbol)),
+        "m1_log_range_ema": float(_monitor_m1_entry_logrange(self, pside, symbol)),
         **dict(trailing_bundle),
     }
     for key in (
@@ -961,6 +992,11 @@ def _build_monitor_trailing_close_payload(
         "close_trailing_qty_pct",
         "close_trailing_retracement_pct",
         "close_trailing_threshold_pct",
+        "close_weight_volatility_1h",
+        "close_weight_volatility_1m",
+    ):
+        inputs[key] = _monitor_strategy_value(self, pside, key, symbol)
+    for key in (
         "wallet_exposure_limit",
         "risk_we_excess_allowance_pct",
         "risk_wel_enforcer_threshold",

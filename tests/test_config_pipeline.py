@@ -502,11 +502,11 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
     trailing_grid = source["bot"]["long"]["strategy"]["trailing_grid"]
     risk = source["bot"]["long"]["risk"]
     for key in (
-        "entry_trailing_retracement_volatility_weight",
-        "entry_trailing_retracement_we_weight",
-        "entry_trailing_threshold_volatility_weight",
-        "entry_trailing_threshold_we_weight",
         "entry_volatility_ema_span_hours",
+        "entry_volatility_ema_span_minutes",
+        "entry_weight_volatility_1h",
+        "entry_weight_volatility_1m",
+        "entry_we_weight",
     ):
         trailing_grid.pop(key)
     for key in (
@@ -521,11 +521,11 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
 
     long_strategy = _strategy_side(prepared, "long")
     long_risk = prepared["bot"]["long"]["risk"]
-    assert long_strategy["entry_trailing_retracement_volatility_weight"] == pytest.approx(87)
-    assert long_strategy["entry_trailing_retracement_we_weight"] == pytest.approx(3.97)
-    assert long_strategy["entry_trailing_threshold_volatility_weight"] == pytest.approx(76)
-    assert long_strategy["entry_trailing_threshold_we_weight"] == pytest.approx(1.31)
     assert long_strategy["entry_volatility_ema_span_hours"] == pytest.approx(1690)
+    assert long_strategy["entry_volatility_ema_span_minutes"] == pytest.approx(60.0)
+    assert long_strategy["entry_weight_volatility_1h"] == pytest.approx(2.4)
+    assert long_strategy["entry_weight_volatility_1m"] == pytest.approx(0.0)
+    assert long_strategy["entry_we_weight"] == pytest.approx(0.135)
     assert long_risk["twel_enforcer_threshold"] == pytest.approx(1.0)
     assert long_risk["we_excess_allowance_pct"] == pytest.approx(0.37)
     assert long_risk["wel_enforcer_threshold"] == pytest.approx(0.994)
