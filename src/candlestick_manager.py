@@ -3689,8 +3689,8 @@ class CandlestickManager:
                         "error_repr": err_repr,
                     }
                 )
-                self._log(
-                    "warning",
+                self._throttled_warning(
+                    f"ccxt_fetch_ohlcv_failed:{symbol}:{tf}:{err_type}",
                     "ccxt_fetch_ohlcv_failed",
                     symbol=symbol,
                     tf=str(tf) if tf is not None else None,

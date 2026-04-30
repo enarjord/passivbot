@@ -500,7 +500,7 @@ def test_candle_fetch_concurrency_is_conservative_for_history_replay():
     assert bot._candle_fetch_concurrency(context="history_replay") == 1
 
     bot.exchange = "kucoin"
-    assert bot._candle_fetch_concurrency(context="history_replay") == 2
+    assert bot._candle_fetch_concurrency(context="history_replay") == 1
 
     bot.config = {"live": {"warmup_concurrency": 7}}
     assert bot._candle_fetch_concurrency(context="history_replay") == 7
@@ -911,6 +911,86 @@ def test_order_plan_summary_is_interesting_only_for_large_or_clipped_waves():
         )
         is True
     )
+
+
+def test_order_wave_summary_logs_elapsed_lifecycle(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._order_wave_seq = 0
+    bot._order_wave_last_summary_key = None
+    clock = iter([1_000_000, 1_002_500])
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(clock))
+
+    wave = bot._begin_order_wave(
+        [{"symbol": "BTC/USDT:USDT"}],
+        [{"symbol": "ETH/USDT:USDT"}],
+    )
+    wave["cancel_posted"] = 1
+    wave["create_posted"] = 1
+    wave["cancel_ms"] = 400
+    wave["create_ms"] = 600
+
+    with caplog.at_level(logging.INFO):
+        bot._log_order_wave_summary(wave)
+
+    assert any(
+        "[order] wave complete | id=1 | elapsed_ms=2500 | cancel 1->1 | create 1->1"
+        in record.message
+        for record in caplog.records
+    )
+
+
+def test_min_effective_cost_blocks_are_aggregated(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._min_effective_cost_last_log_ms = {}
+    bot._min_effective_cost_log_interval_ms = 15 * 60 * 1000
+    bot._min_effective_cost_summary_last_log_ms = 0
+    bot._min_effective_cost_summary_log_interval_ms = 15 * 60 * 1000
+    bot.is_pside_enabled = lambda _pside: True
+    idx_to_symbol = {idx: f"SYM{idx}/USDT:USDT" for idx in range(5)}
+    out = {
+        "diagnostics": {
+            "min_effective_cost_blocks": [
+                {
+                    "symbol_idx": idx,
+                    "pside": "long",
+                    "balance": 1000.0,
+                    "effective_limit": 0.1,
+                    "entry_initial_qty_pct": 0.01,
+                    "projected_initial_cost": 1.0,
+                    "effective_min_cost": 10.0,
+                }
+                for idx in range(5)
+            ]
+        }
+    }
+
+    with caplog.at_level(logging.WARNING):
+        bot._log_min_effective_cost_blocks(out, idx_to_symbol)
+
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert sum("symbol=SYM" in msg for msg in warnings) == 3
+    assert any("blocked=5 detailed=3" in msg for msg in warnings)
+
+
+def test_active_candle_incomplete_warning_is_throttled(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._active_candle_incomplete_last_log_ms = {}
+    times = iter([1_000_000, 1_060_000, 1_400_001])
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times))
+    ordered = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    missing = [{"symbol": "BTC/USDT:USDT"}]
+
+    with caplog.at_level(logging.DEBUG):
+        bot._log_active_candle_refresh_incomplete(ordered, missing)
+        bot._log_active_candle_refresh_incomplete(ordered, missing)
+        bot._log_active_candle_refresh_incomplete(ordered, missing)
+
+    levels = [
+        record.levelname
+        for record in caplog.records
+        if "active completed-candle refresh incomplete" in record.message
+    ]
+    assert levels == ["WARNING", "DEBUG", "WARNING"]
 
 
 def test_candle_health_missing_trailing_1m_gap_is_not_actionable_during_grace():

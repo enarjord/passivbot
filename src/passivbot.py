@@ -595,6 +595,9 @@ class Passivbot:
         }
         self._last_plan_detail: dict[str, tuple[int, int, int]] = {}
         self._last_action_summary: dict[tuple[str, str], str] = {}
+        self._order_wave_seq = 0
+        self._order_wave_last_summary_key = None
+        self._active_candle_incomplete_last_log_ms = {}
         self.start_time_ms = utc_ms()
         self.bot_start_exchange_ts = int(self.get_exchange_time())
         self.orders_emitted_to_exchange: list[dict] = []
@@ -847,6 +850,8 @@ class Passivbot:
         # Effective min-cost gate logging throttle
         self._min_effective_cost_last_log_ms = {}
         self._min_effective_cost_log_interval_ms = 15 * 60 * 1000  # 15 minutes
+        self._min_effective_cost_summary_last_log_ms = 0
+        self._min_effective_cost_summary_log_interval_ms = 15 * 60 * 1000
         self._orchestrator_prev_close_ema = {}
         self._orchestrator_close_ema_fallback_counts = {}
         self.hsl = self._parse_hsl_config()
@@ -2798,6 +2803,84 @@ class Passivbot:
             or unchanged_create >= 3
         )
 
+    def _begin_order_wave(self, to_cancel: list[dict], to_create: list[dict]) -> dict | None:
+        """Start a lightweight timing record for one non-empty exchange sync wave."""
+        if not to_cancel and not to_create:
+            return None
+        self._order_wave_seq = int(getattr(self, "_order_wave_seq", 0) or 0) + 1
+        symbols = sorted(
+            {
+                str(order.get("symbol"))
+                for order in list(to_cancel or []) + list(to_create or [])
+                if order.get("symbol")
+            }
+        )
+        return {
+            "id": int(self._order_wave_seq),
+            "started_ms": int(utc_ms()),
+            "planned_cancel": len(to_cancel or []),
+            "planned_create": len(to_create or []),
+            "symbols": symbols,
+            "cancel_posted": 0,
+            "create_posted": 0,
+            "cancel_ms": None,
+            "create_ms": None,
+            "deferred_create": 0,
+            "skipped_create": 0,
+        }
+
+    def _log_order_wave_summary(self, wave: dict | None) -> None:
+        """Emit one compact lifecycle summary for plan-to-exchange timing."""
+        if not wave:
+            return
+        now_ms = int(utc_ms())
+        elapsed_ms = max(0, now_ms - int(wave.get("started_ms", now_ms)))
+        planned_cancel = int(wave.get("planned_cancel", 0) or 0)
+        planned_create = int(wave.get("planned_create", 0) or 0)
+        cancel_posted = int(wave.get("cancel_posted", 0) or 0)
+        create_posted = int(wave.get("create_posted", 0) or 0)
+        deferred_create = int(wave.get("deferred_create", 0) or 0)
+        skipped_create = int(wave.get("skipped_create", 0) or 0)
+        symbols = list(wave.get("symbols") or [])
+        summary_key = (
+            planned_cancel,
+            planned_create,
+            cancel_posted,
+            create_posted,
+            deferred_create,
+            skipped_create,
+            tuple(symbols[:12]),
+        )
+        log_level = (
+            logging.INFO if elapsed_ms >= 1_000 or cancel_posted or create_posted else logging.DEBUG
+        )
+        if log_level == logging.DEBUG and summary_key == getattr(
+            self, "_order_wave_last_summary_key", None
+        ):
+            return
+        self._order_wave_last_summary_key = summary_key
+        timings = []
+        if wave.get("cancel_ms") is not None:
+            timings.append(f"cancel_ms={int(wave['cancel_ms'])}")
+        if wave.get("create_ms") is not None:
+            timings.append(f"create_ms={int(wave['create_ms'])}")
+        if deferred_create:
+            timings.append(f"deferred_create={deferred_create}")
+        if skipped_create:
+            timings.append(f"skipped_create={skipped_create}")
+        logging.log(
+            log_level,
+            "[order] wave complete | id=%s | elapsed_ms=%d | cancel %d->%d | create %d->%d%s%s",
+            wave.get("id", "?"),
+            elapsed_ms,
+            planned_cancel,
+            cancel_posted,
+            planned_create,
+            create_posted,
+            f" | {' '.join(timings)}" if timings else "",
+            f" | symbols={','.join(symbols[:12])}" if symbols else "",
+        )
+
     def init_coin_overrides(self):
         """Populate coin override map keyed by symbols for quick lookup."""
         self.coin_overrides = {
@@ -2971,20 +3054,7 @@ class Passivbot:
 
         # Determine concurrency: explicit arg > config > exchange-specific default
         if concurrency is None:
-            cfg_concurrency = get_optional_live_value(self.config, "warmup_concurrency", 0)
-            try:
-                cfg_concurrency = int(cfg_concurrency) if cfg_concurrency else 0
-            except Exception:
-                cfg_concurrency = 0
-            if cfg_concurrency > 0:
-                concurrency = cfg_concurrency
-            else:
-                # Exchange-specific defaults: Hyperliquid has stricter rate limits
-                exchange_lower = self.exchange.lower() if self.exchange else ""
-                if exchange_lower == "hyperliquid":
-                    concurrency = 1
-                else:
-                    concurrency = 8
+            concurrency = self._candle_fetch_concurrency(context=context)
         concurrency = max(1, int(concurrency))
 
         # Random jitter delay to prevent API rate limit storms when multiple bots start simultaneously
@@ -3748,6 +3818,33 @@ class Passivbot:
         except Exception:
             return True
 
+    def _log_active_candle_refresh_incomplete(
+        self, ordered_symbols: list[str], missing: list[dict]
+    ) -> None:
+        """Log incomplete active-candle refreshes without warning every cycle for the same set."""
+        if not missing:
+            return
+        now_ms = int(utc_ms())
+        examples = ",".join(str(item.get("symbol", "?")) for item in missing[:8])
+        missing_symbols = tuple(sorted(str(item.get("symbol", "?")) for item in missing))
+        key = (len(ordered_symbols), missing_symbols[:20])
+        last_by_key = getattr(self, "_active_candle_incomplete_last_log_ms", None)
+        if not isinstance(last_by_key, dict):
+            last_by_key = {}
+            self._active_candle_incomplete_last_log_ms = last_by_key
+        throttle_ms = 5 * 60 * 1000
+        last_ms = int(last_by_key.get(key, 0) or 0)
+        level = logging.WARNING if now_ms - last_ms >= throttle_ms else logging.DEBUG
+        if level == logging.WARNING:
+            last_by_key[key] = now_ms
+        logging.log(
+            level,
+            "[candle] active completed-candle refresh incomplete | symbols=%d missing=%d examples=%s",
+            len(ordered_symbols),
+            len(missing),
+            examples,
+        )
+
     def get_first_timestamp(self, symbol):
         """Return the cached first tradable timestamp for `symbol`, populating defaults."""
         if symbol not in self.first_timestamps:
@@ -3984,6 +4081,12 @@ class Passivbot:
             return max(1, cfg_concurrency)
         exchange_lower = str(getattr(self, "exchange", "") or "").lower()
         if exchange_lower == "hyperliquid":
+            return 1
+        if exchange_lower == "kucoin" and str(context).lower() in {
+            "background warmup",
+            "background_warmup",
+            "history_replay",
+        }:
             return 1
         if context == "history_replay":
             return 2
@@ -4395,11 +4498,84 @@ class Passivbot:
             suffix,
         )
 
+    async def _log_staged_refresh_progress_until(
+        self,
+        plan: set[str],
+        timings_ms: dict[str, int],
+        tasks: dict[str, asyncio.Task],
+        wall_started_ms: int,
+    ) -> None:
+        """Log visible progress when a required staged refresh surface is still pending."""
+        try:
+            threshold_s = float(
+                get_optional_config_value(
+                    self.config, "logging.staged_refresh_slow_surface_seconds", 10.0
+                )
+            )
+        except Exception:
+            threshold_s = 10.0
+        if threshold_s <= 0.0 or not tasks:
+            return
+        interval_s = max(5.0, threshold_s)
+        logged_pending: set[tuple[str, ...]] = set()
+        try:
+            await Passivbot._sleep_unless_shutdown(
+                self, threshold_s, stage="staged_refresh_progress"
+            )
+            while not Passivbot._shutdown_requested(self):
+                pending = tuple(sorted(name for name, task in tasks.items() if not task.done()))
+                if not pending:
+                    return
+                elapsed_ms = int(max(0, utc_ms() - wall_started_ms))
+                completed = " ".join(
+                    f"{surface}={int(timings_ms[surface])}ms"
+                    for surface in sorted(timings_ms)
+                    if surface not in pending
+                )
+                key = pending
+                level = logging.INFO if key not in logged_pending else logging.DEBUG
+                logged_pending.add(key)
+                logging.log(
+                    level,
+                    "[state] staged refresh still waiting | plan=%s | pending=%s | elapsed=%dms%s",
+                    ",".join(sorted(plan)),
+                    ",".join(pending),
+                    elapsed_ms,
+                    f" | completed={completed}" if completed else "",
+                )
+                await Passivbot._sleep_unless_shutdown(
+                    self, interval_s, stage="staged_refresh_progress"
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging.debug("[state] staged refresh progress logger stopped: %s", exc)
+
     async def _fetch_authoritative_state_staged_snapshot(self, plan: set[str]) -> dict:
         """Fetch staged authoritative components concurrently without mutating live state."""
         wall_started = utc_ms()
         timings_ms = {}
-        exchange_snapshot = await self.capture_authoritative_state_staged_snapshot(plan, timings_ms)
+        exchange_task = asyncio.create_task(
+            self.capture_authoritative_state_staged_snapshot(plan, timings_ms)
+        )
+        progress_task = asyncio.create_task(
+            self._log_staged_refresh_progress_until(
+                plan, timings_ms, {"exchange_staged_capture": exchange_task}, wall_started
+            )
+        )
+        try:
+            exchange_snapshot = await exchange_task
+        except Exception:
+            if not progress_task.done():
+                progress_task.cancel()
+            await asyncio.gather(progress_task, return_exceptions=True)
+            wall_ms = int(max(0, utc_ms() - wall_started))
+            self._log_staged_refresh_timings(plan, timings_ms, wall_ms)
+            raise
+        finally:
+            if not progress_task.done():
+                progress_task.cancel()
+                await asyncio.gather(progress_task, return_exceptions=True)
         if exchange_snapshot is not None:
             wall_ms = int(max(0, utc_ms() - wall_started))
             self._log_staged_refresh_timings(plan, timings_ms, wall_ms)
@@ -4427,6 +4603,9 @@ class Passivbot:
             tasks["fills"] = asyncio.create_task(
                 self._timed_authoritative_fetch("fills", self.update_pnls(), timings_ms)
             )
+        progress_task = asyncio.create_task(
+            self._log_staged_refresh_progress_until(plan, timings_ms, tasks, wall_started)
+        )
         try:
             keys = list(tasks)
             results = await asyncio.gather(*[tasks[key] for key in keys])
@@ -4438,9 +4617,16 @@ class Passivbot:
                 *tasks.values(),
                 return_exceptions=True,
             )
+            if not progress_task.done():
+                progress_task.cancel()
+            await asyncio.gather(progress_task, return_exceptions=True)
             wall_ms = int(max(0, utc_ms() - wall_started))
             self._log_staged_refresh_timings(plan, timings_ms, wall_ms)
             raise
+        finally:
+            if not progress_task.done():
+                progress_task.cancel()
+                await asyncio.gather(progress_task, return_exceptions=True)
         wall_ms = int(max(0, utc_ms() - wall_started))
         self._log_staged_refresh_timings(plan, timings_ms, wall_ms)
         out = {"plan": set(plan), "pnls_ok": True}
@@ -4882,6 +5068,7 @@ class Passivbot:
             await self.execution_cycle()
         # await self.update_EMAs()
         to_cancel, to_create = await self.calc_orders_to_cancel_and_create()
+        order_wave = Passivbot._begin_order_wave(self, to_cancel, to_create)
 
         # debug duplicates
         seen = set()
@@ -4902,7 +5089,11 @@ class Passivbot:
             if to_cancel:
                 print(f"would cancel {len(to_cancel)} order{'s' if len(to_cancel) > 1 else ''}")
         else:
+            cancel_started_ms = utc_ms()
             res = await self.execute_cancellations_parent(to_cancel)
+            if order_wave is not None:
+                order_wave["cancel_ms"] = int(max(0, utc_ms() - cancel_started_ms))
+                order_wave["cancel_posted"] = len(res or [])
         if self.debug_mode:
             if to_create:
                 print(f"would create {len(to_create)} order{'s' if len(to_create) > 1 else ''}")
@@ -4928,16 +5119,21 @@ class Passivbot:
                     )
                 else:
                     to_create_mod.append(x)
+            if order_wave is not None:
+                order_wave["deferred_create"] += max(0, len(to_create) - len(to_create_mod))
             if self.state_change_detected_by_symbol:
                 logging.info(
                     "[order] state change detected; skipping order creation for %s until next cycle",
                     self.state_change_detected_by_symbol,
                 )
+                before_state_filter = len(to_create_mod)
                 to_create_mod = [
                     x
                     for x in to_create_mod
                     if x["symbol"] not in self.state_change_detected_by_symbol
                 ]
+                if order_wave is not None:
+                    order_wave["skipped_create"] += max(0, before_state_filter - len(to_create_mod))
             if to_create_mod:
                 creation_symbols = sorted({order["symbol"] for order in to_create_mod})
                 configured_symbols = await self.update_exchange_configs(creation_symbols)
@@ -4949,15 +5145,27 @@ class Passivbot:
                         "[config] skipping order creation for symbols pending exchange config: %s",
                         ",".join(pending_config),
                     )
+                    before_config_filter = len(to_create_mod)
                     to_create_mod = [
                         order for order in to_create_mod if order["symbol"] not in pending_config
                     ]
+                    if order_wave is not None:
+                        order_wave["skipped_create"] += max(
+                            0, before_config_filter - len(to_create_mod)
+                        )
+            before_market_filter = len(to_create_mod)
             to_create_mod = await Passivbot._filter_fresh_market_snapshot_creations(
                 self, to_create_mod
             )
+            if order_wave is not None:
+                order_wave["skipped_create"] += max(0, before_market_filter - len(to_create_mod))
             res = None
             try:
+                create_started_ms = utc_ms()
                 res = await self.execute_orders_parent(to_create_mod)
+                if order_wave is not None:
+                    order_wave["create_ms"] = int(max(0, utc_ms() - create_started_ms))
+                    order_wave["create_posted"] = len(res or [])
             except RestartBotException:
                 raise  # Propagate restart without incrementing error count
             except Exception as e:
@@ -4969,6 +5177,7 @@ class Passivbot:
             self.execution_scheduled = True
         if not Passivbot._shutdown_requested(self):
             self._schedule_forager_candidate_candle_refresh()
+        Passivbot._log_order_wave_summary(self, order_wave)
         if self.debug_mode:
             return to_cancel, to_create
 
@@ -5460,7 +5669,9 @@ class Passivbot:
             fetch_delay_ms = None
         if fetch_delay_ms is None:
             exchange_lower = self.exchange.lower() if self.exchange else ""
-            fetch_delay_ms = 200.0 if exchange_lower in ("bybit", "hyperliquid") else 0.0
+            fetch_delay_ms = (
+                200.0 if exchange_lower in ("bybit", "hyperliquid", "kucoin") else 0.0
+            )
         return max(0.0, float(fetch_delay_ms) / 1000.0)
 
     def stop_data_maintainers(self, verbose=True):
@@ -7534,7 +7745,12 @@ class Passivbot:
             self._min_effective_cost_last_log_ms = {}
         if not hasattr(self, "_min_effective_cost_log_interval_ms"):
             self._min_effective_cost_log_interval_ms = 15 * 60 * 1000
+        if not hasattr(self, "_min_effective_cost_summary_last_log_ms"):
+            self._min_effective_cost_summary_last_log_ms = 0
+        if not hasattr(self, "_min_effective_cost_summary_log_interval_ms"):
+            self._min_effective_cost_summary_log_interval_ms = 15 * 60 * 1000
         now_ms = utc_ms()
+        visible_blocks = []
         for block in blocks:
             if not isinstance(block, dict):
                 continue
@@ -7547,6 +7763,11 @@ class Passivbot:
             if (now_ms - last_log_ms) < self._min_effective_cost_log_interval_ms:
                 continue
             self._min_effective_cost_last_log_ms[throttle_key] = now_ms
+            visible_blocks.append((symbol, pside, block))
+        if not visible_blocks:
+            return
+        detail_limit = 3
+        for symbol, pside, block in visible_blocks[:detail_limit]:
             balance = float(block.get("balance", 0.0) or 0.0)
             effective_limit = float(block.get("effective_limit", 0.0) or 0.0)
             entry_initial_qty_pct = float(block.get("entry_initial_qty_pct", 0.0) or 0.0)
@@ -7570,6 +7791,28 @@ class Passivbot:
                 entry_initial_qty_pct,
                 pside,
             )
+        if len(visible_blocks) > detail_limit:
+            examples = ",".join(f"{symbol}:{pside}" for symbol, pside, _ in visible_blocks[:12])
+            summary_interval = int(self._min_effective_cost_summary_log_interval_ms)
+            if (
+                now_ms - int(self._min_effective_cost_summary_last_log_ms)
+                >= summary_interval
+            ):
+                self._min_effective_cost_summary_last_log_ms = now_ms
+                logging.warning(
+                    "[entry] initial entries blocked by min effective cost | blocked=%d detailed=%d examples=%s | "
+                    "increase balance, reduce n_positions, increase per-slot sizing, or set "
+                    "live.filter_by_min_effective_cost=false",
+                    len(visible_blocks),
+                    min(detail_limit, len(visible_blocks)),
+                    examples,
+                )
+            else:
+                logging.debug(
+                    "[entry] initial entries blocked by min effective cost suppressed by summary throttle | blocked=%d examples=%s",
+                    len(visible_blocks),
+                    examples,
+                )
 
     # Legacy init_fill_events, update_fill_events, etc. removed - using FillEventsManager
 
@@ -10981,12 +11224,7 @@ class Passivbot:
                 self, ordered_symbols, now_ms=utc_ms()
             )
             if missing:
-                logging.warning(
-                    "[candle] active completed-candle refresh incomplete | symbols=%d missing=%d examples=%s",
-                    len(ordered_symbols),
-                    len(missing),
-                    ",".join(str(item.get("symbol", "?")) for item in missing[:8]),
-                )
+                Passivbot._log_active_candle_refresh_incomplete(self, ordered_symbols, missing)
                 return False
             self._ensure_freshness_ledger().stamp(
                 "completed_candles",
@@ -11037,7 +11275,11 @@ class Passivbot:
                         )
                 # update markets dict once every hour, with per-instance jitter
                 hourly_interval_ms = 1000 * 60 * 60 + int(jitter_s * 1000)
-                if now - self.init_markets_last_update_ms > hourly_interval_ms:
+                last_markets_update_ms = getattr(self, "init_markets_last_update_ms", None)
+                if last_markets_update_ms is None:
+                    last_markets_update_ms = 0
+                    self.init_markets_last_update_ms = 0
+                if now - int(last_markets_update_ms) > hourly_interval_ms:
                     try:
                         await self.init_markets(verbose=False)
                     except RateLimitExceeded:

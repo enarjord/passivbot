@@ -112,6 +112,20 @@ Before order planning/execution, live bot must have coherent state for:
 - [ ] Ensure HSL/balance-equity replay candle fetches use the same remote-call economy principles as
   active/forager candle refreshes; latest VPS Hyperliquid logs show replay can still burst 5m/15m
   candle fetches and hit 429s during restart.
+- [ ] Reduce long account-surface refresh tail latency, especially fill refreshes. Overnight VPS
+  runs showed order execution is usually fast after planning, but pre-plan `fills` refresh can
+  dominate response time: examples include Binance around 224s, KuCoin around 187s, Gate.io
+  around 55s, Bybit around 39s, and Hyperliquid around 33s.
+- [ ] Add a request-count/timing pass for fill-event fetchers, preferring incremental recent-fill
+  refresh for active symbols and websocket-triggered windows where exchange APIs allow it.
+- [x] Prevent background candle warmup from competing with runtime EMA/active-symbol OHLCV fetches
+  on slow exchanges. Latest KuCoin logs show many concurrent broad warmup and runtime EMA OHLCV
+  timeouts, with pending task piles during startup. Background warmup now uses the common
+  candle-fetch concurrency helper instead of its previous 8-way default, and KuCoin background
+  warmup/history replay is capped at one concurrent candle fetch unless explicitly overridden.
+- [x] Add a general slow-surface progress log for staged account refreshes. If a required surface
+  crosses a threshold, e.g. 10s, log which surface is still pending so long fill/open-order
+  refreshes do not look like a frozen bot.
 - [ ] Avoid repeated full-scope exchange-specific state sweeps in steady state. Hyperliquid HIP-3
   full dex sweeps are required at startup, periodically for safety, and after unknown-dex WS
   activity, but should not run on every ordinary account refresh cycle.
@@ -146,6 +160,11 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] On position change, force fills refresh.
 - [x] On significant balance change, force planner/order reconciliation.
 - [x] Add DEBUG/INFO reason logs for refresh causes.
+- [x] Add per-order-wave lifecycle diagnostics with a correlation id for plan-to-post timing:
+  plan time, cancel post time, create post time, defer reasons, and final elapsed. This makes
+  most order response timing measurable without reconstructing scattered log lines.
+- [ ] Extend order-wave lifecycle diagnostics through authoritative confirmation, so
+  event-to-final-settlement timing includes the post-write open-order/account refresh.
 
 ### 10. Validation Matrix
 
@@ -164,6 +183,14 @@ Before order planning/execution, live bot must have coherent state for:
 - [ ] Add shutdown/reconnect smoke coverage for exchanges whose CCXT websocket layer emits callback
   errors outside `watch_orders()`; latest KuCoin logs show `kucoinfutures ping timeout` as an
   asyncio callback traceback even though the watch loop also reconnects.
+- [x] Add focused overnight-log regression checks for INFO-level noise: aggregate or throttle
+  repeated `initial entries blocked by min effective cost` and `active completed-candle refresh
+  incomplete` without hiding first occurrence and summary counts.
+- [x] Throttle repeated per-symbol OHLCV fetch-failure warnings after the first occurrence/window,
+  especially for KuCoin runtime EMA fetches.
+- [x] Investigate OKX `maintain_hourly_cycle '<=' not supported between instances of 'NoneType'
+  and 'float'` from overnight VPS logs.
+- [ ] Investigate Binance `-1021` recvWindow/timestamp drift from overnight VPS logs.
 
 ### 11. `src/live/` Module Split
 
