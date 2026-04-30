@@ -367,7 +367,7 @@ def test_hyperliquid_non_unified_approved_hip3_requires_unified(stubbed_modules)
         "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
     }
 
-    with pytest.raises(FatalBotException, match="require unifiedAccount mode"):
+    with pytest.raises(FatalBotException, match="require unifiedAccount or portfolioMargin mode"):
         bot._assert_supported_live_state()
 
 
@@ -414,6 +414,25 @@ def test_hyperliquid_unified_allows_hip3_symbols(stubbed_modules):
             {"id": "1", "symbol": "XYZ-SP500/USDC:USDC", "qty": 0.003, "price": 6600.0}
         ]
     }
+    bot.markets_dict = {
+        "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
+    }
+
+    bot._assert_supported_live_state()
+
+
+def test_hyperliquid_portfolio_margin_allows_hip3_symbols(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    bot = _make_probe_bot(HyperliquidBot)
+    bot._hl_user_abstraction = "portfolioMargin"
+    bot._hl_unified_enabled = True
+    bot.approved_coins_minus_ignored_coins = {
+        "long": {"XYZ-SP500/USDC:USDC"},
+        "short": set(),
+    }
+    bot.positions = {}
+    bot.open_orders = {}
     bot.markets_dict = {
         "XYZ-SP500/USDC:USDC": {"baseName": "xyz:SP500", "info": {"baseName": "xyz:SP500"}},
     }
@@ -522,6 +541,75 @@ async def test_hyperliquid_fetch_user_abstraction_state_sets_unified_options(stu
     assert bot._hl_unified_enabled is True
     assert bot.cca.options["enableUnifiedMargin"] is True
     assert bot.ccp.options["enableUnifiedMargin"] is True
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_fetch_user_abstraction_state_accepts_portfolio_margin(
+    stubbed_modules,
+):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.user = "hyperliquid_pm"
+    bot.user_info = {"wallet_address": "0xabc"}
+    bot.cca = types.SimpleNamespace(
+        options={},
+        publicPostInfo=lambda payload: _return_async('"portfolioMargin"', payload),
+    )
+    bot.ccp = types.SimpleNamespace(options={})
+
+    abstraction = await bot.fetch_user_abstraction_state()
+
+    assert abstraction == "portfolioMargin"
+    assert bot._hl_user_abstraction == "portfolioMargin"
+    assert bot._hl_unified_enabled is True
+    assert bot.cca.options["enableUnifiedMargin"] is True
+    assert bot.ccp.options["enableUnifiedMargin"] is True
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_fetch_positions_balance_handles_missing_asset_positions(
+    stubbed_modules,
+):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    import asyncio
+
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.quote = "USDC"
+    bot.positions = {}
+    bot.active_symbols = []
+    bot.fetched_positions = []
+    bot.coin_to_symbol = lambda c: f"{c}/USDC:USDC"
+    bot.cm = types.SimpleNamespace(get_current_close=lambda *args, **kwargs: 1.0)
+    bot._hl_fetch_lock = asyncio.Lock()
+    bot._hl_cache_generation = 0
+    bot._hl_unified_enabled = True
+    bot._get_hl_dex_for_symbol = lambda _symbol: None
+    bot._fetch_hip3_positions = lambda include_raw=False: _return_async(([], []), include_raw)
+    bot._record_hl_live_margin_mode = lambda *args, **kwargs: None
+    bot._hl_last_dex_scope_summary = lambda surface: f"{surface}_scope=active {surface}_dexes=0"
+
+    class _BalanceWithoutAssetPositionsCCA:
+        async def fetch_balance(self):
+            return {
+                "info": {
+                    "marginSummary": {
+                        "accountValue": "123.45",
+                    }
+                }
+            }
+
+        async def fetch_positions(self, **kwargs):
+            return []
+
+    bot.cca = _BalanceWithoutAssetPositionsCCA()
+
+    raw_snapshot, positions, balance = await bot._fetch_positions_and_balance()
+
+    assert raw_snapshot["balance_mode"] == "perp_account_value"
+    assert positions == []
+    assert balance == pytest.approx(123.45)
 
 
 @pytest.mark.asyncio

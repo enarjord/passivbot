@@ -19,6 +19,10 @@ def _normalize_abstraction(raw) -> str:
     return text or "unknown"
 
 
+def _is_unified_like(abstraction: str) -> bool:
+    return str(abstraction) in {"unifiedAccount", "portfolioMargin"}
+
+
 async def _main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -43,6 +47,7 @@ async def _main() -> int:
             "is_vault": bool(user_info.get("is_vault")),
             "raw_user_abstraction": raw,
             "abstraction": _normalize_abstraction(raw),
+            "passivbot_unified_like": _is_unified_like(_normalize_abstraction(raw)),
             "ccxt_is_unified_enabled": bool(enabled),
         }
         print(json.dumps(summary, indent=2, sort_keys=True, default=str))

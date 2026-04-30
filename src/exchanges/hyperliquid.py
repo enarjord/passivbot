@@ -117,6 +117,10 @@ class HyperliquidBot(CCXTBot):
             text = text[1:-1]
         return text or "unknown"
 
+    def _hl_abstraction_is_unified_like(self, abstraction: str) -> bool:
+        """Return True for Hyperliquid account modes with shared collateral semantics."""
+        return str(abstraction) in {"unifiedAccount", "portfolioMargin"}
+
     async def fetch_user_abstraction_state(self) -> str:
         """Fetch and cache the Hyperliquid account abstraction mode."""
         wallet_address = str(self.user_info.get("wallet_address") or "")
@@ -125,7 +129,7 @@ class HyperliquidBot(CCXTBot):
         raw = await self.cca.publicPostInfo({"type": "userAbstraction", "user": wallet_address})
         abstraction = self._normalize_hl_user_abstraction(raw)
         self._hl_user_abstraction = abstraction
-        self._hl_unified_enabled = abstraction == "unifiedAccount"
+        self._hl_unified_enabled = self._hl_abstraction_is_unified_like(abstraction)
         if hasattr(self, "cca") and getattr(self, "cca", None) is not None:
             self.cca.options["enableUnifiedMargin"] = bool(self._hl_unified_enabled)
         if hasattr(self, "ccp") and getattr(self, "ccp", None) is not None:
@@ -140,14 +144,14 @@ class HyperliquidBot(CCXTBot):
             logging.info(
                 "[account] Hyperliquid abstraction=%s | unified=%s",
                 abstraction,
-                "yes" if abstraction == "unifiedAccount" else "no",
+                "yes" if self._hl_abstraction_is_unified_like(abstraction) else "no",
             )
         elif previous != abstraction:
             logging.warning(
                 "[account] Hyperliquid abstraction changed %s -> %s | unified=%s",
                 previous,
                 abstraction,
-                "yes" if abstraction == "unifiedAccount" else "no",
+                "yes" if self._hl_abstraction_is_unified_like(abstraction) else "no",
             )
         self._hl_last_logged_user_abstraction = abstraction
         return abstraction
@@ -492,11 +496,12 @@ class HyperliquidBot(CCXTBot):
             unsupported.append(f"{symbol} ({'/'.join(state_bits)}; {', '.join(reasons)})")
         if unsupported:
             raise FatalBotException(
-                "Hyperliquid HIP-3/non-standard perps require unifiedAccount mode in Passivbot. "
+                "Hyperliquid HIP-3/non-standard perps require unifiedAccount or portfolioMargin "
+                "mode in Passivbot. "
                 f"Current abstraction={getattr(self, '_hl_user_abstraction', 'unknown')}. "
                 f"Unsupported HIP-3 state detected: {'; '.join(unsupported)}. "
-                "Upgrade the Hyperliquid account to unifiedAccount or remove all HIP-3 "
-                "symbols, positions, and open orders before running the bot."
+                "Upgrade the Hyperliquid account to unifiedAccount/portfolioMargin or remove all "
+                "HIP-3 symbols, positions, and open orders before running the bot."
             )
 
     async def watch_orders(self):
