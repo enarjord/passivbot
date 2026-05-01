@@ -104,6 +104,8 @@ async def test_hyperliquid_order_margin_probe_smoke(monkeypatch, capsys):
             "--symbol",
             "BTC/USDC:USDC",
             "--yes",
+            "--settle-seconds",
+            "0",
         ],
     )
     monkeypatch.setattr(
@@ -188,6 +190,8 @@ async def test_hyperliquid_position_probe_threads_vault_address(monkeypatch, cap
             "cross",
             "--leave-open-after-entry",
             "--place-resting-entry-order",
+            "--settle-seconds",
+            "0",
         ],
     )
     monkeypatch.setattr(

@@ -2282,7 +2282,7 @@ class Passivbot:
 
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
-        self._install_asyncio_runtime_exception_handler()
+        Passivbot._install_asyncio_runtime_exception_handler(self)
         Passivbot._startup_timing_begin(self)
         self._log_startup_banner()
         self._bot_ready = False
@@ -5235,7 +5235,11 @@ class Passivbot:
         if to_cancel or to_create:
             self.execution_scheduled = True
         if not Passivbot._shutdown_requested(self):
-            self._schedule_forager_candidate_candle_refresh()
+            schedule_forager_refresh = getattr(
+                self, "_schedule_forager_candidate_candle_refresh", None
+            )
+            if callable(schedule_forager_refresh):
+                schedule_forager_refresh()
         Passivbot._log_order_wave_summary(self, order_wave)
         if self.debug_mode:
             return to_cancel, to_create

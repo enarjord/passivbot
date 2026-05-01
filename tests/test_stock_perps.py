@@ -531,7 +531,10 @@ class TestHyperliquidBotHIP3:
             }
         }
 
-        with pytest.raises(FatalBotException, match="require unifiedAccount mode"):
+        with pytest.raises(
+            FatalBotException,
+            match="require unifiedAccount or portfolioMargin mode",
+        ):
             bot._assert_supported_live_state()
 
     def test_isolated_only_hip3_open_orders_hard_fail(self, bot_class):

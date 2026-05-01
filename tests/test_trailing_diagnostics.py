@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import subprocess
 import sys
 
@@ -175,9 +176,15 @@ def test_wizard_core_keys_do_not_repeat_shared_params():
 
 def test_trailing_diagnostics_tool_help_runs_without_import_errors():
     repo_root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    src_path = str(repo_root / "src")
+    env["PYTHONPATH"] = (
+        src_path if not env.get("PYTHONPATH") else f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
+    )
     result = subprocess.run(
         [sys.executable, "src/tools/trailing_diagnostics.py", "--help"],
         cwd=repo_root,
+        env=env,
         text=True,
         capture_output=True,
         check=False,

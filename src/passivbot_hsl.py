@@ -1344,6 +1344,9 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
             self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
         if metrics["tier"] == "red" and not prev_latched:
             state["pending_red_since_ms"] = int(metrics["timestamp_ms"])
+            state["pending_stop_event"] = await self._equity_hard_stop_compute_stop_event(
+                pside, int(metrics["timestamp_ms"])
+            )
             logging.critical(
                 "[risk] HSL[%s] RED triggered | strategy_equity=%.6f peak_strategy_equity=%.6f rolling_peak_strategy_equity=%.6f drawdown_score=%.6f red_threshold=%.6f",
                 pside,
@@ -1511,7 +1514,6 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
         state = self._hsl_state(pside)
         state["red_flat_confirmations"] = 0
         state["last_red_progress"] = None
-        state["pending_stop_event"] = None
     try:
         logging.critical("[risk] entering HSL RED supervisor loop (panic-close until confirmed flat)")
         while not self.stop_signal_received:
@@ -1532,14 +1534,13 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
                 n_positions = self._equity_hard_stop_count_open_positions(pside)
                 entry_orders, nonpanic_close_orders = self._equity_hard_stop_count_blocking_open_orders(pside)
                 if n_positions == 0 and entry_orders == 0 and nonpanic_close_orders == 0:
-                    if state["red_flat_confirmations"] == 0:
+                    if state["red_flat_confirmations"] == 0 and state["pending_stop_event"] is None:
                         state["pending_stop_event"] = await self._equity_hard_stop_compute_stop_event(
                             pside, int(self.get_exchange_time())
                         )
                     state["red_flat_confirmations"] += 1
                 else:
                     state["red_flat_confirmations"] = 0
-                    state["pending_stop_event"] = None
                 self._equity_hard_stop_log_red_progress(
                     pside,
                     n_positions,

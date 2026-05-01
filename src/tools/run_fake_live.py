@@ -345,6 +345,12 @@ def _prime_fake_fill_cache(bot, fake_client: FakeCCXTClient, cache_root: Path | 
 def _prime_fake_candles(bot, fake_client: FakeCCXTClient) -> None:
     if not hasattr(bot, "cm"):
         return
+    # Fake scenarios advance exchange time without advancing wall-clock time.
+    # MarketSnapshotProvider TTLs are wall-clock based, so clear cached tickers
+    # before each fake step to keep HSL/upnl checks aligned with scenario prices.
+    provider = getattr(bot, "market_snapshot_provider", None)
+    if provider is not None and hasattr(provider, "_cache"):
+        provider._cache.clear()
     for symbol in fake_client.symbols:
         rows = fake_client._candles_by_symbol.get(symbol, [])[: fake_client.current_index + 1]
         arr = np.zeros(len(rows), dtype=CANDLE_DTYPE)
@@ -386,14 +392,13 @@ async def _run_fake_red_supervisor_step(bot) -> dict:
         n_positions = bot._equity_hard_stop_count_open_positions(pside)
         entry_orders, nonpanic_close_orders = bot._equity_hard_stop_count_blocking_open_orders(pside)
         if n_positions == 0 and entry_orders == 0 and nonpanic_close_orders == 0:
-            if state["red_flat_confirmations"] == 0:
+            if state["red_flat_confirmations"] == 0 and state["pending_stop_event"] is None:
                 state["pending_stop_event"] = await bot._equity_hard_stop_compute_stop_event(
                     pside, int(bot.get_exchange_time())
                 )
             state["red_flat_confirmations"] += 1
         else:
             state["red_flat_confirmations"] = 0
-            state["pending_stop_event"] = None
         bot._equity_hard_stop_log_red_progress(
             pside,
             n_positions,

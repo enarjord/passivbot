@@ -558,6 +558,51 @@ def _set_basic_state(bot, symbol="TEST/USDT"):
     return symbol
 
 
+def _stamp_staged_account_and_candles(bot):
+    from freshness_ledger import ACCOUNT_SURFACES
+    from market_snapshot import MarketSnapshot
+
+    if bot._authoritative_refresh_mode() != "staged":
+        return
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+    candle_signature, missing = bot._completed_candle_freshness_signature(
+        bot._urgent_active_candle_symbols()
+    )
+    assert missing == []
+    bot._record_authoritative_surface("completed_candles", candle_signature)
+    symbols = bot._urgent_active_candle_symbols()
+    snapshots = {
+        symbol: MarketSnapshot(
+            symbol=symbol,
+            bid=99.5,
+            ask=100.5,
+            last=100.0,
+            fetched_ms=utc_ms(),
+            source="test",
+        )
+        for symbol in symbols
+    }
+    bot._record_market_snapshot_surface(symbols, snapshots)
+    if getattr(bot, "market_snapshot_provider", None) is None:
+        async def _get_snapshots(requested_symbols, max_age_ms=None):
+            del max_age_ms
+            return {
+                symbol: MarketSnapshot(
+                    symbol=symbol,
+                    bid=99.5,
+                    ask=100.5,
+                    last=100.0,
+                    fetched_ms=utc_ms(),
+                    source="test",
+                )
+                for symbol in requested_symbols
+            }
+
+        bot.market_snapshot_provider = types.SimpleNamespace(get_snapshots=_get_snapshots)
+
+
 def _make_hsl_fill_event(
     timestamp: int,
     *,
@@ -693,6 +738,7 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
         bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
     )
     monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
+    _stamp_staged_account_and_candles(bot)
 
     await bot.calc_ideal_orders_orchestrator()
 
@@ -772,9 +818,11 @@ async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
     bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
     assert bot._runtime_forced_modes["long"][symbol] == "panic"
 
+    _stamp_staged_account_and_candles(bot)
     await bot.execution_cycle()
     assert symbol in bot.active_symbols
 
+    _stamp_staged_account_and_candles(bot)
     _orders, snapshot = await bot.calc_ideal_orders_orchestrator(return_snapshot=True)
 
     rust_symbol = captured["input"]["symbols"][0]
@@ -891,7 +939,7 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(monk
     await bot.calc_ideal_orders_orchestrator()
 
     assert call_order == ["ema_bundle", "market_snapshot"]
-    assert snapshot_calls == [([symbol], 10_000)]
+    assert snapshot_calls == [([symbol], 5_000)]
     assert cm_calls == []
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["order_book"]["bid"] == pytest.approx(100.5)
