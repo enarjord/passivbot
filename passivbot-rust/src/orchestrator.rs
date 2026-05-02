@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// Backtest-only performance hint: allow next-only vs full-grid expansion on a per-symbol basis.
+/// Order-expansion hint: allow next-only vs full-grid expansion on a per-symbol basis.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EntryPeekHints {
@@ -18,13 +18,22 @@ pub struct EntryPeekHints {
     pub expand_close_short: HashSet<usize>,
 }
 
+/// Stateless forager hysteresis input derived from current open entry orders.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForagerHysteresisState {
+    pub score_hysteresis_pct: f64,
+    pub incumbent_long: HashSet<usize>,
+    pub incumbent_short: HashSet<usize>,
+}
+
 mod core {
     use crate::closes::{
         calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
     };
     use crate::coin_selection::{
-        select_forager_candidates, ForagerCandidate, ForagerPositionSide, ForagerSelectionConfig,
-        ForagerSelectionError,
+        select_forager_candidates_with_diagnostics, ForagerCandidate, ForagerPositionSide,
+        ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
     };
     use crate::constants::{LONG, SHORT};
     use crate::entries::{
@@ -142,6 +151,42 @@ mod core {
         pub effective_min_cost: f64,
     }
 
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ForagerScoredCandidateDiagnostic {
+        pub symbol_idx: usize,
+        pub rank: usize,
+        pub score: f64,
+        pub volume_component: f64,
+        pub ema_readiness_component: f64,
+        pub volatility_component: f64,
+        pub selected: bool,
+        pub incumbent: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ForagerHysteresisEventDiagnostic {
+        pub incumbent_symbol_idx: usize,
+        pub incumbent_score: f64,
+        pub challenger_symbol_idx: usize,
+        pub challenger_score: f64,
+        pub score_gap: f64,
+        pub kept_incumbent: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ForagerSelectionDiagnostic {
+        pub pside: PositionSide,
+        pub slots_to_fill: usize,
+        pub score_hysteresis_pct: f64,
+        pub selected_symbol_indices: Vec<usize>,
+        pub incumbent_symbol_indices: Vec<usize>,
+        pub top_scores: Vec<ForagerScoredCandidateDiagnostic>,
+        pub hysteresis_events: Vec<ForagerHysteresisEventDiagnostic>,
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case", deny_unknown_fields)]
     pub enum OrchestratorError {
@@ -172,6 +217,8 @@ mod core {
         pub symbol_states: Vec<SymbolStateDiagnostic>,
         #[serde(default)]
         pub min_effective_cost_blocks: Vec<MinEffectiveCostBlock>,
+        #[serde(default)]
+        pub forager_selections: Vec<ForagerSelectionDiagnostic>,
     }
 
     #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -309,8 +356,12 @@ mod core {
         pub balance_raw: f64,
         pub global: OrchestratorGlobal,
         pub symbols: Vec<SymbolInput>,
-        /// Backtest-only performance hint: allow next-only vs full-grid expansion.
+        /// Optional order-expansion hint. Live uses this to avoid full flat entry grids; backtest
+        /// normally leaves it absent and uses `next_candle` lookahead instead.
         pub peek_hints: Option<super::EntryPeekHints>,
+        /// Optional forager hysteresis input reconstructed from current open entry orders.
+        #[serde(default)]
+        pub forager_hysteresis: Option<super::ForagerHysteresisState>,
     }
 
     fn default_balance_raw() -> f64 {
@@ -500,6 +551,54 @@ mod core {
                 }
             }
         }
+    }
+
+    fn record_forager_selection_diagnostic(
+        diagnostics: &mut OrchestratorDiagnostics,
+        pside: PositionSide,
+        cfg: &ForagerSelectionConfig,
+        result: &ForagerSelectionResult,
+    ) {
+        const TOP_SCORE_LIMIT: usize = 12;
+        let mut incumbent_symbol_indices: Vec<usize> =
+            cfg.incumbent_indices.iter().copied().collect();
+        incumbent_symbol_indices.sort_unstable();
+        diagnostics
+            .forager_selections
+            .push(ForagerSelectionDiagnostic {
+                pside,
+                slots_to_fill: cfg.slots_to_fill,
+                score_hysteresis_pct: cfg.score_hysteresis_pct,
+                selected_symbol_indices: result.selected_indices.clone(),
+                incumbent_symbol_indices,
+                top_scores: result
+                    .scored
+                    .iter()
+                    .take(TOP_SCORE_LIMIT)
+                    .map(|item| ForagerScoredCandidateDiagnostic {
+                        symbol_idx: item.index,
+                        rank: item.rank,
+                        score: item.score,
+                        volume_component: item.volume_component,
+                        ema_readiness_component: item.ema_readiness_component,
+                        volatility_component: item.volatility_component,
+                        selected: item.selected,
+                        incumbent: item.incumbent,
+                    })
+                    .collect(),
+                hysteresis_events: result
+                    .hysteresis_events
+                    .iter()
+                    .map(|event| ForagerHysteresisEventDiagnostic {
+                        incumbent_symbol_idx: event.incumbent_index,
+                        incumbent_score: event.incumbent_score,
+                        challenger_symbol_idx: event.challenger_index,
+                        challenger_score: event.challenger_score,
+                        score_gap: event.score_gap,
+                        kept_incumbent: event.kept_incumbent,
+                    })
+                    .collect(),
+            });
     }
 
     fn require_forager_input(
@@ -1734,6 +1833,16 @@ mod core {
                         .clone(),
                     require_forager: true,
                     position_side: ForagerPositionSide::Long,
+                    score_hysteresis_pct: input
+                        .forager_hysteresis
+                        .as_ref()
+                        .map(|h| h.score_hysteresis_pct)
+                        .unwrap_or(0.0),
+                    incumbent_indices: input
+                        .forager_hysteresis
+                        .as_ref()
+                        .map(|h| h.incumbent_long.clone())
+                        .unwrap_or_default(),
                 };
                 build_forager_candidates_into(
                     &input.symbols,
@@ -1746,9 +1855,16 @@ mod core {
                     &mut workspace.features,
                     &mut diagnostics,
                 )?;
-                for idx in select_forager_candidates(&workspace.features, &cfg)
-                    .map_err(map_forager_selection_error)?
-                {
+                let selection =
+                    select_forager_candidates_with_diagnostics(&workspace.features, &cfg)
+                        .map_err(map_forager_selection_error)?;
+                record_forager_selection_diagnostic(
+                    &mut diagnostics,
+                    PositionSide::Long,
+                    &cfg,
+                    &selection,
+                );
+                for idx in selection.selected_indices {
                     if actives_long_count >= enp_long {
                         break;
                     }
@@ -1801,6 +1917,16 @@ mod core {
                         .clone(),
                     require_forager: true,
                     position_side: ForagerPositionSide::Short,
+                    score_hysteresis_pct: input
+                        .forager_hysteresis
+                        .as_ref()
+                        .map(|h| h.score_hysteresis_pct)
+                        .unwrap_or(0.0),
+                    incumbent_indices: input
+                        .forager_hysteresis
+                        .as_ref()
+                        .map(|h| h.incumbent_short.clone())
+                        .unwrap_or_default(),
                 };
                 build_forager_candidates_into(
                     &input.symbols,
@@ -1813,9 +1939,16 @@ mod core {
                     &mut workspace.features,
                     &mut diagnostics,
                 )?;
-                for idx in select_forager_candidates(&workspace.features, &cfg)
-                    .map_err(map_forager_selection_error)?
-                {
+                let selection =
+                    select_forager_candidates_with_diagnostics(&workspace.features, &cfg)
+                        .map_err(map_forager_selection_error)?;
+                record_forager_selection_diagnostic(
+                    &mut diagnostics,
+                    PositionSide::Short,
+                    &cfg,
+                    &selection,
+                );
+                for idx in selection.selected_indices {
                     if actives_short_count >= enp_short {
                         break;
                     }
@@ -2971,6 +3104,7 @@ mod core {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::orchestrator::EntryPeekHints;
         use std::collections::HashSet;
 
         fn make_basic_symbol(idx: usize) -> SymbolInput {
@@ -3097,6 +3231,7 @@ mod core {
                 },
                 symbols: vec![sym],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
 
             let out = compute_ideal_orders(&input).unwrap();
@@ -3232,6 +3367,7 @@ mod core {
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
 
             let out = compute_ideal_orders(&input).unwrap();
@@ -3262,6 +3398,56 @@ mod core {
         }
 
         #[test]
+        fn live_peek_hints_keep_flat_entries_next_only_until_position_exists() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.bot_params.entry_grid_spacing_pct = 0.01;
+            sym.long.bot_params.entry_grid_double_down_factor = 1.2;
+            sym.long.bot_params.entry_initial_qty_pct = 0.01;
+            sym.long.bot_params.wallet_exposure_limit = 100.0;
+
+            let mut global = make_basic_global();
+            global.global_bot_params.long.total_wallet_exposure_limit = 1000.0;
+            global.global_bot_params.long.n_positions = 1;
+
+            let input_flat = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: global.clone(),
+                symbols: vec![sym.clone()],
+                peek_hints: Some(EntryPeekHints::default()),
+                forager_hysteresis: None,
+            };
+            let out_flat = compute_ideal_orders(&input_flat).unwrap();
+            let n_entries_flat = out_flat
+                .orders
+                .iter()
+                .filter(|o| o.pside == PositionSide::Long && !is_close_order_type(o.order_type))
+                .count();
+            assert_eq!(n_entries_flat, 1);
+
+            sym.long.position = Position {
+                size: 100.0,
+                price: 100.0,
+            };
+            let input_positioned = OrchestratorInput {
+                symbols: vec![sym],
+                peek_hints: Some(EntryPeekHints {
+                    expand_grid_long: HashSet::from([0]),
+                    expand_close_long: HashSet::from([0]),
+                    ..Default::default()
+                }),
+                ..input_flat
+            };
+            let out_positioned = compute_ideal_orders(&input_positioned).unwrap();
+            let n_entries_positioned = out_positioned
+                .orders
+                .iter()
+                .filter(|o| o.pside == PositionSide::Long && !is_close_order_type(o.order_type))
+                .count();
+            assert!(n_entries_positioned > 1);
+        }
+
+        #[test]
         fn non_tradable_forced_normal_flat_symbol_does_not_require_emas() {
             let mut sym = make_basic_symbol(0);
             sym.tradable = false;
@@ -3283,6 +3469,7 @@ mod core {
                 global,
                 symbols: vec![sym],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
 
             let out = compute_ideal_orders(&input).unwrap();
@@ -3350,6 +3537,7 @@ mod core {
                 },
                 symbols: vec![sym],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
             let out = compute_ideal_orders(&input).unwrap();
             // With no position and GracefulStop, we should not emit any entries.
@@ -3385,6 +3573,7 @@ mod core {
                 },
                 symbols: vec![sym],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
 
             let out = compute_ideal_orders(&input).unwrap();
@@ -3429,6 +3618,7 @@ mod core {
                 },
                 symbols: vec![sym],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
 
             let out = compute_ideal_orders(&input).unwrap();
@@ -3485,6 +3675,7 @@ mod core {
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
 
             let out = compute_ideal_orders(&input).unwrap();
@@ -3538,6 +3729,7 @@ mod core {
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
 
             let out = compute_ideal_orders(&input).unwrap();
@@ -3590,6 +3782,7 @@ mod core {
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
 
             let out = compute_ideal_orders(&input).unwrap();
@@ -3636,6 +3829,7 @@ mod core {
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
 
             let out = compute_ideal_orders(&input).unwrap();
@@ -3682,6 +3876,7 @@ mod core {
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
 
             let err = compute_ideal_orders(&input).unwrap_err();
@@ -3793,6 +3988,7 @@ mod core {
                 },
                 symbols: syms,
                 peek_hints: None,
+                forager_hysteresis: None,
             };
 
             let out = compute_ideal_orders(&input).unwrap();
@@ -4009,6 +4205,7 @@ mod core {
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
             let out_open = compute_ideal_orders(&input_open).unwrap();
             assert!(
@@ -4079,6 +4276,7 @@ mod core {
                 },
                 symbols: vec![sym],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
             let out = compute_ideal_orders(&input).unwrap();
             assert!(
@@ -4137,6 +4335,7 @@ mod core {
                     },
                     symbols: vec![sym],
                     peek_hints: None,
+                    forager_hysteresis: None,
                 };
                 let out = compute_ideal_orders(&input).unwrap();
                 assert!(
@@ -4199,6 +4398,7 @@ mod core {
                 },
                 symbols: vec![sym],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
             let out = compute_ideal_orders(&input).unwrap();
             assert!(
@@ -4254,6 +4454,7 @@ mod core {
                 },
                 symbols: vec![sym],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
             let out = compute_ideal_orders(&input).unwrap();
             let entry_orders: Vec<_> = out
@@ -4315,6 +4516,7 @@ mod core {
                 },
                 symbols: vec![sym],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
             let out = compute_ideal_orders(&input).unwrap();
             assert_eq!(out.orders.len(), 1);
@@ -4361,6 +4563,7 @@ mod core {
                 },
                 symbols: vec![sym],
                 peek_hints: None,
+                forager_hysteresis: None,
             };
             let out = compute_ideal_orders(&input).unwrap();
             assert_eq!(out.orders.len(), 1);

@@ -1330,6 +1330,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.0005),
+        forager_score_hysteresis_pct: dict
+            .get_item("forager_score_hysteresis_pct")?
+            .map(|item| item.extract::<f64>())
+            .transpose()?
+            .unwrap_or(0.005),
         candle_interval_minutes: dict
             .get_item("candle_interval_minutes")?
             .map(|item| item.extract::<u64>())

@@ -32,6 +32,9 @@ All notable user-facing changes will be documented in this file.
 - Live shutdown now interrupts candle/EMA warmup and cancels a stuck execution loop before closing exchange sessions, reducing Ctrl-C/shutdown hangs during broad market-data refresh.
 - Removed the deprecated `live.price_distance_threshold` setting. Rust-owned order generation and the live `order_match_tolerance_pct` replacement tolerance now define order placement/churn behavior; stale `price_distance_threshold` keys are stripped during config normalization.
 - Live startup logs one-shot readiness timings for account state, active candles, first market refresh, startup readiness, and broad candle warmup completion.
+- Rust order orchestration now emits only the next most-likely flat entry order for live symbols without a position, while preserving full entry-grid expansion once a position exists and preserving backtest next-candle expansion behavior.
+- Added `live.forager_score_hysteresis_pct` to keep already-selected flat forager coins when challenger scores are only marginally better, reducing selection flip-flop in live, backtest, and optimizer.
+- Live forager diagnostics now include Rust-owned selection score logs: `INFO` reports selected/incumbent coins and top scores only on selection/hysteresis changes or periodic heartbeat, while `DEBUG` includes top-score component detail.
 - Fixed OHLCV v2 local preparation so sparse invalid v2 windows are repaired from existing legacy daily shards first, then fetched with exact intraday ranges instead of triggering full-range archive downloads or collapsing same-day repair windows to empty fetches.
 
 ## v7.10.0 - 2026-04-22

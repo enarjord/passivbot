@@ -3,6 +3,7 @@ import contextlib
 import inspect
 import json
 import logging
+import signal
 import sys
 import time
 import types
@@ -28,14 +29,37 @@ from passivbot import Passivbot
 import passivbot as passivbot_module
 from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from market_snapshot import MarketSnapshot
-from planning_snapshot import PlanningMarketSnapshot, PlanningSnapshot, PlanningSurfaceStamp
+from planning_snapshot import (
+    PlanningMarketSnapshot,
+    PlanningSnapshot,
+    PlanningSurfaceStamp,
+)
 from exchanges.binance import BinanceBot
+
+
+def test_repeated_shutdown_signal_forces_immediate_exit(monkeypatch):
+    bot = SimpleNamespace(stop_signal_received=True, _shutdown_in_progress=True)
+    monkeypatch.setattr(passivbot_module, "bot", bot)
+    monkeypatch.setattr(passivbot_module.logging, "shutdown", lambda: None)
+
+    def fake_exit(code):
+        raise SystemExit(code)
+
+    monkeypatch.setattr(passivbot_module.os, "_exit", fake_exit)
+
+    with pytest.raises(SystemExit) as exc_info:
+        passivbot_module.signal_handler(signal.SIGINT, None)
+
+    assert exc_info.value.code == 130
 
 
 def test_authoritative_refresh_mode_defaults_to_staged_without_explicit_choice():
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "binance"
-    bot.config = {"live": {"authoritative_refresh_mode": "legacy"}, "_raw_effective": {"live": {}}}
+    bot.config = {
+        "live": {"authoritative_refresh_mode": "legacy"},
+        "_raw_effective": {"live": {}},
+    }
 
     assert bot._authoritative_refresh_mode() == "staged"
 
@@ -112,7 +136,10 @@ async def test_staged_orchestrator_market_snapshot_fetch_uses_headroom_ttl():
 
     assert seen_max_age_ms == [5_000]
     assert snapshots[symbol].last == 100.5
-    assert bot.freshness_ledger.surface_epoch("market_snapshot") == bot._authoritative_refresh_epoch
+    assert (
+        bot.freshness_ledger.surface_epoch("market_snapshot")
+        == bot._authoritative_refresh_epoch
+    )
     assert bot._market_snapshot_signature_invalid([symbol]) == []
 
 
@@ -121,7 +148,9 @@ async def test_hyperliquid_live_market_snapshot_uses_symbol_fallback_for_hip3():
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "hyperliquid"
     bot.symbol_ids = {}
-    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=AsyncMock(return_value={}))
+    bot.market_snapshot_provider = SimpleNamespace(
+        get_snapshots=AsyncMock(return_value={})
+    )
 
     async def fake_fetch(*args, **kwargs):
         return {}
@@ -283,7 +312,9 @@ async def test_shutdown_gracefully_awaits_cancelled_maintainers():
 
 
 @pytest.mark.asyncio
-async def test_shutdown_gracefully_times_out_stuck_maintainer_before_closing_sessions(caplog):
+async def test_shutdown_gracefully_times_out_stuck_maintainer_before_closing_sessions(
+    caplog,
+):
     bot = Passivbot.__new__(Passivbot)
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
@@ -480,7 +511,9 @@ def test_asyncio_runtime_exception_handler_suppresses_ping_timeout_callback(capl
         )
 
     assert handled is True
-    assert any("websocket callback ping timeout" in record.message for record in caplog.records)
+    assert any(
+        "websocket callback ping timeout" in record.message for record in caplog.records
+    )
     assert (
         bot._handle_asyncio_runtime_exception(
             {
@@ -511,7 +544,10 @@ def test_asyncio_runtime_exception_handler_suppresses_ccxt_transport_callback(ca
         )
 
     assert handled is True
-    assert any("websocket callback ClientConnectionResetError" in r.message for r in caplog.records)
+    assert any(
+        "websocket callback ClientConnectionResetError" in r.message
+        for r in caplog.records
+    )
 
 
 def test_candle_fetch_concurrency_is_conservative_for_history_replay():
@@ -550,7 +586,9 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
         "ETH/USDT:USDT": 1.0,
         "SOL/USDT:USDT": 1.0,
     }
-    monkeypatch.setattr(passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
 
     class _CM:
         def __init__(self):
@@ -593,9 +631,9 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
     await bot.get_balance_equity_history(fill_events=fill_events, current_balance=100.0)
 
     assert cm.max_active == 2
-    assert sorted(symbol for symbol, timeframe in cm.calls if timeframe == "1m") == sorted(
-        bot.c_mults
-    )
+    assert sorted(
+        symbol for symbol, timeframe in cm.calls if timeframe == "1m"
+    ) == sorted(bot.c_mults)
 
 
 @pytest.mark.asyncio
@@ -656,7 +694,11 @@ def test_startup_timing_marks_log_once(monkeypatch, caplog):
         now_ms[0] = 9_000
         Passivbot._startup_timing_mark(bot, "active-candle", details="symbols=2")
 
-    messages = [record.message for record in caplog.records if "startup timing" in record.message]
+    messages = [
+        record.message
+        for record in caplog.records
+        if "startup timing" in record.message
+    ]
     assert messages == [
         "[boot] startup timing | account-ready=1.50s | since_previous=1.50s",
         "[boot] startup timing | active-candle-ready=8.00s | since_previous=6.50s | symbols=2",
@@ -691,7 +733,9 @@ def test_ws_reconnect_warning_logs_are_throttled(monkeypatch, caplog):
             )
 
     reconnect_records = [
-        record for record in caplog.records if "[ws] kucoin: connection lost" in record.message
+        record
+        for record in caplog.records
+        if "[ws] kucoin: connection lost" in record.message
     ]
     assert [record.levelno for record in reconnect_records] == [
         logging.WARNING,
@@ -826,7 +870,9 @@ def test_handle_order_update_suppresses_recent_self_echoes(caplog, monkeypatch):
     assert not [record.message for record in caplog.records if "[ws]" in record.message]
 
 
-def test_handle_order_update_cancel_hint_requests_full_confirmation(caplog, monkeypatch):
+def test_handle_order_update_cancel_hint_requests_full_confirmation(
+    caplog, monkeypatch
+):
     bot = Passivbot.__new__(Passivbot)
     bot.execution_scheduled = False
     bot._authoritative_refresh_epoch = 7
@@ -923,7 +969,9 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
         )
 
     state_logs = [
-        (record.levelname, record.message) for record in caplog.records if "[state]" in record.message
+        (record.levelname, record.message)
+        for record in caplog.records
+        if "[state]" in record.message
     ]
     assert state_logs == [
         (
@@ -1028,9 +1076,78 @@ def test_min_effective_cost_blocks_are_aggregated(caplog):
     with caplog.at_level(logging.WARNING):
         bot._log_min_effective_cost_blocks(out, idx_to_symbol)
 
-    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    warnings = [
+        record.message for record in caplog.records if record.levelno == logging.WARNING
+    ]
     assert sum("symbol=SYM" in msg for msg in warnings) == 3
     assert any("blocked=5 detailed=3" in msg for msg in warnings)
+
+
+def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    out = {
+        "diagnostics": {
+            "forager_selections": [
+                {
+                    "pside": "long",
+                    "slots_to_fill": 1,
+                    "score_hysteresis_pct": 0.005,
+                    "selected_symbol_indices": [1],
+                    "incumbent_symbol_indices": [1],
+                    "top_scores": [
+                        {
+                            "symbol_idx": 0,
+                            "rank": 1,
+                            "score": 0.625,
+                            "volume_component": 0.4,
+                            "ema_readiness_component": 0.5,
+                            "volatility_component": 1.0,
+                            "selected": False,
+                            "incumbent": False,
+                        },
+                        {
+                            "symbol_idx": 1,
+                            "rank": 2,
+                            "score": 0.623,
+                            "volume_component": 0.3,
+                            "ema_readiness_component": 0.6,
+                            "volatility_component": 0.9,
+                            "selected": True,
+                            "incumbent": True,
+                        },
+                    ],
+                    "hysteresis_events": [
+                        {
+                            "incumbent_symbol_idx": 1,
+                            "incumbent_score": 0.623,
+                            "challenger_symbol_idx": 0,
+                            "challenger_score": 0.625,
+                            "score_gap": 0.002,
+                            "kept_incumbent": True,
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+    idx_to_symbol = {0: "coin2/USDT:USDT", 1: "coin1/USDT:USDT"}
+
+    with caplog.at_level(logging.DEBUG):
+        Passivbot._log_forager_selection_diagnostics(bot, out, idx_to_symbol)
+        Passivbot._log_forager_selection_diagnostics(bot, out, idx_to_symbol)
+
+    messages = [record.message for record in caplog.records]
+    info_messages = [
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.INFO
+        and "[forager] long selection" in record.message
+    ]
+    assert len(info_messages) == 1
+    assert any("selected=coin1/USDT:USDT" in msg for msg in messages)
+    assert any("kept:coin1/USDT:USDT<->coin2/USDT:USDT" in msg for msg in messages)
+    assert any("[forager] long score detail" in msg for msg in messages)
+    assert any("vol=0.400" in msg for msg in messages)
 
 
 def test_active_candle_incomplete_warning_is_throttled(monkeypatch, caplog):
@@ -1103,7 +1220,9 @@ def test_memory_snapshot_is_interesting_only_initially_or_on_large_change():
     assert (
         bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=10.0) is False
     )
-    assert bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=30.0) is True
+    assert (
+        bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=30.0) is True
+    )
 
 
 def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
@@ -1119,7 +1238,12 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
 
     state_by_pside = {
-        "long": {"status": "ok", "allowance": -41.01, "peak": 16400.0, "pct_from_peak": -0.3},
+        "long": {
+            "status": "ok",
+            "allowance": -41.01,
+            "peak": 16400.0,
+            "pct_from_peak": -0.3,
+        },
         "short": {"status": "disabled"},
     }
 
@@ -1149,7 +1273,9 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
         now[0] += 60 * 60 * 1000
         bot._maybe_log_unstuck_status()
 
-    unstuck_logs = [record.message for record in caplog.records if "[unstuck]" in record.message]
+    unstuck_logs = [
+        record.message for record in caplog.records if "[unstuck]" in record.message
+    ]
     assert len(unstuck_logs) == 3
 
 
@@ -1208,14 +1334,20 @@ def test_unstuck_selection_logs_on_change_then_hourly(monkeypatch, caplog):
             allowance=-41.0,
         )
 
-    unstuck_logs = [record.message for record in caplog.records if "[unstuck] selecting" in record.message]
+    unstuck_logs = [
+        record.message
+        for record in caplog.records
+        if "[unstuck] selecting" in record.message
+    ]
     assert len(unstuck_logs) == 3
 
 
 @pytest.mark.asyncio
 async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower():
     bot = Passivbot.__new__(Passivbot)
-    cached_events = [SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])]
+    cached_events = [
+        SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
+    ]
 
     class _Manager:
         def __init__(self, events, *, history_scope="unknown"):
@@ -1255,7 +1387,9 @@ async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower()
 @pytest.mark.asyncio
 async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_full_history():
     bot = Passivbot.__new__(Passivbot)
-    cached_events = [SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])]
+    cached_events = [
+        SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
+    ]
 
     class _Manager:
         def __init__(self, events, *, history_scope="unknown"):
@@ -1298,13 +1432,17 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
 @pytest.mark.asyncio
 async def test_update_pnls_propagates_unexpected_refresh_errors():
     bot = Passivbot.__new__(Passivbot)
-    cached_events = [SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])]
+    cached_events = [
+        SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
+    ]
 
     class _Manager:
         def __init__(self, events, *, history_scope="unknown"):
             self._events = list(events)
             self.refresh = AsyncMock()
-            self.refresh_latest = AsyncMock(side_effect=RuntimeError("fill refresh failed"))
+            self.refresh_latest = AsyncMock(
+                side_effect=RuntimeError("fill refresh failed")
+            )
             self.history_scope = history_scope
 
         def get_events(self):
@@ -1334,7 +1472,9 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
 @pytest.mark.asyncio
 async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
     bot = Passivbot.__new__(Passivbot)
-    cached_events = [SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])]
+    cached_events = [
+        SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
+    ]
     monitor_errors = []
 
     class _Manager:
@@ -1364,7 +1504,9 @@ async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
-    bot._monitor_record_error = lambda *args, **kwargs: monitor_errors.append((args, kwargs))
+    bot._monitor_record_error = lambda *args, **kwargs: monitor_errors.append(
+        (args, kwargs)
+    )
     bot.logging_level = 2
     bot._health_rate_limits = 0
 
@@ -1374,7 +1516,10 @@ async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
     assert result is False
     assert monitor_errors == []
     assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
-    assert any("fill refresh stopped during in-flight request" in r.message for r in caplog.records)
+    assert any(
+        "fill refresh stopped during in-flight request" in r.message
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -1590,7 +1735,9 @@ async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_
     bot.handle_balance_update = AsyncMock()
     bot._apply_open_orders_snapshot = AsyncMock(return_value=True)
     finalized = []
-    bot._finalize_authoritative_refresh_consistency = lambda plan: finalized.append(set(plan))
+    bot._finalize_authoritative_refresh_consistency = lambda plan: finalized.append(
+        set(plan)
+    )
 
     result = await bot.refresh_authoritative_state()
 
@@ -1633,7 +1780,9 @@ async def test_update_positions_only_updates_positions(monkeypatch):
         return
 
     async def fail_handle_balance_update(source="REST"):
-        raise AssertionError("handle_balance_update should not be called by update_positions")
+        raise AssertionError(
+            "handle_balance_update should not be called by update_positions"
+        )
 
     bot.fetch_positions = fake_fetch_positions
     bot.log_position_changes = fake_log_position_changes
@@ -1854,7 +2003,9 @@ def test_balance_peak_uses_raw_not_snapped():
     assert balance_peak_raw == pytest.approx(1010.0)
 
     # Using snapped balance (would be wrong)
-    balance_peak_snapped = bot.get_hysteresis_snapped_balance() + (pnls_cumsum_max - pnls_cumsum_last)
+    balance_peak_snapped = bot.get_hysteresis_snapped_balance() + (
+        pnls_cumsum_max - pnls_cumsum_last
+    )
     assert balance_peak_snapped == pytest.approx(1000.0)
 
     # The raw-based peak is correct and higher
@@ -1868,7 +2019,9 @@ def test_effective_min_cost_filter_uses_snapped_balance():
     bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
     bot.live_value = lambda key: key == "filter_by_min_effective_cost"
     bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
-    bot.bp = lambda pside, key, symbol=None: 0.5 if key == "entry_initial_qty_pct" else 0.0
+    bot.bp = lambda pside, key, symbol=None: (
+        0.5 if key == "entry_initial_qty_pct" else 0.0
+    )
 
     # Passes only when snapped balance is used:
     # 100 * 1.0 * 0.5 = 50 >= 40; raw path would fail (10 * 1.0 * 0.5 = 5).
@@ -1903,7 +2056,10 @@ def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     bot.balance = 100.0
     bot.balance_raw = 200.0
     bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda: [types.SimpleNamespace(pnl=10.0), types.SimpleNamespace(pnl=-4.0)]
+        get_events=lambda: [
+            types.SimpleNamespace(pnl=10.0),
+            types.SimpleNamespace(pnl=-4.0),
+        ]
     )
 
     def bot_value(pside, key):
@@ -1923,7 +2079,9 @@ def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
         calls.append((balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last))
         return 123.45
 
-    monkeypatch.setattr(pb_mod.pbr, "calc_auto_unstuck_allowance", fake_calc_auto_unstuck_allowance)
+    monkeypatch.setattr(
+        pb_mod.pbr, "calc_auto_unstuck_allowance", fake_calc_auto_unstuck_allowance
+    )
 
     out = bot._calc_unstuck_allowances(allow_new_unstuck=True)
 
@@ -1970,7 +2128,9 @@ def test_unstuck_allowance_uses_only_configured_pnl_lookback(monkeypatch):
         calls.append((balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last))
         return 10.0
 
-    monkeypatch.setattr(pb_mod.pbr, "calc_auto_unstuck_allowance", fake_calc_auto_unstuck_allowance)
+    monkeypatch.setattr(
+        pb_mod.pbr, "calc_auto_unstuck_allowance", fake_calc_auto_unstuck_allowance
+    )
 
     out = bot._calc_unstuck_allowances(allow_new_unstuck=True)
 
@@ -1993,8 +2153,12 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
         hedge_mode = False
         equity_hard_stop_loss = {"panic_close_order_type": "limit"}
         _monitor_record_price_ticks = pb_mod.Passivbot._monitor_record_price_ticks
-        _build_monitor_runtime_market_hints = pb_mod.Passivbot._build_monitor_runtime_market_hints
-        _build_monitor_runtime_unstuck_hints = pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        _build_monitor_runtime_market_hints = (
+            pb_mod.Passivbot._build_monitor_runtime_market_hints
+        )
+        _build_monitor_runtime_unstuck_hints = (
+            pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        )
         _update_monitor_runtime_hints = pb_mod.Passivbot._update_monitor_runtime_hints
 
         def config_get(self, keys):
@@ -2074,8 +2238,12 @@ async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch)
         equity_hard_stop_loss = {"panic_close_order_type": "limit"}
         trailing_prices = {}
         _monitor_record_price_ticks = pb_mod.Passivbot._monitor_record_price_ticks
-        _build_monitor_runtime_market_hints = pb_mod.Passivbot._build_monitor_runtime_market_hints
-        _build_monitor_runtime_unstuck_hints = pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        _build_monitor_runtime_market_hints = (
+            pb_mod.Passivbot._build_monitor_runtime_market_hints
+        )
+        _build_monitor_runtime_unstuck_hints = (
+            pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        )
         _update_monitor_runtime_hints = pb_mod.Passivbot._update_monitor_runtime_hints
 
         def config_get(self, keys):
@@ -2155,7 +2323,10 @@ def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_
     # State A: peak = 100 + (100 - 0) = 200
     bot.balance_raw = 100.0
     bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda: [types.SimpleNamespace(pnl=100.0), types.SimpleNamespace(pnl=-100.0)]
+        get_events=lambda: [
+            types.SimpleNamespace(pnl=100.0),
+            types.SimpleNamespace(pnl=-100.0),
+        ]
     )
     info_a = bot._calc_unstuck_allowance_for_logging("long")
 
@@ -2163,7 +2334,10 @@ def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_
     # If snapped balance were incorrectly used here, peak would drift down to 150.
     bot.balance_raw = 150.0
     bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda: [types.SimpleNamespace(pnl=100.0), types.SimpleNamespace(pnl=-50.0)]
+        get_events=lambda: [
+            types.SimpleNamespace(pnl=100.0),
+            types.SimpleNamespace(pnl=-50.0),
+        ]
     )
     info_b = bot._calc_unstuck_allowance_for_logging("long")
 
@@ -2419,7 +2593,9 @@ def test_positions_change_without_fills_requests_full_confirmation():
     bot._record_authoritative_surface("positions", ("p", 1))
     bot._record_authoritative_surface("open_orders", ("o", 1))
 
-    bot._finalize_authoritative_refresh_consistency({"balance", "positions", "open_orders"})
+    bot._finalize_authoritative_refresh_consistency(
+        {"balance", "positions", "open_orders"}
+    )
 
     assert bot._authoritative_pending_confirmations == {
         "balance": 2,
@@ -2824,7 +3000,15 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
         completed_candle_signature=tuple(),
     )
 
-    orders = [{"symbol": symbol, "side": "buy", "position_side": "long", "qty": 1.0, "price": 99.0}]
+    orders = [
+        {
+            "symbol": symbol,
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 99.0,
+        }
+    ]
 
     assert await bot._filter_fresh_market_snapshot_creations(orders) == []
 
@@ -2874,7 +3058,15 @@ async def test_pre_create_snapshot_filter_refreshes_stale_planning_market_snapsh
         }
 
     bot.market_snapshot_provider = SimpleNamespace(get_snapshots=fake_get_snapshots)
-    orders = [{"symbol": symbol, "side": "buy", "position_side": "long", "qty": 1.0, "price": 99.0}]
+    orders = [
+        {
+            "symbol": symbol,
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 99.0,
+        }
+    ]
 
     assert await bot._filter_fresh_market_snapshot_creations(orders) == orders
 
@@ -2917,10 +3109,20 @@ async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidatio
     )
 
     async def fail_if_called(*args, **kwargs):
-        raise AssertionError("pre-create refresh must not rescue non-market invalid state")
+        raise AssertionError(
+            "pre-create refresh must not rescue non-market invalid state"
+        )
 
     bot.market_snapshot_provider = SimpleNamespace(get_snapshots=fail_if_called)
-    orders = [{"symbol": symbol, "side": "buy", "position_side": "long", "qty": 1.0, "price": 99.0}]
+    orders = [
+        {
+            "symbol": symbol,
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 99.0,
+        }
+    ]
 
     assert await bot._filter_fresh_market_snapshot_creations(orders) == []
 
@@ -3119,7 +3321,9 @@ async def test_restarted_inherited_order_disappearance_uses_confirmation_not_sym
 
 
 @pytest.mark.asyncio
-async def test_disappeared_self_order_guardrail_blocks_real_plan_create_until_refresh(caplog):
+async def test_disappeared_self_order_guardrail_blocks_real_plan_create_until_refresh(
+    caplog,
+):
     bot = _make_open_order_guardrail_bot(epoch=7)
     bot._last_plan_detail = {}
     bot._order_plan_summary_is_interesting = lambda **kwargs: False
@@ -3131,6 +3335,7 @@ async def test_disappeared_self_order_guardrail_blocks_real_plan_create_until_re
             return 100.0
 
     bot.cm = _CM()
+
     async def fake_get_live_last_prices(symbols, **kwargs):
         return {symbol: 100.0 for symbol in symbols}
 
@@ -3234,7 +3439,9 @@ async def test_ambiguous_cancel_forces_full_authoritative_confirmation():
     bot.remove_order = lambda *args, **kwargs: None
     bot._monitor_order_payload = lambda *args, **kwargs: {}
     bot._monitor_record_event = lambda *args, **kwargs: None
-    bot._request_authoritative_confirmation = lambda surfaces: confirmations.append(set(surfaces))
+    bot._request_authoritative_confirmation = lambda surfaces: confirmations.append(
+        set(surfaces)
+    )
 
     res = await Passivbot.execute_cancellations_parent(bot, [order])
 
@@ -3266,7 +3473,9 @@ def test_positions_signature_ignores_margin_used_and_margin_mode_noise():
         }
     ]
 
-    assert bot._positions_signature(positions_a) == bot._positions_signature(positions_b)
+    assert bot._positions_signature(positions_a) == bot._positions_signature(
+        positions_b
+    )
 
 
 def test_authoritative_barrier_does_not_block_on_balance_only_change():
@@ -3517,7 +3726,10 @@ async def test_run_execution_loop_suppresses_inflight_shutdown_refresh_error(cap
     bot.restart_bot_on_too_many_errors.assert_not_awaited()
     bot.execute_to_exchange.assert_not_awaited()
     assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
-    assert any("execution loop stopped during in-flight refresh" in r.message for r in caplog.records)
+    assert any(
+        "execution loop stopped during in-flight refresh" in r.message
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -3557,9 +3769,15 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
             "execution_timestamp": 10**15,
         }
     ]
-    bot.fetch_balance = AsyncMock(side_effect=AssertionError("balance fetch should not run"))
-    bot.fetch_positions = AsyncMock(side_effect=AssertionError("positions fetch should not run"))
-    bot.update_pnls = AsyncMock(side_effect=AssertionError("fills refresh should not run"))
+    bot.fetch_balance = AsyncMock(
+        side_effect=AssertionError("balance fetch should not run")
+    )
+    bot.fetch_positions = AsyncMock(
+        side_effect=AssertionError("positions fetch should not run")
+    )
+    bot.update_pnls = AsyncMock(
+        side_effect=AssertionError("fills refresh should not run")
+    )
     bot.fetch_open_orders = AsyncMock(
         return_value=[
             {
