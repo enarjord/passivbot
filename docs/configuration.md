@@ -432,10 +432,12 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - Ownership is `config.live`. Backtests always inherit `live.market_orders_allowed` and `live.market_order_near_touch_threshold`; `config.backtest` does not accept overrides for either field.
 - **forager_score_hysteresis_pct**: Fractional normalized-score tolerance for forager incumbent selection. Default is `0.005`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 0.5 percentage points of final forager score. Applies to live, backtest, and optimizer.
 - **order_match_tolerance_pct**: Fractional relative tolerance used to match near-identical cancel/create pairs and avoid order churn. Default is `0.0002`, meaning 0.02% relative price/quantity tolerance. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling/replacing it.
-- **max_n_cancellations_per_batch**: Cancels `n` open orders per execution.
-- **max_n_creations_per_batch**: Creates `n` new orders per execution.
+- **max_n_cancellations_per_batch**: Cancels `n` open orders per execution. Must be greater than `max_n_creations_per_batch` so the bot can make room before posting replacement orders.
+- **max_n_creations_per_batch**: Creates `n` new orders per execution. Must be lower than `max_n_cancellations_per_batch`.
 - **max_n_restarts_per_day**: If the bot crashes, restart up to `n` times per day before stopping completely.
 - **max_ohlcv_fetches_per_minute**: Live OHLCV/network budget for candle-backed indicators such as forager ranking and warm-up maintenance. Set lower to reduce REST pressure; set to `0` to disallow new fetches and rely only on what is already cached.
+- **max_forager_candle_staleness_minutes**: Optional cap on acceptable completed-candle staleness for broad forager-candidate refresh budgeting. `null` lets Passivbot derive the target from `max_ohlcv_fetches_per_minute` and candidate count.
+- **defer_broad_candle_warmup**: If `true`, startup warms only trading-critical symbols first and catches up broad approved-coin candles in the background. Set `false` to block startup until broad candle warmup completes.
 - **minimum_coin_age_days**: Disallows coins younger than a given number of days.
 - **balance_override**: Optional numeric override for wallet balance used by the live bot (useful for dry-runs and debugging). When set, the bot will not fetch balance from the exchange. Can also be useful when using BTC collateral and you want to keep an effectively “fixed USD balance” for sizing, instead of having the USD-denominated balance fluctuate with the BTC/USD price.
 - **balance_hysteresis_snap_pct**: Hysteresis snap percentage applied to balance updates to reduce noise. Set `0.0` to disable hysteresis.

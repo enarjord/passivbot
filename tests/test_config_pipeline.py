@@ -345,6 +345,17 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+def test_prepare_config_preserves_live_candle_budget_controls():
+    source = get_template_config()
+    source["live"]["defer_broad_candle_warmup"] = False
+    source["live"]["max_forager_candle_staleness_minutes"] = 7.5
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["live"]["defer_broad_candle_warmup"] is False
+    assert prepared["live"]["max_forager_candle_staleness_minutes"] == 7.5
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

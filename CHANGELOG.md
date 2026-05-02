@@ -35,6 +35,7 @@ All notable user-facing changes will be documented in this file.
 - Rust order orchestration now emits only the next most-likely flat entry order for live symbols without a position, while preserving full entry-grid expansion once a position exists and preserving backtest next-candle expansion behavior.
 - Added `live.forager_score_hysteresis_pct` to keep already-selected flat forager coins when challenger scores are only marginally better, reducing selection flip-flop in live, backtest, and optimizer.
 - Live forager diagnostics now include Rust-owned selection score logs: `INFO` reports selected/incumbent coins and top scores only on selection/hysteresis changes or periodic heartbeat, while `DEBUG` includes top-score component detail.
+- Live config validation now requires `live.max_n_cancellations_per_batch > live.max_n_creations_per_batch`, making the intended cancel-before-create batch capacity contract explicit at config load.
 - Fixed OHLCV v2 local preparation so sparse invalid v2 windows are repaired from existing legacy daily shards first, then fetched with exact intraday ranges instead of triggering full-range archive downloads or collapsing same-day repair windows to empty fetches.
 
 ## v7.10.0 - 2026-04-22
