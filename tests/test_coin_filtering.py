@@ -252,7 +252,7 @@ def test_log_min_effective_cost_blocks_includes_concrete_numbers(monkeypatch):
     }
     bot._log_min_effective_cost_blocks(out, {0: "BTC/USDC:USDC"})
     assert len(seen) == 1
-    assert "symbol=BTC/USDC:USDC side=long" in seen[0]
+    assert "symbol=BTC side=long" in seen[0]
     assert "projected_initial_cost=1.473263" in seen[0]
     assert "required_effective_min_cost=10.100000" in seen[0]
     assert "live.filter_by_min_effective_cost=false" in seen[0]

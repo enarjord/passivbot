@@ -5,7 +5,7 @@ import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 import asyncio
 import passivbot_rust as pbr
-from utils import ts_to_date, utc_ms
+from utils import symbol_to_coin, ts_to_date, utc_ms
 from procedures import assert_correct_ccxt_version
 from collections import defaultdict
 import hmac
@@ -382,13 +382,15 @@ class KucoinBot(CCXTBot):
                 matches.append((p, best_match))
                 timedelta = best_match["timestamp"] - p["lastUpdateTimestamp"]
                 if timedelta > 1000:
+                    log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
                     logging.debug(
-                        f"best match fill and pos close {symbol} timedelta>1000ms: {best_match['timestamp'] - p['lastUpdateTimestamp']}ms"
+                        f"best match fill and pos close {log_symbol} timedelta>1000ms: {best_match['timestamp'] - p['lastUpdateTimestamp']}ms"
                     )
                 seen_trade_id.add(best_match["id"])
             if len(phd[symbol]) != len(cld[symbol]):
+                log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
                 logging.debug(
-                    f"len mismatch between closes and positions_history for {symbol}: {len(cld[symbol])} {len(phd[symbol])}"
+                    f"len mismatch between closes and positions_history for {log_symbol}: {len(cld[symbol])} {len(phd[symbol])}"
                 )
         # add pnls, dedup and return
         deduped = {}
@@ -467,6 +469,7 @@ class KucoinBot(CCXTBot):
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call = []
         for symbol in symbols:
+            log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             try:
                 margin_mode = self._get_margin_mode_for_symbol(symbol)
                 params = {
@@ -481,20 +484,22 @@ class KucoinBot(CCXTBot):
                     )
                 )
             except Exception as e:
-                logging.warning(f"{symbol}: error set_margin_mode {e}")
+                logging.warning(f"{log_symbol}: error set_margin_mode {e}")
         for symbol, task_name, task in coros_to_call:
+            log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None
             to_print = ""
             try:
                 res = await task
                 to_print += f"{task_name}={format_exchange_config_response(res)}"
             except Exception as e:
-                logging.warning(f"{symbol} error {task_name} {e}")
+                logging.warning(f"{log_symbol} error {task_name} {e}")
             if to_print:
-                logging.info(f"{symbol}: {to_print}")
+                logging.info(f"{log_symbol}: {to_print}")
 
         coros_to_call = []
         for symbol in symbols:
+            log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             try:
                 margin_mode = self._get_margin_mode_for_symbol(symbol)
                 params = {
@@ -506,14 +511,15 @@ class KucoinBot(CCXTBot):
                     (symbol, "set_leverage", asyncio.create_task(self.cca.set_leverage(**params)))
                 )
             except Exception as e:
-                logging.warning(f"{symbol}: error set_leverage {e}")
+                logging.warning(f"{log_symbol}: error set_leverage {e}")
         for symbol, task_name, task in coros_to_call:
+            log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None
             to_print = ""
             try:
                 res = await task
                 to_print += f"{task_name}={format_exchange_config_response(res)}"
             except Exception as e:
-                logging.warning(f"{symbol} error {task_name} {e}")
+                logging.warning(f"{log_symbol} error {task_name} {e}")
             if to_print:
-                logging.info(f"{symbol}: {to_print}")
+                logging.info(f"{log_symbol}: {to_print}")

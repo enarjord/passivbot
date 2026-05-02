@@ -11,7 +11,7 @@ from ccxt.base.errors import RateLimitExceeded
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
 from passivbot_exceptions import FatalBotException
-from utils import ts_to_date, utc_ms
+from utils import symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
 from pure_funcs import calc_hash
 from procedures import print_async_exception, assert_correct_ccxt_version
@@ -492,7 +492,10 @@ class HyperliquidBot(CCXTBot):
                 state_bits.append("position")
             if has_orders:
                 state_bits.append("open_orders")
-            unsupported.append(f"{symbol} ({'/'.join(state_bits)}; {', '.join(reasons)})")
+            unsupported.append(
+                f"{symbol_to_coin(symbol, verbose=False) or symbol} "
+                f"({'/'.join(state_bits)}; {', '.join(reasons)})"
+            )
         if unsupported:
             raise FatalBotException(
                 "Hyperliquid HIP-3/non-standard perps require unifiedAccount or portfolioMargin "
@@ -961,7 +964,8 @@ class HyperliquidBot(CCXTBot):
             ask = last
         if last is None or bid is None or ask is None:
             logging.debug(
-                "[market] hyperliquid HIP-3 ticker missing usable price | symbol=%s", symbol
+                "[market] hyperliquid HIP-3 ticker missing usable price | symbol=%s",
+                symbol_to_coin(symbol, verbose=False) or symbol,
             )
             return None
         return {"bid": bid, "ask": ask, "last": last}
@@ -1122,7 +1126,11 @@ class HyperliquidBot(CCXTBot):
             # Try to recover from Hyperliquid's "$10 minimum" errors by adjusting min_cost
             try:
                 if self.adjust_min_cost_on_error(e, order):
-                    logging.info(f"Adjusted min_cost for order, will retry: {order['symbol']}")
+                    logging.info(
+                        "Adjusted min_cost for order, will retry: %s",
+                        symbol_to_coin(order["symbol"], verbose=False)
+                        or order["symbol"],
+                    )
                     return {}
             except Exception as e0:
                 logging.error(f"error with adjust_min_cost_on_error {e0}")
@@ -1190,7 +1198,11 @@ class HyperliquidBot(CCXTBot):
             if float(market_info.get("openInterest", 0)) == 0.0:
                 return False
         except Exception as e:
-            logging.error(f"error with symbol_is_eligible {e} {symbol}")
+            logging.error(
+                "error with symbol_is_eligible %s %s",
+                e,
+                symbol_to_coin(symbol, verbose=False) or symbol,
+            )
             return False
         return True
 
@@ -1222,11 +1234,14 @@ class HyperliquidBot(CCXTBot):
                     if '"code":"59107"' in str(e):
                         to_print = f"margin=ok (unchanged, {margin_mode})"
                     else:
-                        logging.error(f"{symbol} error setting {margin_mode} mode {e}")
+                        log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
+                        logging.error(f"{log_symbol} error setting {margin_mode} mode {e}")
             except Exception as e:
-                logging.error(f"{symbol}: error setting margin mode and leverage {e}")
+                log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
+                logging.error(f"{log_symbol}: error setting margin mode and leverage {e}")
             if to_print:
-                logging.debug(f"{symbol}: {to_print}")
+                log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
+                logging.debug(f"{log_symbol}: {to_print}")
             # Small delay between margin-mode API calls to avoid rate-limit bursts
             await asyncio.sleep(0.2)
 

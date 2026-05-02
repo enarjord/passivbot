@@ -3,7 +3,7 @@ from passivbot import logging
 import passivbot_rust as pbr
 
 import asyncio
-from utils import ts_to_date, utc_ms
+from utils import symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
 
 calc_order_price_diff = pbr.calc_order_price_diff
@@ -206,6 +206,7 @@ class OKXBot(CCXTBot):
         coros_to_call_margin_mode = {}
         for symbol in symbols:
             margin_mode = self._get_margin_mode_for_symbol(symbol)
+            log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             try:
                 leverage = self._calc_leverage_for_symbol(symbol)
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
@@ -216,8 +217,9 @@ class OKXBot(CCXTBot):
                     )
                 )
             except Exception as e:
-                logging.error(f"{symbol}: error setting {margin_mode} mode and leverage {e}")
+                logging.error(f"{log_symbol}: error setting {margin_mode} mode and leverage {e}")
         for symbol in symbols:
+            log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None
             to_print = ""
             try:
@@ -229,13 +231,13 @@ class OKXBot(CCXTBot):
                     to_print += f"margin=ok (unchanged)"
                 elif '"code":"51039"' in err_str:
                     logging.warning(
-                        f"{symbol}: unable to adjust margin mode/leverage (possibly PM or open positions)"
+                        f"{log_symbol}: unable to adjust margin mode/leverage (possibly PM or open positions)"
                     )
                     continue
                 else:
-                    logging.error(f"{symbol} error setting cross mode {e}")
+                    logging.error(f"{log_symbol} error setting cross mode {e}")
             if to_print:
-                logging.info(f"{symbol}: {to_print}")
+                logging.info(f"{log_symbol}: {to_print}")
 
     async def update_exchange_config(self):
         # Detect current account mode; adjust expectations before attempting changes.

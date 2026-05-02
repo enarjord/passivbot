@@ -5,7 +5,7 @@ from passivbot_exceptions import FatalBotException
 import asyncio
 import random
 import re
-from utils import ts_to_date, utc_ms
+from utils import symbol_to_coin, ts_to_date, utc_ms
 from pure_funcs import flatten
 from procedures import load_broker_code
 from config.access import require_live_value
@@ -489,20 +489,21 @@ class BinanceBot(CCXTBot):
                 )
             )
         for symbol in symbols:
+            log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None
             to_print = ""
             try:
                 res = await coros_to_call_lev[symbol]
                 to_print += f"leverage={format_exchange_config_response(res)} "
             except Exception as e:
-                logging.error(f"{symbol}: error setting leverage {e}")
+                logging.error(f"{log_symbol}: error setting leverage {e}")
             try:
                 res_margin = await coros_to_call_margin_mode[symbol]
                 to_print += f"margin={format_exchange_config_response(res_margin)}"
             except Exception as e:
-                logging.error(f"{symbol}: error setting cross mode {e}")
+                logging.error(f"{log_symbol}: error setting cross mode {e}")
             if to_print:
-                logging.info(f"{symbol}: {to_print}")
+                logging.info(f"{log_symbol}: {to_print}")
 
     async def update_exchange_config(self):
         try:

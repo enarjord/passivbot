@@ -794,8 +794,8 @@ def test_handle_order_update_logs_summary_and_dedupes(caplog, monkeypatch):
 
     ws_logs = [record.message for record in caplog.records if "[ws]" in record.message]
     assert ws_logs == [
-        "[ws] order update detected | cause=replace_hint | events=2 | symbols=BTC/USDC:USDC,SOL/USDC:USDC | statuses=canceled,open | scheduling refresh",
-        "[ws] order update detected | cause=replace_hint | events=2 | symbols=BTC/USDC:USDC,SOL/USDC:USDC | statuses=canceled,open | scheduling refresh",
+        "[ws] order update detected | cause=replace_hint | events=2 | symbols=BTC,SOL | statuses=canceled,open | scheduling refresh",
+        "[ws] order update detected | cause=replace_hint | events=2 | symbols=BTC,SOL | statuses=canceled,open | scheduling refresh",
     ]
     assert bot.execution_scheduled is True
     assert bot._authoritative_pending_confirmations == {
@@ -1044,6 +1044,7 @@ def test_order_wave_summary_logs_elapsed_lifecycle(monkeypatch, caplog):
     assert any(
         "[order] wave complete | id=1 | elapsed_ms=2500 | cancel 1->1 | create 1->1"
         in record.message
+        and "symbols=BTC,ETH" in record.message
         for record in caplog.records
     )
 
@@ -1130,7 +1131,7 @@ def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
             ]
         }
     }
-    idx_to_symbol = {0: "coin2/USDT:USDT", 1: "coin1/USDT:USDT"}
+    idx_to_symbol = {0: "SOL/USDT:USDT", 1: "DOGE/USDT:USDT"}
 
     with caplog.at_level(logging.DEBUG):
         Passivbot._log_forager_selection_diagnostics(bot, out, idx_to_symbol)
@@ -1144,8 +1145,9 @@ def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
         and "[forager] long selection" in record.message
     ]
     assert len(info_messages) == 1
-    assert any("selected=coin1/USDT:USDT" in msg for msg in messages)
-    assert any("kept:coin1/USDT:USDT<->coin2/USDT:USDT" in msg for msg in messages)
+    assert any("selected=DOGE" in msg for msg in messages)
+    assert any("kept:DOGE<->SOL" in msg for msg in messages)
+    assert not any("DOGE/USDT:USDT" in msg for msg in messages)
     assert any("[forager] long score detail" in msg for msg in messages)
     assert any("vol=0.400" in msg for msg in messages)
 

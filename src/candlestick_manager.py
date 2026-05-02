@@ -66,6 +66,7 @@ from legacy_data_migrator import (
     merge_duplicate_symbol_directories,
     normalize_ccxt_volume_to_base,
 )
+from utils import symbol_to_coin
 
 # Suppress portalocker's "timeout has no effect in blocking mode" warning
 warnings.filterwarnings(
@@ -78,6 +79,16 @@ ONE_MIN_MS = 60_000
 
 _LOCK_TIMEOUT_SECONDS = 10.0
 _LOCK_STALE_SECONDS = 180.0
+
+
+def _log_symbol(symbol: Any) -> str:
+    """Return compact symbol labels for operator-facing candle logs."""
+    if symbol is None:
+        return "unknown"
+    sym = str(symbol)
+    return symbol_to_coin(sym, verbose=False) or sym
+
+
 _LOCK_BACKOFF_INITIAL = 0.1
 _LOCK_BACKOFF_MAX = 2.0
 _GATEIO_RECENT_1M_LIMIT_CANDLES = 9_990
@@ -895,7 +906,7 @@ class CandlestickManager:
                 "(no data for requested minutes)%s",
                 count,
                 "s" if count > 1 else "",
-                symbol,
+                _log_symbol(symbol),
                 rng,
                 suffix,
             )
@@ -911,7 +922,7 @@ class CandlestickManager:
             for sym, meta in sorted_syms[:top_n]:
                 count = int(meta.get("count", 0))
                 rng = _fmt_range(meta.get("min_ts"), meta.get("max_ts"))
-                top_parts.append(f"{sym}:{count}@{rng}")
+                top_parts.append(f"{_log_symbol(sym)}:{count}@{rng}")
             extra = total_symbols - min(top_n, total_symbols)
             top_str = ", ".join(top_parts)
             if extra > 0:
@@ -948,7 +959,7 @@ class CandlestickManager:
             symbol, count = next(iter(self._candle_replace_batch.items()))
             self.log.info(
                 "[candle] %s: real data replaced %d synthetic candle%s, EMA cache invalidated",
-                symbol,
+                _log_symbol(symbol),
                 count,
                 "s" if count > 1 else "",
             )
@@ -1151,6 +1162,8 @@ class CandlestickManager:
         for k, v in fields.items():
             if k.endswith("_ts") and isinstance(v, (int, np.integer)):
                 parts.append(f"{k}={self._fmt_ts(int(v))}")
+            elif k == "symbol":
+                parts.append(f"{k}={_log_symbol(v)}")
             else:
                 parts.append(f"{k}={v}")
         msg = " ".join(base + parts)
@@ -1229,7 +1242,9 @@ class CandlestickManager:
         self._persistent_gap_summary_last_log = now
         summary = self._persistent_gap_summary
         total = sum(summary.values())
-        symbols = ", ".join(f"{s}:{c}" for s, c in sorted(summary.items())[:5])
+        symbols = ", ".join(
+            f"{_log_symbol(s)}:{c}" for s, c in sorted(summary.items())[:5]
+        )
         if len(summary) > 5:
             symbols += f", +{len(summary) - 5} more"
         self.log.info(
@@ -4209,7 +4224,7 @@ class CandlestickManager:
                     log_fn(
                         "[candle] %s: synthesized %d zero-candle%s at %s "
                         "(no data for requested minutes) using prev_close=%.6f%s",
-                        symbol,
+                        _log_symbol(symbol),
                         synthesized_count,
                         "s" if synthesized_count > 1 else "",
                         ts_info,

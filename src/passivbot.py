@@ -529,6 +529,60 @@ def compute_live_warmup_windows(
 
 
 class Passivbot:
+    @staticmethod
+    def _log_symbol(symbol: Any) -> str:
+        """Return a compact operator-facing symbol label for logs only."""
+        if symbol is None:
+            return "unknown"
+        sym = str(symbol)
+        return symbol_to_coin(sym, verbose=False) or sym
+
+    @staticmethod
+    def _log_symbols(symbols: Iterable[Any], limit: int | None = None) -> str:
+        """Format a symbol collection for operator-facing logs."""
+        vals = [Passivbot._log_symbol(symbol) for symbol in symbols if symbol]
+        if limit is not None and len(vals) > limit:
+            return ",".join(vals[:limit]) + f",+{len(vals) - limit} more"
+        return ",".join(vals)
+
+    @staticmethod
+    def _log_mode_element(elm: str) -> str:
+        """Compact mode-change elements like 'long.BTC/USDT:USDT: normal'."""
+        try:
+            pside, rest = str(elm).split(".", 1)
+            symbol, suffix = rest.rsplit(": ", 1)
+            return f"{pside}.{Passivbot._log_symbol(symbol)}: {suffix}"
+        except Exception:
+            return str(elm)
+
+    @staticmethod
+    def _log_compact_symbol_payload(obj: Any) -> Any:
+        """Compact symbol fields inside diagnostics before rendering operator logs."""
+        symbol_keys = {
+            "symbol",
+            "symbols",
+            "changed_symbols",
+            "missing_symbols",
+            "extra_symbols",
+            "invalid_symbols",
+        }
+        if isinstance(obj, dict):
+            out = {}
+            for key, val in obj.items():
+                if key in symbol_keys:
+                    if isinstance(val, (list, tuple, set)):
+                        out[key] = [Passivbot._log_symbol(item) for item in val]
+                    else:
+                        out[key] = Passivbot._log_symbol(val)
+                else:
+                    out[key] = Passivbot._log_compact_symbol_payload(val)
+            return out
+        if isinstance(obj, list):
+            return [Passivbot._log_compact_symbol_payload(item) for item in obj]
+        if isinstance(obj, tuple):
+            return tuple(Passivbot._log_compact_symbol_payload(item) for item in obj)
+        return obj
+
     def __init__(self, config: dict):
         """Initialise the bot with configuration, user context, and runtime caches."""
         self.config = config
@@ -1567,7 +1621,7 @@ class Passivbot:
             logging.critical(
                 "[risk] detected non-flat position during RED cooldown | policy=%s symbols=%s cooldown_until_ms=%s",
                 policy,
-                ",".join(symbols),
+                Passivbot._log_symbols(symbols, limit=12),
                 cooldown_until_ms,
             )
             self._equity_hard_stop_last_cooldown_intervention_log_ms = now_ms
@@ -2884,10 +2938,9 @@ class Passivbot:
                             continue
                         self._ema_gating_last_log_ms[throttle_key] = now_ms
 
-                        coin = symbol.split("/")[0] if "/" in symbol else symbol
                         logging.info(
                             "[ema] %s %s entry gated | price=%.4g ema_thresh=%.4g (+%.1f%% away)",
-                            coin,
+                            Passivbot._log_symbol(symbol),
                             pside,
                             current_price,
                             ema_entry_price,
@@ -2943,7 +2996,7 @@ class Passivbot:
             if stats:
                 top = sorted(stats, key=lambda item: item[1], reverse=True)[:3]
                 cache_top = ", ".join(
-                    f"{sym}:{bytes_ / (1024 * 1024):.1f}MiB/{rows}"
+                    f"{Passivbot._log_symbol(sym)}:{bytes_ / (1024 * 1024):.1f}MiB/{rows}"
                     for sym, bytes_, rows in top
                 )
             tf_cache = (
@@ -2971,7 +3024,7 @@ class Passivbot:
                 tf_cache_ranges = len(tf_stats)
                 top_tf = sorted(tf_stats, key=lambda item: item[1], reverse=True)[:3]
                 tf_cache_top = ", ".join(
-                    f"{sym}:{tf}:{bytes_ / (1024 * 1024):.1f}MiB/{rows}"
+                    f"{Passivbot._log_symbol(sym)}:{tf}:{bytes_ / (1024 * 1024):.1f}MiB/{rows}"
                     for (sym, tf), bytes_, rows in top_tf
                 )
         except Exception:
@@ -3143,7 +3196,11 @@ class Passivbot:
             planned_create,
             create_posted,
             f" | {' '.join(timings)}" if timings else "",
-            f" | symbols={','.join(symbols[:12])}" if symbols else "",
+            (
+                f" | symbols={Passivbot._log_symbols(symbols, limit=12)}"
+                if symbols
+                else ""
+            ),
         )
 
     def init_coin_overrides(self):
@@ -3238,7 +3295,7 @@ class Passivbot:
                 grid_lr = (
                     (entry_volatility_logrange_ema_1h or {}).get(pside, {}).get(symbol)
                 )
-                parts = [f"{symbol}"]
+                parts = [Passivbot._log_symbol(symbol)]
                 if span0 is not None or span1 is not None:
                     parts.append(
                         f"spans=({span0 if span0 is not None else '?'}"
@@ -4103,7 +4160,9 @@ class Passivbot:
                         if age_ms > stale_threshold_ms:
                             stale_count += 1
                     if actionable_missing:
-                        unhealthy_details.append(f"{symbol} {tf} missing={missing}")
+                        unhealthy_details.append(
+                            f"{Passivbot._log_symbol(symbol)} {tf} missing={missing}"
+                        )
             detail = "; ".join(unhealthy_details[:5])
             if len(unhealthy_details) > 5:
                 detail += f"; +{len(unhealthy_details) - 5} more"
@@ -4197,7 +4256,9 @@ class Passivbot:
         if not missing:
             return
         now_ms = int(utc_ms())
-        examples = ",".join(str(item.get("symbol", "?")) for item in missing[:8])
+        examples = Passivbot._log_symbols(
+            (str(item.get("symbol", "?")) for item in missing[:8]), limit=8
+        )
         missing_symbols = tuple(
             sorted(str(item.get("symbol", "?")) for item in missing)
         )
@@ -4223,7 +4284,8 @@ class Passivbot:
         """Return the cached first tradable timestamp for `symbol`, populating defaults."""
         if symbol not in self.first_timestamps:
             logging.info(
-                f"warning: {symbol} missing from first_timestamps. Setting to zero."
+                "warning: %s missing from first_timestamps. Setting to zero.",
+                Passivbot._log_symbol(symbol),
             )
             self.first_timestamps[symbol] = 0.0
         return self.first_timestamps[symbol]
@@ -5664,7 +5726,7 @@ class Passivbot:
             logging.error(
                 "[safety] detected foreign Passivbot order candidate | symbol=%s type=%s "
                 "custom_id=%s ts=%s",
-                order.get("symbol"),
+                Passivbot._log_symbol(order.get("symbol")),
                 pb_type,
                 shorten_custom_id(custom_id),
                 ts_to_date(order_ts),
@@ -5723,17 +5785,20 @@ class Passivbot:
             # to_create_mod = [x for x in to_create if not order_has_match(x, to_cancel)]
             to_create_mod = []
             for x in to_create:
-                xf = f"{x['symbol']} {x['side']} {x['position_side']} {x['qty']} @ {x['price']}"
+                xf_log = (
+                    f"{Passivbot._log_symbol(x['symbol'])} {x['side']} "
+                    f"{x['position_side']} {x['qty']} @ {x['price']}"
+                )
                 if order_has_match(x, to_cancel):
                     logging.debug(
                         "matching order cancellation found; will be delayed until next cycle: %s",
-                        xf,
+                        xf_log,
                     )
                 elif delay_time_ms := self.order_was_recently_updated(x):
                     logging.info(
                         "[order] recent execution found; delaying for up to %.1f secs: %s",
                         delay_time_ms / 1000,
-                        xf,
+                        xf_log,
                     )
                 else:
                     to_create_mod.append(x)
@@ -5744,7 +5809,9 @@ class Passivbot:
             if self.state_change_detected_by_symbol:
                 logging.info(
                     "[order] state change detected; skipping order creation for %s until next cycle",
-                    self.state_change_detected_by_symbol,
+                    Passivbot._log_symbols(
+                        sorted(self.state_change_detected_by_symbol), limit=12
+                    ),
                 )
                 before_state_filter = len(to_create_mod)
                 to_create_mod = [
@@ -5769,7 +5836,7 @@ class Passivbot:
                 if pending_config:
                     logging.warning(
                         "[config] skipping order creation for symbols pending exchange config: %s",
-                        ",".join(pending_config),
+                        Passivbot._log_symbols(pending_config, limit=12),
                     )
                     before_config_filter = len(to_create_mod)
                     to_create_mod = [
@@ -5841,13 +5908,15 @@ class Passivbot:
             ):
                 logging.warning(
                     "[market] skipping order creation; planning snapshot invalid before create | symbols=%s details=%s",
-                    ",".join(symbols[:12]),
-                    planning_snapshot_invalid[:8],
+                    Passivbot._log_symbols(symbols, limit=12),
+                    Passivbot._log_compact_symbol_payload(
+                        planning_snapshot_invalid[:8]
+                    ),
                 )
                 return []
             logging.info(
                 "[market] refreshing stale planning market snapshot before create | symbols=%s stale=%s",
-                ",".join(symbols[:12]),
+                Passivbot._log_symbols(symbols, limit=12),
                 len(planning_snapshot_invalid),
             )
         try:
@@ -5863,7 +5932,7 @@ class Passivbot:
         except Exception as exc:
             logging.warning(
                 "[market] skipping order creation; failed pre-create market snapshot refresh | symbols=%s error_type=%s error=%s",
-                ",".join(symbols[:12]),
+                Passivbot._log_symbols(symbols, limit=12),
                 type(exc).__name__,
                 exc,
             )
@@ -5871,8 +5940,8 @@ class Passivbot:
         if invalid:
             logging.warning(
                 "[market] skipping order creation; stale pre-create market snapshots | symbols=%s details=%s",
-                ",".join(symbols[:12]),
-                invalid[:8],
+                Passivbot._log_symbols(symbols, limit=12),
+                Passivbot._log_compact_symbol_payload(invalid[:8]),
             )
             return []
         return orders
@@ -6025,7 +6094,7 @@ class Passivbot:
                 logging.info(
                     "[order] ambiguous cancel terminal state; forcing full account confirmation "
                     "before next cycle | symbols=%s",
-                    ",".join(ambiguous_symbols),
+                    Passivbot._log_symbols(ambiguous_symbols, limit=12),
                 )
             if hasattr(self, "_request_authoritative_confirmation"):
                 self._request_authoritative_confirmation(confirmation_surfaces)
@@ -6880,7 +6949,12 @@ class Passivbot:
                         self._mode_change_last_log_ms[throttle_key] = now_ms
                     except Exception:
                         pass
-                    logging.info("[mode] %s %s%s", change_type, elm, info_suffix)
+                    logging.info(
+                        "[mode] %s %s%s",
+                        change_type,
+                        Passivbot._log_mode_element(elm),
+                        info_suffix,
+                    )
 
     async def get_filtered_coins(
         self, pside: str, *, max_network_fetches: Optional[int] = None
@@ -7624,7 +7698,7 @@ class Passivbot:
         self._request_authoritative_confirmation(ACCOUNT_SURFACES, min_epoch=min_epoch)
         logging.debug(
             "[state] freshness guardrail armed | symbol=%s | reason=self_order_disappeared_position_may_be_stale | required=%s | min_epoch=%s | order_id=%s",
-            symbol,
+            Passivbot._log_symbol(symbol),
             ",".join(sorted(ACCOUNT_SURFACES)),
             min_epoch,
             details["order_id"],
@@ -7664,10 +7738,10 @@ class Passivbot:
         self._account_dirty_last_log_key = log_key
         self._account_dirty_last_log_ms = now_ms
         symbol_preview = (
-            ",".join(normalized_symbols[:6]) if normalized_symbols else "unknown"
+            Passivbot._log_symbols(normalized_symbols, limit=6)
+            if normalized_symbols
+            else "unknown"
         )
-        if len(normalized_symbols) > 6:
-            symbol_preview += f",+{len(normalized_symbols) - 6} more"
         logging.log(
             level,
             "[state] account-critical refresh requested | source=%s | reason=%s | symbols=%s | required=%s | min_epoch=%s",
@@ -8015,7 +8089,7 @@ class Passivbot:
                         reason = first.get("reason") or "invalid"
                         symbol = first.get("symbol")
                         if symbol:
-                            suffix = f":{symbol}"
+                            suffix = f":{Passivbot._log_symbol(symbol)}"
                         elif reason == "signature_mismatch":
                             missing_count = int(first.get("missing_count") or 0)
                             extra_count = int(first.get("extra_count") or 0)
@@ -8029,15 +8103,27 @@ class Passivbot:
                             symbol_bits = []
                             if changed_symbols:
                                 symbol_bits.append(
-                                    "changed=" + "|".join(changed_symbols[:4])
+                                    "changed="
+                                    + "|".join(
+                                        Passivbot._log_symbol(sym)
+                                        for sym in changed_symbols[:4]
+                                    )
                                 )
                             if missing_symbols:
                                 symbol_bits.append(
-                                    "missing=" + "|".join(missing_symbols[:4])
+                                    "missing="
+                                    + "|".join(
+                                        Passivbot._log_symbol(sym)
+                                        for sym in missing_symbols[:4]
+                                    )
                                 )
                             if extra_symbols:
                                 symbol_bits.append(
-                                    "extra=" + "|".join(extra_symbols[:4])
+                                    "extra="
+                                    + "|".join(
+                                        Passivbot._log_symbol(sym)
+                                        for sym in extra_symbols[:4]
+                                    )
                                 )
                             suffix = (
                                 f":{mismatch_type}"
@@ -8167,7 +8253,7 @@ class Passivbot:
                     )
                 logging.info(
                     "[state] freshness guardrail blocking order creation | symbol=%s | reason=%s | missing=%s | min_epoch=%s",
-                    symbol,
+                    Passivbot._log_symbol(symbol),
                     block.reason,
                     ",".join(missing) if missing else "unknown",
                     block.min_epoch,
@@ -8216,9 +8302,9 @@ class Passivbot:
             cause = "replace_hint"
         else:
             cause = "mixed_hint"
-        symbol_preview = ",".join(symbols[:3]) if symbols else "unknown"
-        if len(symbols) > 3:
-            symbol_preview += f",+{len(symbols) - 3} more"
+        symbol_preview = (
+            Passivbot._log_symbols(symbols, limit=3) if symbols else "unknown"
+        )
         status_preview = ",".join(statuses[:3]) if statuses else "unknown"
         if len(statuses) > 3:
             status_preview += f",+{len(statuses) - 3} more"
@@ -8763,7 +8849,7 @@ class Passivbot:
                 "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
                 "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
                 "adjust live.max_realized_loss_pct to change behavior",
-                symbol,
+                Passivbot._log_symbol(symbol),
                 pside,
                 order_type,
                 qty,
@@ -8827,7 +8913,7 @@ class Passivbot:
                 "  override: set live.filter_by_min_effective_cost=false to allow exchange-min-clamped initial entries\n"
                 "  caution: disabling the gate lets Passivbot size initial entries up to the exchange executable minimum, "
                 "which may exceed configured initial sizing and can still cause venue-specific churn or rejects in edge cases",
-                symbol,
+                Passivbot._log_symbol(symbol),
                 pside,
                 projected_initial_cost,
                 effective_min_cost,
@@ -8838,7 +8924,8 @@ class Passivbot:
             )
         if len(visible_blocks) > detail_limit:
             examples = ",".join(
-                f"{symbol}:{pside}" for symbol, pside, _ in visible_blocks[:12]
+                f"{Passivbot._log_symbol(symbol)}:{pside}"
+                for symbol, pside, _ in visible_blocks[:12]
             )
             summary_interval = int(self._min_effective_cost_summary_log_interval_ms)
             if (
@@ -8881,7 +8968,10 @@ class Passivbot:
                 idx_int = int(idx)
             except (TypeError, ValueError):
                 return "idx:unknown"
-            return idx_to_symbol.get(idx_int, f"idx:{idx_int}")
+            symbol = idx_to_symbol.get(idx_int)
+            if symbol is None:
+                return f"idx:{idx_int}"
+            return symbol_to_coin(symbol, verbose=False) or symbol
 
         def _fmt_top(items: list[dict], limit: int, *, with_components: bool) -> str:
             parts = []
@@ -9442,7 +9532,7 @@ class Passivbot:
                                 if math.isfinite(after_psize)
                                 else "nan"
                             ),
-                            evt["symbol"],
+                            Passivbot._log_symbol(evt["symbol"]),
                         )
                     if (
                         (math.isfinite(after_psize) and after_psize <= 1e-12)
@@ -10087,7 +10177,12 @@ class Passivbot:
                     )
                 )
             except Exception as e:
-                logging.error(f"error with {get_function_name()} for {symbol}: {e}")
+                logging.error(
+                    "error with %s for %s: %s",
+                    get_function_name(),
+                    Passivbot._log_symbol(symbol),
+                    e,
+                )
                 traceback.print_exc()
 
     async def calc_ideal_orders(self):
@@ -10558,7 +10653,9 @@ class Passivbot:
                     symbol = idx_to_symbol.get(idx)
                     if symbol:
                         logging.error(
-                            "[ema] Missing EMA for %s (symbol_idx=%d)", symbol, idx
+                            "[ema] Missing EMA for %s (symbol_idx=%d)",
+                            Passivbot._log_symbol(symbol),
+                            idx,
                         )
             raise
         out = json.loads(out_json)
@@ -10802,7 +10899,7 @@ class Passivbot:
                     logging.warning(
                         "[ema] dropping %s span for %s span=%.8g reason=%s: %s",
                         ema_type,
-                        symbol,
+                        Passivbot._log_symbol(symbol),
                         span,
                         type(e).__name__,
                         e,
@@ -10814,7 +10911,7 @@ class Passivbot:
                     logging.warning(
                         "[ema] dropping %s span for %s span=%.8g reason=non-finite value %s",
                         ema_type,
-                        symbol,
+                        Passivbot._log_symbol(symbol),
                         span,
                         val,
                     )
@@ -10842,7 +10939,7 @@ class Passivbot:
                 logging.warning(
                     "[ema] missing required %s span for %s span=%.8g reason=%s",
                     ema_type,
-                    symbol,
+                    Passivbot._log_symbol(symbol),
                     span,
                     reason,
                 )
@@ -10884,7 +10981,7 @@ class Passivbot:
                         if prev_fallback_count > 0:
                             logging.info(
                                 "[ema] close EMA recovered %s span=%.8g after %d fallback(s)",
-                                symbol,
+                                Passivbot._log_symbol(symbol),
                                 span,
                                 prev_fallback_count,
                             )
@@ -10910,7 +11007,7 @@ class Passivbot:
                         logging.warning(
                             "[ema] close EMA fallback %s span=%.8g ema=%.12g age_ms=%d"
                             " n_fallbacks=%d reason=%s",
-                            symbol,
+                            Passivbot._log_symbol(symbol),
                             span,
                             prev_val,
                             age_ms,
@@ -10971,7 +11068,7 @@ class Passivbot:
             if sym in cache_only_never_fetched:
                 logging.debug(
                     "[candle] skipping orchestrator EMA fetch for never-fetched cache-only symbol %s",
-                    sym,
+                    Passivbot._log_symbol(sym),
                 )
                 ema_unavailable_symbols.add(sym)
                 return {}, {}, {}, {}
@@ -10990,7 +11087,7 @@ class Passivbot:
                     raise
                 logging.debug(
                     "[candle] cache-only orchestrator EMA unavailable for %s; marking non-tradable this cycle",
-                    sym,
+                    Passivbot._log_symbol(sym),
                 )
                 ema_unavailable_symbols.add(sym)
                 return {}, {}, {}, {}
@@ -11000,7 +11097,7 @@ class Passivbot:
                 if missing_volume or missing_lr1m:
                     logging.debug(
                         "[candle] cache-only orchestrator forager EMA incomplete for %s; marking non-tradable this cycle missing_volume=%s missing_log_range=%s",
-                        sym,
+                        Passivbot._log_symbol(sym),
                         [float(span) for span in missing_volume],
                         [float(span) for span in missing_lr1m],
                     )
@@ -11066,7 +11163,7 @@ class Passivbot:
             for sym, err in errors[1:]:
                 logging.debug(
                     "[ema] additional symbol EMA bundle failure %s: %s: %s",
-                    sym,
+                    Passivbot._log_symbol(sym),
                     type(err).__name__,
                     err,
                 )
@@ -11306,7 +11403,9 @@ class Passivbot:
                     symbol = idx_to_symbol.get(idx)
                     if symbol:
                         logging.error(
-                            "[ema] Missing EMA for %s (symbol_idx=%d)", symbol, idx
+                            "[ema] Missing EMA for %s (symbol_idx=%d)",
+                            Passivbot._log_symbol(symbol),
+                            idx,
                         )
             raise
         out = json.loads(out_json)
@@ -11549,7 +11648,7 @@ class Passivbot:
         ]
         if missing:
             raise RuntimeError(
-                f"missing live market snapshots for {context}: {','.join(missing[:12])}"
+                f"missing live market snapshots for {context}: {Passivbot._log_symbols(missing, limit=12)}"
             )
         return {symbol: snapshots[symbol] for symbol in ordered_symbols}
 
@@ -11607,7 +11706,7 @@ class Passivbot:
                 logging.debug(
                     "[state] staged bulk market snapshots incomplete | symbols=%s | missing=%s%s",
                     len(symbols),
-                    ",".join(missing[:12]),
+                    Passivbot._log_symbols(missing, limit=12),
                     suffix,
                 )
             invalid = [
@@ -11642,7 +11741,7 @@ class Passivbot:
                     len(symbols),
                     len(symbols) - len(invalid),
                     len(invalid),
-                    ",".join(invalid[:12]),
+                    Passivbot._log_symbols(invalid, limit=12),
                 )
             else:
                 sources = Counter(snap.source for snap in snapshots.values())
@@ -11924,7 +12023,7 @@ class Passivbot:
                 if c or cr or skipped:
                     if prev != current:
                         detail_parts.append(
-                            f"{symbol}:c{pre_c}->{c} cr{pre_cr}->{cr} skip{skipped}"
+                            f"{Passivbot._log_symbol(symbol)}:c{pre_c}->{c} cr{pre_cr}->{cr} skip{skipped}"
                         )
             detail = " | ".join(detail_parts[:6])
             summary_key = (
@@ -12708,20 +12807,20 @@ class Passivbot:
                         "[candle] forager refresh progress %d/%d last=%s elapsed=%ds",
                         idx,
                         len(to_refresh),
-                        sym,
+                        Passivbot._log_symbol(sym),
                         elapsed_s,
                     )
                     last_progress_ms = now_ms
             except TimeoutError as exc:
                 logging.warning(
                     "Timed out acquiring candle lock for %s; forager refresh will retry (%s)",
-                    sym,
+                    Passivbot._log_symbol(sym),
                     exc,
                 )
             except Exception as exc:
                 logging.error(
                     "error refreshing forager candles for %s: %s",
-                    sym,
+                    Passivbot._log_symbol(sym),
                     exc,
                     exc_info=True,
                 )
@@ -13252,11 +13351,15 @@ class Passivbot:
                             warn_key = (self.exchange, coin_list, symbol_list, k_coins)
                             if warn_key not in warned:
                                 logging.info(
-                                    "[config] skipping unsupported markets for %s: coins=%s symbols=%s exchange=%s",
+                                    "[config] skipping unsupported markets for %s: coins=%s exchange=%s",
                                     k_coins,
                                     coin_list,
-                                    symbol_list,
                                     getattr(self, "exchange", "?"),
+                                )
+                                logging.debug(
+                                    "[config] unsupported market symbols for %s: %s",
+                                    k_coins,
+                                    symbol_list,
                                 )
                                 warned.add(warn_key)
                             symbols = symbols - set(skipped)
@@ -13329,7 +13432,7 @@ class Passivbot:
                     for pside, coins in summary.items():
                         if coins:
                             parts.append(
-                                f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}"
+                                f"{pside}: {','.join(sorted(Passivbot._log_symbol(x) for x in coins))}"
                             )
                     if parts:
                         logging.info("added to approved_coins | %s", " | ".join(parts))
@@ -13339,7 +13442,7 @@ class Passivbot:
                     for pside, coins in summary.items():
                         if coins:
                             parts.append(
-                                f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}"
+                                f"{pside}: {','.join(sorted(Passivbot._log_symbol(x) for x in coins))}"
                             )
                     if parts:
                         logging.info(
@@ -13351,7 +13454,7 @@ class Passivbot:
                     for pside, coins in summary.items():
                         if coins:
                             parts.append(
-                                f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}"
+                                f"{pside}: {','.join(sorted(Passivbot._log_symbol(x) for x in coins))}"
                             )
                     if parts:
                         logging.info("added to ignored_coins | %s", " | ".join(parts))
@@ -13361,7 +13464,7 @@ class Passivbot:
                     for pside, coins in summary.items():
                         if coins:
                             parts.append(
-                                f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}"
+                                f"{pside}: {','.join(sorted(Passivbot._log_symbol(x) for x in coins))}"
                             )
                     if parts:
                         logging.info(
@@ -13473,7 +13576,7 @@ class Passivbot:
             if any(ind in err_str for ind in already_gone_indicators):
                 logging.info(
                     "[order] cancel skipped: %s %s - order likely already filled or cancelled",
-                    order.get("symbol", "?"),
+                    Passivbot._log_symbol(order.get("symbol", "?")),
                     order.get("id", "?")[:12],
                 )
             else:

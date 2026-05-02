@@ -5,7 +5,7 @@ import json
 import os
 from copy import deepcopy
 from typing import Dict, List, Tuple
-from utils import utc_ms, ts_to_date
+from utils import symbol_to_coin, utc_ms, ts_to_date
 from config.access import require_live_value
 from pure_funcs import calc_hash
 import passivbot_rust as pbr
@@ -285,13 +285,15 @@ class BitgetBot(CCXTBot):
                 logging.debug(
                     "bitget order detail missing clientOid for id=%s symbol=%s",
                     event["id"],
-                    event["symbol"],
+                    symbol_to_coin(event["symbol"] or "", verbose=False)
+                    or event["symbol"],
                 )
         except Exception as exc:
             logging.warning(
                 "failed to fetch bitget order detail for id=%s symbol=%s: %s",
                 event["id"],
-                event["symbol"],
+                symbol_to_coin(event["symbol"] or "", verbose=False)
+                or event["symbol"],
                 exc,
             )
 
@@ -461,7 +463,8 @@ class BitgetBot(CCXTBot):
                     logging.info(
                         "bitget fill without pb_order_type id=%s symbol=%s clientOrderId=%s %s %s %s @ %s",
                         elm.get("id"),
-                        elm.get("symbol"),
+                        symbol_to_coin(elm.get("symbol") or "", verbose=False)
+                        or elm.get("symbol"),
                         elm.get("clientOrderId"),
                         elm.get("side"),
                         elm.get("info", {}).get("posSide"),
@@ -569,6 +572,7 @@ class BitgetBot(CCXTBot):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
         for symbol in symbols:
             margin_mode = self._get_margin_mode_for_symbol(symbol)
+            log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             try:
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode(
@@ -577,31 +581,32 @@ class BitgetBot(CCXTBot):
                     )
                 )
             except Exception as e:
-                logging.error(f"{symbol}: error setting {margin_mode} mode {e}")
+                logging.error(f"{log_symbol}: error setting {margin_mode} mode {e}")
             try:
                 coros_to_call_lev[symbol] = asyncio.create_task(
                     self.cca.set_leverage(self._calc_leverage_for_symbol(symbol), symbol=symbol)
                 )
             except Exception as e:
-                logging.error(f"{symbol}: error setting leverage {e}")
+                logging.error(f"{log_symbol}: error setting leverage {e}")
         for symbol in symbols:
+            log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None
             to_print = ""
             try:
                 res = await coros_to_call_lev[symbol]
                 to_print += f"leverage={format_exchange_config_response(res)} "
             except Exception as e:
-                logging.error(f"{symbol} error setting leverage {e}")
+                logging.error(f"{log_symbol} error setting leverage {e}")
             res = None
             try:
                 res = await coros_to_call_margin_mode[symbol]
                 to_print += f"margin={format_exchange_config_response(res)}"
             except Exception as e:
                 logging.error(
-                    f"{symbol} error setting {self._get_margin_mode_for_symbol(symbol)} mode {e}"
+                    f"{log_symbol} error setting {self._get_margin_mode_for_symbol(symbol)} mode {e}"
                 )
             if to_print:
-                logging.info(f"{symbol}: {to_print}")
+                logging.info(f"{log_symbol}: {to_print}")
 
     async def calc_ideal_orders(self):
         # Bitget returns max 100 open orders per fetch_open_orders.
