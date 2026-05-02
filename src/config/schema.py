@@ -346,6 +346,8 @@ def get_template_config():
                 "enable_archive_candle_fetch": False,
                 "execution_delay_seconds": 2,
                 "filter_by_min_effective_cost": True,
+                "fills_confirmation_overlap_minutes": 60.0,
+                "fills_recent_overlap_minutes": 10.0,
                 "forced_mode_long": "",
                 "forced_mode_short": "",
                 "hedge_mode": False,

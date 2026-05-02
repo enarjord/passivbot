@@ -443,6 +443,8 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **balance_hysteresis_snap_pct**: Hysteresis snap percentage applied to balance updates to reduce noise. Set `0.0` to disable hysteresis.
 - **recv_window_ms**: Millisecond tolerance for authenticated REST calls (default `5000`). Increase if your exchange intermittently rejects requests with `invalid request ... recv_window` errors due to clock drift.
 - Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used.
+- **fills_recent_overlap_minutes**: Time overlap used for routine incremental live fill refreshes once the fill cache is warm. Default is `10.0`, which keeps ordinary minute-by-minute fill checks narrow to reduce private REST load.
+- **fills_confirmation_overlap_minutes**: Time overlap used when fills are explicitly required to confirm an account-critical state change, such as a suspected fill or pending staged confirmation. Default is `60.0`, preserving the wider safety window for confirmation refreshes.
 - **pnls_max_lookback_days**: How far into the past to fetch PnL history. This also feeds the rolling realized-PnL window used by both live risk logic and backtests. Ownership is `config.live`; `config.backtest` does not accept an override.
   - `0`: minimal lookback window at the consumer's native sampling resolution (resets as often as that path can meaningfully observe).
   - `> 0`: rolling window of that many days.

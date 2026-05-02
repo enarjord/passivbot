@@ -356,6 +356,17 @@ def test_prepare_config_preserves_live_candle_budget_controls():
     assert prepared["live"]["max_forager_candle_staleness_minutes"] == 7.5
 
 
+def test_prepare_config_preserves_live_fill_refresh_economy_controls():
+    source = get_template_config()
+    source["live"]["fills_recent_overlap_minutes"] = 3.5
+    source["live"]["fills_confirmation_overlap_minutes"] = 45.0
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["live"]["fills_recent_overlap_minutes"] == pytest.approx(3.5)
+    assert prepared["live"]["fills_confirmation_overlap_minutes"] == pytest.approx(45.0)
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

@@ -106,6 +106,90 @@ def test_market_snapshot_ticker_strategy_respects_explicit_override():
     assert bot._market_snapshot_ticker_strategy() == "bulk"
 
 
+def _counted_staged_account_refresh_bot(
+    *,
+    balance: float = 100.0,
+    positions: list[dict] | None = None,
+    open_orders: list[dict] | None = None,
+    pending_confirmations: dict[str, int] | None = None,
+) -> tuple[Passivbot, dict[str, int]]:
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.exchange = "fake"
+    bot.stop_signal_received = False
+    bot.balance_override = None
+    bot._balance_override_logged = False
+    bot.previous_hysteresis_balance = balance
+    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_raw = balance
+    bot.balance = balance
+    bot._exchange_reported_balance_raw = balance
+    bot.fetched_positions = list(positions or [])
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.fetched_open_orders = list(open_orders or [])
+    bot.active_symbols = []
+    bot.state_change_detected_by_symbol = set()
+    bot.execution_scheduled = False
+    bot._authoritative_surface_signatures = {}
+    bot._authoritative_surface_generations = {}
+    bot._authoritative_refresh_epoch = 0
+    bot._authoritative_refresh_epoch_fresh = set()
+    bot._authoritative_refresh_epoch_changed = set()
+    bot._authoritative_pending_confirmations = dict(pending_confirmations or {})
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot.recent_order_cancellations = []
+    bot.recent_order_executions = []
+    bot.log_position_changes = AsyncMock()
+    bot.handle_balance_update = AsyncMock()
+    bot.order_matches_bot_cancellation = lambda order: False
+    bot.order_was_recently_cancelled = lambda order: 0.0
+    bot.order_matches_recent_execution = lambda order, max_age_ms=180_000: False
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._detect_foreign_passivbot_orders = AsyncMock()
+    bot._reconcile_balance_after_positions_and_balance_refresh = lambda: False
+    bot._reconcile_balance_after_open_orders_refresh = lambda: False
+
+    counts = {
+        "fetch_balance": 0,
+        "fetch_positions": 0,
+        "fetch_open_orders": 0,
+        "update_pnls": 0,
+    }
+
+    async def counted_fetch_balance():
+        counts["fetch_balance"] += 1
+        return balance
+
+    async def counted_fetch_positions():
+        counts["fetch_positions"] += 1
+        return list(positions or [])
+
+    async def counted_fetch_open_orders():
+        counts["fetch_open_orders"] += 1
+        return list(open_orders or [])
+
+    async def counted_update_pnls():
+        counts["update_pnls"] += 1
+        bot._record_authoritative_surface("fills", ())
+        return True
+
+    bot.fetch_balance = counted_fetch_balance
+    bot.fetch_positions = counted_fetch_positions
+    bot.fetch_open_orders = counted_fetch_open_orders
+    bot.update_pnls = counted_update_pnls
+
+    # Seed the previous signatures so steady-state request-count tests do not
+    # create follow-up confirmations just because the fake bot has no history.
+    bot._authoritative_surface_signatures = {
+        "balance": round(float(balance), 12),
+        "positions": Passivbot._positions_signature(bot, list(positions or [])),
+        "open_orders": Passivbot._open_orders_signature(bot, list(open_orders or [])),
+        "fills": (),
+    }
+    return bot, counts
+
+
 @pytest.mark.asyncio
 async def test_staged_orchestrator_market_snapshot_fetch_uses_headroom_ttl():
     bot = Passivbot.__new__(Passivbot)
@@ -1410,6 +1494,65 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
             self.history_scope = scope
 
     bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    bot._pnls_manager = _Manager(cached_events, history_scope="all")
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    result = await bot.update_pnls()
+
+    assert result is True
+    bot._pnls_manager.refresh.assert_not_awaited()
+    bot._pnls_manager.refresh_latest.assert_awaited_once_with(
+        overlap=20,
+        last_refresh_overlap_ms=10 * 60 * 1000,
+    )
+    assert bot._pnls_manager.history_scope == "all"
+
+
+@pytest.mark.asyncio
+async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
+    bot = Passivbot.__new__(Passivbot)
+    cached_events = [
+        SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
+    ]
+
+    class _Manager:
+        def __init__(self, events, *, history_scope="unknown"):
+            self._events = list(events)
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock()
+            self.history_scope = history_scope
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_confirmation_overlap_minutes": 60.0,
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    bot._authoritative_pending_confirmations = {"fills": 2}
     bot._pnls_manager = _Manager(cached_events, history_scope="all")
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
@@ -1428,7 +1571,6 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
         overlap=20,
         last_refresh_overlap_ms=60 * 60 * 1000,
     )
-    assert bot._pnls_manager.history_scope == "all"
 
 
 @pytest.mark.asyncio
@@ -1457,6 +1599,12 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
             self.history_scope = scope
 
     bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
     bot._pnls_manager = _Manager(cached_events, history_scope="all")
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
@@ -1500,6 +1648,12 @@ async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
 
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
     bot._pnls_manager = _Manager(cached_events)
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
@@ -3810,6 +3964,97 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
     assert bot.update_pnls.await_count == 0
     assert blocked is False
     assert details["missing"] == []
+
+
+@pytest.mark.asyncio
+async def test_staged_account_refresh_request_counts_steady_state_defers_recent_fills(
+    monkeypatch,
+):
+    bot, counts = _counted_staged_account_refresh_bot()
+    bot.freshness_ledger.stamp("fills", (), now_ms=120_010, epoch=0)
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 120_500)
+
+    result = await bot.refresh_authoritative_state()
+
+    assert result is True
+    assert counts == {
+        "fetch_balance": 1,
+        "fetch_positions": 1,
+        "fetch_open_orders": 1,
+        "update_pnls": 0,
+    }
+    assert bot._authoritative_refresh_plan_surfaces == {
+        "balance",
+        "positions",
+        "open_orders",
+    }
+    assert bot._authoritative_pending_confirmations == {}
+
+
+@pytest.mark.asyncio
+async def test_staged_account_refresh_request_counts_open_orders_only_confirmation():
+    bot, counts = _counted_staged_account_refresh_bot(
+        pending_confirmations={"open_orders": 1}
+    )
+
+    result = await bot.refresh_authoritative_state()
+    blocked, details = bot._authoritative_execution_barrier_state()
+
+    assert result is True
+    assert counts == {
+        "fetch_balance": 0,
+        "fetch_positions": 0,
+        "fetch_open_orders": 1,
+        "update_pnls": 0,
+    }
+    assert bot._authoritative_refresh_plan_surfaces == {"open_orders"}
+    assert blocked is False
+    assert details["missing"] == []
+
+
+@pytest.mark.asyncio
+async def test_staged_account_refresh_request_counts_missing_self_order_escalates_next_cycle():
+    stale_order = {
+        "id": "stale-entry",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.01,
+        "amount": 0.01,
+        "price": 90_000.0,
+        "timestamp": 1,
+        "reduce_only": False,
+    }
+    bot, counts = _counted_staged_account_refresh_bot(
+        open_orders=[],
+        pending_confirmations={"open_orders": 1},
+    )
+    bot.open_orders = {"BTC/USDT:USDT": [dict(stale_order)]}
+    bot._authoritative_surface_signatures["open_orders"] = (
+        Passivbot._open_orders_signature(bot, [stale_order])
+    )
+
+    result = await bot.refresh_authoritative_state()
+
+    assert result is True
+    assert counts == {
+        "fetch_balance": 0,
+        "fetch_positions": 0,
+        "fetch_open_orders": 1,
+        "update_pnls": 0,
+    }
+    assert set(bot._authoritative_pending_confirmations) == ACCOUNT_SURFACES
+
+    result = await bot.refresh_authoritative_state()
+
+    assert result is True
+    assert counts == {
+        "fetch_balance": 1,
+        "fetch_positions": 1,
+        "fetch_open_orders": 2,
+        "update_pnls": 1,
+    }
+    assert bot._authoritative_refresh_plan_surfaces == ACCOUNT_SURFACES
 
 
 @pytest.mark.asyncio

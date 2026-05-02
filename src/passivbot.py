@@ -8536,6 +8536,7 @@ class Passivbot:
 
         refresh_started_ms = utc_ms()
         refresh_mode = "unknown"
+        overlap_minutes: Optional[float] = None
         await self.init_pnls()  # will do nothing if already initiated
 
         if self._pnls_manager is None:
@@ -8613,10 +8614,31 @@ class Passivbot:
                 )
             else:
                 # Incremental refresh
-                refresh_mode = "incremental"
+                pending = dict(
+                    getattr(self, "_authoritative_pending_confirmations", {}) or {}
+                )
+                confirmation_refresh = "fills" in pending
+                refresh_mode = (
+                    "incremental_confirm"
+                    if confirmation_refresh
+                    else "incremental_recent"
+                )
+                overlap_minutes_key = (
+                    "fills_confirmation_overlap_minutes"
+                    if confirmation_refresh
+                    else "fills_recent_overlap_minutes"
+                )
+                overlap_minutes = float(
+                    get_optional_live_value(
+                        self.config,
+                        overlap_minutes_key,
+                        60.0 if confirmation_refresh else 10.0,
+                    )
+                )
+                overlap_minutes = max(0.0, overlap_minutes)
                 await self._pnls_manager.refresh_latest(
                     overlap=20,
-                    last_refresh_overlap_ms=60 * 60 * 1000,
+                    last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
                 )
 
             # Find and log new events (those not in cache before refresh)
@@ -8648,7 +8670,7 @@ class Passivbot:
             )
             logging.log(
                 log_level,
-                "[fills] refresh timing | mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s",
+                "[fills] refresh timing | mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s overlap_minutes=%s",
                 refresh_mode,
                 elapsed_ms,
                 before_events_count,
@@ -8656,6 +8678,11 @@ class Passivbot:
                 len(new_events),
                 str(self.live_value("pnls_max_lookback_days")),
                 self._pnls_manager.get_history_scope(),
+                (
+                    f"{overlap_minutes:.3f}"
+                    if overlap_minutes is not None
+                    else "-"
+                ),
             )
 
             return True

@@ -121,7 +121,11 @@ Before order planning/execution, live bot must have coherent state for:
 - [ ] Ensure HSL/balance-equity replay candle fetches use the same remote-call economy principles as
   active/forager candle refreshes; latest VPS Hyperliquid logs show replay can still burst 5m/15m
   candle fetches and hit 429s during restart.
-- [ ] Reduce long account-surface refresh tail latency, especially fill refreshes. Overnight VPS
+- [x] Reduce routine fill-refresh tail latency by separating scheduled recent-fill checks from
+  explicit account-state confirmations. Warm-cache routine refreshes now use
+  `live.fills_recent_overlap_minutes` (default 10m), while pending confirmation refreshes keep
+  `live.fills_confirmation_overlap_minutes` (default 60m) for safety.
+- [ ] Continue reducing long account-surface refresh tail latency, especially fill refreshes. Overnight VPS
   runs showed order execution is usually fast after planning, but pre-plan `fills` refresh can
   dominate response time: examples include Binance around 224s, KuCoin around 187s, Gate.io
   around 55s, Bybit around 39s, and Hyperliquid around 33s.
@@ -190,8 +194,10 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Hyperliquid non-unified vanilla DEBUG smoke.
 - [ ] Later: Bitget, Gate.io, OKX, Binance, KuCoin smoke tests.
 - [x] Add fake-live support for comparing remote call counts before/after major changes.
-- [ ] Add/extend fake-live request-count validation for steady-state staged account refreshes, with
-  exchange-specific hooks where needed to catch repeated broad state sweeps.
+- [x] Add/extend request-count validation for steady-state staged account refreshes. Generic
+  staged tests now prove routine refreshes defer recent fills, open-orders-only confirmations stay
+  narrow, and missing self-orders escalate to a full follow-up account refresh exactly once.
+  Exchange-specific hooks remain useful later to catch repeated broad state sweeps.
 - [ ] Add shutdown/reconnect smoke coverage for exchanges whose CCXT websocket layer emits callback
   errors outside `watch_orders()`; latest KuCoin logs show `kucoinfutures ping timeout` as an
   asyncio callback traceback even though the watch loop also reconnects.
