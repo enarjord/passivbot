@@ -492,6 +492,28 @@ def test_asyncio_runtime_exception_handler_suppresses_ping_timeout_callback(capl
     )
 
 
+def test_asyncio_runtime_exception_handler_suppresses_ccxt_transport_callback(caplog):
+    class ClientConnectionResetError(Exception):
+        pass
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._asyncio_ws_callback_last_log_ms = 0
+
+    with caplog.at_level(logging.WARNING):
+        handled = bot._handle_asyncio_runtime_exception(
+            {
+                "message": "Exception in callback Client.receive_loop",
+                "exception": ClientConnectionResetError("connection reset by peer"),
+            }
+        )
+
+    assert handled is True
+    assert any("websocket callback ClientConnectionResetError" in r.message for r in caplog.records)
+
+
 def test_candle_fetch_concurrency_is_conservative_for_history_replay():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
@@ -2566,6 +2588,7 @@ def test_staged_planner_preconditions_explain_completed_candle_signature_mismatc
     assert ok is False
     mismatch = details["invalid"]["completed_candles"][0]
     assert mismatch["reason"] == "signature_mismatch"
+    assert mismatch["mismatch_type"] == "planning_universe_changed"
     assert mismatch["expected_count"] == 2
     assert mismatch["stamped_count"] == 1
     assert mismatch["missing_symbols"] == ["ETH/USDT:USDT"]

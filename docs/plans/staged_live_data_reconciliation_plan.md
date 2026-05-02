@@ -103,6 +103,9 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Make staged completed-candle ledger signatures stable across cache improvements: the
   signature now represents the required completed minute per symbol, while mutable cache
   details remain diagnostics only.
+- [x] Enrich staged completed-candle signature-mismatch diagnostics with mismatch type and
+  previewed missing/extra/changed symbols, so INFO logs show whether the planning universe
+  changed or only the completed-candle target advanced.
 
 ### 6. Remote-Call Budgeting
 
@@ -124,6 +127,9 @@ Before order planning/execution, live bot must have coherent state for:
   around 55s, Bybit around 39s, and Hyperliquid around 33s.
 - [ ] Add a request-count/timing pass for fill-event fetchers, preferring incremental recent-fill
   refresh for active symbols and websocket-triggered windows where exchange APIs allow it.
+- [x] Add live fill-refresh timing logs with mode, elapsed time, before/after event counts,
+  new-event count, lookback, and cache scope. This makes slow `fills` surfaces visible without
+  reconstructing them from broader staged refresh timing lines.
 - [x] Prevent background candle warmup from competing with runtime EMA/active-symbol OHLCV fetches
   on slow exchanges. Latest KuCoin logs show many concurrent broad warmup and runtime EMA OHLCV
   timeouts, with pending task piles during startup. Background warmup now uses the common
@@ -191,6 +197,9 @@ Before order planning/execution, live bot must have coherent state for:
   asyncio callback traceback even though the watch loop also reconnects.
 - [x] Throttle websocket reconnect WARN logs generally: first few reconnects remain visible,
   persistent reconnect storms emit periodic WARNs, and repeated details move to DEBUG.
+- [x] Add exponential reconnect backoff for CCXT order websocket watchers and broaden callback
+  traceback suppression to known CCXT Pro transport callbacks such as ping timeout, request
+  timeout, and connection reset.
 - [x] Add focused overnight-log regression checks for INFO-level noise: aggregate or throttle
   repeated `initial entries blocked by min effective cost` and `active completed-candle refresh
   incomplete` without hiding first occurrence and summary counts.

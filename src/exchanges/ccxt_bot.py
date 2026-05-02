@@ -451,24 +451,30 @@ class CCXTBot(Passivbot):
             return
 
         logging.info(f"[ws] {self.exchange}: starting order watch")
+        consecutive_failures = 0
         while True:
             try:
                 if self.stop_websocket:
                     break
                 raw_orders = await self._do_watch_orders()
+                consecutive_failures = 0
                 normalized = [self._normalize_order_update(o) for o in raw_orders]
                 self.handle_order_update(normalized)
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                consecutive_failures += 1
                 self._health_ws_reconnects += 1
+                retry_delay_s = min(60.0, 2 ** max(0, consecutive_failures - 1))
                 self._log_ws_reconnect(
                     reconnect_no=self._health_ws_reconnects,
-                    retry_delay_s=1.0,
+                    retry_delay_s=retry_delay_s,
                     reason="connection_lost",
                     exc=e,
                 )
-                await asyncio.sleep(1)
+                await Passivbot._sleep_unless_shutdown(
+                    self, retry_delay_s, stage="watch_orders_reconnect"
+                )
                 logging.debug("[ws] %s: reconnecting...", self.exchange)
 
     async def update_exchange_config(self):

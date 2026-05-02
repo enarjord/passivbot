@@ -4126,20 +4126,52 @@ class Passivbot:
         message = str(context.get("message") or "") if isinstance(context, dict) else ""
         exc_text = f"{type(exc).__name__}: {exc}" if exc is not None else ""
         combined = f"{message} {exc_text}".lower()
-        if "ping timeout" not in combined:
+        callback_like = (
+            "exception in callback" in combined
+            or "client.receive_loop" in combined
+            or "websocket" in combined
+            or " ws " in f" {combined} "
+        )
+        if not callback_like:
             return False
-        if "kucoin" not in combined and "websocket" not in combined and "ws" not in combined:
+        known_transport_error = any(
+            needle in combined
+            for needle in (
+                "ping timeout",
+                "requesttimeout",
+                "request timeout",
+                "timed out",
+                "clientconnectionreseterror",
+                "connection reset",
+                "connection lost",
+                "cannot write to closing transport",
+                "transport is closing",
+                "connectionclosed",
+            )
+        )
+        if not known_transport_error:
+            return False
+        if (
+            "kucoin" not in combined
+            and "websocket" not in combined
+            and "ws" not in combined
+            and "client.receive_loop" not in combined
+        ):
             return False
         now_ms = utc_ms()
         last_ms = int(getattr(self, "_asyncio_ws_callback_last_log_ms", 0) or 0)
         if now_ms - last_ms >= 30_000:
             self._asyncio_ws_callback_last_log_ms = now_ms
             level = logging.DEBUG if self._shutdown_requested() else logging.WARNING
+            reason = "ping timeout" if "ping timeout" in combined else type(exc).__name__
+            if not reason:
+                reason = "transport error"
             logging.log(
                 level,
-                "[ws] %s: websocket callback ping timeout; suppressing callback traceback "
+                "[ws] %s: websocket callback %s; suppressing callback traceback "
                 "and relying on watch_orders reconnect",
                 self.exchange,
+                reason,
             )
         return True
 
@@ -7034,11 +7066,20 @@ class Passivbot:
             and symbol in stamped_by_symbol
             and expected_by_symbol[symbol] != stamped_by_symbol[symbol]
         ]
+        if missing_from_stamp or extra_in_stamp:
+            mismatch_type = "planning_universe_changed"
+        elif changed_symbols:
+            mismatch_type = "completed_candle_target_changed"
+        else:
+            mismatch_type = "signature_shape_changed"
         return [
             {
                 "reason": "signature_mismatch",
+                "mismatch_type": mismatch_type,
                 "expected_count": len(expected_by_symbol),
                 "stamped_count": len(stamped_by_symbol),
+                "expected_symbols": list(expected_symbols_tuple[:12]),
+                "stamped_symbols": list(tuple(sorted(stamped_by_symbol))[:12]),
                 "missing_symbols": missing_from_stamp[:12],
                 "missing_count": len(missing_from_stamp),
                 "extra_symbols": extra_in_stamp[:12],
@@ -7206,10 +7247,23 @@ class Passivbot:
                             changed_count = int(first.get("changed_count") or 0)
                             expected_count = int(first.get("expected_count") or 0)
                             stamped_count = int(first.get("stamped_count") or 0)
+                            mismatch_type = str(first.get("mismatch_type") or "unknown")
+                            changed_symbols = list(first.get("changed_symbols") or [])
+                            missing_symbols = list(first.get("missing_symbols") or [])
+                            extra_symbols = list(first.get("extra_symbols") or [])
+                            symbol_bits = []
+                            if changed_symbols:
+                                symbol_bits.append("changed=" + "|".join(changed_symbols[:4]))
+                            if missing_symbols:
+                                symbol_bits.append("missing=" + "|".join(missing_symbols[:4]))
+                            if extra_symbols:
+                                symbol_bits.append("extra=" + "|".join(extra_symbols[:4]))
                             suffix = (
-                                f":expected={expected_count} stamped={stamped_count}"
+                                f":{mismatch_type}"
+                                f" expected={expected_count} stamped={stamped_count}"
                                 f" missing={missing_count} extra={extra_count}"
                                 f" changed={changed_count}"
+                                + (f" {' '.join(symbol_bits)}" if symbol_bits else "")
                             )
                         else:
                             suffix = ""
@@ -7588,6 +7642,8 @@ class Passivbot:
         if self.stop_signal_received:
             return False
 
+        refresh_started_ms = utc_ms()
+        refresh_mode = "unknown"
         await self.init_pnls()  # will do nothing if already initiated
 
         if self._pnls_manager is None:
@@ -7615,6 +7671,7 @@ class Passivbot:
 
             # Check if we need a full refresh (cache empty or too old)
             events = self._pnls_manager.get_events()
+            before_events_count = len(events)
             needs_full_refresh = not events
             history_scope = self._pnls_manager.get_history_scope()
             if lookback.is_all and events and history_scope != "all":
@@ -7642,6 +7699,7 @@ class Passivbot:
 
             if needs_full_refresh:
                 # Full refresh with proper lookback window
+                refresh_mode = "full"
                 if not getattr(self, "_fills_full_refresh_logged", False):
                     if age_limit is None:
                         logging.debug("[fills] Performing full refresh from full available history")
@@ -7656,6 +7714,7 @@ class Passivbot:
                 self._pnls_manager.set_history_scope("all" if lookback.is_all else "window")
             else:
                 # Incremental refresh
+                refresh_mode = "incremental"
                 await self._pnls_manager.refresh_latest(
                     overlap=20,
                     last_refresh_overlap_ms=60 * 60 * 1000,
@@ -7682,6 +7741,19 @@ class Passivbot:
             if new_events:
                 self._log_new_fill_events(new_events)
             self._record_authoritative_surface("fills", self._fill_events_signature(all_events))
+            elapsed_ms = int(max(0, utc_ms() - refresh_started_ms))
+            log_level = logging.INFO if elapsed_ms >= 10_000 or new_events else logging.DEBUG
+            logging.log(
+                log_level,
+                "[fills] refresh timing | mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s",
+                refresh_mode,
+                elapsed_ms,
+                before_events_count,
+                len(all_events),
+                len(new_events),
+                str(self.live_value("pnls_max_lookback_days")),
+                self._pnls_manager.get_history_scope(),
+            )
 
             return True
 

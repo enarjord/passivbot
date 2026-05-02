@@ -113,6 +113,37 @@ class TestWatchOrdersTemplateMethod:
         assert call_args[0]["position_side"] == "long"
         assert call_args[0]["qty"] == 1.0
 
+    @pytest.mark.asyncio
+    async def test_reconnect_backoff_increases_after_consecutive_failures(self, monkeypatch):
+        """Repeated watch failures should back off instead of reconnecting every second."""
+        from exchanges.ccxt_bot import CCXTBot
+        from passivbot import Passivbot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.ccp = MagicMock()
+        bot.ccp.has = {"watchOrders": True}
+        bot.exchange = "test_exchange"
+        bot.stop_websocket = False
+        bot.stop_signal_received = False
+        bot._shutdown_in_progress = False
+        bot._health_ws_reconnects = 0
+        bot._ws_reconnect_warning_last_ms = 0
+        bot._do_watch_orders = AsyncMock(side_effect=[RuntimeError("ws down"), RuntimeError("ws down")])
+        bot.handle_order_update = MagicMock()
+        delays = []
+
+        async def fake_sleep(_self, seconds, *, stage):
+            delays.append((seconds, stage))
+            if len(delays) >= 2:
+                bot.stop_websocket = True
+
+        monkeypatch.setattr(Passivbot, "_sleep_unless_shutdown", fake_sleep)
+
+        await bot.watch_orders()
+
+        assert [delay for delay, _stage in delays] == [1.0, 2.0]
+        assert all(stage == "watch_orders_reconnect" for _delay, stage in delays)
+
 
 class TestCreateCcxtSessionsWebSocketOptional:
     """Test that WebSocket is optional in create_ccxt_sessions()."""
