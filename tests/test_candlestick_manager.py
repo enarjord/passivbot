@@ -163,6 +163,221 @@ def test_persist_batch_observer_receives_saved_batch(tmp_path):
     assert np.array_equal(batch, arr)
 
 
+def test_hyperliquid_s3_records_bucket_to_dense_day(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    day = "2026-01-02"
+    day_start, day_end = cm._date_range_of_key(day)
+    records = [
+        (
+            "node_fills_by_block",
+            {
+                "events": [
+                    [
+                        "0xabc",
+                        {
+                            "coin": "BTC",
+                            "px": "100.0",
+                            "sz": "1.5",
+                            "side": "B",
+                            "time": day_start + 10_000,
+                            "tid": 1,
+                        },
+                    ],
+                    [
+                        "0xmaker",
+                        {
+                            "coin": "BTC",
+                            "px": "100.0",
+                            "sz": "1.5",
+                            "side": "A",
+                            "time": day_start + 10_000,
+                            "tid": 1,
+                        },
+                    ],
+                    [
+                        "0xdef",
+                        {
+                            "coin": "BTC",
+                            "px": "102.0",
+                            "sz": "0.5",
+                            "side": "A",
+                            "time": day_start + 20_000,
+                            "tid": 2,
+                        },
+                    ],
+                    [
+                        "0xghi",
+                        {
+                            "coin": "ETH",
+                            "px": "1000.0",
+                            "sz": "1.0",
+                            "side": "B",
+                            "time": day_start + 20_000,
+                        },
+                    ],
+                ]
+            },
+        ),
+        (
+            "node_fills",
+            [
+                "0xabc",
+                {
+                    "coin": "BTC",
+                    "px": "101.0",
+                    "sz": "2.0",
+                    "side": "B",
+                    "time": day_start + ONE_MIN_MS + 5_000,
+                    "tid": 3,
+                },
+            ],
+        ),
+        (
+            "node_trades",
+            {
+                "coin": "BTC",
+                "px": "99.0",
+                "sz": "0.25",
+                "side": "B",
+                "time": "2026-01-02T00:02:00.000984711",
+            },
+        ),
+    ]
+
+    arr = cm._hyperliquid_archive_records_to_day_arr(records, "BTC/USDC:USDC", day)
+
+    assert arr is not None
+    assert arr.shape[0] == 1440
+    assert int(arr[0]["ts"]) == day_start
+    assert int(arr[-1]["ts"]) == day_end
+    assert float(arr[0]["o"]) == pytest.approx(100.0)
+    assert float(arr[0]["h"]) == pytest.approx(102.0)
+    assert float(arr[0]["l"]) == pytest.approx(100.0)
+    assert float(arr[0]["c"]) == pytest.approx(102.0)
+    assert float(arr[0]["bv"]) == pytest.approx(2.0)
+    assert float(arr[1]["c"]) == pytest.approx(101.0)
+    assert float(arr[2]["c"]) == pytest.approx(99.0)
+
+
+@pytest.mark.parametrize(
+    "ts,dataset",
+    [
+        (1742601600000, "node_trades"),
+        (1748131200000, "node_fills"),
+        (1753603200000, "node_fills_by_block"),
+    ],
+)
+def test_hyperliquid_s3_dataset_cutovers(tmp_path, ts, dataset):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    assert cm._hyperliquid_archive_dataset_for_hour(ts) == dataset
+
+
+def test_hyperliquid_s3_json_parser_handles_jsonl_arrays(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    line_1 = ["0xabc", {"coin": "BTC", "px": "100", "sz": "1", "time": 1}]
+    line_2 = ["0xdef", {"coin": "ETH", "px": "200", "sz": "2", "time": 2}]
+
+    records = list(cm._iter_hyperliquid_json_records("\n".join(map(json.dumps, [line_1, line_2]))))
+
+    assert records == [line_1, line_2]
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_s3_archive_fetch_aggregates_downloaded_hours(tmp_path, monkeypatch):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    day = "2026-01-02"
+    day_start, _ = cm._date_range_of_key(day)
+    downloaded = []
+
+    async def fake_download(dataset, day_key, hour):
+        assert dataset == "node_fills_by_block"
+        assert day_key == day
+        downloaded.append(hour)
+        return tmp_path / f"hour{hour}.lz4"
+
+    async def fake_decompress(path):
+        assert path.name.startswith("hour")
+        return "\n".join(
+            [
+                json.dumps(
+                    {
+                        "events": [
+                            [
+                                "0xabc",
+                                {
+                                    "coin": "BTC",
+                                    "px": "100.0",
+                                    "sz": "1.0",
+                                    "time": day_start + 1_000,
+                                },
+                            ]
+                        ]
+                    }
+                )
+            ]
+        )
+
+    monkeypatch.setattr(cm, "_download_hyperliquid_s3_hour", fake_download)
+    monkeypatch.setattr(cm, "_decompress_hyperliquid_s3_hour", fake_decompress)
+
+    arr = await cm._archive_fetch_hyperliquid_s3("BTC/USDC:USDC", day)
+
+    assert downloaded == list(range(24))
+    assert arr is not None
+    assert arr.shape[0] == 1440
+    assert float(arr[0]["c"]) == pytest.approx(100.0)
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_s3_archive_fetch_rejects_incomplete_day(tmp_path, monkeypatch):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+
+    async def fake_download(dataset, day_key, hour):
+        return tmp_path / "hour0.lz4" if hour == 0 else None
+
+    async def fake_decompress(path):
+        return json.dumps(
+            {
+                "events": [
+                    [
+                        "0xabc",
+                        {
+                            "coin": "BTC",
+                            "px": "100.0",
+                            "sz": "1.0",
+                            "time": 1767312000000,
+                        },
+                    ]
+                ]
+            }
+        )
+
+    monkeypatch.setattr(cm, "_download_hyperliquid_s3_hour", fake_download)
+    monkeypatch.setattr(cm, "_decompress_hyperliquid_s3_hour", fake_decompress)
+
+    assert await cm._archive_fetch_hyperliquid_s3("BTC/USDC:USDC", "2026-01-02") is None
+
+
 def test_rebuild_index_for_range_updates_and_prunes(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "REBUILD/USDT"

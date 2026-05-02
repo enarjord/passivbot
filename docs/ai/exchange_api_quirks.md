@@ -93,6 +93,19 @@ Handling:
 2. Clip 1m historical fetches to the recent-window bound and mark older spans as `no_archive`.
 3. Require external OHLCV source data or another candle source for older Gate.io backtests.
 
+## Hyperliquid
+
+### Public candle endpoint recent-window limit
+
+Problem: Hyperliquid `candleSnapshot` only serves the most recent 5000 candles for each timeframe, so 1m backtests older than roughly 3.5 days cannot rely on CCXT/API candles alone.
+
+Handling:
+
+1. Clip direct Hyperliquid 1m CCXT/API fetches to the recent 5000-minute window.
+2. For older missing full-day 1m ranges from 2025-03-22 onward, use official requester-pays S3 raw node fills/trades from `hl-mainnet-node-data`, aggregate them into 1m OHLCV, and persist through the normal OHLCV cache.
+3. Require complete hourly S3 coverage for a derived day; do not synthesize missing archive hours into apparently complete historical candles.
+4. Require observable warnings when AWS credentials or the `lz4` decoder are unavailable; do not silently synthesize missing historical Hyperliquid data.
+
 ## General Guidance
 
 1. Check raw exchange payloads when CCXT abstraction is insufficient.

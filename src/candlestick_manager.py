@@ -38,6 +38,7 @@ import logging
 import math
 import os
 import shutil
+import subprocess
 import sys
 
 import time
@@ -81,6 +82,10 @@ _LOCK_STALE_SECONDS = 180.0
 _LOCK_BACKOFF_INITIAL = 0.1
 _LOCK_BACKOFF_MAX = 2.0
 _GATEIO_RECENT_1M_LIMIT_CANDLES = 9_990
+_HYPERLIQUID_S3_BUCKET = "hl-mainnet-node-data"
+_HYPERLIQUID_NODE_TRADES_START_TS = 1742601600000  # 2025-03-22T00:00:00Z
+_HYPERLIQUID_NODE_FILLS_START_TS = 1748131200000  # 2025-05-25T00:00:00Z
+_HYPERLIQUID_NODE_FILLS_BY_BLOCK_START_TS = 1753603200000  # 2025-07-27T08:00:00Z
 
 # See: https://github.com/enarjord/passivbot/issues/547
 # True if running on Windows (used for file/path compatible names)
@@ -619,6 +624,11 @@ class CandlestickManager:
         self._legacy_day_quality_cache: Dict[Tuple[str, str, str], bool] = {}
         # Cache of primary shard paths per (symbol, tf) - avoids redundant glob scans
         self._shard_paths_cache: Dict[Tuple[str, str], Dict[str, str]] = {}
+        # Hyperliquid official S3 archive access is requester-pays and depends on
+        # local AWS credentials plus an lz4 decoder. Cache fatal environment
+        # failures to avoid repeating 24 failing subprocesses per requested day.
+        self._hyperliquid_s3_disabled_reason: Optional[str] = None
+        self._hyperliquid_s3_warned_reason: Optional[str] = None
 
         self._cache: Dict[str, np.ndarray] = {}
         self._index: Dict[str, dict] = {}
@@ -4229,16 +4239,439 @@ class CandlestickManager:
             return None
         return self._ohlcv_df_to_day_arr(ohlcvs, day_key)
 
+    def _hyperliquid_archive_dataset_for_hour(self, hour_start_ts: int) -> Optional[str]:
+        """Return the official Hyperliquid S3 dataset for an hour timestamp."""
+        ts = int(hour_start_ts)
+        if ts >= _HYPERLIQUID_NODE_FILLS_BY_BLOCK_START_TS:
+            return "node_fills_by_block"
+        if ts >= _HYPERLIQUID_NODE_FILLS_START_TS:
+            return "node_fills"
+        if ts >= _HYPERLIQUID_NODE_TRADES_START_TS:
+            return "node_trades"
+        return None
+
+    def _warn_hyperliquid_s3_unavailable(self, reason: str) -> None:
+        if self._hyperliquid_s3_warned_reason == reason:
+            return
+        self._hyperliquid_s3_warned_reason = reason
+        self._log(
+            "warning",
+            "hyperliquid_s3_archive_unavailable",
+            reason=reason,
+            hint=(
+                "official Hyperliquid historical fills are requester-pays; configure AWS "
+                "credentials and install lz4 to enable automatic old-history backfills"
+            ),
+        )
+
+    def _hyperliquid_s3_hour_cache_path(self, dataset: str, day_key: str, hour: int) -> Path:
+        day_compact = day_key.replace("-", "")
+        return (
+            Path(self.cache_dir)
+            / "hyperliquid_s3"
+            / dataset
+            / "hourly"
+            / day_compact
+            / f"{int(hour)}.lz4"
+        )
+
+    def _unlink_hyperliquid_partial_download(self, path: Path) -> None:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            self._log(
+                "debug",
+                "hyperliquid_s3_partial_unlink_failed",
+                path=str(path),
+                error=str(exc),
+            )
+
+    async def _run_hyperliquid_archive_cmd(
+        self, cmd: List[str], *, timeout: int = 180
+    ) -> subprocess.CompletedProcess:
+        def _run() -> subprocess.CompletedProcess:
+            env = dict(os.environ)
+            env.setdefault("AWS_EC2_METADATA_DISABLED", "true")
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+                env=env,
+            )
+
+        return await asyncio.to_thread(_run)
+
+    async def _download_hyperliquid_s3_hour(
+        self, dataset: str, day_key: str, hour: int
+    ) -> Optional[Path]:
+        if self._hyperliquid_s3_disabled_reason:
+            return None
+        if shutil.which("aws") is None:
+            self._hyperliquid_s3_disabled_reason = "aws_cli_not_found"
+            self._warn_hyperliquid_s3_unavailable(self._hyperliquid_s3_disabled_reason)
+            return None
+        if shutil.which("lz4") is None:
+            self._hyperliquid_s3_disabled_reason = "lz4_cli_not_found"
+            self._warn_hyperliquid_s3_unavailable(self._hyperliquid_s3_disabled_reason)
+            return None
+
+        out_path = self._hyperliquid_s3_hour_cache_path(dataset, day_key, hour)
+        if out_path.exists() and out_path.stat().st_size > 0:
+            return out_path
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        day_compact = day_key.replace("-", "")
+        hour_candidates = [str(int(hour))]
+        padded = f"{int(hour):02d}"
+        if padded not in hour_candidates:
+            hour_candidates.append(padded)
+
+        last_stderr = ""
+        for hour_name in hour_candidates:
+            s3_keys = [
+                f"{dataset}/hourly/{day_compact}/{hour_name}.lz4",
+                f"{dataset}/hourly/{day_compact}/{hour_name}",
+            ]
+            for s3_key in s3_keys:
+                s3_uri = f"s3://{_HYPERLIQUID_S3_BUCKET}/{s3_key}"
+                cmd = [
+                    "aws",
+                    "s3",
+                    "cp",
+                    s3_uri,
+                    str(out_path),
+                    "--request-payer",
+                    "requester",
+                    "--no-progress",
+                ]
+                self._log(
+                    "debug",
+                    "hyperliquid_s3_download_start",
+                    dataset=dataset,
+                    day_key=day_key,
+                    hour=hour_name,
+                    uri=s3_uri,
+                )
+                try:
+                    proc = await self._run_hyperliquid_archive_cmd(cmd, timeout=240)
+                except subprocess.TimeoutExpired:
+                    last_stderr = "aws s3 cp timed out"
+                    continue
+
+                stderr = proc.stderr.decode("utf-8", errors="replace")
+                stdout = proc.stdout.decode("utf-8", errors="replace")
+                if proc.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
+                    self._log(
+                        "debug",
+                        "hyperliquid_s3_download_ok",
+                        dataset=dataset,
+                        day_key=day_key,
+                        hour=hour_name,
+                        uri=s3_uri,
+                        bytes=out_path.stat().st_size,
+                    )
+                    return out_path
+
+                last_stderr = stderr or stdout
+                lowered = last_stderr.lower()
+                if "unable to locate credentials" in lowered or "accessdenied" in lowered:
+                    self._hyperliquid_s3_disabled_reason = (
+                        "aws_credentials_required_for_requester_pays"
+                    )
+                    self._warn_hyperliquid_s3_unavailable(
+                        self._hyperliquid_s3_disabled_reason
+                    )
+                    self._unlink_hyperliquid_partial_download(out_path)
+                    return None
+                if "nosuchkey" in lowered or "not found" in lowered or "404" in lowered:
+                    continue
+
+        self._log(
+            "debug",
+            "hyperliquid_s3_download_miss",
+            dataset=dataset,
+            day_key=day_key,
+            hour=int(hour),
+            error=last_stderr.strip()[:500],
+        )
+        self._unlink_hyperliquid_partial_download(out_path)
+        return None
+
+    async def _decompress_hyperliquid_s3_hour(self, path: Path) -> Optional[str]:
+        if shutil.which("lz4") is None:
+            self._hyperliquid_s3_disabled_reason = "lz4_cli_not_found"
+            self._warn_hyperliquid_s3_unavailable(self._hyperliquid_s3_disabled_reason)
+            return None
+        cmd = ["lz4", "-d", "-c", str(path)]
+        try:
+            proc = await self._run_hyperliquid_archive_cmd(cmd, timeout=120)
+        except subprocess.TimeoutExpired:
+            self._log("warning", "hyperliquid_s3_lz4_timeout", path=str(path))
+            return None
+        if proc.returncode != 0:
+            self._log(
+                "warning",
+                "hyperliquid_s3_lz4_failed",
+                path=str(path),
+                error=proc.stderr.decode("utf-8", errors="replace").strip()[:500],
+            )
+            return None
+        return proc.stdout.decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _parse_hyperliquid_time_ms(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return int(text)
+        # Hyperliquid archive ISO strings can carry nanosecond precision. Python's
+        # datetime parser accepts microseconds only, so trim fractional seconds.
+        try:
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            if "." in text:
+                head, tail = text.split(".", 1)
+                tz = ""
+                for sep in ("+", "-"):
+                    if sep in tail:
+                        frac_part, tz_part = tail.split(sep, 1)
+                        tz = f"{sep}{tz_part}"
+                        break
+                else:
+                    frac_part = tail
+                frac = "".join(ch for ch in frac_part if ch.isdigit())[:6].ljust(6, "0")
+                text = f"{head}.{frac}{tz}"
+            dt = datetime.fromisoformat(text)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp() * 1000)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @staticmethod
+    def _iter_hyperliquid_json_payload(payload: Any):
+        if isinstance(payload, list):
+            if len(payload) >= 2 and isinstance(payload[0], str) and isinstance(payload[1], dict):
+                yield payload
+            else:
+                for item in payload:
+                    yield item
+        elif isinstance(payload, dict):
+            yield payload
+
+    @classmethod
+    def _iter_hyperliquid_json_records(cls, text: str):
+        stripped = text.strip()
+        if not stripped:
+            return
+        try:
+            payload = json.loads(stripped)
+            yield from cls._iter_hyperliquid_json_payload(payload)
+            return
+        except json.JSONDecodeError:
+            pass
+        for line in stripped.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            yield from cls._iter_hyperliquid_json_payload(json.loads(line))
+
+    @staticmethod
+    def _extract_hyperliquid_fill(record: Any, dataset: str):
+        if dataset == "node_trades":
+            if isinstance(record, dict):
+                yield record
+            return
+        if dataset == "node_fills":
+            if isinstance(record, list) and len(record) >= 2 and isinstance(record[1], dict):
+                yield record[1]
+            elif isinstance(record, dict):
+                yield record
+            return
+        if dataset == "node_fills_by_block":
+            events = record.get("events") if isinstance(record, dict) else None
+            if not isinstance(events, list):
+                return
+            for event in events:
+                if isinstance(event, list) and len(event) >= 2 and isinstance(event[1], dict):
+                    yield event[1]
+                elif isinstance(event, dict):
+                    yield event
+
+    def _accumulate_hyperliquid_archive_record(
+        self,
+        dataset: str,
+        record: Any,
+        *,
+        base: str,
+        start_ts: int,
+        end_ts: int,
+        buckets: Dict[int, List[float]],
+        seen_fill_trade_ids: set,
+    ) -> None:
+        for fill in self._extract_hyperliquid_fill(record, dataset):
+            if not isinstance(fill, dict):
+                continue
+            if str(fill.get("coin") or "").strip() != base:
+                continue
+            ts = self._parse_hyperliquid_time_ms(fill.get("time"))
+            if ts is None or ts < start_ts or ts > end_ts:
+                continue
+            try:
+                px = float(fill.get("px"))
+                sz = abs(float(fill.get("sz")))
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(px) and math.isfinite(sz)) or px <= 0.0:
+                continue
+            if dataset in {"node_fills", "node_fills_by_block"}:
+                tid = fill.get("tid")
+                if tid is not None:
+                    dedupe_key = (base, str(tid))
+                    if dedupe_key in seen_fill_trade_ids:
+                        continue
+                    seen_fill_trade_ids.add(dedupe_key)
+            minute_ts = int(ts // ONE_MIN_MS * ONE_MIN_MS)
+            bucket = buckets.get(minute_ts)
+            if bucket is None:
+                buckets[minute_ts] = [px, px, px, px, sz]
+            else:
+                bucket[1] = max(bucket[1], px)
+                bucket[2] = min(bucket[2], px)
+                bucket[3] = px
+                bucket[4] += sz
+
+    def _hyperliquid_buckets_to_day_arr(
+        self, buckets: Dict[int, List[float]], day_key: str
+    ) -> Optional[np.ndarray]:
+        if not buckets:
+            return None
+
+        import pandas as pd
+
+        rows = [
+            {
+                "timestamp": ts,
+                "open": values[0],
+                "high": values[1],
+                "low": values[2],
+                "close": values[3],
+                "volume": values[4],
+            }
+            for ts, values in sorted(buckets.items())
+        ]
+        return self._ohlcv_df_to_day_arr(pd.DataFrame(rows), day_key)
+
+    def _hyperliquid_archive_records_to_day_arr(
+        self, records: List[Tuple[str, Any]], symbol: str, day_key: str
+    ) -> Optional[np.ndarray]:
+        base = symbol.split("/", 1)[0] if "/" in symbol else symbol
+        base = base.strip()
+        start_ts, end_ts = self._date_range_of_key(day_key)
+        buckets: Dict[int, List[float]] = {}
+        seen_fill_trade_ids = set()
+        for dataset, record in records:
+            self._accumulate_hyperliquid_archive_record(
+                dataset,
+                record,
+                base=base,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                buckets=buckets,
+                seen_fill_trade_ids=seen_fill_trade_ids,
+            )
+        return self._hyperliquid_buckets_to_day_arr(buckets, day_key)
+
+    async def _archive_fetch_hyperliquid_s3(self, symbol: str, day_key: str) -> Optional[np.ndarray]:
+        """Fetch official Hyperliquid S3 fills/trades and aggregate them to 1m OHLCV."""
+        day_start, day_end = self._date_range_of_key(day_key)
+        if day_end < _HYPERLIQUID_NODE_TRADES_START_TS:
+            self._log(
+                "debug",
+                "hyperliquid_s3_before_archive_start",
+                symbol=symbol,
+                day_key=day_key,
+            )
+            return None
+
+        base = symbol.split("/", 1)[0] if "/" in symbol else symbol
+        base = base.strip()
+        buckets: Dict[int, List[float]] = {}
+        seen_fill_trade_ids = set()
+        expected_hours = 0
+        loaded_hours = 0
+        for hour in range(24):
+            hour_start = day_start + hour * 60 * ONE_MIN_MS
+            dataset = self._hyperliquid_archive_dataset_for_hour(hour_start)
+            if dataset is None:
+                continue
+            expected_hours += 1
+            path = await self._download_hyperliquid_s3_hour(dataset, day_key, hour)
+            if path is None:
+                continue
+            text = await self._decompress_hyperliquid_s3_hour(path)
+            if not text:
+                continue
+            loaded_hours += 1
+            try:
+                for record in self._iter_hyperliquid_json_records(text):
+                    self._accumulate_hyperliquid_archive_record(
+                        dataset,
+                        record,
+                        base=base,
+                        start_ts=day_start,
+                        end_ts=day_end,
+                        buckets=buckets,
+                        seen_fill_trade_ids=seen_fill_trade_ids,
+                    )
+            except json.JSONDecodeError as exc:
+                self._log(
+                    "warning",
+                    "hyperliquid_s3_json_decode_failed",
+                    symbol=symbol,
+                    day_key=day_key,
+                    hour=hour,
+                    path=str(path),
+                    error=str(exc),
+                )
+
+        if expected_hours and loaded_hours != expected_hours:
+            self._log(
+                "debug",
+                "hyperliquid_s3_incomplete_day",
+                symbol=symbol,
+                day_key=day_key,
+                loaded_hours=loaded_hours,
+                expected_hours=expected_hours,
+            )
+            return None
+        if not buckets:
+            return None
+        arr = self._hyperliquid_buckets_to_day_arr(buckets, day_key)
+        if arr is not None and arr.size:
+            self._log(
+                "debug",
+                "hyperliquid_s3_archive_hit",
+                symbol=symbol,
+                day_key=day_key,
+                rows=int(arr.shape[0]),
+            )
+            return arr
+        return None
+
     async def _archive_fetch_hyperliquid(self, symbol: str, day_key: str) -> Optional[np.ndarray]:
         """Fetch Hyperliquid archive data for backtesting.
 
         Data sources tried in order:
-        1. Local pre-processed cache (caches/ohlcv/hyperliquid/{coin}/{day_key}.parquet)
-        2. For stock perps: TradFi API (if credentials available in api-keys.json)
-
-        For Hyperliquid's S3 raw trade data, users can pre-process it using:
-            python -m src.tools.hyperliquid_s3_fetcher --start YYYY-MM-DD --end YYYY-MM-DD
-            python -m src.tools.trades_to_ohlcv --input caches/hyperliquid_trades --output caches/ohlcv/hyperliquid
+        1. Local pre-processed compatibility cache (caches/ohlcv/hyperliquid/{coin}/{day_key}.parquet)
+        2. Official requester-pays Hyperliquid S3 raw fills/trades, aggregated to 1m OHLCV
+        3. For stock perps: TradFi API (if credentials available in api-keys.json)
 
         Args:
             symbol: CCXT-style symbol (e.g., "BTC/USDC:USDC" or "xyz:TSLA/USDC:USDC")
@@ -4289,7 +4722,11 @@ class CandlestickManager:
                     "debug", "hyperliquid_archive_error", symbol=symbol, day_key=day_key, error=str(e)
                 )
 
-        # 2. For stock perps, try TradFi data fetch
+        arr = await self._archive_fetch_hyperliquid_s3(symbol, day_key)
+        if arr is not None and arr.size > 0:
+            return arr
+
+        # 3. For stock perps, try TradFi data fetch
         try:
             from tradfi_data import is_stock_ticker, hip3_to_tradfi_symbol
         except ImportError:

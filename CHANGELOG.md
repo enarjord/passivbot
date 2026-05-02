@@ -12,6 +12,7 @@ All notable user-facing changes will be documented in this file.
 - Fixed live foreign-writer detection so a bot's own freshly acknowledged orders can be recognized by exchange order id, canonical Passivbot custom id, or a strict recent order fingerprint instead of relying only on raw client-id string equality.
 - Fixed OHLCV v2 planning so persistent gaps are not bypassed by sparse store bounds, and single-exchange backtest preparation no longer attempts the same v2 local path twice before falling back.
 - Fixed OHLCV v2 local preparation so sparse invalid v2 windows are repaired from existing legacy daily shards first, then fetched with exact intraday ranges instead of triggering full-range archive downloads or collapsing same-day repair windows to empty fetches.
+- Added automatic Hyperliquid old-history backfill support from the official requester-pays `hl-mainnet-node-data` S3 raw fill/trade archives from 2025-03-22 onward. Hyperliquid backtests still use the official recent candle API when possible, but older missing full-day 1m candles can now be derived from S3 fills/trades and cached normally when AWS credentials and the `lz4` CLI are available.
 
 ## v7.10.0 - 2026-04-22
 

@@ -12,6 +12,8 @@ python3 -m pip install -e ".[full]"
 
 > **GateIO history note:** GateIO's public 1m OHLCV endpoint only serves a recent window of roughly 10,000 candles. Older GateIO backtests need `backtest.ohlcv_source_dir` data or candles sourced from another exchange; Passivbot marks older GateIO 1m spans unavailable instead of repeatedly retrying rejected requests.
 
+> **Hyperliquid history note:** Hyperliquid's public candle endpoint only serves the most recent 5000 candles. For older missing full-day 1m data from 2025-03-22 onward, Passivbot can fetch official requester-pays S3 raw fills/trades from `s3://hl-mainnet-node-data`, aggregate them into dense 1m OHLCV candles, and cache the result normally. This requires local AWS credentials authorized for requester-pays S3 access and the `lz4` CLI (`aws s3 cp ... --request-payer requester` must work locally). Without those prerequisites, or for ranges before the official trade archive starts, old Hyperliquid ranges remain unavailable unless supplied through `backtest.ohlcv_source_dir`.
+
 ### External OHLCV source dir
 
 You can point `backtest.ohlcv_source_dir` to a pre-populated OHLCV tree. The loader looks under:
