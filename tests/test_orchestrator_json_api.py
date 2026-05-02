@@ -580,6 +580,47 @@ def test_twel_enforcer_emits_auto_reduce():
     assert any(o["order_type"] == "close_auto_reduce_twel_long" for o in out["orders"])
 
 
+def test_twel_enforcer_threshold_reduces_positions_at_wel():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.75,
+        "total_wallet_exposure_limit": 1.5,
+        "risk_twel_enforcer_threshold": 0.99,
+        "n_positions": 2,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym0 = make_symbol(
+        0,
+        bid=49.0,
+        ask=49.0,
+        long_pos_size=15.0,
+        long_pos_price=50.0,
+        long_bp=long_bp,
+    )
+    sym1 = make_symbol(
+        1,
+        bid=49.5,
+        ask=49.5,
+        long_pos_size=15.0,
+        long_pos_price=50.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
+    out = compute(pbr, inp)
+    orders = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
+    assert orders, (
+        "TWEL enforcer should reduce positions below raw WEL when "
+        "risk_twel_enforcer_threshold is below 1.0"
+    )
+
+    psize_by_symbol = {0: 15.0, 1: 15.0}
+    for order in orders:
+        psize_by_symbol[order["symbol_idx"]] -= abs(order["qty"])
+    twe_after = sum(size * 50.0 / 1_000.0 for size in psize_by_symbol.values())
+    assert twe_after <= 1.5 * 0.99 + 1e-12
+
+
 # ---------------------------------------------------------------------------
 # balance_raw semantics tests
 # ---------------------------------------------------------------------------

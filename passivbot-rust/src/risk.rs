@@ -678,7 +678,7 @@ pub fn calc_twel_enforcer_actions(
             );
             continue;
         }
-        let per_position_twel_share = total_wallet_exposure_limit / (effective_n_positions as f64);
+        let per_position_twel_share = limit / (effective_n_positions as f64);
         let floor_exposure = base_limit.min(per_position_twel_share.max(0.0));
         if exposure <= floor_exposure + 1e-9 {
             continue;
@@ -1033,6 +1033,40 @@ mod tests {
             "TWE not at or below target: {} > {}",
             twe,
             twel
+        );
+    }
+
+    #[test]
+    fn test_twel_reducer_threshold_adjusts_per_position_floor() {
+        let balance = 1000.0;
+        let wel_base = 0.75;
+        let twel = 1.5;
+        let threshold = 0.99;
+        let positions = vec![
+            pos(0, 15.0, 50.0, 49.0, wel_base, 1.0, 0.1, 0.1, 0.1, 0.0),
+            pos(1, 15.0, 50.0, 49.5, wel_base, 1.0, 0.1, 0.1, 0.1, 0.0),
+        ];
+
+        let actions =
+            calc_twel_enforcer_actions(LONG, threshold, twel, 2, balance, &positions, None);
+        assert!(
+            !actions.is_empty(),
+            "thresholded TWEL target should be reachable even when positions start at WEL"
+        );
+
+        let mut psize = vec![15.0, 15.0];
+        for (idx, order) in actions {
+            psize[idx] = (psize[idx] - order.qty.abs()).max(0.0);
+        }
+        let twe = psize
+            .iter()
+            .map(|size| calc_wallet_exposure(1.0, balance, *size, 50.0))
+            .sum::<f64>();
+        assert!(
+            twe <= twel * threshold + 1e-12,
+            "TWE should reduce to the thresholded TWEL target: {} > {}",
+            twe,
+            twel * threshold
         );
     }
 
