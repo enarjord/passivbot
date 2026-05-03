@@ -7,6 +7,7 @@ import signal
 import sys
 import time
 import types
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -1236,13 +1237,97 @@ def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
     assert any("vol=0.400" in msg for msg in messages)
 
 
-def test_active_candle_incomplete_warning_is_throttled(monkeypatch, caplog):
+def test_forager_selection_diagnostics_demotes_rank_only_changes(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    base = {
+        "diagnostics": {
+            "forager_selections": [
+                {
+                    "pside": "long",
+                    "slots_to_fill": 2,
+                    "score_hysteresis_pct": 0.005,
+                    "selected_symbol_indices": [0, 1],
+                    "incumbent_symbol_indices": [0, 1],
+                    "top_scores": [
+                        {"symbol_idx": 0, "rank": 1, "score": 0.625, "selected": True},
+                        {"symbol_idx": 1, "rank": 2, "score": 0.623, "selected": True},
+                    ],
+                    "hysteresis_events": [],
+                }
+            ]
+        }
+    }
+    rank_changed = deepcopy(base)
+    rank_changed["diagnostics"]["forager_selections"][0][
+        "selected_symbol_indices"
+    ] = [1, 0]
+    rank_changed["diagnostics"]["forager_selections"][0]["top_scores"] = [
+        {"symbol_idx": 1, "rank": 1, "score": 0.626, "selected": True},
+        {"symbol_idx": 0, "rank": 2, "score": 0.624, "selected": True},
+    ]
+    idx_to_symbol = {0: "SOL/USDT:USDT", 1: "DOGE/USDT:USDT"}
+
+    with caplog.at_level(logging.DEBUG):
+        Passivbot._log_forager_selection_diagnostics(bot, base, idx_to_symbol)
+        Passivbot._log_forager_selection_diagnostics(bot, rank_changed, idx_to_symbol)
+
+    info_messages = [
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.INFO
+        and "[forager] long selection" in record.message
+    ]
+    debug_messages = [
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.DEBUG
+        and "[forager] long score detail" in record.message
+    ]
+    assert len(info_messages) == 1
+    assert len(debug_messages) == 2
+
+
+def test_active_candle_incomplete_publish_lag_is_info_throttled(monkeypatch, caplog):
     bot = Passivbot.__new__(Passivbot)
     bot._active_candle_incomplete_last_log_ms = {}
     times = iter([1_000_000, 1_060_000, 1_400_001])
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times))
     ordered = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
-    missing = [{"symbol": "BTC/USDT:USDT"}]
+    missing = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "reason": "missing_latest_completed_1m",
+            "missing_candles": 1,
+        }
+    ]
+
+    with caplog.at_level(logging.DEBUG):
+        bot._log_active_candle_refresh_incomplete(ordered, missing)
+        bot._log_active_candle_refresh_incomplete(ordered, missing)
+        bot._log_active_candle_refresh_incomplete(ordered, missing)
+
+    levels = [
+        record.levelname
+        for record in caplog.records
+        if "active completed-candle refresh incomplete" in record.message
+    ]
+    assert levels == ["INFO", "DEBUG", "DEBUG"]
+    assert any("likely_publish_lag=yes" in record.message for record in caplog.records)
+
+
+def test_active_candle_incomplete_actionable_gap_still_warns(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._active_candle_incomplete_last_log_ms = {}
+    times = iter([1_000_000, 1_060_000, 1_400_001])
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times))
+    ordered = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    missing = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "reason": "missing_latest_completed_1m",
+            "missing_candles": 2,
+        }
+    ]
 
     with caplog.at_level(logging.DEBUG):
         bot._log_active_candle_refresh_incomplete(ordered, missing)
@@ -3989,6 +4074,66 @@ async def test_staged_account_refresh_request_counts_steady_state_defers_recent_
         "open_orders",
     }
     assert bot._authoritative_pending_confirmations == {}
+
+
+@pytest.mark.asyncio
+async def test_staged_account_refresh_prefetches_due_routine_fills_without_blocking(
+    monkeypatch,
+):
+    bot, counts = _counted_staged_account_refresh_bot()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_update_pnls():
+        counts["update_pnls"] += 1
+        started.set()
+        await release.wait()
+        bot._record_authoritative_surface("fills", ())
+        return True
+
+    bot.update_pnls = slow_update_pnls
+    bot.freshness_ledger.stamp("fills", (), now_ms=1_000, epoch=1)
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 61_500)
+
+    result = await bot.refresh_authoritative_state()
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    assert result is True
+    assert bot._authoritative_refresh_plan_surfaces == {
+        "balance",
+        "positions",
+        "open_orders",
+    }
+    assert counts["fetch_balance"] == 1
+    assert counts["fetch_positions"] == 1
+    assert counts["fetch_open_orders"] == 1
+    assert counts["update_pnls"] == 1
+    fill_task = bot.maintainers["routine_fill_refresh"]
+    assert fill_task.done() is False
+
+    release.set()
+    await asyncio.wait_for(fill_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_staged_account_refresh_blocks_on_due_fills_when_prefetch_is_too_stale(
+    monkeypatch,
+):
+    bot, counts = _counted_staged_account_refresh_bot()
+    bot.freshness_ledger.stamp("fills", (), now_ms=1_000, epoch=1)
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 4 * 60_000 + 1_000)
+
+    result = await bot.refresh_authoritative_state()
+
+    assert result is True
+    assert bot._authoritative_refresh_plan_surfaces == ACCOUNT_SURFACES
+    assert counts == {
+        "fetch_balance": 1,
+        "fetch_positions": 1,
+        "fetch_open_orders": 1,
+        "update_pnls": 1,
+    }
+    assert "routine_fill_refresh" not in getattr(bot, "maintainers", {})
 
 
 @pytest.mark.asyncio

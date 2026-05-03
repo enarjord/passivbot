@@ -4267,17 +4267,31 @@ class Passivbot:
         if not isinstance(last_by_key, dict):
             last_by_key = {}
             self._active_candle_incomplete_last_log_ms = last_by_key
-        throttle_ms = 5 * 60 * 1000
+        likely_publish_lag = True
+        for item in missing:
+            if str(item.get("reason") or "") != "missing_latest_completed_1m":
+                likely_publish_lag = False
+                break
+            try:
+                missing_candles = int(item.get("missing_candles") or 0)
+            except Exception:
+                missing_candles = 0
+            if missing_candles > 1:
+                likely_publish_lag = False
+                break
+        throttle_ms = (15 if likely_publish_lag else 5) * 60 * 1000
         last_ms = int(last_by_key.get(key, 0) or 0)
-        level = logging.WARNING if now_ms - last_ms >= throttle_ms else logging.DEBUG
-        if level == logging.WARNING:
+        base_level = logging.INFO if likely_publish_lag else logging.WARNING
+        level = base_level if now_ms - last_ms >= throttle_ms else logging.DEBUG
+        if level == base_level:
             last_by_key[key] = now_ms
         logging.log(
             level,
-            "[candle] active completed-candle refresh incomplete | symbols=%d missing=%d examples=%s",
+            "[candle] active completed-candle refresh incomplete | symbols=%d missing=%d examples=%s%s",
             len(ordered_symbols),
             len(missing),
             examples,
+            " | likely_publish_lag=yes" if likely_publish_lag else "",
         )
 
     def get_first_timestamp(self, symbol):
@@ -5020,11 +5034,21 @@ class Passivbot:
             self._authoritative_refresh_plan_surfaces = set(plan)
             return plan
         plan = {"balance", "positions", "open_orders", "fills"}
-        if "fills" not in pending and not self._staged_fills_refresh_due():
-            plan.discard("fills")
-            logging.debug(
-                "[state] staged fills refresh deferred until next minute boundary"
-            )
+        if "fills" not in pending:
+            if not self._staged_fills_refresh_due():
+                plan.discard("fills")
+                logging.debug(
+                    "[state] staged fills refresh deferred until next minute boundary"
+                )
+            elif self._staged_fills_can_prefetch_routine() and (
+                self._schedule_routine_fill_refresh_prefetch(
+                    reason="minute_boundary"
+                )
+            ):
+                plan.discard("fills")
+                logging.debug(
+                    "[state] staged routine fills refresh scheduled in background"
+                )
         self._authoritative_refresh_plan_surfaces = set(plan)
         return plan
 
@@ -5038,6 +5062,62 @@ class Passivbot:
         if last_updated_ms <= 0:
             return True
         return int(utc_ms()) // 60_000 > last_updated_ms // 60_000
+
+    def _staged_fills_can_prefetch_routine(self) -> bool:
+        """Return whether routine fills may refresh outside the blocking staged cohort."""
+        ledger = getattr(self, "freshness_ledger", None)
+        if ledger is None or int(ledger.surface_epoch("fills") or 0) < 1:
+            return False
+        last_updated_ms = int(ledger.surface_updated_ms("fills") or 0)
+        if last_updated_ms <= 0:
+            return False
+        max_staleness_ms = 3 * 60 * 1000
+        return int(utc_ms()) - last_updated_ms <= max_staleness_ms
+
+    def _schedule_routine_fill_refresh_prefetch(self, *, reason: str) -> bool:
+        """Schedule one routine fills refresh if none is already running."""
+        if Passivbot._shutdown_requested(self):
+            return False
+        if not hasattr(self, "maintainers") or not isinstance(self.maintainers, dict):
+            self.maintainers = {}
+        key = "routine_fill_refresh"
+        existing = self.maintainers.get(key)
+        if existing is not None and not existing.done():
+            return True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        self.maintainers[key] = loop.create_task(
+            self._routine_fill_refresh_prefetch_task(reason=reason)
+        )
+        return True
+
+    async def _routine_fill_refresh_prefetch_task(self, *, reason: str) -> None:
+        """Refresh routine fills outside the critical account-state refresh path."""
+        try:
+            started_ms = utc_ms()
+            ok = await self.update_pnls()
+            elapsed_ms = int(max(0, utc_ms() - started_ms))
+            logging.debug(
+                "[fills] routine prefetch complete | reason=%s ok=%s elapsed=%dms",
+                reason,
+                ok,
+                elapsed_ms,
+            )
+        except asyncio.CancelledError:
+            logging.debug("[shutdown] routine fills prefetch cancelled")
+            raise
+        except Exception as exc:
+            if Passivbot._shutdown_requested(self):
+                logging.debug("[shutdown] routine fills prefetch stopped: %s", exc)
+                return
+            logging.warning(
+                "[fills] routine prefetch failed; blocking/confirmation refresh will retry | reason=%s error_type=%s error=%s",
+                reason,
+                type(exc).__name__,
+                exc,
+            )
 
     async def capture_authoritative_state_staged_snapshot(
         self, plan: set[str], timings_ms: dict[str, int]
@@ -8534,6 +8614,16 @@ class Passivbot:
         if self.stop_signal_received:
             return False
 
+        if not hasattr(self, "_pnls_refresh_lock"):
+            self._pnls_refresh_lock = asyncio.Lock()
+        async with self._pnls_refresh_lock:
+            return await self._update_pnls_locked()
+
+    async def _update_pnls_locked(self):
+        """Fetch latest fills while holding the fill-cache single-flight lock."""
+        if self.stop_signal_received:
+            return False
+
         refresh_started_ms = utc_ms()
         refresh_mode = "unknown"
         overlap_minutes: Optional[float] = None
@@ -8661,6 +8751,7 @@ class Passivbot:
                 seen_new_source_ids.update(src_ids)
             if new_events:
                 self._log_new_fill_events(new_events)
+                self._request_authoritative_confirmation(ACCOUNT_SURFACES)
             self._record_authoritative_surface(
                 "fills", self._fill_events_signature(all_events)
             )
@@ -9076,17 +9167,32 @@ class Passivbot:
                 )
                 for event in events
             )
-            info_key = (selected_symbols, incumbent_symbols, event_key)
+            replacement_event_key = tuple(
+                (
+                    _symbol(event.get("incumbent_symbol_idx")),
+                    _symbol(event.get("challenger_symbol_idx")),
+                )
+                for event in events
+                if not bool(event.get("kept_incumbent"))
+            )
+            selected_set_key = tuple(sorted(selected_symbols))
+            slots_to_fill = int(selection.get("slots_to_fill", 0) or 0)
+            info_key = (selected_set_key, slots_to_fill)
             debug_key = (info_key, score_key)
             state = self._forager_selection_log_state.setdefault(pside, {})
             last_info_key = state.get("info_key")
             last_debug_key = state.get("debug_key")
             last_event_key = state.get("event_key")
+            last_replacement_event_key = state.get("replacement_event_key")
             info_last_ms = int(state.get("info_last_ms", 0) or 0)
             debug_last_ms = int(state.get("debug_last_ms", 0) or 0)
             info_changed = info_key != last_info_key
             debug_changed = debug_key != last_debug_key
             event_changed = bool(event_key) and event_key != last_event_key
+            replacement_changed = (
+                bool(replacement_event_key)
+                and replacement_event_key != last_replacement_event_key
+            )
             periodic_info = (
                 now_ms - info_last_ms
             ) >= self._forager_selection_info_interval_ms
@@ -9094,10 +9200,10 @@ class Passivbot:
                 now_ms - debug_last_ms
             ) >= self._forager_selection_debug_interval_ms
 
-            if info_changed or event_changed or periodic_info:
+            if info_changed or replacement_changed or periodic_info:
                 reason = (
-                    "hysteresis"
-                    if event_changed
+                    "hysteresis_replacement"
+                    if replacement_changed
                     else "selection_changed" if info_changed else "periodic"
                 )
                 logging.info(
@@ -9114,6 +9220,7 @@ class Passivbot:
                 )
                 state["info_key"] = info_key
                 state["event_key"] = event_key
+                state["replacement_event_key"] = replacement_event_key
                 state["info_last_ms"] = now_ms
             if debug_changed or event_changed or periodic_debug:
                 logging.debug(

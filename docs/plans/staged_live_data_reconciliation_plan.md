@@ -125,6 +125,9 @@ Before order planning/execution, live bot must have coherent state for:
   explicit account-state confirmations. Warm-cache routine refreshes now use
   `live.fills_recent_overlap_minutes` (default 10m), while pending confirmation refreshes keep
   `live.fills_confirmation_overlap_minutes` (default 60m) for safety.
+- [x] Move due routine fill refreshes to a single-flight background prefetch lane after the initial
+  fills stamp. The staged account refresh still blocks on fills if fills have never been stamped,
+  if fills fall too far behind, or if an explicit fill/account confirmation is pending.
 - [ ] Continue reducing long account-surface refresh tail latency, especially fill refreshes. Overnight VPS
   runs showed order execution is usually fast after planning, but pre-plan `fills` refresh can
   dominate response time: examples include Binance around 224s, KuCoin around 187s, Gate.io
@@ -134,6 +137,11 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Add live fill-refresh timing logs with mode, elapsed time, before/after event counts,
   new-event count, lookback, and cache scope. This makes slow `fills` surfaces visible without
   reconstructing them from broader staged refresh timing lines.
+- [x] Reduce forager INFO log noise. INFO now focuses on selected-set/slot changes, hysteresis
+  replacements, and periodic heartbeats; rank-only score movement remains available at DEBUG.
+- [x] Soften active completed-candle refresh-incomplete logs for likely one-candle exchange
+  publication lag. These now emit INFO with slower throttling, while larger/actionable gaps keep
+  WARNING visibility.
 - [x] Prevent background candle warmup from competing with runtime EMA/active-symbol OHLCV fetches
   on slow exchanges. Latest KuCoin logs show many concurrent broad warmup and runtime EMA OHLCV
   timeouts, with pending task piles during startup. Background warmup now uses the common
