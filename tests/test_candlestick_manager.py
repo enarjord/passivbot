@@ -443,6 +443,60 @@ async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_get_latest_ema_close_1h_excludes_current_hour_at_boundary(monkeypatch, tmp_path):
+    fixed_now_ms = 1725580800000  # 2024-09-06 00:00:00 UTC, exact hour boundary
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "BTC/USDT:USDT"
+    hour_ms = 60 * ONE_MIN_MS
+    expected_end = fixed_now_ms - hour_ms
+    expected_start = fixed_now_ms - 2 * hour_ms
+    seen = {}
+
+    async def fake_get_candles(
+        symbol_,
+        *,
+        start_ts=None,
+        end_ts=None,
+        max_age_ms=None,
+        strict=False,
+        timeframe=None,
+        tf=None,
+        fill_leading_gaps=False,
+        max_lookback_candles=None,
+    ):
+        seen.update(
+            {
+                "symbol": symbol_,
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "timeframe": timeframe,
+            }
+        )
+        arr = np.zeros(2, dtype=CANDLE_DTYPE)
+        arr["ts"] = np.asarray([expected_start, expected_end], dtype=np.int64)
+        arr["c"] = np.asarray([100.0, 102.0], dtype=np.float32)
+        arr["h"] = arr["c"]
+        arr["l"] = arr["c"]
+        arr["bv"] = 1.0
+        return arr
+
+    monkeypatch.setattr(cm, "get_candles", fake_get_candles)
+
+    value = await cm.get_latest_ema_close(symbol, span=2.0, timeframe="1h", max_age_ms=60_000)
+
+    assert np.isfinite(value)
+    assert seen == {
+        "symbol": symbol,
+        "start_ts": expected_start,
+        "end_ts": expected_end,
+        "timeframe": "1h",
+    }
+    assert seen["end_ts"] < fixed_now_ms
+
+
+@pytest.mark.asyncio
 async def test_tf_loads_from_disk_without_network(tmp_path, monkeypatch):
     class _Ex:
         id = "okx"

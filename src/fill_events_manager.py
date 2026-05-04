@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import fcntl
+import inspect
 import json
 import logging
 import os
@@ -1104,6 +1105,87 @@ class BaseFetcher:
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
         raise NotImplementedError
+
+
+@dataclass
+class FillFetchRequestStats:
+    """Best-effort remote-call timing collected by wrapping fetcher API clients."""
+
+    calls: Dict[str, Dict[str, float]] = field(default_factory=dict)
+
+    def record(self, endpoint: str, elapsed_ms: int, ok: bool) -> None:
+        data = self.calls.setdefault(
+            endpoint,
+            {
+                "count": 0,
+                "ok": 0,
+                "error": 0,
+                "total_ms": 0,
+                "max_ms": 0,
+            },
+        )
+        data["count"] += 1
+        data["ok" if ok else "error"] += 1
+        data["total_ms"] += max(0, int(elapsed_ms))
+        data["max_ms"] = max(data["max_ms"], max(0, int(elapsed_ms)))
+
+    @property
+    def count(self) -> int:
+        return int(sum(data["count"] for data in self.calls.values()))
+
+    @property
+    def total_ms(self) -> int:
+        return int(sum(data["total_ms"] for data in self.calls.values()))
+
+    @property
+    def error_count(self) -> int:
+        return int(sum(data["error"] for data in self.calls.values()))
+
+    def format_endpoints(self, *, limit: int = 8) -> str:
+        if not self.calls:
+            return "-"
+        parts = []
+        for name, data in sorted(
+            self.calls.items(),
+            key=lambda item: (-item[1]["total_ms"], item[0]),
+        )[:limit]:
+            count = int(data["count"])
+            total_ms = int(data["total_ms"])
+            max_ms = int(data["max_ms"])
+            errors = int(data["error"])
+            suffix = f",err={errors}" if errors else ""
+            parts.append(f"{name}:n={count},sum={total_ms}ms,max={max_ms}ms{suffix}")
+        if len(self.calls) > limit:
+            parts.append(f"+{len(self.calls) - limit} endpoints")
+        return ";".join(parts)
+
+
+class _TimedApiProxy:
+    """Proxy async CCXT/API calls so fill refresh logs include request counts."""
+
+    def __init__(self, api, stats: FillFetchRequestStats) -> None:
+        self._api = api
+        self._stats = stats
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._api, name)
+        if not callable(attr):
+            return attr
+
+        async def _wrapped(*args, **kwargs):
+            started = time.monotonic()
+            ok = False
+            try:
+                result = attr(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+                ok = True
+                return result
+            finally:
+                elapsed_ms = int(max(0.0, (time.monotonic() - started) * 1000.0))
+                self._stats.record(name, elapsed_ms, ok)
+
+        return _wrapped
 
 
 class FakeFetcher(BaseFetcher):
@@ -2455,6 +2537,12 @@ class FillEventsManager:
             self.cache.save_days(day_payload)
             all_days_persisted.update(days_touched)
 
+        fetch_started = time.monotonic()
+        request_stats = FillFetchRequestStats()
+        original_api = getattr(self.fetcher, "api", None)
+        wrapped_api = original_api is not None
+        if wrapped_api:
+            self.fetcher.api = _TimedApiProxy(original_api, request_stats)
         try:
             await self.fetcher.fetch(start_ms, end_ms, detail_cache, on_batch=handle_batch)
         except RateLimitExceeded:
@@ -2468,6 +2556,33 @@ class FillEventsManager:
                     confidence=GAP_CONFIDENCE_UNKNOWN,
                 )
             raise
+        finally:
+            if wrapped_api:
+                self.fetcher.api = original_api
+            fetch_elapsed_ms = int(max(0.0, (time.monotonic() - fetch_started) * 1000.0))
+            if request_stats.count or fetch_elapsed_ms >= 5_000:
+                level = (
+                    logging.INFO
+                    if fetch_elapsed_ms >= 10_000
+                    or request_stats.count >= 10
+                    or request_stats.error_count
+                    else logging.DEBUG
+                )
+                logger.log(
+                    level,
+                    "[fills] fetcher request timing | exchange=%s user=%s fetcher=%s "
+                    "elapsed=%dms requests=%d remote_ms=%d errors=%d range=%s..%s endpoints=%s",
+                    self.exchange,
+                    self.user,
+                    type(self.fetcher).__name__,
+                    fetch_elapsed_ms,
+                    request_stats.count,
+                    request_stats.total_ms,
+                    request_stats.error_count,
+                    _format_ms(start_ms),
+                    _format_ms(end_ms),
+                    request_stats.format_endpoints(),
+                )
 
         self._events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
 

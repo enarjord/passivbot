@@ -88,7 +88,7 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Ensure incomplete timeframe candles are never persisted.
 - [x] Review runtime synthetic candle behavior and keep only completed-candle-safe usage.
 - [x] Add tests for completed-minute boundary behavior.
-- [ ] Add tests for completed-hour boundary behavior.
+- [x] Add tests for completed-hour boundary behavior.
 - [x] Add tests that current in-progress candles are not persisted.
 
 ### 5. Candle Completeness And Health
@@ -132,7 +132,7 @@ Before order planning/execution, live bot must have coherent state for:
   runs showed order execution is usually fast after planning, but pre-plan `fills` refresh can
   dominate response time: examples include Binance around 224s, KuCoin around 187s, Gate.io
   around 55s, Bybit around 39s, and Hyperliquid around 33s.
-- [ ] Add a request-count/timing pass for fill-event fetchers, preferring incremental recent-fill
+- [x] Add a request-count/timing pass for fill-event fetchers, preferring incremental recent-fill
   refresh for active symbols and websocket-triggered windows where exchange APIs allow it.
 - [x] Add live fill-refresh timing logs with mode, elapsed time, before/after event counts,
   new-event count, lookback, and cache scope. This makes slow `fills` surfaces visible without
@@ -191,7 +191,7 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Add per-order-wave lifecycle diagnostics with a correlation id for plan-to-post timing:
   plan time, cancel post time, create post time, defer reasons, and final elapsed. This makes
   most order response timing measurable without reconstructing scattered log lines.
-- [ ] Extend order-wave lifecycle diagnostics through authoritative confirmation, so
+- [x] Extend order-wave lifecycle diagnostics through authoritative confirmation, so
   event-to-final-settlement timing includes the post-write open-order/account refresh.
 
 ### 10. Validation Matrix

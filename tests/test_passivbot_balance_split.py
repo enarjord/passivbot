@@ -1134,6 +1134,46 @@ def test_order_wave_summary_logs_elapsed_lifecycle(monkeypatch, caplog):
     )
 
 
+def test_order_wave_settlement_logs_authoritative_confirmation(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._order_wave_seq = 0
+    bot._pending_order_waves = []
+    times = iter([1_000_000, 1_000_500, 1_003_000, 1_003_000])
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times))
+
+    wave = bot._begin_order_wave(
+        [{"symbol": "BTC/USDT:USDT"}],
+        [{"symbol": "ETH/USDT:USDT"}],
+    )
+    bot._authoritative_refresh_epoch = 4
+    bot._authoritative_pending_confirmations = {}
+    bot._order_wave_in_progress = wave
+    bot._request_authoritative_confirmation({"open_orders"})
+    bot._order_wave_in_progress = None
+    wave["cancel_posted"] = 1
+    wave["create_posted"] = 1
+    bot._track_order_wave_confirmation(wave)
+
+    bot._authoritative_refresh_epoch = 5
+    bot._authoritative_refresh_epoch_fresh = {"open_orders"}
+    bot._authoritative_refresh_epoch_changed = {"open_orders"}
+
+    with caplog.at_level(logging.INFO):
+        blocked, details = bot._authoritative_execution_barrier_state()
+
+    assert blocked is False
+    assert details["missing"] == []
+    assert bot._pending_order_waves == []
+    assert bot._authoritative_pending_confirmations == {}
+    assert any(
+        "[order] wave settled | id=1 | elapsed_ms=3000 | confirm_ms=2500"
+        in record.message
+        and "confirmed=open_orders" in record.message
+        and "symbols=BTC,ETH" in record.message
+        for record in caplog.records
+    )
+
+
 def test_min_effective_cost_blocks_are_aggregated(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot._min_effective_cost_last_log_ms = {}

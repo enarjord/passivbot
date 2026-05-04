@@ -3214,6 +3214,7 @@ class Passivbot:
             "create_ms": None,
             "deferred_create": 0,
             "skipped_create": 0,
+            "requested_confirmations": {},
         }
 
     def _log_order_wave_summary(self, wave: dict | None) -> None:
@@ -3273,6 +3274,84 @@ class Passivbot:
                 else ""
             ),
         )
+
+    def _track_order_wave_confirmation(self, wave: dict | None) -> None:
+        """Remember posted order waves until their authoritative refresh settles."""
+        if not wave:
+            return
+        if not (int(wave.get("cancel_posted", 0) or 0) or int(wave.get("create_posted", 0) or 0)):
+            return
+        confirmations = dict(wave.get("requested_confirmations") or {})
+        if not confirmations:
+            confirmations = dict(getattr(self, "_authoritative_pending_confirmations", {}) or {})
+        if not confirmations:
+            return
+        now_ms = int(utc_ms())
+        pending = list(getattr(self, "_pending_order_waves", []) or [])
+        pending.append(
+            {
+                "id": int(wave.get("id", 0) or 0),
+                "started_ms": int(wave.get("started_ms") or now_ms),
+                "posted_ms": now_ms,
+                "planned_cancel": int(wave.get("planned_cancel", 0) or 0),
+                "planned_create": int(wave.get("planned_create", 0) or 0),
+                "cancel_posted": int(wave.get("cancel_posted", 0) or 0),
+                "create_posted": int(wave.get("create_posted", 0) or 0),
+                "symbols": list(wave.get("symbols") or []),
+                "confirmations": {
+                    str(surface): int(epoch)
+                    for surface, epoch in confirmations.items()
+                },
+            }
+        )
+        self._pending_order_waves = pending[-8:]
+
+    def _log_settled_order_waves(
+        self,
+        *,
+        current_epoch: int,
+        fresh_surfaces: set[str],
+        changed_surfaces: list[str],
+    ) -> None:
+        """Log order waves once post-write authoritative confirmation is complete."""
+        pending = list(getattr(self, "_pending_order_waves", []) or [])
+        if not pending:
+            return
+        now_ms = int(utc_ms())
+        remaining = []
+        for wave in pending:
+            confirmations = dict(wave.get("confirmations") or {})
+            settled = bool(confirmations) and all(
+                surface in fresh_surfaces and current_epoch >= int(epoch)
+                for surface, epoch in confirmations.items()
+            )
+            if not settled:
+                remaining.append(wave)
+                continue
+            elapsed_ms = max(0, now_ms - int(wave.get("started_ms", now_ms) or now_ms))
+            confirm_ms = max(0, now_ms - int(wave.get("posted_ms", now_ms) or now_ms))
+            symbols = list(wave.get("symbols") or [])
+            logging.info(
+                "[order] wave settled | id=%s | elapsed_ms=%d | confirm_ms=%d | "
+                "cancel_posted=%d create_posted=%d | confirmed=%s%s%s",
+                wave.get("id", "?"),
+                elapsed_ms,
+                confirm_ms,
+                int(wave.get("cancel_posted", 0) or 0),
+                int(wave.get("create_posted", 0) or 0),
+                ",".join(sorted(confirmations)) if confirmations else "-",
+                (
+                    f" | changed={','.join(changed_surfaces)}"
+                    if changed_surfaces
+                    else ""
+                ),
+                (
+                    f" | symbols={Passivbot._log_symbols(symbols, limit=12)}"
+                    if symbols
+                    else ""
+                ),
+            )
+        self._pending_order_waves = remaining
 
     def init_coin_overrides(self):
         """Populate coin override map keyed by symbols for quick lookup."""
@@ -5932,7 +6011,11 @@ class Passivbot:
                 )
         else:
             cancel_started_ms = utc_ms()
-            res = await self.execute_cancellations_parent(to_cancel)
+            self._order_wave_in_progress = order_wave
+            try:
+                res = await self.execute_cancellations_parent(to_cancel)
+            finally:
+                self._order_wave_in_progress = None
             if order_wave is not None:
                 order_wave["cancel_ms"] = int(max(0, utc_ms() - cancel_started_ms))
                 order_wave["cancel_posted"] = len(res or [])
@@ -5995,6 +6078,7 @@ class Passivbot:
                     creation_symbols
                 )
                 if self._shutdown_requested():
+                    self._order_wave_in_progress = None
                     return None
                 pending_config = sorted(
                     set(creation_symbols) - set(configured_symbols or set())
@@ -6025,7 +6109,11 @@ class Passivbot:
             res = None
             try:
                 create_started_ms = utc_ms()
-                res = await self.execute_orders_parent(to_create_mod)
+                self._order_wave_in_progress = order_wave
+                try:
+                    res = await self.execute_orders_parent(to_create_mod)
+                finally:
+                    self._order_wave_in_progress = None
                 if order_wave is not None:
                     order_wave["create_ms"] = int(max(0, utc_ms() - create_started_ms))
                     order_wave["create_posted"] = len(res or [])
@@ -6044,6 +6132,7 @@ class Passivbot:
             )
             if callable(schedule_forager_refresh):
                 schedule_forager_refresh()
+        Passivbot._track_order_wave_confirmation(self, order_wave)
         Passivbot._log_order_wave_summary(self, order_wave)
         if self.debug_mode:
             return to_cancel, to_create
@@ -7690,9 +7779,15 @@ class Passivbot:
             if min_epoch is not None
             else int(getattr(self, "_authoritative_refresh_epoch", 0) or 0) + 1
         )
+        current_wave = getattr(self, "_order_wave_in_progress", None)
+        if isinstance(current_wave, dict):
+            wave_confirmations = current_wave.setdefault("requested_confirmations", {})
         for surface in requested:
             prev = int(self._authoritative_pending_confirmations.get(surface, 0) or 0)
             self._authoritative_pending_confirmations[surface] = max(prev, target_epoch)
+            if isinstance(current_wave, dict):
+                prev_wave = int(wave_confirmations.get(surface, 0) or 0)
+                wave_confirmations[surface] = max(prev_wave, target_epoch)
 
     def _clear_authoritative_confirmations(self, surfaces: set[str]) -> None:
         if not hasattr(self, "_authoritative_pending_confirmations"):
@@ -7717,6 +7812,11 @@ class Passivbot:
         )
         blocked = bool(missing)
         if not blocked:
+            self._log_settled_order_waves(
+                current_epoch=current_epoch,
+                fresh_surfaces=fresh,
+                changed_surfaces=changed,
+            )
             self._clear_authoritative_confirmations(required)
         return blocked, {
             "missing": missing,

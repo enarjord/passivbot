@@ -2228,6 +2228,44 @@ async def test_manager_refresh_records_successful_empty_refresh(tmp_path: Path):
     assert manager.get_events() == []
 
 
+@pytest.mark.asyncio
+async def test_manager_refresh_logs_fetcher_request_timing(tmp_path: Path, caplog):
+    cache_dir = tmp_path / "fills_request_timing"
+
+    class _Api:
+        async def fetch_a(self):
+            return {"ok": True}
+
+        async def fetch_b(self):
+            return {"ok": True}
+
+    class _ApiFetcher(BaseFetcher):
+        def __init__(self):
+            self.api = _Api()
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            await self.api.fetch_a()
+            await self.api.fetch_b()
+            await self.api.fetch_b()
+            return []
+
+    manager = FillEventsManager(
+        exchange="bitget",
+        user="default",
+        fetcher=_ApiFetcher(),
+        cache_path=cache_dir,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger=fem.logger.name):
+        await manager.refresh(start_ms=123, end_ms=456)
+
+    messages = [record.message for record in caplog.records]
+    assert any("[fills] fetcher request timing" in msg for msg in messages)
+    assert any("requests=3" in msg for msg in messages)
+    assert any("fetch_b:n=2" in msg for msg in messages)
+    assert any("range=1970-01-01 00:00:00..1970-01-01 00:00:00" in msg for msg in messages)
+
+
 def test_fill_event_cache_load_ignores_metadata_file(tmp_path: Path, sample_events, caplog):
     cache = FillEventCache(tmp_path)
     cache.save([FillEvent.from_dict(dict(sample_events[0]))])
