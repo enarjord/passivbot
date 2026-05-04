@@ -182,6 +182,11 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Coin Selection",
         },
     },
+    "live.initial_entry_exec_max_market_dist_pct": {
+        "owner": "live",
+        "consumed_by": {"live"},
+        "cli_exposed_on": {"live"},
+    },
     "live.hedge_mode": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
@@ -834,6 +839,18 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Forager incumbent score tolerance. Keeps an already-selected flat forager coin when a challenger score is within this fractional normalized-score gap.",
     },
+    "live.initial_entry_exec_max_market_dist_pct": {
+        "visible": ["--initial-entry-exec-max-market-dist-pct"],
+        "hidden": [
+            "--live.initial_entry_exec_max_market_dist_pct",
+            "--live_initial_entry_exec_max_market_dist_pct",
+        ],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Executor-side distance gate for initial entry creations. Set to 0 to disable. Far initial entries are logged but not posted until they are near market.",
+    },
     "live.filter_by_min_effective_cost": {
         "visible": ["--filter-by-min-effective-cost", "-fbmec"],
         "hidden": [
@@ -1187,6 +1204,7 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "live.leverage",
         "live.market_orders_allowed",
         "live.max_realized_loss_pct",
+        "live.initial_entry_exec_max_market_dist_pct",
         "live.order_match_tolerance_pct",
     }
     runtime = {

@@ -1159,13 +1159,14 @@ def test_min_effective_cost_blocks_are_aggregated(caplog):
         }
     }
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         bot._log_min_effective_cost_blocks(out, idx_to_symbol)
 
+    infos = [record.message for record in caplog.records if record.levelno == logging.INFO]
     warnings = [
         record.message for record in caplog.records if record.levelno == logging.WARNING
     ]
-    assert sum("symbol=SYM" in msg for msg in warnings) == 3
+    assert sum("symbol=SYM" in msg for msg in infos) == 3
     assert any("blocked=5 detailed=3" in msg for msg in warnings)
 
 

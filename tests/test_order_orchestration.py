@@ -1,3 +1,4 @@
+import logging
 import types
 
 import pytest
@@ -233,3 +234,182 @@ async def test_to_create_orders_sorted_by_market_diff(monkeypatch):
 
     assert not to_cancel
     assert [order["price"] for order in to_create] == [101.0, 95.0]
+
+
+@pytest.mark.asyncio
+async def test_initial_entry_distance_gate_blocks_far_create_and_logs_by_tolerance(
+    caplog,
+):
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._live_values["initial_entry_exec_max_market_dist_pct"] = 0.005
+    bot._live_values["order_match_tolerance_pct"] = 0.0002
+    prices = iter([99.0, 99.01, 98.9])
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "buy",
+                    "long",
+                    1.0,
+                    next(prices),
+                    "entry_initial_normal_long",
+                )
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    with caplog.at_level(logging.INFO):
+        for _ in range(3):
+            to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+            assert not to_cancel
+            assert not to_create
+
+    messages = [
+        record.message
+        for record in caplog.records
+        if "initial entry staged but not placed" in record.message
+    ]
+    assert len(messages) == 2
+    assert "price=99" in messages[0]
+    assert "price=98.9" in messages[1]
+
+
+@pytest.mark.asyncio
+async def test_initial_entry_distance_gate_keeps_existing_within_tolerance():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._live_values["initial_entry_exec_max_market_dist_pct"] = 0.005
+    bot._live_values["order_match_tolerance_pct"] = 0.0002
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "buy",
+            "long",
+            1.0,
+            99.0,
+            "entry_initial_normal_long",
+        )
+    ]
+    ideal = {
+        symbol: [
+            _make_order(
+                symbol,
+                "buy",
+                "long",
+                1.0,
+                99.01,
+                "entry_initial_normal_long",
+            )
+        ]
+    }
+
+    async def fake_calc_ideal_orders(self):
+        return ideal
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+    assert not to_cancel
+    assert not to_create
+
+
+@pytest.mark.asyncio
+async def test_initial_entry_distance_gate_cancels_far_drift_without_recreate():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._live_values["initial_entry_exec_max_market_dist_pct"] = 0.005
+    bot._live_values["order_match_tolerance_pct"] = 0.0002
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "buy",
+            "long",
+            1.0,
+            99.0,
+            "entry_initial_normal_long",
+        )
+    ]
+    ideal = {
+        symbol: [
+            _make_order(
+                symbol,
+                "buy",
+                "long",
+                1.0,
+                98.9,
+                "entry_initial_normal_long",
+            )
+        ]
+    }
+
+    async def fake_calc_ideal_orders(self):
+        return ideal
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+    assert [order["price"] for order in to_cancel] == [99.0]
+    assert not to_create
+
+
+@pytest.mark.asyncio
+async def test_initial_entry_distance_gate_allows_near_market_initial():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._live_values["initial_entry_exec_max_market_dist_pct"] = 0.005
+    bot._live_values["order_match_tolerance_pct"] = 0.0002
+    ideal = {
+        symbol: [
+            _make_order(
+                symbol,
+                "buy",
+                "long",
+                1.0,
+                99.8,
+                "entry_initial_normal_long",
+            )
+        ]
+    }
+
+    async def fake_calc_ideal_orders(self):
+        return ideal
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+    assert not to_cancel
+    assert [order["price"] for order in to_create] == [99.8]
+
+
+@pytest.mark.asyncio
+async def test_initial_entry_distance_gate_ignores_market_initial():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._live_values["initial_entry_exec_max_market_dist_pct"] = 0.005
+    ideal = {
+        symbol: [
+            _make_order(
+                symbol,
+                "buy",
+                "long",
+                1.0,
+                90.0,
+                "entry_initial_normal_long",
+                order_kind="market",
+            )
+        ]
+    }
+
+    async def fake_calc_ideal_orders(self):
+        return ideal
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+    assert not to_cancel
+    assert [order["type"] for order in to_create] == ["market"]

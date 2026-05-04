@@ -9022,7 +9022,7 @@ class Passivbot:
                 block.get("projected_initial_cost", 0.0) or 0.0
             )
             effective_min_cost = float(block.get("effective_min_cost", 0.0) or 0.0)
-            logging.warning(
+            logging.info(
                 "[entry] initial entries blocked by min effective cost\n"
                 "  symbol=%s side=%s\n"
                 "  projected_initial_cost=%.6f required_effective_min_cost=%.6f\n"
@@ -12136,6 +12136,9 @@ class Passivbot:
             to_cancel += cancel_
             to_create += create_
 
+        to_create, initial_entry_gate_skipped = (
+            await self._apply_initial_entry_distance_gate(to_create)
+        )
         to_cancel = await self._sort_orders_by_market_diff(to_cancel, "to_cancel")
         to_create = await self._sort_orders_by_market_diff(to_create, "to_create")
         to_create, freshness_skipped = self._apply_freshness_creation_guardrails(
@@ -12145,8 +12148,12 @@ class Passivbot:
             total_pre_cancel = sum(p[1] for p in plan_summaries)
             total_cancel = sum(p[2] for p in plan_summaries)
             total_pre_create = sum(p[3] for p in plan_summaries)
-            total_create = sum(p[4] for p in plan_summaries)
-            total_skipped = sum(p[5] for p in plan_summaries) + freshness_skipped
+            total_create = len(to_create)
+            total_skipped = (
+                sum(p[5] for p in plan_summaries)
+                + freshness_skipped
+                + initial_entry_gate_skipped
+            )
             detail_parts = []
             untouched_cancel = total_pre_cancel - total_cancel
             untouched_create = total_pre_create - total_create
@@ -12402,6 +12409,174 @@ class Passivbot:
 
         remaining_cancel = [o for i, o in enumerate(to_cancel) if i not in used_cancel]
         return remaining_cancel, kept_create, skipped
+
+    async def _apply_initial_entry_distance_gate(
+        self, to_create: list[dict]
+    ) -> tuple[list[dict], int]:
+        """Drop far-from-market initial entry creations to reduce exchange churn.
+
+        Rust remains the source of truth for the intended initial entry. This live
+        executor guard only decides whether posting that passive initial entry now
+        is economical. Existing matching orders are preserved earlier by
+        _apply_order_match_tolerance(); if an existing initial has drifted beyond
+        tolerance, its cancel remains and the far replacement create is withheld.
+        """
+        if not to_create:
+            return to_create, 0
+        try:
+            threshold = float(
+                self.live_value("initial_entry_exec_max_market_dist_pct") or 0.0
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "live.initial_entry_exec_max_market_dist_pct must be numeric"
+            ) from exc
+        if threshold <= 0.0:
+            return to_create, 0
+        candidates = [
+            order
+            for order in to_create
+            if self._is_initial_entry_order(order)
+            and str(order.get("type", "limit")).lower() != "market"
+        ]
+        if not candidates:
+            return to_create, 0
+        symbols = {str(order["symbol"]) for order in candidates if order.get("symbol")}
+        market_prices = await self._fetch_market_prices(symbols)
+        kept: list[dict] = []
+        skipped = 0
+        for order in to_create:
+            if not self._is_initial_entry_order(order) or str(
+                order.get("type", "limit")
+            ).lower() == "market":
+                kept.append(order)
+                continue
+            market_price = market_prices.get(str(order.get("symbol")))
+            if market_price is None or float(market_price) <= 0.0:
+                kept.append(order)
+                continue
+            dist = order_market_diff(
+                str(order["side"]), float(order["price"]), float(market_price)
+            )
+            if dist > threshold:
+                skipped += 1
+                self._log_initial_entry_distance_gate_block(
+                    order,
+                    market_price=float(market_price),
+                    signed_dist=float(dist),
+                    threshold=float(threshold),
+                )
+                continue
+            self._log_initial_entry_distance_gate_cleared(
+                order,
+                market_price=float(market_price),
+                signed_dist=float(dist),
+                threshold=float(threshold),
+            )
+            kept.append(order)
+        return kept, skipped
+
+    def _is_initial_entry_order(self, order: dict) -> bool:
+        pb_type = self._resolve_pb_order_type(order).lower()
+        return pb_type.startswith("entry_initial_")
+
+    def _initial_entry_gate_key(self, order: dict) -> tuple[str, str]:
+        return (
+            str(order.get("symbol") or ""),
+            str(order.get("position_side") or ""),
+        )
+
+    def _initial_entry_gate_log_probe(self, order: dict) -> dict:
+        return {
+            "symbol": str(order.get("symbol") or ""),
+            "side": str(order.get("side") or ""),
+            "position_side": str(order.get("position_side") or ""),
+            "qty": float(order.get("qty", 0.0) or 0.0),
+            "price": float(order.get("price", 0.0) or 0.0),
+        }
+
+    def _log_initial_entry_distance_gate_block(
+        self,
+        order: dict,
+        *,
+        market_price: float,
+        signed_dist: float,
+        threshold: float,
+    ) -> None:
+        if not hasattr(self, "_initial_entry_distance_gate_log_state"):
+            self._initial_entry_distance_gate_log_state = {}
+        key = self._initial_entry_gate_key(order)
+        probe = self._initial_entry_gate_log_probe(order)
+        last_probe = self._initial_entry_distance_gate_log_state.get(key)
+        try:
+            tolerance = float(self.live_value("order_match_tolerance_pct") or 0.0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("live.order_match_tolerance_pct must be numeric") from exc
+        should_log = last_probe is None
+        if last_probe is not None:
+            try:
+                should_log = not orders_matching(
+                    probe,
+                    last_probe,
+                    tolerance_qty=tolerance,
+                    tolerance_price=tolerance,
+                )
+            except (KeyError, TypeError, ValueError):
+                should_log = True
+        self._initial_entry_distance_gate_log_state[key] = probe
+        if not should_log:
+            logging.debug(
+                "[entry] initial entry creation still distance-gated | symbol=%s side=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s",
+                Passivbot._log_symbol(probe["symbol"]),
+                probe["position_side"],
+                probe["qty"],
+                probe["price"],
+                market_price,
+                signed_dist * 100.0,
+                threshold * 100.0,
+                tolerance * 100.0,
+                self._resolve_pb_order_type(order),
+            )
+            return
+        logging.info(
+            "[entry] initial entry staged but not placed | symbol=%s side=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s reason=initial_entry_distance_gate",
+            Passivbot._log_symbol(probe["symbol"]),
+            probe["position_side"],
+            probe["qty"],
+            probe["price"],
+            market_price,
+            signed_dist * 100.0,
+            threshold * 100.0,
+            tolerance * 100.0,
+            self._resolve_pb_order_type(order),
+        )
+
+    def _log_initial_entry_distance_gate_cleared(
+        self,
+        order: dict,
+        *,
+        market_price: float,
+        signed_dist: float,
+        threshold: float,
+    ) -> None:
+        state = getattr(self, "_initial_entry_distance_gate_log_state", None)
+        if not isinstance(state, dict):
+            return
+        key = self._initial_entry_gate_key(order)
+        if key not in state:
+            return
+        state.pop(key, None)
+        logging.info(
+            "[entry] initial entry distance gate cleared | symbol=%s side=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% type=%s",
+            Passivbot._log_symbol(order.get("symbol")),
+            str(order.get("position_side") or ""),
+            float(order.get("qty", 0.0) or 0.0),
+            float(order.get("price", 0.0) or 0.0),
+            market_price,
+            signed_dist * 100.0,
+            threshold * 100.0,
+            self._resolve_pb_order_type(order),
+        )
 
     def _apply_mode_filters(
         self,

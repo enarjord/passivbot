@@ -345,6 +345,18 @@ changing behavior during extraction commits.
 - [x] Added staged market snapshot fetch headroom. Rust planning now requests ticker snapshots
   with a stricter cache TTL than the hard safety max, avoiding false precondition failures from
   near-expired cached tickers while preserving the pre-create stale-snapshot guard.
+- [x] Added a narrow live-only initial-entry executor distance gate to reduce churn from
+  EMA-drifting `entry_initial_*` orders. Rust still emits the intended initial entry, but live
+  only posts it when it is within `live.initial_entry_exec_max_market_dist_pct` of market; blocked
+  orders are INFO-visible and re-logged only when price/qty drift exceeds
+  `live.order_match_tolerance_pct`.
+- [x] Increased default forager score hysteresis from `0.005` to `0.02` after VPS logs showed
+  most churn-relevant replacements had score gaps above the old 0.5% threshold.
+- [x] Tightened default OHLCV fetch budget and widened default REST recv window. Defaults are now
+  `live.max_ohlcv_fetches_per_minute=24` and `live.recv_window_ms=10000`.
+- [ ] Continue KuCoin-focused robustness work. Latest DEBUG runs still show heavy sparse-candle
+  diagnostics, websocket ping-timeout reconnect churn, and occasional long account/fill refresh
+  tails.
 
 ## Initial Ticker Probe Findings
 

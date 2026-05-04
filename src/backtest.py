@@ -1797,7 +1797,7 @@ def prep_backtest_args(
             "market_orders_allowed": execution_settings.market_orders_allowed,
             "market_order_near_touch_threshold": execution_settings.market_order_near_touch_threshold,
             "forager_score_hysteresis_pct": float(
-                get_optional_live_value(config, "forager_score_hysteresis_pct", 0.005)
+                get_optional_live_value(config, "forager_score_hysteresis_pct", 0.02)
                 or 0.0
             ),
             "liquidation_threshold": liquidation_threshold,
