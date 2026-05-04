@@ -2272,6 +2272,77 @@ class Passivbot:
             options.update(overrides)
         return options
 
+    def _is_exchange_time_sync_error(self, exc: BaseException) -> bool:
+        """Return True for CCXT timestamp/nonce errors recoverable by clock sync."""
+        exc_name = type(exc).__name__.lower()
+        text = str(exc).lower()
+        combined = f"{exc_name} {text}"
+        if isinstance(exc, getattr(ccxt_errors, "InvalidNonce", tuple())):
+            return True
+        return any(
+            needle in combined
+            for needle in (
+                "invalidnonce",
+                "invalid nonce",
+                "kc-api-timestamp",
+                "recvwindow",
+                "recv window",
+                "timestamp for this request",
+                "outside of the recvwindow",
+                '"code":-1021',
+                "'code': -1021",
+                "code=-1021",
+            )
+        )
+
+    async def _maybe_recover_exchange_time_sync(
+        self, exc: BaseException, *, source: str
+    ) -> bool:
+        """Force CCXT time-difference refresh after exchange timestamp/nonce drift."""
+        if not self._is_exchange_time_sync_error(exc):
+            return False
+        synced_clients = []
+        failed_clients = []
+        for client_name in ("cca", "ccp"):
+            client = getattr(self, client_name, None)
+            if client is None:
+                continue
+            sync = getattr(client, "load_time_difference", None)
+            if sync is None:
+                continue
+            options = getattr(client, "options", {}) or {}
+            before = options.get("timeDifference")
+            try:
+                result = sync()
+                if inspect.isawaitable(result):
+                    await result
+                after = (getattr(client, "options", {}) or {}).get("timeDifference")
+                synced_clients.append(f"{client_name}:{before}->{after}")
+            except Exception as sync_exc:
+                failed_clients.append(f"{client_name}:{type(sync_exc).__name__}")
+        if not synced_clients and not failed_clients:
+            logging.warning(
+                "[time] exchange timestamp/nonce error but no CCXT time-sync hook is available | source=%s error_type=%s error=%s",
+                source,
+                type(exc).__name__,
+                str(exc),
+            )
+            return False
+        now_ms = utc_ms()
+        last_ms = int(getattr(self, "_exchange_time_sync_last_log_ms", 0) or 0)
+        level = logging.WARNING if now_ms - last_ms >= 60_000 else logging.DEBUG
+        self._exchange_time_sync_last_log_ms = now_ms
+        logging.log(
+            level,
+            "[time] refreshed exchange clock offset after timestamp/nonce error | source=%s clients=%s failed=%s error_type=%s error=%s",
+            source,
+            ",".join(synced_clients) if synced_clients else "-",
+            ",".join(failed_clients) if failed_clients else "-",
+            type(exc).__name__,
+            str(exc),
+        )
+        return bool(synced_clients)
+
     def _log_startup_banner(self) -> None:
         """Log a startup banner with key configuration info."""
         from datetime import datetime, timezone
@@ -4533,6 +4604,19 @@ class Passivbot:
                         e,
                     )
                     break
+                if await self._maybe_recover_exchange_time_sync(
+                    e, source="run_execution_loop"
+                ):
+                    self._health_errors += 1
+                    self._monitor_record_error(
+                        "error.exchange",
+                        e,
+                        tags=("error", "exchange", "time_sync"),
+                        payload={"source": "run_execution_loop"},
+                    )
+                    await self.restart_bot_on_too_many_errors()
+                    await asyncio.sleep(0.5)
+                    continue
                 self._health_errors += 1
                 self._monitor_record_error(
                     "error.bot",
@@ -5097,7 +5181,7 @@ class Passivbot:
         """Refresh routine fills outside the critical account-state refresh path."""
         try:
             started_ms = utc_ms()
-            ok = await self.update_pnls()
+            ok = await self.update_pnls(source=f"routine_prefetch:{reason}")
             elapsed_ms = int(max(0, utc_ms() - started_ms))
             logging.debug(
                 "[fills] routine prefetch complete | reason=%s ok=%s elapsed=%dms",
@@ -5293,7 +5377,9 @@ class Passivbot:
             )
         if "fills" in plan:
             tasks["fills"] = asyncio.create_task(
-                self._timed_authoritative_fetch("fills", self.update_pnls(), timings_ms)
+                self._timed_authoritative_fetch(
+                    "fills", self.update_pnls(source="staged_blocking"), timings_ms
+                )
             )
         progress_task = asyncio.create_task(
             self._log_staged_refresh_progress_until(
@@ -8609,7 +8695,7 @@ class Passivbot:
             traceback.print_exc()
             raise
 
-    async def update_pnls(self):
+    async def update_pnls(self, *, source: str = "direct"):
         """Fetch latest fills using FillEventsManager and update the cache."""
         if self.stop_signal_received:
             return False
@@ -8617,9 +8703,9 @@ class Passivbot:
         if not hasattr(self, "_pnls_refresh_lock"):
             self._pnls_refresh_lock = asyncio.Lock()
         async with self._pnls_refresh_lock:
-            return await self._update_pnls_locked()
+            return await self._update_pnls_locked(source=source)
 
-    async def _update_pnls_locked(self):
+    async def _update_pnls_locked(self, *, source: str = "direct"):
         """Fetch latest fills while holding the fill-cache single-flight lock."""
         if self.stop_signal_received:
             return False
@@ -8761,7 +8847,8 @@ class Passivbot:
             )
             logging.log(
                 log_level,
-                "[fills] refresh timing | mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s overlap_minutes=%s",
+                "[fills] refresh timing | source=%s mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s overlap_minutes=%s",
+                source,
                 refresh_mode,
                 elapsed_ms,
                 before_events_count,
@@ -8799,6 +8886,8 @@ class Passivbot:
                 logging.debug(
                     "[shutdown] fill refresh stopped during in-flight request: %s", e
                 )
+                return False
+            if await self._maybe_recover_exchange_time_sync(e, source="update_pnls"):
                 return False
             self._monitor_record_error(
                 "error.exchange",
@@ -9199,8 +9288,17 @@ class Passivbot:
             periodic_debug = (
                 now_ms - debug_last_ms
             ) >= self._forager_selection_debug_interval_ms
+            first_info = last_info_key is None
+            quiet_selection_change = (
+                info_changed and not incumbent_symbols and not event_key
+            )
 
-            if info_changed or replacement_changed or periodic_info:
+            if (
+                first_info
+                or replacement_changed
+                or periodic_info
+                or (info_changed and not quiet_selection_change)
+            ):
                 reason = (
                     "hysteresis_replacement"
                     if replacement_changed
@@ -9222,6 +9320,17 @@ class Passivbot:
                 state["event_key"] = event_key
                 state["replacement_event_key"] = replacement_event_key
                 state["info_last_ms"] = now_ms
+            elif quiet_selection_change:
+                logging.debug(
+                    "[forager] %s selection changed without incumbents/events | slots=%s selected=%s "
+                    "hyst=%.6f top=%s",
+                    pside,
+                    int(selection.get("slots_to_fill", 0) or 0),
+                    ",".join(selected_symbols) if selected_symbols else "-",
+                    float(selection.get("score_hysteresis_pct", 0.0) or 0.0),
+                    _fmt_top(top_scores, 5, with_components=False),
+                )
+                state["info_key"] = info_key
             if debug_changed or event_changed or periodic_debug:
                 logging.debug(
                     "[forager] %s score detail | slots=%s selected=%s incumbents=%s "

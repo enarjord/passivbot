@@ -230,7 +230,7 @@ class BinanceBot(CCXTBot):
                 self._fill_symbol_scope = sorted(position_symbols | open_order_symbols)
                 try:
                     out["pnls_ok"] = await self._timed_authoritative_fetch(
-                        "fills", self.update_pnls(), timings_ms
+                        "fills", self.update_pnls(source="staged_blocking"), timings_ms
                     )
                 finally:
                     try:

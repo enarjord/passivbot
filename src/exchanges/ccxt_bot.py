@@ -465,11 +465,14 @@ class CCXTBot(Passivbot):
             except Exception as e:
                 consecutive_failures += 1
                 self._health_ws_reconnects += 1
+                clock_synced = await self._maybe_recover_exchange_time_sync(
+                    e, source="watch_orders"
+                )
                 retry_delay_s = min(60.0, 2 ** max(0, consecutive_failures - 1))
                 self._log_ws_reconnect(
                     reconnect_no=self._health_ws_reconnects,
                     retry_delay_s=retry_delay_s,
-                    reason="connection_lost",
+                    reason="time_sync" if clock_synced else "connection_lost",
                     exc=e,
                 )
                 await Passivbot._sleep_unless_shutdown(

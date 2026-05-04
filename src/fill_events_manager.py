@@ -928,6 +928,12 @@ class FillEventCache:
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
         self.save_metadata(metadata)
 
+    def mark_refreshed(self) -> None:
+        """Persist a successful refresh timestamp even if no events exist."""
+        metadata = self.load_metadata()
+        metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        self.save_metadata(metadata)
+
     def get_known_gaps(self) -> List[KnownGap]:
         """Return list of known gaps."""
         return self.load_metadata().get("known_gaps", [])
@@ -2484,6 +2490,8 @@ class FillEventsManager:
             # If we successfully fetched data for a gap range, clear it
             if start_ms is not None and end_ms is not None and added_ids:
                 self.cache.clear_gap(start_ms, end_ms)
+        else:
+            self.cache.mark_refreshed()
 
         # Consolidated refresh summary log
         # Only log at INFO when there are actually new fills; routine refreshes go to DEBUG

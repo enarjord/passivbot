@@ -144,6 +144,42 @@ class TestWatchOrdersTemplateMethod:
         assert [delay for delay, _stage in delays] == [1.0, 2.0]
         assert all(stage == "watch_orders_reconnect" for _delay, stage in delays)
 
+    @pytest.mark.asyncio
+    async def test_timestamp_error_refreshes_clock_before_watch_reconnect(self, monkeypatch):
+        """Timestamp/nonce websocket failures should refresh CCXT time offset."""
+        from exchanges.ccxt_bot import CCXTBot
+        from passivbot import Passivbot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.ccp = MagicMock()
+        bot.ccp.has = {"watchOrders": True}
+        bot.ccp.options = {"timeDifference": 0}
+        bot.ccp.load_time_difference = AsyncMock()
+        bot.cca = None
+        bot.exchange = "kucoin"
+        bot.stop_websocket = False
+        bot.stop_signal_received = False
+        bot._shutdown_in_progress = False
+        bot._health_ws_reconnects = 0
+        bot._ws_reconnect_warning_last_ms = 0
+        bot._do_watch_orders = AsyncMock(
+            side_effect=RuntimeError('kucoinfutures {"code":"400002","msg":"Invalid KC-API-TIMESTAMP"}')
+        )
+        bot.handle_order_update = MagicMock()
+        bot._log_ws_reconnect = MagicMock()
+
+        async def fake_sleep(_self, _seconds, *, stage):
+            assert stage == "watch_orders_reconnect"
+            bot.stop_websocket = True
+
+        monkeypatch.setattr(Passivbot, "_sleep_unless_shutdown", fake_sleep)
+
+        await bot.watch_orders()
+
+        bot.ccp.load_time_difference.assert_awaited_once()
+        bot._log_ws_reconnect.assert_called_once()
+        assert bot._log_ws_reconnect.call_args.kwargs["reason"] == "time_sync"
+
 
 class TestCreateCcxtSessionsWebSocketOptional:
     """Test that WebSocket is optional in create_ccxt_sessions()."""

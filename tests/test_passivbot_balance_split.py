@@ -9,7 +9,7 @@ import time
 import types
 from copy import deepcopy
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
@@ -170,7 +170,7 @@ def _counted_staged_account_refresh_bot(
         counts["fetch_open_orders"] += 1
         return list(open_orders or [])
 
-    async def counted_update_pnls():
+    async def counted_update_pnls(**_kwargs):
         counts["update_pnls"] += 1
         bot._record_authoritative_surface("fills", ())
         return True
@@ -1286,6 +1286,52 @@ def test_forager_selection_diagnostics_demotes_rank_only_changes(caplog):
     ]
     assert len(info_messages) == 1
     assert len(debug_messages) == 2
+
+
+def test_forager_selection_diagnostics_demotes_no_incumbent_selection_churn(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    base = {
+        "diagnostics": {
+            "forager_selections": [
+                {
+                    "pside": "long",
+                    "slots_to_fill": 1,
+                    "score_hysteresis_pct": 0.02,
+                    "selected_symbol_indices": [0],
+                    "incumbent_symbol_indices": [],
+                    "top_scores": [
+                        {"symbol_idx": 0, "rank": 1, "score": 0.625, "selected": True},
+                        {"symbol_idx": 1, "rank": 2, "score": 0.623, "selected": False},
+                    ],
+                    "hysteresis_events": [],
+                }
+            ]
+        }
+    }
+    changed = deepcopy(base)
+    changed["diagnostics"]["forager_selections"][0]["selected_symbol_indices"] = [1]
+    changed["diagnostics"]["forager_selections"][0]["top_scores"] = [
+        {"symbol_idx": 1, "rank": 1, "score": 0.626, "selected": True},
+        {"symbol_idx": 0, "rank": 2, "score": 0.624, "selected": False},
+    ]
+    idx_to_symbol = {0: "SOL/USDT:USDT", 1: "DOGE/USDT:USDT"}
+
+    with caplog.at_level(logging.DEBUG):
+        Passivbot._log_forager_selection_diagnostics(bot, base, idx_to_symbol)
+        Passivbot._log_forager_selection_diagnostics(bot, changed, idx_to_symbol)
+
+    info_messages = [
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.INFO
+        and "[forager] long selection" in record.message
+    ]
+    assert len(info_messages) == 1
+    assert any(
+        "selection changed without incumbents/events" in record.message
+        for record in caplog.records
+        if record.levelno == logging.DEBUG
+    )
 
 
 def test_active_candle_incomplete_publish_lag_is_info_throttled(monkeypatch, caplog):
@@ -3975,6 +4021,89 @@ async def test_run_execution_loop_suppresses_inflight_shutdown_refresh_error(cap
 
 
 @pytest.mark.asyncio
+async def test_exchange_time_sync_recovery_refreshes_ccxt_clients(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "binance"
+    bot.cca = SimpleNamespace(
+        options={"timeDifference": 10},
+        load_time_difference=AsyncMock(
+            side_effect=lambda: bot.cca.options.__setitem__("timeDifference", 25)
+        ),
+    )
+    bot.ccp = SimpleNamespace(
+        options={"timeDifference": -5},
+        load_time_difference=AsyncMock(
+            side_effect=lambda: bot.ccp.options.__setitem__("timeDifference", 30)
+        ),
+    )
+
+    exc = RuntimeError(
+        'binanceusdm {"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}'
+    )
+    with caplog.at_level(logging.WARNING):
+        recovered = await bot._maybe_recover_exchange_time_sync(
+            exc, source="test"
+        )
+
+    assert recovered is True
+    bot.cca.load_time_difference.assert_awaited_once()
+    bot.ccp.load_time_difference.assert_awaited_once()
+    assert bot.cca.options["timeDifference"] == 25
+    assert bot.ccp.options["timeDifference"] == 30
+    assert any("[time] refreshed exchange clock offset" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_recovers_timestamp_error_without_traceback(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "binance"
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = False
+    bot._health_errors = 0
+    bot._health_rate_limits = 0
+    bot.error_counts = []
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._monitor_record_error = MagicMock()
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+    bot.cca = SimpleNamespace(
+        options={"timeDifference": 0},
+        load_time_difference=AsyncMock(),
+    )
+    bot.ccp = None
+    calls = 0
+
+    async def fake_refresh_authoritative_state():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("Timestamp for this request is outside of the recvWindow")
+        bot.stop_signal_received = True
+        return False
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.execute_to_exchange = AsyncMock()
+
+    with caplog.at_level(logging.WARNING):
+        result = await bot.run_execution_loop()
+
+    assert result is None
+    assert calls == 2
+    assert bot._health_errors == 1
+    bot.cca.load_time_difference.assert_awaited_once()
+    bot.restart_bot_on_too_many_errors.assert_awaited_once()
+    bot.execute_to_exchange.assert_not_awaited()
+    assert any("[time] refreshed exchange clock offset" in r.message for r in caplog.records)
+    assert not [r for r in caplog.records if "error with run_execution_loop" in r.message]
+
+
+@pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirmation_plan():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
@@ -4085,7 +4214,7 @@ async def test_staged_account_refresh_prefetches_due_routine_fills_without_block
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def slow_update_pnls():
+    async def slow_update_pnls(**_kwargs):
         counts["update_pnls"] += 1
         started.set()
         await release.wait()

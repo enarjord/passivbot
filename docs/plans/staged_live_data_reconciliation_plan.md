@@ -137,6 +137,10 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Add live fill-refresh timing logs with mode, elapsed time, before/after event counts,
   new-event count, lookback, and cache scope. This makes slow `fills` surfaces visible without
   reconstructing them from broader staged refresh timing lines.
+- [x] Include fill-refresh source context in timing diagnostics so logs distinguish blocking staged
+  confirmations from routine background prefetches.
+- [x] Persist successful empty fill refresh timestamps. Accounts with no fills no longer lose the
+  last-refresh marker and repeatedly fall back to unbounded recent-history refreshes.
 - [x] Reduce forager INFO log noise. INFO now focuses on selected-set/slot changes, hysteresis
   replacements, and periodic heartbeats; rank-only score movement remains available at DEBUG.
 - [x] Soften active completed-candle refresh-incomplete logs for likely one-candle exchange
@@ -221,7 +225,10 @@ Before order planning/execution, live bot must have coherent state for:
   especially for KuCoin runtime EMA fetches.
 - [x] Investigate OKX `maintain_hourly_cycle '<=' not supported between instances of 'NoneType'
   and 'float'` from overnight VPS logs.
-- [ ] Investigate Binance `-1021` recvWindow/timestamp drift from overnight VPS logs.
+- [x] Investigate Binance `-1021` recvWindow/timestamp drift from overnight VPS logs.
+- [x] Add generic CCXT timestamp/nonce recovery. Binance `-1021` and KuCoin
+  `Invalid KC-API-TIMESTAMP`/`InvalidNonce` now force CCXT `load_time_difference()` before the next
+  retry instead of immediately entering the normal noisy error/restart path.
 
 ### 11. `src/live/` Module Split
 

@@ -2200,6 +2200,34 @@ async def test_manager_refresh_latest_can_bound_start_from_last_successful_refre
     assert fetcher.calls[1] == (last_refresh_ms - overlap_ms, None)
 
 
+@pytest.mark.asyncio
+async def test_manager_refresh_records_successful_empty_refresh(tmp_path: Path):
+    cache_dir = tmp_path / "fills_empty_refresh"
+
+    class _EmptyFetcher(BaseFetcher):
+        def __init__(self):
+            self.calls = []
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            return []
+
+    fetcher = _EmptyFetcher()
+    manager = FillEventsManager(
+        exchange="bitget",
+        user="default",
+        fetcher=fetcher,
+        cache_path=cache_dir,
+    )
+
+    await manager.refresh()
+    metadata = manager.cache.load_metadata()
+
+    assert fetcher.calls == [(None, None)]
+    assert metadata["last_refresh_ms"] > 0
+    assert manager.get_events() == []
+
+
 def test_fill_event_cache_load_ignores_metadata_file(tmp_path: Path, sample_events, caplog):
     cache = FillEventCache(tmp_path)
     cache.save([FillEvent.from_dict(dict(sample_events[0]))])

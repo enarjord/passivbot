@@ -233,7 +233,12 @@ def test_log_min_effective_cost_blocks_includes_concrete_numbers(monkeypatch):
     bot.is_pside_enabled = lambda pside: pside == "long"
 
     seen = []
-    monkeypatch.setattr("passivbot.logging.warning", lambda msg, *args: seen.append(msg % args))
+    monkeypatch.setattr(
+        "passivbot.logging.info",
+        lambda msg, *args: seen.append(msg % args)
+        if str(msg).startswith("[entry]")
+        else None,
+    )
 
     out = {
         "diagnostics": {
@@ -267,7 +272,12 @@ def test_log_min_effective_cost_blocks_is_throttled(monkeypatch):
     bot.is_pside_enabled = lambda _pside: True
 
     seen = []
-    monkeypatch.setattr("passivbot.logging.warning", lambda msg, *args: seen.append(msg % args))
+    monkeypatch.setattr(
+        "passivbot.logging.info",
+        lambda msg, *args: seen.append(msg % args)
+        if str(msg).startswith("[entry]")
+        else None,
+    )
 
     out = {
         "diagnostics": {

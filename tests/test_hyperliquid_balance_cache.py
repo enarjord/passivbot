@@ -800,7 +800,7 @@ async def test_refresh_authoritative_state_staged_hyperliquid_publishes_final_ba
     async def fake_handle_balance_update(source="REST"):
         seen_sources.append(source)
 
-    async def fake_update_pnls():
+    async def fake_update_pnls(**_kwargs):
         return True
 
     bot._capture_positions_balance_staged_snapshot = fake_capture_positions_balance_staged_snapshot

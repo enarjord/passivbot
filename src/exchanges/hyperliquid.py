@@ -829,7 +829,9 @@ class HyperliquidBot(CCXTBot):
             )
         if "fills" in plan:
             tasks["fills"] = asyncio.create_task(
-                self._timed_authoritative_fetch("fills", self.update_pnls(), timings_ms)
+                self._timed_authoritative_fetch(
+                    "fills", self.update_pnls(source="staged_blocking"), timings_ms
+                )
             )
         try:
             keys = list(tasks)

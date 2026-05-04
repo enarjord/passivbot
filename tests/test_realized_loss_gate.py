@@ -180,7 +180,7 @@ class TestLogRealizedLossGateBlocks:
         with caplog.at_level(logging.WARNING):
             bot._log_realized_loss_gate_blocks(out, idx_to_symbol)
         assert "[risk] order blocked by realized-loss gate" in caplog.text
-        assert "BTCUSDT" in caplog.text
+        assert " BTC long " in caplog.text
         assert "close_auto_reduce_wel_long" in caplog.text
 
     def test_unknown_symbol_idx_logs_unknown(self, caplog):
@@ -263,8 +263,8 @@ class TestLogRealizedLossGateBlocks:
         idx_to_symbol = {0: "BTCUSDT", 1: "SUIUSDT"}
         with caplog.at_level(logging.WARNING):
             bot._log_realized_loss_gate_blocks(out, idx_to_symbol)
-        assert "BTCUSDT" in caplog.text
-        assert "SUIUSDT" in caplog.text
+        assert " BTC long " in caplog.text
+        assert " SUI long " in caplog.text
 
 
 # ---------------------------------------------------------------------------

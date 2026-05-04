@@ -142,7 +142,7 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
 
     seen_fill_scope = []
 
-    async def update_pnls():
+    async def update_pnls(**_kwargs):
         seen_fill_scope.append(list(bot._fill_symbol_scope))
         return True
 
