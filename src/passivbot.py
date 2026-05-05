@@ -4310,8 +4310,11 @@ class Passivbot:
                         if age_ms > stale_threshold_ms:
                             stale_count += 1
                     if actionable_missing:
+                        tail_note = ""
+                        if bool(tf_report.get("open_tail_gap", False)):
+                            tail_note = f" tail={int(tf_report.get('tail_gap_candles', 0) or 0)}"
                         unhealthy_details.append(
-                            f"{Passivbot._log_symbol(symbol)} {tf} missing={missing}"
+                            f"{Passivbot._log_symbol(symbol)} {tf} missing={missing}{tail_note}"
                         )
             detail = "; ".join(unhealthy_details[:5])
             if len(unhealthy_details) > 5:
@@ -4326,6 +4329,8 @@ class Passivbot:
                         "synthetic": int(
                             tf_report.get("runtime_synthetic_count", 0) or 0
                         ),
+                        "open_tail_gap": bool(tf_report.get("open_tail_gap", False)),
+                        "tail_gap_candles": int(tf_report.get("tail_gap_candles", 0) or 0),
                     }
                     for tf, tf_report in (
                         symbol_report.get("timeframes", {}) or {}

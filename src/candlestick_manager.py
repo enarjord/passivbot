@@ -2298,88 +2298,20 @@ class CandlestickManager:
         }
 
     def _materialize_runtime_synthetic_gap(self, symbol: str, through_ts: int) -> int:
-        """Fill finalized-minute gaps in memory only (never persisted to disk).
+        """Deprecated open-tail synthetic materialization path.
 
-        Returns number of synthesized candles added to in-memory cache.
+        Open-ended tail gaps are intentionally not synthesized.  Synthetic zero
+        candles are allowed only for bounded gaps where a real candle exists both
+        before and after the missing span; that is handled by `standardize_gaps()`
+        on the returned runtime array.
         """
-        through_ts = _floor_minute(int(through_ts))
-        if through_ts <= 0:
-            return 0
-
-        arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
-        if arr.size == 0:
-            # Try loading a broader historical slice so we can seed from last known close.
-            try:
-                seed_start = max(0, through_ts - 30 * 24 * 60 * ONE_MIN_MS)
-                loaded = self._load_from_disk(symbol, seed_start, through_ts, timeframe="1m")
-                if isinstance(loaded, np.ndarray) and loaded.size:
-                    arr = _ensure_dtype(loaded)
-            except Exception as exc:
-                self._log(
-                    "debug",
-                    "runtime_synthetic_seed_load_failed",
-                    symbol=symbol,
-                    error=str(exc),
-                )
-        if arr.size == 0:
-            return 0
-
-        arr = np.sort(arr, order="ts")
-        ts_arr = arr["ts"].astype(np.int64, copy=False)
-        idx = int(np.searchsorted(ts_arr, through_ts, side="right")) - 1
-        if idx < 0:
-            return 0
-
-        last_ts = int(ts_arr[idx])
-        if last_ts >= through_ts:
-            return 0
-
-        # Cap synthesis burst to avoid building enormous in-memory runs if a symbol has
-        # been inactive for a very long time.
-        max_synth = max(1, min(self.max_memory_candles_per_symbol, 24 * 60))
-        first_synth_ts = max(last_ts + ONE_MIN_MS, through_ts - (max_synth - 1) * ONE_MIN_MS)
-        if first_synth_ts > through_ts:
-            return 0
-
-        prev_close = float(arr[idx]["c"])
-        if not math.isfinite(prev_close):
-            return 0
-
-        synth_ts = np.arange(first_synth_ts, through_ts + ONE_MIN_MS, ONE_MIN_MS, dtype=np.int64)
-        if synth_ts.size == 0:
-            return 0
-
-        synth = np.empty((synth_ts.shape[0],), dtype=CANDLE_DTYPE)
-        synth["ts"] = synth_ts
-        synth["o"] = prev_close
-        synth["h"] = prev_close
-        synth["l"] = prev_close
-        synth["c"] = prev_close
-        synth["bv"] = 0.0
-
-        merged = self._merge_overwrite(arr, synth)
-        self._cache[symbol] = merged
-        try:
-            self._enforce_memory_retention(symbol)
-        except Exception as exc:
-            self._log(
-                "debug",
-                "runtime_synthetic_retention_enforcement_failed",
-                symbol=symbol,
-                error=str(exc),
-            )
-        self._track_synthetic_timestamps(symbol, synth_ts.tolist())
-
         self._log(
             "debug",
-            "runtime_synthetic_gap_materialized",
+            "runtime_synthetic_open_tail_skipped",
             symbol=symbol,
-            synthesized=int(synth_ts.shape[0]),
-            first_ts=int(synth_ts[0]),
-            last_ts=int(synth_ts[-1]),
-            seed_last_real_ts=last_ts,
+            through_ts=_floor_minute(int(through_ts)),
         )
-        return int(synth_ts.shape[0])
+        return 0
 
     def _invalidate_ema_cache(self, symbol: str) -> None:
         """Invalidate all cached EMA values for a symbol, forcing recomputation."""
@@ -3026,6 +2958,15 @@ class CandlestickManager:
                 }
             )
             coverage_ok = len(missing) == 0
+            open_tail_gap = bool(
+                missing and end_ts >= start_ts and int(missing[-1][1]) >= int(end_ts)
+            )
+            tail_gap_candles = 0
+            if open_tail_gap:
+                if last_cached_ts is None:
+                    tail_gap_candles = int((end_ts - start_ts) // step_ms) + 1
+                else:
+                    tail_gap_candles = int(max(0, (end_ts - int(last_cached_ts)) // step_ms))
             overall_ok = overall_ok and (coverage_ok or not required)
             tf_reports[tf_norm] = {
                 "timeframe": tf_norm,
@@ -3043,6 +2984,13 @@ class CandlestickManager:
                 "missing_spans": missing,
                 "missing_spans_preview": top_spans,
                 "missing_candles": int(missing_candles),
+                "open_tail_gap": bool(open_tail_gap),
+                "tail_gap_candles": int(tail_gap_candles),
+                "tail_gap_age_ms": (
+                    int(max(0, latest_expected - int(last_cached_ts)))
+                    if open_tail_gap and last_cached_ts is not None and latest_expected >= 0
+                    else None
+                ),
                 "last_cached_ts": last_cached_ts,
                 "last_cached_age_ms": (
                     int(max(0, latest_expected - last_cached_ts))
@@ -4012,6 +3960,7 @@ class CandlestickManager:
         end_ts: Optional[int] = None,
         strict: bool = False,
         fill_leading_gaps: bool = False,
+        fill_trailing_gaps: bool = True,
         assume_sorted: bool = False,
         symbol: Optional[str] = None,
     ) -> np.ndarray:
@@ -4032,6 +3981,10 @@ class CandlestickManager:
             If False (default), do NOT synthesize candles before the first real data point.
             This prevents creating fake flat data when data doesn't exist at start_ts.
             If True, forward-fill from first available candle to fill leading gaps.
+        fill_trailing_gaps : bool
+            If False, do NOT synthesize an open-ended tail after the last real candle.
+            Missing spans are synthesized only when bounded by real candles before
+            and after the gap.
         assume_sorted : bool
             If True, skip sorting (caller guarantees array is already sorted by ts).
         """
@@ -4070,7 +4023,22 @@ class CandlestickManager:
                 )
             effective_lo = _floor_minute(first_real_ts)
 
-        expected = np.arange(effective_lo, hi + ONE_MIN_MS, ONE_MIN_MS, dtype=np.int64)
+        effective_hi = hi
+        if not fill_trailing_gaps and last_real_ts < hi:
+            trailing_gap_minutes = (hi - last_real_ts) // ONE_MIN_MS
+            if trailing_gap_minutes > 0:
+                self._log(
+                    "debug",
+                    "standardize_gaps_skipping_trailing",
+                    requested_end_ts=hi,
+                    actual_end_ts=last_real_ts,
+                    skipped_minutes=int(trailing_gap_minutes),
+                )
+            effective_hi = _floor_minute(last_real_ts)
+        if effective_hi < effective_lo:
+            return np.empty((0,), dtype=CANDLE_DTYPE)
+
+        expected = np.arange(effective_lo, effective_hi + ONE_MIN_MS, ONE_MIN_MS, dtype=np.int64)
         # Map from ts to row index in a
         pos = {int(t): i for i, t in enumerate(ts_arr)}
 
@@ -4078,16 +4046,16 @@ class CandlestickManager:
             # In strict mode: do not synthesize zero-candles.
             # If there are gaps, log a warning and return whatever real candles exist in range.
             i0 = int(np.searchsorted(ts_arr, effective_lo, side="left"))
-            i1 = int(np.searchsorted(ts_arr, hi, side="right"))
+            i1 = int(np.searchsorted(ts_arr, effective_hi, side="right"))
             missing_count = 0
             try:
-                expected_len = int((hi - effective_lo) // ONE_MIN_MS) + 1
+                expected_len = int((effective_hi - effective_lo) // ONE_MIN_MS) + 1
                 slice_ts = ts_arr[i0:i1].astype(np.int64, copy=False)
                 if slice_ts.size:
                     # Missing at head + tail + internal gaps (but NOT leading gaps if not filling)
                     if fill_leading_gaps:
                         missing_count += int((int(slice_ts[0]) - effective_lo) // ONE_MIN_MS)
-                    missing_count += int((hi - int(slice_ts[-1])) // ONE_MIN_MS)
+                    missing_count += int((effective_hi - int(slice_ts[-1])) // ONE_MIN_MS)
                     if slice_ts.size > 1:
                         diffs = np.diff(slice_ts)
                         gaps = diffs[diffs > ONE_MIN_MS]
@@ -6171,16 +6139,6 @@ class CandlestickManager:
                         if not (e < ms or s > me):
                             self._add_known_gap(symbol, max(s, ms), min(e, me))
 
-        # Present-touching runtime path: if there were no trades in completed minutes,
-        # materialize zero-volume candles in RAM (not persisted).
-        if self.exchange is not None and not strict and end_ts >= latest_finalized:
-            synth_through = min(int(end_ts), int(latest_finalized))
-            if synth_through >= int(start_ts):
-                synthesized = self._materialize_runtime_synthetic_gap(symbol, synth_through)
-                if synthesized > 0:
-                    arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
-                    sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
-
         # Standardize gaps: synthesize zero-candles where missing.
         # To help seed forward-fill, include one candle before start_ts if available.
         # This ensures standardize_gaps has a prev_close even if sub starts after start_ts.
@@ -6204,6 +6162,7 @@ class CandlestickManager:
             end_ts=end_ts,
             strict=strict,
             fill_leading_gaps=fill_leading_gaps,
+            fill_trailing_gaps=historical or end_ts < latest_finalized,
             assume_sorted=True,
             symbol=symbol,
         )
@@ -6683,7 +6642,12 @@ class CandlestickManager:
                 # tail is a slice of sorted get_candles output, so assume_sorted=True
                 metric_start_ts = int(end_ts - period_ms * (span_candles - 1))
                 tail = self.standardize_gaps(
-                    tail, start_ts=metric_start_ts, end_ts=end_ts, strict=False, assume_sorted=True
+                    tail,
+                    start_ts=metric_start_ts,
+                    end_ts=end_ts,
+                    strict=False,
+                    fill_trailing_gaps=False,
+                    assume_sorted=True,
                 )
             if tail.size == 0:
                 out[metric_key] = float("nan")
@@ -6931,8 +6895,10 @@ class CandlestickManager:
                 new_arr = await self._fetch_ohlcv_paginated(symbol, since, end_exclusive)
             new_arr = self._slice_ts_range(_ensure_dtype(new_arr), since, end_exclusive - ONE_MIN_MS)
             if new_arr.size == 0:
-                # Keep finalized runtime candles contiguous even if there were no fills.
-                self._materialize_runtime_synthetic_gap(symbol, end_exclusive - ONE_MIN_MS)
+                # A missing open-ended tail is not synthesized. Record the successful
+                # empty poll to avoid repeated immediate refetches; future real candles
+                # will bound the gap and normal runtime standardization can replay it.
+                self._set_last_refresh_meta(symbol, now_fetch)
                 return None
             if not persisted_batches:
                 self._persist_batch(

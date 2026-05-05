@@ -148,8 +148,8 @@ rules. Keep them narrow, visible, and test-covered.
   - Continue using the latest real candle-derived state for close EMA, log-range EMA, quote-volume
     EMA, trailing extrema, and HSL tail replay while the tail gap is within a configurable
     threshold.
-  - Do not synthesize zero candles for unbounded tail gaps.
-  - Only synthesize runtime zero candles for gaps bounded by a real candle before and after the gap.
+  - [x] Do not synthesize zero candles for unbounded tail gaps.
+  - [x] Only synthesize runtime zero candles for gaps bounded by a real candle before and after the gap.
   - When a real candle arrives after a tail gap, replay bounded synthetic zero candles if applicable
     and let EMAs/trailing extrema catch up deterministically.
   - If the tail gap exceeds the configured maximum, halt trading for the affected coin/pside with
@@ -159,11 +159,18 @@ rules. Keep them narrow, visible, and test-covered.
   delisting, exchange API trouble, or an extremely illiquid market. If ticker changes while
   candles remain stale, treat it as likely quote movement without trades and continue cautiously
   within the tail-gap threshold.
-- [ ] Ensure tail carry-forward and bounded-gap synthesis are in-memory/runtime only and never
+- [x] Ensure open-tail gaps are not materialized as runtime synthetic candles, and bounded-gap
+  synthesis remains in-memory/runtime only rather than being persisted as real exchange candles.
+- [ ] Ensure tail carry-forward is bounded by the configured staleness threshold and never
   persisted as real exchange candles.
-- [ ] Add tests for open-ended tail gaps: no synthetic zero candle, carry-forward derived EMAs,
-  bounded threshold halt for affected symbol only, ticker-liveness diagnostics, recovery replay,
-  and no suppression of active position management without visible policy state.
+- [ ] Add tests for open-ended tail gaps:
+  - [x] No synthetic zero candle for open-ended tails.
+  - [x] Bounded gaps still synthesize runtime zero candles and report health correctly.
+  - [ ] Carry-forward derived EMAs.
+  - [ ] Bounded threshold halt for affected symbol only.
+  - [ ] Ticker-liveness diagnostics.
+  - [ ] Recovery replay.
+  - [ ] No suppression of active position management without visible policy state.
 
 ### 6. Remote-Call Budgeting
 

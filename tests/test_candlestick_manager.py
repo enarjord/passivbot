@@ -49,6 +49,38 @@ def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
     assert math.isclose(float(res[1]["c"]), 102.0, rel_tol=1e-6)
 
 
+def test_standardize_gaps_does_not_fill_open_tail_when_disabled(tmp_path):
+    class _Ex:
+        id = "okx"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    t0 = _floor_minute(int(time.time() * 1000)) - 3 * ONE_MIN_MS
+    t1 = t0 + ONE_MIN_MS
+    t2 = t0 + 2 * ONE_MIN_MS
+    a = np.array([(t0, 100.0, 100.0, 100.0, 100.0, 1.0)], dtype=CANDLE_DTYPE)
+
+    res = cm.standardize_gaps(
+        a, start_ts=t0, end_ts=t2, strict=False, fill_trailing_gaps=False, symbol="TAIL"
+    )
+
+    assert list(res["ts"]) == [t0]
+    assert not cm._synthetic_timestamps.get("TAIL")
+
+    bounded = np.array(
+        [
+            (t0, 100.0, 100.0, 100.0, 100.0, 1.0),
+            (t2, 102.0, 102.0, 102.0, 102.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    res = cm.standardize_gaps(
+        bounded, start_ts=t0, end_ts=t2, strict=False, fill_trailing_gaps=False, symbol="TAIL"
+    )
+
+    assert list(res["ts"]) == [t0, t1, t2]
+    assert t1 in cm._synthetic_timestamps.get("TAIL", set())
+
+
 def test_kucoin_synthetic_batch_summary_is_info_not_warning(tmp_path, caplog):
     class _Ex:
         id = "kucoinfutures"
@@ -826,7 +858,9 @@ async def test_get_current_close_never_persists_current_in_progress_candle(monke
 
 
 @pytest.mark.asyncio
-async def test_get_candles_ttl_skips_single_trailing_present_gap(monkeypatch, tmp_path):
+async def test_get_candles_ttl_does_not_synthesize_single_trailing_present_gap(
+    monkeypatch, tmp_path
+):
     fixed_now_ms = 1725590520000  # 2024-09-06 00:02:00 UTC
     monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
 
@@ -860,7 +894,8 @@ async def test_get_candles_ttl_skips_single_trailing_present_gap(monkeypatch, tm
     )
 
     assert calls["paginated"] == 0
-    assert int(out[-1]["ts"]) == end_finalized
+    assert int(out[-1]["ts"]) == cached_last
+    assert not cm._synthetic_timestamps.get(symbol)
 
 
 @pytest.mark.asyncio
@@ -959,7 +994,7 @@ async def test_get_current_close_does_not_tail_fetch_current_minute(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_get_candles_materializes_runtime_synthetic_after_long_no_fill_gap(
+async def test_get_candles_does_not_synthesize_open_ended_tail_gap(
     monkeypatch, tmp_path
 ):
     fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
@@ -971,7 +1006,8 @@ async def test_get_candles_materializes_runtime_synthetic_after_long_no_fill_gap
     cm = CandlestickManager(exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches"))
     symbol = "KBONK/USDC:USDC"
     end_finalized = _floor_minute(fixed_now_ms) - ONE_MIN_MS
-    old_ts = end_finalized - 6 * 60 * ONE_MIN_MS
+    start_ts = end_finalized - 5 * ONE_MIN_MS
+    old_ts = start_ts
     old_close = 0.1234
 
     seed = np.array([(old_ts, old_close, old_close, old_close, old_close, 1.0)], dtype=CANDLE_DTYPE)
@@ -983,7 +1019,6 @@ async def test_get_candles_materializes_runtime_synthetic_after_long_no_fill_gap
 
     monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
 
-    start_ts = end_finalized - 5 * ONE_MIN_MS
     out = await cm.get_candles(
         symbol,
         start_ts=start_ts,
@@ -992,29 +1027,40 @@ async def test_get_candles_materializes_runtime_synthetic_after_long_no_fill_gap
         strict=False,
     )
 
-    assert out.size == 6
-    assert list(out["ts"]) == [start_ts + i * ONE_MIN_MS for i in range(6)]
+    assert out.size == 1
+    assert list(out["ts"]) == [start_ts]
     assert np.allclose(np.asarray(out["c"], dtype=np.float64), old_close)
-    assert np.allclose(np.asarray(out["bv"], dtype=np.float64), 0.0)
+    assert np.allclose(np.asarray(out["bv"], dtype=np.float64), 1.0)
+    assert not cm._synthetic_timestamps.get(symbol)
 
-    # Runtime synthetic candles must remain memory-only: shard still has only the original seed.
+    # Open-ended missing tail is not synthesized; shard still has only the original seed.
     day_key = cm._date_key(old_ts)
     shard = cm._load_shard(cm._shard_path(symbol, day_key, timeframe="1m"))
     assert shard.size == 1
 
 
-def test_real_batch_overrides_runtime_synthetic_and_invalidates_ema_cache(tmp_path):
+def test_real_batch_overrides_bounded_runtime_synthetic_and_invalidates_ema_cache(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "ILLQ/USDT:USDT"
     base_ts = _floor_minute(int(time.time() * 1000)) - 5 * ONE_MIN_MS
     base_close = 11.0
 
     seed = np.array(
-        [(base_ts, base_close, base_close, base_close, base_close, 1.0)], dtype=CANDLE_DTYPE
+        [
+            (base_ts, base_close, base_close, base_close, base_close, 1.0),
+            (base_ts + 2 * ONE_MIN_MS, 13.0, 13.0, 13.0, 13.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
     )
-    cm._cache[symbol] = seed
-    synthesized = cm._materialize_runtime_synthetic_gap(symbol, base_ts + 2 * ONE_MIN_MS)
-    assert synthesized == 2
+    standardized = cm.standardize_gaps(
+        seed,
+        start_ts=base_ts,
+        end_ts=base_ts + 2 * ONE_MIN_MS,
+        strict=False,
+        fill_trailing_gaps=False,
+        symbol=symbol,
+    )
+    cm._cache[symbol] = standardized
 
     cm._ema_cache[symbol] = {("close", 5.0, str(ONE_MIN_MS)): (base_close, base_ts, base_ts)}
 
@@ -1032,11 +1078,9 @@ def test_real_batch_overrides_runtime_synthetic_and_invalidates_ema_cache(tmp_pa
     assert real_ts not in cm._synthetic_timestamps.get(symbol, set())
 
 
-def test_materialize_runtime_synthetic_gap_caps_at_max_synth(tmp_path):
-    """Gap larger than 24*60 minutes should only synthesize the most recent 1440 candles."""
+def test_materialize_runtime_synthetic_gap_skips_open_tail(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "DEAD/USDT:USDT"
-    # Place a seed candle 3 days (4320 minutes) before through_ts.
     through_ts = _floor_minute(int(time.time() * 1000)) - 5 * ONE_MIN_MS
     gap_minutes = 3 * 24 * 60  # 4320 minutes
     seed_ts = through_ts - gap_minutes * ONE_MIN_MS
@@ -1049,20 +1093,11 @@ def test_materialize_runtime_synthetic_gap_caps_at_max_synth(tmp_path):
 
     synthesized = cm._materialize_runtime_synthetic_gap(symbol, through_ts)
 
-    # max_synth caps at min(max_memory_candles_per_symbol, 24*60) = 1440
-    max_synth = min(cm.max_memory_candles_per_symbol, 24 * 60)
-    assert synthesized == max_synth
+    assert synthesized == 0
 
     arr = np.sort(cm._cache[symbol], order="ts")
-    synth_only = arr[arr["ts"] > seed_ts]
-    assert synth_only.shape[0] == max_synth
-    # First synthetic candle should start at through_ts - (max_synth - 1) * ONE_MIN_MS
-    expected_first = through_ts - (max_synth - 1) * ONE_MIN_MS
-    assert int(synth_only[0]["ts"]) == expected_first
-    assert int(synth_only[-1]["ts"]) == through_ts
-    # All synthetic candles carry the seed close and zero volume
-    assert np.allclose(np.asarray(synth_only["c"], dtype=np.float64), seed_close)
-    assert np.allclose(np.asarray(synth_only["bv"], dtype=np.float64), 0.0)
+    assert arr.shape[0] == 1
+    assert int(arr[0]["ts"]) == seed_ts
 
 
 def test_completed_candle_health_excludes_current_minute_and_reports_gaps(tmp_path):
@@ -1090,8 +1125,31 @@ def test_completed_candle_health_excludes_current_minute_and_reports_gaps(tmp_pa
     assert one_m["end_ts"] == last_final
     assert one_m["missing_candles"] == 1
     assert one_m["missing_spans"] == [(start + ONE_MIN_MS, start + ONE_MIN_MS)]
+    assert one_m["open_tail_gap"] is False
     assert one_m["last_cached_ts"] == last_final
     assert one_m["loaded_rows"] == 2
+
+
+def test_completed_candle_health_reports_open_tail_gap(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TAILHEALTH/USDT:USDT"
+    now_ms = 1725590400000
+    current_minute = _floor_minute(now_ms)
+    last_final = current_minute - ONE_MIN_MS
+    start = last_final - 2 * ONE_MIN_MS
+    candles = np.array([(start, 10.0, 10.0, 10.0, 10.0, 1.0)], dtype=CANDLE_DTYPE)
+    cm._persist_batch(symbol, candles, timeframe="1m", merge_cache=True, last_refresh_ms=now_ms)
+
+    report = cm.get_completed_candle_health(symbol, {"1m": 3}, now_ms=now_ms)
+
+    one_m = report["timeframes"]["1m"]
+    assert report["ok"] is False
+    assert one_m["coverage_ok"] is False
+    assert one_m["missing_spans"] == [(start + ONE_MIN_MS, last_final)]
+    assert one_m["missing_candles"] == 2
+    assert one_m["open_tail_gap"] is True
+    assert one_m["tail_gap_candles"] == 2
+    assert one_m["tail_gap_age_ms"] == 2 * ONE_MIN_MS
 
 
 def test_completed_candle_health_reports_synthetic_and_hour_boundary(tmp_path):
@@ -1110,20 +1168,32 @@ def test_completed_candle_health_reports_synthetic_and_hour_boundary(tmp_path):
     cm._persist_batch(symbol, hour_candles, timeframe="1h", merge_cache=False)
 
     last_minute = _floor_minute(now_ms) - ONE_MIN_MS
+    missing_minute = last_minute - ONE_MIN_MS
+    first_minute = last_minute - 2 * ONE_MIN_MS
     seed = np.array(
-        [(last_minute - ONE_MIN_MS, 11.0, 11.0, 11.0, 11.0, 1.0)],
+        [
+            (first_minute, 11.0, 11.0, 11.0, 11.0, 1.0),
+            (last_minute, 12.0, 12.0, 12.0, 12.0, 1.0),
+        ],
         dtype=CANDLE_DTYPE,
     )
-    cm._cache[symbol] = seed
-    assert cm._materialize_runtime_synthetic_gap(symbol, last_minute) == 1
-    cm._synthetic_timestamps[symbol] = {last_minute}
+    cm._cache[symbol] = cm.standardize_gaps(
+        seed,
+        start_ts=first_minute,
+        end_ts=last_minute,
+        strict=False,
+        fill_trailing_gaps=False,
+        symbol=symbol,
+    )
+    cm._synthetic_timestamps[symbol] = {missing_minute}
 
-    report = cm.get_completed_candle_health(symbol, {"1m": 2, "1h": 1}, now_ms=now_ms)
+    report = cm.get_completed_candle_health(symbol, {"1m": 3, "1h": 1}, now_ms=now_ms)
 
     one_m = report["timeframes"]["1m"]
     one_h = report["timeframes"]["1h"]
     assert one_m["coverage_ok"] is True
     assert one_m["runtime_synthetic_count"] == 1
+    assert missing_minute in cm._synthetic_timestamps.get(symbol, set())
     assert one_h["coverage_ok"] is True
     assert one_h["end_ts"] == last_hour
     assert one_h["loaded_rows"] == 1
