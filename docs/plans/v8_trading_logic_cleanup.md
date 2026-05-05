@@ -21,12 +21,12 @@ Working target for `refactor/rust-strategy-runtime-plan`.
 - [x] Keep WEL/TWEL enforcer threshold as a single ratio, not split trigger/reduce-to params.
 - [x] Validate enabled enforcer thresholds as finite and greater than zero.
 - [x] Preserve backtest `dynamic_wel_by_tradability` behavior.
-- [ ] Update TWEL enforcer to use a two-phase reduction contract:
+- [x] Update TWEL enforcer to use a two-phase reduction contract:
   - first pass respects per-position floor as a fairness/preference rule
   - second pass continues reducing least-stuck bot-scope positions, even below the floor, until
     bot-scope TWE is at or below `TWEL * twel_enforcer_threshold`
   - if min-qty/min-cost/order constraints prevent reaching target, surface a warning/diagnostic
-- [ ] Define `manual` mode as outside bot scope entirely:
+- [x] Define `manual` mode as outside bot scope entirely:
   - no order creation
   - no order cancellation
   - excluded from bot-scope TWE/TWEL accounting

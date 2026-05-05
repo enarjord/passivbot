@@ -622,6 +622,8 @@ pub fn calc_twel_enforcer_actions(
         psize_to_close: f64,
         floor_exposure: f64,
         floor_psize: f64,
+        blocked_floor_pass: bool,
+        blocked_no_floor_pass: bool,
     }
 
     let mut candidates: Vec<Candidate> = Vec::with_capacity(positions.len());
@@ -715,9 +717,6 @@ pub fn calc_twel_enforcer_actions(
         }
         let per_position_twel_share = total_wallet_exposure_limit / (effective_n_positions as f64);
         let floor_exposure = base_limit.min(per_position_twel_share.max(0.0));
-        if exposure <= floor_exposure + 1e-9 {
-            continue;
-        }
         let floor_psize =
             exposure_to_psize(floor_exposure, balance, pos.position_price, pos.c_mult);
         candidates.push(Candidate {
@@ -736,6 +735,8 @@ pub fn calc_twel_enforcer_actions(
             psize_to_close: 0.0,
             floor_exposure,
             floor_psize: floor_psize.max(0.0),
+            blocked_floor_pass: false,
+            blocked_no_floor_pass: false,
         });
     }
 
@@ -745,111 +746,152 @@ pub fn calc_twel_enforcer_actions(
         return Vec::new();
     }
 
-    loop {
+    for respect_floor in [true, false] {
+        loop {
+            if total_exposure <= limit + exposure_tolerance {
+                break;
+            }
+            let best_candidate = select_least_stuck(
+                candidates
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, cand)| {
+                        cand.abs_psize > qty_tolerance
+                            && if respect_floor {
+                                !cand.blocked_floor_pass
+                                    && cand.exposure > cand.floor_exposure + exposure_tolerance
+                            } else {
+                                !cand.blocked_no_floor_pass && cand.exposure > exposure_tolerance
+                            }
+                    })
+                    .map(|(collection_idx, cand)| LeastStuckCandidate {
+                        collection_idx,
+                        symbol_idx: cand.idx,
+                        price_diff: cand.price_diff,
+                    })
+                    .collect(),
+            );
+
+            let Some(candidate_idx) = best_candidate else {
+                break;
+            };
+
+            let candidate = &mut candidates[candidate_idx];
+            let reducible_exposure = if respect_floor {
+                (candidate.exposure - candidate.floor_exposure).max(0.0)
+            } else {
+                candidate.exposure
+            };
+            if reducible_exposure <= exposure_tolerance {
+                if respect_floor {
+                    candidate.blocked_floor_pass = true;
+                } else {
+                    candidate.blocked_no_floor_pass = true;
+                }
+                continue;
+            }
+            let needed_exposure = (total_exposure - limit).max(0.0);
+            if needed_exposure <= exposure_tolerance {
+                break;
+            }
+            let exposure_to_cut = reducible_exposure.min(needed_exposure);
+            let mut qty_reduce = exposure_to_psize(
+                exposure_to_cut,
+                balance,
+                candidate.position_price,
+                candidate.c_mult,
+            );
+            if qty_reduce <= qty_tolerance {
+                if respect_floor {
+                    candidate.blocked_floor_pass = true;
+                } else {
+                    candidate.blocked_no_floor_pass = true;
+                }
+                continue;
+            }
+            qty_reduce = round_up(qty_reduce, candidate.qty_step);
+            if qty_reduce > candidate.abs_psize {
+                qty_reduce = candidate.abs_psize;
+            }
+            if qty_reduce <= qty_tolerance {
+                if respect_floor {
+                    candidate.blocked_floor_pass = true;
+                } else {
+                    candidate.blocked_no_floor_pass = true;
+                }
+                continue;
+            }
+
+            if respect_floor {
+                let prospective_psize = candidate.abs_psize - qty_reduce;
+                if prospective_psize + qty_tolerance < candidate.floor_psize {
+                    let target_psize = candidate.floor_psize.min(candidate.abs_psize);
+                    let mut adjusted_qty = (candidate.abs_psize - target_psize).max(0.0);
+                    adjusted_qty = round_dn(adjusted_qty, candidate.qty_step);
+                    if adjusted_qty <= qty_tolerance {
+                        candidate.blocked_floor_pass = true;
+                        continue;
+                    }
+                    qty_reduce = adjusted_qty.min(candidate.abs_psize);
+                }
+            }
+            if qty_reduce <= qty_tolerance {
+                if respect_floor {
+                    candidate.blocked_floor_pass = true;
+                } else {
+                    candidate.blocked_no_floor_pass = true;
+                }
+                continue;
+            }
+
+            let mut close_qty = qty_reduce;
+            if close_qty < candidate.min_qty {
+                if candidate.abs_psize <= candidate.min_qty + qty_tolerance {
+                    close_qty = candidate.abs_psize;
+                } else {
+                    close_qty = candidate.min_qty;
+                }
+            }
+            close_qty = round_dn(close_qty, candidate.qty_step);
+            if close_qty <= qty_tolerance {
+                if respect_floor {
+                    candidate.blocked_floor_pass = true;
+                } else {
+                    candidate.blocked_no_floor_pass = true;
+                }
+                continue;
+            }
+            if close_qty > candidate.abs_psize {
+                close_qty = candidate.abs_psize;
+            }
+            let new_abs_psize = (candidate.abs_psize - close_qty).max(0.0);
+            let new_exposure = calc_wallet_exposure(
+                candidate.c_mult,
+                balance,
+                new_abs_psize,
+                candidate.position_price,
+            );
+            if respect_floor && new_exposure < candidate.floor_exposure - exposure_tolerance {
+                candidate.blocked_floor_pass = true;
+                continue;
+            }
+            let actual_reduce = (candidate.exposure - new_exposure).max(0.0);
+            if actual_reduce <= exposure_tolerance {
+                if respect_floor {
+                    candidate.blocked_floor_pass = true;
+                } else {
+                    candidate.blocked_no_floor_pass = true;
+                }
+                continue;
+            }
+            candidate.abs_psize = new_abs_psize;
+            candidate.exposure = new_exposure;
+            candidate.psize_to_close += close_qty;
+            total_exposure -= actual_reduce;
+        }
         if total_exposure <= limit + exposure_tolerance {
             break;
         }
-        let best_candidate = select_least_stuck(
-            candidates
-                .iter()
-                .enumerate()
-                .filter(|(_, cand)| {
-                    cand.abs_psize > qty_tolerance
-                        && cand.exposure > cand.floor_exposure + exposure_tolerance
-                })
-                .map(|(collection_idx, cand)| LeastStuckCandidate {
-                    collection_idx,
-                    symbol_idx: cand.idx,
-                    price_diff: cand.price_diff,
-                })
-                .collect(),
-        );
-
-        let Some(candidate_idx) = best_candidate else {
-            break;
-        };
-
-        let candidate = &mut candidates[candidate_idx];
-        let exposure_above_floor = (candidate.exposure - candidate.floor_exposure).max(0.0);
-        if exposure_above_floor <= exposure_tolerance {
-            continue;
-        }
-        let needed_exposure = (total_exposure - limit).max(0.0);
-        if needed_exposure <= exposure_tolerance {
-            break;
-        }
-        let exposure_to_cut = exposure_above_floor.min(needed_exposure);
-        let mut qty_reduce = exposure_to_psize(
-            exposure_to_cut,
-            balance,
-            candidate.position_price,
-            candidate.c_mult,
-        );
-        if qty_reduce <= qty_tolerance {
-            candidate.floor_exposure = f64::INFINITY;
-            continue;
-        }
-        qty_reduce = round_up(qty_reduce, candidate.qty_step);
-        if qty_reduce > candidate.abs_psize {
-            qty_reduce = candidate.abs_psize;
-        }
-        if qty_reduce <= qty_tolerance {
-            candidate.floor_exposure = f64::INFINITY;
-            continue;
-        }
-
-        let prospective_psize = candidate.abs_psize - qty_reduce;
-        if prospective_psize + qty_tolerance < candidate.floor_psize {
-            let target_psize = candidate.floor_psize.min(candidate.abs_psize);
-            let mut adjusted_qty = (candidate.abs_psize - target_psize).max(0.0);
-            adjusted_qty = round_dn(adjusted_qty, candidate.qty_step);
-            if adjusted_qty <= qty_tolerance {
-                candidate.floor_exposure = f64::INFINITY;
-                continue;
-            }
-            qty_reduce = adjusted_qty.min(candidate.abs_psize);
-        }
-        if qty_reduce <= qty_tolerance {
-            candidate.floor_exposure = f64::INFINITY;
-            continue;
-        }
-
-        let mut close_qty = qty_reduce;
-        if close_qty < candidate.min_qty {
-            if candidate.abs_psize <= candidate.min_qty + qty_tolerance {
-                close_qty = candidate.abs_psize;
-            } else {
-                close_qty = candidate.min_qty;
-            }
-        }
-        close_qty = round_dn(close_qty, candidate.qty_step);
-        if close_qty <= qty_tolerance {
-            candidate.floor_exposure = f64::INFINITY;
-            continue;
-        }
-        if close_qty > candidate.abs_psize {
-            close_qty = candidate.abs_psize;
-        }
-        let new_abs_psize = (candidate.abs_psize - close_qty).max(0.0);
-        let new_exposure = calc_wallet_exposure(
-            candidate.c_mult,
-            balance,
-            new_abs_psize,
-            candidate.position_price,
-        );
-        if new_exposure < candidate.floor_exposure - exposure_tolerance {
-            candidate.floor_exposure = f64::INFINITY;
-            continue;
-        }
-        let actual_reduce = (candidate.exposure - new_exposure).max(0.0);
-        if actual_reduce <= exposure_tolerance {
-            candidate.floor_exposure = f64::INFINITY;
-            continue;
-        }
-        candidate.abs_psize = new_abs_psize;
-        candidate.exposure = new_exposure;
-        candidate.psize_to_close += close_qty;
-        total_exposure -= actual_reduce;
     }
 
     if total_exposure > limit + exposure_tolerance {
@@ -1147,6 +1189,56 @@ mod tests {
             .map(|(idx, _)| *idx)
             .unwrap();
         assert_eq!(best_idx, 1);
+    }
+
+    #[test]
+    fn test_twel_reducer_second_pass_breaks_below_position_floor() {
+        let balance = 1000.0;
+        let twel = 1.0;
+        let wel_base = 0.2;
+        let mut positions = Vec::new();
+        for idx in 0..9 {
+            let market_price = if idx == 0 { 100.0 } else { 90.0 };
+            positions.push(pos(
+                idx,
+                1.2,
+                100.0,
+                market_price,
+                wel_base,
+                1.0,
+                0.01,
+                0.01,
+                0.01,
+                0.0,
+            ));
+        }
+
+        let actions = calc_twel_enforcer_actions(LONG, 1.0, twel, 8, balance, &positions, None);
+        assert!(
+            actions.iter().any(|(idx, _)| *idx == 0),
+            "second pass should reduce the least-stuck position even when all positions are at/below floor"
+        );
+
+        let mut psizes = vec![1.2; 9];
+        for (idx, order) in actions {
+            psizes[idx] = (psizes[idx] - order.qty.abs()).max(0.0);
+        }
+        let exposures: Vec<f64> = psizes
+            .iter()
+            .map(|psize| calc_wallet_exposure(1.0, balance, *psize, 100.0))
+            .collect();
+        let twe: f64 = exposures.iter().sum();
+        assert!(
+            twe <= twel + 1e-12,
+            "second pass should bring TWE to target; got {} > {}",
+            twe,
+            twel
+        );
+        let floor = (twel / 8.0_f64).min(wel_base);
+        assert!(
+            exposures[0] < floor - 1e-12,
+            "least-stuck position should be allowed below floor in the second pass"
+        );
     }
 
     #[test]

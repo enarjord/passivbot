@@ -1908,7 +1908,9 @@ mod core {
         }
 
         // Active sets per pside:
-        // - Always include all current positions (even if > n_positions), so we keep managing them.
+        // - Always include all bot-managed current positions (even if > n_positions), so we keep
+        //   managing them.
+        // - Manual positions are outside bot scope and must not consume active slots.
         // - Only when there are open slots (`positions < effective_n_positions`), add forced normals
         //   then preferred coins until reaching the cap.
         workspace.actives_long.resize(n_symbols, false);
@@ -1922,7 +1924,10 @@ mod core {
 
         let actives_long = &mut workspace.actives_long;
         let mut actives_long_count: usize = 0;
-        for s in input.symbols.iter().filter(|s| s.long.position.size != 0.0) {
+        for s in input.symbols.iter().filter(|s| {
+            s.long.position.size != 0.0
+                && !matches!(effective_mode(s.long.mode, true), TradingMode::Manual)
+        }) {
             if !actives_long[s.symbol_idx] {
                 actives_long[s.symbol_idx] = true;
                 actives_long_count += 1;
@@ -1987,11 +1992,10 @@ mod core {
 
         let actives_short = &mut workspace.actives_short;
         let mut actives_short_count: usize = 0;
-        for s in input
-            .symbols
-            .iter()
-            .filter(|s| s.short.position.size != 0.0)
-        {
+        for s in input.symbols.iter().filter(|s| {
+            s.short.position.size != 0.0
+                && !matches!(effective_mode(s.short.mode, true), TradingMode::Manual)
+        }) {
             if !actives_short[s.symbol_idx] {
                 actives_short[s.symbol_idx] = true;
                 actives_short_count += 1;
@@ -2740,21 +2744,25 @@ mod core {
         // Portfolio TWEL gating of entries per pside (reuse workspace buffers).
         workspace.gate_positions_long.clear();
         workspace.gate_positions_short.clear();
-        for s in input.symbols.iter() {
-            if s.long.position.size != 0.0 {
+        for s in per_long.iter().filter_map(|v| v.as_ref()) {
+            if !matches!(s.mode, TradingMode::Manual) && s.pos.size != 0.0 {
+                let sym = &input.symbols[s.symbol_idx];
                 workspace.gate_positions_long.push(GateEntriesPosition {
                     idx: s.symbol_idx,
-                    position_size: s.long.position.size,
-                    position_price: s.long.position.price,
-                    c_mult: s.exchange.c_mult,
+                    position_size: s.pos.size,
+                    position_price: s.pos.price,
+                    c_mult: sym.exchange.c_mult,
                 });
             }
-            if s.short.position.size != 0.0 {
+        }
+        for s in per_short.iter().filter_map(|v| v.as_ref()) {
+            if !matches!(s.mode, TradingMode::Manual) && s.pos.size != 0.0 {
+                let sym = &input.symbols[s.symbol_idx];
                 workspace.gate_positions_short.push(GateEntriesPosition {
                     idx: s.symbol_idx,
-                    position_size: s.short.position.size,
-                    position_price: s.short.position.price,
-                    c_mult: s.exchange.c_mult,
+                    position_size: s.pos.size,
+                    position_price: s.pos.price,
+                    c_mult: sym.exchange.c_mult,
                 });
             }
         }

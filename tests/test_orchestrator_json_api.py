@@ -1309,6 +1309,42 @@ def test_twel_entry_gating_blocks_new_entries():
     assert not any(o["order_type"].startswith("entry_") for o in out["orders"])
 
 
+def test_manual_positions_do_not_consume_twel_entry_budget():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "entry_initial_qty_pct": 0.01,
+        "entry_initial_ema_dist": 0.0,
+        "entry_grid_spacing_pct": 0.01,
+        "total_wallet_exposure_limit": 0.1,
+        "wallet_exposure_limit": 0.1,
+        "n_positions": 1,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    manual_sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_mode="manual",
+        long_pos_size=2.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    active_sym = make_symbol(
+        1,
+        bid=100.0,
+        ask=100.0,
+        long_mode="normal",
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[manual_sym, active_sym])
+
+    out = compute(pbr, inp)
+    assert any(
+        o["symbol_idx"] == 1 and o["order_type"].startswith("entry_") for o in out["orders"]
+    ), "manual positions are outside bot-scope TWE and must not block active-symbol entries"
+
+
 def test_twel_enforcer_emits_auto_reduce():
     import passivbot_rust as pbr
 
@@ -1338,6 +1374,36 @@ def test_twel_enforcer_emits_auto_reduce():
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
     out = compute(pbr, inp)
     assert any(o["order_type"] == "close_auto_reduce_twel_long" for o in out["orders"])
+
+
+def test_twel_enforcer_second_pass_reduces_below_position_floor():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.2,
+        "total_wallet_exposure_limit": 1.0,
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 8,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    symbols = [
+        make_symbol(
+            idx,
+            bid=100.0 if idx == 0 else 90.0,
+            ask=100.0 if idx == 0 else 90.0,
+            long_pos_size=1.2,
+            long_pos_price=100.0,
+            long_bp=long_bp,
+        )
+        for idx in range(9)
+    ]
+
+    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols))
+    twel_closes = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
+    assert twel_closes, "TWE above TWEL must be reduced even when every position is at/below floor"
+    assert any(o["symbol_idx"] == 0 for o in twel_closes), (
+        "second pass should target the least-stuck candidate when bypassing the floor"
+    )
 
 
 # ---------------------------------------------------------------------------
