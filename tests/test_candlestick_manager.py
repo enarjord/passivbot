@@ -1039,6 +1039,50 @@ async def test_get_candles_does_not_synthesize_open_ended_tail_gap(
     assert shard.size == 1
 
 
+@pytest.mark.asyncio
+async def test_large_present_touching_warmup_does_not_synthesize_open_tail(
+    monkeypatch, tmp_path
+):
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="kucoin", cache_dir=str(tmp_path / "caches")
+    )
+    symbol = "STALE/USDT:USDT"
+    end_finalized = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    start_ts = end_finalized - 3 * 24 * 60 * ONE_MIN_MS
+    close = 7.0
+    seed = np.array([(start_ts, close, close, close, close, 1.0)], dtype=CANDLE_DTYPE)
+    cm._persist_batch(symbol, seed, timeframe="1m", merge_cache=True)
+    cm._cache.pop(symbol, None)
+
+    calls = {"fetches": 0}
+
+    async def fake_fetch(symbol_, since_ms, end_exclusive_ms, *, timeframe=None, on_batch=None):
+        calls["fetches"] += 1
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+
+    out = await cm.get_candles(
+        symbol,
+        start_ts=start_ts,
+        end_ts=end_finalized,
+        max_age_ms=30_000,
+        strict=False,
+    )
+
+    assert calls["fetches"] >= 1
+    assert out.size == 1
+    assert int(out[0]["ts"]) == start_ts
+    assert float(out[0]["c"]) == pytest.approx(close)
+    assert not cm._synthetic_timestamps.get(symbol)
+
+
 def test_real_batch_overrides_bounded_runtime_synthetic_and_invalidates_ema_cache(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "ILLQ/USDT:USDT"

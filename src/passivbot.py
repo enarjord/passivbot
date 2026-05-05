@@ -5065,6 +5065,8 @@ class Passivbot:
             return "symbols"
         if str(getattr(self, "exchange", "") or "").lower() == "hyperliquid":
             return "symbols"
+        if str(getattr(self, "exchange", "") or "").lower() == "kucoin":
+            return "symbols"
         return "bulk"
 
     def _authoritative_refresh_mode(self) -> str:
@@ -5152,7 +5154,10 @@ class Passivbot:
                     fetched_positions_old, fetched_positions_new
                 )
             except Exception as e:
-                logging.error(f"error logging position changes {e}")
+                if not self._log_noncritical_market_snapshot_error(
+                    "position-change diagnostics", e
+                ):
+                    logging.error(f"error logging position changes {e}")
             await self.handle_balance_update(source="REST")
 
         if "open_orders" in plan:
@@ -5179,7 +5184,10 @@ class Passivbot:
                         fetched_positions_old, fetched_positions_new
                     )
                 except Exception as e:
-                    logging.error(f"error logging position changes {e}")
+                    if not self._log_noncritical_market_snapshot_error(
+                        "position-change diagnostics", e
+                    ):
+                        logging.error(f"error logging position changes {e}")
             await self.handle_balance_update(
                 source=self._staged_balance_update_source()
             )
@@ -8708,12 +8716,32 @@ class Passivbot:
                     },
                 )
             except Exception as e:
-                logging.error(f"error with handle_balance_update {e}")
-                traceback.print_exc()
+                if self._log_noncritical_market_snapshot_error(
+                    "balance equity diagnostics", e
+                ):
+                    pass
+                else:
+                    logging.error(f"error with handle_balance_update {e}")
+                    traceback.print_exc()
             finally:
                 self._previous_balance_raw = balance_raw
                 self._previous_balance_snapped = balance_snapped
                 self.execution_scheduled = True
+
+    @staticmethod
+    def _is_market_snapshot_error(exc: Exception) -> bool:
+        msg = str(exc)
+        return (
+            "[market]" in msg
+            or "market snapshot" in msg
+            or "live market snapshots" in msg
+        )
+
+    def _log_noncritical_market_snapshot_error(self, context: str, exc: Exception) -> bool:
+        if not self._is_market_snapshot_error(exc):
+            return False
+        logging.warning("[market] skipped %s | error=%s", context, exc)
+        return True
 
     async def calc_upnl_sum(self):
         """Compute unrealised PnL across fetched positions using latest prices."""
@@ -10425,7 +10453,10 @@ class Passivbot:
                     fetched_positions_old, fetched_positions_new
                 )
             except Exception as e:
-                logging.error(f"error logging position changes {e}")
+                if not self._log_noncritical_market_snapshot_error(
+                    "position-change diagnostics", e
+                ):
+                    logging.error(f"error logging position changes {e}")
         return True
 
     async def update_balance(self):
@@ -10479,7 +10510,10 @@ class Passivbot:
                     fetched_positions_old, fetched_positions_new
                 )
             except Exception as e:
-                logging.error(f"error logging position changes {e}")
+                if not self._log_noncritical_market_snapshot_error(
+                    "position-change diagnostics", e
+                ):
+                    logging.error(f"error logging position changes {e}")
         if positions_ok:
             self._record_authoritative_surface(
                 "positions", self._positions_signature(fetched_positions_new)

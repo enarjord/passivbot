@@ -5,6 +5,7 @@ import types
 import pytest
 
 from exchanges.kucoin import AsyncKucoinBrokerFutures, KucoinBot
+from market_snapshot import MarketSnapshotProvider
 
 
 class DummyTask:
@@ -97,6 +98,70 @@ def test_create_ccxt_sessions_requires_complete_futures_broker_config():
 
     with pytest.raises(ValueError, match="broker-name"):
         bot.create_ccxt_sessions()
+
+
+def test_kucoin_ticker_normalizer_labels_last_price_fallback(caplog):
+    caplog.set_level(logging.WARNING)
+    bot = KucoinBot.__new__(KucoinBot)
+    bot.markets_dict = {"BTC/USDT:USDT": {}, "ETH/USDT:USDT": {}}
+
+    out = bot._normalize_tickers(
+        {
+            "BTC/USDT:USDT": {
+                "bid": None,
+                "ask": None,
+                "last": 76256.3,
+                "info": {"lastTradePrice": "76255.0", "markPrice": "76254.0"},
+            },
+            "ETH/USDT:USDT": {
+                "bid": 3000.0,
+                "ask": 3001.0,
+                "last": 3000.5,
+            },
+            "DOGE/USDT:USDT": {"last": 0.1},
+        }
+    )
+
+    assert out["BTC/USDT:USDT"]["bid"] == pytest.approx(76256.3)
+    assert out["BTC/USDT:USDT"]["ask"] == pytest.approx(76256.3)
+    assert out["BTC/USDT:USDT"]["last"] == pytest.approx(76256.3)
+    assert out["BTC/USDT:USDT"]["source"] == "kucoin_last_fallback"
+    assert out["ETH/USDT:USDT"]["source"] == "kucoin_ccxt_ticker"
+    assert "DOGE/USDT:USDT" not in out
+    assert "kucoin ticker bid/ask missing" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_kucoin_last_price_fallback_is_valid_market_snapshot():
+    bot = KucoinBot.__new__(KucoinBot)
+    bot.markets_dict = {"BTC/USDT:USDT": {}}
+
+    async def fetch_tickers():
+        return bot._normalize_tickers(
+            {
+                "BTC/USDT:USDT": {
+                    "bid": None,
+                    "ask": None,
+                    "last": None,
+                    "close": None,
+                    "info": {"lastTradePrice": "76255.0"},
+                }
+            }
+        )
+
+    provider = MarketSnapshotProvider(
+        exchange_name="kucoin",
+        fetch_tickers=fetch_tickers,
+        ticker_strategy="bulk",
+    )
+
+    snapshots = await provider.get_snapshots(["BTC/USDT:USDT"], max_age_ms=10_000)
+
+    snap = snapshots["BTC/USDT:USDT"]
+    assert snap.bid == pytest.approx(76255.0)
+    assert snap.ask == pytest.approx(76255.0)
+    assert snap.last == pytest.approx(76255.0)
+    assert snap.source == "kucoin_last_fallback"
 
 
 @pytest.mark.asyncio

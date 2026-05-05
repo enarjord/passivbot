@@ -99,6 +99,14 @@ def test_market_snapshot_ticker_strategy_uses_symbols_for_hyperliquid_hip3_label
     assert bot._market_snapshot_ticker_strategy() == "symbols"
 
 
+def test_market_snapshot_ticker_strategy_defaults_to_symbols_for_kucoin():
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot.config = {"live": {}}
+
+    assert bot._market_snapshot_ticker_strategy() == "symbols"
+
+
 def test_market_snapshot_ticker_strategy_respects_explicit_override():
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "bitget"

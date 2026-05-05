@@ -221,6 +221,64 @@ class KucoinBot(CCXTBot):
         fetched = await self._do_fetch_open_orders(symbol=symbol)
         return self._normalize_open_orders(fetched)
 
+    @staticmethod
+    def _coerce_positive_ticker_price(value) -> float | None:
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            return None
+        return price if price > 0.0 else None
+
+    def _normalize_tickers(self, fetched: dict) -> dict:
+        """Normalize KuCoin futures tickers with an explicit last-price fallback.
+
+        KuCoin futures CCXT ticker payloads commonly include `last`/`close` but no
+        bid/ask.  The staged market snapshot path requires bid/ask/last, so this
+        exchange-scoped fallback labels the synthetic top-of-book source instead
+        of letting the generic provider fabricate values silently.
+        """
+        tickers = {}
+        fallback_symbols = []
+        for symbol, data in fetched.items():
+            if symbol not in self.markets_dict or not isinstance(data, dict):
+                continue
+            info = data.get("info") if isinstance(data.get("info"), dict) else {}
+            last = (
+                self._coerce_positive_ticker_price(data.get("last"))
+                or self._coerce_positive_ticker_price(data.get("close"))
+                or self._coerce_positive_ticker_price(data.get("markPrice"))
+                or self._coerce_positive_ticker_price(info.get("lastTradePrice"))
+                or self._coerce_positive_ticker_price(info.get("markPrice"))
+                or self._coerce_positive_ticker_price(info.get("indexPrice"))
+            )
+            bid = self._coerce_positive_ticker_price(data.get("bid"))
+            ask = self._coerce_positive_ticker_price(data.get("ask"))
+            source = "kucoin_ccxt_ticker"
+            if (bid is None or ask is None) and last is not None:
+                bid = last
+                ask = last
+                source = "kucoin_last_fallback"
+                fallback_symbols.append(symbol)
+            if last is None or bid is None or ask is None:
+                continue
+            tickers[symbol] = {
+                "bid": bid,
+                "ask": ask,
+                "last": last,
+                "timestamp": data.get("timestamp"),
+                "source": source,
+            }
+        if fallback_symbols:
+            now_ms = utc_ms()
+            last_log_ms = int(getattr(self, "_kucoin_ticker_fallback_log_ms", 0) or 0)
+            if now_ms - last_log_ms >= 15 * 60 * 1000:
+                logging.warning(
+                    "[market] kucoin ticker bid/ask missing; using last as bid=ask | symbols=%s",
+                    ",".join(symbol_to_coin(symbol) for symbol in fallback_symbols[:12]),
+                )
+                self._kucoin_ticker_fallback_log_ms = now_ms
+        return tickers
+
     def _get_balance(self, fetched: dict) -> float:
         """KuCoin uses marginBalance in info.data."""
         return float(fetched["info"]["data"]["marginBalance"])
