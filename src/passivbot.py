@@ -13317,6 +13317,15 @@ class Passivbot:
         if not to_refresh:
             return
 
+        max_refresh_s_raw = get_optional_live_value(
+            self.config, "max_forager_candle_refresh_seconds", 45
+        )
+        try:
+            max_refresh_s = float(max_refresh_s_raw)
+        except Exception:
+            max_refresh_s = 45.0
+        max_refresh_ms = int(max(0.0, max_refresh_s) * 1000.0)
+
         # Throttled visibility into forager refresh behavior (debug only).
         try:
             now = utc_ms()
@@ -13363,6 +13372,8 @@ class Passivbot:
         fetch_delay_s = self._get_fetch_delay_seconds()
         refresh_started_ms = utc_ms()
         last_progress_ms = refresh_started_ms
+        refreshed_count = 0
+        paused_by_cap = False
         try:
             last_start_log = int(
                 getattr(self, "_forager_refresh_start_log_last_ms", 0) or 0
@@ -13386,6 +13397,10 @@ class Passivbot:
             if Passivbot._shutdown_requested(self):
                 logging.debug("[shutdown] aborting forager candle refresh")
                 return
+            elapsed_ms = int(max(0, utc_ms() - refresh_started_ms))
+            if max_refresh_ms > 0 and elapsed_ms >= max_refresh_ms:
+                paused_by_cap = True
+                break
             try:
                 max_span = 0.0
                 for pside, syms in candidates_by_side.items():
@@ -13413,7 +13428,7 @@ class Passivbot:
                 if max_warmup_minutes > 0:
                     win = min(int(win), int(max_warmup_minutes))
                 start_ts = end_ts - ONE_MIN_MS * max(1, win)
-                await self.cm.get_candles(
+                candle_task = self.cm.get_candles(
                     sym,
                     start_ts=start_ts,
                     end_ts=end_ts,
@@ -13421,6 +13436,15 @@ class Passivbot:
                     strict=False,
                     max_lookback_candles=win,
                 )
+                if max_refresh_ms > 0:
+                    remaining_s = max(
+                        0.001,
+                        float(max_refresh_ms - elapsed_ms) / 1000.0,
+                    )
+                    await asyncio.wait_for(candle_task, timeout=remaining_s)
+                else:
+                    await candle_task
+                refreshed_count += 1
                 if fetch_delay_s > 0:
                     await Passivbot._sleep_unless_shutdown(
                         self, fetch_delay_s, stage="forager_candidate_candle_refresh"
@@ -13437,6 +13461,17 @@ class Passivbot:
                     )
                     last_progress_ms = now_ms
             except TimeoutError as exc:
+                paused_by_cap = bool(
+                    max_refresh_ms > 0
+                    and utc_ms() - refresh_started_ms >= max_refresh_ms
+                )
+                if paused_by_cap:
+                    logging.warning(
+                        "[candle] forager refresh paused: %s candle fetch exceeded wall-time cap %.1fs",
+                        Passivbot._log_symbol(sym),
+                        float(max_refresh_ms) / 1000.0,
+                    )
+                    break
                 logging.warning(
                     "Timed out acquiring candle lock for %s; forager refresh will retry (%s)",
                     Passivbot._log_symbol(sym),
@@ -13451,10 +13486,19 @@ class Passivbot:
                 )
         try:
             elapsed_s = int(max(0, utc_ms() - refresh_started_ms) / 1000)
-            if len(to_refresh) > 1 and elapsed_s >= 30:
+            if paused_by_cap:
+                logging.info(
+                    "[candle] forager refresh paused by wall-time cap refreshed=%d/%d elapsed=%ds cap=%ds remaining=%d",
+                    refreshed_count,
+                    len(to_refresh),
+                    elapsed_s,
+                    int(max_refresh_ms / 1000),
+                    max(0, len(to_refresh) - refreshed_count),
+                )
+            elif len(to_refresh) > 1 and elapsed_s >= 30:
                 logging.info(
                     "[candle] forager refresh complete refreshed=%d elapsed=%ds",
-                    len(to_refresh),
+                    refreshed_count,
                     elapsed_s,
                 )
         except Exception:

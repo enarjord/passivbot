@@ -367,6 +367,7 @@ def get_template_config():
                 "max_n_creations_per_batch": 3,
                 "max_n_restarts_per_day": 10,
                 "max_forager_candle_staleness_minutes": None,
+                "max_forager_candle_refresh_seconds": 45,
                 "max_ohlcv_fetches_per_minute": 24,
                 "max_realized_loss_pct": 1.0,
                 "max_warmup_minutes": 0,

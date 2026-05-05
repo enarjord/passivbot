@@ -388,6 +388,10 @@ changing behavior during extraction commits.
 - [x] Tightened live candle budgeting: priority position/open-order symbols bypass forager budgets,
   forager/eligible symbols are ranked by latest completed-candle staleness, and
   `live.max_forager_candle_staleness_minutes` caps target staleness for broad eligible refreshes.
+- [x] Added a wall-time cap for best-effort broad forager candidate candle refreshes
+  (`live.max_forager_candle_refresh_seconds`) so sparse/slow exchanges cannot let non-critical
+  candle catch-up monopolize the live runtime; trading-critical active candle refresh remains
+  separate.
 - [x] Split live startup candle work: startup now does a synchronous trading-ready warmup for
   symbols with positions/open orders, then schedules broad approved-coin warmup as a cancellable
   background maintainer. `live.defer_broad_candle_warmup=false` keeps legacy blocking warmup.
