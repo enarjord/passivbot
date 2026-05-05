@@ -115,21 +115,26 @@ async def test_market_snapshot_provider_coalesces_concurrent_bulk_fetches():
 
 
 @pytest.mark.asyncio
-async def test_market_snapshot_provider_fills_missing_bid_ask_from_last():
+@pytest.mark.parametrize(
+    "ticker",
+    [
+        {"last": 42.0, "bid": None, "ask": 43.0},
+        {"last": 42.0, "bid": 41.0, "ask": None},
+        {"last": None, "bid": 41.0, "ask": 43.0},
+    ],
+)
+async def test_market_snapshot_provider_rejects_partial_ticker_fields(ticker):
     async def fetch_tickers():
-        return {"HYPE/USDC:USDC": {"last": 42.0, "bid": None, "ask": None}}
+        return {"HYPE/USDC:USDC": ticker}
 
     provider = MarketSnapshotProvider(exchange_name="hyperliquid", fetch_tickers=fetch_tickers)
 
-    out = await provider.get_snapshots(["HYPE/USDC:USDC"], max_age_ms=60_000)
-
-    assert out["HYPE/USDC:USDC"].bid == 42.0
-    assert out["HYPE/USDC:USDC"].ask == 42.0
-    assert out["HYPE/USDC:USDC"].last == 42.0
+    with pytest.raises(RuntimeError, match="ticker snapshots incomplete"):
+        await provider.get_snapshots(["HYPE/USDC:USDC"], max_age_ms=60_000)
 
 
 @pytest.mark.asyncio
-async def test_market_snapshot_provider_returns_partial_on_fetch_failure():
+async def test_market_snapshot_provider_raises_on_fetch_failure_for_missing_symbols():
     calls = {"fetch": 0}
 
     async def fetch_tickers():
@@ -141,8 +146,27 @@ async def test_market_snapshot_provider_returns_partial_on_fetch_failure():
     provider = MarketSnapshotProvider(exchange_name="bybit", fetch_tickers=fetch_tickers)
 
     first = await provider.get_snapshots(["BTC/USDT:USDT"], max_age_ms=60_000)
-    second = await provider.get_snapshots(["BTC/USDT:USDT", "ETH/USDT:USDT"], max_age_ms=60_000)
 
     assert first["BTC/USDT:USDT"].last == 100.0
-    assert second["BTC/USDT:USDT"].last == 100.0
-    assert "ETH/USDT:USDT" not in second
+    with pytest.raises(RuntimeError, match="ticker snapshot fetch failed"):
+        await provider.get_snapshots(["BTC/USDT:USDT", "ETH/USDT:USDT"], max_age_ms=60_000)
+
+
+@pytest.mark.asyncio
+async def test_market_snapshot_provider_uses_explicit_ticker_source_label():
+    async def fetch_tickers():
+        return {
+            "HYPE/USDC:USDC": {
+                "bid": 42.0,
+                "ask": 42.0,
+                "last": 42.0,
+                "source": "hyperliquid_all_mids",
+            }
+        }
+
+    provider = MarketSnapshotProvider(exchange_name="hyperliquid", fetch_tickers=fetch_tickers)
+
+    out = await provider.get_snapshots(["HYPE/USDC:USDC"], max_age_ms=60_000)
+
+    assert out["HYPE/USDC:USDC"].bid == 42.0
+    assert out["HYPE/USDC:USDC"].source == "hyperliquid_all_mids"

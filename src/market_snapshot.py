@@ -83,31 +83,40 @@ class MarketSnapshotProvider:
                 out[symbol] = snap
 
         missing = [s for s in ordered_symbols if s not in out]
-        if not missing or (
-            self._fetch_tickers is None and self._fetch_tickers_for_symbols is None
-        ):
+        if not missing:
             return out
+        if self._fetch_tickers is None and self._fetch_tickers_for_symbols is None:
+            raise RuntimeError(
+                f"[market] ticker snapshot fetch unavailable | exchange={self.exchange_name} "
+                f"missing={len(missing)}"
+            )
 
         try:
             fetched, source = await self._fetch_tickers_for_missing(missing)
         except Exception as exc:
-            self._log.debug(
+            self._log.warning(
                 "[market] ticker snapshot fetch failed | exchange=%s symbols=%s error_type=%s error=%s",
                 self.exchange_name,
                 len(missing),
                 type(exc).__name__,
                 exc,
             )
-            return out
+            raise RuntimeError(
+                f"[market] ticker snapshot fetch failed for {self.exchange_name}; "
+                f"missing={len(missing)}"
+            ) from exc
 
         fetched_ms = utc_ms()
         if not isinstance(fetched, dict):
-            self._log.debug(
+            self._log.warning(
                 "[market] ticker snapshot fetch returned non-dict | exchange=%s type=%s",
                 self.exchange_name,
                 type(fetched).__name__,
             )
-            return out
+            raise RuntimeError(
+                f"[market] ticker snapshot fetch returned non-dict for {self.exchange_name}: "
+                f"{type(fetched).__name__}"
+            )
 
         cached = 0
         for raw_symbol, ticker in fetched.items():
@@ -145,6 +154,12 @@ class MarketSnapshotProvider:
             cached,
             source,
         )
+        if hits < len(missing):
+            missing_after = [symbol for symbol in missing if symbol not in out]
+            raise RuntimeError(
+                f"[market] ticker snapshots incomplete | exchange={self.exchange_name} "
+                f"missing={len(missing_after)} symbols={','.join(missing_after[:12])}"
+            )
         return out
 
     async def _fetch_tickers_for_missing(self, missing: list[str]) -> tuple[dict[str, Any], str]:
@@ -204,14 +219,11 @@ class MarketSnapshotProvider:
             last = self._coerce_positive(ticker.get("close"))
         bid = self._coerce_positive(ticker.get("bid"))
         ask = self._coerce_positive(ticker.get("ask"))
-        if last is None:
-            last = bid or ask
-        if bid is None:
-            bid = last
-        if ask is None:
-            ask = last
         if last is None or bid is None or ask is None:
             return None
+        ticker_source = ticker.get("source")
+        if isinstance(ticker_source, str) and ticker_source.strip():
+            source = ticker_source.strip()
         exchange_ts = None
         try:
             raw_ts = ticker.get("timestamp")

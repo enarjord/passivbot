@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import random
 from copy import deepcopy
 
@@ -635,14 +636,22 @@ class HyperliquidBot(CCXTBot):
         return isinstance(info, dict) and isinstance(info.get("balances"), list)
 
     def _hl_extract_unified_total(self, balance_payload: dict) -> float:
+        def _validate_total(raw_total):
+            total = float(raw_total)
+            if not math.isfinite(total) or total < 0.0:
+                raise ValueError(
+                    f"unified Hyperliquid balance payload has invalid total for {self.quote}: {raw_total!r}"
+                )
+            return total
+
         total = balance_payload.get("total", {}) if isinstance(balance_payload, dict) else {}
         if isinstance(total, dict) and total.get(self.quote) is not None:
-            return float(total[self.quote])
+            return _validate_total(total[self.quote])
         info = balance_payload.get("info", {}) if isinstance(balance_payload, dict) else {}
         balances = info.get("balances", []) if isinstance(info, dict) else []
         for row in balances or []:
             if str(row.get("coin") or "") == self.quote:
-                return float(row.get("total") or 0.0)
+                return _validate_total(row.get("total"))
         raise KeyError(f"unified Hyperliquid balance payload missing total for {self.quote}")
 
     async def _fetch_positions_and_balance(self):
@@ -870,7 +879,12 @@ class HyperliquidBot(CCXTBot):
             if symbol not in self.markets_dict:
                 continue
             price = float(price_raw)
-            tickers[symbol] = {"bid": price, "ask": price, "last": price}
+            tickers[symbol] = {
+                "bid": price,
+                "ask": price,
+                "last": price,
+                "source": "hyperliquid_all_mids",
+            }
         return tickers
 
     async def fetch_tickers_for_symbols(self, symbols: list[str]) -> dict:
@@ -960,17 +974,20 @@ class HyperliquidBot(CCXTBot):
         last = _positive(ctx.get("midPx")) or _positive(ctx.get("markPx")) or _positive(
             ctx.get("oraclePx")
         )
+        source = "hyperliquid_hip3_asset_ctx"
         if bid is None:
             bid = last
+            source = "hyperliquid_hip3_mid_fallback"
         if ask is None:
             ask = last
+            source = "hyperliquid_hip3_mid_fallback"
         if last is None or bid is None or ask is None:
             logging.debug(
                 "[market] hyperliquid HIP-3 ticker missing usable price | symbol=%s",
                 symbol_to_coin(symbol, verbose=False) or symbol,
             )
             return None
-        return {"bid": bid, "ask": ask, "last": last}
+        return {"bid": bid, "ask": ask, "last": last, "source": source}
 
     async def fetch_ohlcv(self, symbol: str, timeframe="1m"):
         # intervals: 1,3,5,15,30,60,120,240,360,720,D,M,W

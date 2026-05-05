@@ -5058,6 +5058,8 @@ class Passivbot:
                 )
         if str(getattr(self, "exchange", "") or "").lower() == "bitget":
             return "symbols"
+        if str(getattr(self, "exchange", "") or "").lower() == "hyperliquid":
+            return "symbols"
         return "bulk"
 
     def _authoritative_refresh_mode(self) -> str:
@@ -5072,7 +5074,11 @@ class Passivbot:
             )
         default_mode = "staged"
         mode = str(explicit_mode if explicit_mode is not None else default_mode).lower()
-        return mode if mode in {"legacy", "staged"} else default_mode
+        if mode not in {"legacy", "staged"}:
+            raise ValueError(
+                f"invalid live.authoritative_refresh_mode={explicit_mode!r}; expected 'legacy' or 'staged'"
+            )
+        return mode
 
     async def refresh_authoritative_state(self) -> bool:
         """Refresh authoritative account state before planning/execution."""
@@ -11308,6 +11314,7 @@ class Passivbot:
             if not spans:
                 return out
             now_ms = int(utc_ms())
+            max_fallback_age_ms = int(Passivbot._close_ema_fallback_max_age_ms(self))
             prev_by_span = self._orchestrator_prev_close_ema.setdefault(symbol, {})
             missing: list[tuple[float, str]] = []
             for sp in spans:
@@ -11342,6 +11349,23 @@ class Passivbot:
                 if prev is not None:
                     prev_val = float(prev[0])
                     prev_ts = int(prev[1])
+                    age_ms = max(0, now_ms - prev_ts)
+                    if age_ms > max_fallback_age_ms:
+                        logging.warning(
+                            "[ema] close EMA fallback stale %s span=%.8g age_ms=%d max_age_ms=%d reason=%s",
+                            Passivbot._log_symbol(symbol),
+                            span,
+                            age_ms,
+                            max_fallback_age_ms,
+                            reason,
+                        )
+                        missing.append(
+                            (
+                                span,
+                                f"{reason}; previous close EMA stale age_ms={age_ms} max_age_ms={max_fallback_age_ms}",
+                            )
+                        )
+                        continue
                     if math.isfinite(prev_val):
                         out[span] = prev_val
                         n_fallbacks = (
@@ -11351,7 +11375,6 @@ class Passivbot:
                             + 1
                         )
                         self._orchestrator_close_ema_fallback_counts[key] = n_fallbacks
-                        age_ms = max(0, now_ms - prev_ts)
                         logging.warning(
                             "[ema] close EMA fallback %s span=%.8g ema=%.12g age_ms=%d"
                             " n_fallbacks=%d reason=%s",
@@ -11872,9 +11895,20 @@ class Passivbot:
         provider = getattr(self, "market_snapshot_provider", None)
         snapshots: dict[str, MarketSnapshot] = {}
         if provider is not None:
-            snapshots = await provider.get_snapshots(
-                ordered_symbols, max_age_ms=max_age_ms
-            )
+            try:
+                snapshots = await provider.get_snapshots(
+                    ordered_symbols, max_age_ms=max_age_ms
+                )
+            except RuntimeError as exc:
+                if str(getattr(self, "exchange", "") or "").lower() != "hyperliquid":
+                    raise
+                logging.debug(
+                    "[market] hyperliquid primary ticker snapshot path failed; trying explicit fallback | context=%s symbols=%s error=%s",
+                    context,
+                    len(ordered_symbols),
+                    exc,
+                )
+                snapshots = {}
 
         missing = [
             symbol
@@ -11936,12 +11970,13 @@ class Passivbot:
                         if symbol not in missing or not isinstance(ticker, dict):
                             continue
                         try:
-                            last = float(
-                                ticker.get("last") or ticker.get("close") or 0.0
-                            )
-                            bid = float(ticker.get("bid") or last)
-                            ask = float(ticker.get("ask") or last)
+                            last = float(ticker.get("last") or ticker.get("close"))
+                            bid = float(ticker.get("bid"))
+                            ask = float(ticker.get("ask"))
                         except (TypeError, ValueError):
+                            continue
+                        source = ticker.get("source")
+                        if not (last > 0.0 and bid > 0.0 and ask > 0.0):
                             continue
                         snap = MarketSnapshot(
                             symbol=symbol,
@@ -11949,7 +11984,7 @@ class Passivbot:
                             ask=ask,
                             last=last,
                             fetched_ms=fetched_ms,
-                            source="hyperliquid_symbol_tickers",
+                            source=str(source or "hyperliquid_symbol_tickers"),
                         )
                         if snap.is_valid():
                             snapshots[symbol] = snap
@@ -12037,9 +12072,19 @@ class Passivbot:
                     ttl_ms,
                     fetch_ttl_ms,
                 )
-                snapshots = await provider.get_snapshots(
-                    symbols, max_age_ms=fetch_ttl_ms
-                )
+                try:
+                    snapshots = await provider.get_snapshots(
+                        symbols, max_age_ms=fetch_ttl_ms
+                    )
+                except RuntimeError as exc:
+                    if str(getattr(self, "exchange", "") or "").lower() != "hyperliquid":
+                        raise
+                    logging.debug(
+                        "[state] staged hyperliquid primary market snapshots failed; trying explicit fallback | symbols=%s error=%s",
+                        len(symbols),
+                        exc,
+                    )
+                    snapshots = {}
             missing = [
                 symbol
                 for symbol in symbols
@@ -12116,6 +12161,24 @@ class Passivbot:
         """Use a stricter fetch TTL than the hard safety TTL to leave planning headroom."""
         max_age_ms = int(Passivbot._live_market_snapshot_max_age_ms(self))
         return max(1_000, min(max_age_ms, int(max_age_ms * 0.5)))
+
+    def _close_ema_fallback_max_age_ms(self) -> int:
+        """Maximum age for required close-EMA carry-forward fallback."""
+        default_minutes = get_optional_live_value(
+            getattr(self, "config", {}) or {}, "inactive_coin_candle_ttl_minutes", 10
+        )
+        raw_minutes = get_optional_live_value(
+            getattr(self, "config", {}) or {},
+            "max_forager_candle_staleness_minutes",
+            default_minutes,
+        )
+        try:
+            minutes = float(raw_minutes)
+        except (TypeError, ValueError):
+            minutes = 10.0
+        if not math.isfinite(minutes) or minutes <= 0.0:
+            minutes = 10.0
+        return max(60_000, int(minutes * 60_000))
 
     def _market_snapshot_signature(
         self, symbols: Iterable[str], snapshots: dict[str, MarketSnapshot]

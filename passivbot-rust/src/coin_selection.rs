@@ -99,29 +99,22 @@ pub struct ForagerSelectionResult {
 pub enum ForagerSelectionError {
     InvalidPositionSide(String),
     NonFiniteInput { field: &'static str, index: usize },
+    InvalidConfig { field: &'static str, value: String },
 }
 
 impl SelectionConfig {
-    fn clamp_pct(value: f64) -> f64 {
-        if value.is_finite() {
-            value.clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    }
-
-    fn volume_drop(&self) -> f64 {
-        Self::clamp_pct(self.volume_drop_pct)
+    fn volume_drop(&self) -> Result<f64, ForagerSelectionError> {
+        validate_unit_pct("forager_volume_drop_pct", self.volume_drop_pct)
     }
 }
 
 impl ForagerSelectionConfig {
-    fn volume_drop(&self) -> f64 {
-        SelectionConfig::clamp_pct(self.volume_drop_pct)
+    fn volume_drop(&self) -> Result<f64, ForagerSelectionError> {
+        validate_unit_pct("forager_volume_drop_pct", self.volume_drop_pct)
     }
 
-    fn volume_required(&self) -> bool {
-        self.volume_drop() > 0.0 || self.weights.volume != 0.0
+    fn volume_required(&self) -> Result<bool, ForagerSelectionError> {
+        Ok(self.volume_drop()? > 0.0 || self.weights.volume != 0.0)
     }
 
     fn volatility_required(&self) -> bool {
@@ -132,13 +125,32 @@ impl ForagerSelectionConfig {
         self.weights.ema_readiness != 0.0
     }
 
-    fn score_hysteresis(&self) -> f64 {
-        if self.score_hysteresis_pct.is_finite() {
-            self.score_hysteresis_pct.max(0.0)
-        } else {
-            0.0
-        }
+    fn score_hysteresis(&self) -> Result<f64, ForagerSelectionError> {
+        validate_non_negative_pct("forager_score_hysteresis_pct", self.score_hysteresis_pct)
     }
+}
+
+fn validate_unit_pct(field: &'static str, value: f64) -> Result<f64, ForagerSelectionError> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(ForagerSelectionError::InvalidConfig {
+            field,
+            value: format!("{value:?}"),
+        });
+    }
+    Ok(value)
+}
+
+fn validate_non_negative_pct(
+    field: &'static str,
+    value: f64,
+) -> Result<f64, ForagerSelectionError> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(ForagerSelectionError::InvalidConfig {
+            field,
+            value: format!("{value:?}"),
+        });
+    }
+    Ok(value)
 }
 
 fn canonicalize_forager_weights(
@@ -224,7 +236,7 @@ fn build_coin_features(
     candidates: &[ForagerCandidate],
     cfg: &ForagerSelectionConfig,
 ) -> Result<Vec<CoinFeature>, ForagerSelectionError> {
-    let require_volume = cfg.volume_required();
+    let require_volume = cfg.volume_required()?;
     let require_volatility = cfg.volatility_required();
     let require_ema_readiness = cfg.ema_readiness_required();
 
@@ -286,13 +298,15 @@ pub fn select_forager_candidates_with_diagnostics(
     cfg: &ForagerSelectionConfig,
 ) -> Result<ForagerSelectionResult, ForagerSelectionError> {
     let normalized_weights = validate_forager_weights(&cfg.weights)?;
+    let volume_drop_pct = cfg.volume_drop()?;
+    let score_hysteresis_pct = cfg.score_hysteresis()?;
     let normalized_cfg = ForagerSelectionConfig {
         slots_to_fill: cfg.slots_to_fill,
-        volume_drop_pct: cfg.volume_drop_pct,
+        volume_drop_pct,
         weights: normalized_weights,
         require_forager: cfg.require_forager,
         position_side: cfg.position_side,
-        score_hysteresis_pct: cfg.score_hysteresis(),
+        score_hysteresis_pct,
         incumbent_indices: cfg.incumbent_indices.clone(),
     };
     let features = build_coin_features(candidates, &normalized_cfg)?;
@@ -339,7 +353,12 @@ pub fn select_coins_with_diagnostics(
     }
 
     let slots_to_fill = cfg.slots_to_fill.max(1);
-    prune_low_volume_tail(features, &mut enabled_pos, cfg.volume_drop(), slots_to_fill);
+    prune_low_volume_tail(
+        features,
+        &mut enabled_pos,
+        cfg.volume_drop().expect("invalid forager_volume_drop_pct"),
+        slots_to_fill,
+    );
     score_forager_candidates(features, &enabled_pos, cfg, slots_to_fill)
 }
 
@@ -488,11 +507,11 @@ fn apply_score_hysteresis(
     selected: &mut Vec<ScoredPosition>,
     events: &mut Vec<ForagerHysteresisEvent>,
 ) {
-    let hysteresis = if cfg.score_hysteresis_pct.is_finite() {
-        cfg.score_hysteresis_pct.max(0.0)
-    } else {
-        0.0
-    };
+    let hysteresis = cfg.score_hysteresis_pct;
+    assert!(
+        hysteresis.is_finite() && hysteresis >= 0.0,
+        "invalid forager_score_hysteresis_pct"
+    );
     if hysteresis <= 0.0 || cfg.incumbent_indices.is_empty() || selected.is_empty() {
         return;
     }
@@ -691,6 +710,9 @@ pub fn select_coin_indices_py(
             "forager_score_weights must be finite and non-negative",
         )
     })?;
+    validate_unit_pct("forager_volume_drop_pct", volume_drop_pct).map_err(|err| {
+        pyo3::exceptions::PyValueError::new_err(format!("{err:?}"))
+    })?;
     let features: Vec<CoinFeature> = py_features.into_iter().map(Into::into).collect();
     let cfg = SelectionConfig {
         slots_to_fill,
@@ -742,6 +764,11 @@ pub fn select_forager_candidates_py(
         ForagerSelectionError::NonFiniteInput { field, index } => {
             pyo3::exceptions::PyValueError::new_err(format!(
                 "invalid forager candidate input '{field}' at index {index}"
+            ))
+        }
+        ForagerSelectionError::InvalidConfig { field, value } => {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "invalid forager config '{field}' value {value}"
             ))
         }
     })

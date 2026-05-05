@@ -309,6 +309,8 @@ class _BundleReproBot:
         self.h1_log_range_value = float(h1_log_range_value)
         self.entry_h1_span_hours = float(entry_h1_span_hours)
         self._orchestrator_close_ema_fallback_counts = {}
+        self.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
+        self.exchange = "kucoin"
         now_ms = int(time.time() * 1000)
         if prev_close_ema is None:
             self._orchestrator_prev_close_ema = {}
@@ -433,6 +435,30 @@ async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price():
     assert bot._orchestrator_close_ema_fallback_counts[(symbol, span0)] == 1
     assert bot._orchestrator_close_ema_fallback_counts[(symbol, span1)] == 1
     assert bot._orchestrator_close_ema_fallback_counts[(symbol, span2)] == 1
+
+
+@pytest.mark.asyncio
+async def test_close_ema_fallback_raises_when_previous_ema_is_stale():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    prev = {span0: 100.04, span1: 100.03, span2: 100.02}
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="timeout",
+        prev_close_ema=prev,
+        prev_age_ms=11 * 60_000,
+    )
+    bot.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
+
+    with pytest.raises(RuntimeError, match="previous close EMA stale"):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
 
 
 @pytest.mark.asyncio

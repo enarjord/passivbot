@@ -612,6 +612,24 @@ async def test_hyperliquid_fetch_positions_balance_handles_missing_asset_positio
     assert balance == pytest.approx(123.45)
 
 
+def test_hyperliquid_unified_balance_missing_quote_total_raises(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.quote = "USDC"
+
+    with pytest.raises((KeyError, ValueError, TypeError)):
+        bot._hl_extract_unified_total(
+            {
+                "info": {
+                    "balances": [
+                        {"coin": "USDC", "hold": "0.0"},
+                    ]
+                }
+            }
+        )
+
+
 @pytest.mark.asyncio
 async def test_hyperliquid_refresh_and_log_user_abstraction_logs_initial_and_change(
     stubbed_modules, caplog

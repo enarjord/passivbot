@@ -394,6 +394,26 @@ def test_forager_respects_n_positions_selects_one_coin():
     assert selection["top_scores"][0]["selected"] is True
 
 
+def test_json_rejects_invalid_forager_hysteresis_pct():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(0, bid=100.0, ask=100.0),
+            make_symbol(1, bid=100.0, ask=100.0),
+        ],
+    )
+    inp["forager_hysteresis"] = {
+        "score_hysteresis_pct": -0.1,
+        "incumbent_long": [],
+        "incumbent_short": [],
+    }
+
+    with pytest.raises(ValueError, match="forager_score_hysteresis_pct"):
+        compute(pbr, inp)
+
+
 def test_select_forager_candidates_all_zero_weights_fall_back_to_ema_readiness_only():
     import passivbot_rust as pbr
 

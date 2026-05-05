@@ -91,13 +91,16 @@ rules. Keep them narrow, visible, and test-covered.
 - [x] Require fresh market snapshot before order creation for affected symbols.
 - [x] Keep completed candles for indicators/history only.
 - [x] Add tests proving incomplete candles are not used as live price truth when ticker data is available.
-- [ ] Make generic market snapshot construction fail loudly or skip visibly on missing/partial
+- [x] Make generic market snapshot construction fail loudly or skip visibly on missing/partial
   bid/ask/last. Current review found `_snapshot_from_ticker()` can synthesize missing fields
   (`bid=ask=last`) and `get_snapshots()` can swallow ticker fetch exceptions at DEBUG. Replace
   this with an explicit fallback contract, warning visibility, and tests.
-- [ ] Keep Hyperliquid `allMids` as a documented, exchange-scoped exception only. Ensure logs/tests
+- [x] Keep Hyperliquid `allMids` as a documented, exchange-scoped exception only. Ensure logs/tests
   clearly show `source=hyperliquid_all_mids` and no other exchange uses the same synthetic
   bid/ask behavior by accident.
+- [x] Make Hyperliquid HIP-3 ticker fallbacks explicit. If HIP-3 asset contexts lack real impact
+  bid/ask and use mid/mark/oracle as bid/ask/last, label the source separately and cover it with
+  exchange-scoped tests; otherwise reject the partial ticker context loudly.
 
 ### 3. Exchange Ticker Capability Probes
 
@@ -218,6 +221,9 @@ rules. Keep them narrow, visible, and test-covered.
   symbols non-tradable instead of failing loudly. Acceptable behavior should be limited to flat
   forager-only candidates under the formal tail-gap/freshness policy. Active positions, open
   orders, pending confirmations, and forced-normal symbols must not be silently suppressed.
+- [x] Bound required close-EMA carry-forward fallback by the same tail-gap/freshness policy.
+  Previous close EMA may be reused only while recent enough, with `[ema]` warning visibility; once
+  stale beyond the threshold, planning must fail or halt the affected symbol/pside loudly.
 
 ### 7. Startup/Warmup
 
@@ -288,21 +294,21 @@ rules. Keep them narrow, visible, and test-covered.
 - [x] Add generic CCXT timestamp/nonce recovery. Binance `-1021` and KuCoin
   `Invalid KC-API-TIMESTAMP`/`InvalidNonce` now force CCXT `load_time_difference()` before the next
   retry instead of immediately entering the normal noisy error/restart path.
-- [ ] Re-run review-targeted Rust-backed tests after each Rust rebuild:
+- [x] Re-run review-targeted Rust-backed tests after each Rust rebuild:
   `tests/test_orchestrator_json_api.py::test_json_non_tradable_forced_normal_flat_symbol_does_not_require_ema`
   and `tests/test_orchestrator_json_api.py::test_forager_respects_n_positions_selects_one_coin`.
 - [ ] Add/adjust tests proving flat cache-only forager candidate handling cannot trigger
   `MissingEma` for forced-normal symbols and cannot hide active-symbol EMA requirements.
-- [ ] Add tests for generic market snapshot strictness: ticker fetch exceptions, missing bid,
+- [x] Add tests for generic market snapshot strictness: ticker fetch exceptions, missing bid,
   missing ask, missing last, and explicit Hyperliquid `allMids` exception behavior.
 
 ### 11. Config And Runtime Validation Cleanup
 
-- [ ] Move `live.authoritative_refresh_mode` invalid-value handling to config validation. Runtime
+- [x] Move `live.authoritative_refresh_mode` invalid-value handling to config validation. Runtime
   must not silently map invalid values to `staged`.
-- [ ] Consolidate `live.forager_score_hysteresis_pct` defaults so schema/prepared config is the
+- [x] Consolidate `live.forager_score_hysteresis_pct` defaults so schema/prepared config is the
   single source. Review found Python backtest fallback at `0.02` and Rust PyO3 fallback at `0.005`.
-- [ ] Validate non-finite or negative `forager_score_hysteresis_pct` loudly instead of silently
+- [x] Validate non-finite or negative `forager_score_hysteresis_pct` loudly instead of silently
   clamping to `0.0` in Rust.
 - [ ] Audit duplicate runtime defaults added for staged live options and remove any fallback that
   can drift from schema/prepared config.
@@ -311,6 +317,8 @@ rules. Keep them narrow, visible, and test-covered.
 - [ ] Remove order sorting's silent fallback to neutral `diff=0` when market price fetch fails.
   Preserve deterministic ordering or block/skip with visible diagnostics according to the
   execution safety contract.
+- [x] Make Hyperliquid unified balance extraction fail on malformed quote balance rows. Missing,
+  empty, non-finite, or negative quote totals must not become `0.0`.
 
 ### 12. `src/live/` Module Split
 

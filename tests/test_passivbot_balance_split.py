@@ -91,12 +91,12 @@ def test_market_snapshot_ticker_strategy_defaults_to_symbols_for_bitget():
     assert bot._market_snapshot_ticker_strategy() == "symbols"
 
 
-def test_market_snapshot_ticker_strategy_keeps_hyperliquid_on_bulk_all_mids():
+def test_market_snapshot_ticker_strategy_uses_symbols_for_hyperliquid_hip3_labels():
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "hyperliquid"
     bot.config = {"live": {}}
 
-    assert bot._market_snapshot_ticker_strategy() == "bulk"
+    assert bot._market_snapshot_ticker_strategy() == "symbols"
 
 
 def test_market_snapshot_ticker_strategy_respects_explicit_override():

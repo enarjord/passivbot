@@ -345,6 +345,34 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        (
+            "authoritative_refresh_mode",
+            "stagd",
+            "config\\.live\\.authoritative_refresh_mode must be one of",
+        ),
+        (
+            "market_snapshot_ticker_strategy",
+            "fast",
+            "config\\.live\\.market_snapshot_ticker_strategy must be one of",
+        ),
+        (
+            "forager_score_hysteresis_pct",
+            -0.1,
+            "config\\.live\\.forager_score_hysteresis_pct must be finite and >= 0\\.0",
+        ),
+    ],
+)
+def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match):
+    source = get_template_config()
+    source["live"][field] = value
+
+    with pytest.raises((TypeError, ValueError), match=match):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_preserves_live_candle_budget_controls():
     source = get_template_config()
     source["live"]["defer_broad_candle_warmup"] = False

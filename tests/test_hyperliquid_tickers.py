@@ -19,7 +19,14 @@ async def test_fetch_tickers_for_symbols_uses_dex_inference_for_hip3():
     )
 
     async def fake_fetch_tickers():
-        return {"BTC/USDC:USDC": {"last": 100_000.0, "bid": 99_999.0, "ask": 100_001.0}}
+        return {
+            "BTC/USDC:USDC": {
+                "last": 100_000.0,
+                "bid": 99_999.0,
+                "ask": 100_001.0,
+                "source": "hyperliquid_all_mids",
+            }
+        }
 
     async def fake_fetch_hip3_tickers_for_symbols(dex, symbols):
         assert dex == "xyz"
@@ -35,6 +42,7 @@ async def test_fetch_tickers_for_symbols_uses_dex_inference_for_hip3():
 
     assert out["XYZ-SP500/USDC:USDC"]["last"] == pytest.approx(7_171.2)
     assert out["BTC/USDC:USDC"]["last"] == pytest.approx(100_000.0)
+    assert out["BTC/USDC:USDC"]["source"] == "hyperliquid_all_mids"
 
 
 @pytest.mark.asyncio
@@ -61,3 +69,16 @@ async def test_fetch_hip3_tickers_matches_asset_suffix_names():
     out = await bot._fetch_hip3_tickers_for_symbols("xyz", ["XYZ-SP500/USDC:USDC"])
 
     assert out["XYZ-SP500/USDC:USDC"]["last"] == pytest.approx(7171.2)
+    assert out["XYZ-SP500/USDC:USDC"]["source"] == "hyperliquid_hip3_mid_fallback"
+
+
+def test_hip3_ticker_labels_real_asset_context_source():
+    ticker = HyperliquidBot._hip3_ticker_from_asset_ctx(
+        "XYZ-SP500/USDC:USDC",
+        {"impactPxs": ["7170.0", "7172.0"], "midPx": "7171.0"},
+    )
+
+    assert ticker["bid"] == pytest.approx(7170.0)
+    assert ticker["ask"] == pytest.approx(7172.0)
+    assert ticker["last"] == pytest.approx(7171.0)
+    assert ticker["source"] == "hyperliquid_hip3_asset_ctx"

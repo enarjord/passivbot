@@ -550,6 +550,12 @@ mod core {
                     symbol_idx: Some(index),
                 }
             }
+            ForagerSelectionError::InvalidConfig { field, .. } => {
+                OrchestratorError::NonFiniteInput {
+                    field,
+                    symbol_idx: None,
+                }
+            }
         }
     }
 
