@@ -47,6 +47,31 @@ Before order planning/execution, live bot must have coherent state for:
   incomplete candles.
 - Duplicate order prevention is trading-critical and needs explicit tests.
 
+## Accepted Live/Backtest Contract Exceptions
+
+These are deliberate exceptions to the general "Rust owns order behavior" and live/backtest parity
+rules. Keep them narrow, visible, and test-covered.
+
+- Live initial-entry executor distance gate:
+  - Rust still emits the intended `entry_initial_*` order.
+  - Python live may withhold posting far passive initial-entry creates when
+    `live.initial_entry_exec_max_market_dist_pct > 0`.
+  - This is accepted as an executor-level remote-call/order-churn throttle, not a trading-logic
+    source of truth.
+  - Python must not create any order Rust did not request.
+  - Existing matching orders are preserved by order-match tolerance; if an existing order drifts
+    outside tolerance, live may cancel it and withhold the far replacement create.
+  - Blocking must be INFO-visible and throttled by the same order-match tolerance so operators can
+    see that the bot wants the order but is intentionally not posting it yet.
+
+- Hyperliquid `allMids` market snapshot:
+  - User explicitly accepted using a single mid/last-like reference for bid, ask, and last on
+    Hyperliquid where exact top-of-book is not critical for Passivbot's live planning.
+  - This exception must remain exchange-scoped, source-labeled as `hyperliquid_all_mids`, and
+    covered by diagnostics/tests.
+  - Other exchanges must not silently synthesize bid/ask/last from partial ticker payloads unless
+    an explicit, documented fallback is approved.
+
 ## Checklist
 
 ### 1. Freshness Ledger
@@ -66,6 +91,13 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Require fresh market snapshot before order creation for affected symbols.
 - [x] Keep completed candles for indicators/history only.
 - [x] Add tests proving incomplete candles are not used as live price truth when ticker data is available.
+- [ ] Make generic market snapshot construction fail loudly or skip visibly on missing/partial
+  bid/ask/last. Current review found `_snapshot_from_ticker()` can synthesize missing fields
+  (`bid=ask=last`) and `get_snapshots()` can swallow ticker fetch exceptions at DEBUG. Replace
+  this with an explicit fallback contract, warning visibility, and tests.
+- [ ] Keep Hyperliquid `allMids` as a documented, exchange-scoped exception only. Ensure logs/tests
+  clearly show `source=hyperliquid_all_mids` and no other exchange uses the same synthetic
+  bid/ask behavior by accident.
 
 ### 3. Exchange Ticker Capability Probes
 
@@ -106,6 +138,29 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Enrich staged completed-candle signature-mismatch diagnostics with mismatch type and
   previewed missing/extra/changed symbols, so INFO logs show whether the planning universe
   changed or only the completed-candle target advanced.
+- [ ] Formalize open-ended tail-gap policy for completed candles:
+  - If a real candle is expected for `floor(now)-1m` but the exchange has not returned it, emit
+    INFO/WARNING with symbol, timeframe, expected timestamp, latest real timestamp, tail age,
+    ticker liveness, and action.
+  - Continue using the latest real candle-derived state for close EMA, log-range EMA, quote-volume
+    EMA, trailing extrema, and HSL tail replay while the tail gap is within a configurable
+    threshold.
+  - Do not synthesize zero candles for unbounded tail gaps.
+  - Only synthesize runtime zero candles for gaps bounded by a real candle before and after the gap.
+  - When a real candle arrives after a tail gap, replay bounded synthetic zero candles if applicable
+    and let EMAs/trailing extrema catch up deterministically.
+  - If the tail gap exceeds the configured maximum, halt trading for the affected coin/pside with
+    loud logs rather than halting unrelated symbols.
+- [ ] Track ticker liveness for symbols under candle scrutiny. If ticker bid/ask/last stops
+  changing for a long time while candles are stale, escalate diagnostics because it may indicate
+  delisting, exchange API trouble, or an extremely illiquid market. If ticker changes while
+  candles remain stale, treat it as likely quote movement without trades and continue cautiously
+  within the tail-gap threshold.
+- [ ] Ensure tail carry-forward and bounded-gap synthesis are in-memory/runtime only and never
+  persisted as real exchange candles.
+- [ ] Add tests for open-ended tail gaps: no synthetic zero candle, carry-forward derived EMAs,
+  bounded threshold halt for affected symbol only, ticker-liveness diagnostics, recovery replay,
+  and no suppression of active position management without visible policy state.
 
 ### 6. Remote-Call Budgeting
 
@@ -159,6 +214,10 @@ Before order planning/execution, live bot must have coherent state for:
   activity, but should not run on every ordinary account refresh cycle.
 - [x] Add tests for fair stale-symbol rotation.
 - [x] Add tests proving active symbols bypass non-critical budgeting.
+- [ ] Revisit EMA cache-only suppression. Review found missing EMA for cache-only symbols can mark
+  symbols non-tradable instead of failing loudly. Acceptable behavior should be limited to flat
+  forager-only candidates under the formal tail-gap/freshness policy. Active positions, open
+  orders, pending confirmations, and forced-normal symbols must not be silently suppressed.
 
 ### 7. Startup/Warmup
 
@@ -229,8 +288,31 @@ Before order planning/execution, live bot must have coherent state for:
 - [x] Add generic CCXT timestamp/nonce recovery. Binance `-1021` and KuCoin
   `Invalid KC-API-TIMESTAMP`/`InvalidNonce` now force CCXT `load_time_difference()` before the next
   retry instead of immediately entering the normal noisy error/restart path.
+- [ ] Re-run review-targeted Rust-backed tests after each Rust rebuild:
+  `tests/test_orchestrator_json_api.py::test_json_non_tradable_forced_normal_flat_symbol_does_not_require_ema`
+  and `tests/test_orchestrator_json_api.py::test_forager_respects_n_positions_selects_one_coin`.
+- [ ] Add/adjust tests proving flat cache-only forager candidate handling cannot trigger
+  `MissingEma` for forced-normal symbols and cannot hide active-symbol EMA requirements.
+- [ ] Add tests for generic market snapshot strictness: ticker fetch exceptions, missing bid,
+  missing ask, missing last, and explicit Hyperliquid `allMids` exception behavior.
 
-### 11. `src/live/` Module Split
+### 11. Config And Runtime Validation Cleanup
+
+- [ ] Move `live.authoritative_refresh_mode` invalid-value handling to config validation. Runtime
+  must not silently map invalid values to `staged`.
+- [ ] Consolidate `live.forager_score_hysteresis_pct` defaults so schema/prepared config is the
+  single source. Review found Python backtest fallback at `0.02` and Rust PyO3 fallback at `0.005`.
+- [ ] Validate non-finite or negative `forager_score_hysteresis_pct` loudly instead of silently
+  clamping to `0.0` in Rust.
+- [ ] Audit duplicate runtime defaults added for staged live options and remove any fallback that
+  can drift from schema/prepared config.
+- [ ] Fix misleading log labels where `side=` prints `position_side`; use `pside=` for long/short
+  and reserve `side=` for buy/sell.
+- [ ] Remove order sorting's silent fallback to neutral `diff=0` when market price fetch fails.
+  Preserve deterministic ordering or block/skip with visible diagnostics according to the
+  execution safety contract.
+
+### 12. `src/live/` Module Split
 
 Goal: reduce `src/passivbot.py` size and make staged live data contracts reviewable without
 changing behavior during extraction commits.
