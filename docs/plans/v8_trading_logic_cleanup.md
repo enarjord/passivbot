@@ -24,24 +24,25 @@ Working target for `refactor/rust-strategy-runtime-plan`.
 - [x] Update TWEL enforcer to use a two-phase reduction contract:
   - first pass respects per-position floor as a fairness/preference rule
   - second pass continues reducing least-stuck bot-scope positions, even below the floor, until
-    bot-scope TWE is at or below `TWEL * twel_enforcer_threshold`
+    bot-scope TWE is at or below `TWEL * total_exposure_enforcer_threshold`
   - if min-qty/min-cost/order constraints prevent reaching target, surface a warning/diagnostic
 - [x] Define `manual` mode as outside bot scope entirely:
   - no order creation
   - no order cancellation
   - excluded from bot-scope TWE/TWEL accounting
-  - excluded from TWEL enforcer, WEL enforcer, auto unstuck, and other bot-managed risk features
-- [ ] Keep WEL and TWEL enforcers as separate controls with clearer user-facing names:
+  - excluded from total exposure enforcer, position exposure enforcer, auto unstuck, and other
+    bot-managed risk features
+- [x] Keep WEL and TWEL enforcers as separate controls with clearer user-facing names:
   - WEL enforcer becomes `position_exposure_enforcer_*`
   - TWEL enforcer becomes `total_exposure_enforcer_*`
   - internal code may still use WEL/TWEL terminology where it is clearer
-- [ ] Document WEL enforcer as both a per-position safety cap and an optional aggressive
+- [x] Document position exposure enforcer as both a per-position safety cap and an optional aggressive
   strategy mechanism:
   - users may deliberately set a threshold such as `0.95`
   - aggressive entries can refill position exposure back toward WEL
-  - the WEL enforcer can repeatedly trim back to `WEL * threshold`
+  - the position exposure enforcer can repeatedly trim back to `WEL * threshold`
   - unlike auto unstuck, this is not constrained by loss allowance or EMA gating
-- [ ] Document the risk-control stack as layered behavior:
+- [x] Document the risk-control stack as layered behavior:
   - close logic / negative markup: normal position management
   - auto unstuck: loss-budgeted and EMA-gated stuck-position reduction
   - position exposure enforcer: per-position WEL enforcement or aggressive trim mechanism

@@ -77,20 +77,27 @@ Extreme black-swan events (exchange failure, stablecoin depeg, delisting, and ot
 While exposure limits prevent *new* orders, it is still possible for existing positions to swell beyond their limits (e.g., the account holds BTC as collateral and the BTC/USD price drops, the user withdraws funds while positions are maxed out, or the account realizes significant losses). To handle this, Passivbot provides three parameters that control how aggressively to cap and trim exposure.
 
 These parameters function on top of the base limits:
-* `risk_wel_enforcer_threshold` (The Position Trimmer)
+* `position_exposure_enforcer_threshold` (The Position Trimmer)
 * `risk_we_excess_allowance_pct` (The Buffer)
-* `risk_twel_enforcer_threshold` (The Portfolio Trimmer)
+* `total_exposure_enforcer_threshold` (The Portfolio Trimmer)
 
-#### WEL Enforcer (`risk_wel_enforcer_threshold`)
+#### Position Exposure Enforcer (`position_exposure_enforcer_threshold`)
 This controls **per-position** trimming. If a single position's exposure exceeds:
-`effective_limit * risk_wel_enforcer_threshold`
+`effective_limit * position_exposure_enforcer_threshold`
 The bot issues a reduce-only order to trim it back down.
 
 Examples:
 * `0.9`: **Proactive trimming.** Keeps the position at 90% of its allowance.
 * `1.0`: **Strict limit.** Trims immediately if the position exceeds the allowance.
 * `1.05`: **Buffer zone.** Trims only if the position becomes greater than 5% of its allowance.
-* `<= 0`: **Disabled.** No automatic trimming; relies solely on entry logic/auto-unstuck.
+
+Set `position_exposure_enforcer_enabled = false` to disable this control. The
+threshold must be finite and greater than zero when enabled.
+
+This enforcer can also be used deliberately as an aggressive strategy mechanism:
+with aggressive entries and a threshold such as `0.95`, the bot may refill toward
+the position limit and repeatedly trim back to 95% without waiting for auto
+unstuck's EMA gate or loss allowance.
 
 #### Excess Allowance (`risk_we_excess_allowance_pct`)
 In practice, the bot rarely fills all positions simultaneously. Therefore, the bot can be configured to allow exceeding individual WELs by setting `risk_we_excess_allowance_pct > 0.0` (e.g., 20% excess allowance). This can be thought of as the bot "borrowing" capacity from unfilled positions. The per-position WEL enforcer respects this expanded limit and only trims when the *effective* WEL is breached.
@@ -129,16 +136,27 @@ In practice, the bot rarely fills all positions simultaneously. Therefore, the b
     * If a 7th position also fills to 0.15, total exposure would become `1.05`.
     * Since `1.05 > 1.0` (the TWEL), the bot will gate any new orders for that 7th position that would cause the total wallet exposure to breach the TWEL, effectively blocking the "excess" allowance for the last few positions.
 
-#### TWEL Enforcer (`risk_twel_enforcer_threshold`)
+#### Total Exposure Enforcer (`total_exposure_enforcer_threshold`)
 This controls **total portfolio** trimming. It monitors the sum of all long (or short) exposures. If the total exceeds:
-`total_wallet_exposure_limit * risk_twel_enforcer_threshold`
+`total_wallet_exposure_limit * total_exposure_enforcer_threshold`
 The bot reduces positions, starting with the **least underwater** ones first (following Auto-Unstuck logic).
 
 * `0.95`: Trims the portfolio when it reaches 95% of the total limit.
 * `1.0`: Strictly enforces the total limit.
 * `> 1.0`: Allows some overflow (e.g., during extreme volatility) before forced reduction occurs.
 
-This portfolio trimming mechanism pairs well with the excess allowance. When TWE hits TWEL and new orders are blocked, the TWEL enforcer will start chipping away at the least underwater positions to free up margin, even if those positions are technically within their per-position effective exposure limit.
+Set `total_exposure_enforcer_enabled = false` to disable this control. The
+threshold must be finite and greater than zero when enabled.
+
+This portfolio trimming mechanism pairs well with the excess allowance. When TWE
+hits TWEL and new orders are blocked, the total exposure enforcer first chips
+away at least-underwater positions above their per-position floor. If total
+bot-scope exposure remains above target, it has greater authority and continues
+reducing least-underwater bot-managed positions even below that floor.
+
+Manual-mode positions are outside bot scope: they do not receive bot-created
+orders, bot cancellations, auto unstuck, exposure-enforcer reductions, active
+slot accounting, or bot-scope TWE/TWEL accounting.
 
 ### C. Realized-Loss Gate (`live.max_realized_loss_pct`)
 This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.

@@ -96,14 +96,14 @@ def validate_bot_config(result: dict) -> None:
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_wel_enforcer_enabled"),
             threshold_value=get_grouped_bot_value(bot_side, "risk_wel_enforcer_threshold"),
-            enabled_path=f"bot.{pside}.risk.wel_enforcer_enabled",
-            threshold_path=f"bot.{pside}.risk.wel_enforcer_threshold",
+            enabled_path=f"bot.{pside}.risk.position_exposure_enforcer_enabled",
+            threshold_path=f"bot.{pside}.risk.position_exposure_enforcer_threshold",
         )
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_enabled"),
             threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
-            enabled_path=f"bot.{pside}.risk.twel_enforcer_enabled",
-            threshold_path=f"bot.{pside}.risk.twel_enforcer_threshold",
+            enabled_path=f"bot.{pside}.risk.total_exposure_enforcer_enabled",
+            threshold_path=f"bot.{pside}.risk.total_exposure_enforcer_threshold",
         )
         _validate_bool(
             get_grouped_bot_value(bot_side, "unstuck_enabled"),
@@ -333,18 +333,22 @@ def normalize_cliff_edge_thresholds(
         risk_cfg = get_bot_group(result["bot"][pside], "risk")
         for key in CLIFF_EDGE_THRESHOLD_KEYS:
             raw_value = get_grouped_bot_value(result["bot"][pside], key)
+            group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(key)
+            display_path = (
+                ".".join(("bot", pside, *group_path))
+                if group_path is not None
+                else _bot_path(pside, key)
+            )
             normalized = _normalize_cliff_edge_threshold(
                 raw_value,
-                path=_bot_path(pside, key),
+                path=display_path,
                 verbose=verbose,
             )
             if tracker is not None and raw_value != normalized:
-                group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(key)
                 if group_path is not None:
                     tracker.update(["bot", pside, *group_path], raw_value, normalized)
                 else:
                     tracker.update(["bot", pside, key], raw_value, normalized)
-            group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(key)
             if group_path is not None:
                 group_name, local_key = group_path
                 group_cfg = get_bot_group(result["bot"][pside], group_name)

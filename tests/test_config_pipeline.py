@@ -111,7 +111,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
     ]["total_wallet_exposure_limit"]
     assert compiled["bot"]["long"]["risk_wel_enforcer_threshold"] == canonical["bot"]["long"][
         "risk"
-    ]["wel_enforcer_threshold"]
+    ]["position_exposure_enforcer_threshold"]
     assert compiled["bot"]["long"]["unstuck_threshold"] == canonical["bot"]["long"]["unstuck"][
         "threshold"
     ]
@@ -527,9 +527,9 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
     for key in ("threshold_volatility_1h_weight", "threshold_volatility_1m_weight", "threshold_we_weight"):
         trailing_martingale["entry"].pop(key)
     for key in (
-        "twel_enforcer_threshold",
+        "total_exposure_enforcer_threshold",
         "we_excess_allowance_pct",
-        "wel_enforcer_threshold",
+        "position_exposure_enforcer_threshold",
     ):
         risk.pop(key)
 
@@ -543,9 +543,9 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
     assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(2.4)
     assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(0.0)
     assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(0.135)
-    assert long_risk["twel_enforcer_threshold"] == pytest.approx(1.0)
+    assert long_risk["total_exposure_enforcer_threshold"] == pytest.approx(1.0)
     assert long_risk["we_excess_allowance_pct"] == pytest.approx(0.37)
-    assert long_risk["wel_enforcer_threshold"] == pytest.approx(0.994)
+    assert long_risk["position_exposure_enforcer_threshold"] == pytest.approx(0.994)
 
 
 def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():

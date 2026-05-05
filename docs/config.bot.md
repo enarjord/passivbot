@@ -170,17 +170,17 @@ Configs that cross those boundaries now hard-fail during validation instead of s
 disabling auto-unstuck. For near-always-on EMA triggering on either side, use a value like
 `-0.99`, not `-1.0`.
 
-## WEL Enforcer (Auto Reduce)
+## Position Exposure Enforcer
 
-The per-position wallet exposure limit (WEL) enforcer trims individual symbols
-whenever their exposure rises above the allowance-adjusted cap:
+The position exposure enforcer trims individual bot-managed positions whenever
+their exposure rises above the allowance-adjusted per-position cap:
 
 ```text
-if not risk_wel_enforcer_enabled:
+if not position_exposure_enforcer_enabled:
     disabled
 
 allowed_i    = wel_base_i * (1 + risk_we_excess_allowance_pct)
-target_i     = allowed_i * risk_wel_enforcer_threshold
+target_i     = allowed_i * position_exposure_enforcer_threshold
 ```
 
 If `exposure_i > target_i`, the bot submits a reduce-only order sized just large
@@ -188,18 +188,25 @@ enough (with step rounding and minimum-qty guards) to bring the position back to
 `target_i`. These orders are emitted as `CloseAutoReduceWel{Long,Short}` and are
 returned directly from `calc_next_close_*`/`calc_closes_*`.
 
-Setting `risk_wel_enforcer_enabled = false` disables this enforcer. When it is
-enabled, `risk_wel_enforcer_threshold` must be finite and greater than zero.
-Values below `1.0` force a gentle, continuous trimming behaviour; values above
-`1.0` create an additional grace margin.
+Setting `position_exposure_enforcer_enabled = false` disables this enforcer. When
+it is enabled, `position_exposure_enforcer_threshold` must be finite and greater
+than zero. Values below `1.0` force continuous trimming; values above `1.0`
+create an additional grace margin.
 
-## TWEL Enforcer (Auto Reduce)
+This is both a risk control and a possible strategy mechanism. For example, a
+user may deliberately set `position_exposure_enforcer_threshold = 0.95` with
+aggressive entries. The strategy can refill toward the per-position limit, and
+the enforcer can repeatedly trim back to `95%` of that limit. Unlike auto
+unstuck, this trim is not gated by EMA distance or loss allowance.
 
-The “Total Wallet Exposure Limit” enforcer keeps the sum of exposures below
-`total_wallet_exposure_limit * risk_twel_enforcer_threshold`.  For each position:
+## Total Exposure Enforcer
+
+The total exposure enforcer keeps the sum of bot-scope exposures below
+`total_wallet_exposure_limit * total_exposure_enforcer_threshold`. For each
+position:
 
 ```text
-if not risk_twel_enforcer_enabled:
+if not total_exposure_enforcer_enabled:
     disabled
 
 exposure_i      = wallet_exposure(...)
@@ -208,7 +215,7 @@ base_psize_i    = allowed_i * balance / (price_i * c_mult_i)
 max_reducible_i = max(0, |pos.size_i| - base_psize_i)
 ```
 
-While `Σ exposure_i` exceeds the threshold:
+While bot-scope `Σ exposure_i` exceeds the threshold:
 
 1. Pick the position with the smallest relative price move from entry.
 2. Reduce it by `min(max_reducible_i,
@@ -225,8 +232,30 @@ order_type = CloseAutoReduceTwel{Long,Short}
 By construction the quantity never exceeds the live position size.
 Positions already earmarked for `CloseAutoReduceWel*` during the same scheduling cycle are skipped so that reductions do not double-up; they can be considered again on subsequent iterations once the WEL order has been filled.
 
-Setting `risk_twel_enforcer_enabled = false` disables this enforcer. When it is
-enabled, `risk_twel_enforcer_threshold` must be finite and greater than zero.
+The first reduction pass respects the per-position floor as a fairness rule. If
+bot-scope total exposure is still above target, a second pass continues reducing
+least-stuck bot-managed positions even below that floor. If exchange min-qty,
+min-cost, or rounding constraints prevent reaching the target, the reducer emits
+a warning.
+
+Setting `total_exposure_enforcer_enabled = false` disables this enforcer. When it
+is enabled, `total_exposure_enforcer_threshold` must be finite and greater than
+zero.
+
+Manual-mode positions are outside bot scope: the bot does not create or cancel
+orders for them, and they do not count toward active slots, total exposure
+accounting, auto unstuck, or either exposure enforcer.
+
+## Risk-Control Stack
+
+Risk controls are layered from ordinary position management to emergency
+intervention:
+
+1. Close logic and negative markup handle normal position reduction.
+2. Auto unstuck reduces stuck positions only when loss allowance and EMA gating permit it.
+3. Position exposure enforcer trims individual positions to enforce or actively recycle per-position exposure.
+4. Total exposure enforcer keeps bot-scope portfolio exposure under the configured total limit.
+5. HSL is the equity-level circuit breaker.
 
 ## Parameter Interactions at a Glance
 
@@ -238,8 +267,8 @@ enabled, `risk_twel_enforcer_threshold` must be finite and greater than zero.
 | `close_grid_markup_*`, `close_grid_qty_pct`    | Shapes TP ladder                                          | `tp_prices`, `tp_qty` |
 | `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
 | `unstuck_*`, `unstuck_enabled`                 | Loss realization rules                                    | `unstuck_allowed`, `close_price` |
-| `risk_wel_enforcer_threshold`, `risk_we_excess_allowance_pct` | Per-symbol exposure cap                                 | `target_i`, `qty` |
-| `risk_twel_enforcer_threshold`, `risk_we_excess_allowance_pct` | Portfolio-wide exposure cap                              | `max_reducible_i`, `qty` |
+| `position_exposure_enforcer_threshold`, `risk_we_excess_allowance_pct` | Per-position exposure cap                                | `target_i`, `qty` |
+| `total_exposure_enforcer_threshold`, `risk_we_excess_allowance_pct` | Bot-scope portfolio exposure cap                         | `max_reducible_i`, `qty` |
 
 For worked examples on a per-parameter basis, see the comments sprinkled in
 `passivbot-rust/src/entries.rs` and the optimiser notebooks under `notebooks/`.

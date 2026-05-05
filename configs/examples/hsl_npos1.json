@@ -169,11 +169,11 @@
                 "entry_cooldown_minutes": 0.0,
                 "n_positions": 10,
                 "total_wallet_exposure_limit": 1.25,
-                "twel_enforcer_enabled": true,
-                "twel_enforcer_threshold": 1.0,
+                "total_exposure_enforcer_enabled": true,
+                "total_exposure_enforcer_threshold": 1.0,
                 "we_excess_allowance_pct": 0.37,
-                "wel_enforcer_enabled": true,
-                "wel_enforcer_threshold": 0.994
+                "position_exposure_enforcer_enabled": true,
+                "position_exposure_enforcer_threshold": 0.994
             },
             "strategy": {
                 "trailing_martingale": {
@@ -242,11 +242,11 @@
                 "entry_cooldown_minutes": 0.0,
                 "n_positions": 10,
                 "total_wallet_exposure_limit": 0,
-                "twel_enforcer_enabled": true,
-                "twel_enforcer_threshold": 0.95,
+                "total_exposure_enforcer_enabled": true,
+                "total_exposure_enforcer_threshold": 0.95,
                 "we_excess_allowance_pct": 0,
-                "wel_enforcer_enabled": true,
-                "wel_enforcer_threshold": 0.95
+                "position_exposure_enforcer_enabled": true,
+                "position_exposure_enforcer_threshold": 0.95
             },
             "strategy": {
                 "trailing_martingale": {
@@ -474,7 +474,7 @@
                         1.25,
                         1.25
                     ],
-                    "twel_enforcer_threshold": [
+                    "total_exposure_enforcer_threshold": [
                         0.95,
                         1.01,
                         0.001
@@ -484,7 +484,7 @@
                         0.3,
                         0.01
                     ],
-                    "wel_enforcer_threshold": [
+                    "position_exposure_enforcer_threshold": [
                         0.95,
                         1.01,
                         0.001
@@ -701,7 +701,7 @@
                         0,
                         0
                     ],
-                    "twel_enforcer_threshold": [
+                    "total_exposure_enforcer_threshold": [
                         0.95,
                         1.01,
                         0.001
@@ -711,7 +711,7 @@
                         0.3,
                         0.01
                     ],
-                    "wel_enforcer_threshold": [
+                    "position_exposure_enforcer_threshold": [
                         0.95,
                         1.01,
                         0.001

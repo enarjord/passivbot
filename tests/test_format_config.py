@@ -140,11 +140,11 @@ def test_format_config_current_roundtrip_basic():
     out = format_config(current, verbose=False)
     for k in ["bot", "live", "optimize", "backtest"]:
         assert k in out
-    assert isinstance(out["bot"]["long"]["risk"]["wel_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"], (int, float))
     assert isinstance(out["bot"]["long"]["risk"]["we_excess_allowance_pct"], float)
-    assert isinstance(out["bot"]["long"]["risk"]["twel_enforcer_threshold"], (int, float))
-    assert isinstance(out["bot"]["short"]["risk"]["wel_enforcer_threshold"], (int, float))
-    assert isinstance(out["bot"]["short"]["risk"]["twel_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["long"]["risk"]["total_exposure_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["short"]["risk"]["position_exposure_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["short"]["risk"]["total_exposure_enforcer_threshold"], (int, float))
     assert "risk_twel_enforcer_threshold" not in out["bot"]["long"]
 
 
@@ -360,9 +360,9 @@ def test_format_config_legacy_omissions_disable_newer_bot_features():
     current["bot"]["long"]["forager"].pop("volatility_ema_span")
     current["bot"]["long"]["forager"].pop("volume_ema_span")
     current["bot"]["long"]["hsl"].pop("panic_close_order_type")
-    current["bot"]["long"]["risk"].pop("twel_enforcer_threshold")
+    current["bot"]["long"]["risk"].pop("total_exposure_enforcer_threshold")
     current["bot"]["long"]["risk"].pop("we_excess_allowance_pct")
-    current["bot"]["long"]["risk"].pop("wel_enforcer_threshold")
+    current["bot"]["long"]["risk"].pop("position_exposure_enforcer_threshold")
     current["bot"]["long"]["unstuck"].pop("close_pct")
     current["bot"]["long"]["unstuck"].pop("ema_dist")
     current["bot"]["long"]["unstuck"].pop("loss_allowance_pct")
@@ -383,9 +383,9 @@ def test_format_config_legacy_omissions_disable_newer_bot_features():
     assert long_cfg["forager"]["volatility_ema_span"] == pytest.approx(225.0)
     assert long_cfg["forager"]["volume_ema_span"] == pytest.approx(520.0)
     assert long_cfg["hsl"]["panic_close_order_type"] == "limit"
-    assert long_cfg["risk"]["twel_enforcer_threshold"] == pytest.approx(1.0)
+    assert long_cfg["risk"]["total_exposure_enforcer_threshold"] == pytest.approx(1.0)
     assert long_cfg["risk"]["we_excess_allowance_pct"] == pytest.approx(0.37)
-    assert long_cfg["risk"]["wel_enforcer_threshold"] == pytest.approx(0.994)
+    assert long_cfg["risk"]["position_exposure_enforcer_threshold"] == pytest.approx(0.994)
     assert long_cfg["unstuck"]["close_pct"] == pytest.approx(0.078)
     assert long_cfg["unstuck"]["ema_dist"] == pytest.approx(-0.07)
     assert long_cfg["unstuck"]["loss_allowance_pct"] == pytest.approx(0.0102)
@@ -416,28 +416,38 @@ def test_format_config_restores_missing_current_enabled_side_core_params():
 
 def test_format_config_warns_and_snaps_cliff_edge_thresholds(caplog):
     current = copy.deepcopy(_template())
-    current["bot"]["long"]["risk"]["wel_enforcer_enabled"] = False
-    current["bot"]["long"]["risk"]["wel_enforcer_threshold"] = 5e-10
-    current["bot"]["long"]["risk"]["twel_enforcer_threshold"] = 0.05
+    current["bot"]["long"]["risk"]["position_exposure_enforcer_enabled"] = False
+    current["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"] = 5e-10
+    current["bot"]["long"]["risk"]["total_exposure_enforcer_threshold"] = 0.05
     current["bot"]["long"]["unstuck"]["threshold"] = 5e-10
 
     with caplog.at_level(logging.WARNING):
         out = format_config(current, verbose=True, live_only=True)
 
-    assert out["bot"]["long"]["risk"]["wel_enforcer_threshold"] == 0.0
-    assert out["bot"]["long"]["risk"]["twel_enforcer_threshold"] == pytest.approx(0.05)
+    assert out["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"] == 0.0
+    assert out["bot"]["long"]["risk"]["total_exposure_enforcer_threshold"] == pytest.approx(0.05)
     assert out["bot"]["long"]["unstuck"]["threshold"] == 0.0
-    assert any("bot.long.risk_wel_enforcer_threshold" in rec.message and "snapping to 0.0" in rec.message for rec in caplog.records)
-    assert any("bot.long.risk_twel_enforcer_threshold=0.05" in rec.message for rec in caplog.records)
-    assert any("bot.long.unstuck_threshold" in rec.message and "snapping to 0.0" in rec.message for rec in caplog.records)
+    assert any(
+        "bot.long.risk.position_exposure_enforcer_threshold" in rec.message
+        and "snapping to 0.0" in rec.message
+        for rec in caplog.records
+    )
+    assert any(
+        "bot.long.risk.total_exposure_enforcer_threshold=0.05" in rec.message
+        for rec in caplog.records
+    )
+    assert any(
+        "bot.long.unstuck.threshold" in rec.message and "snapping to 0.0" in rec.message
+        for rec in caplog.records
+    )
 
 
 def test_format_config_rejects_enabled_enforcer_threshold_snapped_to_zero():
     current = copy.deepcopy(_template())
-    current["bot"]["long"]["risk"]["wel_enforcer_enabled"] = True
-    current["bot"]["long"]["risk"]["wel_enforcer_threshold"] = 5e-10
+    current["bot"]["long"]["risk"]["position_exposure_enforcer_enabled"] = True
+    current["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"] = 5e-10
 
-    with pytest.raises(ValueError, match="wel_enforcer_threshold must be finite and > 0.0"):
+    with pytest.raises(ValueError, match="position_exposure_enforcer_threshold must be finite and > 0.0"):
         format_config(current, verbose=False, live_only=True)
 
 

@@ -30,9 +30,9 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
     "risk": {
         "entry_cooldown_minutes": "risk_entry_cooldown_minutes",
         "n_positions": "n_positions",
-        "twel_enforcer_threshold": "risk_twel_enforcer_threshold",
+        "total_exposure_enforcer_threshold": "risk_twel_enforcer_threshold",
         "we_excess_allowance_pct": "risk_we_excess_allowance_pct",
-        "wel_enforcer_threshold": "risk_wel_enforcer_threshold",
+        "position_exposure_enforcer_threshold": "risk_wel_enforcer_threshold",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
     },
     "unstuck": {
@@ -70,9 +70,9 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "risk": {
             "entry_cooldown_minutes": [0.0, 60.0, 0.1],
             "n_positions": [10, 10, 1],
-            "twel_enforcer_threshold": [0.95, 1.01, 0.001],
+            "total_exposure_enforcer_threshold": [0.95, 1.01, 0.001],
             "we_excess_allowance_pct": [0, 0.3, 0.01],
-            "wel_enforcer_threshold": [0.95, 1.01, 0.001],
+            "position_exposure_enforcer_threshold": [0.95, 1.01, 0.001],
             "total_wallet_exposure_limit": [1.25, 1.25],
         },
         "unstuck": {
@@ -99,9 +99,9 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "risk": {
             "entry_cooldown_minutes": [0.0, 60.0, 0.1],
             "n_positions": [10, 10, 1],
-            "twel_enforcer_threshold": [0.95, 1.01, 0.001],
+            "total_exposure_enforcer_threshold": [0.95, 1.01, 0.001],
             "we_excess_allowance_pct": [0, 0.3, 0.01],
-            "wel_enforcer_threshold": [0.95, 1.01, 0.001],
+            "position_exposure_enforcer_threshold": [0.95, 1.01, 0.001],
             "total_wallet_exposure_limit": [0.0, 0.0],
         },
         "unstuck": {

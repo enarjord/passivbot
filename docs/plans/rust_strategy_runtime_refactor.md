@@ -188,8 +188,8 @@ Recommended canonical shape:
       "risk": {
         "n_positions": 3,
         "total_wallet_exposure_limit": 1.0,
-        "twel_enforcer_threshold": 1.0,
-        "wel_enforcer_threshold": 1.0,
+        "total_exposure_enforcer_threshold": 1.0,
+        "position_exposure_enforcer_threshold": 1.0,
         "we_excess_allowance_pct": 0.0
       },
       "forager": {
@@ -228,8 +228,8 @@ Recommended canonical shape:
       "risk": {
         "n_positions": 3,
         "total_wallet_exposure_limit": 1.0,
-        "twel_enforcer_threshold": 1.0,
-        "wel_enforcer_threshold": 1.0,
+        "total_exposure_enforcer_threshold": 1.0,
+        "position_exposure_enforcer_threshold": 1.0,
         "we_excess_allowance_pct": 0.0
       },
       "forager": {

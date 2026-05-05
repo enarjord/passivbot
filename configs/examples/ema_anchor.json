@@ -55,11 +55,11 @@
                 "entry_cooldown_minutes": 0,
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 0.47,
-                "twel_enforcer_enabled": true,
-                "twel_enforcer_threshold": 1.0,
+                "total_exposure_enforcer_enabled": true,
+                "total_exposure_enforcer_threshold": 1.0,
                 "we_excess_allowance_pct": 0,
-                "wel_enforcer_enabled": true,
-                "wel_enforcer_threshold": 0.98
+                "position_exposure_enforcer_enabled": true,
+                "position_exposure_enforcer_threshold": 0.98
             },
             "strategy": {
                 "ema_anchor": {
@@ -104,11 +104,11 @@
                 "entry_cooldown_minutes": 0,
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 0.19,
-                "twel_enforcer_enabled": true,
-                "twel_enforcer_threshold": 1.0,
+                "total_exposure_enforcer_enabled": true,
+                "total_exposure_enforcer_threshold": 1.0,
                 "we_excess_allowance_pct": 0,
-                "wel_enforcer_enabled": true,
-                "wel_enforcer_threshold": 0.98
+                "position_exposure_enforcer_enabled": true,
+                "position_exposure_enforcer_threshold": 0.98
             },
             "strategy": {
                 "ema_anchor": {
@@ -224,9 +224,9 @@
                     "entry_cooldown_minutes": [0,60,0.1],
                     "n_positions": [1,1,1],
                     "total_wallet_exposure_limit": [1,10,0.01],
-                    "twel_enforcer_threshold": [10,10],
+                    "total_exposure_enforcer_threshold": [10,10],
                     "we_excess_allowance_pct": [0,0],
-                    "wel_enforcer_threshold": [10,10]
+                    "position_exposure_enforcer_threshold": [10,10]
                 },
                 "strategy": {
                     "ema_anchor": {
@@ -267,9 +267,9 @@
                     "entry_cooldown_minutes": [0,60,0.1],
                     "n_positions": [1,1,1],
                     "total_wallet_exposure_limit": [0.15,0.5,0.01],
-                    "twel_enforcer_threshold": [1,1],
+                    "total_exposure_enforcer_threshold": [1,1],
                     "we_excess_allowance_pct": [0,0],
-                    "wel_enforcer_threshold": [0.98,0.98]
+                    "position_exposure_enforcer_threshold": [0.98,0.98]
                 },
                 "strategy": {
                     "ema_anchor": {

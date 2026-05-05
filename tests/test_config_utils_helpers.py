@@ -61,7 +61,7 @@ def test_load_input_config_without_path_uses_schema_defaults():
 
 
 def test_default_example_config_loads_with_grouped_shape_and_live_execution_settings():
-    loaded = load_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
+    loaded = load_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
 
     assert loaded["live"]["strategy_kind"] == "trailing_martingale"
     assert set(loaded["bot"]["long"]) == {
@@ -662,7 +662,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     assert compiled["bot"]["long"]["n_positions"] == config["bot"]["long"]["risk"]["n_positions"]
     assert compiled["bot"]["long"]["risk_wel_enforcer_threshold"] == config["bot"]["long"][
         "risk"
-    ]["wel_enforcer_threshold"]
+    ]["position_exposure_enforcer_threshold"]
     assert compiled["bot"]["long"]["unstuck_threshold"] == config["bot"]["long"]["unstuck"][
         "threshold"
     ]
@@ -914,7 +914,7 @@ def test_update_config_with_args_ignores_non_config_parser_args():
 
 def test_update_config_with_args_adds_missing_sparse_leaf_override():
     source_config, base_config_path, raw_snapshot = load_input_config(
-        "configs/examples/default_trailing_grid_long_npos10.json", log_info=False
+        "configs/examples/default_trailing_grid_long_npos7.json", log_info=False
     )
     source_config["bot"]["long"]["strategy"]["trailing_martingale"]["close"].pop(
         "threshold_we_weight", None
@@ -958,7 +958,7 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
 
 def test_prepare_config_preserves_sparse_leaf_cli_override():
     source_config, base_config_path, raw_snapshot = load_input_config(
-        "configs/examples/default_trailing_grid_long_npos10.json", log_info=False
+        "configs/examples/default_trailing_grid_long_npos7.json", log_info=False
     )
     args = SimpleNamespace()
     vars(args)["bot.long.strategy.trailing_martingale.entry.threshold_volatility_1h_weight"] = 3.5

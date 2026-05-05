@@ -15,11 +15,11 @@ def _get_shared_bot_defaults():
                 "entry_cooldown_minutes": 0.0,
                 "n_positions": 10,
                 "total_wallet_exposure_limit": 1.25,
-                "twel_enforcer_enabled": True,
-                "twel_enforcer_threshold": 1,
+                "total_exposure_enforcer_enabled": True,
+                "total_exposure_enforcer_threshold": 1,
                 "we_excess_allowance_pct": 0.37,
-                "wel_enforcer_enabled": True,
-                "wel_enforcer_threshold": 0.994,
+                "position_exposure_enforcer_enabled": True,
+                "position_exposure_enforcer_threshold": 0.994,
             },
             "forager": {
                 "score_weights": {
@@ -54,11 +54,11 @@ def _get_shared_bot_defaults():
                 "entry_cooldown_minutes": 0.0,
                 "n_positions": 10,
                 "total_wallet_exposure_limit": 0,
-                "twel_enforcer_enabled": True,
-                "twel_enforcer_threshold": 0.95,
+                "total_exposure_enforcer_enabled": True,
+                "total_exposure_enforcer_threshold": 0.95,
                 "we_excess_allowance_pct": 0,
-                "wel_enforcer_enabled": True,
-                "wel_enforcer_threshold": 0.95,
+                "position_exposure_enforcer_enabled": True,
+                "position_exposure_enforcer_threshold": 0.95,
             },
             "forager": {
                 "score_weights": {
