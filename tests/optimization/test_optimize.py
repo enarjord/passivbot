@@ -858,7 +858,7 @@ class TestIndividualToConfig:
 
     def test_lossless_close_trailing_override_supports_trailing_martingale_shape(self):
         config = load_prepared_config(
-            "configs/examples/default_trailing_grid_long_npos10.json",
+            "configs/examples/default_trailing_grid_long_npos7.json",
             verbose=False,
         )
         long_strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
@@ -1570,7 +1570,7 @@ class TestConfigsToIndividuals:
 
     def test_extract_configs_suppresses_entry_grid_inflation_warning_for_starting_seeds(self, caplog):
         with caplog.at_level(logging.WARNING):
-            result = extract_configs("configs/examples/default_trailing_grid_long_npos10.json")
+            result = extract_configs("configs/examples/default_trailing_grid_long_npos7.json")
 
         assert len(result) == 1
         assert not any(

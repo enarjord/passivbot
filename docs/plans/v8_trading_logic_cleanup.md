@@ -59,5 +59,11 @@ Working target for `refactor/rust-strategy-runtime-plan`.
 
 ## Deferred
 
-- [ ] Forager anti-churn controls, if live/backtest behavior shows unwanted slot churn.
+- [ ] Reconcile forager anti-churn controls from `feat/staged-live-planner` after that work lands
+  in `master`.
+  - That branch already addresses the churn issue with stateless incumbent-score hysteresis via
+    `live.forager_score_hysteresis_pct`.
+  - Prefer merging it through `master` instead of directly merging `feat/staged-live-planner` into
+    this branch, since staged-live still has a large live-planner/config diff and may continue to
+    change.
 - [ ] Target/range volatility for forager, if users ask for excluding very high volatility coins.
