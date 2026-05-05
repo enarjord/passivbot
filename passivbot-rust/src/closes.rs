@@ -874,6 +874,186 @@ mod tests {
         assert_eq!(order.price, 100.83);
         assert_eq!(order.qty, -10.0);
     }
+
+    fn make_recursive_close_state() -> StateParams {
+        StateParams {
+            balance: 10_000.0,
+            order_book: crate::types::OrderBook {
+                ask: 100.0,
+                bid: 100.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn make_recursive_close_bot() -> BotParams {
+        BotParams {
+            wallet_exposure_limit: 1.0,
+            risk_we_excess_allowance_pct: 0.0,
+            risk_wel_enforcer_enabled: false,
+            risk_wel_enforcer_threshold: 0.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_recursive_grid_close_long_negative_we_weight_ascends_as_exposure_falls() {
+        let exchange = make_exchange_params();
+        let state = make_recursive_close_state();
+        let bot = make_recursive_close_bot();
+        let close = TrailingGridCloseParams {
+            qty_pct: 0.1,
+            threshold_base_pct: 0.02,
+            threshold_we_weight: -0.01,
+            ..make_close_params()
+        };
+        let pos = Position {
+            size: 100.0,
+            price: 100.0,
+        };
+
+        let closes = calc_closes_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &close,
+            &pos,
+            &TrailingPriceBundle::default(),
+        );
+
+        assert_eq!(closes.len(), 10);
+        assert!(closes
+            .iter()
+            .all(|order| order.order_type == OrderType::CloseGridLong));
+        for (idx, order) in closes.iter().enumerate() {
+            let expected_price = 101.0 + idx as f64 * 0.1;
+            assert!(
+                (order.price - expected_price).abs() < 1e-12,
+                "idx={} price={} expected={}",
+                idx,
+                order.price,
+                expected_price
+            );
+            assert!((order.qty + 10.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_recursive_grid_close_long_positive_we_weight_sorts_returned_orders() {
+        let exchange = make_exchange_params();
+        let state = make_recursive_close_state();
+        let bot = make_recursive_close_bot();
+        let close = TrailingGridCloseParams {
+            qty_pct: 0.1,
+            threshold_base_pct: 0.01,
+            threshold_we_weight: 0.01,
+            ..make_close_params()
+        };
+        let pos = Position {
+            size: 100.0,
+            price: 100.0,
+        };
+
+        let closes = calc_closes_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &close,
+            &pos,
+            &TrailingPriceBundle::default(),
+        );
+
+        assert_eq!(closes.len(), 10);
+        assert!(closes
+            .iter()
+            .all(|order| order.order_type == OrderType::CloseGridLong));
+        // Recursive generation produces 102.0, 101.9, ..., 101.1 as exposure falls; the public
+        // close list is sorted ascending before returning.
+        for (idx, order) in closes.iter().enumerate() {
+            let expected_price = 101.1 + idx as f64 * 0.1;
+            assert!(
+                (order.price - expected_price).abs() < 1e-12,
+                "idx={} price={} expected={}",
+                idx,
+                order.price,
+                expected_price
+            );
+            assert!((order.qty + 10.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_grid_close_long_zero_we_weight_ignores_qty_pct_and_closes_full_position() {
+        let exchange = make_exchange_params();
+        let state = make_recursive_close_state();
+        let bot = make_recursive_close_bot();
+        let close = TrailingGridCloseParams {
+            qty_pct: 0.1,
+            threshold_base_pct: 0.01,
+            threshold_we_weight: 0.0,
+            ..make_close_params()
+        };
+        let pos = Position {
+            size: 100.0,
+            price: 100.0,
+        };
+
+        let closes = calc_closes_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &close,
+            &pos,
+            &TrailingPriceBundle::default(),
+        );
+
+        assert_eq!(closes.len(), 1);
+        assert_eq!(closes[0].order_type, OrderType::CloseGridLong);
+        assert_eq!(closes[0].price, 101.0);
+        assert_eq!(closes[0].qty, -100.0);
+    }
+
+    #[test]
+    fn test_trailing_close_long_returns_single_order_not_recursive_grid() {
+        let exchange = make_exchange_params();
+        let state = make_recursive_close_state();
+        let bot = make_recursive_close_bot();
+        let close = TrailingGridCloseParams {
+            qty_pct: 0.1,
+            threshold_base_pct: 0.01,
+            threshold_we_weight: -0.005,
+            retracement_base_pct: 0.002,
+            ..make_close_params()
+        };
+        let pos = Position {
+            size: 100.0,
+            price: 100.0,
+        };
+        let trailing = TrailingPriceBundle {
+            max_since_open: 102.0,
+            min_since_max: 101.0,
+            ..Default::default()
+        };
+
+        let closes = calc_closes_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &close,
+            &pos,
+            &trailing,
+        );
+
+        assert_eq!(closes.len(), 1);
+        assert_eq!(closes[0].order_type, OrderType::CloseTrailingLong);
+        assert_eq!(closes[0].price, 100.3);
+        assert_eq!(closes[0].qty, -10.0);
+    }
 }
 
 pub fn calc_closes_long(

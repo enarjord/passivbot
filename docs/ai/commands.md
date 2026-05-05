@@ -45,7 +45,7 @@ passivbot optimize --suite
 
 ```bash
 cd passivbot-rust && maturin develop --release && cd ..
-cd passivbot-rust && cargo test && cd ..
+cd passivbot-rust && cargo test --no-default-features && cd ..
 cd passivbot-rust && cargo check --tests && cd ..
 ```
 

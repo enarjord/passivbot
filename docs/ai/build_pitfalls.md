@@ -12,13 +12,16 @@ Guideline:
 2. Confirm which `passivbot_rust` module path Python resolves at runtime.
 3. If behavior is stale, clean rebuild and re-verify import path.
 
-## 2) `cargo test --lib` Linker Noise On PyO3
+## 2) PyO3 Test Linkage
 
-Problem: PyO3 projects often fail linking for `cargo test --lib` without Python runtime symbols.
+Problem: default Rust builds enable the PyO3 `extension-module` feature for Python packaging. Plain
+`cargo test` may fail to link or run because the test binary is not loaded by Python.
 
-Use instead:
+Use no default features for Rust unit tests, and keep the default-feature check for extension-build
+coverage:
 
 ```bash
+cd passivbot-rust && cargo test --no-default-features && cd ..
 cd passivbot-rust && cargo check --tests && cd ..
 ```
 
