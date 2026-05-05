@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import errno
 import json
 import logging
 import os
@@ -35,6 +36,12 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp_path, path)
+
+
+def _is_disk_full_error(exc: BaseException) -> bool:
+    if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC:
+        return True
+    return "No space left on device" in str(exc)
 
 
 class MonitorPublisher:
@@ -93,6 +100,8 @@ class MonitorPublisher:
         self._current_history_paths: dict[str, Path] = {}
         self._last_price_tick_emitted_ms: dict[str, int] = {}
         self._last_candle_ts_by_key: dict[tuple[str, str], int] = {}
+        self._disk_full_last_log_ms = 0
+        self._disk_full_suppressed = 0
         self.seq = 0
         self._ensure_layout()
         self._load_manifest_state()
@@ -218,7 +227,28 @@ class MonitorPublisher:
         try:
             _atomic_write_json(self.manifest_path, self._build_manifest(now_ms=now_ms))
         except Exception as exc:
-            logging.error("[monitor] failed writing manifest: %s", exc)
+            self._log_write_failure("writing manifest", exc)
+
+    def _log_write_failure(self, action: str, exc: BaseException) -> None:
+        if not _is_disk_full_error(exc):
+            logging.error("[monitor] %s: %s", action, exc)
+            return
+        now_ms = self._now_ms()
+        if now_ms - self._disk_full_last_log_ms >= 60_000:
+            suffix = ""
+            if self._disk_full_suppressed:
+                suffix = f" | suppressed={self._disk_full_suppressed}"
+            self._disk_full_suppressed = 0
+            self._disk_full_last_log_ms = now_ms
+            logging.error(
+                "[monitor] disk full while %s: %s%s | suppressing repeat disk-full monitor errors for 60s",
+                action,
+                exc,
+                suffix,
+            )
+        else:
+            self._disk_full_suppressed += 1
+            logging.debug("[monitor] disk full while %s: %s", action, exc)
 
     def _segment_label(self, now_ms: int) -> str:
         dt = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)
@@ -384,7 +414,7 @@ class MonitorPublisher:
             self._prune_retention(now_ms=now_ms)
             return envelope
         except Exception as exc:
-            logging.error("[monitor] failed recording history entry %s/%s: %s", stream, kind, exc)
+            self._log_write_failure(f"recording history entry {stream}/{kind}", exc)
             return None
 
     def record_fill(
@@ -521,7 +551,7 @@ class MonitorPublisher:
             self._prune_retention(now_ms=now_ms)
             return envelope
         except Exception as exc:
-            logging.error("[monitor] failed recording event %s: %s", kind, exc)
+            self._log_write_failure(f"recording event {kind}", exc)
             return None
 
     def record_error(
@@ -578,7 +608,7 @@ class MonitorPublisher:
             self._prune_retention(now_ms=now_ms)
             return True
         except Exception as exc:
-            logging.error("[monitor] failed writing snapshot: %s", exc)
+            self._log_write_failure("writing snapshot", exc)
             return False
 
     def close(self) -> None:

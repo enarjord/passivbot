@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import fcntl
 import inspect
 import json
@@ -47,6 +48,16 @@ _pnl_discrepancy_last_delta: Dict[str, float] = {}  # exchange:user -> last delt
 _PNL_DISCREPANCY_THROTTLE_SECONDS = 3600.0  # Log at most once per hour if delta unchanged
 _PNL_DISCREPANCY_CHANGE_THRESHOLD = 0.10  # Consider delta "changed" if >10%
 _PNL_DISCREPANCY_MIN_SECONDS = 900.0  # Minimum seconds between logs even if delta changes
+
+
+class FillEventCacheDiskFullError(RuntimeError):
+    """Raised when the trading-critical fill event cache cannot be persisted."""
+
+
+def _is_disk_full_error(exc: BaseException) -> bool:
+    if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC:
+        return True
+    return "No space left on device" in str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -843,9 +854,16 @@ class FillEventCache:
                     logger.debug("FillEventCache.save_days: %s unchanged", path.name)
                     continue
             tmp_path = path.with_suffix(".tmp")
-            with tmp_path.open("w", encoding="utf-8") as fh:
-                json.dump(payload, fh)
-            os.replace(tmp_path, path)
+            try:
+                with tmp_path.open("w", encoding="utf-8") as fh:
+                    json.dump(payload, fh)
+                os.replace(tmp_path, path)
+            except Exception as exc:
+                if _is_disk_full_error(exc):
+                    raise FillEventCacheDiskFullError(
+                        f"fill event cache write failed: disk full while writing {path}"
+                    ) from exc
+                raise
             logger.debug(
                 "[fills] cache wrote %d events to %s",
                 len(payload),
@@ -904,9 +922,11 @@ class FillEventCache:
             os.replace(tmp_path, self.metadata_path)
             logger.debug("FillEventCache.save_metadata: wrote to %s", self.metadata_path)
         except Exception as exc:
-            logger.error(
-                "FillEventCache.save_metadata: failed to write %s (%s)", self.metadata_path, exc
-            )
+            if _is_disk_full_error(exc):
+                raise FillEventCacheDiskFullError(
+                    f"fill event cache metadata write failed: disk full while writing {self.metadata_path}"
+                ) from exc
+            raise
 
     def update_metadata_from_events(self, events: Sequence[FillEvent]) -> None:
         """Update metadata timestamps based on events."""
@@ -1122,12 +1142,30 @@ class FillFetchRequestStats:
                 "error": 0,
                 "total_ms": 0,
                 "max_ms": 0,
+                "last_error_type": "",
+                "last_error": "",
             },
         )
         data["count"] += 1
         data["ok" if ok else "error"] += 1
         data["total_ms"] += max(0, int(elapsed_ms))
         data["max_ms"] = max(data["max_ms"], max(0, int(elapsed_ms)))
+
+    def record_error_detail(self, endpoint: str, exc: BaseException) -> None:
+        data = self.calls.setdefault(
+            endpoint,
+            {
+                "count": 0,
+                "ok": 0,
+                "error": 0,
+                "total_ms": 0,
+                "max_ms": 0,
+                "last_error_type": "",
+                "last_error": "",
+            },
+        )
+        data["last_error_type"] = type(exc).__name__
+        data["last_error"] = str(exc)[:240]
 
     @property
     def count(self) -> int:
@@ -1153,7 +1191,15 @@ class FillFetchRequestStats:
             total_ms = int(data["total_ms"])
             max_ms = int(data["max_ms"])
             errors = int(data["error"])
-            suffix = f",err={errors}" if errors else ""
+            suffix = ""
+            if errors:
+                suffix = f",err={errors}"
+                error_type = str(data.get("last_error_type") or "")
+                error_msg = str(data.get("last_error") or "")
+                if error_type:
+                    suffix += f",err_type={error_type}"
+                if error_msg:
+                    suffix += f",err_msg={error_msg}"
             parts.append(f"{name}:n={count},sum={total_ms}ms,max={max_ms}ms{suffix}")
         if len(self.calls) > limit:
             parts.append(f"+{len(self.calls) - limit} endpoints")
@@ -1175,15 +1221,21 @@ class _TimedApiProxy:
         async def _wrapped(*args, **kwargs):
             started = time.monotonic()
             ok = False
+            caught_exc: Optional[BaseException] = None
             try:
                 result = attr(*args, **kwargs)
                 if inspect.isawaitable(result):
                     result = await result
                 ok = True
                 return result
+            except BaseException as exc:
+                caught_exc = exc
+                raise
             finally:
                 elapsed_ms = int(max(0.0, (time.monotonic() - started) * 1000.0))
                 self._stats.record(name, elapsed_ms, ok)
+                if caught_exc is not None:
+                    self._stats.record_error_detail(name, caught_exc)
 
         return _wrapped
 

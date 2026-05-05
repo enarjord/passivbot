@@ -1061,23 +1061,23 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
     assert state_logs == [
         (
             "DEBUG",
-            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=650ms | sum=1150ms | balance=250ms fills=400ms open_orders=200ms positions=300ms",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=650ms | sum=1150ms | max=400ms | balance=250ms fills=400ms open_orders=200ms positions=300ms",
         ),
         (
             "DEBUG",
-            "[state] staged refresh timings | plan=balance,open_orders,positions | wall=1700ms | sum=1800ms | balance=500ms open_orders=700ms positions=600ms",
+            "[state] staged refresh timings | plan=balance,open_orders,positions | wall=1700ms | sum=1800ms | max=700ms | balance=500ms open_orders=700ms positions=600ms unaccounted=1000ms",
         ),
         (
             "DEBUG",
-            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=8500ms | sum=11500ms | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=8500ms | sum=11500ms | max=4000ms | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms unaccounted=4500ms",
         ),
         (
             "INFO",
-            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=4100ms | sum=5100ms | balance=1200ms fills=1300ms open_orders=900ms positions=1700ms",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=4100ms | sum=5100ms | max=1700ms | balance=1200ms fills=1300ms open_orders=900ms positions=1700ms unaccounted=2400ms",
         ),
         (
             "INFO",
-            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=10500ms | sum=11500ms | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=10500ms | sum=11500ms | max=4000ms | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms unaccounted=6500ms",
         ),
     ]
 

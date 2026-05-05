@@ -3947,7 +3947,11 @@ class CandlestickManager:
                     on_batch(arr)
                 except Exception as on_batch_err:
                     self.log.error(
-                        "on_batch callback failed; stopping pagination",
+                        "on_batch callback failed; stopping pagination | symbol=%s timeframe=%s error_type=%s error=%s",
+                        symbol,
+                        tf_norm,
+                        type(on_batch_err).__name__,
+                        on_batch_err,
                         extra={
                             "symbol": symbol,
                             "timeframe": tf_norm,

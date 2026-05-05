@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import logging
 import sys
 import types
@@ -25,6 +26,7 @@ from src.fill_events_manager import (
     OkxFetcher,
     FillEvent,
     FillEventCache,
+    FillEventCacheDiskFullError,
     FillEventsManager,
     GAP_REASON_FETCH_FAILED,
     compute_psize_pprice,
@@ -2264,6 +2266,56 @@ async def test_manager_refresh_logs_fetcher_request_timing(tmp_path: Path, caplo
     assert any("requests=3" in msg for msg in messages)
     assert any("fetch_b:n=2" in msg for msg in messages)
     assert any("range=1970-01-01 00:00:00..1970-01-01 00:00:00" in msg for msg in messages)
+
+
+@pytest.mark.asyncio
+async def test_manager_refresh_logs_fetcher_error_detail(tmp_path: Path, caplog):
+    cache_dir = tmp_path / "fills_request_error_timing"
+
+    class _Api:
+        async def fetch_a(self):
+            raise RuntimeError("remote timeout detail")
+
+    class _ApiFetcher(BaseFetcher):
+        def __init__(self):
+            self.api = _Api()
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            await self.api.fetch_a()
+            return []
+
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_ApiFetcher(),
+        cache_path=cache_dir,
+    )
+
+    with caplog.at_level(logging.INFO, logger=fem.logger.name):
+        with pytest.raises(RuntimeError, match="remote timeout detail"):
+            await manager.refresh(start_ms=123, end_ms=456)
+
+    messages = [record.message for record in caplog.records]
+    assert any("[fills] fetcher request timing" in msg for msg in messages)
+    assert any("fetch_a:n=1" in msg for msg in messages)
+    assert any("err_type=RuntimeError" in msg for msg in messages)
+    assert any("err_msg=remote timeout detail" in msg for msg in messages)
+
+
+def test_fill_event_cache_disk_full_raises_clear_error(tmp_path: Path, monkeypatch, sample_events):
+    cache = FillEventCache(tmp_path / "fills_disk_full")
+    event = FillEvent.from_dict(dict(sample_events[0]))
+
+    def fail_replace(src, dst):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(fem.os, "replace", fail_replace)
+
+    with pytest.raises(FillEventCacheDiskFullError, match="disk full"):
+        cache.save([event])
+
+    with pytest.raises(FillEventCacheDiskFullError, match="disk full"):
+        cache.save_metadata({"last_refresh_ms": event.timestamp})
 
 
 def test_fill_event_cache_load_ignores_metadata_file(tmp_path: Path, sample_events, caplog):

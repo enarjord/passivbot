@@ -5309,6 +5309,8 @@ class Passivbot:
         if not timings_ms:
             return
         sum_ms = int(sum(int(v) for v in timings_ms.values()))
+        max_surface_ms = int(max(int(v) for v in timings_ms.values()))
+        unaccounted_ms = int(max(0, wall_ms - max_surface_ms))
         pending_confirmations = bool(
             getattr(self, "_authoritative_pending_confirmations", {}) or {}
         )
@@ -5335,13 +5337,16 @@ class Passivbot:
         parts = [
             f"{surface}={int(timings_ms[surface])}ms" for surface in sorted(timings_ms)
         ]
+        if unaccounted_ms >= 500:
+            parts.append(f"unaccounted={unaccounted_ms}ms")
         suffix = " | pending_confirmations=yes" if pending_confirmations else ""
         logging.log(
             log_level,
-            "[state] staged refresh timings | plan=%s | wall=%dms | sum=%dms | %s%s",
+            "[state] staged refresh timings | plan=%s | wall=%dms | sum=%dms | max=%dms | %s%s",
             ",".join(sorted(plan)),
             wall_ms,
             sum_ms,
+            max_surface_ms,
             " ".join(parts),
             suffix,
         )
