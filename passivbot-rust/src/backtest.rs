@@ -120,10 +120,10 @@ pub struct EmaAlphas {
     pub vol_alpha_short: f64,
     pub log_range_alpha_long: f64,
     pub log_range_alpha_short: f64,
-    pub offset_volatility_logrange_ema_1m_alpha_long: f64,
-    pub offset_volatility_logrange_ema_1m_alpha_short: f64,
-    pub entry_volatility_logrange_ema_1h_alpha_long: f64,
-    pub entry_volatility_logrange_ema_1h_alpha_short: f64,
+    pub volatility_ema_1m_alpha_long: f64,
+    pub volatility_ema_1m_alpha_short: f64,
+    pub volatility_ema_1h_alpha_long: f64,
+    pub volatility_ema_1h_alpha_short: f64,
 }
 
 #[derive(Clone, Default, Copy, Debug)]
@@ -151,18 +151,18 @@ pub struct EMAs {
     pub log_range_short: f64,
     pub log_range_short_num: f64,
     pub log_range_short_den: f64,
-    pub offset_volatility_logrange_ema_1m_long: f64,
-    pub offset_volatility_logrange_ema_1m_long_num: f64,
-    pub offset_volatility_logrange_ema_1m_long_den: f64,
-    pub offset_volatility_logrange_ema_1m_short: f64,
-    pub offset_volatility_logrange_ema_1m_short_num: f64,
-    pub offset_volatility_logrange_ema_1m_short_den: f64,
-    pub entry_volatility_logrange_ema_1h_long: f64,
-    pub entry_volatility_logrange_ema_1h_long_num: f64,
-    pub entry_volatility_logrange_ema_1h_long_den: f64,
-    pub entry_volatility_logrange_ema_1h_short: f64,
-    pub entry_volatility_logrange_ema_1h_short_num: f64,
-    pub entry_volatility_logrange_ema_1h_short_den: f64,
+    pub volatility_ema_1m_long: f64,
+    pub volatility_ema_1m_long_num: f64,
+    pub volatility_ema_1m_long_den: f64,
+    pub volatility_ema_1m_short: f64,
+    pub volatility_ema_1m_short_num: f64,
+    pub volatility_ema_1m_short_den: f64,
+    pub volatility_ema_1h_long: f64,
+    pub volatility_ema_1h_long_num: f64,
+    pub volatility_ema_1h_long_den: f64,
+    pub volatility_ema_1h_short: f64,
+    pub volatility_ema_1h_short_num: f64,
+    pub volatility_ema_1h_short_den: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -569,10 +569,10 @@ pub struct Backtest<'a> {
     needs_volume_ema_short: bool,
     needs_log_range_long: bool,
     needs_log_range_short: bool,
-    needs_offset_volatility_logrange_ema_1m_long: bool,
-    needs_offset_volatility_logrange_ema_1m_short: bool,
-    needs_entry_volatility_logrange_ema_1h_long: bool,
-    needs_entry_volatility_logrange_ema_1h_short: bool,
+    needs_volatility_ema_1m_long: bool,
+    needs_volatility_ema_1m_short: bool,
+    needs_volatility_ema_1h_long: bool,
+    needs_volatility_ema_1h_short: bool,
     coin_first_valid_idx: Vec<usize>,
     coin_last_valid_idx: Vec<usize>,
     coin_trade_start_idx: Vec<usize>,
@@ -982,7 +982,9 @@ impl<'a> Backtest<'a> {
         let (effective_cumsum_max, effective_cumsum_last) = self.effective_pnl_cumsum(k);
         let allowance = match side {
             LONG => {
-                if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
+                if self.bot_params_master.long.unstuck_enabled
+                    && self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0
+                {
                     calc_auto_unstuck_allowance(
                         balance_raw,
                         self.bot_params_master.long.unstuck_loss_allowance_pct
@@ -995,7 +997,9 @@ impl<'a> Backtest<'a> {
                 }
             }
             SHORT => {
-                if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
+                if self.bot_params_master.short.unstuck_enabled
+                    && self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0
+                {
                     calc_auto_unstuck_allowance(
                         balance_raw,
                         self.bot_params_master.short.unstuck_loss_allowance_pct
@@ -1218,7 +1222,9 @@ impl<'a> Backtest<'a> {
         let balance_raw = self.balance.usd_total_balance;
         let (effective_cumsum_max, effective_cumsum_last) = self.effective_pnl_cumsum(k);
 
-        let long_allowance = if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
+        let long_allowance = if self.bot_params_master.long.unstuck_enabled
+            && self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0
+        {
             calc_auto_unstuck_allowance(
                 balance_raw,
                 self.bot_params_master.long.unstuck_loss_allowance_pct
@@ -1229,7 +1235,9 @@ impl<'a> Backtest<'a> {
         } else {
             0.0
         };
-        let short_allowance = if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
+        let short_allowance = if self.bot_params_master.short.unstuck_enabled
+            && self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0
+        {
             calc_auto_unstuck_allowance(
                 balance_raw,
                 self.bot_params_master.short.unstuck_loss_allowance_pct
@@ -1374,7 +1382,7 @@ impl<'a> Backtest<'a> {
                 {
                     if span > 0.0 {
                         m1.log_range
-                            .push((span, self.emas[idx].offset_volatility_logrange_ema_1m_long));
+                            .push((span, self.emas[idx].volatility_ema_1m_long));
                     }
                 }
                 if let Some(span) =
@@ -1382,7 +1390,7 @@ impl<'a> Backtest<'a> {
                 {
                     if span > 0.0 {
                         m1.log_range
-                            .push((span, self.emas[idx].offset_volatility_logrange_ema_1m_short));
+                            .push((span, self.emas[idx].volatility_ema_1m_short));
                     }
                 }
 
@@ -1391,7 +1399,7 @@ impl<'a> Backtest<'a> {
                 {
                     if span > 0.0 {
                         h1.log_range
-                            .push((span, self.emas[idx].entry_volatility_logrange_ema_1h_long));
+                            .push((span, self.emas[idx].volatility_ema_1h_long));
                     }
                 }
                 if let Some(span) =
@@ -1399,7 +1407,7 @@ impl<'a> Backtest<'a> {
                 {
                     if span > 0.0 {
                         h1.log_range
-                            .push((span, self.emas[idx].entry_volatility_logrange_ema_1h_short));
+                            .push((span, self.emas[idx].volatility_ema_1h_short));
                     }
                 }
 
@@ -1489,30 +1497,32 @@ impl<'a> Backtest<'a> {
 
         let balance_raw = input.balance_raw;
         let (effective_cumsum_max, effective_cumsum_last) = self.effective_pnl_cumsum(k);
-        input.global.unstuck_allowance_long =
-            if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
-                calc_auto_unstuck_allowance(
-                    balance_raw,
-                    self.bot_params_master.long.unstuck_loss_allowance_pct
-                        * self.bot_params_master.long.total_wallet_exposure_limit,
-                    effective_cumsum_max,
-                    effective_cumsum_last,
-                )
-            } else {
-                0.0
-            };
-        input.global.unstuck_allowance_short =
-            if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
-                calc_auto_unstuck_allowance(
-                    balance_raw,
-                    self.bot_params_master.short.unstuck_loss_allowance_pct
-                        * self.bot_params_master.short.total_wallet_exposure_limit,
-                    effective_cumsum_max,
-                    effective_cumsum_last,
-                )
-            } else {
-                0.0
-            };
+        input.global.unstuck_allowance_long = if self.bot_params_master.long.unstuck_enabled
+            && self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0
+        {
+            calc_auto_unstuck_allowance(
+                balance_raw,
+                self.bot_params_master.long.unstuck_loss_allowance_pct
+                    * self.bot_params_master.long.total_wallet_exposure_limit,
+                effective_cumsum_max,
+                effective_cumsum_last,
+            )
+        } else {
+            0.0
+        };
+        input.global.unstuck_allowance_short = if self.bot_params_master.short.unstuck_enabled
+            && self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0
+        {
+            calc_auto_unstuck_allowance(
+                balance_raw,
+                self.bot_params_master.short.unstuck_loss_allowance_pct
+                    * self.bot_params_master.short.total_wallet_exposure_limit,
+                effective_cumsum_max,
+                effective_cumsum_last,
+            )
+        } else {
+            0.0
+        };
         input.global.max_realized_loss_pct = self.backtest_params.max_realized_loss_pct;
         input.global.realized_pnl_cumsum_max = effective_cumsum_max;
         input.global.realized_pnl_cumsum_last = effective_cumsum_last;
@@ -1627,26 +1637,22 @@ impl<'a> Backtest<'a> {
             }
             if let Some(slot) = slots.m1_log_range.offset_long {
                 if sym.emas.m1.log_range.len() > slot {
-                    sym.emas.m1.log_range[slot].1 =
-                        self.emas[idx].offset_volatility_logrange_ema_1m_long;
+                    sym.emas.m1.log_range[slot].1 = self.emas[idx].volatility_ema_1m_long;
                 }
             }
             if let Some(slot) = slots.m1_log_range.offset_short {
                 if sym.emas.m1.log_range.len() > slot {
-                    sym.emas.m1.log_range[slot].1 =
-                        self.emas[idx].offset_volatility_logrange_ema_1m_short;
+                    sym.emas.m1.log_range[slot].1 = self.emas[idx].volatility_ema_1m_short;
                 }
             }
             if let Some(slot) = slots.h1_log_range.long {
                 if sym.emas.h1.log_range.len() > slot {
-                    sym.emas.h1.log_range[slot].1 =
-                        self.emas[idx].entry_volatility_logrange_ema_1h_long;
+                    sym.emas.h1.log_range[slot].1 = self.emas[idx].volatility_ema_1h_long;
                 }
             }
             if let Some(slot) = slots.h1_log_range.short {
                 if sym.emas.h1.log_range.len() > slot {
-                    sym.emas.h1.log_range[slot].1 =
-                        self.emas[idx].entry_volatility_logrange_ema_1h_short;
+                    sym.emas.h1.log_range[slot].1 = self.emas[idx].volatility_ema_1h_short;
                 }
             }
         }
@@ -1852,18 +1858,18 @@ impl<'a> Backtest<'a> {
                     log_range_short: 0.0,
                     log_range_short_num: 0.0,
                     log_range_short_den: 1.0,
-                    offset_volatility_logrange_ema_1m_long: 0.0,
-                    offset_volatility_logrange_ema_1m_long_num: 0.0,
-                    offset_volatility_logrange_ema_1m_long_den: 1.0,
-                    offset_volatility_logrange_ema_1m_short: 0.0,
-                    offset_volatility_logrange_ema_1m_short_num: 0.0,
-                    offset_volatility_logrange_ema_1m_short_den: 1.0,
-                    entry_volatility_logrange_ema_1h_long: 0.0,
-                    entry_volatility_logrange_ema_1h_long_num: 0.0,
-                    entry_volatility_logrange_ema_1h_long_den: 1.0,
-                    entry_volatility_logrange_ema_1h_short: 0.0,
-                    entry_volatility_logrange_ema_1h_short_num: 0.0,
-                    entry_volatility_logrange_ema_1h_short_den: 1.0,
+                    volatility_ema_1m_long: 0.0,
+                    volatility_ema_1m_long_num: 0.0,
+                    volatility_ema_1m_long_den: 1.0,
+                    volatility_ema_1m_short: 0.0,
+                    volatility_ema_1m_short_num: 0.0,
+                    volatility_ema_1m_short_den: 1.0,
+                    volatility_ema_1h_long: 0.0,
+                    volatility_ema_1h_long_num: 0.0,
+                    volatility_ema_1h_long_den: 1.0,
+                    volatility_ema_1h_short: 0.0,
+                    volatility_ema_1h_short_num: 0.0,
+                    volatility_ema_1h_short_den: 1.0,
                 }
             })
             .collect();
@@ -1951,16 +1957,16 @@ impl<'a> Backtest<'a> {
             || strategy_params_parsed
                 .iter()
                 .any(|sp| strategy_needs_log_range_1m(&sp.short));
-        let needs_offset_volatility_logrange_ema_1m_long = strategy_params_parsed
+        let needs_volatility_ema_1m_long = strategy_params_parsed
             .iter()
             .any(|sp| strategy_needs_log_range_1m(&sp.long));
-        let needs_offset_volatility_logrange_ema_1m_short = strategy_params_parsed
+        let needs_volatility_ema_1m_short = strategy_params_parsed
             .iter()
             .any(|sp| strategy_needs_log_range_1m(&sp.short));
-        let needs_entry_volatility_logrange_ema_1h_long = strategy_params_parsed
+        let needs_volatility_ema_1h_long = strategy_params_parsed
             .iter()
             .any(|sp| strategy_needs_log_range_1h(&sp.long));
-        let needs_entry_volatility_logrange_ema_1h_short = strategy_params_parsed
+        let needs_volatility_ema_1h_short = strategy_params_parsed
             .iter()
             .any(|sp| strategy_needs_log_range_1h(&sp.short));
         let btc_collateral_initialized = !balance.use_btc_collateral;
@@ -1995,10 +2001,10 @@ impl<'a> Backtest<'a> {
             }),
             needs_log_range_long,
             needs_log_range_short,
-            needs_offset_volatility_logrange_ema_1m_long,
-            needs_offset_volatility_logrange_ema_1m_short,
-            needs_entry_volatility_logrange_ema_1h_long,
-            needs_entry_volatility_logrange_ema_1h_short,
+            needs_volatility_ema_1m_long,
+            needs_volatility_ema_1m_short,
+            needs_volatility_ema_1h_long,
+            needs_volatility_ema_1h_short,
             coin_first_valid_idx: first_valid_idx,
             coin_last_valid_idx: last_valid_idx,
             coin_trade_start_idx: trade_start_idx,
@@ -4254,9 +4260,7 @@ impl<'a> Backtest<'a> {
             self.last_hour_boundary_ms = hour_boundary;
 
             // Update hourly log-range EMAs for entry volatility adjustments
-            if self.needs_entry_volatility_logrange_ema_1h_long
-                || self.needs_entry_volatility_logrange_ema_1h_short
-            {
+            if self.needs_volatility_ema_1h_long || self.needs_volatility_ema_1h_short {
                 for i in 0..self.n_coins {
                     if self.coin_valid_range(i).is_none() {
                         continue;
@@ -4270,24 +4274,23 @@ impl<'a> Backtest<'a> {
                         continue;
                     }
                     let hour_log_range = (bucket.high / bucket.low).ln();
-                    let alpha_long = self.ema_alphas[i].entry_volatility_logrange_ema_1h_alpha_long;
-                    let alpha_short =
-                        self.ema_alphas[i].entry_volatility_logrange_ema_1h_alpha_short;
+                    let alpha_long = self.ema_alphas[i].volatility_ema_1h_alpha_long;
+                    let alpha_short = self.ema_alphas[i].volatility_ema_1h_alpha_short;
                     let emas = &mut self.emas[i];
-                    if self.needs_entry_volatility_logrange_ema_1h_long && alpha_long > 0.0 {
-                        emas.entry_volatility_logrange_ema_1h_long = update_adjusted_ema(
+                    if self.needs_volatility_ema_1h_long && alpha_long > 0.0 {
+                        emas.volatility_ema_1h_long = update_adjusted_ema(
                             hour_log_range,
                             alpha_long,
-                            &mut emas.entry_volatility_logrange_ema_1h_long_num,
-                            &mut emas.entry_volatility_logrange_ema_1h_long_den,
+                            &mut emas.volatility_ema_1h_long_num,
+                            &mut emas.volatility_ema_1h_long_den,
                         );
                     }
-                    if self.needs_entry_volatility_logrange_ema_1h_short && alpha_short > 0.0 {
-                        emas.entry_volatility_logrange_ema_1h_short = update_adjusted_ema(
+                    if self.needs_volatility_ema_1h_short && alpha_short > 0.0 {
+                        emas.volatility_ema_1h_short = update_adjusted_ema(
                             hour_log_range,
                             alpha_short,
-                            &mut emas.entry_volatility_logrange_ema_1h_short_num,
-                            &mut emas.entry_volatility_logrange_ema_1h_short_den,
+                            &mut emas.volatility_ema_1h_short_num,
+                            &mut emas.volatility_ema_1h_short_den,
                         );
                     }
                 }
@@ -4363,8 +4366,8 @@ impl<'a> Backtest<'a> {
             // log range metric: ln(high / low)
             if self.needs_log_range_long
                 || self.needs_log_range_short
-                || self.needs_offset_volatility_logrange_ema_1m_long
-                || self.needs_offset_volatility_logrange_ema_1m_short
+                || self.needs_volatility_ema_1m_long
+                || self.needs_volatility_ema_1m_short
             {
                 let log_range = if high > 0.0 && low > 0.0 {
                     (high / low).ln()
@@ -4387,25 +4390,25 @@ impl<'a> Backtest<'a> {
                         &mut emas.log_range_short_den,
                     );
                 }
-                if self.needs_offset_volatility_logrange_ema_1m_long {
-                    let alpha = self.ema_alphas[i].offset_volatility_logrange_ema_1m_alpha_long;
+                if self.needs_volatility_ema_1m_long {
+                    let alpha = self.ema_alphas[i].volatility_ema_1m_alpha_long;
                     if alpha > 0.0 {
-                        emas.offset_volatility_logrange_ema_1m_long = update_adjusted_ema(
+                        emas.volatility_ema_1m_long = update_adjusted_ema(
                             log_range,
                             alpha,
-                            &mut emas.offset_volatility_logrange_ema_1m_long_num,
-                            &mut emas.offset_volatility_logrange_ema_1m_long_den,
+                            &mut emas.volatility_ema_1m_long_num,
+                            &mut emas.volatility_ema_1m_long_den,
                         );
                     }
                 }
-                if self.needs_offset_volatility_logrange_ema_1m_short {
-                    let alpha = self.ema_alphas[i].offset_volatility_logrange_ema_1m_alpha_short;
+                if self.needs_volatility_ema_1m_short {
+                    let alpha = self.ema_alphas[i].volatility_ema_1m_alpha_short;
                     if alpha > 0.0 {
-                        emas.offset_volatility_logrange_ema_1m_short = update_adjusted_ema(
+                        emas.volatility_ema_1m_short = update_adjusted_ema(
                             log_range,
                             alpha,
-                            &mut emas.offset_volatility_logrange_ema_1m_short_num,
-                            &mut emas.offset_volatility_logrange_ema_1m_short_den,
+                            &mut emas.volatility_ema_1m_short_num,
+                            &mut emas.volatility_ema_1m_short_den,
                         );
                     }
                 }
@@ -4867,7 +4870,7 @@ fn calc_ema_alphas(
         log_range_alpha_short: clamp_alpha(
             2.0 / (bot_params_pair.short.filter_volatility_ema_span as f64 / interval_f + 1.0),
         ),
-        offset_volatility_logrange_ema_1m_alpha_long: {
+        volatility_ema_1m_alpha_long: {
             let span =
                 strategy_offset_volatility_span_minutes(&strategy_params_pair.long).unwrap_or(0.0);
             if span > 0.0 {
@@ -4876,7 +4879,7 @@ fn calc_ema_alphas(
                 0.0
             }
         },
-        offset_volatility_logrange_ema_1m_alpha_short: {
+        volatility_ema_1m_alpha_short: {
             let span =
                 strategy_offset_volatility_span_minutes(&strategy_params_pair.short).unwrap_or(0.0);
             if span > 0.0 {
@@ -4887,7 +4890,7 @@ fn calc_ema_alphas(
         },
         // Note: entry_volatility spans are in HOURS and computed from hourly buckets,
         // so they do NOT need interval adjustment (hourly buckets are calendar-based)
-        entry_volatility_logrange_ema_1h_alpha_long: {
+        volatility_ema_1h_alpha_long: {
             let span =
                 strategy_entry_volatility_span_hours(&strategy_params_pair.long).unwrap_or(0.0);
             if span > 0.0 {
@@ -4896,7 +4899,7 @@ fn calc_ema_alphas(
                 0.0
             }
         },
-        entry_volatility_logrange_ema_1h_alpha_short: {
+        volatility_ema_1h_alpha_short: {
             let span =
                 strategy_entry_volatility_span_hours(&strategy_params_pair.short).unwrap_or(0.0);
             if span > 0.0 {
@@ -7873,16 +7876,12 @@ mod tests {
         let alphas_5 = calc_ema_alphas(&bp, &strategy_pair, 5);
 
         assert!(
-            (alphas_1.entry_volatility_logrange_ema_1h_alpha_long
-                - alphas_5.entry_volatility_logrange_ema_1h_alpha_long)
-                .abs()
+            (alphas_1.volatility_ema_1h_alpha_long - alphas_5.volatility_ema_1h_alpha_long).abs()
                 < 1e-12,
             "hourly volatility alpha should not change with interval"
         );
         assert!(
-            (alphas_1.entry_volatility_logrange_ema_1h_alpha_short
-                - alphas_5.entry_volatility_logrange_ema_1h_alpha_short)
-                .abs()
+            (alphas_1.volatility_ema_1h_alpha_short - alphas_5.volatility_ema_1h_alpha_short).abs()
                 < 1e-12,
             "hourly volatility alpha should not change with interval"
         );

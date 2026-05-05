@@ -78,13 +78,13 @@
     }
   }
   assertions: {
-    fill_count: 5
+    fill_count: 4
     final_balance: 185.0
     last_prices: {
       "BTC/USDT:USDT": 98.5
     }
     final_positions: {
-      "BTC/USDT:USDT|long": {min: 0.9, max: 1.0}
+      "BTC/USDT:USDT|long": 0.0
     }
     hsl_paths: {
       long.halted: false

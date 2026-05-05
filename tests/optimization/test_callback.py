@@ -6,7 +6,18 @@ from optimization.callback import PymooRecorderCallback
 
 def _build_config(vector, overrides_fn, overrides_list, template):
     config = {
-        "bot": {"long": {"a": float(vector[0]), "b": float(vector[1])}},
+        "bot": {
+            "long": {
+                "strategy": {
+                    "trailing_martingale": {
+                        "entry": {
+                            "threshold_base_pct": float(vector[0]),
+                            "initial_qty_pct": float(vector[1]),
+                        },
+                    },
+                },
+            },
+        },
         "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
     }
     config.update({k: v for k, v in template.items() if k not in config})
@@ -38,7 +49,9 @@ def test_callback_records_offspring_with_suite_payload_cleanup():
     callback.notify(algorithm)
 
     entry = recorder.record.call_args[0][0]
-    assert entry["bot"]["long"]["a"] == 0.25
+    assert entry["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "threshold_base_pct"
+    ] == 0.25
     assert entry["suite_metrics"] == {"scenario_labels": ["base"]}
     assert "coins" not in entry["backtest"]
     assert entry["metrics"]["objectives"] == {"w_0": -1.0}

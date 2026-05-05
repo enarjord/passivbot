@@ -29,6 +29,202 @@ struct ParamSeed {
     short_bounds: &'static [f64],
 }
 
+struct NestedParamSeed {
+    name: &'static str,
+    path: &'static [&'static str],
+    long_default: f64,
+    short_default: f64,
+    long_bounds: &'static [f64],
+    short_bounds: &'static [f64],
+}
+
+const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
+    NestedParamSeed {
+        name: "ema_span_0",
+        path: &["ema_span_0"],
+        long_default: 770.0,
+        short_default: 100.0,
+        long_bounds: &[200.0, 1440.0, 10.0],
+        short_bounds: &[200.0, 1440.0, 10.0],
+    },
+    NestedParamSeed {
+        name: "ema_span_1",
+        path: &["ema_span_1"],
+        long_default: 210.0,
+        short_default: 100.0,
+        long_bounds: &[200.0, 1440.0, 10.0],
+        short_bounds: &[200.0, 1440.0, 10.0],
+    },
+    NestedParamSeed {
+        name: "volatility_ema_span_hours",
+        path: &["volatility_ema_span_hours"],
+        long_default: 1690.0,
+        short_default: 672.0,
+        long_bounds: &[672.0, 2016.0, 1.0],
+        short_bounds: &[672.0, 2016.0, 1.0],
+    },
+    NestedParamSeed {
+        name: "volatility_ema_span_minutes",
+        path: &["volatility_ema_span_minutes"],
+        long_default: 60.0,
+        short_default: 60.0,
+        long_bounds: &[5.0, 720.0, 1.0],
+        short_bounds: &[5.0, 720.0, 1.0],
+    },
+    NestedParamSeed {
+        name: "entry_double_down_factor",
+        path: &["entry", "double_down_factor"],
+        long_default: 0.73,
+        short_default: 0.5,
+        long_bounds: &[0.5, 1.0, 0.01],
+        short_bounds: &[0.5, 1.0, 0.01],
+    },
+    NestedParamSeed {
+        name: "entry_initial_qty_pct",
+        path: &["entry", "initial_qty_pct"],
+        long_default: 0.0276,
+        short_default: 0.01,
+        long_bounds: &[0.01, 0.03, 0.0001],
+        short_bounds: &[0.01, 0.03, 0.0001],
+    },
+    NestedParamSeed {
+        name: "entry_initial_ema_dist",
+        path: &["entry", "initial_ema_dist"],
+        long_default: 0.0097,
+        short_default: -0.01,
+        long_bounds: &[-0.01, 0.01, 0.0001],
+        short_bounds: &[-0.01, 0.01, 0.0001],
+    },
+    NestedParamSeed {
+        name: "entry_threshold_base_pct",
+        path: &["entry", "threshold_base_pct"],
+        long_default: 0.033,
+        short_default: 0.025,
+        long_bounds: &[0.0, 0.04, 1e-05],
+        short_bounds: &[0.0, 0.04, 1e-05],
+    },
+    NestedParamSeed {
+        name: "entry_threshold_we_weight",
+        path: &["entry", "threshold_we_weight"],
+        long_default: 0.135,
+        short_default: 0.0,
+        long_bounds: &[0.0, 5.0, 0.001],
+        short_bounds: &[0.0, 5.0, 0.001],
+    },
+    NestedParamSeed {
+        name: "entry_threshold_volatility_1h_weight",
+        path: &["entry", "threshold_volatility_1h_weight"],
+        long_default: 2.4,
+        short_default: 1.0,
+        long_bounds: &[0.0, 40.0, 0.1],
+        short_bounds: &[0.0, 40.0, 0.1],
+    },
+    NestedParamSeed {
+        name: "entry_threshold_volatility_1m_weight",
+        path: &["entry", "threshold_volatility_1m_weight"],
+        long_default: 0.0,
+        short_default: 0.0,
+        long_bounds: &[0.0, 40.0, 0.1],
+        short_bounds: &[0.0, 40.0, 0.1],
+    },
+    NestedParamSeed {
+        name: "entry_retracement_base_pct",
+        path: &["entry", "retracement_base_pct"],
+        long_default: 0.0,
+        short_default: 0.0,
+        long_bounds: &[0.0, 0.015, 1e-05],
+        short_bounds: &[0.0, 0.015, 1e-05],
+    },
+    NestedParamSeed {
+        name: "entry_retracement_we_weight",
+        path: &["entry", "retracement_we_weight"],
+        long_default: 0.0,
+        short_default: 0.0,
+        long_bounds: &[0.0, 5.0, 0.001],
+        short_bounds: &[0.0, 5.0, 0.001],
+    },
+    NestedParamSeed {
+        name: "entry_retracement_volatility_1h_weight",
+        path: &["entry", "retracement_volatility_1h_weight"],
+        long_default: 0.0,
+        short_default: 0.0,
+        long_bounds: &[0.0, 40.0, 0.1],
+        short_bounds: &[0.0, 40.0, 0.1],
+    },
+    NestedParamSeed {
+        name: "entry_retracement_volatility_1m_weight",
+        path: &["entry", "retracement_volatility_1m_weight"],
+        long_default: 0.0,
+        short_default: 0.0,
+        long_bounds: &[0.0, 40.0, 0.1],
+        short_bounds: &[0.0, 40.0, 0.1],
+    },
+    NestedParamSeed {
+        name: "close_qty_pct",
+        path: &["close", "qty_pct"],
+        long_default: 0.1,
+        short_default: 0.1,
+        long_bounds: &[0.05, 1.0, 0.01],
+        short_bounds: &[0.05, 1.0, 0.01],
+    },
+    NestedParamSeed {
+        name: "close_threshold_base_pct",
+        path: &["close", "threshold_base_pct"],
+        long_default: 0.006,
+        short_default: 0.006,
+        long_bounds: &[-0.02, 0.02, 1e-05],
+        short_bounds: &[-0.02, 0.02, 1e-05],
+    },
+    NestedParamSeed {
+        name: "close_threshold_we_weight",
+        path: &["close", "threshold_we_weight"],
+        long_default: -0.004,
+        short_default: -0.004,
+        long_bounds: &[-0.05, 0.05, 0.0001],
+        short_bounds: &[-0.05, 0.05, 0.0001],
+    },
+    NestedParamSeed {
+        name: "close_threshold_volatility_1h_weight",
+        path: &["close", "threshold_volatility_1h_weight"],
+        long_default: 1.0,
+        short_default: 1.0,
+        long_bounds: &[0.0, 40.0, 0.1],
+        short_bounds: &[0.0, 40.0, 0.1],
+    },
+    NestedParamSeed {
+        name: "close_threshold_volatility_1m_weight",
+        path: &["close", "threshold_volatility_1m_weight"],
+        long_default: 0.0,
+        short_default: 0.0,
+        long_bounds: &[0.0, 40.0, 0.1],
+        short_bounds: &[0.0, 40.0, 0.1],
+    },
+    NestedParamSeed {
+        name: "close_retracement_base_pct",
+        path: &["close", "retracement_base_pct"],
+        long_default: 0.0,
+        short_default: 0.0,
+        long_bounds: &[0.0, 0.015, 1e-05],
+        short_bounds: &[0.0, 0.015, 1e-05],
+    },
+    NestedParamSeed {
+        name: "close_retracement_volatility_1h_weight",
+        path: &["close", "retracement_volatility_1h_weight"],
+        long_default: 0.0,
+        short_default: 0.0,
+        long_bounds: &[0.0, 40.0, 0.1],
+        short_bounds: &[0.0, 40.0, 0.1],
+    },
+    NestedParamSeed {
+        name: "close_retracement_volatility_1m_weight",
+        path: &["close", "retracement_volatility_1m_weight"],
+        long_default: 0.0,
+        short_default: 0.0,
+        long_bounds: &[0.0, 40.0, 0.1],
+        short_bounds: &[0.0, 40.0, 0.1],
+    },
+];
+
 const TRAILING_GRID_PARAM_SEEDS: &[ParamSeed] = &[
     ParamSeed {
         name: "close_grid_markup_end",
@@ -316,10 +512,52 @@ fn build_strategy_spec(
     }
 }
 
-pub fn trailing_grid_spec() -> StrategySpec {
-    build_strategy_spec("trailing_grid", TRAILING_GRID_PARAM_SEEDS, |side, name| {
-        vec![format!("bot.{side}.{name}")]
-    })
+fn build_nested_strategy_spec(
+    strategy_kind: &'static str,
+    param_seeds: &[NestedParamSeed],
+) -> StrategySpec {
+    let mut defaults: BTreeMap<&'static str, BTreeMap<&'static str, f64>> = BTreeMap::new();
+    defaults.insert("long", BTreeMap::new());
+    defaults.insert("short", BTreeMap::new());
+
+    let mut optimize_bounds = BTreeMap::new();
+    let mut parameters = Vec::with_capacity(param_seeds.len() * 2);
+
+    for side in ["long", "short"] {
+        for seed in param_seeds {
+            let (default, bounds) = if side == "long" {
+                (seed.long_default, seed.long_bounds)
+            } else {
+                (seed.short_default, seed.short_bounds)
+            };
+            defaults.get_mut(side).unwrap().insert(seed.name, default);
+            let optimize_key = format!("{side}_{}", seed.name);
+            optimize_bounds.insert(optimize_key.clone(), bounds.to_vec());
+            let mut config_path = vec!["strategy", side];
+            config_path.extend_from_slice(seed.path);
+            parameters.push(StrategyParameterSpec {
+                side,
+                name: seed.name,
+                config_path,
+                optimize_key,
+                default,
+                bounds: bounds.to_vec(),
+                mirror_from: None,
+                legacy_config_paths: Vec::new(),
+            });
+        }
+    }
+
+    StrategySpec {
+        strategy_kind,
+        defaults,
+        optimize_bounds,
+        parameters,
+    }
+}
+
+pub fn trailing_martingale_spec() -> StrategySpec {
+    build_nested_strategy_spec("trailing_martingale", TRAILING_MARTINGALE_PARAM_SEEDS)
 }
 
 pub fn ema_anchor_spec() -> StrategySpec {

@@ -646,11 +646,11 @@ fn calc_ema_anchor_quote_series(
                 ask: close,
             },
             ema_bands: EMABands { upper, lower },
-            offset_volatility_logrange_ema_1m: vol_1m,
-            entry_volatility_logrange_ema_1h: vol_1h,
+            volatility_ema_1m: vol_1m,
+            volatility_ema_1h: vol_1h,
         };
         let (bid, ask) =
-            calc_ema_anchor_quote_prices(&state, &exchange, &params, position_sizes[i]);
+            calc_ema_anchor_quote_prices(&state, &exchange, &params, position_sizes[i], 1.0);
         bids.push(bid);
         asks.push(ask);
 
@@ -1223,7 +1223,7 @@ fn run_backtest_core<'py>(
         .get_item("strategy_kind")?
         .map(|item| item.extract::<String>())
         .transpose()?
-        .unwrap_or_else(|| "trailing_grid".to_string());
+        .unwrap_or_else(|| "trailing_martingale".to_string());
     let strategy_kind = strategy_kind_from_name(&strategy_kind_name).ok_or_else(|| {
         PyValueError::new_err(format!(
             "unknown strategy_kind for backtest params: {}",
@@ -1714,37 +1714,37 @@ fn bot_params_pair_from_dict(dict: &PyDict) -> PyResult<BotParamsPair> {
     })
 }
 
-fn trailing_grid_strategy_params_from_dict(dict: &PyDict, side: &str) -> PyResult<Value> {
+fn trailing_martingale_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
+    let entry = extract_value::<&PyDict>(dict, "entry")?;
+    let close = extract_value::<&PyDict>(dict, "close")?;
     Ok(serde_json::json!({
-        "close_grid_markup_end": extract_value::<f64>(dict, "close_grid_markup_end")?,
-        "close_grid_markup_start": extract_value::<f64>(dict, "close_grid_markup_start")?,
-        "close_grid_qty_pct": extract_value::<f64>(dict, "close_grid_qty_pct")?,
-        "grid_close_price_anchor": extract_grid_close_price_anchor(dict, side)?,
-        "close_trailing_grid_ratio": extract_value::<f64>(dict, "close_trailing_grid_ratio")?,
-        "close_trailing_qty_pct": extract_value::<f64>(dict, "close_trailing_qty_pct")?,
-        "close_trailing_retracement_pct": extract_value::<f64>(dict, "close_trailing_retracement_pct")?,
-        "close_trailing_threshold_pct": extract_value::<f64>(dict, "close_trailing_threshold_pct")?,
-        "close_weight_volatility_1h": extract_value::<f64>(dict, "close_weight_volatility_1h")?,
-        "close_weight_volatility_1m": extract_value::<f64>(dict, "close_weight_volatility_1m")?,
         "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
         "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
-        "entry_grid_double_down_factor": extract_value::<f64>(dict, "entry_grid_double_down_factor")?,
-        "entry_grid_spacing_pct": extract_value::<f64>(dict, "entry_grid_spacing_pct")?,
-        "entry_initial_ema_dist": extract_value::<f64>(dict, "entry_initial_ema_dist")?,
-        "entry_initial_qty_pct": extract_value::<f64>(dict, "entry_initial_qty_pct")?,
-        "entry_trailing_double_down_factor": extract_value::<f64>(dict, "entry_trailing_double_down_factor")?,
-        "entry_trailing_grid_ratio": extract_value::<f64>(dict, "entry_trailing_grid_ratio")?,
-        "entry_trailing_retracement_pct": extract_value::<f64>(dict, "entry_trailing_retracement_pct")?,
-        "entry_trailing_threshold_pct": extract_value::<f64>(dict, "entry_trailing_threshold_pct")?,
-        "entry_volatility_ema_span_hours": extract_value_with_fallback::<f64>(
-            dict,
-            "entry_volatility_ema_span_hours",
-            "entry_log_range_ema_span_hours",
-        )?,
-        "entry_volatility_ema_span_minutes": extract_value::<f64>(dict, "entry_volatility_ema_span_minutes")?,
-        "entry_weight_volatility_1h": extract_value::<f64>(dict, "entry_weight_volatility_1h")?,
-        "entry_weight_volatility_1m": extract_value::<f64>(dict, "entry_weight_volatility_1m")?,
-        "entry_we_weight": extract_value::<f64>(dict, "entry_we_weight")?,
+        "volatility_ema_span_hours": extract_value::<f64>(dict, "volatility_ema_span_hours")?,
+        "volatility_ema_span_minutes": extract_value::<f64>(dict, "volatility_ema_span_minutes")?,
+        "entry": {
+            "double_down_factor": extract_value::<f64>(entry, "double_down_factor")?,
+            "initial_ema_dist": extract_value::<f64>(entry, "initial_ema_dist")?,
+            "initial_qty_pct": extract_value::<f64>(entry, "initial_qty_pct")?,
+            "threshold_base_pct": extract_value::<f64>(entry, "threshold_base_pct")?,
+            "threshold_we_weight": extract_value::<f64>(entry, "threshold_we_weight")?,
+            "threshold_volatility_1h_weight": extract_value::<f64>(entry, "threshold_volatility_1h_weight")?,
+            "threshold_volatility_1m_weight": extract_value::<f64>(entry, "threshold_volatility_1m_weight")?,
+            "retracement_base_pct": extract_value::<f64>(entry, "retracement_base_pct")?,
+            "retracement_we_weight": extract_value::<f64>(entry, "retracement_we_weight")?,
+            "retracement_volatility_1h_weight": extract_value::<f64>(entry, "retracement_volatility_1h_weight")?,
+            "retracement_volatility_1m_weight": extract_value::<f64>(entry, "retracement_volatility_1m_weight")?,
+        },
+        "close": {
+            "qty_pct": extract_value::<f64>(close, "qty_pct")?,
+            "threshold_base_pct": extract_value::<f64>(close, "threshold_base_pct")?,
+            "threshold_we_weight": extract_value::<f64>(close, "threshold_we_weight")?,
+            "threshold_volatility_1h_weight": extract_value::<f64>(close, "threshold_volatility_1h_weight")?,
+            "threshold_volatility_1m_weight": extract_value::<f64>(close, "threshold_volatility_1m_weight")?,
+            "retracement_base_pct": extract_value::<f64>(close, "retracement_base_pct")?,
+            "retracement_volatility_1h_weight": extract_value::<f64>(close, "retracement_volatility_1h_weight")?,
+            "retracement_volatility_1m_weight": extract_value::<f64>(close, "retracement_volatility_1m_weight")?,
+        },
     }))
 }
 
@@ -1778,9 +1778,9 @@ fn strategy_params_pair_from_dict(
         .downcast::<PyDict>()
         .map_err(|_| PyValueError::new_err("strategy_params.short must be a dict"))?;
     let (long, short) = match strategy_kind {
-        "trailing_grid" => (
-            trailing_grid_strategy_params_from_dict(long_dict, "long")?,
-            trailing_grid_strategy_params_from_dict(short_dict, "short")?,
+        "trailing_martingale" => (
+            trailing_martingale_strategy_params_from_dict(long_dict)?,
+            trailing_martingale_strategy_params_from_dict(short_dict)?,
         ),
         "ema_anchor" => (
             ema_anchor_strategy_params_from_dict(long_dict)?,
@@ -1827,6 +1827,13 @@ fn extract_optional_f64(dict: &PyDict, key: &str) -> PyResult<f64> {
     Ok(match dict.get_item(key)? {
         Some(item) => item.extract::<f64>()?,
         None => 0.0,
+    })
+}
+
+fn extract_optional_bool(dict: &PyDict, key: &str, default: bool) -> PyResult<bool> {
+    Ok(match dict.get_item(key)? {
+        Some(item) => item.extract::<bool>()?,
+        None => default,
     })
 }
 
@@ -1950,9 +1957,16 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         n_positions,
         total_wallet_exposure_limit,
         wallet_exposure_limit,
+        risk_wel_enforcer_enabled: extract_optional_bool(dict, "risk_wel_enforcer_enabled", true)?,
         risk_wel_enforcer_threshold,
+        risk_twel_enforcer_enabled: extract_optional_bool(
+            dict,
+            "risk_twel_enforcer_enabled",
+            true,
+        )?,
         risk_twel_enforcer_threshold,
         risk_we_excess_allowance_pct,
+        unstuck_enabled: extract_optional_bool(dict, "unstuck_enabled", true)?,
         unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
         unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,
         unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
@@ -2033,18 +2047,31 @@ fn make_trailing_grid_entry_params(
     entry_weight_volatility_1m: f64,
     entry_we_weight: f64,
 ) -> TrailingGridEntryParams {
+    let use_trailing = entry_trailing_grid_ratio != 0.0;
     TrailingGridEntryParams {
-        entry_grid_double_down_factor,
-        entry_grid_spacing_pct,
-        entry_initial_ema_dist,
-        entry_initial_qty_pct,
-        entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
-        entry_trailing_retracement_pct,
-        entry_trailing_threshold_pct,
-        entry_weight_volatility_1h,
-        entry_weight_volatility_1m,
-        entry_we_weight,
+        double_down_factor: if use_trailing {
+            entry_trailing_double_down_factor
+        } else {
+            entry_grid_double_down_factor
+        },
+        initial_ema_dist: entry_initial_ema_dist,
+        initial_qty_pct: entry_initial_qty_pct,
+        threshold_base_pct: if use_trailing {
+            entry_trailing_threshold_pct
+        } else {
+            entry_grid_spacing_pct
+        },
+        threshold_we_weight: entry_we_weight,
+        threshold_volatility_1h_weight: entry_weight_volatility_1h,
+        threshold_volatility_1m_weight: entry_weight_volatility_1m,
+        retracement_base_pct: if use_trailing {
+            entry_trailing_retracement_pct
+        } else {
+            0.0
+        },
+        retracement_we_weight: entry_we_weight,
+        retracement_volatility_1h_weight: entry_weight_volatility_1h,
+        retracement_volatility_1m_weight: entry_weight_volatility_1m,
     }
 }
 
@@ -2061,18 +2088,33 @@ fn make_trailing_grid_close_params(
     close_weight_volatility_1m: f64,
     grid_close_price_anchor: &str,
 ) -> PyResult<TrailingGridCloseParams> {
-    let grid_close_price_anchor = parse_helper_close_anchor(side, grid_close_price_anchor)?;
-    Ok(TrailingGridCloseParams {
+    let _ = (
+        side,
         close_grid_markup_end,
-        close_grid_markup_start,
-        close_grid_qty_pct,
-        grid_close_price_anchor,
         close_trailing_grid_ratio,
-        close_trailing_qty_pct,
-        close_trailing_retracement_pct,
-        close_trailing_threshold_pct,
-        close_weight_volatility_1h,
-        close_weight_volatility_1m,
+        grid_close_price_anchor,
+    );
+    Ok(TrailingGridCloseParams {
+        qty_pct: if close_trailing_grid_ratio != 0.0 {
+            close_trailing_qty_pct
+        } else {
+            close_grid_qty_pct
+        },
+        threshold_base_pct: if close_trailing_grid_ratio != 0.0 {
+            close_trailing_threshold_pct
+        } else {
+            close_grid_markup_start
+        },
+        threshold_we_weight: 0.0,
+        threshold_volatility_1h_weight: close_weight_volatility_1h,
+        threshold_volatility_1m_weight: close_weight_volatility_1m,
+        retracement_base_pct: if close_trailing_grid_ratio != 0.0 {
+            close_trailing_retracement_pct
+        } else {
+            0.0
+        },
+        retracement_volatility_1h_weight: close_weight_volatility_1h,
+        retracement_volatility_1m_weight: close_weight_volatility_1m,
     })
 }
 
@@ -2138,8 +2180,8 @@ pub fn calc_next_entry_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
-    entry_volatility_logrange_ema_1h: f64,
-    entry_volatility_logrange_ema_1m: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     order_book_bid: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -2160,8 +2202,8 @@ pub fn calc_next_entry_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
-        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -2246,8 +2288,8 @@ pub fn calc_next_entry_long_py(
     min_since_max,
     order_book_ask,
     ema_bands_upper = 0.0,
-    entry_volatility_logrange_ema_1h = 0.0,
-    entry_volatility_logrange_ema_1m = 0.0,
+    volatility_ema_1h = 0.0,
+    volatility_ema_1m = 0.0,
     close_weight_volatility_1h = 0.0,
     close_weight_volatility_1m = 0.0,
     grid_close_price_anchor = "position_price".to_string()
@@ -2277,8 +2319,8 @@ pub fn calc_next_close_long_py(
     min_since_max: f64,
     order_book_ask: f64,
     ema_bands_upper: f64,
-    entry_volatility_logrange_ema_1h: f64,
-    entry_volatility_logrange_ema_1m: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     close_weight_volatility_1h: f64,
     close_weight_volatility_1m: f64,
     grid_close_price_anchor: String,
@@ -2301,8 +2343,8 @@ pub fn calc_next_close_long_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
-        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -2335,7 +2377,7 @@ pub fn calc_next_close_long_py(
     )?;
     validate_helper_close_anchor_inputs(
         StrategySide::Long,
-        close_params.grid_close_price_anchor,
+        GridClosePriceAnchor::PositionPrice,
         ema_bands_upper,
     )?;
     let runtime_context = make_runtime_order_context(wallet_exposure_limit);
@@ -2393,8 +2435,8 @@ pub fn calc_next_entry_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
-    entry_volatility_logrange_ema_1h: f64,
-    entry_volatility_logrange_ema_1m: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     order_book_ask: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -2415,8 +2457,8 @@ pub fn calc_next_entry_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
-        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -2501,8 +2543,8 @@ pub fn calc_next_entry_short_py(
     min_since_max,
     order_book_bid,
     ema_bands_lower = 0.0,
-    entry_volatility_logrange_ema_1h = 0.0,
-    entry_volatility_logrange_ema_1m = 0.0,
+    volatility_ema_1h = 0.0,
+    volatility_ema_1m = 0.0,
     close_weight_volatility_1h = 0.0,
     close_weight_volatility_1m = 0.0,
     grid_close_price_anchor = "position_price".to_string()
@@ -2532,8 +2574,8 @@ pub fn calc_next_close_short_py(
     min_since_max: f64,
     order_book_bid: f64,
     ema_bands_lower: f64,
-    entry_volatility_logrange_ema_1h: f64,
-    entry_volatility_logrange_ema_1m: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     close_weight_volatility_1h: f64,
     close_weight_volatility_1m: f64,
     grid_close_price_anchor: String,
@@ -2556,8 +2598,8 @@ pub fn calc_next_close_short_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
-        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -2590,7 +2632,7 @@ pub fn calc_next_close_short_py(
     )?;
     validate_helper_close_anchor_inputs(
         StrategySide::Short,
-        close_params.grid_close_price_anchor,
+        GridClosePriceAnchor::PositionPrice,
         ema_bands_lower,
     )?;
     let position = Position {
@@ -2648,8 +2690,8 @@ pub fn calc_entries_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
-    entry_volatility_logrange_ema_1h: f64,
-    entry_volatility_logrange_ema_1m: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     order_book_bid: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -2671,8 +2713,8 @@ pub fn calc_entries_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
-        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
 
@@ -2762,8 +2804,8 @@ pub fn calc_entries_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
-    entry_volatility_logrange_ema_1h: f64,
-    entry_volatility_logrange_ema_1m: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     order_book_ask: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -2785,8 +2827,8 @@ pub fn calc_entries_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
-        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
 
@@ -2892,8 +2934,8 @@ pub fn calc_min_entry_qty_py(
     min_since_max,
     order_book_ask,
     ema_bands_upper = 0.0,
-    entry_volatility_logrange_ema_1h = 0.0,
-    entry_volatility_logrange_ema_1m = 0.0,
+    volatility_ema_1h = 0.0,
+    volatility_ema_1m = 0.0,
     close_weight_volatility_1h = 0.0,
     close_weight_volatility_1m = 0.0,
     grid_close_price_anchor = "position_price".to_string()
@@ -2923,8 +2965,8 @@ pub fn calc_closes_long_py(
     min_since_max: f64,
     order_book_ask: f64,
     ema_bands_upper: f64,
-    entry_volatility_logrange_ema_1h: f64,
-    entry_volatility_logrange_ema_1m: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     close_weight_volatility_1h: f64,
     close_weight_volatility_1m: f64,
     grid_close_price_anchor: String,
@@ -2948,8 +2990,8 @@ pub fn calc_closes_long_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
-        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
 
@@ -2983,7 +3025,7 @@ pub fn calc_closes_long_py(
     )?;
     validate_helper_close_anchor_inputs(
         StrategySide::Long,
-        close_params.grid_close_price_anchor,
+        GridClosePriceAnchor::PositionPrice,
         ema_bands_upper,
     )?;
     let runtime_context = make_runtime_order_context(wallet_exposure_limit);
@@ -3040,8 +3082,8 @@ pub fn calc_closes_long_py(
     min_since_max,
     order_book_bid,
     ema_bands_lower = 0.0,
-    entry_volatility_logrange_ema_1h = 0.0,
-    entry_volatility_logrange_ema_1m = 0.0,
+    volatility_ema_1h = 0.0,
+    volatility_ema_1m = 0.0,
     close_weight_volatility_1h = 0.0,
     close_weight_volatility_1m = 0.0,
     grid_close_price_anchor = "position_price".to_string()
@@ -3071,8 +3113,8 @@ pub fn calc_closes_short_py(
     min_since_max: f64,
     order_book_bid: f64,
     ema_bands_lower: f64,
-    entry_volatility_logrange_ema_1h: f64,
-    entry_volatility_logrange_ema_1m: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     close_weight_volatility_1h: f64,
     close_weight_volatility_1m: f64,
     grid_close_price_anchor: String,
@@ -3096,8 +3138,8 @@ pub fn calc_closes_short_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
-        offset_volatility_logrange_ema_1m: entry_volatility_logrange_ema_1m,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
 
@@ -3131,7 +3173,7 @@ pub fn calc_closes_short_py(
     )?;
     validate_helper_close_anchor_inputs(
         StrategySide::Short,
-        close_params.grid_close_price_anchor,
+        GridClosePriceAnchor::PositionPrice,
         ema_bands_lower,
     )?;
     let runtime_context = make_runtime_order_context(wallet_exposure_limit);

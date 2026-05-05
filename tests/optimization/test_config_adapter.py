@@ -142,22 +142,22 @@ class TestConfigAdapter:
         with pytest.raises(ValueError, match=expected):
             get_optimization_key_paths(config)
 
-    def test_get_strategy_spec_exposes_trailing_grid_metadata(self):
-        spec = get_strategy_spec("trailing_grid")
+    def test_get_strategy_spec_exposes_trailing_martingale_metadata(self):
+        spec = get_strategy_spec("trailing_martingale")
 
-        assert spec["strategy_kind"] == "trailing_grid"
+        assert spec["strategy_kind"] == "trailing_martingale"
         assert spec["defaults"]["long"]["ema_span_0"] == 770.0
-        assert spec["defaults"]["short"]["entry_grid_spacing_pct"] == 0.025
+        assert spec["defaults"]["short"]["entry_threshold_base_pct"] == 0.025
         assert spec["optimize_bounds"]["long_ema_span_0"] == [200.0, 1440.0, 10.0]
         assert any(
             param["config_path"] == ["strategy", "long", "ema_span_0"]
-            and param["legacy_config_paths"] == ["bot.long.ema_span_0"]
+            and param["legacy_config_paths"] == []
             for param in spec["parameters"]
         )
 
     def test_rust_strategy_spec_python_api_matches_adapter_cache(self):
-        rust_spec = pbr.get_strategy_spec("trailing_grid")
-        cached_spec = get_strategy_spec("trailing_grid")
+        rust_spec = pbr.get_strategy_spec("trailing_martingale")
+        cached_spec = get_strategy_spec("trailing_martingale")
 
         assert rust_spec == cached_spec
 
@@ -178,21 +178,27 @@ class TestConfigAdapter:
 
     def test_get_optimization_key_paths_routes_strategy_fields_to_strategy_section(self):
         config = {
-            "live": {"strategy_kind": "trailing_grid"},
+            "live": {"strategy_kind": "trailing_martingale"},
             "bot": {
                 "long": {
                     "n_positions": 1.0,
                     "total_wallet_exposure_limit": 1.0,
                     "hsl_red_threshold": 0.25,
                     "strategy": {
-                        "trailing_grid": {"ema_span_0": 10.0, "entry_grid_spacing_pct": 0.02}
+                        "trailing_martingale": {
+                            "ema_span_0": 10.0,
+                            "entry": {"threshold_base_pct": 0.02},
+                        }
                     },
                 },
                 "short": {
                     "n_positions": 1.0,
                     "total_wallet_exposure_limit": 1.0,
                     "strategy": {
-                        "trailing_grid": {"ema_span_0": 11.0, "entry_grid_spacing_pct": 0.03}
+                        "trailing_martingale": {
+                            "ema_span_0": 11.0,
+                            "entry": {"threshold_base_pct": 0.03},
+                        }
                     },
                 },
             },
@@ -203,7 +209,7 @@ class TestConfigAdapter:
                     "short_n_positions": [1.0, 2.0, 1.0],
                     "short_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
                     "long_ema_span_0": [200.0, 1440.0, 10.0],
-                    "short_entry_grid_spacing_pct": [0.01, 0.04, 1e-05],
+                    "short_entry_threshold_base_pct": [0.01, 0.04, 1e-05],
                     "long_hsl_red_threshold": [0.15, 0.35, 0.01],
                 }
             },
@@ -211,10 +217,20 @@ class TestConfigAdapter:
 
         key_paths = get_optimization_key_paths(config)
 
-        assert ("long_ema_span_0", ("bot", "long", "strategy", "trailing_grid", "ema_span_0")) in key_paths
         assert (
-            "short_entry_grid_spacing_pct",
-            ("bot", "short", "strategy", "trailing_grid", "entry_grid_spacing_pct"),
+            "long_ema_span_0",
+            ("bot", "long", "strategy", "trailing_martingale", "ema_span_0"),
+        ) in key_paths
+        assert (
+            "short_entry_threshold_base_pct",
+            (
+                "bot",
+                "short",
+                "strategy",
+                "trailing_martingale",
+                "entry",
+                "threshold_base_pct",
+            ),
         ) in key_paths
         assert ("long_hsl_red_threshold", ("bot", "long", "hsl_red_threshold")) in key_paths
 

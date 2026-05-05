@@ -28,7 +28,8 @@ def build_pymoo_record_entry(
         template,
     )
     entry = clean_config(strip_config_metadata(config))
-    entry = overrides_fn(list(overrides_list or []), entry, None)
+    if callable(overrides_fn):
+        entry = overrides_fn(list(overrides_list or []), entry, None)
     if suite_metrics is not None:
         entry["suite_metrics"] = suite_metrics
         backtest = entry.get("backtest")

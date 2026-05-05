@@ -278,8 +278,8 @@ pub struct StateParams {
     pub balance: f64,
     pub order_book: OrderBook,
     pub ema_bands: EMABands,
-    pub offset_volatility_logrange_ema_1m: f64,
-    pub entry_volatility_logrange_ema_1h: f64,
+    pub volatility_ema_1m: f64,
+    pub volatility_ema_1h: f64,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
@@ -348,6 +348,10 @@ fn default_hsl_panic_close_order_type() -> String {
     "market".to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ForagerScoreWeights {
@@ -391,7 +395,7 @@ impl ForagerScoreWeights {
     }
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BotParams {
     #[serde(default)]
@@ -473,13 +477,78 @@ pub struct BotParams {
     pub n_positions: usize,
     pub total_wallet_exposure_limit: f64,
     pub wallet_exposure_limit: f64, // per-position base limit (without excess allowance)
+    #[serde(default = "default_true")]
+    pub risk_wel_enforcer_enabled: bool,
     pub risk_wel_enforcer_threshold: f64,
+    #[serde(default = "default_true")]
+    pub risk_twel_enforcer_enabled: bool,
     pub risk_twel_enforcer_threshold: f64,
     pub risk_we_excess_allowance_pct: f64,
+    #[serde(default = "default_true")]
+    pub unstuck_enabled: bool,
     pub unstuck_close_pct: f64,
     pub unstuck_ema_dist: f64,
     pub unstuck_loss_allowance_pct: f64,
     pub unstuck_threshold: f64,
+}
+
+impl Default for BotParams {
+    fn default() -> Self {
+        Self {
+            close_grid_markup_end: 0.0,
+            close_grid_markup_start: 0.0,
+            close_grid_qty_pct: 0.0,
+            close_trailing_retracement_pct: 0.0,
+            close_trailing_grid_ratio: 0.0,
+            close_trailing_qty_pct: 0.0,
+            close_trailing_threshold_pct: 0.0,
+            close_weight_volatility_1h: 0.0,
+            close_weight_volatility_1m: 0.0,
+            entry_grid_double_down_factor: 0.0,
+            entry_grid_spacing_pct: 0.0,
+            entry_volatility_ema_span_hours: 0.0,
+            entry_volatility_ema_span_minutes: 0.0,
+            entry_weight_volatility_1h: 0.0,
+            entry_weight_volatility_1m: 0.0,
+            entry_we_weight: 0.0,
+            entry_initial_ema_dist: 0.0,
+            entry_initial_qty_pct: 0.0,
+            entry_trailing_double_down_factor: 0.0,
+            entry_trailing_retracement_pct: 0.0,
+            entry_trailing_grid_ratio: 0.0,
+            entry_trailing_threshold_pct: 0.0,
+            filter_volatility_ema_span: 0.0,
+            filter_volume_ema_span: 0.0,
+            _legacy_filter_volatility_drop_pct: 0.0,
+            forager_volume_drop_pct: 0.0,
+            forager_score_weights: ForagerScoreWeights::default(),
+            ema_span_0: 0.0,
+            ema_span_1: 0.0,
+            hsl_enabled: default_hsl_enabled(),
+            hsl_red_threshold: default_hsl_red_threshold(),
+            hsl_ema_span_minutes: default_hsl_ema_span_minutes(),
+            hsl_cooldown_minutes_after_red: default_hsl_cooldown_minutes_after_red(),
+            hsl_no_restart_drawdown_threshold: default_hsl_no_restart_drawdown_threshold(),
+            hsl_tier_ratio_yellow: default_hsl_tier_ratio_yellow(),
+            hsl_tier_ratio_orange: default_hsl_tier_ratio_orange(),
+            hsl_orange_tier_mode: default_hsl_orange_tier_mode(),
+            hsl_panic_close_order_type: default_hsl_panic_close_order_type(),
+            risk_entry_cooldown_minutes: 0.0,
+            n_positions: 0,
+            total_wallet_exposure_limit: 0.0,
+            wallet_exposure_limit: 0.0,
+            risk_wel_enforcer_enabled: true,
+            risk_wel_enforcer_threshold: 0.0,
+            risk_twel_enforcer_enabled: true,
+            risk_twel_enforcer_threshold: 0.0,
+            risk_we_excess_allowance_pct: 0.0,
+            unstuck_enabled: true,
+            unstuck_close_pct: 0.0,
+            unstuck_ema_dist: 0.0,
+            unstuck_loss_allowance_pct: 0.0,
+            unstuck_threshold: 0.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

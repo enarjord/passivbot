@@ -4,7 +4,7 @@ from .optimize_bounds import get_optimize_bounds_defaults
 from .strategy import DEFAULT_STRATEGY_KIND, get_all_strategy_defaults
 
 
-CONFIG_SCHEMA_VERSION = "v7.10.0"
+CONFIG_SCHEMA_VERSION = "v8.0.0"
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_grid_long_npos7.json"
 
 
@@ -15,8 +15,10 @@ def _get_shared_bot_defaults():
                 "entry_cooldown_minutes": 0.0,
                 "n_positions": 10,
                 "total_wallet_exposure_limit": 1.25,
+                "twel_enforcer_enabled": True,
                 "twel_enforcer_threshold": 1,
                 "we_excess_allowance_pct": 0.37,
+                "wel_enforcer_enabled": True,
                 "wel_enforcer_threshold": 0.994,
             },
             "forager": {
@@ -42,6 +44,7 @@ def _get_shared_bot_defaults():
             "unstuck": {
                 "close_pct": 0.078,
                 "ema_dist": -0.07,
+                "enabled": True,
                 "loss_allowance_pct": 0.0102,
                 "threshold": 0.408,
             },
@@ -51,8 +54,10 @@ def _get_shared_bot_defaults():
                 "entry_cooldown_minutes": 0.0,
                 "n_positions": 10,
                 "total_wallet_exposure_limit": 0,
+                "twel_enforcer_enabled": True,
                 "twel_enforcer_threshold": 0.95,
                 "we_excess_allowance_pct": 0,
+                "wel_enforcer_enabled": True,
                 "wel_enforcer_threshold": 0.95,
             },
             "forager": {
@@ -78,6 +83,7 @@ def _get_shared_bot_defaults():
             "unstuck": {
                 "close_pct": 0.05,
                 "ema_dist": -0.2,
+                "enabled": True,
                 "loss_allowance_pct": 0.01,
                 "threshold": 0.4,
             },
@@ -230,7 +236,7 @@ def get_template_config():
                     },
                     {
                         "label": "short_only",
-                        "overrides": {"bot.long.total_wallet_exposure_limit": 0},
+                        "overrides": {"bot.long.risk.total_wallet_exposure_limit": 0},
                         "start_date": "2025-01-01",
                     },
                     {

@@ -50,36 +50,79 @@ ADAPTIVE_STRATEGY_KEYS = {
 }
 
 
+def _set_nested(mapping, path, value):
+    current = mapping
+    for part in path[:-1]:
+        current = current.setdefault(part, {})
+    current[path[-1]] = value
+
+
+LEGACY_STRATEGY_KEY_MAP = {
+    "close_grid_markup_end": ("close", "threshold_base_pct"),
+    "close_grid_markup_start": ("close", "threshold_base_pct"),
+    "close_grid_qty_pct": ("close", "qty_pct"),
+    "close_trailing_retracement_pct": ("close", "retracement_base_pct"),
+    "close_trailing_qty_pct": ("close", "qty_pct"),
+    "close_trailing_threshold_pct": ("close", "threshold_base_pct"),
+    "close_weight_volatility_1h": ("close", "threshold_volatility_1h_weight"),
+    "close_weight_volatility_1m": ("close", "threshold_volatility_1m_weight"),
+    "entry_grid_double_down_factor": ("entry", "double_down_factor"),
+    "entry_grid_spacing_pct": ("entry", "threshold_base_pct"),
+    "entry_volatility_ema_span_hours": ("volatility_ema_span_hours",),
+    "entry_volatility_ema_span_minutes": ("volatility_ema_span_minutes",),
+    "entry_weight_volatility_1h": ("entry", "threshold_volatility_1h_weight"),
+    "entry_weight_volatility_1m": ("entry", "threshold_volatility_1m_weight"),
+    "entry_we_weight": ("entry", "threshold_we_weight"),
+    "entry_initial_ema_dist": ("entry", "initial_ema_dist"),
+    "entry_initial_qty_pct": ("entry", "initial_qty_pct"),
+    "entry_trailing_double_down_factor": ("entry", "double_down_factor"),
+    "entry_trailing_retracement_pct": ("entry", "retracement_base_pct"),
+    "entry_trailing_threshold_pct": ("entry", "threshold_base_pct"),
+}
+
+
 def adaptive_strategy_params(**overrides):
-    """Create trailing_grid strategy params with overrides."""
+    """Create trailing_martingale strategy params with legacy override support."""
     base = {
-        "close_grid_markup_end": 0.01,
-        "close_grid_markup_start": 0.01,
-        "close_grid_qty_pct": 1.0,
-        "grid_close_price_anchor": "position_price",
-        "close_trailing_retracement_pct": 0.0,
-        "close_trailing_grid_ratio": 0.0,
-        "close_trailing_qty_pct": 0.0,
-        "close_trailing_threshold_pct": 0.0,
-        "close_weight_volatility_1h": 0.0,
-        "close_weight_volatility_1m": 0.0,
-        "entry_grid_double_down_factor": 1.0,
-        "entry_weight_volatility_1h": 0.0,
-        "entry_weight_volatility_1m": 0.0,
-        "entry_we_weight": 0.0,
-        "entry_grid_spacing_pct": 0.02,
-        "entry_volatility_ema_span_hours": 0.0,
-        "entry_volatility_ema_span_minutes": 60.0,
-        "entry_initial_ema_dist": 0.0,
-        "entry_initial_qty_pct": 0.1,
-        "entry_trailing_double_down_factor": 0.0,
-        "entry_trailing_retracement_pct": 0.0,
-        "entry_trailing_grid_ratio": 0.0,
-        "entry_trailing_threshold_pct": 0.0,
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
+        "volatility_ema_span_hours": 0.0,
+        "volatility_ema_span_minutes": 60.0,
+        "entry": {
+            "double_down_factor": 1.0,
+            "initial_ema_dist": 0.0,
+            "initial_qty_pct": 0.1,
+            "threshold_base_pct": 0.02,
+            "threshold_we_weight": 0.0,
+            "threshold_volatility_1h_weight": 0.0,
+            "threshold_volatility_1m_weight": 0.0,
+            "retracement_base_pct": 0.0,
+            "retracement_we_weight": 0.0,
+            "retracement_volatility_1h_weight": 0.0,
+            "retracement_volatility_1m_weight": 0.0,
+        },
+        "close": {
+            "qty_pct": 1.0,
+            "threshold_base_pct": 0.01,
+            "threshold_we_weight": 0.0,
+            "threshold_volatility_1h_weight": 0.0,
+            "threshold_volatility_1m_weight": 0.0,
+            "retracement_base_pct": 0.0,
+            "retracement_volatility_1h_weight": 0.0,
+            "retracement_volatility_1m_weight": 0.0,
+        },
     }
-    base.update(overrides)
+    for key, value in overrides.items():
+        if key in {"grid_close_price_anchor", "close_trailing_grid_ratio", "entry_trailing_grid_ratio"}:
+            continue
+        if key in LEGACY_STRATEGY_KEY_MAP:
+            _set_nested(base, LEGACY_STRATEGY_KEY_MAP[key], value)
+        elif "." in key:
+            _set_nested(base, tuple(part for part in key.split(".") if part), value)
+        elif isinstance(value, dict) and isinstance(base.get(key), dict):
+            base[key].update(value)
+        else:
+            base[key] = value
     return base
 
 
@@ -280,6 +323,7 @@ def make_input(*, balance: float, global_bp=None, symbols):
             "unstuck_allowance_short": 0.0,
             "sort_global": True,
             "global_bot_params": global_bp or bot_params_pair(),
+            "strategy_kind": "trailing_martingale",
         },
         "symbols": symbols,
         "peek_hints": None,

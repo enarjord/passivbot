@@ -56,15 +56,21 @@ def test_prepare_config_canonical_omits_runtime_aliases():
         runtime=None,
     )
 
+    assert "n_positions" not in prepared["bot"]["long"]
+    assert "total_wallet_exposure_limit" not in prepared["bot"]["long"]
+    assert "risk_wel_enforcer_threshold" not in prepared["bot"]["long"]
+    assert "unstuck_threshold" not in prepared["bot"]["long"]
+    assert "hsl_red_threshold" not in prepared["bot"]["long"]
+    assert "forager_volume_ema_span" not in prepared["bot"]["long"]
     assert "filter_volume_ema_span" not in prepared["bot"]["long"]
     assert "filter_volatility_ema_span" not in prepared["bot"]["long"]
     assert "long_filter_volume_ema_span" not in prepared["optimize"]["bounds"]
     assert "long_filter_volatility_ema_span" not in prepared["optimize"]["bounds"]
-    assert prepared["live"]["strategy_kind"] == "trailing_grid"
+    assert prepared["live"]["strategy_kind"] == "trailing_martingale"
     assert "ema_span_0" not in get_template_config()["bot"]["long"]
     assert "entry_grid_spacing_pct" not in get_template_config()["bot"]["short"]
     assert _strategy_side(prepared, "long")["ema_span_0"] == _strategy_side(
-        get_template_config(), "long", "trailing_grid"
+        get_template_config(), "long", "trailing_martingale"
     )["ema_span_0"]
 
 
@@ -97,6 +103,21 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
 
     compiled = compile_runtime_config(canonical, runtime="optimize")
 
+    assert compiled["bot"]["long"]["n_positions"] == canonical["bot"]["long"]["risk"][
+        "n_positions"
+    ]
+    assert compiled["bot"]["long"]["total_wallet_exposure_limit"] == canonical["bot"]["long"][
+        "risk"
+    ]["total_wallet_exposure_limit"]
+    assert compiled["bot"]["long"]["risk_wel_enforcer_threshold"] == canonical["bot"]["long"][
+        "risk"
+    ]["wel_enforcer_threshold"]
+    assert compiled["bot"]["long"]["unstuck_threshold"] == canonical["bot"]["long"]["unstuck"][
+        "threshold"
+    ]
+    assert compiled["bot"]["long"]["hsl_red_threshold"] == canonical["bot"]["long"]["hsl"][
+        "red_threshold"
+    ]
     assert compiled["bot"]["long"]["forager_volume_ema_span"] == canonical["bot"]["long"]["forager"][
         "volume_ema_span"
     ]
@@ -115,15 +136,15 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
 
 def test_prepare_config_preserves_nested_strategy_namespace():
     source = get_template_config()
-    source["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"] = 321.0
-    source["bot"]["short"]["strategy"]["trailing_grid"]["entry_grid_spacing_pct"] = 0.0123
+    source["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 321.0
+    source["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_base_pct"] = 0.0123
     source["live"].pop("strategy_kind", None)
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["live"]["strategy_kind"] == "trailing_grid"
+    assert prepared["live"]["strategy_kind"] == "trailing_martingale"
     assert _strategy_side(prepared, "long")["ema_span_0"] == pytest.approx(321.0)
-    assert _strategy_side(prepared, "short")["entry_grid_spacing_pct"] == pytest.approx(0.0123)
+    assert _strategy_side(prepared, "short")["entry"]["threshold_base_pct"] == pytest.approx(0.0123)
 
 
 def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
@@ -226,7 +247,7 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
         "volume_ema_span"
     ]
     assert _strategy_side(prepared, "long")["ema_span_0"] == _strategy_side(
-        template, "long", "trailing_grid"
+        template, "long", "trailing_martingale"
     )["ema_span_0"]
     assert prepared["backtest"]["visible_metrics"] is None
     assert prepared["_raw"] == template
@@ -316,7 +337,7 @@ def test_prepare_config_assigns_current_schema_version_to_legacy_configs():
 
 def test_prepare_config_rejects_future_config_version():
     source = {
-        "config_version": "v8.0.0",
+        "config_version": "v9.0.0",
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -499,16 +520,12 @@ def test_prepare_config_warns_and_removes_entry_grid_inflation_enabled(caplog):
 
 def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(caplog):
     source = get_template_config()
-    trailing_grid = source["bot"]["long"]["strategy"]["trailing_grid"]
+    trailing_martingale = source["bot"]["long"]["strategy"]["trailing_martingale"]
     risk = source["bot"]["long"]["risk"]
-    for key in (
-        "entry_volatility_ema_span_hours",
-        "entry_volatility_ema_span_minutes",
-        "entry_weight_volatility_1h",
-        "entry_weight_volatility_1m",
-        "entry_we_weight",
-    ):
-        trailing_grid.pop(key)
+    trailing_martingale.pop("volatility_ema_span_hours")
+    trailing_martingale.pop("volatility_ema_span_minutes")
+    for key in ("threshold_volatility_1h_weight", "threshold_volatility_1m_weight", "threshold_we_weight"):
+        trailing_martingale["entry"].pop(key)
     for key in (
         "twel_enforcer_threshold",
         "we_excess_allowance_pct",
@@ -521,11 +538,11 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
 
     long_strategy = _strategy_side(prepared, "long")
     long_risk = prepared["bot"]["long"]["risk"]
-    assert long_strategy["entry_volatility_ema_span_hours"] == pytest.approx(1690)
-    assert long_strategy["entry_volatility_ema_span_minutes"] == pytest.approx(60.0)
-    assert long_strategy["entry_weight_volatility_1h"] == pytest.approx(2.4)
-    assert long_strategy["entry_weight_volatility_1m"] == pytest.approx(0.0)
-    assert long_strategy["entry_we_weight"] == pytest.approx(0.135)
+    assert long_strategy["volatility_ema_span_hours"] == pytest.approx(1690)
+    assert long_strategy["volatility_ema_span_minutes"] == pytest.approx(60.0)
+    assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(2.4)
+    assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(0.0)
+    assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(0.135)
     assert long_risk["twel_enforcer_threshold"] == pytest.approx(1.0)
     assert long_risk["we_excess_allowance_pct"] == pytest.approx(0.37)
     assert long_risk["wel_enforcer_threshold"] == pytest.approx(0.994)
@@ -535,7 +552,7 @@ def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
     prepared = load_prepared_config("configs/fake_live_hsl_btc.hjson", verbose=False, target="live")
 
     assert prepared["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
-    assert _strategy_side(prepared, "short")["entry_trailing_double_down_factor"] == pytest.approx(0.5)
+    assert _strategy_side(prepared, "short")["entry"]["double_down_factor"] == pytest.approx(0.5)
 
 
 def test_prepare_config_silently_removes_disabled_entry_grid_inflation_flag(caplog):

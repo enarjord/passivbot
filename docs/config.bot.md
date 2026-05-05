@@ -12,7 +12,7 @@ Throughout:
   (`ema_span_0`, `ema_span_1`, `sqrt(ema_span_0 * ema_span_1)`).
 * `pos.price`, `pos.size` are the current average entry price and signed quantity
   (`>0` long, `<0` short).
-* `wallet_exposure(balance, size, price, c_mult)` returns `abs(size) * price / (balance * c_mult)`.
+* `wallet_exposure(balance, size, price, c_mult)` returns `abs(size) * price * c_mult / balance`.
 * `wel_base` abbreviates `wallet_exposure_limit` for the symbol and pside.
   In live mode this is derived from a fixed denominator (`n_positions`); in backtests it may be
   fixed or tradability-driven depending on `backtest.dynamic_wel_by_tradability`.
@@ -21,8 +21,8 @@ Throughout:
 
 ```text
 alpha(span)         = 2 / (span + 1)
-entry_vol_term      = log_range_ema_1h * entry_weight_volatility_1h
-                    + log_range_ema_1m * entry_weight_volatility_1m
+entry_vol_term      = volatility_ema_1h * entry_weight_volatility_1h
+                    + volatility_ema_1m * entry_weight_volatility_1m
 entry_we_term       = (wel / wel_base) * entry_we_weight
 entry_multiplier    = max(1, 1 + entry_vol_term + entry_we_term)
 
@@ -82,9 +82,17 @@ limit (or the TWEL enforcer, see below).
 ## Take-profit Grid (Close Orders)
 
 ```text
+close_vol_term       = volatility_ema_1h * close_weight_volatility_1h
+                     + volatility_ema_1m * close_weight_volatility_1m
+close_multiplier     = max(1, 1 + close_vol_term)
+markup_center        = (close_grid_markup_start + close_grid_markup_end) / 2
+markup_half_width    = (close_grid_markup_start - close_grid_markup_end) / 2
+effective_markup_start = markup_center + markup_half_width * close_multiplier
+effective_markup_end   = markup_center - markup_half_width * close_multiplier
+
 tp_prices(pside, i in [0, n)):
-    step   = (close_grid_markup_end - close_grid_markup_start) / (n - 1)
-    markup = close_grid_markup_start + i * step
+    step   = (effective_markup_end - effective_markup_start) / (n - 1)
+    markup = effective_markup_start + i * step
 
     long  : pos.price * (1 + markup)
     short : pos.price * (1 - markup)
@@ -111,12 +119,12 @@ Trailing closes mirror the trailing-entry logic with the parameters
 `close_trailing_*`.  For longs:
 
 ```text
-threshold_close =
-    close_trailing_threshold_pct * (1 + close_trailing_threshold_we_weight * wel_ratio)
+close_vol_term   = volatility_ema_1h * close_weight_volatility_1h
+                 + volatility_ema_1m * close_weight_volatility_1m
+close_multiplier = max(1, 1 + close_vol_term)
 
-retracement_close =
-    close_trailing_retracement_pct *
-    (1 + close_trailing_retracement_we_weight * wel_ratio)
+threshold_close   = close_trailing_threshold_pct * close_multiplier
+retracement_close = close_trailing_retracement_pct * close_multiplier
 
 triggered_when:
     high_since_entry  > pos.price * (1 + threshold_close)
@@ -130,6 +138,9 @@ close_qty   = full_pos_size * close_trailing_qty_pct
 Short trailing closes invert the inequalities and use the symmetric formulas.
 
 ## Auto-Unstucking
+
+Auto unstuck is controlled by `bot.<side>.unstuck.enabled`. When disabled, the
+unstuck thresholds remain in the config but do not create orders.
 
 When aggregated realised PnL falls below the peak by more than
 `unstuck_loss_allowance_pct * total_wallet_exposure_limit`, one position at a time is
@@ -147,6 +158,10 @@ if equity < unstuck_allowed:
 Positions become eligible when
 `wallet_exposure / wel_base > unstuck_threshold`.
 
+When multiple positions are eligible, auto-unstuck chooses the least stuck
+position first, defined as the lowest pside-aware relative distance between
+position price and market price. TWEL enforcer uses the same selector.
+
 `unstuck_ema_dist` must keep the EMA-derived trigger price positive:
 - `bot.long.unstuck_ema_dist > -1.0`
 - `bot.short.unstuck_ema_dist < 1.0`
@@ -161,6 +176,9 @@ The per-position wallet exposure limit (WEL) enforcer trims individual symbols
 whenever their exposure rises above the allowance-adjusted cap:
 
 ```text
+if not risk_wel_enforcer_enabled:
+    disabled
+
 allowed_i    = wel_base_i * (1 + risk_we_excess_allowance_pct)
 target_i     = allowed_i * risk_wel_enforcer_threshold
 ```
@@ -170,8 +188,10 @@ enough (with step rounding and minimum-qty guards) to bring the position back to
 `target_i`. These orders are emitted as `CloseAutoReduceWel{Long,Short}` and are
 returned directly from `calc_next_close_*`/`calc_closes_*`.
 
-Setting `risk_wel_enforcer_threshold` below `1.0` forces a gentle, continuous
-trimming behaviour; values above `1.0` create an additional grace margin.
+Setting `risk_wel_enforcer_enabled = false` disables this enforcer. When it is
+enabled, `risk_wel_enforcer_threshold` must be finite and greater than zero.
+Values below `1.0` force a gentle, continuous trimming behaviour; values above
+`1.0` create an additional grace margin.
 
 ## TWEL Enforcer (Auto Reduce)
 
@@ -179,6 +199,9 @@ The “Total Wallet Exposure Limit” enforcer keeps the sum of exposures below
 `total_wallet_exposure_limit * risk_twel_enforcer_threshold`.  For each position:
 
 ```text
+if not risk_twel_enforcer_enabled:
+    disabled
+
 exposure_i      = wallet_exposure(...)
 allowed_i       = wel_base_i * (1 + risk_we_excess_allowance_pct)
 base_psize_i    = allowed_i * balance / (price_i * c_mult_i)
@@ -202,6 +225,9 @@ order_type = CloseAutoReduceTwel{Long,Short}
 By construction the quantity never exceeds the live position size.
 Positions already earmarked for `CloseAutoReduceWel*` during the same scheduling cycle are skipped so that reductions do not double-up; they can be considered again on subsequent iterations once the WEL order has been filled.
 
+Setting `risk_twel_enforcer_enabled = false` disables this enforcer. When it is
+enabled, `risk_twel_enforcer_threshold` must be finite and greater than zero.
+
 ## Parameter Interactions at a Glance
 
 | Parameter                                      | Primary effect                                             | Key equations |
@@ -211,7 +237,7 @@ Positions already earmarked for `CloseAutoReduceWel*` during the same scheduling
 | `entry_trailing_*`                             | Adjust trailing entry triggers via exposure & volatility  | `threshold`, `retracement` |
 | `close_grid_markup_*`, `close_grid_qty_pct`    | Shapes TP ladder                                          | `tp_prices`, `tp_qty` |
 | `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
-| `unstuck_*`                                    | Loss realization rules                                    | `unstuck_allowed`, `close_price` |
+| `unstuck_*`, `unstuck_enabled`                 | Loss realization rules                                    | `unstuck_allowed`, `close_price` |
 | `risk_wel_enforcer_threshold`, `risk_we_excess_allowance_pct` | Per-symbol exposure cap                                 | `target_i`, `qty` |
 | `risk_twel_enforcer_threshold`, `risk_we_excess_allowance_pct` | Portfolio-wide exposure cap                              | `max_reducible_i`, `qty` |
 

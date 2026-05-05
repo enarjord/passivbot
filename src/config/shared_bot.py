@@ -10,8 +10,10 @@ BOT_GROUP_FIELD_MAP = {
         "entry_cooldown_minutes": "risk_entry_cooldown_minutes",
         "n_positions": "n_positions",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
+        "twel_enforcer_enabled": "risk_twel_enforcer_enabled",
         "twel_enforcer_threshold": "risk_twel_enforcer_threshold",
         "we_excess_allowance_pct": "risk_we_excess_allowance_pct",
+        "wel_enforcer_enabled": "risk_wel_enforcer_enabled",
         "wel_enforcer_threshold": "risk_wel_enforcer_threshold",
     },
     "forager": {
@@ -33,6 +35,7 @@ BOT_GROUP_FIELD_MAP = {
     "unstuck": {
         "close_pct": "unstuck_close_pct",
         "ema_dist": "unstuck_ema_dist",
+        "enabled": "unstuck_enabled",
         "loss_allowance_pct": "unstuck_loss_allowance_pct",
         "threshold": "unstuck_threshold",
     },

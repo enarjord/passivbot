@@ -36,10 +36,10 @@ def base_config():
                 "forager_volume_ema_span": 2000.0,
                 "forager_volatility_ema_span": 100.0,
                 "strategy": {
-                    "trailing_grid": {
+                    "trailing_martingale": {
                         "ema_span_0": 1000.0,
                         "ema_span_1": 1500.0,
-                        "entry_volatility_ema_span_hours": 1.0,
+                        "volatility_ema_span_hours": 1.0,
                     }
                 },
             },
@@ -47,16 +47,16 @@ def base_config():
                 "forager_volume_ema_span": 2000.0,
                 "forager_volatility_ema_span": 100.0,
                 "strategy": {
-                    "trailing_grid": {
+                    "trailing_martingale": {
                         "ema_span_0": 1000.0,
                         "ema_span_1": 1500.0,
-                        "entry_volatility_ema_span_hours": 1.0,
+                        "volatility_ema_span_hours": 1.0,
                     }
                 },
             },
         },
         "live": {
-            "strategy_kind": "trailing_grid",
+            "strategy_kind": "trailing_martingale",
             "warmup_ratio": 3.0,
             "max_warmup_minutes": 0.0,  # 0 means no limit
         },
@@ -74,7 +74,7 @@ def config_with_coin_overrides(base_config):
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_grid": {
+                        "trailing_martingale": {
                             "ema_span_0": 5000.0,
                             "ema_span_1": 7000.0,
                         }
@@ -86,7 +86,7 @@ def config_with_coin_overrides(base_config):
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_grid": {
+                        "trailing_martingale": {
                             "ema_span_0": 500.0,
                         }
                     },
@@ -104,16 +104,16 @@ def config_with_bounds(base_config):
         "long": {
             "forager": {"volume_ema_span": [1000, 5000]},
             "strategy": {
-                "trailing_grid": {
+                "trailing_martingale": {
                     "ema_span_0": [500, 5000],
                     "ema_span_1": [1000, 10000],
-                    "entry_volatility_ema_span_hours": [0.5, 5.0],
+                    "volatility_ema_span_hours": [0.5, 5.0],
                 }
             },
         },
         "short": {
             "strategy": {
-                "trailing_grid": {
+                "trailing_martingale": {
                     "ema_span_0": [500, 5000],
                     "ema_span_1": [1000, 10000],
                 }
@@ -143,8 +143,8 @@ class TestWarmupCalculation:
         assert warmup_minutes == 6000
 
     def test_compute_backtest_warmup_minutes_considers_entry_volatility_hours(self, base_config):
-        """Test that entry_volatility_ema_span_hours is converted to minutes."""
-        # entry_volatility_ema_span_hours = 1.0 -> 60 minutes
+        """Test that volatility_ema_span_hours is converted to minutes."""
+        # volatility_ema_span_hours = 1.0 -> 60 minutes
         # This is less than other spans (2000.0), so max is still 2000.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
@@ -152,8 +152,8 @@ class TestWarmupCalculation:
         # Max span should still be 2000.0 from forager_volume_ema_span
         assert warmup_minutes == 6000
 
-        # Now test with larger entry_volatility_ema_span_hours
-        base_config["bot"]["long"]["strategy"]["trailing_grid"]["entry_volatility_ema_span_hours"] = 100.0
+        # Now test with larger volatility_ema_span_hours
+        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["volatility_ema_span_hours"] = 100.0
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
         # Max span should now be 6000 minutes
@@ -166,7 +166,7 @@ class TestWarmupCalculation:
 
         # Max from bounds:
         # - long_ema_span_1: 10000
-        # - long_entry_volatility_ema_span_hours: 5.0 = 300 minutes
+        # - long_volatility_ema_span_hours: 5.0 = 300 minutes
         # Max is 10000
         # Warmup = 10000 * 3.0 = 30000 minutes
         assert warmup_minutes == 30000
@@ -202,7 +202,7 @@ class TestWarmupCalculation:
 
     def test_extreme_spans_edge_case(self, base_config):
         """Test with very large EMA spans."""
-        base_config["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"] = 1_000_000.0
+        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 1_000_000.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -275,14 +275,14 @@ class TestPerCoinWarmupCalculation:
         assert per_coin_warmup["__default__"] == 5000
 
     def test_per_coin_warmup_with_entry_volatility_hours(self, base_config):
-        """Test that entry_volatility_ema_span_hours is properly handled per-coin."""
+        """Test that volatility_ema_span_hours is properly handled per-coin."""
         base_config["coin_overrides"] = {
             "BTC": {
                 "bot": {
                     "long": {
                         "strategy": {
-                            "trailing_grid": {
-                                "entry_volatility_ema_span_hours": 50.0,
+                            "trailing_martingale": {
+                                "volatility_ema_span_hours": 50.0,
                             }
                         },
                     },
@@ -311,18 +311,18 @@ class TestEMASpanExtraction:
         # Modify each field to be the maximum and verify it's used
 
         # Test ema_span_0
-        base_config["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"] = 10000.0
+        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 10000.0
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000  # 10000 * 3.0
 
         # Reset and test ema_span_1
-        base_config["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"] = 1000.0
-        base_config["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_1"] = 10000.0
+        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 1000.0
+        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_1"] = 10000.0
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000
 
         # Reset and test forager_volume_ema_span
-        base_config["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_1"] = 1500.0
+        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_1"] = 1500.0
         base_config["bot"]["long"]["forager_volume_ema_span"] = 10000.0
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000
@@ -336,7 +336,7 @@ class TestEMASpanExtraction:
     def test_short_params_also_considered(self, base_config):
         """Test that short-side params are also considered."""
         # Make short side have larger span
-        base_config["bot"]["short"]["strategy"]["trailing_grid"]["ema_span_0"] = 15000.0
+        base_config["bot"]["short"]["strategy"]["trailing_martingale"]["ema_span_0"] = 15000.0
 
         warmup = compute_backtest_warmup_minutes(base_config)
 
@@ -374,10 +374,10 @@ class TestWarmupEdgeCases:
         """Test handling of missing warmup_ratio."""
         config = {
             "bot": {
-                "long": {"strategy": {"trailing_grid": {"ema_span_0": 1000.0}}},
+                "long": {"strategy": {"trailing_martingale": {"ema_span_0": 1000.0}}},
                 "short": {},
             },
-            "live": {"strategy_kind": "trailing_grid"},  # Missing warmup_ratio
+            "live": {"strategy_kind": "trailing_martingale"},  # Missing warmup_ratio
             "optimize": {"bounds": {}},
         }
 
@@ -389,10 +389,10 @@ class TestWarmupEdgeCases:
         """Test handling of missing max_warmup_minutes."""
         config = {
             "bot": {
-                "long": {"strategy": {"trailing_grid": {"ema_span_0": 1000.0}}},
+                "long": {"strategy": {"trailing_martingale": {"ema_span_0": 1000.0}}},
                 "short": {},
             },
-            "live": {"strategy_kind": "trailing_grid", "warmup_ratio": 3.0},
+            "live": {"strategy_kind": "trailing_martingale", "warmup_ratio": 3.0},
             "optimize": {"bounds": {}},
         }
 
@@ -404,7 +404,7 @@ class TestWarmupEdgeCases:
         """Test with empty bot params."""
         config = {
             "bot": {"long": {}, "short": {}},
-            "live": {"strategy_kind": "trailing_grid", "warmup_ratio": 3.0, "max_warmup_minutes": 0.0},
+            "live": {"strategy_kind": "trailing_martingale", "warmup_ratio": 3.0, "max_warmup_minutes": 0.0},
             "optimize": {"bounds": {}},
         }
 
@@ -417,10 +417,10 @@ class TestWarmupEdgeCases:
         """Test that infinite spans result in 0 warmup."""
         config = {
             "bot": {
-                "long": {"strategy": {"trailing_grid": {"ema_span_0": math.inf}}},
+                "long": {"strategy": {"trailing_martingale": {"ema_span_0": math.inf}}},
                 "short": {},
             },
-            "live": {"strategy_kind": "trailing_grid", "warmup_ratio": 3.0, "max_warmup_minutes": 0.0},
+            "live": {"strategy_kind": "trailing_martingale", "warmup_ratio": 3.0, "max_warmup_minutes": 0.0},
             "optimize": {"bounds": {}},
         }
 
@@ -433,10 +433,10 @@ class TestWarmupEdgeCases:
         """Test that NaN spans result in 0 warmup."""
         config = {
             "bot": {
-                "long": {"strategy": {"trailing_grid": {"ema_span_0": math.nan}}},
+                "long": {"strategy": {"trailing_martingale": {"ema_span_0": math.nan}}},
                 "short": {},
             },
-            "live": {"strategy_kind": "trailing_grid", "warmup_ratio": 3.0, "max_warmup_minutes": 0.0},
+            "live": {"strategy_kind": "trailing_martingale", "warmup_ratio": 3.0, "max_warmup_minutes": 0.0},
             "optimize": {"bounds": {}},
         }
 

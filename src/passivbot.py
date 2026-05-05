@@ -2558,7 +2558,7 @@ class Passivbot:
         self,
         ema_bounds_long: Dict[str, Tuple[float, float]],
         ema_bounds_short: Dict[str, Tuple[float, float]],
-        entry_volatility_logrange_ema_1h: Dict[str, Dict[str, float]],
+        volatility_ema_1h: Dict[str, Dict[str, float]],
     ) -> None:
 
         ema_debug_logging_enabled = False
@@ -2588,7 +2588,7 @@ class Passivbot:
             for symbol, (lower, upper) in sorted(bounds.items()):
                 span0 = _safe_span(pside, "ema_span_0", symbol)
                 span1 = _safe_span(pside, "ema_span_1", symbol)
-                grid_lr = (entry_volatility_logrange_ema_1h or {}).get(pside, {}).get(symbol)
+                grid_lr = (volatility_ema_1h or {}).get(pside, {}).get(symbol)
                 parts = [f"{symbol}"]
                 if span0 is not None or span1 is not None:
                     parts.append(
@@ -2598,7 +2598,7 @@ class Passivbot:
                 parts.append(f"lower={lower:.6g}")
                 parts.append(f"upper={upper:.6g}")
                 if grid_lr is not None:
-                    parts.append(f"log_range_ema={grid_lr:.6g}")
+                    parts.append(f"volatility_ema={grid_lr:.6g}")
                 side_entries.append(" ".join(parts))
             if side_entries:
                 logs.append(f"{pside} -> " + "; ".join(side_entries))
@@ -4100,8 +4100,8 @@ class Passivbot:
             return self.is_trailing(symbol, "long") or self.is_trailing(symbol, "short")
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
         return (
-            float(strategy_cfg.get("entry_trailing_grid_ratio", 0.0) or 0.0) != 0.0
-            or float(strategy_cfg.get("close_trailing_grid_ratio", 0.0) or 0.0) != 0.0
+            float(strategy_cfg.get("entry", {}).get("retracement_base_pct", 0.0) or 0.0) > 0.0
+            or float(strategy_cfg.get("close", {}).get("retracement_base_pct", 0.0) or 0.0) > 0.0
         )
 
     def get_last_position_changes(self, symbol=None):
@@ -6246,9 +6246,12 @@ class Passivbot:
 
     def _strategy_value(self, pside: str, key: str, symbol: str | None = None) -> Any:
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
-        if key not in strategy_cfg:
-            raise KeyError(f"missing required strategy key {pside}.{key}")
-        return strategy_cfg[key]
+        current = strategy_cfg
+        for part in key.split("."):
+            if not isinstance(current, dict) or part not in current:
+                raise KeyError(f"missing required strategy key {pside}.{key}")
+            current = current[part]
+        return current
 
     def _bot_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
         """Build a dict matching Rust `BotParams` for JSON orchestrator input."""
@@ -6256,8 +6259,14 @@ class Passivbot:
         global_keys = {
             "n_positions",
             "total_wallet_exposure_limit",
+            "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_threshold",
             "unstuck_loss_allowance_pct",
+        }
+        bool_keys = {
+            "risk_wel_enforcer_enabled",
+            "risk_twel_enforcer_enabled",
+            "unstuck_enabled",
         }
         strategy_keys = {
             "close_grid_markup_end",
@@ -6317,9 +6326,12 @@ class Passivbot:
             "n_positions",
             "total_wallet_exposure_limit",
             "wallet_exposure_limit",
+            "risk_wel_enforcer_enabled",
             "risk_wel_enforcer_threshold",
+            "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_threshold",
             "risk_we_excess_allowance_pct",
+            "unstuck_enabled",
             "unstuck_close_pct",
             "unstuck_ema_dist",
             "unstuck_loss_allowance_pct",
@@ -6357,6 +6369,8 @@ class Passivbot:
                 }
             elif key == "n_positions":
                 out[out_key] = int(round(val or 0.0))
+            elif key in bool_keys:
+                out[out_key] = bool(val)
             else:
                 out[out_key] = float(val or 0.0)
         out.update(
@@ -6780,6 +6794,18 @@ class Passivbot:
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
 
+        def _strategy_lookup(params: dict, *paths, default=0.0):
+            for path in paths:
+                current = params
+                for part in path:
+                    if not isinstance(current, dict) or part not in current:
+                        current = None
+                        break
+                    current = current[part]
+                if current is not None:
+                    return current
+            return default
+
         for pside in ["long", "short"]:
             for symbol in symbols:
                 strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
@@ -6796,23 +6822,72 @@ class Passivbot:
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
                 m1_lr_span = float(
-                    strategy_params.get(
-                        "entry_volatility_ema_span_minutes",
-                        strategy_params.get("offset_volatility_ema_span_minutes", 0.0),
+                    _strategy_lookup(
+                        strategy_params,
+                        ("volatility_ema_span_minutes",),
+                        ("entry_volatility_ema_span_minutes",),
+                        ("offset_volatility_ema_span_minutes",),
                     )
                     or 0.0
                 )
                 m1_lr_weight = max(
-                    abs(float(strategy_params.get("entry_weight_volatility_1m", 0.0) or 0.0)),
-                    abs(float(strategy_params.get("close_weight_volatility_1m", 0.0) or 0.0)),
+                    abs(
+                        float(
+                            _strategy_lookup(
+                                strategy_params,
+                                ("entry", "threshold_volatility_1m_weight"),
+                                ("entry", "retracement_volatility_1m_weight"),
+                                ("entry_weight_volatility_1m",),
+                            )
+                            or 0.0
+                        )
+                    ),
+                    abs(
+                        float(
+                            _strategy_lookup(
+                                strategy_params,
+                                ("close", "threshold_volatility_1m_weight"),
+                                ("close", "retracement_volatility_1m_weight"),
+                                ("close_weight_volatility_1m",),
+                            )
+                            or 0.0
+                        )
+                    ),
                     abs(float(strategy_params.get("offset_volatility_1m_weight", 0.0) or 0.0)),
                 )
                 if m1_lr_weight > 0.0 and m1_lr_span > 0.0 and math.isfinite(m1_lr_span):
                     need_m1_lr_spans[symbol].add(m1_lr_span)
-                h1_span = float(strategy_params.get("entry_volatility_ema_span_hours", 0.0) or 0.0)
+                h1_span = float(
+                    _strategy_lookup(
+                        strategy_params,
+                        ("volatility_ema_span_hours",),
+                        ("entry_volatility_ema_span_hours",),
+                    )
+                    or 0.0
+                )
                 h1_lr_weight = max(
-                    abs(float(strategy_params.get("entry_weight_volatility_1h", 0.0) or 0.0)),
-                    abs(float(strategy_params.get("close_weight_volatility_1h", 0.0) or 0.0)),
+                    abs(
+                        float(
+                            _strategy_lookup(
+                                strategy_params,
+                                ("entry", "threshold_volatility_1h_weight"),
+                                ("entry", "retracement_volatility_1h_weight"),
+                                ("entry_weight_volatility_1h",),
+                            )
+                            or 0.0
+                        )
+                    ),
+                    abs(
+                        float(
+                            _strategy_lookup(
+                                strategy_params,
+                                ("close", "threshold_volatility_1h_weight"),
+                                ("close", "retracement_volatility_1h_weight"),
+                                ("close_weight_volatility_1h",),
+                            )
+                            or 0.0
+                        )
+                    ),
                     abs(float(strategy_params.get("offset_volatility_1h_weight", 0.0) or 0.0)),
                 )
                 if h1_lr_weight > 0.0 and h1_span > 0.0 and math.isfinite(h1_span):

@@ -34,7 +34,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
     let mut generated = GeneratedOrders::default();
     let params = match request.strategy_params {
         StrategyParams::TrailingGrid(params) => params,
-        _ => panic!("trailing_grid strategy received non-trailing_grid params"),
+        _ => panic!("trailing_martingale strategy received non-trailing_martingale params"),
     };
     let runtime_context = RuntimeOrderContext {
         effective_wallet_exposure_limit: request.runtime_budget.effective_wallet_exposure_limit,

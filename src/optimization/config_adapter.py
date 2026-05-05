@@ -94,7 +94,7 @@ def _flatten_bounds_for_config(config: dict, optimize_bounds: dict) -> dict:
 
 
 @lru_cache(maxsize=None)
-def get_strategy_spec(strategy_kind: str = "trailing_grid") -> dict:
+def get_strategy_spec(strategy_kind: str = "trailing_martingale") -> dict:
     return pbr.get_strategy_spec(normalize_strategy_kind(strategy_kind))
 
 
@@ -110,8 +110,8 @@ def _strategy_path_map(config: dict) -> dict[str, Tuple[str, ...]]:
     for param in spec.get("parameters", []):
         optimize_key = param.get("optimize_key")
         config_path = tuple(param.get("config_path", ()))
-        if len(config_path) == 3 and config_path[0] == "strategy" and config_path[1] in ("long", "short"):
-            config_path = ("bot", config_path[1], "strategy", strategy_kind, config_path[2])
+        if len(config_path) >= 3 and config_path[0] == "strategy" and config_path[1] in ("long", "short"):
+            config_path = ("bot", config_path[1], "strategy", strategy_kind, *config_path[2:])
         if not isinstance(optimize_key, str) or not config_path:
             continue
         mapping[optimize_key] = config_path
@@ -223,15 +223,22 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
                     key,
                 )
                 scalar_paths[key] = resolved
-            pside_strategy = strategy_config.get(pside, {}) if isinstance(strategy_config, dict) else {}
-            if isinstance(pside_strategy, dict):
-                for key in sorted(pside_strategy):
-                    value = pside_strategy[key]
-                    if key not in strategy_fields.get(pside, set()):
-                        continue
-                    if isinstance(value, bool) or not isinstance(value, (int, float)):
-                        continue
-                    scalar_paths[key] = ("bot", pside, "strategy", strategy_kind, key)
+            for key, path in strategy_path_map.items():
+                if not key.startswith(f"{pside}_"):
+                    continue
+                local_key = key.split("_", 1)[1]
+                current = config
+                found = True
+                for part in path:
+                    if not isinstance(current, dict) or part not in current:
+                        found = False
+                        break
+                    current = current[part]
+                if not found:
+                    continue
+                if isinstance(current, bool) or not isinstance(current, (int, float)):
+                    continue
+                scalar_paths[local_key] = path
             for key in sorted(scalar_paths):
                 key_paths.append((f"{pside}_{key}", scalar_paths[key]))
         return key_paths

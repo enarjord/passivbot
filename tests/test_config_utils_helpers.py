@@ -63,7 +63,7 @@ def test_load_input_config_without_path_uses_schema_defaults():
 def test_default_example_config_loads_with_grouped_shape_and_live_execution_settings():
     loaded = load_config("configs/examples/default_trailing_grid_long_npos10.json", verbose=False)
 
-    assert loaded["live"]["strategy_kind"] == "trailing_grid"
+    assert loaded["live"]["strategy_kind"] == "trailing_martingale"
     assert set(loaded["bot"]["long"]) == {
         "forager",
         "hsl",
@@ -244,7 +244,7 @@ def test_hydrate_then_sync_with_template_adds_missing_and_removes_extras():
     assert result["live"]["base_config_path"] == "/tmp/base_config.json"
     # ensure key from template was added
     assert "strategy" in result["bot"]["long"]
-    assert "trailing_grid" in result["bot"]["long"]["strategy"]
+    assert "trailing_martingale" in result["bot"]["long"]["strategy"]
 
 
 def test_normalize_position_counts_rounds_values():
@@ -271,7 +271,9 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     config["optimize"][
         "limits"
     ] = "--lower_bound_drawdown_worst 0.3 --penalize_if_lower_than_gain_btc 0.1"
-    config["optimize"]["bounds"]["long"]["strategy"]["trailing_grid"]["entry_grid_spacing_pct"] = [0.1, 0.05]
+    config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "threshold_base_pct"
+    ] = [0.1, 0.05]
 
     _apply_non_live_adjustments(config, verbose=False)
 
@@ -292,7 +294,9 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     assert gain_limit is not None
     assert gain_limit["penalize_if"] == "less_than"
     assert gain_limit["value"] == pytest.approx(0.1)
-    assert _bound(config, "long", "strategy", "trailing_grid", "entry_grid_spacing_pct") == [0.05, 0.1]
+    assert _bound(
+        config, "long", "strategy", "trailing_martingale", "entry", "threshold_base_pct"
+    ) == [0.05, 0.1]
     assert config["live"]["approved_coins"]["short"] == ["btc", "eth"]
 
 
@@ -300,7 +304,9 @@ def test_apply_non_live_adjustments_supports_legacy_coins_file():
     config = get_template_config()
     config["live"]["approved_coins"] = "configs/approved_coins_topmcap.json"
     config["live"]["ignored_coins"] = {"long": [], "short": []}
-    config["optimize"]["bounds"]["long"]["strategy"]["trailing_grid"]["entry_grid_spacing_pct"] = [0.1, 0.2]
+    config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "threshold_base_pct"
+    ] = [0.1, 0.2]
     config["backtest"]["end_date"] = "2023-01-01"
     _apply_non_live_adjustments(config, verbose=False)
     with open("configs/approved_coins.json") as fp:
@@ -643,11 +649,26 @@ def test_apply_backward_compatibility_renames_moves_filter_keys():
 def test_compile_runtime_config_adds_internal_forager_aliases():
     config = format_config(get_template_config(), verbose=False)
 
+    assert "n_positions" not in config["bot"]["long"]
+    assert "risk_wel_enforcer_threshold" not in config["bot"]["long"]
+    assert "unstuck_threshold" not in config["bot"]["long"]
+    assert "hsl_red_threshold" not in config["bot"]["long"]
+    assert "forager_volume_ema_span" not in config["bot"]["long"]
     assert "filter_volume_ema_span" not in config["bot"]["long"]
     assert "long_filter_volume_ema_span" not in config["optimize"]["bounds"]
 
     compiled = compile_runtime_config(config, runtime="live")
 
+    assert compiled["bot"]["long"]["n_positions"] == config["bot"]["long"]["risk"]["n_positions"]
+    assert compiled["bot"]["long"]["risk_wel_enforcer_threshold"] == config["bot"]["long"][
+        "risk"
+    ]["wel_enforcer_threshold"]
+    assert compiled["bot"]["long"]["unstuck_threshold"] == config["bot"]["long"]["unstuck"][
+        "threshold"
+    ]
+    assert compiled["bot"]["long"]["hsl_red_threshold"] == config["bot"]["long"]["hsl"][
+        "red_threshold"
+    ]
     assert compiled["bot"]["long"]["filter_volume_ema_span"] == config["bot"]["long"][
         "forager"
     ]["volume_ema_span"]
@@ -895,23 +916,31 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
     source_config, base_config_path, raw_snapshot = load_input_config(
         "configs/examples/default_trailing_grid_long_npos10.json", log_info=False
     )
-    assert "grid_close_price_anchor" not in source_config["bot"]["long"]["strategy"]["trailing_grid"]
+    source_config["bot"]["long"]["strategy"]["trailing_martingale"]["close"].pop(
+        "threshold_we_weight", None
+    )
+    assert (
+        "threshold_we_weight"
+        not in source_config["bot"]["long"]["strategy"]["trailing_martingale"]["close"]
+    )
 
     args = SimpleNamespace()
-    vars(args)["bot.long.strategy.trailing_grid.grid_close_price_anchor"] = "ema_band"
+    vars(args)["bot.long.strategy.trailing_martingale.close.threshold_we_weight"] = -0.012
 
     update_config_with_args(source_config, args, verbose=False)
 
     assert (
-        source_config["bot"]["long"]["strategy"]["trailing_grid"]["grid_close_price_anchor"]
-        == "ema_band"
+        source_config["bot"]["long"]["strategy"]["trailing_martingale"]["close"][
+            "threshold_we_weight"
+        ]
+        == -0.012
     )
     entry = source_config["_transform_log"][-1]
     assert entry["step"] == "update_config_with_args"
     diff = entry["details"]["diffs"][0]
-    assert diff["path"] == "bot.long.strategy.trailing_grid.grid_close_price_anchor"
+    assert diff["path"] == "bot.long.strategy.trailing_martingale.close.threshold_we_weight"
     assert diff["old"] is None
-    assert diff["new"] == "ema_band"
+    assert diff["new"] == -0.012
 
     prepared = prepare_config(
         source_config,
@@ -920,30 +949,31 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
         raw_snapshot=raw_snapshot,
     )
     assert (
-        prepared["bot"]["long"]["strategy"]["trailing_grid"]["grid_close_price_anchor"]
-        == "ema_band_upper"
+        prepared["bot"]["long"]["strategy"]["trailing_martingale"]["close"][
+            "threshold_we_weight"
+        ]
+        == -0.012
     )
 
 
-def test_prepare_config_rejects_invalid_sparse_leaf_cli_override():
+def test_prepare_config_preserves_sparse_leaf_cli_override():
     source_config, base_config_path, raw_snapshot = load_input_config(
         "configs/examples/default_trailing_grid_long_npos10.json", log_info=False
     )
     args = SimpleNamespace()
-    vars(args)["bot.long.strategy.trailing_grid.grid_close_price_anchor"] = "ema"
+    vars(args)["bot.long.strategy.trailing_martingale.entry.threshold_volatility_1h_weight"] = 3.5
 
     update_config_with_args(source_config, args, verbose=False)
 
-    with pytest.raises(
-        ValueError,
-        match="bot\\.long\\.strategy\\.trailing_grid\\.grid_close_price_anchor",
-    ):
-        prepare_config(
-            source_config,
-            base_config_path=base_config_path,
-            verbose=False,
-            raw_snapshot=raw_snapshot,
-        )
+    prepared = prepare_config(
+        source_config,
+        base_config_path=base_config_path,
+        verbose=False,
+        raw_snapshot=raw_snapshot,
+    )
+    assert prepared["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "threshold_volatility_1h_weight"
+    ] == pytest.approx(3.5)
 
 
 def test_update_config_with_args_logs_optimize_limits_as_diff(caplog):
@@ -1057,7 +1087,7 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "--bot.long.entry_grid_inflation_enabled" not in help_text
     assert "--bot.long.hsl_enabled" not in help_text
     assert "--optimize_population_size" not in help_text
-    assert "--optimize.bounds.long.strategy.trailing_grid.close_grid_markup_end" not in help_text
+    assert "--optimize.bounds.long.strategy.trailing_martingale.close.threshold_base_pct" not in help_text
     assert "Optimize DEAP:" not in help_text
     assert "Optimize Pymoo:" not in help_text
 
@@ -1067,7 +1097,10 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     help_text = _format_parser_help_with_config("optimize", config, help_all=True)
 
     assert "Optimize Bounds:" in help_text
-    assert "--optimize.bounds.long.strategy.trailing_grid.close_grid_markup_end MIN,MAX[,STEP]" in help_text
+    assert (
+        "--optimize.bounds.long.strategy.trailing_martingale.close.threshold_base_pct MIN,MAX[,STEP]"
+        in help_text
+    )
     assert "--limits JSON_OR_HJSON" in help_text
     assert "-l SPEC, --limit SPEC" in help_text
     assert "--hedge-mode Y/N, -hm Y/N" in help_text

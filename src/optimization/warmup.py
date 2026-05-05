@@ -5,9 +5,39 @@ from copy import deepcopy
 from typing import Sequence
 
 from config.bot import normalize_forager_score_weights
+from config.shared_bot import canonical_shared_bot_path_for_flat_key, flatten_shared_bot_side
+from config.strategy import get_strategy_param_keys, normalize_strategy_kind
 from optimizer_overrides import optimizer_overrides
 from optimization.config_adapter import extract_bounds_tuple_list_from_config, get_optimization_key_paths
 from warmup_utils import compute_per_coin_warmup_minutes
+
+
+def _resolve_override_parts(config: dict, parts: list[str]) -> list[str]:
+    if len(parts) == 3 and parts[0] == "bot" and parts[1] in {"long", "short"}:
+        pside = parts[1]
+        flat_key = parts[2]
+        canonical_path = canonical_shared_bot_path_for_flat_key(pside, flat_key)
+        if canonical_path is not None:
+            return list(canonical_path)
+        live_cfg = config.get("live")
+        strategy_kind = normalize_strategy_kind(
+            live_cfg.get("strategy_kind") if isinstance(live_cfg, dict) else None
+        )
+        if flat_key in get_strategy_param_keys(strategy_kind):
+            return ["bot", pside, "strategy", strategy_kind, flat_key]
+    return parts
+
+
+def _refresh_shared_bot_runtime_aliases(config: dict) -> None:
+    bot_cfg = config.get("bot")
+    if not isinstance(bot_cfg, dict):
+        return
+    for pside in ("long", "short"):
+        pside_cfg = bot_cfg.get(pside)
+        if not isinstance(pside_cfg, dict):
+            continue
+        for key, value in flatten_shared_bot_side(pside_cfg).items():
+            pside_cfg[key] = deepcopy(value)
 
 
 def _apply_config_overrides(config: dict, overrides: dict) -> None:
@@ -19,12 +49,14 @@ def _apply_config_overrides(config: dict, overrides: dict) -> None:
         parts = dotted_path.split(".")
         if not parts:
             continue
+        parts = _resolve_override_parts(config, parts)
         target = config
         for part in parts[:-1]:
             if part not in target or not isinstance(target[part], dict):
                 target[part] = {}
             target = target[part]
         target[parts[-1]] = value
+    _refresh_shared_bot_runtime_aliases(config)
 
 
 def build_optimizer_vector_config(

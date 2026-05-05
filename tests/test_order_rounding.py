@@ -60,8 +60,8 @@ def test_calc_entries_long_py_quantizes_results():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_lower=0.6545,
-        entry_volatility_logrange_ema_1h=0.0,
-        entry_volatility_logrange_ema_1m=0.0,
+        volatility_ema_1h=0.0,
+        volatility_ema_1m=0.0,
         order_book_bid=0.66,
     )
     result = pbr.calc_entries_long_py(**params)
@@ -109,7 +109,7 @@ def test_calc_closes_long_py_quantizes_results():
 
 
 @requires_extension
-def test_calc_closes_long_py_supports_ema_anchor():
+def test_calc_closes_long_py_uses_position_price_anchor():
     result = pbr.calc_closes_long_py(
         qty_step=0.01,
         price_step=0.01,
@@ -139,38 +139,40 @@ def test_calc_closes_long_py_supports_ema_anchor():
     )
     assert result
     _, price, _ = result[0]
-    assert price == pytest.approx(111.1)
+    assert price == pytest.approx(101.0)
 
 
 @requires_extension
-def test_calc_closes_short_py_rejects_missing_ema_band_for_ema_anchor():
-    with pytest.raises(ValueError, match="ema_bands_lower must be > 0"):
-        pbr.calc_closes_short_py(
-            qty_step=0.01,
-            price_step=0.01,
-            min_qty=0.0,
-            min_cost=0.0,
-            c_mult=1.0,
-            close_grid_markup_end=0.01,
-            close_grid_markup_start=0.01,
-            close_grid_qty_pct=1.0,
-            close_trailing_grid_ratio=0.0,
-            close_trailing_qty_pct=0.0,
-            close_trailing_retracement_pct=0.0,
-            close_trailing_threshold_pct=0.0,
-            wallet_exposure_limit=1.0,
-            risk_we_excess_allowance_pct=0.0,
-            risk_wel_enforcer_threshold=1.0,
-            balance=1000.0,
-            position_size=-1.0,
-            position_price=100.0,
-            min_since_open=0.0,
-            max_since_min=0.0,
-            max_since_open=0.0,
-            min_since_max=0.0,
-            order_book_bid=100.0,
-            grid_close_price_anchor="ema_band",
-        )
+def test_calc_closes_short_py_ignores_legacy_ema_anchor_arg():
+    result = pbr.calc_closes_short_py(
+        qty_step=0.01,
+        price_step=0.01,
+        min_qty=0.0,
+        min_cost=0.0,
+        c_mult=1.0,
+        close_grid_markup_end=0.01,
+        close_grid_markup_start=0.01,
+        close_grid_qty_pct=1.0,
+        close_trailing_grid_ratio=0.0,
+        close_trailing_qty_pct=0.0,
+        close_trailing_retracement_pct=0.0,
+        close_trailing_threshold_pct=0.0,
+        wallet_exposure_limit=1.0,
+        risk_we_excess_allowance_pct=0.0,
+        risk_wel_enforcer_threshold=1.0,
+        balance=1000.0,
+        position_size=-1.0,
+        position_price=100.0,
+        min_since_open=0.0,
+        max_since_min=0.0,
+        max_since_open=0.0,
+        min_since_max=0.0,
+        order_book_bid=100.0,
+        grid_close_price_anchor="ema_band",
+    )
+    assert result
+    _, price, _ = result[0]
+    assert price == pytest.approx(99.0)
 
 
 @requires_extension

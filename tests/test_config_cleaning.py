@@ -40,8 +40,8 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
         "volume_ema_span"
     ]
     assert (
-        cleaned["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"]
-        == template["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"]
+        cleaned["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"]
+        == template["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"]
     )
     assert "BTC" in cleaned["coin_overrides"]
     assert "_meta" not in cleaned["coin_overrides"]["BTC"]
@@ -56,15 +56,15 @@ def test_clean_config_fills_missing_values_from_template():
     cleaned = clean_config(config)
     template = get_template_config()
     assert cleaned["live"]["strategy_kind"] == template["live"]["strategy_kind"]
-    assert cleaned["bot"]["long"]["strategy"] == {"trailing_grid": template["bot"]["long"]["strategy"]["trailing_grid"]}
+    assert cleaned["bot"]["long"]["strategy"] == {"trailing_martingale": template["bot"]["long"]["strategy"]["trailing_martingale"]}
     assert cleaned["bot"]["short"]["strategy"] == {
-        "trailing_grid": template["bot"]["short"]["strategy"]["trailing_grid"]
+        "trailing_martingale": template["bot"]["short"]["strategy"]["trailing_martingale"]
     }
     assert cleaned["optimize"]["bounds"]["long"]["strategy"] == {
-        "trailing_grid": template["optimize"]["bounds"]["long"]["strategy"]["trailing_grid"]
+        "trailing_martingale": template["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]
     }
     assert cleaned["optimize"]["bounds"]["short"]["strategy"] == {
-        "trailing_grid": template["optimize"]["bounds"]["short"]["strategy"]["trailing_grid"]
+        "trailing_martingale": template["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"]
     }
 
 

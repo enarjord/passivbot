@@ -94,7 +94,7 @@ def test_prep_backtest_args_encodes_all_pnls_lookback_for_backtest():
     config = _base_config()
     config["live"]["pnls_max_lookback_days"] = "all"
     mss = _base_mss()
-    _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["pnls_max_lookback_days"] == -1.0
 
 
@@ -150,12 +150,8 @@ def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
 
 def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload():
     config = _base_config()
-    config["bot"]["long"]["ema_span_0"] = -1.0
-    config["bot"]["short"]["entry_grid_spacing_pct"] = -1.0
-    config["bot"]["long"]["strategy"]["trailing_grid"]["ema_span_0"] = 321.0
-    config["bot"]["short"]["strategy"]["trailing_grid"]["entry_grid_spacing_pct"] = 0.0123
-    config["bot"]["long"]["strategy"]["trailing_grid"]["grid_close_price_anchor"] = "ema_band"
-    config["bot"]["short"]["strategy"]["trailing_grid"]["grid_close_price_anchor"] = "pprice"
+    config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 321.0
+    config["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_base_pct"] = 0.0123
     mss = _base_mss()
 
     bot_params_list, strategy_params_list, _, _ = prep_backtest_args(config, mss, "binance")
@@ -164,9 +160,7 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
     assert "ema_span_0" not in bot_params_list[0]["long"]
     assert "entry_grid_spacing_pct" not in bot_params_list[0]["short"]
     assert strategy_params_list[0]["long"]["ema_span_0"] == 321.0
-    assert strategy_params_list[0]["short"]["entry_grid_spacing_pct"] == 0.0123
-    assert strategy_params_list[0]["long"]["grid_close_price_anchor"] == "ema_band_upper"
-    assert strategy_params_list[0]["short"]["grid_close_price_anchor"] == "position_price"
+    assert strategy_params_list[0]["short"]["entry"]["threshold_base_pct"] == 0.0123
 
 
 def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():

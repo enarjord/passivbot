@@ -16,6 +16,40 @@ fn exposure_to_psize(exposure: f64, balance: f64, price: f64, c_mult: f64) -> f6
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct LeastStuckCandidate {
+    collection_idx: usize,
+    symbol_idx: usize,
+    price_diff: f64,
+}
+
+fn compare_least_stuck(a: LeastStuckCandidate, b: LeastStuckCandidate) -> std::cmp::Ordering {
+    match a
+        .price_diff
+        .partial_cmp(&b.price_diff)
+        .unwrap_or(std::cmp::Ordering::Equal)
+    {
+        std::cmp::Ordering::Equal => a.symbol_idx.cmp(&b.symbol_idx),
+        other => other,
+    }
+}
+
+fn least_stuck_order(candidates: Vec<LeastStuckCandidate>) -> Vec<usize> {
+    let mut candidates: Vec<LeastStuckCandidate> = candidates
+        .into_iter()
+        .filter(|candidate| candidate.price_diff.is_finite())
+        .collect();
+    candidates.sort_by(|a, b| compare_least_stuck(*a, *b));
+    candidates
+        .into_iter()
+        .map(|candidate| candidate.collection_idx)
+        .collect()
+}
+
+fn select_least_stuck(candidates: Vec<LeastStuckCandidate>) -> Option<usize> {
+    least_stuck_order(candidates).into_iter().next()
+}
+
 #[derive(Clone, Debug)]
 pub struct GateEntriesPosition {
     pub idx: usize,
@@ -412,19 +446,20 @@ pub fn calc_unstucking_action(
         return None;
     }
 
-    stuck_positions.sort_by(|a, b| {
-        match a
-            .pprice_diff
-            .partial_cmp(&b.pprice_diff)
-            .unwrap_or(std::cmp::Ordering::Equal)
-        {
-            std::cmp::Ordering::Equal => a.input.idx.cmp(&b.input.idx),
-            other => other,
-        }
-    });
+    let candidate_order = least_stuck_order(
+        stuck_positions
+            .iter()
+            .enumerate()
+            .map(|(collection_idx, candidate)| LeastStuckCandidate {
+                collection_idx,
+                symbol_idx: candidate.input.idx,
+                price_diff: candidate.pprice_diff,
+            })
+            .collect(),
+    );
 
-    for candidate in stuck_positions {
-        let input = candidate.input;
+    for candidate_idx in candidate_order {
+        let input = stuck_positions[candidate_idx].input;
         let allowance = match input.side {
             LONG => allowance_long,
             SHORT => allowance_short,
@@ -714,18 +749,23 @@ pub fn calc_twel_enforcer_actions(
         if total_exposure <= limit + exposure_tolerance {
             break;
         }
-        let best_candidate = candidates
-            .iter()
-            .enumerate()
-            .filter(|(_, cand)| {
-                cand.abs_psize > qty_tolerance
-                    && cand.exposure > cand.floor_exposure + exposure_tolerance
-            })
-            .map(|(idx, cand)| (idx, cand.price_diff))
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(idx, metric)| (idx, metric));
+        let best_candidate = select_least_stuck(
+            candidates
+                .iter()
+                .enumerate()
+                .filter(|(_, cand)| {
+                    cand.abs_psize > qty_tolerance
+                        && cand.exposure > cand.floor_exposure + exposure_tolerance
+                })
+                .map(|(collection_idx, cand)| LeastStuckCandidate {
+                    collection_idx,
+                    symbol_idx: cand.idx,
+                    price_diff: cand.price_diff,
+                })
+                .collect(),
+        );
 
-        let Some((candidate_idx, _)) = best_candidate else {
+        let Some(candidate_idx) = best_candidate else {
             break;
         };
 

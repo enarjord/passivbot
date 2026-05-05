@@ -14,6 +14,7 @@ use serde_json::Value;
 #[serde(rename_all = "snake_case")]
 pub enum StrategyKind {
     #[default]
+    #[serde(rename = "trailing_martingale")]
     TrailingGrid,
     EmaAnchor,
 }
@@ -30,152 +31,86 @@ pub enum GridClosePriceAnchor {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TrailingGridParams {
-    pub close_grid_markup_end: f64,
-    pub close_grid_markup_start: f64,
-    pub close_grid_qty_pct: f64,
-    pub grid_close_price_anchor: GridClosePriceAnchor,
-    pub close_trailing_grid_ratio: f64,
-    pub close_trailing_qty_pct: f64,
-    pub close_trailing_retracement_pct: f64,
-    pub close_trailing_threshold_pct: f64,
-    pub close_weight_volatility_1h: f64,
-    pub close_weight_volatility_1m: f64,
     pub ema_span_0: f64,
     pub ema_span_1: f64,
-    pub entry_grid_double_down_factor: f64,
-    pub entry_grid_spacing_pct: f64,
-    pub entry_initial_ema_dist: f64,
-    pub entry_initial_qty_pct: f64,
-    pub entry_trailing_double_down_factor: f64,
-    pub entry_trailing_grid_ratio: f64,
-    pub entry_trailing_retracement_pct: f64,
-    pub entry_trailing_threshold_pct: f64,
-    pub entry_volatility_ema_span_hours: f64,
-    pub entry_volatility_ema_span_minutes: f64,
-    pub entry_weight_volatility_1h: f64,
-    pub entry_weight_volatility_1m: f64,
-    pub entry_we_weight: f64,
+    pub volatility_ema_span_hours: f64,
+    pub volatility_ema_span_minutes: f64,
+    pub entry: TrailingGridEntryParams,
+    pub close: TrailingGridCloseParams,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TrailingGridEntryParams {
-    pub entry_grid_double_down_factor: f64,
-    pub entry_grid_spacing_pct: f64,
-    pub entry_initial_ema_dist: f64,
-    pub entry_initial_qty_pct: f64,
-    pub entry_trailing_double_down_factor: f64,
-    pub entry_trailing_grid_ratio: f64,
-    pub entry_trailing_retracement_pct: f64,
-    pub entry_trailing_threshold_pct: f64,
-    pub entry_weight_volatility_1h: f64,
-    pub entry_weight_volatility_1m: f64,
-    pub entry_we_weight: f64,
+    pub double_down_factor: f64,
+    pub initial_ema_dist: f64,
+    pub initial_qty_pct: f64,
+    pub threshold_base_pct: f64,
+    pub threshold_we_weight: f64,
+    pub threshold_volatility_1h_weight: f64,
+    pub threshold_volatility_1m_weight: f64,
+    pub retracement_base_pct: f64,
+    pub retracement_we_weight: f64,
+    pub retracement_volatility_1h_weight: f64,
+    pub retracement_volatility_1m_weight: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TrailingGridCloseParams {
-    pub close_grid_markup_end: f64,
-    pub close_grid_markup_start: f64,
-    pub close_grid_qty_pct: f64,
-    pub grid_close_price_anchor: GridClosePriceAnchor,
-    pub close_trailing_grid_ratio: f64,
-    pub close_trailing_qty_pct: f64,
-    pub close_trailing_retracement_pct: f64,
-    pub close_trailing_threshold_pct: f64,
-    pub close_weight_volatility_1h: f64,
-    pub close_weight_volatility_1m: f64,
+    pub qty_pct: f64,
+    pub threshold_base_pct: f64,
+    pub threshold_we_weight: f64,
+    pub threshold_volatility_1h_weight: f64,
+    pub threshold_volatility_1m_weight: f64,
+    pub retracement_base_pct: f64,
+    pub retracement_volatility_1h_weight: f64,
+    pub retracement_volatility_1m_weight: f64,
 }
 
 impl TrailingGridParams {
     pub fn from_bot_params(bot_params: &BotParams) -> Self {
         Self {
-            close_grid_markup_end: bot_params.close_grid_markup_end,
-            close_grid_markup_start: bot_params.close_grid_markup_start,
-            close_grid_qty_pct: bot_params.close_grid_qty_pct,
-            grid_close_price_anchor: GridClosePriceAnchor::PositionPrice,
-            close_trailing_grid_ratio: bot_params.close_trailing_grid_ratio,
-            close_trailing_qty_pct: bot_params.close_trailing_qty_pct,
-            close_trailing_retracement_pct: bot_params.close_trailing_retracement_pct,
-            close_trailing_threshold_pct: bot_params.close_trailing_threshold_pct,
-            close_weight_volatility_1h: bot_params.close_weight_volatility_1h,
-            close_weight_volatility_1m: bot_params.close_weight_volatility_1m,
             ema_span_0: bot_params.ema_span_0,
             ema_span_1: bot_params.ema_span_1,
-            entry_grid_double_down_factor: bot_params.entry_grid_double_down_factor,
-            entry_grid_spacing_pct: bot_params.entry_grid_spacing_pct,
-            entry_initial_ema_dist: bot_params.entry_initial_ema_dist,
-            entry_initial_qty_pct: bot_params.entry_initial_qty_pct,
-            entry_trailing_double_down_factor: bot_params.entry_trailing_double_down_factor,
-            entry_trailing_grid_ratio: bot_params.entry_trailing_grid_ratio,
-            entry_trailing_retracement_pct: bot_params.entry_trailing_retracement_pct,
-            entry_trailing_threshold_pct: bot_params.entry_trailing_threshold_pct,
-            entry_volatility_ema_span_hours: bot_params.entry_volatility_ema_span_hours,
-            entry_volatility_ema_span_minutes: bot_params.entry_volatility_ema_span_minutes,
-            entry_weight_volatility_1h: bot_params.entry_weight_volatility_1h,
-            entry_weight_volatility_1m: bot_params.entry_weight_volatility_1m,
-            entry_we_weight: bot_params.entry_we_weight,
+            volatility_ema_span_hours: bot_params.entry_volatility_ema_span_hours,
+            volatility_ema_span_minutes: bot_params.entry_volatility_ema_span_minutes,
+            entry: TrailingGridEntryParams {
+                double_down_factor: bot_params.entry_grid_double_down_factor,
+                initial_ema_dist: bot_params.entry_initial_ema_dist,
+                initial_qty_pct: bot_params.entry_initial_qty_pct,
+                threshold_base_pct: bot_params.entry_grid_spacing_pct,
+                threshold_we_weight: bot_params.entry_we_weight,
+                threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
+                threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+                retracement_base_pct: bot_params.entry_trailing_retracement_pct,
+                retracement_we_weight: bot_params.entry_we_weight,
+                retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
+                retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+            },
+            close: TrailingGridCloseParams {
+                qty_pct: bot_params.close_grid_qty_pct,
+                threshold_base_pct: bot_params.close_grid_markup_start,
+                threshold_we_weight: 0.0,
+                threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
+                threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+                retracement_base_pct: bot_params.close_trailing_retracement_pct,
+                retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
+                retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+            },
         }
     }
 
     pub fn entry_params(&self) -> TrailingGridEntryParams {
-        TrailingGridEntryParams {
-            entry_grid_double_down_factor: self.entry_grid_double_down_factor,
-            entry_grid_spacing_pct: self.entry_grid_spacing_pct,
-            entry_initial_ema_dist: self.entry_initial_ema_dist,
-            entry_initial_qty_pct: self.entry_initial_qty_pct,
-            entry_trailing_double_down_factor: self.entry_trailing_double_down_factor,
-            entry_trailing_grid_ratio: self.entry_trailing_grid_ratio,
-            entry_trailing_retracement_pct: self.entry_trailing_retracement_pct,
-            entry_trailing_threshold_pct: self.entry_trailing_threshold_pct,
-            entry_weight_volatility_1h: self.entry_weight_volatility_1h,
-            entry_weight_volatility_1m: self.entry_weight_volatility_1m,
-            entry_we_weight: self.entry_we_weight,
-        }
+        self.entry
     }
 
     pub fn close_params(&self) -> TrailingGridCloseParams {
-        TrailingGridCloseParams {
-            close_grid_markup_end: self.close_grid_markup_end,
-            close_grid_markup_start: self.close_grid_markup_start,
-            close_grid_qty_pct: self.close_grid_qty_pct,
-            grid_close_price_anchor: self.grid_close_price_anchor,
-            close_trailing_grid_ratio: self.close_trailing_grid_ratio,
-            close_trailing_qty_pct: self.close_trailing_qty_pct,
-            close_trailing_retracement_pct: self.close_trailing_retracement_pct,
-            close_trailing_threshold_pct: self.close_trailing_threshold_pct,
-            close_weight_volatility_1h: self.close_weight_volatility_1h,
-            close_weight_volatility_1m: self.close_weight_volatility_1m,
-        }
+        self.close
     }
 
     pub fn to_value(&self) -> Value {
-        serde_json::json!({
-            "close_grid_markup_end": self.close_grid_markup_end,
-            "close_grid_markup_start": self.close_grid_markup_start,
-            "close_grid_qty_pct": self.close_grid_qty_pct,
-            "grid_close_price_anchor": self.grid_close_price_anchor,
-            "close_trailing_grid_ratio": self.close_trailing_grid_ratio,
-            "close_trailing_qty_pct": self.close_trailing_qty_pct,
-            "close_trailing_retracement_pct": self.close_trailing_retracement_pct,
-            "close_trailing_threshold_pct": self.close_trailing_threshold_pct,
-            "close_weight_volatility_1h": self.close_weight_volatility_1h,
-            "close_weight_volatility_1m": self.close_weight_volatility_1m,
-            "ema_span_0": self.ema_span_0,
-            "ema_span_1": self.ema_span_1,
-            "entry_grid_double_down_factor": self.entry_grid_double_down_factor,
-            "entry_grid_spacing_pct": self.entry_grid_spacing_pct,
-            "entry_initial_ema_dist": self.entry_initial_ema_dist,
-            "entry_initial_qty_pct": self.entry_initial_qty_pct,
-            "entry_trailing_double_down_factor": self.entry_trailing_double_down_factor,
-            "entry_trailing_grid_ratio": self.entry_trailing_grid_ratio,
-            "entry_trailing_retracement_pct": self.entry_trailing_retracement_pct,
-            "entry_trailing_threshold_pct": self.entry_trailing_threshold_pct,
-            "entry_volatility_ema_span_hours": self.entry_volatility_ema_span_hours,
-            "entry_volatility_ema_span_minutes": self.entry_volatility_ema_span_minutes,
-            "entry_weight_volatility_1h": self.entry_weight_volatility_1h,
-            "entry_weight_volatility_1m": self.entry_weight_volatility_1m,
-            "entry_we_weight": self.entry_we_weight,
-        })
+        serde_json::to_value(self).expect("trailing_martingale params serialize")
     }
 }
 
@@ -258,18 +193,20 @@ pub struct StrategyRequest<'a> {
 
 pub fn parse_strategy_params(
     kind: StrategyKind,
-    side: StrategySide,
+    _side: StrategySide,
     raw: Option<&Value>,
     _bot_params: &BotParams,
 ) -> Result<StrategyParams, String> {
     match kind {
         StrategyKind::TrailingGrid => {
             let value = raw.ok_or_else(|| {
-                "trailing_grid requires per-side strategy_params in orchestrator input".to_string()
+                "trailing_martingale requires per-side strategy_params in orchestrator input"
+                    .to_string()
             })?;
-            let params = serde_json::from_value::<TrailingGridParams>(value.clone())
-                .map_err(|err| format!("failed to parse trailing_grid strategy params: {err}"))?;
-            validate_grid_close_price_anchor(side, params.grid_close_price_anchor)?;
+            let params =
+                serde_json::from_value::<TrailingGridParams>(value.clone()).map_err(|err| {
+                    format!("failed to parse trailing_martingale strategy params: {err}")
+                })?;
             Ok(StrategyParams::TrailingGrid(params))
         }
         StrategyKind::EmaAnchor => {
@@ -335,21 +272,21 @@ pub fn strategy_ema_spans(params: &StrategyParams) -> (f64, f64) {
 
 pub fn strategy_entry_volatility_span_hours(params: &StrategyParams) -> Option<f64> {
     match params {
-        StrategyParams::TrailingGrid(params) => Some(params.entry_volatility_ema_span_hours),
+        StrategyParams::TrailingGrid(params) => Some(params.volatility_ema_span_hours),
         StrategyParams::EmaAnchor(params) => Some(params.entry_volatility_ema_span_hours),
     }
 }
 
 pub fn strategy_offset_volatility_span_minutes(params: &StrategyParams) -> Option<f64> {
     match params {
-        StrategyParams::TrailingGrid(params) => Some(params.entry_volatility_ema_span_minutes),
+        StrategyParams::TrailingGrid(params) => Some(params.volatility_ema_span_minutes),
         StrategyParams::EmaAnchor(params) => Some(params.offset_volatility_ema_span_minutes),
     }
 }
 
 pub fn strategy_initial_entry_offset(params: &StrategyParams) -> f64 {
     match params {
-        StrategyParams::TrailingGrid(params) => params.entry_initial_ema_dist,
+        StrategyParams::TrailingGrid(params) => params.entry.initial_ema_dist,
         StrategyParams::EmaAnchor(params) => params.offset,
     }
 }
@@ -357,8 +294,11 @@ pub fn strategy_initial_entry_offset(params: &StrategyParams) -> f64 {
 pub fn strategy_needs_log_range_1m(params: &StrategyParams) -> bool {
     match params {
         StrategyParams::TrailingGrid(params) => {
-            (params.entry_weight_volatility_1m != 0.0 || params.close_weight_volatility_1m != 0.0)
-                && params.entry_volatility_ema_span_minutes > 0.0
+            (params.entry.threshold_volatility_1m_weight != 0.0
+                || params.entry.retracement_volatility_1m_weight != 0.0
+                || params.close.threshold_volatility_1m_weight != 0.0
+                || params.close.retracement_volatility_1m_weight != 0.0)
+                && params.volatility_ema_span_minutes > 0.0
         }
         StrategyParams::EmaAnchor(params) => {
             params.offset_volatility_1m_weight != 0.0
@@ -370,8 +310,11 @@ pub fn strategy_needs_log_range_1m(params: &StrategyParams) -> bool {
 pub fn strategy_needs_log_range_1h(params: &StrategyParams) -> bool {
     match params {
         StrategyParams::TrailingGrid(params) => {
-            (params.entry_weight_volatility_1h != 0.0 || params.close_weight_volatility_1h != 0.0)
-                && params.entry_volatility_ema_span_hours > 0.0
+            (params.entry.threshold_volatility_1h_weight != 0.0
+                || params.entry.retracement_volatility_1h_weight != 0.0
+                || params.close.threshold_volatility_1h_weight != 0.0
+                || params.close.retracement_volatility_1h_weight != 0.0)
+                && params.volatility_ema_span_hours > 0.0
         }
         StrategyParams::EmaAnchor(params) => {
             params.offset_volatility_1h_weight != 0.0
@@ -383,7 +326,7 @@ pub fn strategy_needs_log_range_1h(params: &StrategyParams) -> bool {
 pub fn strategy_has_trailing(params: &StrategyParams) -> bool {
     match params {
         StrategyParams::TrailingGrid(params) => {
-            params.close_trailing_grid_ratio != 0.0 || params.entry_trailing_grid_ratio != 0.0
+            params.entry.retracement_base_pct > 0.0 || params.close.retracement_base_pct > 0.0
         }
         StrategyParams::EmaAnchor(_) => false,
     }

@@ -12,7 +12,8 @@ All notable user-facing changes will be documented in this file.
 - Fixed Gate.io live order creation with current CCXT/Gate.io by passing Passivbot custom ids as `clientOrderId`, letting CCXT emit Gate.io's required `t-`-prefixed order `text` while preserving the embedded Passivbot order-type marker.
 - Fixed live foreign-writer detection so a bot's own freshly acknowledged orders can be recognized by exchange order id, canonical Passivbot custom id, or a strict recent order fingerprint instead of relying only on raw client-id string equality.
 - Fixed OHLCV v2 planning so persistent gaps are not bypassed by sparse store bounds, and single-exchange backtest preparation no longer attempts the same v2 local path twice before falling back.
-- Redesigned `trailing_grid` distance weighting: entry grid spacing and entry trailing distances now share side-level 1h/1m volatility weights plus one wallet-exposure weight, while close grid/trailing distances share side-level 1h/1m volatility weights.
+- Replaced the v7 `trailing_grid` strategy schema with the v8 `trailing_martingale` strategy. Entries and closes now use unified threshold/retracement parameters with 1h/1m volatility scaling; entries also support wallet-exposure scaling, while closes support additive wallet-exposure threshold shifts for recursive reduce ladders.
+- Bumped the canonical config schema to `v8.0.0`, added shared dynamic distance multiplier logic for `trailing_grid` and `ema_anchor`, changed `ema_anchor` inventory sensitivity to signed wallet-exposure ratio, and added explicit runtime toggles for WEL enforcer, TWEL enforcer, and auto-unstuck.
 - Fixed OHLCV v2 local preparation so sparse invalid v2 windows are repaired from existing legacy daily shards first, then fetched with exact intraday ranges instead of triggering full-range archive downloads or collapsing same-day repair windows to empty fetches.
 
 ## v7.10.0 - 2026-04-22

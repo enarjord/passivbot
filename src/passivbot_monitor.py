@@ -801,11 +801,42 @@ def _monitor_wallet_exposure_limit_with_allowance(self, pside: str, symbol: str)
 
 
 def _monitor_strategy_value(self, pside: str, key: str, symbol: str) -> float:
+    legacy_map = {
+        "entry_grid_double_down_factor": "entry.double_down_factor",
+        "entry_trailing_double_down_factor": "entry.double_down_factor",
+        "entry_grid_spacing_pct": "entry.threshold_base_pct",
+        "entry_trailing_threshold_pct": "entry.threshold_base_pct",
+        "entry_trailing_retracement_pct": "entry.retracement_base_pct",
+        "entry_initial_ema_dist": "entry.initial_ema_dist",
+        "entry_initial_qty_pct": "entry.initial_qty_pct",
+        "entry_weight_volatility_1h": "entry.threshold_volatility_1h_weight",
+        "entry_weight_volatility_1m": "entry.threshold_volatility_1m_weight",
+        "entry_we_weight": "entry.threshold_we_weight",
+        "entry_volatility_ema_span_hours": "volatility_ema_span_hours",
+        "entry_volatility_ema_span_minutes": "volatility_ema_span_minutes",
+        "close_grid_markup_start": "close.threshold_base_pct",
+        "close_grid_markup_end": "close.threshold_base_pct",
+        "close_grid_qty_pct": "close.qty_pct",
+        "close_trailing_qty_pct": "close.qty_pct",
+        "close_trailing_threshold_pct": "close.threshold_base_pct",
+        "close_trailing_retracement_pct": "close.retracement_base_pct",
+        "close_weight_volatility_1h": "close.threshold_volatility_1h_weight",
+        "close_weight_volatility_1m": "close.threshold_volatility_1m_weight",
+    }
     strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
     if callable(strategy_getter):
         strategy_cfg = strategy_getter(pside, symbol)
         if key in strategy_cfg:
             return float(strategy_cfg[key])
+        mapped_key = legacy_map.get(key, key)
+        current = strategy_cfg
+        try:
+            for part in mapped_key.split("."):
+                current = current[part]
+            return float(current)
+        except (KeyError, TypeError, ValueError):
+            if key in {"entry_trailing_grid_ratio", "close_trailing_grid_ratio"}:
+                return 1.0 if _monitor_strategy_value(self, pside, "entry.retracement_base_pct" if key.startswith("entry") else "close.retracement_base_pct", symbol) > 0.0 else 0.0
     return float(self.bp(pside, key, symbol))
 
 
@@ -818,21 +849,10 @@ def _monitor_entry_trailing_limit_cap(
     allowed_limit = _monitor_wallet_exposure_limit_with_allowance(self, pside, symbol)
     if allowed_limit <= 0.0:
         return None, None
-    trailing_ratio = _monitor_strategy_value(self, pside, "entry_trailing_grid_ratio", symbol)
-    if trailing_ratio >= 1.0 or trailing_ratio <= -1.0:
+    retracement = _monitor_strategy_value(self, pside, "entry.retracement_base_pct", symbol)
+    if retracement > 0.0:
         return allowed_limit, "trailing_only"
-    if trailing_ratio == 0.0:
-        return None, "grid_only"
-    wallet_exposure_ratio = wallet_exposure / allowed_limit if allowed_limit > 0.0 else 0.0
-    if trailing_ratio > 0.0:
-        if wallet_exposure_ratio < trailing_ratio:
-            if wallet_exposure == 0.0:
-                return allowed_limit, "trailing_first"
-            return min(allowed_limit * trailing_ratio * 1.01, allowed_limit), "trailing_first"
-        return None, "grid_first"
-    if wallet_exposure_ratio < 1.0 + trailing_ratio:
-        return None, "grid_first"
-    return allowed_limit, "trailing_after_grid"
+    return None, "grid_only"
 
 
 def _monitor_h1_entry_logrange(self, pside: str, symbol: str) -> float:

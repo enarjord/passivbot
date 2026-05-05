@@ -1079,6 +1079,7 @@ def get_cache_hash(config, exchange):
         "gap_tolerance_ohlcvs_minutes": require_config_value(
             config, "backtest.gap_tolerance_ohlcvs_minutes"
         ),
+        "ohlcv_source_dir": config.get("backtest", {}).get("ohlcv_source_dir"),
         "coin_sources": coin_sources_sorted,
         "market_settings_sources": market_settings_sources_sorted,
     }

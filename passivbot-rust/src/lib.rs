@@ -3,6 +3,7 @@ mod backtest;
 mod closes;
 mod coin_selection;
 mod constants;
+mod dynamic;
 mod entries;
 mod equity_hard_stop_loss;
 mod orchestrator;

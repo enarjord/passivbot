@@ -1,15 +1,35 @@
 use super::{EmaAnchorParams, GeneratedOrders, StrategyParams, StrategyRequest, StrategySide};
+use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
 use crate::entries::calc_min_entry_qty;
 use crate::types::{BotParams, ExchangeParams, Order, OrderType, StateParams};
-use crate::utils::{cost_to_qty, round_, round_dn, round_up};
+use crate::utils::{cost_to_qty, qty_to_cost, round_, round_dn, round_up};
 
 #[inline]
-fn calc_pside_bias(balance: f64, mid: f64, psize: f64) -> f64 {
-    if balance > 0.0 {
-        psize * mid / balance
+fn calc_signed_wallet_exposure_ratio(
+    balance: f64,
+    mid: f64,
+    psize: f64,
+    c_mult: f64,
+    effective_wallet_exposure_limit: f64,
+) -> f64 {
+    if balance > 0.0 && mid > 0.0 && c_mult > 0.0 && effective_wallet_exposure_limit > 0.0 {
+        psize.signum() * qty_to_cost(psize, mid, c_mult) / balance / effective_wallet_exposure_limit
     } else {
         0.0
     }
+}
+
+#[inline]
+fn calc_offset_multiplier(state: &StateParams, params: &EmaAnchorParams) -> f64 {
+    calc_dynamic_distance_multiplier(DynamicDistanceInputs {
+        volatility_ema_1m: state.volatility_ema_1m,
+        volatility_ema_1h: state.volatility_ema_1h,
+        weight_volatility_1m: params.offset_volatility_1m_weight,
+        weight_volatility_1h: params.offset_volatility_1h_weight,
+        wallet_exposure_ratio: None,
+        weight_wallet_exposure: 0.0,
+        min_multiplier: 1.0,
+    })
 }
 
 #[inline]
@@ -27,12 +47,17 @@ pub fn calc_bid_price(
     exchange: &ExchangeParams,
     params: &EmaAnchorParams,
     psize: f64,
+    effective_wallet_exposure_limit: f64,
 ) -> f64 {
     let mid = (state.order_book.bid + state.order_book.ask) * 0.5;
-    let inventory_shift = calc_pside_bias(state.balance, mid, psize) * params.offset_psize_weight;
-    let vol_term = state.offset_volatility_logrange_ema_1m * params.offset_volatility_1m_weight
-        + state.entry_volatility_logrange_ema_1h * params.offset_volatility_1h_weight;
-    let effective_offset = params.offset * (1.0 + vol_term).max(1.0);
+    let inventory_shift = calc_signed_wallet_exposure_ratio(
+        state.balance,
+        mid,
+        psize,
+        exchange.c_mult,
+        effective_wallet_exposure_limit,
+    ) * params.offset_psize_weight;
+    let effective_offset = params.offset * calc_offset_multiplier(state, params);
     let target = state.ema_bands.lower * (1.0 - effective_offset - inventory_shift);
     f64::min(state.order_book.bid, round_dn(target, exchange.price_step))
 }
@@ -43,12 +68,17 @@ pub fn calc_ask_price(
     exchange: &ExchangeParams,
     params: &EmaAnchorParams,
     psize: f64,
+    effective_wallet_exposure_limit: f64,
 ) -> f64 {
     let mid = (state.order_book.bid + state.order_book.ask) * 0.5;
-    let inventory_shift = calc_pside_bias(state.balance, mid, psize) * params.offset_psize_weight;
-    let vol_term = state.offset_volatility_logrange_ema_1m * params.offset_volatility_1m_weight
-        + state.entry_volatility_logrange_ema_1h * params.offset_volatility_1h_weight;
-    let effective_offset = params.offset * (1.0 + vol_term).max(1.0);
+    let inventory_shift = calc_signed_wallet_exposure_ratio(
+        state.balance,
+        mid,
+        psize,
+        exchange.c_mult,
+        effective_wallet_exposure_limit,
+    ) * params.offset_psize_weight;
+    let effective_offset = params.offset * calc_offset_multiplier(state, params);
     let target = state.ema_bands.upper * (1.0 + effective_offset - inventory_shift);
     f64::max(state.order_book.ask, round_up(target, exchange.price_step))
 }
@@ -59,10 +89,23 @@ pub fn calc_quote_prices(
     exchange: &ExchangeParams,
     params: &EmaAnchorParams,
     psize: f64,
+    effective_wallet_exposure_limit: f64,
 ) -> (f64, f64) {
     (
-        calc_bid_price(state, exchange, params, psize),
-        calc_ask_price(state, exchange, params, psize),
+        calc_bid_price(
+            state,
+            exchange,
+            params,
+            psize,
+            effective_wallet_exposure_limit,
+        ),
+        calc_ask_price(
+            state,
+            exchange,
+            params,
+            psize,
+            effective_wallet_exposure_limit,
+        ),
     )
 }
 
@@ -119,10 +162,16 @@ fn calc_entry_qty(
     if base_qty <= 0.0 {
         return 0.0;
     }
-    let pside_bias = calc_pside_bias(balance, mid, psize);
+    let signed_we_ratio = calc_signed_wallet_exposure_ratio(
+        balance,
+        mid,
+        psize,
+        exchange.c_mult,
+        effective_wallet_exposure_limit,
+    );
     let same_side_bias = match side {
-        StrategySide::Long => pside_bias.max(0.0),
-        StrategySide::Short => (-pside_bias).max(0.0),
+        StrategySide::Long => signed_we_ratio.max(0.0),
+        StrategySide::Short => (-signed_we_ratio).max(0.0),
     };
     let multiplier = (1.0 + same_side_bias * params.entry_double_down_factor).max(1.0);
     round_(base_qty * multiplier, exchange.qty_step)
@@ -186,6 +235,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     request.exchange,
                     params,
                     request.position.size,
+                    effective_wallet_exposure_limit,
                 );
                 if bid_price.is_finite() && bid_price > 0.0 && effective_wallet_exposure_limit > 0.0
                 {
@@ -217,6 +267,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     request.exchange,
                     params,
                     request.position.size,
+                    effective_wallet_exposure_limit,
                 );
                 if ask_price.is_finite() && ask_price > 0.0 {
                     let close_qty = calc_close_qty(
@@ -245,6 +296,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     request.exchange,
                     params,
                     request.position.size,
+                    effective_wallet_exposure_limit,
                 );
                 if bid_price.is_finite() && bid_price > 0.0 {
                     let close_qty = calc_close_qty(
@@ -272,6 +324,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     request.exchange,
                     params,
                     request.position.size,
+                    effective_wallet_exposure_limit,
                 );
                 if ask_price.is_finite() && ask_price > 0.0 && effective_wallet_exposure_limit > 0.0
                 {
@@ -299,4 +352,42 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
         }
     }
     generated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{EMABands, OrderBook};
+
+    #[test]
+    fn bid_inventory_shift_uses_signed_wallet_exposure_ratio() {
+        let state = StateParams {
+            balance: 1000.0,
+            order_book: OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            },
+            ema_bands: EMABands {
+                lower: 100.0,
+                upper: 100.0,
+            },
+            ..Default::default()
+        };
+        let exchange = ExchangeParams {
+            price_step: 0.01,
+            c_mult: 2.0,
+            ..Default::default()
+        };
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.01,
+            ..Default::default()
+        };
+
+        let bid_wel_1 = calc_bid_price(&state, &exchange, &params, 1.0, 1.0);
+        let bid_wel_half = calc_bid_price(&state, &exchange, &params, 1.0, 0.5);
+
+        assert_eq!(bid_wel_1, 99.8);
+        assert_eq!(bid_wel_half, 99.6);
+    }
 }

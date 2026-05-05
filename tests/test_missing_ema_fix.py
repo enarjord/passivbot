@@ -219,33 +219,47 @@ def _rust_bot_params(**overrides):
 
 def _rust_strategy_params(**overrides):
     params = {
-        "close_grid_markup_end": 0.01,
-        "close_grid_markup_start": 0.01,
-        "close_grid_qty_pct": 1.0,
-        "grid_close_price_anchor": "position_price",
-        "close_trailing_retracement_pct": 0.0,
-        "close_trailing_grid_ratio": 0.0,
-        "close_trailing_qty_pct": 0.0,
-        "close_trailing_threshold_pct": 0.0,
-        "close_weight_volatility_1h": 0.0,
-        "close_weight_volatility_1m": 0.0,
-        "entry_grid_double_down_factor": 1.0,
-        "entry_weight_volatility_1h": 0.0,
-        "entry_weight_volatility_1m": 0.0,
-        "entry_we_weight": 0.0,
-        "entry_grid_spacing_pct": 0.02,
-        "entry_volatility_ema_span_hours": 0.0,
-        "entry_volatility_ema_span_minutes": 60.0,
-        "entry_initial_ema_dist": 0.0,
-        "entry_initial_qty_pct": 0.1,
-        "entry_trailing_double_down_factor": 0.0,
-        "entry_trailing_retracement_pct": 0.0,
-        "entry_trailing_grid_ratio": 0.0,
-        "entry_trailing_threshold_pct": 0.0,
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
+        "volatility_ema_span_hours": 0.0,
+        "volatility_ema_span_minutes": 60.0,
+        "entry": {
+            "double_down_factor": 1.0,
+            "initial_ema_dist": 0.0,
+            "initial_qty_pct": 0.1,
+            "threshold_base_pct": 0.02,
+            "threshold_we_weight": 0.0,
+            "threshold_volatility_1h_weight": 0.0,
+            "threshold_volatility_1m_weight": 0.0,
+            "retracement_base_pct": 0.0,
+            "retracement_we_weight": 0.0,
+            "retracement_volatility_1h_weight": 0.0,
+            "retracement_volatility_1m_weight": 0.0,
+        },
+        "close": {
+            "qty_pct": 1.0,
+            "threshold_base_pct": 0.01,
+            "threshold_we_weight": 0.0,
+            "threshold_volatility_1h_weight": 0.0,
+            "threshold_volatility_1m_weight": 0.0,
+            "retracement_base_pct": 0.0,
+            "retracement_volatility_1h_weight": 0.0,
+            "retracement_volatility_1m_weight": 0.0,
+        },
     }
-    params.update(overrides)
+    legacy_map = {
+        "entry_volatility_ema_span_hours": ("volatility_ema_span_hours",),
+        "entry_weight_volatility_1h": ("entry", "threshold_volatility_1h_weight"),
+    }
+    for key, value in overrides.items():
+        path = legacy_map.get(key)
+        if path is None:
+            params[key] = value
+            continue
+        current = params
+        for part in path[:-1]:
+            current = current[part]
+        current[path[-1]] = value
     return params
 
 
@@ -271,6 +285,7 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
                 "short": _rust_bot_params(n_positions=0, total_wallet_exposure_limit=0.0),
             },
             "hedge_mode": True,
+            "strategy_kind": "trailing_martingale",
         },
         "symbols": [
             {
@@ -390,7 +405,7 @@ class _BundleReproBot:
             return 10.0
         if key == "ema_span_1":
             return 20.0
-        if key == "entry_volatility_ema_span_hours":
+        if key in {"entry_volatility_ema_span_hours", "volatility_ema_span_hours"}:
             return self.entry_h1_span_hours
         return 0.0
 
@@ -401,7 +416,12 @@ class _BundleReproBot:
         )
 
     def _strategy_value(self, pside, key, symbol=None):
-        return self._strategy_params_to_rust_dict(pside, symbol)[key]
+        params = self._strategy_params_to_rust_dict(pside, symbol)
+        if key == "volatility_ema_span_hours":
+            return params[key]
+        if key == "entry_volatility_ema_span_hours":
+            return params["volatility_ema_span_hours"]
+        return params[key]
 
     def bot_value(self, pside, key):
         if key == "filter_volume_ema_span":

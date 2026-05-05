@@ -123,6 +123,21 @@ class TestApplyConfigOverrides:
         _apply_config_overrides(config, {"bot.long.value": 3.0})
         assert config["bot"]["long"]["value"] == 3.0
 
+    def test_bot_shared_paths_update_grouped_value_and_runtime_alias(self):
+        config = {
+            "bot": {
+                "long": {
+                    "hsl": {"no_restart_drawdown_threshold": 0.3},
+                    "hsl_no_restart_drawdown_threshold": 0.3,
+                }
+            }
+        }
+
+        _apply_config_overrides(config, {"bot.long.hsl_no_restart_drawdown_threshold": 1.0})
+
+        assert config["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(1.0)
+        assert config["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
+
 
 class TestLiquidationHelpers:
     def test_analysis_indicates_liquidation_uses_explicit_flag(self):
@@ -800,9 +815,9 @@ class TestIndividualToConfig:
             == result["bot"]["long"]["strategy"]["ema_anchor"]
         )
 
-    def test_mirror_short_from_long_override_supports_trailing_grid(self):
+    def test_mirror_short_from_long_override_supports_trailing_martingale(self):
         config = {
-            "live": {"strategy_kind": "trailing_grid"},
+            "live": {"strategy_kind": "trailing_martingale"},
             "bot": {
                 "long": {
                     "risk": {"n_positions": 1, "total_wallet_exposure_limit": 0.9},
@@ -812,7 +827,7 @@ class TestIndividualToConfig:
                         "score_weights": {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0},
                     },
                     "strategy": {
-                        "trailing_grid": {"ema_span_0": 100.0},
+                        "trailing_martingale": {"ema_span_0": 100.0},
                         "ema_anchor": {"ema_span_0": 999.0},
                     },
                 },
@@ -824,7 +839,7 @@ class TestIndividualToConfig:
                         "score_weights": {"volume": 0.1, "ema_readiness": 0.2, "volatility": 0.7},
                     },
                     "strategy": {
-                        "trailing_grid": {"ema_span_0": 200.0},
+                        "trailing_martingale": {"ema_span_0": 200.0},
                         "ema_anchor": {"ema_span_0": 123.0},
                     },
                 },
@@ -836,49 +851,30 @@ class TestIndividualToConfig:
         assert result["bot"]["short"]["risk"] == result["bot"]["long"]["risk"]
         assert result["bot"]["short"]["forager"] == result["bot"]["long"]["forager"]
         assert (
-            result["bot"]["short"]["strategy"]["trailing_grid"]
-            == result["bot"]["long"]["strategy"]["trailing_grid"]
+            result["bot"]["short"]["strategy"]["trailing_martingale"]
+            == result["bot"]["long"]["strategy"]["trailing_martingale"]
         )
         assert result["bot"]["short"]["strategy"]["ema_anchor"] == {"ema_span_0": 123.0}
 
-    @pytest.mark.parametrize(
-        ("override_name", "expected_start", "expected_end"),
-        [
-            ("lossless_close_trailing", 0.0015, 0.0015),
-            ("forward_tp_grid", 0.0015, 0.009),
-            ("backward_tp_grid", 0.009, 0.0015),
-        ],
-    )
-    def test_legacy_trailing_grid_overrides_support_canonical_shape(
-        self,
-        override_name,
-        expected_start,
-        expected_end,
-    ):
+    def test_lossless_close_trailing_override_supports_trailing_martingale_shape(self):
         config = load_prepared_config(
             "configs/examples/default_trailing_grid_long_npos10.json",
             verbose=False,
         )
-        long_strategy = config["bot"]["long"]["strategy"]["trailing_grid"]
-        long_strategy["close_grid_markup_start"] = 0.009
-        long_strategy["close_grid_markup_end"] = 0.0015
-        long_strategy["close_trailing_threshold_pct"] = 0.001
-        long_strategy["close_trailing_retracement_pct"] = 0.004
+        long_strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
+        long_strategy["close"]["threshold_base_pct"] = 0.001
+        long_strategy["close"]["retracement_base_pct"] = 0.004
 
-        result = optimize.optimizer_overrides([override_name], deepcopy(config), "long")
-        strategy = result["bot"]["long"]["strategy"]["trailing_grid"]
+        result = optimize.optimizer_overrides(["lossless_close_trailing"], deepcopy(config), "long")
+        strategy = result["bot"]["long"]["strategy"]["trailing_martingale"]
 
-        if override_name == "lossless_close_trailing":
-            assert strategy["close_trailing_threshold_pct"] == pytest.approx(0.004)
-            assert strategy["close_trailing_retracement_pct"] == pytest.approx(0.004)
-        else:
-            assert strategy["close_grid_markup_start"] == pytest.approx(expected_start)
-            assert strategy["close_grid_markup_end"] == pytest.approx(expected_end)
+        assert strategy["close"]["threshold_base_pct"] == pytest.approx(0.004)
+        assert strategy["close"]["retracement_base_pct"] == pytest.approx(0.004)
 
-    def test_legacy_trailing_grid_overrides_reject_non_trailing_grid_strategy(self):
+    def test_trailing_martingale_overrides_reject_non_trailing_martingale_strategy(self):
         config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
 
-        with pytest.raises(ValueError, match="live.strategy_kind = 'trailing_grid'"):
+        with pytest.raises(ValueError, match="live.strategy_kind = 'trailing_martingale'"):
             optimize.optimizer_overrides(["forward_tp_grid"], deepcopy(config), "long")
 
     def test_accepts_precomputed_key_paths(self):

@@ -23,17 +23,7 @@ from .tree_ops import add_missing_keys_recursively
 
 DEFAULT_FORAGER_SCORE_WEIGHTS = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
 DEFAULT_HSL_TIER_RATIOS = {"yellow": 0.5, "orange": 0.75}
-REQUIRED_BOT_KEYS = (
-    "close_grid_markup_start",
-    "close_grid_markup_end",
-    "close_grid_qty_pct",
-    "ema_span_0",
-    "ema_span_1",
-    "entry_grid_double_down_factor",
-    "entry_grid_spacing_pct",
-    "entry_initial_ema_dist",
-    "entry_initial_qty_pct",
-)
+REQUIRED_BOT_KEYS = ()
 CLIFF_EDGE_THRESHOLD_KEYS = (
     "risk_wel_enforcer_threshold",
     "risk_twel_enforcer_threshold",
@@ -76,10 +66,51 @@ def validate_unstuck_ema_dist_value(value, *, path: str, pside: str) -> None:
         )
 
 
+def _validate_bool(value, *, path: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise TypeError(f"{path} must be a boolean")
+
+
+def _validate_positive_ratio_when_enabled(
+    *,
+    enabled_value,
+    threshold_value,
+    enabled_path: str,
+    threshold_path: str,
+) -> None:
+    enabled = _validate_bool(enabled_value, path=enabled_path)
+    if not enabled:
+        return
+    try:
+        threshold = float(threshold_value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{threshold_path} must be numeric") from exc
+    if not math.isfinite(threshold) or threshold <= 0.0:
+        raise ValueError(f"{threshold_path} must be finite and > 0.0 when {enabled_path}=true")
+
+
 def validate_bot_config(result: dict) -> None:
     for pside in BOT_POSITION_SIDES:
+        bot_side = result["bot"][pside]
+        _validate_positive_ratio_when_enabled(
+            enabled_value=get_grouped_bot_value(bot_side, "risk_wel_enforcer_enabled"),
+            threshold_value=get_grouped_bot_value(bot_side, "risk_wel_enforcer_threshold"),
+            enabled_path=f"bot.{pside}.risk.wel_enforcer_enabled",
+            threshold_path=f"bot.{pside}.risk.wel_enforcer_threshold",
+        )
+        _validate_positive_ratio_when_enabled(
+            enabled_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_enabled"),
+            threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
+            enabled_path=f"bot.{pside}.risk.twel_enforcer_enabled",
+            threshold_path=f"bot.{pside}.risk.twel_enforcer_threshold",
+        )
+        _validate_bool(
+            get_grouped_bot_value(bot_side, "unstuck_enabled"),
+            path=f"bot.{pside}.unstuck.enabled",
+        )
         validate_unstuck_ema_dist_value(
-            get_grouped_bot_value(result["bot"][pside], "unstuck_ema_dist"),
+            get_grouped_bot_value(bot_side, "unstuck_ema_dist"),
             path=f"bot.{pside}.unstuck_ema_dist",
             pside=pside,
         )
@@ -672,8 +703,6 @@ def format_bot_config(
         verbose=verbose and warn_deprecations,
         tracker=tracker,
     )
-    for pside in BOT_POSITION_SIDES:
-        inject_flattened_shared_bot_side(result["bot"][pside])
     return sort_dict_keys(result["bot"])
 
 

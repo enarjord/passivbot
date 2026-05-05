@@ -5,37 +5,35 @@ from .shared_bot import BOT_SHARED_GROUPS
 
 
 BOT_POSITION_SIDES = ("long", "short")
-DEFAULT_STRATEGY_KIND = "trailing_grid"
+DEFAULT_STRATEGY_KIND = "trailing_martingale"
 EMA_ANCHOR_STRATEGY_KIND = "ema_anchor"
 SUPPORTED_STRATEGY_KINDS = (DEFAULT_STRATEGY_KIND, EMA_ANCHOR_STRATEGY_KIND)
 GRID_CLOSE_PRICE_ANCHOR_DEFAULT = "position_price"
 
-TRAILING_GRID_PARAM_KEYS = (
-    "close_grid_markup_end",
-    "close_grid_markup_start",
-    "close_grid_qty_pct",
-    "grid_close_price_anchor",
-    "close_trailing_grid_ratio",
-    "close_trailing_qty_pct",
-    "close_trailing_retracement_pct",
-    "close_trailing_threshold_pct",
-    "close_weight_volatility_1h",
-    "close_weight_volatility_1m",
+TRAILING_MARTINGALE_PARAM_KEYS = (
     "ema_span_0",
     "ema_span_1",
-    "entry_grid_double_down_factor",
-    "entry_grid_spacing_pct",
-    "entry_initial_ema_dist",
-    "entry_initial_qty_pct",
-    "entry_trailing_double_down_factor",
-    "entry_trailing_grid_ratio",
-    "entry_trailing_retracement_pct",
-    "entry_trailing_threshold_pct",
-    "entry_volatility_ema_span_hours",
-    "entry_volatility_ema_span_minutes",
-    "entry_weight_volatility_1h",
-    "entry_weight_volatility_1m",
-    "entry_we_weight",
+    "volatility_ema_span_hours",
+    "volatility_ema_span_minutes",
+    "entry.double_down_factor",
+    "entry.initial_ema_dist",
+    "entry.initial_qty_pct",
+    "entry.threshold_base_pct",
+    "entry.threshold_we_weight",
+    "entry.threshold_volatility_1h_weight",
+    "entry.threshold_volatility_1m_weight",
+    "entry.retracement_base_pct",
+    "entry.retracement_we_weight",
+    "entry.retracement_volatility_1h_weight",
+    "entry.retracement_volatility_1m_weight",
+    "close.qty_pct",
+    "close.threshold_base_pct",
+    "close.threshold_we_weight",
+    "close.threshold_volatility_1h_weight",
+    "close.threshold_volatility_1m_weight",
+    "close.retracement_base_pct",
+    "close.retracement_volatility_1h_weight",
+    "close.retracement_volatility_1m_weight",
 )
 
 EMA_ANCHOR_PARAM_KEYS = (
@@ -52,65 +50,69 @@ EMA_ANCHOR_PARAM_KEYS = (
 )
 
 STRATEGY_PARAM_KEYS_BY_KIND = {
-    DEFAULT_STRATEGY_KIND: TRAILING_GRID_PARAM_KEYS,
+    DEFAULT_STRATEGY_KIND: TRAILING_MARTINGALE_PARAM_KEYS,
     EMA_ANCHOR_STRATEGY_KIND: EMA_ANCHOR_PARAM_KEYS,
 }
 
 STRATEGY_DEFAULTS_BY_KIND = {
     DEFAULT_STRATEGY_KIND: {
         "long": {
-            "close_grid_markup_end": 0.0094,
-            "close_grid_markup_start": 0.00634,
-            "close_grid_qty_pct": 0.51,
-            "grid_close_price_anchor": GRID_CLOSE_PRICE_ANCHOR_DEFAULT,
-            "close_trailing_grid_ratio": -0.76,
-            "close_trailing_qty_pct": 0.05,
-            "close_trailing_retracement_pct": 0.00279,
-            "close_trailing_threshold_pct": 0.001,
-            "close_weight_volatility_1h": 0.0,
-            "close_weight_volatility_1m": 0.0,
             "ema_span_0": 770,
             "ema_span_1": 210,
-            "entry_grid_double_down_factor": 0.73,
-            "entry_grid_spacing_pct": 0.033,
-            "entry_initial_ema_dist": 0.0097,
-            "entry_initial_qty_pct": 0.0276,
-            "entry_trailing_double_down_factor": 0.9,
-            "entry_trailing_grid_ratio": -0.5,
-            "entry_trailing_retracement_pct": 0.0276,
-            "entry_trailing_threshold_pct": 0.0029,
-            "entry_volatility_ema_span_hours": 1690,
-            "entry_volatility_ema_span_minutes": 60.0,
-            "entry_weight_volatility_1h": 2.4,
-            "entry_weight_volatility_1m": 0.0,
-            "entry_we_weight": 0.135,
+            "volatility_ema_span_hours": 1690,
+            "volatility_ema_span_minutes": 60.0,
+            "entry": {
+                "double_down_factor": 0.73,
+                "initial_ema_dist": 0.0097,
+                "initial_qty_pct": 0.0276,
+                "threshold_base_pct": 0.033,
+                "threshold_we_weight": 0.135,
+                "threshold_volatility_1h_weight": 2.4,
+                "threshold_volatility_1m_weight": 0.0,
+                "retracement_base_pct": 0.0,
+                "retracement_we_weight": 0.0,
+                "retracement_volatility_1h_weight": 0.0,
+                "retracement_volatility_1m_weight": 0.0,
+            },
+            "close": {
+                "qty_pct": 0.1,
+                "threshold_base_pct": 0.006,
+                "threshold_we_weight": -0.004,
+                "threshold_volatility_1h_weight": 1.0,
+                "threshold_volatility_1m_weight": 0.0,
+                "retracement_base_pct": 0.0,
+                "retracement_volatility_1h_weight": 0.0,
+                "retracement_volatility_1m_weight": 0.0,
+            },
         },
         "short": {
-            "close_grid_markup_end": 0.0015,
-            "close_grid_markup_start": 0.0015,
-            "close_grid_qty_pct": 0.05,
-            "grid_close_price_anchor": GRID_CLOSE_PRICE_ANCHOR_DEFAULT,
-            "close_trailing_grid_ratio": -1,
-            "close_trailing_qty_pct": 0.05,
-            "close_trailing_retracement_pct": 0.001,
-            "close_trailing_threshold_pct": 0.001,
-            "close_weight_volatility_1h": 0.0,
-            "close_weight_volatility_1m": 0.0,
             "ema_span_0": 100,
             "ema_span_1": 100,
-            "entry_grid_double_down_factor": 0.5,
-            "entry_grid_spacing_pct": 0.025,
-            "entry_initial_ema_dist": -0.01,
-            "entry_initial_qty_pct": 0.01,
-            "entry_trailing_double_down_factor": 0.5,
-            "entry_trailing_grid_ratio": -0.5,
-            "entry_trailing_retracement_pct": 0.001,
-            "entry_trailing_threshold_pct": 0.001,
-            "entry_volatility_ema_span_hours": 672,
-            "entry_volatility_ema_span_minutes": 60.0,
-            "entry_weight_volatility_1h": 1.0,
-            "entry_weight_volatility_1m": 0.0,
-            "entry_we_weight": 0.0,
+            "volatility_ema_span_hours": 672,
+            "volatility_ema_span_minutes": 60.0,
+            "entry": {
+                "double_down_factor": 0.5,
+                "initial_ema_dist": -0.01,
+                "initial_qty_pct": 0.01,
+                "threshold_base_pct": 0.025,
+                "threshold_we_weight": 0.0,
+                "threshold_volatility_1h_weight": 1.0,
+                "threshold_volatility_1m_weight": 0.0,
+                "retracement_base_pct": 0.0,
+                "retracement_we_weight": 0.0,
+                "retracement_volatility_1h_weight": 0.0,
+                "retracement_volatility_1m_weight": 0.0,
+            },
+            "close": {
+                "qty_pct": 0.1,
+                "threshold_base_pct": 0.006,
+                "threshold_we_weight": -0.004,
+                "threshold_volatility_1h_weight": 1.0,
+                "threshold_volatility_1m_weight": 0.0,
+                "retracement_base_pct": 0.0,
+                "retracement_volatility_1h_weight": 0.0,
+                "retracement_volatility_1m_weight": 0.0,
+            },
         },
     },
     EMA_ANCHOR_STRATEGY_KIND: {
@@ -167,6 +169,54 @@ def _normalize_strategy_side_value(key: str, value, *, strategy_kind: str, pside
     if strategy_kind == DEFAULT_STRATEGY_KIND and key == "grid_close_price_anchor":
         return normalize_grid_close_price_anchor(value, pside=pside)
     return value
+
+
+def _path_parts(key: str) -> tuple[str, ...]:
+    return tuple(part for part in key.split(".") if part)
+
+
+def _get_path(mapping: dict, key: str):
+    current = mapping
+    for part in _path_parts(key):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _has_path(mapping: dict, key: str) -> bool:
+    sentinel = object()
+    return _get_path_or(mapping, key, sentinel) is not sentinel
+
+
+def _get_path_or(mapping: dict, key: str, default):
+    current = mapping
+    for part in _path_parts(key):
+        if not isinstance(current, dict) or part not in current:
+            return default
+        current = current[part]
+    return current
+
+
+def _set_path(mapping: dict, key: str, value) -> None:
+    current = mapping
+    parts = _path_parts(key)
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    current[parts[-1]] = deepcopy(value)
+
+
+def _iter_leaf_paths(mapping: dict, prefix: tuple[str, ...] = ()):
+    for key, value in mapping.items():
+        path = (*prefix, key)
+        if isinstance(value, dict):
+            yield from _iter_leaf_paths(value, path)
+        else:
+            yield ".".join(path), value
 
 
 def get_all_strategy_defaults() -> dict:
@@ -264,37 +314,32 @@ def build_runtime_strategy_side(
             pside=pside,
         )
 
-    result = {}
+    result = deepcopy(side_defaults)
     for key in strategy_keys:
-        if isinstance(override_side, dict) and key in override_side:
-            result[key] = deepcopy(
+        if isinstance(override_side, dict) and _has_path(override_side, key):
+            _set_path(
+                result,
+                key,
                 _normalize_strategy_side_value(
                     key,
-                    override_side[key],
+                    _get_path(override_side, key),
                     strategy_kind=normalized_kind,
                     pside=pside or "",
-                )
+                ),
             )
             continue
-        if isinstance(strategy_side, dict) and key in strategy_side:
-            result[key] = deepcopy(
+        if isinstance(strategy_side, dict) and _has_path(strategy_side, key):
+            _set_path(
+                result,
+                key,
                 _normalize_strategy_side_value(
                     key,
-                    strategy_side[key],
+                    _get_path(strategy_side, key),
                     strategy_kind=normalized_kind,
                     pside=pside or "",
-                )
+                ),
             )
             continue
-        if key in side_defaults:
-            result[key] = deepcopy(
-                _normalize_strategy_side_value(
-                    key,
-                    side_defaults[key],
-                    strategy_kind=normalized_kind,
-                    pside=pside or "",
-                )
-            )
     return result
 
 
@@ -342,45 +387,46 @@ def sync_canonical_strategy_config(config: dict, *, tracker: Optional[object] = 
             for key in get_strategy_param_keys(kind):
                 if key in bot_side:
                     flat_value = bot_side.pop(key)
-                    if current_strategy_side.get(key) != flat_value:
-                        old_value = current_strategy_side.get(key)
-                        current_strategy_side[key] = flat_value
+                    if _get_path_or(current_strategy_side, key, None) != flat_value:
+                        old_value = _get_path_or(current_strategy_side, key, None)
+                        _set_path(current_strategy_side, key, flat_value)
                         if tracker is not None:
                             if old_value is None:
                                 tracker.rename(
                                     ["bot", pside, key],
-                                    ["bot", pside, "strategy", kind, key],
+                                    ["bot", pside, "strategy", kind, *_path_parts(key)],
                                     flat_value,
                                 )
                             else:
                                 tracker.update(
-                                    ["bot", pside, "strategy", kind, key],
+                                    ["bot", pside, "strategy", kind, *_path_parts(key)],
                                     old_value,
                                     flat_value,
                                 )
                     elif tracker is not None:
                         tracker.remove(["bot", pside, key], flat_value)
-                if key not in current_strategy_side:
-                    if key in defaults_by_side:
-                        current_strategy_side[key] = deepcopy(defaults_by_side[key])
+                if not _has_path(current_strategy_side, key):
+                    if _has_path(defaults_by_side, key):
+                        _set_path(current_strategy_side, key, _get_path(defaults_by_side, key))
                         if tracker is not None:
                             tracker.add(
-                                ["bot", pside, "strategy", kind, key], current_strategy_side[key]
+                                ["bot", pside, "strategy", kind, *_path_parts(key)],
+                                _get_path(current_strategy_side, key),
                             )
                 normalized_value = _normalize_strategy_side_value(
                     key,
-                    current_strategy_side[key],
+                    _get_path(current_strategy_side, key),
                     strategy_kind=kind,
                     pside=pside,
                 )
-                if current_strategy_side[key] != normalized_value:
+                if _get_path(current_strategy_side, key) != normalized_value:
                     if tracker is not None:
                         tracker.update(
-                            ["bot", pside, "strategy", kind, key],
-                            current_strategy_side[key],
+                            ["bot", pside, "strategy", kind, *_path_parts(key)],
+                            _get_path(current_strategy_side, key),
                             normalized_value,
                         )
-                    current_strategy_side[key] = normalized_value
+                    _set_path(current_strategy_side, key, normalized_value)
 
 
 def prune_inactive_strategy_subtrees(config: dict, *, tracker: Optional[object] = None) -> None:

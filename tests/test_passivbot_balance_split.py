@@ -568,6 +568,9 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
         def _bot_params_to_rust_dict(self, pside, symbol):
             return {}
 
+        def _strategy_params_to_rust_dict(self, pside, symbol):
+            return {}
+
         def live_value(self, key):
             return False
 
@@ -647,6 +650,9 @@ async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch)
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
+            return {}
+
+        def _strategy_params_to_rust_dict(self, pside, symbol):
             return {}
 
         def live_value(self, key):

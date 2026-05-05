@@ -545,7 +545,7 @@ mod core {
         Ok(EMABands { upper, lower })
     }
 
-    fn derive_entry_volatility_logrange_ema_1h(
+    fn derive_volatility_ema_1h(
         symbol_idx: usize,
         emas: &EmaBundle,
         strategy_params: &crate::strategies::StrategyParams,
@@ -563,14 +563,14 @@ mod core {
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
         if !(v.is_finite() && v >= 0.0) {
             return Err(OrchestratorError::NonFiniteInput {
-                field: "entry_volatility_logrange_ema_1h",
+                field: "volatility_ema_1h",
                 symbol_idx: Some(symbol_idx),
             });
         }
         Ok(v)
     }
 
-    fn derive_offset_volatility_logrange_ema_1m(
+    fn derive_volatility_ema_1m(
         symbol_idx: usize,
         emas: &EmaBundle,
         strategy_params: &crate::strategies::StrategyParams,
@@ -588,7 +588,7 @@ mod core {
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
         if !(v.is_finite() && v >= 0.0) {
             return Err(OrchestratorError::NonFiniteInput {
-                field: "offset_volatility_logrange_ema_1m",
+                field: "volatility_ema_1m",
                 symbol_idx: Some(symbol_idx),
             });
         }
@@ -710,31 +710,31 @@ mod core {
         Ok(ema_bands)
     }
 
-    fn cached_entry_volatility_logrange_ema_1h(
+    fn cached_volatility_ema_1h(
         cache: &mut [CachedSideDerived],
         symbol_idx: usize,
         emas: &EmaBundle,
         strategy_params: &crate::strategies::StrategyParams,
     ) -> Result<f64, OrchestratorError> {
-        if let Some(v) = cache[symbol_idx].entry_volatility_logrange_ema_1h {
+        if let Some(v) = cache[symbol_idx].volatility_ema_1h {
             return Ok(v);
         }
-        let v = derive_entry_volatility_logrange_ema_1h(symbol_idx, emas, strategy_params)?;
-        cache[symbol_idx].entry_volatility_logrange_ema_1h = Some(v);
+        let v = derive_volatility_ema_1h(symbol_idx, emas, strategy_params)?;
+        cache[symbol_idx].volatility_ema_1h = Some(v);
         Ok(v)
     }
 
-    fn cached_offset_volatility_logrange_ema_1m(
+    fn cached_volatility_ema_1m(
         cache: &mut [CachedSideDerived],
         symbol_idx: usize,
         emas: &EmaBundle,
         strategy_params: &crate::strategies::StrategyParams,
     ) -> Result<f64, OrchestratorError> {
-        if let Some(v) = cache[symbol_idx].offset_volatility_logrange_ema_1m {
+        if let Some(v) = cache[symbol_idx].volatility_ema_1m {
             return Ok(v);
         }
-        let v = derive_offset_volatility_logrange_ema_1m(symbol_idx, emas, strategy_params)?;
-        cache[symbol_idx].offset_volatility_logrange_ema_1m = Some(v);
+        let v = derive_volatility_ema_1m(symbol_idx, emas, strategy_params)?;
+        cache[symbol_idx].volatility_ema_1m = Some(v);
         Ok(v)
     }
 
@@ -1496,8 +1496,8 @@ mod core {
     struct CachedSideDerived {
         strategy_params: Option<crate::strategies::StrategyParams>,
         ema_bands: Option<EMABands>,
-        entry_volatility_logrange_ema_1h: Option<f64>,
-        offset_volatility_logrange_ema_1m: Option<f64>,
+        volatility_ema_1h: Option<f64>,
+        volatility_ema_1m: Option<f64>,
     }
 
     /// Reusable buffers for performance-critical backtest loops.
@@ -2241,26 +2241,24 @@ mod core {
                             &s.emas,
                             &strategy_params,
                         )?;
-                        let entry_volatility_logrange_ema_1h =
-                            cached_entry_volatility_logrange_ema_1h(
-                                &mut workspace.derived_long,
-                                s.symbol_idx,
-                                &s.emas,
-                                &strategy_params,
-                            )?;
-                        let offset_volatility_logrange_ema_1m =
-                            cached_offset_volatility_logrange_ema_1m(
-                                &mut workspace.derived_long,
-                                s.symbol_idx,
-                                &s.emas,
-                                &strategy_params,
-                            )?;
+                        let volatility_ema_1h = cached_volatility_ema_1h(
+                            &mut workspace.derived_long,
+                            s.symbol_idx,
+                            &s.emas,
+                            &strategy_params,
+                        )?;
+                        let volatility_ema_1m = cached_volatility_ema_1m(
+                            &mut workspace.derived_long,
+                            s.symbol_idx,
+                            &s.emas,
+                            &strategy_params,
+                        )?;
                         let state = StateParams {
                             balance: input.balance,
                             order_book: s.order_book,
                             ema_bands,
-                            offset_volatility_logrange_ema_1m,
-                            entry_volatility_logrange_ema_1h,
+                            volatility_ema_1m,
+                            volatility_ema_1h,
                         };
                         let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
                         let generated = generate_strategy_orders(
@@ -2384,26 +2382,24 @@ mod core {
                             &s.emas,
                             &strategy_params,
                         )?;
-                        let entry_volatility_logrange_ema_1h =
-                            cached_entry_volatility_logrange_ema_1h(
-                                &mut workspace.derived_short,
-                                s.symbol_idx,
-                                &s.emas,
-                                &strategy_params,
-                            )?;
-                        let offset_volatility_logrange_ema_1m =
-                            cached_offset_volatility_logrange_ema_1m(
-                                &mut workspace.derived_short,
-                                s.symbol_idx,
-                                &s.emas,
-                                &strategy_params,
-                            )?;
+                        let volatility_ema_1h = cached_volatility_ema_1h(
+                            &mut workspace.derived_short,
+                            s.symbol_idx,
+                            &s.emas,
+                            &strategy_params,
+                        )?;
+                        let volatility_ema_1m = cached_volatility_ema_1m(
+                            &mut workspace.derived_short,
+                            s.symbol_idx,
+                            &s.emas,
+                            &strategy_params,
+                        )?;
                         let state = StateParams {
                             balance: input.balance,
                             order_book: s.order_book,
                             ema_bands,
-                            offset_volatility_logrange_ema_1m,
-                            entry_volatility_logrange_ema_1h,
+                            volatility_ema_1m,
+                            volatility_ema_1h,
                         };
                         let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
                         let generated = generate_strategy_orders(
@@ -2471,7 +2467,8 @@ mod core {
             let sym = &input.symbols[s.symbol_idx];
             let bot = &sym.long.bot_params;
             let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
-            let enabled = bot.unstuck_loss_allowance_pct > 0.0
+            let enabled = bot.unstuck_enabled
+                && bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
                 && bot.unstuck_threshold > 0.0;
             if !enabled {
@@ -2517,7 +2514,8 @@ mod core {
             let sym = &input.symbols[s.symbol_idx];
             let bot = &sym.short.bot_params;
             let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
-            let enabled = bot.unstuck_loss_allowance_pct > 0.0
+            let enabled = bot.unstuck_enabled
+                && bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
                 && bot.unstuck_threshold > 0.0;
             if !enabled {
@@ -2588,7 +2586,13 @@ mod core {
         }
 
         // TWEL enforcer: add auto-reduce closes in addition to normal closes.
-        if enabled_long {
+        if enabled_long
+            && input
+                .global
+                .global_bot_params
+                .long
+                .risk_twel_enforcer_enabled
+        {
             workspace.twel_positions.clear();
             for s in per_long.iter().filter_map(|v| v.as_ref()) {
                 if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
@@ -2645,7 +2649,13 @@ mod core {
                 }
             }
         }
-        if enabled_short {
+        if enabled_short
+            && input
+                .global
+                .global_bot_params
+                .short
+                .risk_twel_enforcer_enabled
+        {
             workspace.twel_positions.clear();
             for s in per_short.iter().filter_map(|v| v.as_ref()) {
                 if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
@@ -3029,6 +3039,31 @@ mod core {
             }
         }
 
+        fn sync_trailing_grid_strategy_params(symbol: &mut SymbolInput) {
+            let long_params =
+                crate::strategies::TrailingGridParams::from_bot_params(&symbol.long.bot_params);
+            symbol.long.strategy_params = Some(long_params.to_value());
+            symbol.long.parsed_strategy_params =
+                Some(crate::strategies::StrategyParams::TrailingGrid(long_params));
+
+            let short_params =
+                crate::strategies::TrailingGridParams::from_bot_params(&symbol.short.bot_params);
+            symbol.short.strategy_params = Some(short_params.to_value());
+            symbol.short.parsed_strategy_params = Some(
+                crate::strategies::StrategyParams::TrailingGrid(short_params),
+            );
+        }
+
+        fn compute_ideal_orders_for_test(
+            input: &OrchestratorInput,
+        ) -> Result<OrchestratorOutput, OrchestratorError> {
+            let mut synced = input.clone();
+            for symbol in &mut synced.symbols {
+                sync_trailing_grid_strategy_params(symbol);
+            }
+            super::compute_ideal_orders(&synced)
+        }
+
         fn make_basic_global() -> OrchestratorGlobal {
             OrchestratorGlobal {
                 filter_by_min_effective_cost: false,
@@ -3194,7 +3229,7 @@ mod core {
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let n_entries_no_fill = out
                 .orders
                 .iter()
@@ -3212,7 +3247,7 @@ mod core {
                 symbols: vec![sym_fill],
                 ..input
             };
-            let out_fill = compute_ideal_orders(&input_fill).unwrap();
+            let out_fill = compute_ideal_orders_for_test(&input_fill).unwrap();
             let n_entries_fill = out_fill
                 .orders
                 .iter()
@@ -3225,6 +3260,9 @@ mod core {
         fn adaptive_grid_long_entry_output_regression() {
             let mut sym = make_basic_symbol(0);
             sym.long.bot_params.entry_initial_ema_dist = -0.01;
+            sym.long.bot_params.entry_initial_qty_pct = 0.1;
+            sym.long.bot_params.entry_grid_spacing_pct = 0.02;
+            sym.long.bot_params.entry_grid_double_down_factor = 1.0;
             sym.short.bot_params.total_wallet_exposure_limit = 0.0;
             sym.short.bot_params.n_positions = 0;
 
@@ -3257,7 +3295,7 @@ mod core {
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let actual: Vec<(PositionSide, f64, f64, OrderType)> = out
                 .orders
                 .iter()
@@ -3272,26 +3310,26 @@ mod core {
                 ),
                 (
                     PositionSide::Long,
-                    1.02,
+                    1.0,
                     98.0,
                     OrderType::EntryGridNormalLong,
                 ),
                 (
                     PositionSide::Long,
-                    2.02,
-                    97.01,
+                    2.0,
+                    97.0,
                     OrderType::EntryGridNormalLong,
                 ),
                 (
                     PositionSide::Long,
-                    4.04,
-                    96.04,
+                    4.0,
+                    96.0,
                     OrderType::EntryGridNormalLong,
                 ),
                 (
                     PositionSide::Long,
-                    2.27,
-                    95.07,
+                    2.3,
+                    95.0,
                     OrderType::EntryGridCroppedLong,
                 ),
             ];
@@ -3306,6 +3344,9 @@ mod core {
             sym.short.bot_params.total_wallet_exposure_limit = 1.0;
             sym.short.bot_params.n_positions = 1;
             sym.short.bot_params.entry_initial_ema_dist = 0.01;
+            sym.short.bot_params.entry_initial_qty_pct = 0.1;
+            sym.short.bot_params.entry_grid_spacing_pct = 0.02;
+            sym.short.bot_params.entry_grid_double_down_factor = 1.0;
 
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 0.0;
@@ -3336,7 +3377,7 @@ mod core {
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let actual: Vec<(PositionSide, f64, f64, OrderType)> = out
                 .orders
                 .iter()
@@ -3345,27 +3386,33 @@ mod core {
             let expected = vec![
                 (
                     PositionSide::Short,
-                    -0.99,
+                    -1.0,
                     101.0,
                     OrderType::EntryInitialNormalShort,
                 ),
                 (
                     PositionSide::Short,
-                    -0.99,
-                    103.02,
+                    -1.0,
+                    103.1,
                     OrderType::EntryGridNormalShort,
                 ),
                 (
                     PositionSide::Short,
-                    -1.98,
-                    104.06,
+                    -2.0,
+                    104.1,
                     OrderType::EntryGridNormalShort,
                 ),
                 (
                     PositionSide::Short,
-                    -5.63,
-                    105.1,
-                    OrderType::EntryGridInflatedShort,
+                    -4.0,
+                    105.2,
+                    OrderType::EntryGridNormalShort,
+                ),
+                (
+                    PositionSide::Short,
+                    -1.5,
+                    106.3,
+                    OrderType::EntryGridCroppedShort,
                 ),
             ];
             assert_eq!(actual, expected);
@@ -3432,7 +3479,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             // With no position and GracefulStop, we should not emit any entries.
             assert!(out.orders.iter().all(|o| is_close_order_type(o.order_type)));
         }
@@ -3470,7 +3517,7 @@ mod core {
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let has_long_entries = out
                 .orders
                 .iter()
@@ -3516,7 +3563,7 @@ mod core {
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let has_long_entries = out
                 .orders
                 .iter()
@@ -3574,7 +3621,7 @@ mod core {
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let short_entry_symbol_idxs: Vec<usize> = out
                 .orders
                 .iter()
@@ -3629,7 +3676,7 @@ mod core {
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let long_entry_symbol_idxs: Vec<usize> = out
                 .orders
                 .iter()
@@ -3683,7 +3730,7 @@ mod core {
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let long_entry_symbol_idxs: Vec<usize> = out
                 .orders
                 .iter()
@@ -3731,7 +3778,7 @@ mod core {
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let long_entry_symbol_idxs: Vec<usize> = out
                 .orders
                 .iter()
@@ -3779,7 +3826,7 @@ mod core {
                 peek_hints: None,
             };
 
-            let err = compute_ideal_orders(&input).unwrap_err();
+            let err = compute_ideal_orders_for_test(&input).unwrap_err();
             assert_eq!(
                 err,
                 OrchestratorError::NonContiguousSymbolIdx {
@@ -3892,7 +3939,7 @@ mod core {
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let mut entry_syms: HashSet<usize> = HashSet::new();
             for o in out.orders {
                 if o.pside == PositionSide::Long && o.qty > 0.0 && o.symbol_idx >= 2 {
@@ -4109,7 +4156,7 @@ mod core {
                 symbols: vec![sym.clone()],
                 peek_hints: None,
             };
-            let out_open = compute_ideal_orders(&input_open).unwrap();
+            let out_open = compute_ideal_orders_for_test(&input_open).unwrap();
             assert!(
                 out_open
                     .orders
@@ -4120,7 +4167,7 @@ mod core {
 
             let mut input_blocked = input_open.clone();
             input_blocked.global.max_realized_loss_pct = 0.01;
-            let out_blocked = compute_ideal_orders(&input_blocked).unwrap();
+            let out_blocked = compute_ideal_orders_for_test(&input_blocked).unwrap();
             assert!(
                 out_blocked
                     .orders
@@ -4181,7 +4228,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             assert!(
                 out.orders
                     .iter()
@@ -4241,7 +4288,7 @@ mod core {
                     symbols: vec![sym],
                     peek_hints: None,
                 };
-                let out = compute_ideal_orders(&input).unwrap();
+                let out = compute_ideal_orders_for_test(&input).unwrap();
                 assert!(
                     out.orders
                         .iter()
@@ -4305,7 +4352,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             assert!(
                 out.orders
                     .iter()
@@ -4362,7 +4409,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let entry_orders: Vec<_> = out
                 .orders
                 .iter()
@@ -4425,7 +4472,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             assert_eq!(out.orders.len(), 1);
             assert_eq!(out.orders[0].order_type, OrderType::ClosePanicLong);
             assert!(
@@ -4473,7 +4520,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             assert_eq!(out.orders.len(), 1);
             assert_eq!(out.orders[0].order_type, OrderType::ClosePanicLong);
         }

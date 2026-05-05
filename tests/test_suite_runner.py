@@ -218,10 +218,11 @@ def test_apply_scenario_overrides_update_config():
         available_coins={"BTC"},
         base_coin_sources={"BTC": "binance"},
     )
-    assert cfg["bot"]["long"]["n_positions"] == 3
+    assert cfg["bot"]["long"]["risk"]["n_positions"] == 3
+    assert "n_positions" not in cfg["bot"]["long"]
     entry = cfg["_transform_log"][-1]
-    paths = [change["path"] for change in entry["details"]["changes"]]
-    assert "bot.long.n_positions" in paths
+    paths = [change["path"] for change in entry["details"]["changes"] if "path" in change]
+    assert "bot.long.risk.n_positions" in paths
 
 
 def test_resolve_coin_sources_merges_overrides():
